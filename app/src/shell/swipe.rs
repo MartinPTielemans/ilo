@@ -1,7 +1,8 @@
 //! Two fingers or a wheel across the sidebar, paging between Spaces and out to the
 //! Library (docs/ux-spec.md › Spaces › Switching), and the list's scroll edge.
 
-use std::{collections::VecDeque, time::Instant};
+use std::collections::VecDeque;
+use web_time::Instant;
 
 use gpui::{
     Context, DispatchPhase, Point, ScrollDelta, ScrollEvent, TouchPhase, Window, canvas, div,
@@ -10,8 +11,10 @@ use gpui::{
 
 use super::{
     Command, ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING,
-    Settle, Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at,
-    library::library_band, rubber_band,
+    Settle, Shell, Space, Swipe, WEB, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at,
+    library::library_band,
+    rubber_band,
+    wheel_gestures::{GAP, LONG},
 };
 
 impl Shell {
@@ -146,6 +149,17 @@ impl Shell {
     /// scroll the list. Over the Library's Spaces cards they scroll them across, if they don't
     /// fit. Returns whether paging, or the cards, took the event.
     fn scroll(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.scroll_at(event, Instant::now(), window, cx)
+    }
+
+    /// The same, with the event come at `now`.
+    fn scroll_at(
+        &mut self,
+        event: &ScrollEvent,
+        now: Instant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         // The form pages back to the Space it was made from, but not while another Space shows.
         let form_hidden = self.form.is_some() && self.form().is_none();
         if form_hidden || self.renaming.is_some() || self.drag.is_some() {
@@ -173,7 +187,7 @@ impl Shell {
                     cards,
                 });
             }
-            TouchPhase::Ended | TouchPhase::Cancelled => return self.release(window, cx),
+            TouchPhase::Ended | TouchPhase::Cancelled => return self.release(now, window, cx),
             TouchPhase::Moved => {}
         }
         let Some(mut swipe) = self.swipe.take() else {
@@ -231,7 +245,7 @@ impl Shell {
                 // check.sh waits for this line.
                 log!("browser: library past its end");
             }
-            let (now, x) = (Instant::now(), self.swiped_to(&swipe));
+            let x = self.swiped_to(&swipe);
             swipe.samples.push_back((now, x));
             while swipe
                 .samples
@@ -264,7 +278,7 @@ impl Shell {
     /// The fingers lifted. The pages settle on the next Space in the direction of a flick, else
     /// on the one nearest its place, keeping the release's speed if it's heading there. Off the
     /// form, that's Cancel, its page going out as the Space it was made from settles.
-    fn release(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn release(&mut self, now: Instant, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(swipe) = self.swipe.take().filter(|swipe| swipe.across == Some(true)) else {
             return false;
         };
@@ -273,7 +287,7 @@ impl Shell {
             self.release_cards(cards, cx);
             return true;
         }
-        let (now, x) = (Instant::now(), self.swiped_to(&swipe));
+        let x = self.swiped_to(&swipe);
         let velocity = velocity(&swipe.samples, now).unwrap_or(0.);
         if let Some(out) = self.library_swiped(&swipe) {
             let open = library_opens(out, velocity);
@@ -339,6 +353,66 @@ impl Shell {
         self.nearest(swipe.from, toward).map(Landing::Space)
     }
 
+    /// A browser's wheel event at `at`, as the fingers landing, moving and lifting that AppKit's
+    /// phases tell (`wheel_gestures`): a page swipe commits its Space as they lift, and the rest of
+    /// its momentum is swallowed. The fingers lift too once the events stop.
+    fn web_scroll(
+        &mut self,
+        event: &ScrollEvent,
+        at: Instant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let ScrollDelta::Pixels(delta) = event.delta else {
+            return self.scroll_at(event, at, window, cx);
+        };
+        let larger = if delta.x.abs() >= delta.y.abs() {
+            delta.x
+        } else {
+            delta.y
+        };
+        let cut = self.web_wheel.event(f32::from(larger), at);
+        let phase = |touch_phase, delta| ScrollEvent {
+            touch_phase,
+            delta,
+            ..event.clone()
+        };
+        let still = ScrollDelta::Pixels(Point::default());
+        if cut.lifted {
+            self.scroll_at(&phase(TouchPhase::Ended, still), at, window, cx);
+        }
+        if cut.landed {
+            self.scroll_at(&phase(TouchPhase::Started, still), at, window, cx);
+        }
+        let took = self.scroll_at(&phase(TouchPhase::Moved, event.delta), at, window, cx);
+        let lift = phase(TouchPhase::Ended, still);
+        self.web_wheel_quiet = Some(cx.spawn_in(window, async move |shell, cx| {
+            // Slowed fingers lift after GAP, and others after LONG.
+            for wait in [GAP, LONG - GAP] {
+                cx.background_executor().timer(wait).await;
+                let lift = lift.clone();
+                let quiet = |shell: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+                    shell.web_quiet(&lift, cx.background_executor().now(), window, cx)
+                };
+                shell.update_in(cx, quiet).ok();
+            }
+        }));
+        took
+    }
+
+    /// No wheel event since the last, at `now`: fingers still down lift, as `lift`.
+    fn web_quiet(
+        &mut self,
+        lift: &ScrollEvent,
+        now: Instant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.web_wheel.quiet(now) {
+            self.scroll_at(lift, now, window, cx);
+        }
+    }
+
     /// A wheel's ticks across the sidebar page once per burst, then rest. Past the first Space they
     /// open the Library, and back they close it. Back off the form they cancel it. Over the
     /// Library's Spaces cards at `x`, they scroll them first.
@@ -361,6 +435,10 @@ impl Shell {
             .wheel_paged
             .is_some_and(|paged| now - paged < WHEEL_REST)
         {
+            // A browser's momentum goes on long after a burst: it rests until the events stop.
+            if WEB {
+                self.wheel_paged = Some(now);
+            }
             return true;
         }
         let sum = match self.wheel {
@@ -444,7 +522,11 @@ impl Shell {
                             }
                             false => bounds.contains(&event.position),
                         };
-                        (over || shell.swipe.is_some()) && shell.scroll(event, window, cx)
+                        (over || shell.swipe.is_some())
+                            && match WEB {
+                                true => shell.web_scroll(event, wheel_time(), window, cx),
+                                false => shell.scroll(event, window, cx),
+                            }
                     });
                     if took.unwrap_or(false) {
                         cx.stop_propagation();
@@ -596,6 +678,27 @@ pub(super) enum Landing {
     Space(u64),
 }
 
+/// When the browser's wheel event being handled came, by its own clock: a page busy drawing hears
+/// the trackpad's events late, and several summed into one.
+#[cfg(target_family = "wasm")]
+fn wheel_time() -> Instant {
+    let performance = web_sys::window().and_then(|window| window.performance());
+    let age = performance.map_or(0., |performance| {
+        performance.now() - gpui_web::wheel_time_stamp()
+    });
+    // A browser that gives no stamp leaves the event as old as the page.
+    let age = if (0. ..1000.).contains(&age) { age } else { 0. };
+    let now = Instant::now();
+    now.checked_sub(std::time::Duration::from_secs_f64(age / 1000.))
+        .unwrap_or(now)
+}
+
+/// Off the web, the wheel's events are the app's, AppKit's phases and all (`scroll`).
+#[cfg(not(target_family = "wasm"))]
+fn wheel_time() -> Instant {
+    Instant::now()
+}
+
 /// How fast the page went over the last SWIPE_HISTORY before `now`, from `samples` of where it
 /// was, in points a second. None from fewer than two.
 fn velocity(samples: &VecDeque<(Instant, f32)>, now: Instant) -> Option<f32> {
@@ -624,6 +727,9 @@ fn heading(x: f32, velocity: f32, width: f32) -> f32 {
         x
     }
 }
+
+#[cfg(test)]
+mod model;
 
 #[cfg(test)]
 mod tests {
