@@ -554,7 +554,7 @@ pub(crate) fn finish_opening(
     let Ok(shell) = window.entity(cx) else {
         return;
     };
-    crate::heap_sites::start_logging();
+    browser::heap_sites::start_logging();
     let weak = shell.downgrade();
     let look = move |cx: &App| {
         let shell = weak.upgrade()?;

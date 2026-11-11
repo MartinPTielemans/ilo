@@ -630,9 +630,10 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.1.13"
+version = "0.2.0"
 dependencies = [
  "async-io",
+ "backtrace",
  "base64 0.22.1",
  "bindgen",
  "cc",
