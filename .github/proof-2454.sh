@@ -19,7 +19,7 @@ procs() {
     case $args in *chrome_crashpad_handler*) kind=handler ;; esac
     case $args in *--extension-process*) kind="$kind(extension)" ;; esac
     echo "$p ${kind:-browser} pidns=$(readlink "/proc/$p/ns/pid") userns=$(readlink "/proc/$p/ns/user")" \
-      "$(grep -E '^(Seccomp|NoNewPrivs|PPid):' "/proc/$p/status" | tr '\t\n' '  ')"
+      "$(grep -E '^(Seccomp|NoNewPrivs|PPid|NSpid):' "/proc/$p/status" | tr '\t\n' '  ')"
   done
 }
 pid_of() {
@@ -92,4 +92,8 @@ find "$crashpad" -type f 2> /dev/null | sed 's/^/  /' | tee -a "$summary"
 say "memory without ptrace, in the sandbox:"
 flatpak run --filesystem="$PWD/.github:ro" --command=python3 app.ilo.browser \
   "$PWD/.github/proof-2454-mem.py" 2>&1 | tee -a "$summary"
+
+say "memory of a sub-sandboxed child, as a renderer is:"
+flatpak run --filesystem="$PWD/.github:ro" --command=python3 app.ilo.browser \
+  "$PWD/.github/proof-2454-sub.py" 2>&1 | tee -a "$summary"
 exit 0
