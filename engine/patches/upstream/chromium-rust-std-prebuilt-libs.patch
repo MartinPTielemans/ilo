@@ -1,9 +1,10 @@
 From Chromium (https://chromium.googlesource.com/chromium/src, BSD-3-Clause, Copyright The Chromium
 Authors), commit f3417da85a5f7a176e13ff9ae6d5d822e3f5faae, "[rust] Fix `is_component_build` vs
 `rust_sysroot_absolute` interaction" (https://chromium-review.googlesource.com/c/chromium/src/+/8564239,
-refs/heads/main@{#1718864}), which Chromium 157 has. Its change, unchanged, with one line of
-context, so that it applies to 156 and the series skips it on 157, which already has it. Drop it
-once every platform's pin has the commit.
+refs/heads/main@{#1718864}), which Chromium 157.0.8103.50 doesn't have yet. Its change, unchanged,
+with one line of context, so that it applies to 156 and 157. ungoogled-chromium-windows 157's
+windows-fix-building-without-crubit makes the same change, so on Windows the series finds it in the
+tree and goes on. Drop it once every platform's Chromium has the commit.
 
 Lets the dev (component) build link libraries whose only use of Rust's prebuilt std is a function
 clang's runtime also has. The prebuilt rlibs were ldflags of an all_dependent_configs, so every
