@@ -305,7 +305,19 @@ impl Shell {
         let phase = |touch_phase, delta| ScrollEvent { touch_phase, delta, ..event.clone() };
         let still = ScrollDelta::Pixels(Point::default());
         if cut.lifted {
-            self.scroll_at(&phase(TouchPhase::Ended, still), at, window, cx);
+            // A lift found from momentum's fall came some frames back: the fingers give back the
+            // way it went since and let go there, so the pages settle when and where the app's do.
+            let lifted = match cut.since {
+                Some((since, way)) => {
+                    if let Some(swipe) = self.swipe.as_mut().filter(|swipe| swipe.across == Some(true)) {
+                        swipe.way -= SWIPE_TRACKING * way;
+                        swipe.samples.retain(|&(when, _)| when <= since);
+                    }
+                    since
+                }
+                None => at,
+            };
+            self.scroll_at(&phase(TouchPhase::Ended, still), lifted, window, cx);
         }
         if cut.landed {
             self.scroll_at(&phase(TouchPhase::Started, still), at, window, cx);

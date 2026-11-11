@@ -199,6 +199,16 @@ struct Run {
     first_shown_ms: Option<f64>,
 }
 
+impl Run {
+    /// When the page came to rest: from there on it stays within a hundredth of a Space of where
+    /// it ends.
+    fn rest_ms(&self) -> f64 {
+        let end = self.slides.last().copied().unwrap_or(0.);
+        let still = self.slides.iter().rev().take_while(|&&place| (place - end).abs() <= 0.01).count();
+        (self.slides.len() - still) as f64 * STEP_MS
+    }
+}
+
 /// The fingers' and momentum's events, each `(ms, what)` as `send` gives it to the shell, which
 /// shows a Space as soon as it asks to, as the core does, with the page's place each step.
 fn run(
@@ -301,9 +311,12 @@ fn deliveries() -> [Delivery; 4] {
 }
 
 /// Each gesture, in each way a browser may hand it on, shows the Spaces in the demo that it does
-/// in the app, starting no sooner than the fingers lift there and soon after.
+/// in the app, starting no sooner than the fingers lift there and soon after. The pages come to
+/// rest within REST_LAG of the app's, as a lift found late is dated back to when the fingers left;
+/// whole pixels round away the falls that find it, so theirs is found only when the wheels stop.
 #[gpui::test]
 fn the_demo_swipes_as_the_app_does(cx: &mut TestAppContext) {
+    const REST_LAG: f64 = 40.;
     for (name, events) in gestures() {
         let end = events.last().map_or(0., |event| event.at_ms) + 400.;
         let app = in_app(cx, &events, end);
@@ -313,6 +326,10 @@ fn the_demo_swipes_as_the_app_does(cx: &mut TestAppContext) {
             assert_eq!(demo.shown, app.shown, "{way}: the Spaces shown");
             let lag = demo.first_shown_ms.zip(app.first_shown_ms).map(|(demo, app)| demo - app);
             assert!(lag.is_some_and(|lag| (0. ..300.).contains(&lag)), "{way}: {lag:?} ms after the app");
+            if !matches!(delivery, Delivery::Whole) {
+                let rest = demo.rest_ms() - app.rest_ms();
+                assert!(rest <= REST_LAG, "{way}: at rest {rest} ms after the app");
+            }
         }
     }
 }
