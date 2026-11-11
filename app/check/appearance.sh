@@ -64,8 +64,10 @@ for choice in $other $system automatic; do
       "Appearance's $item didn't make the page's prefers-color-scheme $scheme"
   fi
   was=$scheme
-  expect "^browser: settings appearance $item at " "Settings' Appearance didn't show $item"
+  expect "^browser: settings appearance $item\$" "Settings' Appearance didn't take $item"
+  # Light and Dark are each drawn chosen for the first time here, Automatic was at launch.
   if [ "$choice" != automatic ]; then
+    expect "^browser: settings appearance $item at " "Settings' Appearance didn't show $item"
     ../tools/window-screenshot.sh "$pid" "$out/settings-appearance-$choice.png" ||
       fail "no window to capture"
   fi
