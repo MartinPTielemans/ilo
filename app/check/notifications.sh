@@ -131,8 +131,15 @@ PY
     for _ in 1 2; do
       "$out/banner" Notifications Allow >> "$notes" 2>&1 || break
     done
-    grep -q '^pressed .* with Name:Allow: done$' "$notes" ||
-      fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
+    if ! grep -q '^pressed .* with Name:Allow: done$' "$notes"; then
+      # macOS asks once for each app, and a check VM keeps the answer from an earlier run, as a
+      # Mac does (#2396). The hosted Mac starts with none, so it sees the question every time.
+      mac_notifications_said
+      grep -q "\"bundle-id\" = \"$app_id\";" "$out/notifications-macos.txt" ||
+        fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
+      echo "skip: macOS's question whether the app may notify, as it keeps an earlier run's answer for $app_id (notifications-macos.txt)."
+      return 0
+    fi
     asked=$(grep '^pressed .* with Name:Allow' "$notes" | sed 's/^pressed \(“[^”]*”\) Notifications.*/\1/')
     while read -r each; do
       # Braced: bash 3.2 on the Mac reads the quote's first byte as a letter of the name.
