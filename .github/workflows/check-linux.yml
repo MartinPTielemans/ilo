@@ -115,6 +115,8 @@ jobs:
               ! printf '%s\n' "$LINUX_SKIPS" | grep -q "^$run: " || continue
               todo="$todo $run"
             done
+            # #2391's proof only: named runs go as given, in order and repeated, on one profile.
+            case $RUNS in ''|all) ;; *) todo=$RUNS ;; esac
             of=1
             case $RUNS in ''|all) of=3; [ "$session" != wayland ] || of=2 ;; esac
             for shard in $(seq "$of"); do
