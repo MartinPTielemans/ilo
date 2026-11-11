@@ -32,7 +32,9 @@ pub enum Arranged {
 /// How the core draws Arrange's marks in the page: the Space's accent for the outline, the line
 /// and the label, whose words are in `label`; `ink` for the dashed place a carried thing left; in
 /// CSS px, the outline's width and its corners. The label names a thing with the app's word for
-/// its kind (KINDS).
+/// its kind (KINDS). How the page moves: `rest`, the seconds a carry holds still before the drop
+/// shows; `room_omega`, per second, the critically damped spring the page's other things make room
+/// on; and `land_response`, seconds, and `land_damping`, the spring a dropped thing lands on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Look {
     pub accent: u32,
@@ -40,6 +42,10 @@ pub struct Look {
     pub ink: u32,
     pub line: f32,
     pub radius: f32,
+    pub rest: f32,
+    pub room_omega: f32,
+    pub land_response: f32,
+    pub land_damping: f32,
 }
 
 /// The app's word for each kind of thing on a page, by the token the core gives: its ARIA role,

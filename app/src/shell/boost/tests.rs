@@ -672,3 +672,15 @@ fn no_arrange_in_a_private_window_or_an_agents_space(cx: &mut TestAppContext) {
         assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
     }
 }
+
+/// The core takes its own default for a motion value outside its range (bc_arrange_look), so one
+/// of the sidebar's springs moved past it would be dropped without a word: each stays inside.
+#[test]
+fn arranges_motion_is_inside_the_cores_ranges() {
+    use crate::shell::{ROOM_OMEGA, ROW_DAMPING, ROW_RESPONSE};
+    use crate::tokens::shell::boost::motion::REST;
+    assert!((0.05..=1.).contains(&REST), "rest {REST}");
+    assert!((5. ..=100.).contains(&ROOM_OMEGA), "room {ROOM_OMEGA}");
+    assert!((0.05..=1.).contains(&ROW_RESPONSE), "land {ROW_RESPONSE}");
+    assert!((0.2..=0.99).contains(&ROW_DAMPING), "land {ROW_DAMPING}");
+}

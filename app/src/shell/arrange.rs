@@ -15,6 +15,7 @@ use super::{
 use crate::boosts::{self, Arranged};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::theme::packed;
+use crate::tokens::shell::boost::motion::REST;
 use crate::tokens::shell::boost::{
     LIST_TOP, MARK_LINE, MARK_RADIUS, MISFIT, PUT_BACK, PUT_BACK_GLYPH, ROW_GAP, ROW_TOP,
 };
@@ -31,7 +32,8 @@ impl Shell {
         self.stop_arrange(cx);
         // check.sh reads this line.
         log!("browser: arrange {tab} started");
-        // The marks in the page are the Space's, as the card's own controls are.
+        // The marks in the page are the Space's, as the card's own controls are, and the page
+        // moves on the sidebar's springs: making room as the Favorites do, landing as a row does.
         let palette = &self.palette;
         let look = boosts::arrange::Look {
             accent: packed(palette.accent),
@@ -39,6 +41,10 @@ impl Shell {
             ink: packed(palette.ink),
             line: MARK_LINE,
             radius: MARK_RADIUS,
+            rest: REST,
+            room_omega: super::ROOM_OMEGA,
+            land_response: super::ROW_RESPONSE,
+            land_damping: super::ROW_DAMPING,
         };
         if self.browser.arrange(tab, Some(&look), cx) {
             self.arranging = Some(tab);
