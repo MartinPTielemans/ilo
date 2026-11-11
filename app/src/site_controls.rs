@@ -909,6 +909,7 @@ pub fn show(
     extensions: Vec<Extension>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<SiteControls>(cx);
     update(cx, |panel, _, cx| {
         if panel
             .open

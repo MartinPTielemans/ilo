@@ -25,8 +25,8 @@ use super::{
     SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_ICON_PLATE, SPACE_MORE, SPACE_MORE_INSET,
     SPACE_NAME, SPACE_NAME_SHUT, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_DOT,
     STATUS_LOADING, Shell, Slot, Swapped, TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label,
-    cubic_bezier, developer_outline, divider_box, favicon, folder_icon, host, icon_placeholder,
-    icon_slot, name_box, new_tab_label, plate, row_box, row_spring,
+    cubic_bezier, developer_outline, divider_box, favicon, favicon_source, folder_icon, host,
+    icon_placeholder, icon_slot, name_box, new_tab_label, plate, row_box, row_spring,
     scaled::scaled_from_middle,
     selected_plate, space_icon, split_plate,
     swap::{ARROW_DOWN, NONE, folder_glyph},
@@ -35,6 +35,7 @@ use super::{
 use super::{
     access::{Accessible, NEW_TAB},
     drag::in_sidebar,
+    return_mark::Bitmap,
 };
 use crate::{
     icon_picker::{self, Subject},
@@ -832,6 +833,18 @@ impl Shell {
         }
     }
 
+    /// The bitmap `tab_icon_in` draws, if it draws one: not an emoji or the globe.
+    pub(super) fn tab_bitmap_in(&self, palette: &Palette, tab: u64) -> Option<Bitmap> {
+        let each = self.tabs.get(&tab)?;
+        if has_icon(&each.page.icon) {
+            return None;
+        }
+        Some(Bitmap {
+            source: favicon_source(palette, each.favicon.clone())?,
+            drawn: FAVICON_DRAWN,
+        })
+    }
+
     /// Shows `tab` for a press on its row, or its segment of a split view's, at once, as Arc's
     /// does, even if the press becomes a drag. Its page takes the keyboard, as a tab clicked in
     /// Chrome's tab strip does, so the keys that follow, ⌘D or Space, are the page's.
@@ -937,6 +950,7 @@ impl Shell {
         width: f32,
         first: bool,
         focused: bool,
+        cx: &App,
     ) -> gpui::Div {
         let page = self.page(tab);
         let icon = div()
@@ -947,7 +961,14 @@ impl Shell {
             .items_center()
             .justify_center()
             .when(page.unloaded, |icon| icon.opacity(SLEEPING_FAVICON))
-            .child(self.tab_icon_in(palette, tab));
+            .child(self.with_return_mark(
+                palette,
+                tab,
+                FAVICON_SIZE,
+                self.tab_bitmap_in(palette, tab),
+                || self.tab_icon_in(palette, tab),
+                cx,
+            ));
         let line = div()
             .absolute()
             .left_0()
@@ -986,7 +1007,7 @@ impl Shell {
         focused: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        self.segment(&self.palette, tab, width, first, focused)
+        self.segment(&self.palette, tab, width, first, focused, cx)
             .id(("segment", tab))
             .when(self.a11y, |segment| {
                 segment
@@ -1105,7 +1126,7 @@ impl Shell {
                     })
                     .collect();
                 if let Some(((tab, _), slot)) = drop.zip(slot) {
-                    segments.insert(slot, self.drop_slot(tab, width, slot == 0));
+                    segments.insert(slot, self.drop_slot(tab, width, slot == 0, cx));
                 }
                 split_plate(segments).children(close)
             }
@@ -1211,7 +1232,7 @@ impl Shell {
 
     /// The slot `tab`, dragged onto a row, would take in the split view it would make: its segment,
     /// faint, on a plate inset in its place, so the row reads as the split before it's let go.
-    fn drop_slot(&self, tab: u64, width: f32, first: bool) -> AnyElement {
+    fn drop_slot(&self, tab: u64, width: f32, first: bool, cx: &App) -> AnyElement {
         // The first segment starts inside the split plate's padding, and the slot from its edge.
         let padding = FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X;
         let left = if first {
@@ -1228,7 +1249,7 @@ impl Shell {
             .rounded(px(PLATE_RADIUS - DROP_SLOT_INSET))
             .bg(self.palette.plate(HOVERED));
         let segment = self
-            .segment(&self.palette, tab, width, first, false)
+            .segment(&self.palette, tab, width, first, false, cx)
             .opacity(SECONDARY);
         let slot = div().relative().flex_1().min_w_0().h_full().flex();
         slot.child(fill).child(segment).into_any_element()
@@ -1341,7 +1362,17 @@ impl Shell {
                 .size(px(FAVICON_DRAWN))
                 .text_color(self.palette.glyph(NAV))
                 .into_any_element(),
-            false => self.tab_icon(tab),
+            false => {
+                let bitmap = self.tab_bitmap_in(&self.palette, tab);
+                self.with_return_mark(
+                    &self.palette,
+                    tab,
+                    FAVICON_SIZE,
+                    bitmap,
+                    || self.tab_icon(tab),
+                    cx,
+                )
+            }
         };
         let icon = div()
             .id(("favicon", tab))
