@@ -7,8 +7,10 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
+#include "browser_core/ax_text.h"
 #include "browser_core/public/browser_core.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
@@ -60,11 +62,11 @@ class PageText : public content::WebContentsObserver,
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
-// The page's text from |update|, a line for each block, from the documents whose URL is in
-// |readable| alone: those of the frames an agent may read (IsWebFrame). The snapshot names no frame
-// but by its document's URL.
-std::string TextOf(const ui::AXTreeUpdate& update,
-                   const std::set<std::string, std::less<>>& readable);
+// Snapshots |contents|' page as PageText does and gives TextUnder |node|, or nothing once the page
+// is gone, posted.
+void ReadElementText(content::WebContents& contents,
+                     int node,
+                     base::OnceCallback<void(ElementText)> done);
 
 }  // namespace browser_core
 

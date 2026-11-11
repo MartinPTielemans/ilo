@@ -60,6 +60,7 @@
 #include "browser_core/permission_question.h"
 #include "browser_core/platform/playready.h"
 #include "browser_core/platform/window_views.h"
+#include "browser_core/point.h"
 #include "browser_core/profiles.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/search.h"
@@ -540,6 +541,13 @@ bool bc_agent_may_act(const char* agent,
       refused = "The user is arranging this page. Try again once they're done.";
     }
   }
+  if (refused.empty() && contents) {
+    // The user's clicks there are Point's until they send or close it.
+    const browser_core::PagePoint* point = browser_core::PagePoint::FromWebContents(contents);
+    if (point && point->on()) {
+      refused = "The user is pointing at this page. Try again once they've answered.";
+    }
+  }
   if (refused.empty() && contents &&
       browser_core::Tab::FromWebContents(contents)->system_page()) {
     // Its Space never switches a tab there, but the rule is the core's to keep, not the UI's.
@@ -607,6 +615,12 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   if (browser_core::Arrange* arrange =
           contents ? browser_core::Arrange::FromWebContents(contents) : nullptr) {
     arrange->End(/*tell=*/true);
+  }
+  // Pointing for one agent never goes on in another's Space.
+  if (browser_core::PagePoint* point =
+          contents ? browser_core::PagePoint::FromWebContents(contents) : nullptr;
+      point && point->on() && point->agent() != to->agent()->id) {
+    point->End(/*tell=*/true);
   }
   browser_core::Window::MoveToSpace(tab, space, /*to_agent=*/true);
   if (browser_core::Space::Holding(tab) != to) {
@@ -2262,6 +2276,34 @@ bool bc_tab_arrange(bc_id id, bool on, const bc_arrange_look* look) {
     }
   }
   return arrange->Start(marks);
+}
+
+int bc_tab_may_point(bc_id id, const char* agent) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  return contents ? browser_core::PagePoint::May(*contents, agent ? agent : "")
+                  : BC_POINT_NOT_WEB;
+}
+
+int bc_tab_point(bc_id id, const char* agent, bool on) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  browser_core::PagePoint* point =
+      contents ? browser_core::PagePoint::FromWebContents(contents) : nullptr;
+  if (!point) {
+    return BC_POINT_NOT_WEB;
+  }
+  if (!on) {
+    point->End(/*tell=*/false);
+    return BC_POINT_CAN;
+  }
+  return point->Start(agent ? agent : "");
+}
+
+void bc_tab_point_do(bc_id id, int action) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (browser_core::PagePoint* point =
+          contents ? browser_core::PagePoint::FromWebContents(contents) : nullptr) {
+    point->Do(action);
+  }
 }
 
 void bc_tab_arrange_do(bc_id id, int action) {
