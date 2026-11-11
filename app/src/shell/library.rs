@@ -1011,6 +1011,13 @@ impl Shell {
         self.sidebar_fade = None;
         // check.sh waits for these lines.
         if self.library_open {
+            // check/sidebar-right.sh reads which side it opened on.
+            let left = self.library_x();
+            log!(
+                "browser: library across {left:.0} to {:.0} of {:.0}",
+                left + self.library_width(),
+                f32::from(self.viewport.width)
+            );
             log!("browser: library shown");
         } else {
             log!("browser: library hidden");
