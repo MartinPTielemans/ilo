@@ -9,7 +9,8 @@
 # page's title for the run to read. The power rows are each browser's processes' energy, from
 # proc_pid_rusage's ri_energy_nj (check/usage.py), which needs no root: it counts their CPUs' energy,
 # not the GPU's or the display's, which only powermetrics reads, as root. Each row is three 20 s
-# windows, their median and range: idle in view, on a page of boxes and text with nothing moving;
+# windows, their median and range: idle in view, on a page of boxes and text with nothing moving,
+# from 2 minutes after it painted, as perf's settled rows;
 # idle hidden, the window minimized; scrolling that page down and up, a trackpad's events every 8 ms
 # (the driver's in the app, DevTools' in Chrome); switching among 5 tabs twice a second; and a
 # 1080p H.264 video playing, looped and muted. It says the machine, macOS, the power source and each
@@ -132,7 +133,7 @@ bench_power() {
     python3 -I check/usage.py idle "$bench_dir/$name-$((n - 1)).json" "$bench_dir/$name-$n.json" |
       cut -d' ' -f1 >> "$bench_dir/$name.cpu"
   done
-  if [ "$(awk '{ s += $1 } END { print s > 0 }' "$bench_dir/$name.mw")" = 1 ]; then
+  if [ "$(awk '{ s += $1 } END { print (s > 0) }' "$bench_dir/$name.mw")" = 1 ]; then
     power="$(bench_stats '%.1f' < "$bench_dir/$name.mw") mW"
   else
     power="unmeasured: ri_energy_nj read 0 for the browser's processes here"
@@ -200,7 +201,9 @@ bench_procs=$procs
 ilo_launch "${site}bench.html?b1" power
 ilo_await "^browser: title [0-9]* b1 fcp" 30 "the bench page didn't paint"
 send click $page_point
-sleep 30 # the launch's own work settling, before idle counts
+# uBlock Origin works on and off after a launch (53–123 mW 30–90 s in, on a MacBook), and perf's
+# settled idle has it quiet by 2 minutes. Idle counts from there, as Chrome has no extension.
+sleep 120
 bench_power ilo-idle idle_moment
 bench_row power-idle "Power, idle, window in view, ilo" "$power, CPU $cpu" "Ardia 3.5 mW"
 send minimize
@@ -326,7 +329,7 @@ chrome_await "^cdp: title [^ ]* b1 fcp" 30 "the bench page didn't paint in Chrom
 first=$(sed -n 's/^cdp: title \([^ ]*\) b1 fcp$/\1/p' "$log" | head -1)
 # cdp.py asks for the titles each 50 ms, which power mustn't count.
 echo "titles off" >&5
-sleep 30 # the launch's own work settling, before idle counts
+sleep 120 # settled, as ilo's idle
 bench_power chrome-idle idle_moment
 bench_row chrome-power-idle "Power, idle, window in view, Chrome for Testing" "$power, CPU $cpu" "ilo's"
 echo "state minimized" >&5
