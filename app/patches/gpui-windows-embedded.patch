@@ -83,8 +83,44 @@ index 4ad4cc77b3..48291220e4 100644
          if current == DIRECTMANIPULATION_READY {
              self.end_gesture();
  
+diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
+index 622c1cb604..c48a028ff1 100644
+--- a/crates/gpui_windows/src/directx_atlas.rs
++++ b/crates/gpui_windows/src/directx_atlas.rs
+@@ -107,6 +107,7 @@ impl AtlasBackend for DirectXAtlasTextures {
+ 
+     fn remove(&mut self, tile: AtlasTile) {
+         let id = tile.texture_id;
++        let atlas = self as *const Self;
+ 
+         let textures = match id.kind {
+             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
+@@ -122,6 +123,7 @@ impl AtlasBackend for DirectXAtlasTextures {
+             texture.allocator.deallocate(tile.tile_id.into());
+             texture.decrement_ref_count();
+             if texture.is_unreferenced() {
++                eprintln!("browser: gpu atlas {:p} {:?} freed", atlas, texture.id.kind);
+                 textures.free_list.push(texture.id.index as usize);
+             } else {
+                 *texture_slot = Some(texture);
+@@ -216,6 +218,15 @@ impl DirectXAtlasTextures {
+                 .ok()?;
+         }
+         let texture = texture.unwrap();
++        // Proof only (#2317): each atlas texture, by its atlas.
++        eprintln!(
++            "browser: gpu atlas {:p} {:?} {}x{} {} bytes",
++            self as *const Self,
++            kind,
++            size.width.0,
++            size.height.0,
++            size.width.0 as u64 * size.height.0 as u64 * bytes_per_pixel as u64
++        );
+ 
+         let texture_list = match kind {
+             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
-index 98a13f304c..6cfbd572ae 100644
+index 98a13f304c..363127a9b4 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
 @@ -73,16 +73,36 @@ struct DirectXResources {
@@ -129,7 +165,15 @@ index 98a13f304c..6cfbd572ae 100644
  struct DirectXRenderPipelines {
      shadow_pipeline: PipelineState<Shadow>,
      quad_pipeline: PipelineState<Quad>,
-@@ -409,7 +429,6 @@ impl DirectXRenderer {
+@@ -163,6 +183,7 @@ impl DirectXRenderer {
+         let devices = DirectXRendererDevices::new(directx_devices, disable_direct_composition)
+             .context("Creating DirectX devices")?;
+         let atlas = Arc::new(DirectXAtlas::new(&devices.device, &devices.device_context));
++        eprintln!("browser: gpu renderer {:?} made", hwnd);
+ 
+         let resources = DirectXResources::new(&devices, 1, 1, hwnd, disable_direct_composition)
+             .context("Creating DirectX resources")?;
+@@ -409,7 +430,6 @@ impl DirectXRenderer {
      /// goes through MetalRenderer; this is the Windows analogue). Draws into
      /// the existing render target, copies it into a `D3D11_USAGE_STAGING`
      /// texture, maps it, and converts BGRA to RGBA.
@@ -137,13 +181,36 @@ index 98a13f304c..6cfbd572ae 100644
      pub(crate) fn render_to_image(
          &mut self,
          scene: &Scene,
-@@ -618,16 +637,21 @@ impl DirectXRenderer {
+@@ -516,6 +536,14 @@ impl DirectXRenderer {
+         }
+ 
+         resources.recreate_resources(devices, width, height)?;
++        eprintln!(
++            "browser: gpu swap chain {:?} {}x{} x{} {} bytes",
++            self.hwnd,
++            width,
++            height,
++            BUFFER_COUNT,
++            width as u64 * height as u64 * 4 * BUFFER_COUNT as u64
++        );
+ 
+         unsafe {
+             devices
+@@ -618,16 +646,29 @@ impl DirectXRenderer {
          }
  
          let devices = self.devices.as_ref().context("devices missing")?;
 +        let resources = self.resources.as_mut().context("resources missing")?;
 +        if resources.path_textures.is_none() {
 +            resources.path_textures = Some(PathTextures::new(&devices.device, &resources.viewport)?);
++            let (w, h) = (resources.viewport.Width as u64, resources.viewport.Height as u64);
++            eprintln!(
++                "browser: gpu path textures {:?} {}x{} {} bytes",
++                self.hwnd,
++                w,
++                h,
++                w * h * 4 * (1 + PATH_MULTISAMPLE_COUNT as u64)
++            );
 +        }
          let resources = self.resources.as_ref().context("resources missing")?;
 +        let path_textures = resources.path_textures.as_ref().unwrap();
@@ -161,7 +228,7 @@ index 98a13f304c..6cfbd572ae 100644
                  None,
              );
          }
-@@ -660,9 +684,9 @@ impl DirectXRenderer {
+@@ -660,9 +701,9 @@ impl DirectXRenderer {
          // Resolve MSAA to non-MSAA intermediate texture
          unsafe {
              devices.device_context.ResolveSubresource(
@@ -173,7 +240,7 @@ index 98a13f304c..6cfbd572ae 100644
                  0,
                  RENDER_TARGET_FORMAT,
              );
-@@ -704,6 +728,10 @@ impl DirectXRenderer {
+@@ -704,6 +745,10 @@ impl DirectXRenderer {
  
          let devices = self.devices.as_ref().context("devices missing")?;
          let resources = self.resources.as_ref().context("resources missing")?;
@@ -184,7 +251,7 @@ index 98a13f304c..6cfbd572ae 100644
          self.pipelines.path_sprite_pipeline.update_buffer(
              &devices.device,
              &devices.device_context,
-@@ -713,7 +741,7 @@ impl DirectXRenderer {
+@@ -713,7 +758,7 @@ impl DirectXRenderer {
          // Draw the sprites with the path texture
          self.pipelines.path_sprite_pipeline.draw_with_texture(
              &devices.device_context,
@@ -193,7 +260,7 @@ index 98a13f304c..6cfbd572ae 100644
              slice::from_ref(&self.globals.sampler),
              sprites.len() as u32,
          )
-@@ -889,25 +917,15 @@ impl DirectXResources {
+@@ -889,25 +934,15 @@ impl DirectXResources {
              )?
          };
  
@@ -222,7 +289,7 @@ index 98a13f304c..6cfbd572ae 100644
              viewport,
          })
      }
-@@ -919,21 +937,12 @@ impl DirectXResources {
+@@ -919,21 +954,12 @@ impl DirectXResources {
          width: u32,
          height: u32,
      ) -> Result<()> {
@@ -248,7 +315,30 @@ index 98a13f304c..6cfbd572ae 100644
          self.viewport = viewport;
          Ok(())
      }
-@@ -1359,20 +1368,12 @@ fn create_resources(
+@@ -1114,6 +1140,10 @@ impl<T> PipelineState<T> {
+         };
+         let buffer = create_buffer(device, std::mem::size_of::<T>(), buffer_size)?;
+         let view = create_buffer_view(device, &buffer)?;
++        eprintln!(
++            "browser: gpu buffer {label} {} bytes",
++            std::mem::size_of::<T>() * buffer_size
++        );
+ 
+         Ok(PipelineState {
+             label,
+@@ -1153,6 +1183,11 @@ impl<T> PipelineState<T> {
+             );
+             let buffer = create_buffer(device, std::mem::size_of::<T>(), new_buffer_size)?;
+             let view = create_buffer_view(device, &buffer)?;
++            eprintln!(
++                "browser: gpu buffer {} grew to {} bytes",
++                self.label,
++                element_size * new_buffer_size
++            );
+             self.buffer = buffer;
+             self.view = view;
+             self.buffer_size = new_buffer_size;
+@@ -1359,20 +1394,12 @@ fn create_resources(
      width: u32,
      height: u32,
  ) -> Result<(
@@ -269,7 +359,7 @@ index 98a13f304c..6cfbd572ae 100644
      let viewport = D3D11_VIEWPORT {
          TopLeftX: 0.0,
          TopLeftY: 0.0,
-@@ -1381,15 +1382,7 @@ fn create_resources(
+@@ -1381,15 +1408,7 @@ fn create_resources(
          MinDepth: 0.0,
          MaxDepth: 1.0,
      };
