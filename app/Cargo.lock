@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "async-io",
  "base64 0.22.1",
