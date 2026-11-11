@@ -15,6 +15,7 @@
 #include "browser_core/arrangement.h"
 #include "browser_core/boosts.h"
 #include "browser_core/host.h"
+#include "browser_core/point.h"
 #include "browser_core/profiles.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -1375,6 +1376,10 @@ bool Arrange::Start(const Look& look) {
   Space* space = Space::Holding(tab_);
   if (!arrange_rule::MayStart(Site(), contents->GetBrowserContext()->IsOffTheRecord(),
                               space && space->agent())) {
+    return false;
+  }
+  // The user is pointing at the page for an agent, which ends first.
+  if (const PagePoint* point = PagePoint::FromWebContents(contents); point && point->on()) {
     return false;
   }
   // Zap takes the page's presses too.

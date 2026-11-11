@@ -29,6 +29,7 @@
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/keyboard.h"
 #include "browser_core/platform/window_views.h"
+#include "browser_core/point.h"
 #include "browser_core/script_dialog.h"
 #include "browser_core/session.h"
 #include "browser_core/developer_mode.h"
@@ -380,6 +381,7 @@ void Tab::Attach(content::WebContents* contents) {
   PagePresses::CreateForWebContents(contents, id_);
   Boosts::CreateForWebContents(contents, id_);
   Arrange::CreateForWebContents(contents, id_);
+  PagePoint::CreateForWebContents(contents, id_);
   // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
   AutofillMenu::Watch(contents);
   // Its page's language, and the app's translation of it (#671).
