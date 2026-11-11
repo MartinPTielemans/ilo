@@ -411,6 +411,9 @@ fn update(cx: &mut App, f: impl FnOnce(&mut HoverCard, &mut Context<HoverCard>))
 /// after LEAVE unless it's onto the card; what a tab's card shows, as it changes; or the card's
 /// end.
 pub fn hover(hover: Hover, cx: &mut App) {
+    if matches!(hover, Hover::Rest(_)) {
+        crate::lazy_window::ready::<HoverCard>(cx);
+    }
     update(cx, |card, cx| match hover {
         Hover::Rest(rest) => card.rest(rest, cx),
         Hover::Left(tab) => card.left(tab, cx),
