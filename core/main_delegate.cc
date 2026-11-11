@@ -242,6 +242,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     RegisterDownloadPrefs();
     developer_mode::RegisterProfilePrefs();
     notes::RegisterProfilePrefs();
+    RegisterAdBlockPrefs();
     RegisterWebRtc();
     widevine::Start();
   }
