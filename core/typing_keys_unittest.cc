@@ -54,11 +54,15 @@ TEST(TypingKeysTest, ALineBreakIsTextWithItsNeighbour) {
        {u"line one\nline two\n\nline four", u"a\n\n\n\n\nb", u"\n\n\nx", u"😀\n\n", u"x\n\n\n"}) {
     EXPECT_EQ(Inserted(text), text);
     for (const base::DictValue& key : TypingKeys(text)) {
+      // The other characters are their own keys; each line break is in a keypress of more than
+      // a lone control character, which Blink doesn't insert, and at most 3 units.
       const std::string* typed = key.FindString("text");
-      // More than a lone control character, which Blink doesn't insert, and at most 3 units.
+      if (typed->find('\n') == std::string::npos) {
+        continue;
+      }
+      EXPECT_EQ(*key.FindString("type"), "char") << *typed;
       EXPECT_GE(base::UTF8ToUTF16(*typed).size(), 2u) << *typed;
       EXPECT_LE(base::UTF8ToUTF16(*typed).size(), 3u) << *typed;
-      EXPECT_NE(*key.FindString("type"), "keyDown") << *typed;
     }
   }
   // Only a text that's a line break alone has Enter's keypress, as nothing else puts it in.
