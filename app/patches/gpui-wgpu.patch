@@ -14,21 +14,44 @@ index 3ce9dcecc4..ce6de4149b 100644
  [target.'cfg(not(any(target_os = "linux", target_os = "freebsd")))'.dependencies]
  wgpu = { workspace = true, default-features = true }
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
-index 16d451f008..86c32284ee 100644
+index 16d451f008..9551a45d9e 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs
 +++ b/crates/gpui_wgpu/src/wgpu_context.rs
-@@ -7,6 +7,10 @@ use std::sync::Arc;
+@@ -7,6 +7,33 @@ use std::sync::Arc;
  use std::sync::atomic::{AtomicBool, Ordering};
  use wgpu::TextureFormat;
  
-+/// The instance make_instance_early started, until a renderer takes it.
++/// What make_instance_early started, until the first renderer takes it.
 +#[cfg(not(target_family = "wasm"))]
-+static EARLY_INSTANCE: Mutex<Option<std::thread::JoinHandle<wgpu::Instance>>> = Mutex::new(None);
++static EARLY: Mutex<Option<Early>> = Mutex::new(None);
++
++/// The compositor's GPU, which the platform notes as it connects, before make_instance_early.
++#[cfg(not(target_family = "wasm"))]
++static COMPOSITOR_GPU: Mutex<Option<CompositorGpuHint>> = Mutex::new(None);
++
++#[cfg(not(target_family = "wasm"))]
++enum Early {
++    Making(std::thread::JoinHandle<(wgpu::Instance, Option<EarlyDevice>)>),
++    /// Its instance is taken, and the device waits for the context made with it.
++    Device(EarlyDevice),
++}
++
++/// A device made early, on the adapter a first context tries first.
++#[cfg(not(target_family = "wasm"))]
++struct EarlyDevice {
++    instance: wgpu::Instance,
++    compositor_gpu: Option<CompositorGpuHint>,
++    adapter: wgpu::Adapter,
++    device: wgpu::Device,
++    queue: wgpu::Queue,
++    dual_source_blending: bool,
++    color_texture_format: TextureFormat,
++}
 +
  #[derive(Clone)]
  pub struct WgpuContext {
      pub instance: wgpu::Instance,
-@@ -17,6 +21,8 @@ pub struct WgpuContext {
+@@ -17,6 +44,8 @@ pub struct WgpuContext {
      dual_source_blending: bool,
      color_texture_format: wgpu::TextureFormat,
      errors: Arc<DeviceErrorState>,
@@ -37,7 +60,46 @@ index 16d451f008..86c32284ee 100644
  }
  
  /// Errors reported by wgpu's device-wide callbacks.
-@@ -313,6 +319,7 @@ impl WgpuContext {
+@@ -120,7 +149,7 @@ impl raw_window_handle::HasDisplayHandle for WebDisplaySource {
+     }
+ }
+ 
+-#[derive(Clone, Copy)]
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ pub struct CompositorGpuHint {
+     pub vendor_id: u32,
+     pub device_id: u32,
+@@ -152,6 +181,29 @@ impl WgpuContext {
+         compositor_gpu: Option<CompositorGpuHint>,
+         reject_software: bool,
+     ) -> anyhow::Result<Self> {
++        // The device made early is on the adapter the loop below tries first, so only the surface's
++        // test is left. Making it took 12 to 14 ms of the first window's path on llvmpipe (#2384).
++        if !reject_software
++            && let Some(early) = Self::take_early_device(&instance, compositor_gpu)
++        {
++            match gpui::block_on(Self::test_surface(&early.adapter, &early.device, surface)) {
++                Ok(()) => {
++                    return Ok(Self::from_native_adapter_and_device(
++                        instance,
++                        early.adapter,
++                        early.device,
++                        early.queue,
++                        early.dual_source_blending,
++                        early.color_texture_format,
++                    ));
++                }
++                Err(e) => log::info!(
++                    "Early device on {} failed: {e}, trying every adapter...",
++                    early.adapter.get_info().name
++                ),
++            }
++        }
++
+         let device_id_filter = Self::device_id_filter();
+ 
+         // Select an adapter by actually testing surface configuration with the real device.
+@@ -313,6 +365,7 @@ impl WgpuContext {
              dual_source_blending,
              color_texture_format,
              errors,
@@ -45,7 +107,7 @@ index 16d451f008..86c32284ee 100644
          }
      }
  
-@@ -412,6 +419,7 @@ impl WgpuContext {
+@@ -412,6 +465,7 @@ impl WgpuContext {
              dual_source_blending,
              color_texture_format,
              errors,
@@ -53,30 +115,86 @@ index 16d451f008..86c32284ee 100644
          };
          Ok(PreparedWebGraphics { context, surface })
      }
-@@ -470,8 +478,33 @@ impl WgpuContext {
+@@ -470,8 +524,89 @@ impl WgpuContext {
          ))
      }
  
 +    /// Starts making the instance on a thread, for the first renderer to take rather than make its
 +    /// own. Loading the Vulkan drivers took 32 ms of the main thread as the browser's first window
 +    /// opened, on the CI runner's llvmpipe (#2384). It needs no window, and Vulkan, the one backend
-+    /// this crate builds on Linux (Cargo.toml), reads no display handle as it makes one.
++    /// this crate builds on Linux (Cargo.toml), reads no display handle as it makes one. The thread
++    /// then makes the device on the adapter the first context tries first, which needs no window
++    /// either, with the compositor's GPU the platform noted.
 +    #[cfg(not(target_family = "wasm"))]
 +    pub fn make_instance_early() {
-+        let mut early = EARLY_INSTANCE.lock();
++        let mut early = EARLY.lock();
 +        if early.is_none() {
++            let compositor_gpu = *COMPOSITOR_GPU.lock();
 +            *early = std::thread::Builder::new()
 +                .name("wgpu instance".into())
-+                .spawn(|| Self::new_instance(None))
-+                .ok();
++                .spawn(move || {
++                    let instance = Self::new_instance(None);
++                    let device = gpui::block_on(Self::early_device(&instance, compositor_gpu));
++                    (instance, device)
++                })
++                .ok()
++                .map(Early::Making);
++        }
++    }
++
++    /// The platform's note of the compositor's GPU, for make_instance_early's device.
++    #[cfg(not(target_family = "wasm"))]
++    pub fn note_compositor_gpu(compositor_gpu: Option<CompositorGpuHint>) {
++        *COMPOSITOR_GPU.lock() = compositor_gpu;
++    }
++
++    #[cfg(not(target_family = "wasm"))]
++    async fn early_device(
++        instance: &wgpu::Instance,
++        compositor_gpu: Option<CompositorGpuHint>,
++    ) -> Option<EarlyDevice> {
++        let mut adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
++        Self::sort_adapters(&mut adapters, Self::device_id_filter(), compositor_gpu.as_ref());
++        let adapter = adapters.into_iter().next()?;
++        let (device, queue, dual_source_blending, color_texture_format) =
++            Self::create_device(&adapter).await.log_err()?;
++        Some(EarlyDevice {
++            instance: instance.clone(),
++            compositor_gpu,
++            adapter,
++            device,
++            queue,
++            dual_source_blending,
++            color_texture_format,
++        })
++    }
++
++    /// The early device, if it was made with this instance and compositor GPU.
++    #[cfg(not(target_family = "wasm"))]
++    fn take_early_device(
++        instance: &wgpu::Instance,
++        compositor_gpu: Option<CompositorGpuHint>,
++    ) -> Option<EarlyDevice> {
++        let mut early = EARLY.lock();
++        match early.take() {
++            Some(Early::Device(device)) => (device.instance == *instance
++                && device.compositor_gpu == compositor_gpu)
++                .then_some(device),
++            making => {
++                *early = making;
++                None
++            }
 +        }
 +    }
 +
      #[cfg(not(target_family = "wasm"))]
      pub fn instance(display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>) -> wgpu::Instance {
 +        // The one made early serves once: after a lost device, the next is made here.
-+        let early = EARLY_INSTANCE.lock().take();
-+        if let Some(instance) = early.and_then(|early| early.join().ok()) {
++        let mut early = EARLY.lock();
++        if let Some(Early::Making(making)) = early.take()
++            && let Ok((instance, device)) = making.join()
++        {
++            *early = device.map(Early::Device);
 +            return instance;
 +        }
 +        Self::new_instance(display)
@@ -87,6 +205,81 @@ index 16d451f008..86c32284ee 100644
          wgpu::Instance::new(wgpu::InstanceDescriptor {
              backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
              flags: wgpu::InstanceFlags::default(),
+@@ -645,6 +780,34 @@ impl WgpuContext {
+         adapter: &wgpu::Adapter,
+         surface: &wgpu::Surface<'_>,
+     ) -> anyhow::Result<(wgpu::Device, wgpu::Queue, bool, TextureFormat)> {
++        let caps = Self::surface_caps(adapter, surface)?;
++        let (device, queue, dual_source_blending, color_atlas_texture_format) =
++            Self::create_device(adapter).await?;
++        Self::configure_test(&device, surface, &caps).await?;
++        Ok((
++            device,
++            queue,
++            dual_source_blending,
++            color_atlas_texture_format,
++        ))
++    }
++
++    /// The surface's test alone, for a device made already.
++    #[cfg(not(target_family = "wasm"))]
++    async fn test_surface(
++        adapter: &wgpu::Adapter,
++        device: &wgpu::Device,
++        surface: &wgpu::Surface<'_>,
++    ) -> anyhow::Result<()> {
++        let caps = Self::surface_caps(adapter, surface)?;
++        Self::configure_test(device, surface, &caps).await
++    }
++
++    #[cfg(not(target_family = "wasm"))]
++    fn surface_caps(
++        adapter: &wgpu::Adapter,
++        surface: &wgpu::Surface<'_>,
++    ) -> anyhow::Result<wgpu::SurfaceCapabilities> {
+         let caps = surface.get_capabilities(adapter);
+         if caps.formats.is_empty() {
+             anyhow::bail!("no compatible surface formats");
+@@ -652,9 +815,15 @@ impl WgpuContext {
+         if caps.alpha_modes.is_empty() {
+             anyhow::bail!("no compatible alpha modes");
+         }
++        Ok(caps)
++    }
+ 
+-        let (device, queue, dual_source_blending, color_atlas_texture_format) =
+-            Self::create_device(adapter).await?;
++    #[cfg(not(target_family = "wasm"))]
++    async fn configure_test(
++        device: &wgpu::Device,
++        surface: &wgpu::Surface<'_>,
++        caps: &wgpu::SurfaceCapabilities,
++    ) -> anyhow::Result<()> {
+         let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+ 
+         let test_config = wgpu::SurfaceConfiguration {
+@@ -669,19 +838,13 @@ impl WgpuContext {
+             view_formats: vec![],
+         };
+ 
+-        surface.configure(&device, &test_config);
++        surface.configure(device, &test_config);
+ 
+         let error = error_scope.pop().await;
+         if let Some(e) = error {
+             anyhow::bail!("surface configuration failed: {e}");
+         }
+-
+-        Ok((
+-            device,
+-            queue,
+-            dual_source_blending,
+-            color_atlas_texture_format,
+-        ))
++        Ok(())
+     }
+ 
+     fn select_color_texture_format(adapter: &wgpu::Adapter) -> anyhow::Result<wgpu::TextureFormat> {
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
 index a148a4ccfb..bb264118f7 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
