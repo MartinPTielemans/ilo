@@ -464,6 +464,12 @@ impl TextInput {
         self.marked_range.is_some()
     }
 
+    /// The field's text if it isn't `last` and an input method has committed it: what Find
+    /// searches as the user types, as Chrome's does.
+    pub fn committed_change(&self, last: &str) -> Option<&str> {
+        (!self.composing() && self.content != last).then_some(self.text())
+    }
+
     /// The field's text without what an input method is still composing in it.
     pub fn committed(&self) -> String {
         match &self.marked_range {
@@ -1651,6 +1657,8 @@ impl Focusable for TextInput {
     }
 }
 
+#[cfg(test)]
+pub(crate) mod korean;
 #[cfg(test)]
 mod leave_tests;
 #[cfg(test)]
