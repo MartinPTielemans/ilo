@@ -2991,6 +2991,15 @@ fn main() {
                         placeholder: "Day and time".into(),
                         text: "Wed 11 Nov 08:00".into(),
                         secure: false,
+                        // The mocks' clock, Tuesday 10 November 14:25.
+                        reads: Some(Rc::new(|text: &str| {
+                            let now = chrono::NaiveDate::from_ymd_opt(2026, 11, 10)
+                                .and_then(|day| day.and_hms_opt(14, 25, 0))
+                                .unwrap_or_default();
+                            browser::snooze::read(text, now)
+                                .map(|at| browser::snooze::full(at, now).into())
+                                .map_err(Into::into)
+                        })),
                     }],
                     check: None,
                     on_return: dialog::Return::Action,

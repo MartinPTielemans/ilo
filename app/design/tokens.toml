@@ -285,6 +285,10 @@ return-glyph = 16.0
 # checkbox under them, ticked in the action's colour.
 fields-top = 16.0
 field-gap = 8.0
+# A field that reads its text, such as the snooze picker's, says what it read in a line under
+# it, at the list's sub-line, in from the field as its text is: in the detail's ink when it
+# reads, the sub-line's when it doesn't (#2350).
+reading-top = 6.0
 field-text = 0.9
 field-placeholder = 0.45
 check-top = 14.0

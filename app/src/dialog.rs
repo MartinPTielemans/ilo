@@ -18,7 +18,8 @@ use std::{
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful, Task,
+    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful, Subscription,
+    Task,
     TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
     WindowOptions,
     accesskit::{Role, Toggled},
@@ -80,7 +81,7 @@ use crate::tokens::dialog::TITLE_LINE;
 use crate::tokens::dialog::WIDTH;
 use crate::tokens::dialog::{
     CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHECK_TOP, FIELD_GAP, FIELD_PLACEHOLDER,
-    FIELD_TEXT, FIELDS_TOP,
+    FIELD_TEXT, FIELDS_TOP, READING_TOP,
 };
 use crate::tokens::text;
 /// Arc's motion: over 0.275 s the window dims and the card comes down 32 pt into place,
@@ -134,7 +135,14 @@ pub struct Field {
     pub text: SharedString,
     /// It shows dots for what's typed, and won't copy it, as a password field.
     pub secure: bool,
+    /// What its text reads as, said in a quiet line under it as the user types, such as the
+    /// snooze picker's "Fri 13 Nov 17:30". While it reads as nothing, the line says why and the
+    /// action waits: no error dialog and no shake (#2350).
+    pub reads: Option<Reads>,
 }
+
+/// What a field's text reads as, or why it doesn't read.
+pub type Reads = Rc<dyn Fn(&str) -> Result<SharedString, SharedString>>;
 
 /// What the user answered: the action or not, what was in the fields, and the checkbox.
 pub struct Reply {
@@ -268,6 +276,8 @@ struct Asked {
     over: Option<(Bounds<Pixels>, f32)>,
     page: Option<(u64, u64)>,
     fields: Vec<Entity<TextInput>>,
+    /// Each field's line under it follows what's typed.
+    _fields_read: Vec<Subscription>,
     checked: bool,
     answered: Option<Box<dyn FnOnce(Reply, &mut App)>>,
     /// When its window was first on screen, where the motion starts.
@@ -319,6 +329,15 @@ fn drawn_into(
 }
 
 impl Asked {
+    /// What each field that reads its text reads as now.
+    fn readings<'a>(
+        &'a self,
+        cx: &'a App,
+    ) -> impl Iterator<Item = Result<SharedString, SharedString>> + 'a {
+        (self.fields.iter().zip(&self.question.fields))
+            .filter_map(move |(field, asked)| Some(asked.reads.as_ref()?(field.read(cx).text())))
+    }
+
     /// How long the dialog has been arriving, in seconds.
     fn arrived_for(&self) -> f32 {
         self.shown.map_or(0., |shown| shown.elapsed().as_secs_f32())
@@ -785,6 +804,15 @@ impl Dialog {
                 })
             })
             .collect();
+        let fields_read = (question.fields.iter().zip(&fields))
+            .filter(|(field, _)| field.reads.is_some())
+            .map(|(_, input)| cx.observe(input, |_, _, cx| cx.notify()))
+            .collect();
+        // Mock only (#2350): PREVIEW_SNOOZE_TYPED is typed into the field, the caret after it.
+        if let (Ok(typed), Some(field)) = (std::env::var("PREVIEW_SNOOZE_TYPED"), fields.first()) {
+            let caret = typed.len();
+            field.update(cx, |input, cx| input.set_text(typed.into(), caret, window, cx));
+        }
         match fields.first() {
             Some(field) => window.focus(&field.focus_handle(cx), cx),
             None => window.focus(&self.focus, cx),
@@ -797,6 +825,7 @@ impl Dialog {
             over,
             page,
             fields,
+            _fields_read: fields_read,
             checked: false,
             answered: Some(answered),
             shown: None,
@@ -915,8 +944,10 @@ impl Dialog {
             return;
         };
         let unsettled = asked.source.grants() && !asked.settling.settled(cx);
+        let unread = asked.readings(cx).any(|reading| reading.is_err());
         if asked.answered_at.is_some()
-            || (answer == Answer::Action && (asked.question.action.is_empty() || unsettled))
+            || (answer == Answer::Action
+                && (asked.question.action.is_empty() || unsettled || unread))
         {
             return;
         }
@@ -1300,8 +1331,9 @@ impl Render for Dialog {
                 .flex()
                 .flex_col()
                 .gap(px(FIELD_GAP))
-                .children(asked.fields.iter().map(|field| {
-                    div()
+                .children(asked.fields.iter().zip(&question.fields).map(|(field, asked_for)| {
+                    let reading = (asked_for.reads.as_ref()).map(|reads| reads(field.read(cx).text()));
+                    let input = div()
                         .h(px(BUTTON_HEIGHT))
                         .px(px(LABEL_X - 1.))
                         .flex()
@@ -1312,7 +1344,21 @@ impl Render for Dialog {
                         .bg(palette.plate(CANCEL_FILL))
                         .text_size(px(text::BODY))
                         .text_color(palette.on_overlay(FIELD_TEXT))
-                        .child(field.clone())
+                        .child(field.clone());
+                    let reading = reading.map(|reading| {
+                        let (line, alpha) = match reading {
+                            Ok(read) => (read, DETAIL),
+                            Err(why) => (why, SUBLINE_TEXT),
+                        };
+                        div()
+                            .mt(px(READING_TOP))
+                            .pl(px(LABEL_X))
+                            .line_height(px(SUBLINE))
+                            .text_size(px(text::SMALL))
+                            .text_color(palette.on_overlay(alpha))
+                            .child(line)
+                    });
+                    div().flex().flex_col().child(input).children(reading)
                 }))
         });
         let check = question.check.clone().map(|check| {
