@@ -121,7 +121,8 @@ jobs:
           IMAGE: ${{ matrix.image }}
           SETUP: ${{ matrix.setup }}
         run: |
-          docker run --name setup "$IMAGE" sh -c "$SETUP && useradd -m -u 1000 user"
+          # ubuntu:24.04 has its own user 1000, ubuntu, which goes.
+          docker run --name setup "$IMAGE" sh -c "$SETUP && { userdel -r \$(id -nu 1000 2>/dev/null) 2>/dev/null || true; } && useradd -m -u 1000 user"
           docker commit setup distro
       - run: |
           mkdir -m 777 "$RUNNER_TEMP/out"
@@ -146,7 +147,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tools
+          sparse-checkout: |
+            tools
+            .github/actions
       - uses: actions/download-artifact@v4
         with:
           name: ilo-linux-native
