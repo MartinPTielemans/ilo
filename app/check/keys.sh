@@ -433,12 +433,12 @@ in_browser AccessKitSubclassOfGPUIView "before ⌘, from the UI"
 send key , cmd
 expect '^browser: settings shown ' "⌘, with the UI focused didn't show Settings"
 settings_drew
-send type share favorites
-expect '^browser: settings search "share favorites" finds Share favorites$' \
-  "typing once ⌘, opened Settings didn't find Share favorites"
+send type page zoom
+expect '^browser: settings search "page zoom" finds Page zoom$' \
+  "typing once ⌘, opened Settings didn't find Page zoom"
 send key tab
 send key return
-expect '^browser: menu shown ' "Return on the favorites pop-up, reached by ⇥, didn't open its menu"
+expect '^browser: menu shown ' "Return on Page zoom's pop-up, reached by ⇥, didn't open its menu"
 ../tools/window-screenshot.sh "$pid" "$out/settings-focus-popup.png" || fail "no window to capture"
 send key escape
 expect '^browser: menu closed$' "⎋ didn't close the pop-up's menu"
@@ -447,12 +447,12 @@ send key return
 expect '^browser: menu shown ' "Return didn't open the pop-up's menu again"
 send key down
 send key return
-expect "^browser: favorites scope In Each Space\$" "↓ and Return in the pop-up's menu didn't choose In Each Space"
+expect '^browser: page zoom 110%$' "↓ and Return in the pop-up's menu didn't choose 110%"
 send key return
 expect '^browser: menu shown ' "Return didn't open the pop-up's menu a third time"
 send key up
 send key return
-expect "^browser: favorites scope In Each Profile's Spaces\$" "↑ and Return didn't choose the default back"
+expect '^browser: page zoom 100% (default)$' "↑ and Return didn't choose the default back"
 send key escape
 expect '^browser: settings search cleared$' "⎋ didn't empty the search"
 # The command bar finds settings too (#1636), by what Settings' search reads: "peek" in ⌘T lists

@@ -2318,6 +2318,17 @@ fn main() {
                 preview_pictures(Pictures::Appearance(chosen), cx);
                 return;
             }
+            // PREVIEW_SHARE_FAVORITES=every, profile or space shows Settings › Tabs & Sidebar's
+            // Share favorites group alone, its drawings with that scope chosen (#2430).
+            if let Ok(chosen) = std::env::var("PREVIEW_SHARE_FAVORITES") {
+                let chosen = match chosen.as_str() {
+                    "every" => browser::shell::FavoritesScope::Every,
+                    "space" => browser::shell::FavoritesScope::Space,
+                    _ => browser::shell::FavoritesScope::Profile,
+                };
+                preview_pictures(Pictures::Favorites(chosen), cx);
+                return;
+            }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
@@ -3398,6 +3409,8 @@ enum Pictures {
     Sidebar { right: bool },
     /// General's Look group: Appearance, the one chosen, and Page zoom under it.
     Appearance(browser::theme::Appearance),
+    /// Tabs & Sidebar's Share favorites, the scope chosen, in its group of one.
+    Favorites(browser::shell::FavoritesScope),
 }
 
 /// `shown`'s group in a window of Settings' size. PREVIEW_BUTTONS=mac, windows or linux draws that
@@ -3460,7 +3473,7 @@ impl gpui::Render for PicturesPage {
         use browser::palette::{INK, PAPER};
         use browser::settings_card::Colors;
         use browser::settings_column::{self, Section};
-        use browser::settings_pictures::{appearance_picker, picker};
+        use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
         use browser::settings_rows::{
             Look, end, frame, group, popup, stop_switch, text as row_text,
         };
@@ -3488,7 +3501,7 @@ impl gpui::Render for PicturesPage {
             cx,
         );
         let section = match self.shown {
-            Pictures::Sidebar { .. } => Section::TabsAndSidebar,
+            Pictures::Sidebar { .. } | Pictures::Favorites(_) => Section::TabsAndSidebar,
             Pictures::Appearance(_) => Section::General,
         };
         let column = settings_column::column(
@@ -3567,7 +3580,7 @@ impl gpui::Render for PicturesPage {
                         Some("Press and let go of ⌥ with no other key.".into()),
                     ))
                     .child(switch("option", false));
-                ("The sidebar", vec![position, edge, option])
+                (Some("The sidebar"), vec![position, edge, option])
             }
             Pictures::Appearance(chosen) => {
                 let three = appearance_picker(
@@ -3617,14 +3630,51 @@ impl gpui::Render for PicturesPage {
                         POPUP_WIDTH,
                         false,
                     ))]));
-                ("Look", vec![appearance, zoom])
+                (Some("Look"), vec![appearance, zoom])
+            }
+            Pictures::Favorites(chosen) => {
+                let three = favorites_picker(
+                    &look,
+                    base,
+                    dark,
+                    chosen,
+                    a11y,
+                    self.logged.clone(),
+                    move |scope, _, cx| {
+                        log!("preview: share favorites {}", scope.title());
+                        page.update(cx, |page, cx| {
+                            page.shown = Pictures::Favorites(scope);
+                            cx.notify();
+                        })
+                        .ok();
+                    },
+                );
+                let shared = frame()
+                    .flex_col()
+                    .items_stretch()
+                    .child(row_text(
+                        &look,
+                        "Share favorites",
+                        Some("Which Spaces show the same favorites.".into()),
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .mt(px(SIDE_TOP))
+                            .ml(px(-SIDE_ROOM))
+                            .child(three),
+                    );
+                (None, vec![shared])
             }
         };
-        let heading = div()
-            .px(px(TEXT_X))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(look.heading)
-            .child(heading);
+        let heading = heading.map(|heading| {
+            div()
+                .px(px(TEXT_X))
+                .mb(px(HEADING_BOTTOM))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(look.heading)
+                .child(heading)
+        });
         let colors = Colors {
             line: look.line,
             name: base.opacity(NAME),
@@ -3635,8 +3685,8 @@ impl gpui::Render for PicturesPage {
             div()
                 .flex()
                 .flex_col()
-                .child(heading)
-                .child(div().mt(px(HEADING_BOTTOM)).child(group(&look, rows))),
+                .children(heading)
+                .child(group(&look, rows)),
             dark,
             colors,
         );
