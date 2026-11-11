@@ -44,7 +44,7 @@ serve
 ! windows || powercfg -change -monitor-timeout-ac 0 || echo "perf: the display's timeout stays"
 # #2324's spike: every launch has the memory on, as a profile whose user said yes has it, so each row
 # is what it costs; spike/memory-2324-2 runs the same app with it off.
-memory=on
+memory=off
 export BROWSER_MEMORY=$memory
 perf_dir="$out/perf"
 rm -rf "$perf_dir"
