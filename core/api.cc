@@ -533,13 +533,6 @@ bool bc_agent_may_act(const char* agent,
   if (refused.empty() && browser_core::IsHeld(tab)) {
     refused = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
   }
-  if (refused.empty() && contents) {
-    // An agent's tab is never arranged, but the rule is the core's to keep, not the UI's.
-    const browser_core::Arrange* arrange = browser_core::Arrange::FromWebContents(contents);
-    if (arrange && arrange->on()) {
-      refused = "The user is arranging this page. Try again once they're done.";
-    }
-  }
   if (refused.empty() && contents &&
       browser_core::Tab::FromWebContents(contents)->system_page()) {
     // Its Space never switches a tab there, but the rule is the core's to keep, not the UI's.
