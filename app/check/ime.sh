@@ -111,7 +111,7 @@ if [ "${1:-}" = --steps ]; then
   case $mode in
     *-count | *-probe)
       for try in $(seq "${PROBE_TRIES:-25}"); do
-        echo "[DEBUG-2365] try $try" >> "$LOG"
+        # Not into $LOG, which the app writes at its own offset, over what's appended.
         at=$(mark); click 330 40
         await "title [0-9]* clicked" "$at"
         at=$(mark); compose de
@@ -130,15 +130,13 @@ if [ "${1:-}" = --steps ]; then
           sleep 0.1
         done
         echo "$try $result $at" >> "$out/$mode.tries"
-        echo "[DEBUG-2365] try $try $result" >> "$LOG"
+        echo "[DEBUG-2365] try $try $result, from line $at" >&2
         # Escape cancels what's composed, in the bar or the page, and the next closes the bar.
         key $'\e'
         if [ "$result" != closed ]; then
           key $'\e'
           await "command bar hidden" "$at"
         fi
-        at=$(mark); click 330 40
-        await "title [0-9]* clicked" "$at"
       done
       mv "$out/$mode.failed" "$out/$mode.passed"
       exit 0
