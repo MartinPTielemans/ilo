@@ -61,9 +61,6 @@ pub(super) struct WheelGestures {
     /// before, and the fastest they went.
     speeds: VecDeque<(Instant, f32, f32)>,
     peak: f32,
-    /// The gesture's events over the last LONG, each when it came and its delta: what the fingers
-    /// were given after a lift that's found only later.
-    moves: VecDeque<(Instant, f32)>,
 }
 
 #[derive(Clone, Copy)]
@@ -92,9 +89,6 @@ enum State {
 pub(super) struct Cut {
     pub lifted: bool,
     pub landed: bool,
-    /// For a lift found from momentum's fall, which shows only events after it: when the fingers
-    /// lifted, and the way the momentum has gone since, which they were given as theirs.
-    pub since: Option<(Instant, f32)>,
 }
 
 impl WheelGestures {
@@ -106,7 +100,6 @@ impl WheelGestures {
             last = None;
             self.recent.clear();
             self.speeds.clear();
-            self.moves.clear();
             self.peak = 0.;
         }
         // The first event of a gesture is as long as a trackpad's between events.
@@ -130,10 +123,6 @@ impl WheelGestures {
             self.peak = 0.;
         }
         self.speeds.push_back((at, now, speed));
-        self.moves.push_back((at, delta));
-        while self.moves.front().is_some_and(|&(when, _)| at.duration_since(when) > LONG) {
-            self.moves.pop_front();
-        }
         self.peak = self.peak.max(now.abs());
         while self.speeds.len() > HELD
             && self.speeds.get(1).is_some_and(|&(when, _, _)| at.duration_since(when) >= HOLD)
@@ -141,14 +130,14 @@ impl WheelGestures {
             self.speeds.pop_front();
         }
         let (state, cut) = match self.state {
-            State::Fingers if fresh => (State::Fingers, Cut { lifted: true, landed: true, since: None }),
+            State::Fingers if fresh => (State::Fingers, Cut { lifted: true, landed: true }),
             State::Idle | State::Momentum { .. } if fresh => {
                 (State::Fingers, Cut { landed: true, ..Cut::default() })
             }
             State::Idle => (State::Fingers, Cut { landed: true, ..Cut::default() }),
             State::Fingers if self.falling() || self.slowing() => {
                 let state = State::Momentum { sign: now.signum(), slowest: now.abs(), smallest: delta.abs() };
-                (state, Cut { lifted: true, since: self.lifted_at(at), ..Cut::default() })
+                (state, Cut { lifted: true, ..Cut::default() })
             }
             State::Fingers => (State::Fingers, Cut::default()),
             State::Momentum { sign, slowest, smallest } => {
@@ -160,9 +149,8 @@ impl WheelGestures {
                     // The fingers' own speed is taken from here on.
                     self.recent.retain(|wheel| wheel.at == at);
                     self.speeds.clear();
-                    self.moves.retain(|&(when, _)| when == at);
                     self.peak = 0.;
-                    (State::Fingers, Cut { lifted: stopped, landed: true, since: None })
+                    (State::Fingers, Cut { lifted: stopped, landed: true })
                 } else {
                     let (slowest, smallest) = (slowest.min(now.abs()), smallest.min(delta.abs()));
                     (State::Momentum { sign, slowest, smallest }, Cut { lifted: stopped, ..Cut::default() })
@@ -171,23 +159,6 @@ impl WheelGestures {
         };
         self.state = state;
         cut
-    }
-
-    /// Where the fall that lifts the fingers at `at` began, the fingers' last event before the
-    /// momentum, with the way the events since it went, `at`'s own aside. Momentum's speed falls at
-    /// every event, so the fall begins after the last that held or rose; a page that sums or holds
-    /// back the fingers' events can make one of them pass for a fall, and their way stays theirs.
-    fn lifted_at(&self, at: Instant) -> Option<(Instant, f32)> {
-        let falls: Vec<(Instant, f32)> = if self.falling() {
-            let falls = self.recent.iter().rev().take(FALLS + 1).map(|wheel| (wheel.at, wheel.speed));
-            falls.rev().collect()
-        } else {
-            self.speeds.iter().map(|&(when, _, speed)| (when, speed)).collect()
-        };
-        let held = falls.windows(2).rev().find(|pair| pair[1].0 < at && pair[1].1.abs() >= pair[0].1.abs());
-        let since = held.map_or(falls.first()?.0, |pair| pair[1].0);
-        let way = self.moves.iter().filter(|&&(when, _)| when > since && when < at).map(|&(_, delta)| delta).sum();
-        Some((since, way))
     }
 
     /// Momentum from the gesture's last event, as the fingers lift there.
