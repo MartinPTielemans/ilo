@@ -1037,7 +1037,7 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   [ "$cookies" -ge 2 ] && [ "$items" -ge 1 ] ||
     fail "the switch copied $cookies cookies and $items storage items, not the session page's"
   served "^GET safari 127.0.0.1:$port/drm.html cookie .*h=$port; n=$port" \
-    "Safari's engine's first request didn't carry the site's cookies from Chromium"
+    "Safari's engine's first request didn't carry the site's cookies from Chromium" "^GET safari "
   served "^GET safari 127.0.0.1:$port/seen?item=chromium " \
     "Safari's engine's page didn't find the item from Chromium as its script ran"
   # Chromium's page let go for the switch isn't a renderer lost, which a crash card would show.
@@ -1408,8 +1408,11 @@ for _ in $(seq 100); do
   [ "$(focused)" = Cancel ] && break
   sleep 0.1
 done
-[ "$(focused)" = Cancel ] ||
-  fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused)"
+if [ "$(focused)" != Cancel ]; then
+  # Which window has the keyboard, and whether ilo is the active app, for the VM's failure (#2396).
+  send front
+  fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused); active $active, $(grep '^browser: front ' "$log" | tail -1)"
+fi
 send key tab
 send key space
 for _ in $(seq 20); do
