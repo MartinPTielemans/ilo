@@ -191,6 +191,9 @@ typedef struct bc_archived_tab {
   // When it comes back by itself, as bc_tab_snooze put it, in milliseconds since the Unix epoch,
   // or 0 for a tab that stays until it's reopened.
   double snoozed_until;
+  // The Space it closed in, which it goes back to, as the Library's row names it, or 0 once that
+  // Space is gone.
+  bc_id space;
 } bc_archived_tab;
 
 // One of an extension's keyboard commands that has a key, as Chrome's Keyboard Shortcuts page
