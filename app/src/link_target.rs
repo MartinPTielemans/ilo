@@ -5,11 +5,8 @@
 //! its window goes through `Host`; where it goes, what it says and when the pointer is near it are
 //! the shell's, which calls `plate` and `place`.
 
-use std::{
-    ops::Range,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{ops::Range, rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, FontWeight, Global, Hsla, Pixels, SharedString, Task, TitlebarOptions,

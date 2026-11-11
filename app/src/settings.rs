@@ -40,12 +40,12 @@ use browser::menu::{self, Look};
 use browser::palette::{INK, PAPER};
 use browser::settings_card::{self, Card};
 use browser::settings_column::{self, Section};
+use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
     Chip, Look as RowLook, SLIDE, chip, detailed_row, end, frame, glyph_plate, group, group_lined,
     named_button, row, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
-use browser::settings_side::title as side_title;
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
@@ -416,8 +416,6 @@ enum Popup {
     TaskAgent,
     /// The model a CLI runs tasks with.
     TaskModel(Cli),
-    /// General's Appearance.
-    Appearance,
     /// General's Page zoom.
     PageZoom,
 }
@@ -434,7 +432,6 @@ impl Popup {
             Popup::Notes(_) => "New Note".into(),
             Popup::TaskAgent => "Run tasks on".into(),
             Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
-            Popup::Appearance => "Appearance".into(),
             Popup::PageZoom => "Page zoom".into(),
         }
     }
@@ -446,6 +443,8 @@ pub struct Settings {
     /// Whether the window is dark, as View › Appearance or the system has it, which its rows,
     /// pop-up menus and the views it shows follow.
     dark: bool,
+    /// View › Appearance's choice, which General's Appearance rings.
+    appearance: Appearance,
     look: RowLook,
     /// The card the section shows on, which a section starts at the top of.
     card: Card,
@@ -1265,6 +1264,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             section: Section::General,
             focus: cx.focus_handle(),
             dark,
+            appearance: shell::app_appearance(cx),
             look,
             card: Card::default(),
             shown: false,
@@ -1574,6 +1574,18 @@ impl Settings {
     /// Takes the look View › Appearance, else the system, gives it now, and hands it to the views
     /// it shows.
     fn follow_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A choice that leaves the look as it was, such as Automatic after Light on a light
+        // system, still moves Appearance's ring.
+        let appearance = shell::app_appearance(cx);
+        if appearance != self.appearance {
+            self.appearance = appearance;
+            // check.sh waits for this line.
+            log!(
+                "browser: settings appearance {}",
+                appearance_title(appearance)
+            );
+            cx.notify();
+        }
         let dark = dark(window, cx);
         if dark == self.dark {
             return;
@@ -1865,18 +1877,45 @@ impl Settings {
             vec![ask],
         );
         let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
-        let appearance = shell::app_appearance(cx);
-        let appearance_popup = self.popup(
-            Popup::Appearance,
-            appearance_label(appearance).into(),
-            POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_appearance(appearance, window, cx)
-            }),
-        );
-        let appearance_line = match cfg!(target_os = "macos") {
+        let appearance = self.appearance;
+        let appearance_line: SharedString = match cfg!(target_os = "macos") {
             true => "Light, dark, or as macOS is. View › Appearance has it too.",
             false => "Light, dark, or as the system is.",
+        }
+        .into();
+        let appearances = browser::settings_pictures::appearance_picker(
+            look,
+            self.base(),
+            appearance,
+            browser::settings_pictures::Buttons::HERE,
+            self.a11y,
+            self.drawn_logged.clone(),
+            |appearance, _, cx| {
+                crate::browser_windows::update_shells_in(cx, |shell, cx| {
+                    shell.run(Command::Appearance(appearance), "settings", cx)
+                })
+            },
+        )
+        .relative()
+        // Drawn once for each choice the first time it's shown, which check.sh waits for.
+        .child(self.drawn(format!("appearance {}", appearance_title(appearance))));
+        // As Sidebar position's: the drawings under the row's line, their ring's room outside it.
+        let appearances = Row {
+            div: frame()
+                .flex_col()
+                .items_stretch()
+                .child(text(look, "Appearance", Some(appearance_line.clone())))
+                .child(
+                    div()
+                        .flex()
+                        .mt(px(SIDE_TOP))
+                        .ml(px(-SIDE_ROOM))
+                        .child(appearances),
+                ),
+            name: "Appearance".into(),
+            line: Some(appearance_line),
+            keys: None,
+            nested: false,
         };
         let zoom = unsafe { bc::bc_page_zoom() };
         let zoom_chosen = PAGE_ZOOM
@@ -1895,16 +1934,7 @@ impl Settings {
             }),
         );
         let mut looks = vec![
-            setting(
-                look,
-                "Appearance",
-                Some(appearance_line.into()),
-                vec![
-                    appearance_popup
-                        .child(self.drawn("appearance".into()))
-                        .into_any_element(),
-                ],
-            ),
+            appearances,
             setting(
                 look,
                 "Page zoom",
@@ -2069,12 +2099,12 @@ impl Settings {
         let right = shell::sidebar_right(cx);
         let line: SharedString =
             "The side of the window the sidebar and the window's buttons are on.".into();
-        let pair = browser::settings_side::picker(
+        let pair = browser::settings_pictures::picker(
             look,
             self.base(),
             self.dark,
             right,
-            browser::settings_side::Buttons::HERE,
+            browser::settings_pictures::Buttons::HERE,
             self.a11y,
             self.drawn_logged.clone(),
             |side, _, cx| set_sidebar_right(side, cx),
@@ -2931,32 +2961,6 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::PageZoom, items, picked, window, cx);
-    }
-
-    /// General's Appearance: Automatic, Light or Dark, View › Appearance's choice, which every
-    /// window takes.
-    fn choose_appearance(&mut self, chosen: Appearance, window: &Window, cx: &mut Context<Self>) {
-        const ALL: [Appearance; 3] = [Appearance::Automatic, Appearance::Light, Appearance::Dark];
-        let items: Vec<MenuEntry> = (ALL.iter())
-            .map(|&each| {
-                let on = each == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::new(appearance_label(each), true)
-                }
-            })
-            .collect();
-        let settings = cx.weak_entity();
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(appearance) = picked.map(|index| ALL[index]) {
-                crate::browser_windows::update_shells_in(cx, |shell, cx| {
-                    shell.run(Command::Appearance(appearance), "settings", cx)
-                });
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::Appearance, items, picked, window, cx);
     }
 
     /// Shows `which` pop-up's menu of `items` in ilo's menu over Settings' window, light or dark as
@@ -4739,15 +4743,6 @@ fn set_notification_prompts(on: bool, _: &mut App) {
 
 fn set_warn_moving_profiles(warn: bool, _: &mut App) {
     unsafe { bc::bc_set_warn_moving_profiles(warn) };
-}
-
-/// Appearance's choices as View › Appearance names them.
-fn appearance_label(appearance: Appearance) -> &'static str {
-    match appearance {
-        Appearance::Automatic => "Automatic",
-        Appearance::Light => "Light",
-        Appearance::Dark => "Dark",
-    }
 }
 
 /// The browser window in front's shell, if there's one.
