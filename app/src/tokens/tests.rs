@@ -112,6 +112,9 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // A drawing of the window, its corners and its page card's at the drawing's scale (#2407).
     "settings.side-radius",
     "settings.side-page-radius",
+    // Share favorites' Spaces and their tiles at the drawing's scale (#2430).
+    "settings.share-space-radius",
+    "settings.share-tile-radius",
 ];
 
 #[test]

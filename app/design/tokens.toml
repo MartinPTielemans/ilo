@@ -867,8 +867,6 @@ control-hovered-light = 0.1
 control-pressed = 0.16
 control-pressed-light = 0.135
 popup-width = 155.0
-# Ours: the favorites' longest choice, "In Each Profile's Spaces", needs more than 155.
-favorites-popup-width = 195.0
 popup-end = 0.0
 # Buttons under the groups are 11 below them.
 buttons-top = 11.0
@@ -984,6 +982,39 @@ side-glyph = 0.8
 side-mac-close = 0xff5f57
 side-mac-minimize = 0xfebc2e
 side-mac-zoom = 0x28c840
+# Ours (#2430): Share favorites is three drawings at the side-* size, ring and window, each three
+# Spaces' sidebars, the first two on one profile's plate and the third on another's, 6 apart.
+# A sidebar is 32 by 60 at radius 4, tinted with its Space's colour, with four favorites' tiles
+# 13 by 10 at radius 3, 2 apart, over three tabs' bars. Spaces that share favorites show the same
+# four marks, in the same colours and the same shape, which is a list's alone: dots, squares or
+# rings 1.5 wide, so who shares reads without the colours.
+share-space-width = 32.0
+share-space-height = 60.0
+share-space-radius = 4.0
+share-space-padding = 3.0
+share-space-padding-x = 2.0
+share-space-gap = 4.0
+share-tint = 0.22
+share-tint-light = 0.16
+share-tile-width = 13.0
+share-tile-height = 10.0
+share-tile-radius = 3.0
+share-tile-gap = 2.0
+share-tile = 0.1
+share-tile-light = 0xffffff
+share-tile-rim = 0.07
+share-mark = 5.0
+share-mark-square = 1.0
+share-ring = 1.5
+share-tab-height = 3.0
+share-tab-gap = 3.0
+share-plate-radius = 6.0
+share-plate-padding = 3.0
+share-plate-gap = 3.0
+share-plate = 0.06
+share-profiles-gap = 6.0
+# The Spaces' colours: ilo's green, then two of Edit's marks' (capture.markup).
+share-spaces = [0x289054, 0x0a84ff, 0xff9500]
 
 [shell]
 # The docked sidebar's width at first, where the card starts.

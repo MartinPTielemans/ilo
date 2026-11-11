@@ -2,8 +2,9 @@
 //! one ringed and its name beneath in the row's ink. A click on one picks it, and so do ← and →
 //! while the row has the keyboard; an assistive app reads them as options with one chosen.
 //!
-//! Sidebar position (#2407) draws the window with the sidebar on each side, and Appearance (#2429)
-//! draws it light, dark, and split between the two for Automatic.
+//! Sidebar position (#2407) draws the window with the sidebar on each side, Appearance (#2429)
+//! draws it light, dark, and split between the two for Automatic, and Share favorites (#2430)
+//! draws three Spaces' favorites, alike where they're shared.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,7 +19,20 @@ use gpui::{
 
 use crate::palette::{INK, PAPER};
 use crate::settings_rows::{Look, drawn, ring};
+use crate::shell::FavoritesScope;
 use crate::theme::Appearance;
+use crate::tokens::command_bar::site_colors::{
+    AMAZON, APPLE_MUSIC, ASANA, DROPBOX, FIGMA, GMAIL, GOOGLE_CALENDAR, GOOGLE_DRIVE, GOOGLE_MAPS,
+    LINKEDIN, REDDIT, SPOTIFY,
+};
+use crate::tokens::settings::{
+    SHARE_MARK, SHARE_MARK_SQUARE, SHARE_PLATE, SHARE_PLATE_GAP, SHARE_PLATE_PADDING,
+    SHARE_PLATE_RADIUS, SHARE_PROFILES_GAP, SHARE_RING, SHARE_SPACE_GAP, SHARE_SPACE_HEIGHT,
+    SHARE_SPACE_PADDING, SHARE_SPACE_PADDING_X, SHARE_SPACE_RADIUS, SHARE_SPACE_WIDTH,
+    SHARE_SPACES, SHARE_TAB_GAP, SHARE_TAB_HEIGHT, SHARE_TILE, SHARE_TILE_GAP, SHARE_TILE_HEIGHT,
+    SHARE_TILE_LIGHT, SHARE_TILE_RADIUS, SHARE_TILE_RIM, SHARE_TILE_WIDTH, SHARE_TINT,
+    SHARE_TINT_LIGHT,
+};
 use crate::tokens::settings::{
     SIDE_BAR, SIDE_BAR_FIRST, SIDE_BUTTON, SIDE_BUTTON_GAP, SIDE_BUTTONS, SIDE_GAP, SIDE_GLYPH,
     SIDE_GLYPH_GAP, SIDE_HEADING, SIDE_HEIGHT, SIDE_INSET, SIDE_LABEL_GAP, SIDE_MAC_CLOSE,
@@ -262,6 +276,162 @@ pub fn appearance_picker(
         logged,
         move |index, window, cx| pick(APPEARANCES[index], window, cx),
     )
+}
+
+/// Share favorites' three, `chosen` ringed, drawn in Settings' look (`dark`, its ink `base`).
+/// `pick` is called with the scope picked.
+#[allow(clippy::too_many_arguments)]
+pub fn favorites_picker(
+    look: &Look,
+    base: Rgba,
+    dark: bool,
+    chosen: FavoritesScope,
+    a11y: bool,
+    logged: Rc<RefCell<Vec<String>>>,
+    pick: impl Fn(FavoritesScope, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let choices = FavoritesScope::ALL
+        .map(|scope| Choice {
+            title: scope.title(),
+            drawing: favorites(base, dark, scope),
+        })
+        .into();
+    let index = FavoritesScope::ALL.iter().position(|&each| each == chosen);
+    pictures(
+        look,
+        base,
+        "Share favorites",
+        index.unwrap_or(0),
+        choices,
+        a11y,
+        logged,
+        move |index, window, cx| pick(FavoritesScope::ALL[index], window, cx),
+    )
+}
+
+/// A favorites list's marks: four sites' colours and the list's own shape.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Mark {
+    Dot,
+    Square,
+    Ring,
+}
+
+/// The three lists a drawing can show, each its sites' colours (the command bar's) and its shape.
+const LISTS: [([u32; 4], Mark); 3] = [
+    ([GMAIL, FIGMA, SPOTIFY, DROPBOX], Mark::Dot),
+    ([GOOGLE_DRIVE, AMAZON, LINKEDIN, APPLE_MUSIC], Mark::Square),
+    ([GOOGLE_MAPS, REDDIT, GOOGLE_CALENDAR, ASANA], Mark::Ring),
+];
+
+/// Which list each of the three Spaces shows under `scope`: the first two are one profile's, the
+/// third another's.
+fn lists(scope: FavoritesScope) -> [usize; 3] {
+    match scope {
+        FavoritesScope::Every => [0, 0, 0],
+        FavoritesScope::Profile => [0, 0, 1],
+        FavoritesScope::Space => [0, 1, 2],
+    }
+}
+
+/// Three Spaces' sidebars in the window, on their profiles' plates, each with the favorites
+/// `scope` gives it.
+fn favorites(base: Rgba, dark: bool, scope: FavoritesScope) -> gpui::Div {
+    let lists = lists(scope);
+    let plate = |spaces: Vec<gpui::Div>| {
+        div()
+            .flex()
+            .gap(px(SHARE_PLATE_GAP))
+            .p(px(SHARE_PLATE_PADDING))
+            .rounded(px(SHARE_PLATE_RADIUS))
+            .bg(base.opacity(SHARE_PLATE))
+            .children(spaces)
+    };
+    let space = |index: usize| space(base, dark, SHARE_SPACES[index], LISTS[lists[index]]);
+    div()
+        .flex_none()
+        .w(px(SIDE_WIDTH))
+        .h(px(SIDE_HEIGHT))
+        .rounded(px(SIDE_RADIUS))
+        .bg(rgb(if dark { SIDE_WINDOW } else { SIDE_WINDOW_LIGHT }))
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(SHARE_PROFILES_GAP))
+        .child(plate(vec![space(0), space(1)]))
+        .child(plate(vec![space(2)]))
+}
+
+/// One Space's sidebar in its `color`: its four favorites' tiles, then three tabs.
+fn space(base: Rgba, dark: bool, color: u32, (sites, mark): ([u32; 4], Mark)) -> gpui::Div {
+    let tint = if dark { SHARE_TINT } else { SHARE_TINT_LIGHT };
+    let tile_fill = match dark {
+        true => base.opacity(SHARE_TILE),
+        false => rgb(SHARE_TILE_LIGHT),
+    };
+    let tile = |site: u32| {
+        let shape = div().flex_none().size(px(SHARE_MARK));
+        let shape = match mark {
+            Mark::Dot => shape.rounded_full().bg(rgb(site)),
+            Mark::Square => shape.rounded(px(SHARE_MARK_SQUARE)).bg(rgb(site)),
+            Mark::Ring => shape
+                .rounded_full()
+                .border(px(SHARE_RING))
+                .border_color(rgb(site)),
+        };
+        div()
+            .flex_none()
+            .w(px(SHARE_TILE_WIDTH))
+            .h(px(SHARE_TILE_HEIGHT))
+            .rounded(px(SHARE_TILE_RADIUS))
+            .bg(tile_fill)
+            .shadow(vec![spread(base.opacity(SHARE_TILE_RIM), 0.5)])
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(shape)
+    };
+    let row = |pair: &[u32]| {
+        div()
+            .flex()
+            .gap(px(SHARE_TILE_GAP))
+            .children(pair.iter().map(|&site| tile(site)))
+    };
+    let tabs = [0.86, 0.7, 0.78].map(|width| {
+        div()
+            .flex_none()
+            .h(px(SHARE_TAB_HEIGHT))
+            .w(gpui::relative(width))
+            .rounded_full()
+            .bg(base.opacity(SIDE_BAR))
+    });
+    div()
+        .flex_none()
+        .w(px(SHARE_SPACE_WIDTH))
+        .h(px(SHARE_SPACE_HEIGHT))
+        .rounded(px(SHARE_SPACE_RADIUS))
+        .bg(rgb(color).opacity(tint))
+        .py(px(SHARE_SPACE_PADDING))
+        .px(px(SHARE_SPACE_PADDING_X))
+        .flex()
+        .flex_col()
+        .gap(px(SHARE_SPACE_GAP))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SHARE_TILE_GAP))
+                .child(row(&sites[..2]))
+                .child(row(&sites[2..])),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(SHARE_TAB_GAP))
+                .px(px(1.))
+                .children(tabs),
+        )
 }
 
 /// The window drawn: its material with the sidebar on `right` or not, its buttons at its top,

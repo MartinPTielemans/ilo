@@ -50,10 +50,10 @@ use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND
 use browser::tokens::radius;
 use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP,
-    FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
-    GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP,
-    MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING,
-    SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE, WIDTH,
+    FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP,
+    HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME,
+    PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP,
+    TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -404,7 +404,6 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Popup {
     LittleArchiveAfter,
-    Favorites,
     PasswordsProfile,
     /// A profile's, in General.
     SearchEngine(u64),
@@ -425,7 +424,6 @@ impl Popup {
     fn spoken(self) -> SharedString {
         match self {
             Popup::LittleArchiveAfter => "Archive windows left unused after".into(),
-            Popup::Favorites => "Share favorites".into(),
             Popup::PasswordsProfile => "Profile".into(),
             Popup::SearchEngine(_) => "Search engine".into(),
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
@@ -2043,21 +2041,45 @@ impl Settings {
             vec![battery],
         );
         let scope = favorites_scope();
-        let favorites = self.popup(
-            Popup::Favorites,
-            MenuEntry::label(scope.title()),
-            FAVORITES_POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_favorites_scope(scope, window, cx)
-            }),
-        );
-        let favorites = favorites.child(self.drawn("favorites".into()));
-        let favorites = setting(
+        let settings = cx.weak_entity();
+        let shared = browser::settings_pictures::favorites_picker(
             look,
-            "Share favorites",
-            Some("Which Spaces show the same favorites.".into()),
-            vec![favorites.into_any_element()],
-        );
+            self.base(),
+            self.dark,
+            scope,
+            self.a11y,
+            self.drawn_logged.clone(),
+            // The core keeps the favorites it had, copying or merging the lists, and tells the
+            // windows (`favorites_changed`).
+            move |scope, _, cx| {
+                // check.sh waits for this line.
+                log!("browser: favorites scope {}", scope.title());
+                unsafe { bc::bc_set_favorites_scope(scope.to_core()) };
+                settings.update(cx, |_, cx| cx.notify()).ok();
+            },
+        )
+        .relative()
+        // Drawn again once the scope changes, which check.sh waits for.
+        .child(self.drawn(format!("share favorites {}", scope.title())));
+        let favorites_line: SharedString = "Which Spaces show the same favorites.".into();
+        // As Sidebar position's: the drawings under the row's line, their ring's room outside it.
+        let favorites = Row {
+            div: frame()
+                .flex_col()
+                .items_stretch()
+                .child(text(look, "Share favorites", Some(favorites_line.clone())))
+                .child(
+                    div()
+                        .flex()
+                        .mt(px(SIDE_TOP))
+                        .ml(px(-SIDE_ROOM))
+                        .child(shared),
+                ),
+            name: "Share favorites".into(),
+            line: Some(favorites_line),
+            keys: None,
+            nested: false,
+        };
         let moving = self.toggle(
             "warn moving profiles",
             "Ask before moving a tab to another profile",
@@ -2892,37 +2914,6 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::SearchEngine(profile), items, picked, window, cx);
-    }
-
-    /// Opens the favorites' pop-up menu over its button, as the archive's, and sets the scope
-    /// picked. The core keeps the favorites it had, copying or merging the lists, and tells the
-    /// windows (`favorites_changed`).
-    fn choose_favorites_scope(
-        &mut self,
-        chosen: shell::FavoritesScope,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        let items: Vec<MenuEntry> = (shell::FavoritesScope::ALL.iter())
-            .map(|&scope| {
-                let on = scope == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::new(scope.title(), true)
-                }
-            })
-            .collect();
-        let settings = cx.weak_entity();
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(scope) = picked.map(|index| shell::FavoritesScope::ALL[index]) {
-                // check.sh waits for this line.
-                log!("browser: favorites scope {}", scope.title());
-                unsafe { bc::bc_set_favorites_scope(scope.to_core()) };
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::Favorites, items, picked, window, cx);
     }
 
     /// General's Page zoom: Chrome's choices, which every profile's pages take.
