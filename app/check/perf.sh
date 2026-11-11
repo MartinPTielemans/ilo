@@ -474,6 +474,19 @@ if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
   await "^browser: title [0-9]* t1 fcp " || fail "the traced launch's first page didn't paint"
   send click $page_point
   [ "$active" = 1 ] || fail "Browser wasn't the active app for the traced switches"
+  # Proof only (#2383): the traced new tabs with ad blocking off, as adblock-parity's off engine
+  # turns it off, for how much of a new tab's hold is uBlock Origin's.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  send clickkey $(drawn "toolbar Privacy")
+  expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
+  settings_drew Privacy
+  send clickkey $(drawn "switch ad blocking")
+  expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  send click $page_point
+  sleep 2
   : > "$perf_dir/traced-newtab"
   # The first 3 new tabs, traced on their own into perf/trace-ilo-newtab.json, for where a new
   # tab's ms go (#2383).
