@@ -46,8 +46,21 @@ if [ "${1:-}" = --steps ]; then
   await '^browser: UI shown ' 0
   step() { echo "$*" >&3; }
   # The browser window's place on the output, and its size.
+  # Proof only: sway's tree as the step reads it, and if it finds no window, each 0.2 s for 10 s.
+  views() { swaymsg -t get_tree | jq -c '.. | objects | select(has("app_id")) | {id, pid, app_id, shell, name, visible, rect, window_properties}'; }
+  swaymsg -t get_tree > "$out/tree-ui-shown.json"
+  echo "at UI shown, line $(mark):" >> "$out/views.log"
+  views >> "$out/views.log"
   read -r wx wy ww wh < <(swaymsg -t get_tree | jq -r \
     '[.. | select(.app_id? != null and .app_id != "ilo-drag")][0].rect | "\(.x) \(.y) \(.width) \(.height)"')
+  if [ "$wx" = null ]; then
+    for i in $(seq 50); do
+      sleep 0.2
+      echo "+$((i * 2))00 ms, line $(mark):" >> "$out/views.log"
+      views >> "$out/views.log"
+    done
+    fail "no window with an app_id at UI shown; views.log has sway's views"
+  fi
   px=0 py=0
   # Moves the pointer to ($1, $2) in the browser window in steps, as a hand does.
   to() {
