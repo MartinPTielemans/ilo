@@ -187,6 +187,7 @@ expect '^browser: command close-window via page$' "⇧⌘W with the page focused
 expect "^browser: window closed $second\$" \
   "⇧⌘W with the page focused didn't close the window"
 expect "^browser: window $first shows $tab\$" "the first window didn't get its page back"
+ran_once close-window "one ⇧⌘W with the page focused"
 [ "$(grep -c "^browser: loaded $tab " "$log")" = 1 ] ||
   fail "the page loaded again as it moved"
 send window 1
