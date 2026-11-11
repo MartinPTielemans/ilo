@@ -236,3 +236,77 @@ fn the_bar_snoozes_the_tab_shown(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.set_selected(5, cx));
     assert!(found(&shell, cx).is_empty());
 }
+
+/// A snoozed tab in the archive says when it comes back and to which Space, the Filter button
+/// offers Snoozed while one is, and its menu brings it back now or snoozes it until another time.
+#[gpui::test]
+fn a_snoozed_tab_in_the_archive_says_when_and_where_it_comes_back(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, Vec::new(), vec![10]);
+    let tab = |id, snoozed_until, space| crate::shell::Archived {
+        id,
+        url: "https://zed.dev/blog".into(),
+        title: "Zed".into(),
+        archived: 0.,
+        little: false,
+        snoozed_until,
+        space,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_archive(vec![tab(30, 0., 1)], cx);
+        assert!(
+            !shell
+                .archive_filters()
+                .contains(&Some(super::library::Only::Snoozed))
+        );
+        let archive = vec![tab(30, 0., 1), tab(31, at(11, 8), 1), tab(32, at(16, 8), 0)];
+        shell.set_archive(archive, cx);
+        assert!(
+            shell
+                .archive_filters()
+                .contains(&Some(super::library::Only::Snoozed))
+        );
+        let details: Vec<String> = (shell.archive.iter())
+            .map(|tab| shell.archived_detail(tab))
+            .collect();
+        assert_eq!(
+            details,
+            [
+                "zed.dev",
+                "Snoozed until Wed 08:00 in Home · zed.dev",
+                // Its Space is gone, so it stays in the archive as a tab closed then.
+                "Snoozed until Mon 08:00 · zed.dev",
+            ]
+        );
+        shell.archived_menu(31, point(px(100.), px(200.)), cx);
+    });
+    let titles: Vec<String> = (host.menus.borrow().last().unwrap().iter())
+        .map(|(title, _)| title.to_string())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "Bring Back Now",
+            "Change Time",
+            "Later Today",
+            "This Evening",
+            "Tomorrow Morning",
+            "Next Week",
+            "",
+            "Pick a Date and Time…",
+            "Copy URL",
+            "",
+            "Delete from Archive",
+        ]
+    );
+    host.take();
+    cx.update(|cx| host.choose("Next Week", cx));
+    assert_eq!(
+        host.take(),
+        [format!("snooze archived 31 until {}", at(16, 8))]
+    );
+    shell.update(cx, |shell, cx| {
+        shell.archived_menu(31, point(px(100.), px(200.)), cx)
+    });
+    cx.update(|cx| host.choose("Bring Back Now", cx));
+    assert_eq!(host.take(), ["restore archived 31"]);
+}

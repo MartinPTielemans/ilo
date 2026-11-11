@@ -1159,6 +1159,7 @@ fn archived(id: u64) -> Archived {
         archived: 0.,
         little: false,
         snoozed_until: 0.,
+        space: 0,
     }
 }
 

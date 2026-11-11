@@ -24,6 +24,7 @@ fn tab(id: u64, archived: f64, little: bool) -> Archived {
         archived,
         little,
         snoozed_until: 0.,
+        space: 0,
     }
 }
 

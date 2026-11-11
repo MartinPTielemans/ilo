@@ -358,9 +358,17 @@ impl Fake {
                 // Every fourth, so the archive's filter shows (Little ilo).
                 little: id % 4 == 0,
                 snoozed_until,
+                space: 0,
             })
-            .collect();
-        self.later(cx, move |shell, cx| shell.set_archive(archive, cx));
+            .collect::<Vec<_>>();
+        // Each closed in the Space shown.
+        self.later(cx, move |shell, cx| {
+            let space = shell.space();
+            let archive = (archive.into_iter())
+                .map(|tab| Archived { space, ..tab })
+                .collect();
+            shell.set_archive(archive, cx)
+        });
     }
 
     fn report_downloads(&self, cx: &mut App) {

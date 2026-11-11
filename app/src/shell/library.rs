@@ -197,6 +197,8 @@ pub struct Archived {
     /// When it comes back by itself, in milliseconds since the Unix epoch, or 0 if it isn't
     /// snoozed (#2350).
     pub snoozed_until: f64,
+    /// The Space it closed in, which it goes back to, or 0 once that Space is gone.
+    pub space: u64,
 }
 
 /// A video a Media tile plays: its file's name, for the log, and the frame it shows, none before
@@ -436,6 +438,11 @@ pub(super) struct Library {
     _search: Subscription,
 }
 
+/// Whether the archive holds what Archived Tabs' Filter button picks out.
+fn has_filters(archive: &[Archived], tasks: &[ArchivedTask]) -> bool {
+    !tasks.is_empty() || (archive.iter()).any(|tab| tab.little || tab.snoozed_until > 0.)
+}
+
 /// What Archived Tabs lists, as its Filter button's menu offers.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) enum Only {
@@ -445,16 +452,27 @@ pub(super) enum Only {
     Little,
     /// The tasks dismissed from the sidebar's foot.
     Tasks,
+    /// The tabs snoozed, which come back by themselves (#2350).
+    Snoozed,
 }
 
 impl Only {
-    const MENU: [Only; 3] = [Only::All, Only::Little, Only::Tasks];
-
     fn label(self) -> &'static str {
         match self {
             Only::All => "All",
             Only::Little => "Little ilo",
             Only::Tasks => "Tasks",
+            Only::Snoozed => "Snoozed",
+        }
+    }
+
+    /// Whether it lists `tab`.
+    fn lists(self, tab: &Archived) -> bool {
+        match self {
+            Only::All => true,
+            Only::Little => tab.little,
+            Only::Tasks => false,
+            Only::Snoozed => tab.snoozed_until > 0.,
         }
     }
 }
@@ -1058,18 +1076,14 @@ impl Shell {
             }
         }
         let found = |text: &SharedString| text.to_lowercase().contains(&query);
-        let filtered = self.archive.iter().any(|tab| tab.little) || !self.archived_tasks.is_empty();
+        let filtered = has_filters(&self.archive, &self.archived_tasks);
         let only = if filtered { library.only } else { Only::All };
         // Each with the time it's listed by, newest first.
         let found: Vec<(Item, f64)> = match self.section {
             Section::Spaces => Vec::new(),
             Section::Archive => {
                 let tabs = (self.archive.iter().enumerate())
-                    .filter(|(_, tab)| match only {
-                        Only::All => true,
-                        Only::Little => tab.little,
-                        Only::Tasks => false,
-                    })
+                    .filter(|(_, tab)| only.lists(tab))
                     .filter(|(_, tab)| query.is_empty() || found(&tab.title) || found(&tab.url))
                     .map(|(index, tab)| (Item::Tab(index), tab.archived));
                 let tasks = (self.archived_tasks.iter().enumerate())
@@ -1202,7 +1216,7 @@ impl Shell {
     }
 
     /// Opens the archived tab `id` at the top of the Space's Today tabs and closes the Library.
-    fn restore_archived(&mut self, id: u64, cx: &mut Context<Self>) {
+    pub(super) fn restore_archived(&mut self, id: u64, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: restore archived {id}");
         self.browser.restore_archived(id, cx);
@@ -1234,11 +1248,21 @@ impl Shell {
         self.keep(What::DELETE_ARCHIVED, Some(Edit::UndeleteTask(agent)), cx);
     }
 
-    /// Whether Archived Tabs has the Filter button: while the archive holds a Little ilo tab or a
-    /// task, which are what it picks out.
+    /// Whether Archived Tabs has the Filter button: while the archive holds a Little ilo tab, a
+    /// task or a snoozed tab, which are what it picks out.
     fn archive_filtered(&self) -> bool {
-        self.section == Section::Archive
-            && (self.archive.iter().any(|tab| tab.little) || !self.archived_tasks.is_empty())
+        self.section == Section::Archive && has_filters(&self.archive, &self.archived_tasks)
+    }
+
+    /// The Filter button's choices: All, then Snoozed while a tab is, set apart, as those come
+    /// back by themselves, then Little ilo's tabs and the tasks. None is a line.
+    pub(super) fn archive_filters(&self) -> Vec<Option<Only>> {
+        let mut filters = vec![Some(Only::All)];
+        if self.archive.iter().any(|tab| tab.snoozed_until > 0.) {
+            filters.extend([Some(Only::Snoozed), None]);
+        }
+        filters.extend([Some(Only::Little), Some(Only::Tasks)]);
+        filters
     }
 
     /// What the list shows, the Filter button's choice while it has the button.
@@ -1252,11 +1276,16 @@ impl Shell {
         }
     }
 
-    /// The Filter button's menu: All, Little ilo's tabs or the tasks alone, the one shown checked.
+    /// The Filter button's menu: All, the snoozed tabs, Little ilo's or the tasks alone, the one
+    /// shown checked.
     fn archive_filter_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let only = self.archive_only();
-        let entries = (Only::MENU.iter())
-            .map(|each| MenuEntry::new(each.label(), true).checked(*each == only))
+        let filters = self.archive_filters();
+        let entries = (filters.iter())
+            .map(|each| match each {
+                Some(each) => MenuEntry::new(each.label(), true).checked(*each == only),
+                None => MenuEntry::line(),
+            })
             .collect();
         let shell = cx.weak_entity();
         self.browser.context_menu(
@@ -1265,7 +1294,7 @@ impl Shell {
             false,
             self.menu_look(),
             Box::new(move |chosen, cx| {
-                if let Some(&only) = chosen.and_then(|chosen| Only::MENU.get(chosen)) {
+                if let Some(&Some(only)) = chosen.and_then(|chosen| filters.get(chosen)) {
                     shell
                         .update(cx, |shell, cx| shell.filter_archive(only, cx))
                         .ok();
@@ -1286,6 +1315,7 @@ impl Shell {
             Only::All => "all",
             Only::Little => "little",
             Only::Tasks => "tasks",
+            Only::Snoozed => "snoozed",
         };
         log!("browser: archive filter {name}");
         self.filter(true, cx);
@@ -1331,14 +1361,13 @@ impl Shell {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let Some(url) = self
-            .archive
-            .iter()
-            .find(|tab| tab.id == id)
-            .map(|tab| tab.url.clone())
-        else {
+        let Some(tab) = self.archive.iter().find(|tab| tab.id == id) else {
             return;
         };
+        let url = tab.url.clone();
+        if tab.snoozed_until > 0. {
+            return self.snoozed_menu(id, url, position, cx);
+        }
         let entries = vec![
             MenuEntry::new("Restore Tab", true),
             MenuEntry::new("Copy URL", true),
@@ -2294,7 +2323,7 @@ impl Shell {
             &self.palette,
             self.page_favicons.get(&url).cloned().flatten(),
         );
-        let host = SharedString::from(host(&url).to_string());
+        let host = SharedString::from(self.archived_detail(tab));
         div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
@@ -4048,6 +4077,7 @@ mod tests {
             archived: 0.,
             little: false,
             snoozed_until: 0.,
+            space: 0,
         };
         shell.update(cx, |shell, cx| shell.set_archive(vec![tab], cx));
         assert_eq!(menu(cx), [("Clear Archive".into(), true)]);
@@ -4071,6 +4101,7 @@ mod tests {
             archived: 0.,
             little,
             snoozed_until: 0.,
+            space: 0,
         };
         shell.update(cx, |shell, cx| {
             shell.section = Section::Archive;

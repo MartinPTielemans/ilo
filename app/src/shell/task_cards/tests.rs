@@ -433,6 +433,7 @@ fn a_dismissed_task_comes_back(cx: &mut TestAppContext) {
             archived,
             little: false,
             snoozed_until: 0.,
+            space: 0,
         };
         shell.set_archive(vec![tab], cx);
         host.take();

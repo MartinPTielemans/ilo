@@ -21,6 +21,7 @@ fn tab(id: u64, url: &str) -> Archived {
         archived: 3000. - id as f64,
         little: false,
         snoozed_until: 0.,
+        space: 0,
     }
 }
 

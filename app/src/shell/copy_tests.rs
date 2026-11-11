@@ -44,6 +44,7 @@ fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<
             archived: 0.,
             little: false,
             snoozed_until: 0.,
+            space: 0,
         };
         shell.set_archive(vec![archived], cx);
     });
