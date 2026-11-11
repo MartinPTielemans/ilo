@@ -827,15 +827,14 @@ pub(crate) fn finish_opening(
         },
         cx,
     );
+    // The card's pictures are kept from the first switch, before its window is made.
+    unsafe { platform::host_watch_memory_pressure(memory_pressed) };
     when_asked::<hover_card::HoverCard>(
         move |cx| {
             if let Some(card) = hover_card::open(Rc::new(CardHost), cx)
                 && let Ok(view) = card.update(cx, |_, window, _| ns_view(window))
             {
-                unsafe {
-                    platform::host_add_hover_card(view, margin, card_away);
-                    platform::host_watch_memory_pressure(memory_pressed);
-                }
+                unsafe { platform::host_add_hover_card(view, margin, card_away) };
             }
         },
         cx,
