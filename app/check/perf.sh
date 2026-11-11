@@ -512,6 +512,13 @@ chrome_dir="$PWD/$perf_dir/chrome-profile"
 chrome_profile=$chrome_dir
 ! windows || chrome_profile="$(cygpath -w "$chrome_profile")"
 chrome_launches=0
+# On the Mac, Chrome opens 40 points into the display the app does, and each launch checks it's
+# there: on a Mac with another display, the main one may be playing something (AGENTS.md).
+chrome_at=
+if [ "$(uname)" = Darwin ] && [ "$chrome" != none ]; then
+  chrome_display=$(display_bounds)
+  chrome_at=$(echo "$chrome_display" | awk '{ print $1 + 40, $2 + 40 }')
+fi
 # Launches Chrome on page $1, with the arguments after, and check/cdp.py on the DevTools port it
 # picks, which logs its pages' titles to $log, as the app's log has its own, and takes commands on
 # fd 5. Sets $pid and $launched, the Unix ms just before, or says Chrome didn't stay.
@@ -523,9 +530,11 @@ chrome_launch() {
   rm -f "$chrome_dir/DevToolsActivePort"
   perf_stamp
   launched=$stamp
+  # shellcheck disable=SC2046 # the place, two words, or none
   "$chrome" --user-data-dir="$chrome_profile" --no-first-run --no-default-browser-check \
-    --use-mock-keychain --password-store=basic --remote-debugging-port=0 "$@" "$chrome_url" \
-    < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
+    --use-mock-keychain --password-store=basic --remote-debugging-port=0 \
+    $([ -z "$chrome_at" ] || echo "--window-position=${chrome_at% *},${chrome_at#* }" \
+      --window-size=1280,800) "$@" "$chrome_url" < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
   pid=$!
   # Its port, then the browser's path, once DevTools listens, which a runner's first launch of it,
   # from a cold disk, took 15.5 s to (#2385).
@@ -549,6 +558,16 @@ chrome_launch() {
   cat "$perf_dir/chrome-cdp" | python3 -I -u check/cdp.py --socket "$chrome_socket" > "$log" 2>&1 &
   exec 5> "$perf_dir/chrome-cdp"
   echo titles >&5
+  if [ -n "$chrome_at" ]; then
+    echo window >&5
+    chrome_await "^cdp: window " "Chrome's DevTools didn't say where its window is"
+    at=$(grep '^cdp: window ' "$log" | tail -1 | cut -d' ' -f3-)
+    if ! echo "$chrome_display $at" | awk '{ exit !($5 >= $1 && $6 >= $2 && $5 + $7 <= $1 + $3 &&
+      $6 + $8 <= $2 + $4) }'; then
+      chrome_quit
+      fail "Chrome's window opened at $at, not inside the app's display, $chrome_display"
+    fi
+  fi
 }
 # Waits for a line matching $1 in Chrome's log after its line $3, or any, failing with $2.
 chrome_await() {
