@@ -1,0 +1,92 @@
+# The site's live demo on ilobrowser.com: the preview built for the web (app/src/preview.rs, `web`),
+# as wasm-bindgen's ilo_demo.js and ilo_demo_bg.wasm, with the licences it ships under, packed as
+# ilo-demo.tar.gz. release.yml adds it to a release, and the site's release workflow
+# (MartinPTielemans/ilo-site) puts it on the site once the release is published. A commit without
+# the `web` profile has no demo to build, and says so. By hand, to try a branch's demo:
+# `gh workflow run demo.yml --ref <branch>`.
+name: Site demo
+
+on:
+  workflow_call:
+    outputs:
+      built:
+        description: Whether the commit has a demo, in the ilo-demo artifact
+        value: ${{ jobs.demo.outputs.built }}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      built: ${{ steps.check.outputs.built }}
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: check
+        run: |
+          if grep -q '^\[profile\.web\]' Cargo.toml; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::app/Cargo.toml has no web profile, so this commit has no site demo to build."
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # bindgen reads the core's header with libclang in build.rs, which runs on the runner. The
+      # wasm-bindgen that writes the JS has to be the version Cargo.lock builds against.
+      - name: Install tools
+        if: ${{ steps.check.outputs.built == 'true' }}
+        run: |
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq libclang-dev
+          rustup update stable --no-self-update
+          rustup target add wasm32-unknown-unknown
+          version=$(awk '$0 == "name = \"wasm-bindgen\"" { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$version" --locked
+
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        uses: actions/cache/restore@v4
+        if: ${{ steps.check.outputs.built == 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: demo-${{ hashFiles('app/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
+          restore-keys: demo-
+
+      - name: Build
+        if: ${{ steps.check.outputs.built == 'true' }}
+        run: |
+          ./setup.sh
+          cargo build --profile web --target wasm32-unknown-unknown --bin preview
+          demo=$RUNNER_TEMP/demo
+          wasm-bindgen --target web --no-typescript --out-dir "$demo" --out-name ilo_demo \
+            target/wasm32-unknown-unknown/web/preview.wasm
+          cp ../LICENSE assets/fonts/OFL.txt assets/fonts/Inter-OFL.txt "$demo/"
+          tar czf "$RUNNER_TEMP/ilo-demo.tar.gz" -C "$demo" .
+          echo "The site's demo: $(du -h "$demo/ilo_demo_bg.wasm" | cut -f1) of wasm." >> "$GITHUB_STEP_SUMMARY"
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ steps.check.outputs.built == 'true' }}
+        with:
+          name: ilo-demo
+          path: ${{ runner.temp }}/ilo-demo.tar.gz
+          if-no-files-found: error
