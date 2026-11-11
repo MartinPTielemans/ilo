@@ -45,6 +45,8 @@ For perf's Chrome on the same runner (check/perf.sh), which has no driver of its
   activate TARGET logs "cdp: activating TARGET at MS", then shows the tab, through its window's tab
                   strip, as a click on it or ⌘1–⌘8 do: stamped here, the shell's clock and the
                   pipe aren't in the time
+  window          logs "cdp: window LEFT TOP WIDTH HEIGHT STATE", a page's window's bounds on the
+                  screens, from the main display's top left, once there's a page
   histogram NAME  logs "cdp: histogram NAME SUM COUNT", or "cdp: histogram NAME none" while the
                   browser has none by that name, such as Chrome's startup times
 For perf's traced switches, in ilo and Chrome:
@@ -447,6 +449,13 @@ for line in sys.stdin:
         log("tracing")
     elif words[:2] == ["trace", "end"] and len(words) == 3:
         log("traced %s%s" % (words[2], trace_end(words[2])))
+    elif words == ["window"]:
+        with answered:
+            answered.wait_for(lambda: page_target(lambda url: True))
+            target = page_target(lambda url: True)
+        window = call("Browser.getWindowForTarget", {"targetId": target})["bounds"]
+        log("window %d %d %d %d %s" % (window["left"], window["top"], window["width"],
+                                       window["height"], window["windowState"]))
     elif words[:1] == ["histogram"] and len(words) == 2:
         try:
             histogram = call("Browser.getHistogram", {"name": words[1]})["histogram"]
