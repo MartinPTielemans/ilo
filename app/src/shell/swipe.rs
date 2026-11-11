@@ -1592,23 +1592,25 @@ mod tests {
         assert_eq!(circle(cx), ready);
     }
 
-    /// Fingers across the sidebar, `dx` this event, a moment after the last, as a trackpad sends
-    /// them. Returns how many detents the trackpad has been asked for.
+    /// Fingers across the sidebar, `dx` this event, 2 ms after the last on the test's `clock`, as
+    /// a trackpad sends them: the clock is the test's, not the runner's, as the fingers' speed
+    /// decides the clicks (#2446). Returns how many detents the trackpad has been asked for.
     fn finger(
         shell: &mut Shell,
         host: &Recorder,
+        clock: &mut Instant,
         touch_phase: TouchPhase,
         dx: f32,
         window: &mut Window,
         cx: &mut Context<Shell>,
     ) -> usize {
-        std::thread::sleep(Duration::from_millis(2));
+        *clock += Duration::from_millis(2);
         let event = ScrollEvent {
             delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
             touch_phase,
             ..Default::default()
         };
-        shell.scroll(&event, window, cx);
+        shell.scroll_at(&event, *clock, window, cx);
         host.detents.get()
     }
 
@@ -1621,28 +1623,29 @@ mod tests {
         use TouchPhase::{Ended, Moved, Started};
         let (shell, host, cx) = three_spaces(cx, 2);
         shell.update_in(cx, |shell, window, cx| {
+            let mut clock = Instant::now();
             let step = -0.05 * shell.width() / SWIPE_TRACKING;
-            let first = finger(shell, &host, Started, step, window, cx);
+            let first = finger(shell, &host, &mut clock, Started, step, window, cx);
             assert_eq!(first, 0, "a click before the fingers had gone two moves");
             assert_eq!(
-                finger(shell, &host, Moved, step, window, cx),
+                finger(shell, &host, &mut clock, Moved, step, window, cx),
                 1,
                 "no click going"
             );
             for _ in 0..2 {
                 assert_eq!(
-                    finger(shell, &host, Moved, step, window, cx),
+                    finger(shell, &host, &mut clock, Moved, step, window, cx),
                     1,
                     "a click going on"
                 );
             }
             assert_eq!(
-                finger(shell, &host, Ended, 0., window, cx),
+                finger(shell, &host, &mut clock, Ended, 0., window, cx),
                 1,
                 "a click at the lift"
             );
             for _ in 0..10 {
-                let momentum = finger(shell, &host, Moved, step, window, cx);
+                let momentum = finger(shell, &host, &mut clock, Moved, step, window, cx);
                 assert_eq!(momentum, 1, "a click in the momentum");
             }
         });
@@ -1656,24 +1659,31 @@ mod tests {
         use TouchPhase::{Ended, Moved, Started};
         let (shell, host, cx) = three_spaces(cx, 1);
         shell.update_in(cx, |shell, window, cx| {
+            let mut clock = Instant::now();
             let step = 0.05 * shell.library_width() / SWIPE_TRACKING;
-            assert_eq!(finger(shell, &host, Started, step, window, cx), 0);
             assert_eq!(
-                finger(shell, &host, Moved, step, window, cx),
+                finger(shell, &host, &mut clock, Started, step, window, cx),
+                0
+            );
+            assert_eq!(
+                finger(shell, &host, &mut clock, Moved, step, window, cx),
                 1,
                 "no click to the Library"
             );
-            assert_eq!(finger(shell, &host, Moved, step, window, cx), 1);
+            assert_eq!(finger(shell, &host, &mut clock, Moved, step, window, cx), 1);
             // The moves out are past the ones the fingers' speed is read from.
-            let before = Instant::now() - Duration::from_millis(500);
+            let before = clock - Duration::from_millis(500);
             for (at, _) in &mut shell.swipe.as_mut().expect("a swipe").samples {
                 *at = (*at).min(before);
             }
-            assert_eq!(finger(shell, &host, Moved, -step / 2., window, cx), 1);
-            let back = finger(shell, &host, Moved, -step / 2., window, cx);
+            assert_eq!(
+                finger(shell, &host, &mut clock, Moved, -step / 2., window, cx),
+                1
+            );
+            let back = finger(shell, &host, &mut clock, Moved, -step / 2., window, cx);
             assert_eq!(back, 2, "no click turning back");
             assert_eq!(
-                finger(shell, &host, Ended, 0., window, cx),
+                finger(shell, &host, &mut clock, Ended, 0., window, cx),
                 2,
                 "a click at the lift"
             );
@@ -1688,9 +1698,13 @@ mod tests {
         use TouchPhase::{Moved, Started};
         let (shell, host, cx) = three_spaces(cx, 3);
         shell.update_in(cx, |shell, window, cx| {
-            assert_eq!(finger(shell, &host, Started, -20., window, cx), 0);
+            let mut clock = Instant::now();
+            assert_eq!(
+                finger(shell, &host, &mut clock, Started, -20., window, cx),
+                0
+            );
             for _ in 0..30 {
-                let detents = finger(shell, &host, Moved, -20., window, cx);
+                let detents = finger(shell, &host, &mut clock, Moved, -20., window, cx);
                 let ready = shell.swipe.as_ref().expect("a swipe").ready;
                 assert_eq!(
                     detents, ready as usize,
