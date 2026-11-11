@@ -28,10 +28,11 @@ fi
 # and loop, gpui's scales what's painted, lets the tests stand in for an assistive app, adds the
 # Edit menu's Paste and Match Style, caps a window's frame rate only while the app isn't the
 # active one and leaves the site's demo only the image decoders and regex tables it uses,
-# gpui_wgpu's draws with Vulkan alone on Linux, builds its pipelines once for all windows, resizes
-# a canvas under WebGL without waiting on the GPU, which WebGL can't, and lets a browser's WebGPU
-# canvas be see-through, and gpui_web's draws the site's demo in the site's canvas, see-through
-# where it draws nothing, leaving the page its keys and scrolling.
+# gpui_wgpu's draws with Vulkan alone on Linux, builds each pipeline once for all windows, the
+# first time one draws with it, resizes a canvas under WebGL without waiting on the GPU, which
+# WebGL can't, and lets a browser's WebGPU canvas be see-through, and gpui_web's draws the site's
+# demo in the site's canvas, see-through where it draws nothing, leaving the page its keys and
+# scrolling.
 git -C .deps/zed apply "$PWD/patches/gpui-macos-embedded.patch" "$PWD/patches/gpui-windows-embedded.patch" \
   "$PWD/patches/gpui-linux-embedded.patch" "$PWD/patches/gpui-scale.patch" \
   "$PWD/patches/gpui-wgpu.patch" "$PWD/patches/gpui-web-page.patch"
@@ -46,7 +47,7 @@ sha256() { if command -v shasum >/dev/null; then shasum -a 256 "$@"; else sha256
 vendor() {
   crate=.deps/$1-$2.crate
   if ! echo "$3  $crate" | sha256 -c --status 2>/dev/null; then
-    curl -sSfL "https://static.crates.io/crates/$1/$1-$2.crate" -o "$crate"
+    curl -sSfL --retry 5 "https://static.crates.io/crates/$1/$1-$2.crate" -o "$crate"
     echo "$3  $crate" | sha256 -c --status
   fi
   rm -rf ".deps/$1" "${crate%.crate}"
@@ -70,7 +71,7 @@ if [ "$(uname -s)" = Darwin ]; then
   SPARKLE_SHA256=1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27
   archive=.deps/Sparkle-$SPARKLE.tar.xz
   if ! echo "$SPARKLE_SHA256  $archive" | sha256 -c --status 2>/dev/null; then
-    curl -sSfL "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE/Sparkle-$SPARKLE.tar.xz" -o "$archive"
+    curl -sSfL --retry 5 "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE/Sparkle-$SPARKLE.tar.xz" -o "$archive"
     echo "$SPARKLE_SHA256  $archive" | sha256 -c --status
   fi
   rm -rf .deps/Sparkle

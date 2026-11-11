@@ -19,7 +19,7 @@ use gpui::{
     FocusHandle, Focusable, FontWeight, Global, HitboxBehavior, Hsla, Image, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
     Point, Rgba, Role, ScrollHandle, SharedString, Size, Subscription, Task, Window,
-    WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowTextSystem, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -122,6 +122,7 @@ mod picture;
 mod recent_downloads;
 #[cfg(test)]
 mod recorder;
+mod return_mark;
 mod rows;
 mod scripting;
 mod scroller;
@@ -133,6 +134,9 @@ mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
 mod space_order;
+mod split_fold;
+#[cfg(test)]
+mod split_fold_tests;
 mod split_targets;
 pub(crate) mod swap;
 mod swipe;
@@ -450,7 +454,6 @@ const TITLE_END_INSET: f32 = FAVICON_X - PLATE_INSET;
 use crate::tokens::shell::BREATH_LOW;
 use crate::tokens::shell::EMOJI_SIZE;
 use crate::tokens::shell::FAVICON_DRAWN;
-use crate::tokens::shell::LOADING_ROW_MIN;
 use crate::tokens::shell::LOADING_SIZE;
 use crate::tokens::shell::STATUS_AGENT;
 use crate::tokens::shell::STATUS_DOT;
@@ -1420,6 +1423,8 @@ pub struct Shell {
     /// changed there, for the chevron's turn.
     pinned_seen: Option<(u64, bool)>,
     pinned_turn: Option<Instant>,
+    /// Each split view's row in the Space shown, by its first tab, as it folds to a pane.
+    split_folds: HashMap<u64, split_fold::Fold>,
     /// The row whose ring the keys move while the sidebar has the keyboard (sidebar_keys.rs), the
     /// focus it takes them with, whether it takes them at the next draw, and where the ring was
     /// last drawn.
@@ -1983,6 +1988,7 @@ impl Shell {
             name_menu: false,
             pinned_seen: None,
             pinned_turn: None,
+            split_folds: HashMap::new(),
             keyed: None,
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
@@ -4387,6 +4393,7 @@ impl Render for Shell {
         }
         self.step_tools(window);
         self.step_pinned_turn(window);
+        self.step_split_folds(window, cx);
         self.step_empty(window, cx);
         self.step_crash_cards(window);
         self.step_little(window, cx);
@@ -4777,7 +4784,7 @@ impl Shell {
                     .child(self.space_pages(cx))
                     // Over the pages, which they scroll with when they're tall.
                     .children(self.tiles(cx).map(|tiles| self.with_page(tiles)))
-                    .children(self.beside_pages())
+                    .children(self.beside_pages(cx))
                     .child(rest.h(px(self.under_tiles() - URL_FIELD_TOP)))
                     .children(self.dragged_tile(cx))
                     .children(self.turning_drag())
@@ -4823,9 +4830,9 @@ impl Shell {
                 // Beside the form, the page's URL field and favorites are the shown Space's, over
                 // it (beside_form). Elsewhere it's drawn whole, with its own (beside_pages), over
                 // its place here, which keeps its menu.
-                Some(other) if form.is_some() => {
-                    self.still_page(other, self.tiles_room()).into_any_element()
-                }
+                Some(other) if form.is_some() => self
+                    .still_page(other, self.tiles_room(), cx)
+                    .into_any_element(),
                 Some(_) => div().into_any_element(),
                 None => continue,
             };
@@ -4906,7 +4913,7 @@ impl Shell {
 
     /// Another Space's page as it shows once shown, while it slides in or out: its name, and its
     /// rows with the tab it would show selected, `room` under its top. It takes no input.
-    fn still_page(&self, space: &Space, room: f32) -> impl IntoElement + use<> {
+    fn still_page(&self, space: &Space, room: f32, cx: &App) -> impl IntoElement + use<> {
         let selected = self.browser.space_tab(space.id);
         let row = |tab: u64| {
             let depth = space.listed_depth(tab);
@@ -4918,9 +4925,19 @@ impl Shell {
             }
             let panes = space.panes(tab);
             if panes.len() > 1 {
-                let width = self.segment_width(depth, panes.len());
-                let segments = panes.iter().map(|&pane| {
-                    self.segment(&self.palette, pane, width, pane == tab, pane == selected)
+                let weights = self.rest_weights(&panes, selected);
+                let segments = panes.iter().zip(weights).map(|(&pane, weight)| {
+                    let speaker = self.still_speaker(&self.palette, pane);
+                    let fold = (weight, 0.);
+                    self.segment(
+                        &self.palette,
+                        pane,
+                        fold,
+                        pane == tab,
+                        pane == selected,
+                        speaker,
+                        cx,
+                    )
                 });
                 let developer = panes.contains(&selected) && self.page(selected).developer_mode;
                 return row.child(
@@ -4936,7 +4953,14 @@ impl Shell {
             let page = self.page(tab);
             let icon = div()
                 .when(page.unloaded, |icon| icon.opacity(SLEEPING_FAVICON))
-                .child(self.tab_icon(tab));
+                .child(self.with_return_mark(
+                    &self.palette,
+                    tab,
+                    FAVICON_SIZE,
+                    self.tab_bitmap_in(&self.palette, tab),
+                    || self.tab_icon(tab),
+                    cx,
+                ));
             let bright = tab == selected || page.developer_mode;
             let developer = tab == selected && page.developer_mode;
             row.child(
@@ -5152,6 +5176,7 @@ impl Shell {
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
         self.step_pinned_turn(window);
+        self.step_split_folds(window, cx);
         self.step_foot(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // On the right, its window ends at the browser window's right edge, and the panel comes
@@ -5680,14 +5705,20 @@ fn folder_icon(palette: &Palette, open: bool, elided: bool) -> AnyElement {
         .into_any_element()
 }
 
+/// The bitmap `favicon` draws for `favicon`: a one-colour favicon the sidebar's tint would hide
+/// is drawn in the ink.
+fn favicon_source(palette: &Palette, favicon: Option<Arc<Image>>) -> Option<return_mark::Source> {
+    let favicon = favicon?;
+    Some(match tile_theme::ink_copy(&favicon, palette.tone) {
+        Some(copy) => return_mark::Source::Decoded(copy),
+        None => return_mark::Source::Encoded(favicon),
+    })
+}
+
 /// A tab's favicon, or a globe for a page without one.
 fn favicon(palette: &Palette, favicon: Option<Arc<Image>>) -> AnyElement {
-    match favicon {
-        // A one-colour favicon the sidebar's tint would hide is drawn in the ink.
-        Some(favicon) => match tile_theme::ink_copy(&favicon, palette.tone) {
-            Some(copy) => img(copy).size(px(FAVICON_DRAWN)).into_any_element(),
-            None => img(favicon).size(px(FAVICON_DRAWN)).into_any_element(),
-        },
+    match favicon_source(palette, favicon) {
+        Some(source) => source.img().size(px(FAVICON_DRAWN)).into_any_element(),
         None => svg()
             .path("icons/globe.svg")
             .size(px(FAVICON_DRAWN))

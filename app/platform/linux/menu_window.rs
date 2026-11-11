@@ -108,7 +108,7 @@ pub extern "C" fn host_show_menu_window(
     // The menu draws its panels' corners and shadows inside its window.
     crate::overlays::show_over(menu.view, ui_view, bounds, px(0.), true, left_menu);
     // check.sh reads it.
-    eprintln!("browser: menu window at {left:.0},{top:.0} {width:.0}x{height:.0}");
+    browser::log!("browser: menu window at {left:.0},{top:.0} {width:.0}x{height:.0}");
 }
 
 #[unsafe(no_mangle)]
@@ -125,7 +125,7 @@ pub extern "C" fn host_hide_menu_window() {
             overlays::lend_keyboard(window, view, false);
         }
     });
-    eprintln!("browser: menu window hidden");
+    browser::log!("browser: menu window hidden");
 }
 
 /// The window's content, in the points of `ui_view`, its own or an overlay's over it: the menu

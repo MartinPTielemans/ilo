@@ -621,6 +621,7 @@ pub fn show(
     archived: Option<u64>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<LinkPreview>(cx);
     update(cx, |preview, gpui_window, cx| {
         preview.finish(cx);
         // check.sh reads this line.

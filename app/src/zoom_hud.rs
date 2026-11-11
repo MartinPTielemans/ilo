@@ -192,6 +192,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<ZoomHud>> {
 
 /// Shows `tab`'s zoom, `percent`, over the browser window `shell` draws in, for a while from now.
 pub fn show(tab: u64, percent: i32, shell: WeakEntity<Shell>, cx: &mut App) {
+    crate::lazy_window::ready::<ZoomHud>(cx);
     let Some(window) = cx.try_global::<ZoomHudWindow>().map(|hud| hud.0) else {
         return;
     };

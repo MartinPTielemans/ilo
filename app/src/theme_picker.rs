@@ -371,6 +371,7 @@ pub fn show(
     changed: Changed,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<ThemePicker>(cx);
     let Some(window) = cx.try_global::<ThemePickerWindow>().map(|picker| picker.0) else {
         return;
     };

@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use gpui::{
-    AnyElement, Context, MouseButton, MouseDownEvent, MouseUpEvent, Point, div, prelude::*, px,
+    AnyElement, App, Context, MouseButton, MouseDownEvent, MouseUpEvent, Point, div, prelude::*, px,
 };
 
 #[cfg(test)]
@@ -68,7 +68,7 @@ impl Shell {
     /// The pages of the Spaces beside the shown one's, while they page: each with its URL field,
     /// its favorites and its rows under them, as they show once it's shown, at its offset. They
     /// take no input.
-    pub(super) fn beside_pages(&self) -> Vec<gpui::Div> {
+    pub(super) fn beside_pages(&self, cx: &App) -> Vec<gpui::Div> {
         let width = self.width();
         let pages = self
             .pages()
@@ -86,7 +86,7 @@ impl Shell {
                     .w(px(width))
                     .bottom(px(FOOTER_HEIGHT))
                     .overflow_hidden()
-                    .child(self.still_page(space, 0.));
+                    .child(self.still_page(space, 0., cx));
                 let page = div()
                     .absolute()
                     .top_0()
@@ -95,7 +95,7 @@ impl Shell {
                     .w(px(width))
                     .child(self.still_url_field(tab))
                     .child(rows)
-                    .children(self.still_tiles(&favorites, tab));
+                    .children(self.still_tiles(&favorites, tab, cx));
                 Some(div().absolute().size_full().overflow_hidden().child(page))
             })
             .collect()

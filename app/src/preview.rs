@@ -2284,6 +2284,12 @@ fn main() {
             if let Some(update) = &update {
                 preview_update(update, cx);
             }
+            // PREVIEW_SIDEBAR_POSITION=left or right shows Settings › Tabs & Sidebar's sidebar group
+            // alone, Sidebar position's drawings with that side chosen (#2407).
+            if let Ok(side) = std::env::var("PREVIEW_SIDEBAR_POSITION") {
+                preview_sidebar_position(side == "right", cx);
+                return;
+            }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
@@ -3271,6 +3277,186 @@ fn preview_account(state: &str, cx: &mut App) {
     });
     if let Err(error) = opened {
         log!("preview: couldn't open the account's window: {error}");
+    }
+}
+
+/// Settings › Tabs & Sidebar's sidebar group on its card, as Settings draws it, in a window of
+/// Settings' size: Sidebar position's drawings, `right` chosen, and the two switches under it.
+/// PREVIEW_BUTTONS=mac, windows or linux draws that OS's window buttons in the drawings.
+fn preview_sidebar_position(right: bool, cx: &mut App) {
+    use browser::settings_side::Buttons;
+    use browser::tokens::settings::{HEIGHT, WIDTH};
+    let buttons = match std::env::var("PREVIEW_BUTTONS").as_deref() {
+        Ok("mac") => Buttons::Mac,
+        Ok("windows") => Buttons::Windows,
+        Ok("linux") => Buttons::Linux,
+        _ => Buttons::HERE,
+    };
+    let (mut x, mut y) = (0., 0.);
+    unsafe { host_centered(WIDTH as f64, HEIGHT as f64, &mut x, &mut y) };
+    let bounds = Bounds::new(
+        point(px(x as f32), px(y as f32)),
+        size(px(WIDTH), px(HEIGHT)),
+    );
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        ..Default::default()
+    };
+    let opened = cx.open_window(options, |_, cx| {
+        cx.new(|cx| {
+            let look = browser::settings_rows::Look::settings(true);
+            let search = cx.new(|cx| {
+                browser::text_input::TextInput::new("Search", cx)
+                    .placeholder_color(look.detail)
+                    .caret_color(look.ink)
+            });
+            SidebarPage {
+                right,
+                buttons,
+                card: Card::default(),
+                search,
+                logged: Rc::default(),
+            }
+        })
+    });
+    if let Err(error) = opened {
+        log!("preview: couldn't open Sidebar position's window: {error}");
+    }
+}
+
+struct SidebarPage {
+    right: bool,
+    buttons: browser::settings_side::Buttons,
+    card: Card,
+    search: gpui::Entity<browser::text_input::TextInput>,
+    logged: Rc<std::cell::RefCell<Vec<String>>>,
+}
+
+impl gpui::Render for SidebarPage {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use browser::palette::{INK, PAPER};
+        use browser::settings_card::Colors;
+        use browser::settings_column::{self, Section};
+        use browser::settings_rows::{Look, end, frame, group, stop_switch, text as row_text};
+        use browser::settings_side::picker;
+        use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
+        use browser::tokens::settings::{HEADING_BOTTOM, NAME, SIDE_ROOM, SIDE_TOP, TEXT_X};
+        use browser::tokens::text;
+        use gpui::{FontWeight, ParentElement, Styled, div, rgb};
+        let dark = preview_tone() != Some(Tone::Light);
+        let look = Look::settings(dark);
+        let base = if dark { rgb(PAPER) } else { rgb(INK) };
+        let a11y = window.is_a11y_active();
+        let field = browser::settings_search::field(
+            &self.search,
+            base,
+            gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+            |_, _| {},
+            cx,
+        );
+        let column = settings_column::column(
+            Section::TabsAndSidebar,
+            dark,
+            Rc::default(),
+            gpui::IntoElement::into_any_element(field),
+            None,
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _| {}),
+            a11y,
+        );
+        let page = cx.entity().downgrade();
+        let pair = picker(
+            &look,
+            base,
+            dark,
+            self.right,
+            self.buttons,
+            a11y,
+            self.logged.clone(),
+            move |side, _, cx| {
+                log!(
+                    "preview: sidebar position {}",
+                    browser::settings_side::title(side)
+                );
+                page.update(cx, |page, cx| {
+                    page.right = side;
+                    cx.notify();
+                })
+                .ok();
+            },
+        );
+        let position = frame()
+            .flex_col()
+            .items_stretch()
+            .child(row_text(
+                &look,
+                "Sidebar position",
+                Some("The side of the window the sidebar and the window's buttons are on.".into()),
+            ))
+            .child(div().flex().mt(px(SIDE_TOP)).ml(px(-SIDE_ROOM)).child(pair));
+        let switch = |name: &'static str, on: bool| {
+            end([gpui::IntoElement::into_any_element(stop_switch(
+                &look,
+                name,
+                name,
+                on,
+                1.,
+                look.accent,
+                a11y,
+            ))])
+        };
+        let side = if self.right { "right" } else { "left" };
+        let edge = frame()
+            .child(row_text(
+                &look,
+                "Show the hidden sidebar at the window's edge",
+                Some(
+                    format!("Move the pointer along the {side} edge. ⌘S shows it either way.")
+                        .into(),
+                ),
+            ))
+            .child(switch("edge", true));
+        let option = frame()
+            .child(row_text(
+                &look,
+                "Show the hidden sidebar when ⌥ is pressed alone",
+                Some("Press and let go of ⌥ with no other key.".into()),
+            ))
+            .child(switch("option", false));
+        let heading = div()
+            .px(px(TEXT_X))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(look.heading)
+            .child("The sidebar");
+        let colors = Colors {
+            line: look.line,
+            name: base.opacity(NAME),
+            heading: look.heading,
+        };
+        let card = self.card.draw(
+            Section::TabsAndSidebar.name(),
+            div().flex().flex_col().child(heading).child(
+                div()
+                    .mt(px(HEADING_BOTTOM))
+                    .child(group(&look, [position, edge, option])),
+            ),
+            dark,
+            colors,
+        );
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .bg(rgb(if dark { STAND_IN } else { LIGHT_STAND_IN }))
+            .font_family(browser::face::UI)
+            .text_size(px(text::BODY))
+            .text_color(look.ink)
+            .child(column)
+            .child(card)
     }
 }
 

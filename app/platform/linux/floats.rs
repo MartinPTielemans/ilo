@@ -250,7 +250,7 @@ fn fade_in(kind: Kind, ui_view: *mut c_void, fade: f64, shown: &'static str) {
     motion::after(fade, move || {
         if find(kind, |float| float.changes) == Some(change) {
             // check.sh waits for this line, so a capture after it shows the float whole.
-            eprintln!("{shown}");
+            browser::log!("{shown}");
         }
     });
 }
@@ -357,14 +357,14 @@ pub extern "C" fn host_add_hud(hud_view: *mut c_void, right: f64, top: f64, marg
 pub extern "C" fn host_show_hud(ui_view: *mut c_void) {
     if show(Kind::Hud, ui_view).is_some() {
         // check.sh reads this line.
-        eprintln!("browser: zoom hud shown");
+        browser::log!("browser: zoom hud shown");
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_hide_hud() {
     if hide(Kind::Hud) {
-        eprintln!("browser: zoom hud hidden");
+        browser::log!("browser: zoom hud hidden");
     }
 }
 
@@ -379,14 +379,14 @@ pub extern "C" fn host_show_drop_targets(ui_view: *mut c_void) {
         return;
     }
     if show(Kind::DropTargets, ui_view).is_some() {
-        eprintln!("browser: drop targets shown");
+        browser::log!("browser: drop targets shown");
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_hide_drop_targets() {
     if hide(Kind::DropTargets) {
-        eprintln!("browser: drop targets hidden");
+        browser::log!("browser: drop targets hidden");
     }
 }
 
@@ -461,7 +461,7 @@ pub extern "C" fn host_show_toast(ui_view: *mut c_void) {
     toast_outline(ui_view, None);
     if show(Kind::Toast, ui_view).is_some() {
         // check.sh reads this line.
-        eprintln!("browser: toast window shown");
+        browser::log!("browser: toast window shown");
     }
 }
 
@@ -514,7 +514,7 @@ pub extern "C" fn host_show_tooltip(
     });
     // check.sh reads this line: where it is, in the window it shows over, to compare with where
     // the UI asked.
-    eprintln!("browser: tooltip window at {left} {top}");
+    browser::log!("browser: tooltip window at {left} {top}");
     fade_in(
         Kind::Tooltip,
         ui_view,
@@ -565,7 +565,7 @@ pub extern "C" fn host_show_link_target(ui_view: *mut c_void, left: f64, top: f6
         (float.left, float.top) = (left, top)
     });
     // check.sh reads this line: which side it's on, out of the pointer's way.
-    eprintln!("browser: link target window at {left} {top}");
+    browser::log!("browser: link target window at {left} {top}");
     fade_in(
         Kind::LinkTarget,
         ui_view,
@@ -633,8 +633,8 @@ pub extern "C" fn host_show_hover_card(
     }
     if show(Kind::Card, ui_view).is_some() {
         // check.sh reads these: where it is, to compare with where the UI asked, and that it shows.
-        eprintln!("browser: hover card window at {left} {top}");
-        eprintln!("browser: hover card window shown");
+        browser::log!("browser: hover card window at {left} {top}");
+        browser::log!("browser: hover card window shown");
     }
 }
 
