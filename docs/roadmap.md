@@ -56,7 +56,7 @@ Measured on every release against Chrome, Helium and Ardia, following the method
 **Not held.** `./check.sh perf` (#2142) measures only against Chrome, on CI runners, and not on every release (#456).
 
 - Memory at 10 and 20 tabs is 12–62 % over Chrome's (#2138).
-- A launch's page waits 2 s for uBlock Origin (#2139).
+- A launch's page waits for uBlock Origin: on Linux 4.5 s on its selfie, longer than the 3 s with none, and 6 s in a new profile (#2139).
 - A tab switch takes 15–20 ms.
 
 | Metric | Target |
