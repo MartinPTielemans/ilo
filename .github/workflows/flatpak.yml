@@ -137,6 +137,26 @@ jobs:
           cat ilo.log
           grep -q "browser: UI shown" ilo.log
 
+      # A crash of each kind of process leaves a minidump in the sandbox (#2454), once the engine
+      # has the patch that reads a crashed process without ptrace, which Flatpak's seccomp refuses.
+      - name: Crash dumps
+        if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        run: |
+          engine=$(engine/fetch.sh commit)
+          if ! git cat-file -e "$engine:engine/patches/ours/chromium-crashpad-flatpak-dumps.patch" 2> /dev/null; then
+            echo "::notice::Skipped crash dumps: the engine (${engine:0:12}) predates the patch for them."
+            exit 0
+          fi
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' \
+            tools/flatpak-crashes.sh app/build/flatpak-crashes
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.engine.outputs.found == 'true' && !inputs.release }}
+        with:
+          name: ilo-flatpak-crashes
+          path: app/build/flatpak-crashes
+          if-no-files-found: ignore
+
       # The Flatpak signs in to sync as the build does, by check.sh's sync-account run, driven in its
       # sandbox (BROWSER_FLATPAK), on an ilo-server of the run's own, on SQLite with a throwaway
       # account, never the hosted one, at the commit check-linux.yml builds. Not in a release,
