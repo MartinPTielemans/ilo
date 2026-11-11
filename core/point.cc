@@ -16,9 +16,9 @@
 #include "base/task/thread_pool.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/arrange.h"
+#include "browser_core/ax_text.h"
 #include "browser_core/boosts.h"
 #include "browser_core/host.h"
-#include "browser_core/page_text.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "content/public/browser/browser_context.h"
@@ -225,6 +225,7 @@ struct PagePoint::Picked {
   std::string font;
   std::string font_size;
   std::string padding;
+  std::string frame;
   gfx::RectF box;
   bool withheld = false;
   std::vector<uint8_t> png;
@@ -413,6 +414,8 @@ void PagePoint::HitTest(gfx::PointF point, const base::DictValue* metrics) {
 
 void PagePoint::Ancestors(const base::DictValue* node) {
   std::optional<int> id = node ? node->FindInt("backendNodeId") : std::nullopt;
+  const std::string* frame = node ? node->FindString("frameId") : nullptr;
+  frame_ = frame ? *frame : std::string();
   if (!id) {
     chain_.clear();
     at_ = 0;
@@ -548,6 +551,7 @@ void PagePoint::Pick() {
   Picked picked;
   picked.turn = turn_;
   picked.node = shown_->node;
+  picked.frame = frame_;
   picked.kind = shown_->kind;
   picked.name = shown_->name;
   picked.box = shown_->box;
@@ -609,18 +613,50 @@ void PagePoint::Styled(Picked picked, const base::DictValue* result) {
             ? sides[0]
             : base::JoinString(sides, " ");
   }
+  // Its text from the tree the agent's outline reads, by the same rule, before DOM goes off.
+  // Nothing of a frame an agent may not read.
+  if (!Readable(picked.frame)) {
+    Texted(std::move(picked), std::string(), true);
+  } else {
+    base::DictValue params;
+    if (!picked.frame.empty()) {
+      params.Set("frameId", picked.frame);
+    }
+    Send("Accessibility.getFullAXTree", std::move(params),
+         base::BindOnce(
+             [](base::WeakPtr<PagePoint> point, Picked picked, const base::DictValue* result) {
+               if (!point) {
+                 return;
+               }
+               const base::ListValue* nodes = result ? result->FindList("nodes") : nullptr;
+               ElementText text = nodes ? TextUnder(*nodes, picked.node) : ElementText();
+               point->Texted(std::move(picked), std::move(text.text), text.withheld);
+             },
+             weak_factory_.GetWeakPtr(), std::move(picked)));
+  }
   // Off again, so the page's changes aren't followed while the user only points.
   Send("CSS.disable", base::DictValue(), base::DoNothing());
   Send("DOM.disable", base::DictValue(), base::DoNothing());
-  const int node = picked.node;
-  ReadElementText(*web_contents(), node,
-                  base::BindOnce(
-                      [](base::WeakPtr<PagePoint> point, Picked picked, ElementText text) {
-                        if (point) {
-                          point->Texted(std::move(picked), std::move(text.text), text.withheld);
-                        }
-                      },
-                      weak_factory_.GetWeakPtr(), std::move(picked)));
+}
+
+bool PagePoint::Readable(const std::string& frame) {
+  content::RenderFrameHost* main = web_contents()->GetPrimaryMainFrame();
+  content::RenderFrameHost* found = frame.empty() ? main : nullptr;
+  main->ForEachRenderFrameHost([&](content::RenderFrameHost* each) {
+    if (!found &&
+        base::EqualsCaseInsensitiveASCII(each->GetDevToolsFrameToken().ToString(), frame)) {
+      found = each;
+    }
+  });
+  if (!found) {
+    return false;
+  }
+  for (content::RenderFrameHost* up = found; up; up = up->GetParent()) {
+    if (!IsWebFrame(up)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 void PagePoint::Texted(Picked picked, std::string text, bool withheld) {
