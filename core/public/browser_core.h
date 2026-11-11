@@ -188,6 +188,9 @@ typedef struct bc_archived_tab {
   // Whether it closed in a Little ilo window, by its window closing or auto-archive, as the
   // Library's filter picks them out (Arc's Little Arc filter).
   bool little;
+  // When it comes back by itself, as bc_tab_snooze put it, in milliseconds since the Unix epoch,
+  // or 0 for a tab that stays until it's reopened.
+  double snoozed_until;
 } bc_archived_tab;
 
 // One of an extension's keyboard commands that has a key, as Chrome's Keyboard Shortcuts page
@@ -1366,6 +1369,9 @@ typedef struct bc_host {
   // and the list's dimmed rows.
   void (*tab_arrangement_fits)(void* context, bc_id tab, const char* site,
                                const uint32_t* misfits, size_t count);
+  // A snoozed tab came back by itself (bc_tab_snooze): |tab| is at the top of its Space's Today
+  // tabs, unloaded, and nothing shows it, so the app marks it unread until it's shown.
+  void (*tab_unsnoozed)(void* context, bc_id tab);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2277,6 +2283,23 @@ BC_EXPORT void bc_extensions_report(void);
 // bc_window_reopen_closed_tab. Then archive_changed. Returns the removal's id, for
 // bc_archive_undo_remove, or 0 if the archive was empty.
 BC_EXPORT bc_id bc_archive_clear(void);
+
+// Closes the Today tab as bc_tab_close does, into the archive snoozed until |until|, in
+// milliseconds since the Unix epoch. Then, or at the first launch after it with the window on
+// screen, it comes back by itself at the top of its Space's Today tabs, unloaded, and leaves the
+// archive: then space_changed, archive_changed and tab_unsnoozed. If its Space is gone by then, it
+// stays in the archive as a tab closed then. Till then it's an archived tab like the rest, with its
+// time in bc_archived_tab.snoozed_until, which auto-archive's 30 days don't drop, and
+// bc_window_reopen_tab and bc_window_restore_archived bring it back sooner. Returns false and
+// leaves it open if it isn't a Today tab of the user's own Spaces, such as a pinned tab, a
+// favorite, a private window's or an agent's, or |until| has passed. The user's: an agent's closed
+// pages don't go in the archive (#1408), so agents get no call for it.
+BC_EXPORT bool bc_tab_snooze(bc_id tab, double until);
+
+// Changes when the snoozed archived tab comes back, to |until|, or with 0 leaves it in the archive
+// as a tab closed now. Returns false if the archive has no such tab, or |until| has passed. Then
+// archive_changed. The user's, as bc_tab_snooze.
+BC_EXPORT bool bc_archive_snooze(bc_id archived, double until);
 
 // Takes the archived tab out of the archive, as bc_archive_clear does with all of them. Its tab,
 // if it closed since the browser started, still reopens with bc_window_reopen_closed_tab. Then
