@@ -184,12 +184,13 @@ impl Shell {
         }
     }
 
-    /// Shows the theme picker for `space` `at` its place in the window, with the Space's theme, or
-    /// its colour alone if it has no theme.
+    /// Shows the theme picker for `space` `at` its place in the window, to its left if `left`, with
+    /// the Space's theme, or its colour alone if it has no theme.
     pub(super) fn show_theme_picker(
         &mut self,
         space: u64,
         at: theme_picker::At,
+        left: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(entry) = self.spaces.iter().find(|each| each.id == space) else {
@@ -210,7 +211,16 @@ impl Shell {
         let height = f32::from(self.viewport.height);
         // A card showing would stay under the picker, as rows' cards wait while it shows.
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
-        theme_picker::show(self.browser.window(), space, theme, at, height, changed, cx);
+        theme_picker::show(
+            self.browser.window(),
+            space,
+            theme,
+            at,
+            left,
+            height,
+            changed,
+            cx,
+        );
     }
 
     /// The picker made `theme` for `space`: the window shows it at once, and once the user is
@@ -288,7 +298,11 @@ impl Shell {
     /// Where the sidebar's middle is across the window, 0 to 1, where the window's colour is taken
     /// for what covers it.
     pub(super) fn sidebar_x(&self) -> f32 {
-        self.width() / 2. / f32::from(self.viewport.width).max(1.)
+        let x = self.width() / 2. / f32::from(self.viewport.width).max(1.);
+        match self.right() {
+            true => 1. - x,
+            false => x,
+        }
     }
 
     /// The window's colour behind everything: the gradient down it, or with a Space of more than

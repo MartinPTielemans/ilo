@@ -3,7 +3,8 @@
 # so text that fits on the Mac but not in another system's faces or windows shows without anyone
 # taking screenshots: on Linux on Wayland and on X11, each in a headless sway session of its own
 # (tools/headless.sh), and on Windows, a CI runner's, its desktop (tools/window-capture.ps1).
-# The screens: the sidebar with tabs, the command bar, a tab's context menu, Site Controls, the
+# The screens: the sidebar with tabs, on the left and on the right, where the window's buttons
+# are at the window's right corner (#2375), the command bar, a tab's context menu, Site Controls, the
 # icon picker, the delete-Space dialog, the sidebar of a Space whose theme has three colours,
 # whose dot in the switcher draws all three (#1354), Peek over the page, its card a hole the
 # shell's page shows through, and more Spaces than fit (#1401): 16 in the switcher of a sidebar
@@ -29,6 +30,7 @@ if command -v magick >/dev/null; then convert=(magick) montage=(magick montage);
 # preview logs ending in the point the pointer goes to.
 screens=(
   "sidebar|drawn at|"
+  "sidebar-right|drawn at|PREVIEW_SIDEBAR_RIGHT=1"
   "command-bar|command bar drew|PREVIEW_BAR=tabs"
   "context-menu|menu shown|PREVIEW_MENU=100,247"
   "site-controls|site controls settled|PREVIEW_SITE_CONTROLS=1"
