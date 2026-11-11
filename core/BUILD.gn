@@ -297,8 +297,6 @@ source_set("window_frames") {
   ]
 }
 
-# Which fields' contents an agent sees, and the hatch over those it doesn't in its pictures, apart
-# so browser_core_unittests tests the rule alone.
 # A page's text as its accessibility tree has it, an element's too, with no field's value: what
 # bc_tab_read_text and Point read.
 source_set("ax_text") {
@@ -312,6 +310,8 @@ source_set("ax_text") {
   ]
 }
 
+# Which fields' contents an agent sees, and the hatch over those it doesn't in its pictures, apart
+# so browser_core_unittests tests the rule alone.
 source_set("withheld_fields") {
   sources = [
     "withheld_fields.cc",

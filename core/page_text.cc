@@ -7,7 +7,6 @@
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_util.h"
-#include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/agent_page.h"
@@ -15,7 +14,6 @@
 #include "browser_core/tab.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
-#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -64,28 +62,6 @@ void Report(bc_id tab, uint64_t request, std::optional<std::string> text) {
 }
 
 }  // namespace
-
-void ReadElementText(content::WebContents& contents,
-                     int node,
-                     base::OnceCallback<void(ElementText)> done) {
-  // Posted, so the caller never hears inside its own call, and heard as nothing if the renderer
-  // never answers.
-  done = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-      base::BindPostTaskToCurrentDefault(std::move(done)), ElementText());
-  contents.RequestAXTreeSnapshot(
-      base::BindOnce(
-          [](base::WeakPtr<content::WebContents> contents, int node,
-             base::OnceCallback<void(ElementText)> done, ui::AXTreeUpdate& update) {
-            if (!contents) {
-              std::move(done).Run(ElementText());
-              return;
-            }
-            std::move(done).Run(TextUnder(update, ReadableUrls(*contents), node));
-          },
-          contents.GetWeakPtr(), node, std::move(done)),
-      ui::kAXModeWebContentsOnly, kMaxNodes, kSnapshotTimeout,
-      content::WebContents::AXTreeSnapshotPolicy::kAll);
-}
 
 PageText::PageText(content::WebContents* contents)
     : content::WebContentsObserver(contents),

@@ -62,12 +62,6 @@ class PageText : public content::WebContentsObserver,
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
-// Snapshots |contents|' page as PageText does and gives TextUnder |node|, or nothing once the page
-// is gone, posted.
-void ReadElementText(content::WebContents& contents,
-                     int node,
-                     base::OnceCallback<void(ElementText)> done);
-
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_PAGE_TEXT_H_
