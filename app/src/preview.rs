@@ -2920,8 +2920,9 @@ fn main() {
                     preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Left, cx);
                 }
             }
-            // PREVIEW_MODEL_MENU=claude or codex shows Settings › Agents' Model menu for that CLI as
-            // it opens, from the CLI's recorded list, light with PREVIEW_APPEARANCE=light (#2455).
+            // PREVIEW_MODEL_MENU=<claude|codex>[,<model>] shows Settings › Agents' Model menu for that
+            // CLI as it opens, from the CLI's recorded list, on Default or the model chosen, light
+            // with PREVIEW_APPEARANCE=light (#2455).
             if let Ok(cli) = std::env::var("PREVIEW_MODEL_MENU") {
                 preview_model_menu(bounds, &cli, cx);
             }
@@ -3051,6 +3052,7 @@ fn preview_page_menu(
 /// recorded answer lists them, in the light or dark Settings.
 fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
     use browser::agents::ready::{claude_listed, codex_listed};
+    let (cli, chosen) = cli.split_once(',').unwrap_or((cli, ""));
     let answer = |text: &str| serde_json::from_str(text).unwrap_or_default();
     let models = match cli {
         "codex" => Some(codex_listed(&answer(include_str!(
@@ -3062,7 +3064,7 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
     }
     .unwrap_or_default();
     let (_, items) =
-        browser::agents::task::model_menu("", models.default.as_deref(), models.listed);
+        browser::agents::task::model_menu(chosen, models.default.as_deref(), models.listed);
     let light = preview_tone() == Some(Tone::Light);
     if menu::open_at(Rc::new(PreviewMenu), bounds, cx).is_none() {
         return;
