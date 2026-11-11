@@ -23,6 +23,7 @@
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/arrange.h"
+#include "browser_core/arrange_rule.h"
 #include "browser_core/arrangement.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
@@ -595,14 +596,19 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   if (!from || from->agent() || !to || !to->agent() || from->profile() != to->profile()) {
     return false;
   }
-  // Arrange is the user's alone.
   content::WebContents* contents = browser_core::Tab::FromId(tab);
-  if (browser_core::Arrange* arrange =
-          contents ? browser_core::Arrange::FromWebContents(contents) : nullptr) {
-    arrange->End(/*tell=*/true);
-  }
-  browser_core::Window::MoveToSpace(tab, space, /*to_agent=*/true);
-  if (browser_core::Space::Holding(tab) != to) {
+  const bool moved = browser_core::arrange_rule::GiveToAgent(
+      [&] {
+        if (browser_core::Arrange* arrange =
+                contents ? browser_core::Arrange::FromWebContents(contents) : nullptr) {
+          arrange->End(/*tell=*/true);
+        }
+      },
+      [&] {
+        browser_core::Window::MoveToSpace(tab, space, /*to_agent=*/true);
+        return browser_core::Space::Holding(tab) == to;
+      });
+  if (!moved) {
     return false;
   }
   // One the user took back from an agent before is the agent's now.
