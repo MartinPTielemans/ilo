@@ -12,8 +12,8 @@
 //! A Boost also keeps what Arrange moved on the site's pages, `Boosts/<site>.arrange.json`
 //! (arrange.rs), which the core places only while it's what the user kept in the browser.
 //!
-//! This first slice is CSS and Zap. Scripts come in a slice of their own, as they run code in the
-//! user's pages.
+//! A site's script, `Boosts/<site>.js` (#2297), is the user's too: Edit Script… starts and opens
+//! it, and it runs only once the user turns it on in the browser.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -177,6 +177,8 @@ pub struct Boost {
 pub struct Boosts {
     profiles: HashMap<u64, Kept>,
     all_off: bool,
+    /// Safe start holds them all off for the launch, whatever Settings says (crate::safe_start).
+    held: bool,
 }
 
 thread_local! {
@@ -216,6 +218,10 @@ impl Kept {
 
     fn arrangement_path(&self, site: &str) -> PathBuf {
         self.boosts().join(format!("{site}{}", arrange::SUFFIX))
+    }
+
+    fn script_path(&self, site: &str) -> PathBuf {
+        self.boosts().join(format!("{site}.js"))
     }
 
     fn read(&mut self) {
@@ -292,6 +298,10 @@ fn first_line(site: &str) -> String {
     format!("/* {site}: your CSS for its pages, shown as you save. */\n\n")
 }
 
+fn first_script_line(site: &str) -> String {
+    format!("// {site}: your script for its pages, which runs once you turn it on in ilo.\n\n")
+}
+
 /// A line of OFF_FILE, if it names a site.
 fn site_of_line(line: &str) -> Option<String> {
     let line = line.trim();
@@ -357,13 +367,24 @@ impl Boosts {
         Some(self.profiles.get(&profile)?.boosts())
     }
 
+    /// Whether none shows: Settings has them all off, or safe start holds them.
     pub fn all_off(&self) -> bool {
-        self.all_off
+        self.all_off || self.held
+    }
+
+    /// Safe start's hold: every Boost off for the launch, leaving Settings' switch as it is.
+    pub fn set_held(&mut self, held: bool) -> Vec<Change> {
+        self.held = held;
+        self.every_change()
     }
 
     /// Settings' switch: every Boost off, or back as each site has it.
     pub fn set_all_off(&mut self, off: bool) -> Vec<Change> {
         self.all_off = off;
+        self.every_change()
+    }
+
+    fn every_change(&mut self) -> Vec<Change> {
         let profiles: Vec<u64> = self.profiles.keys().copied().collect();
         profiles
             .into_iter()
@@ -500,6 +521,12 @@ impl Boosts {
         }
         kept.arranged_as.remove(site);
         kept.misfits.remove(site);
+        // Its script goes with it.
+        if let Err(error) = std::fs::remove_file(kept.script_path(site))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            crate::log!("couldn't delete the Boost script for {site}: {error}");
+        }
         if kept.off.remove(site) {
             kept.save_off();
         }
@@ -606,10 +633,29 @@ impl Boosts {
         Some(kept.path(site))
     }
 
+    /// `site`'s script, `Boosts/<site>.js` (#2297), for the user's editor, started with a line
+    /// saying what it is if there's none. It runs only once the user turns it on in the browser.
+    /// A script is part of its site's Boost, so a site without one gets its CSS started too: the
+    /// Library lists it, and Delete… takes both.
+    pub fn script_file(&mut self, profile: u64, site: &str) -> Option<PathBuf> {
+        self.file(profile, site)?;
+        let kept = self.profiles.get_mut(&profile)?;
+        let path = kept.script_path(site);
+        if !path.exists() {
+            let written = std::fs::create_dir_all(kept.boosts())
+                .and_then(|_| std::fs::write(&path, first_script_line(site)));
+            if let Err(error) = written {
+                crate::log!("couldn't start the script for {site}: {error}");
+                return None;
+            }
+        }
+        Some(path)
+    }
+
     /// What the core should show that it doesn't yet: each site's CSS, or none for a site turned
     /// off, there no more, or with Settings' switch off.
     fn changes(&mut self, profile: u64) -> Vec<Change> {
-        let all_off = self.all_off;
+        let all_off = self.all_off();
         let Some(kept) = self.profiles.get_mut(&profile) else {
             return Vec::new();
         };

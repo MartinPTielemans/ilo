@@ -1445,6 +1445,14 @@ impl Browser for Engine {
         restart_browser(cx);
     }
 
+    fn safe_start(&self) -> bool {
+        crate::safe_start_host::held()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        unsafe { bc::bc_ad_blocking() }
+    }
+
     fn playready_needs(&self) -> shell::PlayReady {
         shell::PlayReady::from_core(unsafe { bc::bc_playready_needs() })
     }

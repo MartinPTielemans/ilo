@@ -597,3 +597,27 @@ fn a_card_after_a_click_doesn_t_take_the_pointer_left_on_a_button_for_its_own(
     );
     assert_eq!(*told.borrow(), ["shown 2"]);
 }
+
+#[gpui::test]
+fn a_picture_taken_before_the_cards_window_is_made_is_the_windows(cx: &mut TestAppContext) {
+    let kept = cx.update(|cx| asking(1, cx));
+    let dropped = cx.update(|cx| asking(2, cx));
+    cx.update(|cx| answered(kept, Some(picture(528, 352)), cx));
+    cx.update(|cx| answered(dropped, Some(picture(528, 352)), cx));
+    cx.update(|cx| forget(2, cx));
+    let late = cx.update(|cx| asking(3, cx));
+    open_card(cx);
+    cx.update(|cx| answered(late, Some(picture(528, 352)), cx));
+    let held = card_window(cx)
+        .read_with(cx, |card, _| {
+            let mut tabs: Vec<u64> = card.pictures.keys().copied().collect();
+            tabs.sort();
+            tabs
+        })
+        .unwrap();
+    assert_eq!(
+        held,
+        [1, 3],
+        "the window lost a picture taken early, or kept one forgotten"
+    );
+}

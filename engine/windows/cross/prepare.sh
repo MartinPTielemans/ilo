@@ -58,7 +58,17 @@ ucl_tag=$(git config -f "$engine/pins.ini" ungoogled-chromium-portablelinux.tag)
 ucw=$work/ucw
 ucl=$work/ucl
 clone ungoogled-chromium-windows "$ucw_tag" "$ucw"
-clone ungoogled-chromium-portablelinux "$ucl_tag" "$ucl"
+# On the pinned Chromium, Windows takes portablelinux's host patches as the Linux engine does,
+# rebased by ilo if it was (tree.sh).
+ucl_stamp=$ucl_tag
+[ "${ucw_tag%%-*}" != "$(git config -f "$engine/pins.ini" chromium.version)" ] ||
+  ucl_stamp=$(platform_stamp ungoogled-chromium-portablelinux "$ucl_tag")
+if [ "$(cat "$ucl/.ilo-platform" 2>/dev/null)" != "$ucl_stamp" ]; then
+  rm -rf "$ucl"
+  clone ungoogled-chromium-portablelinux "$ucl_tag" "$ucl"
+  [ "$ucl_stamp" = "$ucl_tag" ] || rebase_platform "$ucl" ungoogled-chromium-portablelinux || exit 1
+  echo "$ucl_stamp" >"$ucl/.ilo-platform"
+fi
 check_ungoogled "$ucw/ungoogled-chromium" "ungoogled-chromium-windows $ucw_tag"
 [ "$(git -C "$ucw/ungoogled-chromium" rev-parse HEAD)" = "$(git -C "$ucl/ungoogled-chromium" rev-parse HEAD)" ] ||
   fail "ungoogled-chromium-windows $ucw_tag and ungoogled-chromium-portablelinux $ucl_tag build different ungoogled-chromium commits"
@@ -149,7 +159,7 @@ target_tools() {
   fi
 }
 
-tags="$ucw_tag $ucl_tag"
+tags="$ucw_tag $ucl_stamp"
 if [ "$(cat "$src/.windows-tags" 2>/dev/null)" != "$tags" ]; then
   # portablelinux's scripts/build.sh, with the Windows patches and downloads, in the scratch tree.
   # Each step leaves a stamp there, so a run that stopped goes on where it was.
