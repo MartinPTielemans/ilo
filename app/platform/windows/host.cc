@@ -1272,6 +1272,38 @@ bool g_settings_placed = false;
 // The UI's view of the browser window the toast shows over, while it shows.
 void* g_toast_over = nullptr;
 
+// The foot bar, the UI's view of the browser window it shows over while it shows, and where: its
+// size, centred between its insets from the content's left and right edges, its bottom over the
+// content's (host_show_foot_bar).
+Floating g_foot_bar;
+void* g_foot_bar_over = nullptr;
+double g_foot_bar_left = 0, g_foot_bar_right = 0, g_foot_bar_bottom = 0;
+double g_foot_bar_width = 0, g_foot_bar_height = 0;
+
+// Where the foot bar's window goes over its browser window, in points from its content's top left.
+std::pair<double, double> FootBarOrigin() {
+  double content_width, content_height;
+  ContentSize(Root(g_foot_bar_over), &content_width, &content_height);
+  const double across = content_width - g_foot_bar_left - g_foot_bar_right;
+  return {g_foot_bar_left + (across - g_foot_bar_width) / 2,
+          content_height - g_foot_bar_bottom - g_foot_bar_height};
+}
+
+// Keeps the foot bar there as its browser window resizes, without raising it.
+void PlaceFootBar() {
+  HWND root = g_foot_bar_over ? Root(g_foot_bar_over) : nullptr;
+  if (!root || !g_foot_bar.hwnd || !IsWindowVisible(g_foot_bar.hwnd)) {
+    return;
+  }
+  auto [left, top] = FootBarOrigin();
+  g_foot_bar.place = std::pair{left, top};
+  const double scale = Scale(root);
+  POINT origin{std::lround(left * scale), std::lround(top * scale)};
+  ClientToScreen(root, &origin);
+  SetWindowPos(g_foot_bar.hwnd, nullptr, origin.x, origin.y, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 // Where the toast's window goes over |ui_view|'s browser window, in points from its content's top
 // left: at the focused page's top right corner, which in a split view is its pane's, and as wide as
 // that page from its left edge, so no toast runs past its window (#1462).
@@ -1597,6 +1629,9 @@ void PlaceCorners(HWND root) {
   }
   if (g_toast_over && Root(g_toast_over) == root) {
     PlaceToast();
+  }
+  if (g_foot_bar_over && Root(g_foot_bar_over) == root) {
+    PlaceFootBar();
   }
 }
 
@@ -3326,6 +3361,9 @@ void host_forget_window(void* ui_view) {
     Forget(it->second.floating);
     g_reveals.erase(it);
   }
+  if (g_foot_bar_over == ui_view) {
+    host_hide_foot_bar();
+  }
   g_pane_corners.erase(ui_view);
   g_page_lefts.erase(ui_view);
   std::erase(UiViews(), Hwnd(ui_view));
@@ -4024,6 +4062,39 @@ void host_hide_toast(void) {
   g_toast_over = nullptr;
   g_toast.plate = RECT{};
   Hide(g_toast);
+}
+
+void host_add_foot_bar(void* foot_bar_view) {
+  Adopt(g_foot_bar, foot_bar_view, false, nullptr);
+  // A click on its buttons leaves the keyboard where it was, with the browser window and the page,
+  // where the mode has its keys, as the hover card's does.
+  SetWindowLongPtrW(g_foot_bar.hwnd, GWL_EXSTYLE,
+                    GetWindowLongPtrW(g_foot_bar.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
+}
+
+void host_show_foot_bar(void* ui_view,
+                        double left,
+                        double right,
+                        double bottom,
+                        double width,
+                        double height) {
+  g_foot_bar_over = ui_view;
+  g_foot_bar_left = left;
+  g_foot_bar_right = right;
+  g_foot_bar_bottom = bottom;
+  g_foot_bar_width = width;
+  g_foot_bar_height = height;
+  const bool shown = IsWindowVisible(g_foot_bar.hwnd);
+  auto [x, y] = FootBarOrigin();
+  Show(g_foot_bar, ui_view, x, y, width, height, false);
+  if (!shown) {
+    LogShown(g_foot_bar, "foot bar");
+  }
+}
+
+void host_hide_foot_bar(void) {
+  g_foot_bar_over = nullptr;
+  Hide(g_foot_bar);
 }
 
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {

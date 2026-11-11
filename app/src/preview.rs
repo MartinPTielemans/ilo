@@ -21,6 +21,7 @@ use browser::boost_editor;
 use browser::boost_style::{self, Case, Face, Style};
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
+use browser::foot_bar;
 use browser::icon_picker::{self, Recents};
 use browser::import::sources::{Os, Roots};
 use browser::link_preview;
@@ -2833,6 +2834,14 @@ fn main() {
                     );
                 }
             }
+            // PREVIEW_FOOT_BAR=arrange shows the foot bar over the page's bottom centre with one
+            // line, as Arrange's, =point with two, as pointing's, and =long with a question past
+            // its two lines.
+            if let Ok(kind) = std::env::var("PREVIEW_FOOT_BAR")
+                && let Some(shell) = shell_window
+            {
+                preview_foot_bar(&kind, shell, bounds, cx);
+            }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
             // drawn the URL field they hang from.
             let site_controls = std::env::var_os("PREVIEW_SITE_CONTROLS").is_some();
@@ -3015,6 +3024,60 @@ impl menu::Host for PreviewMenu {
 }
 
 /// The icon picker over the preview's window, whose host can't move it: it opened where it's to be.
+thread_local! {
+    /// Where the foot bar asked to go.
+    static FOOT_BAR_PLACE: std::cell::Cell<Option<foot_bar::Place>> =
+        const { std::cell::Cell::new(None) };
+}
+
+struct PreviewFootBar;
+
+impl foot_bar::Host for PreviewFootBar {
+    fn show(&self, _: u64, place: foot_bar::Place) {
+        FOOT_BAR_PLACE.set(Some(place));
+    }
+
+    fn hide(&self) {}
+}
+
+/// Shows the foot bar with made-up words over the page of the preview's `window` at `bounds`.
+/// The host sizes the bar's window to what it shows, so a hidden one lays it out first, as the
+/// host would place it.
+fn preview_foot_bar(
+    kind: &str,
+    window: gpui::WindowHandle<Shell>,
+    bounds: Bounds<Pixels>,
+    cx: &mut App,
+) {
+    let Ok((page, palette)) = window.read_with(cx, |shell, _| {
+        (shell.page_frame(bounds.size).0, shell.palette())
+    }) else {
+        return;
+    };
+    let Some(bar) = foot_bar::sample(kind) else {
+        return;
+    };
+    let look = move |_, _: &App| palette;
+    let hidden = Bounds::new(bounds.origin, size(px(1.), px(1.)));
+    let Some(measuring) = foot_bar::open_at(Rc::new(PreviewFootBar), look, hidden, false, cx)
+    else {
+        return;
+    };
+    foot_bar::show(0, page, bounds.size, bar.clone(), cx);
+    let _ = measuring.update(cx, |_, window, _| window.remove_window());
+    let Some(place) = FOOT_BAR_PLACE.get() else {
+        return;
+    };
+    let across = f32::from(bounds.size.width) - place.left - place.right;
+    let left = place.left + (across - f32::from(place.size.width)) / 2.;
+    let top = f32::from(bounds.size.height - place.size.height) - place.bottom;
+    let at = Bounds::new(bounds.origin + point(px(left), px(top)), place.size);
+    if foot_bar::open_at(Rc::new(PreviewFootBar), look, at, true, cx).is_some() {
+        foot_bar::show(0, page, bounds.size, bar, cx);
+        log!("preview: foot bar shown");
+    }
+}
+
 struct PreviewPicker;
 
 impl icon_picker::Host for PreviewPicker {
