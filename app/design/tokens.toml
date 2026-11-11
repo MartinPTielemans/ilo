@@ -621,6 +621,9 @@ text = 13.0
 header-text = 11.0
 # Between the check, the title and what trails it.
 gap = 6.0
+# Between an item's title and its detail in the secondary ink, as Default's model follows
+# "Default": a word space at 13 pt.
+detail-gap = 4.0
 check = 12.0
 chevron = 12.0
 min-width = 200.0
