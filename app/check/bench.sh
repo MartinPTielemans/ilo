@@ -188,15 +188,15 @@ bench_procs=$procs
 ilo_launch "${site}bench.html?b1" power
 ilo_await "^browser: title [0-9]* b1 fcp" 30 "the bench page didn't paint"
 send click $page_point
-sleep 30
+sleep 30 # the launch's own work settling, before idle counts
 bench_power ilo-idle idle_moment
 bench_row power-idle "Power, idle, window in view, ilo" "$power, CPU $cpu" "Ardia 3.5 mW"
 send minimize
-sleep 10
+sleep 10 # the minimize's animation and the pages' hiding, before idle counts
 bench_power ilo-hidden idle_moment
 bench_row power-hidden "Power, idle, window hidden, ilo" "$power, CPU $cpu" "Ardia 3.9 mW"
 send minimize
-sleep 5
+sleep 5 # the window's return, before scrolling counts
 ilo_scroll() {
   send scroll 600 400 8 250
   send scroll 600 400 -8 250
@@ -210,12 +210,12 @@ for n in 2 3 4 5; do
   send key return
   ilo_await "^browser: title [0-9]* b$n fcp" 30 "b$n didn't paint in its new tab"
 done
-sleep 10
+sleep 10 # the new tabs' loads settling, before switching counts
 switch_key=0
 ilo_switch() {
   switch_key=$((switch_key % 5 + 1))
   send key "$switch_key" cmd
-  sleep 0.5
+  sleep 0.5 # the pace: two switches a second
 }
 bench_power ilo-switch ilo_switch
 bench_row power-switch "Power, switching tabs, ilo" "$power, CPU $cpu" "Ardia 136 mW"
@@ -224,7 +224,7 @@ ilo_await '^browser: command bar shown$' 5 "⌘T didn't open the command bar"
 send type "${site}bench-video.html?v1"
 send key return
 ilo_await "^browser: title [0-9]* v1 playing" 30 "the video didn't play in the app"
-sleep 5
+sleep 5 # the video's start, before its playing counts
 bench_power ilo-video idle_moment
 bench_row power-video "Power, playing a video, ilo" "$power, CPU $cpu" "Ardia 82 mW"
 quit 30
@@ -312,17 +312,17 @@ bench_procs=$chrome_procs
 bench_chrome "${site}bench.html?b1" power
 chrome_await "^cdp: title [^ ]* b1 fcp" 30 "the bench page didn't paint in Chrome"
 first=$(sed -n 's/^cdp: title \([^ ]*\) b1 fcp$/\1/p' "$log" | head -1)
-sleep 30
+sleep 30 # the launch's own work settling, before idle counts
 bench_power chrome-idle idle_moment
 bench_row chrome-power-idle "Power, idle, window in view, Chrome for Testing" "$power, CPU $cpu" "ilo's"
 echo "state minimized" >&5
 chrome_await "^cdp: window minimized" 10 "Chrome's window didn't minimize"
-sleep 10
+sleep 10 # the minimize's animation and the pages' hiding, before idle counts
 bench_power chrome-hidden idle_moment
 bench_row chrome-power-hidden "Power, idle, window hidden, Chrome for Testing" "$power, CPU $cpu" "ilo's"
 echo "state normal" >&5
 chrome_await "^cdp: window normal" 10 "Chrome's window didn't come back"
-sleep 5
+sleep 5 # the window's return, before scrolling counts
 chrome_scroll() {
   since=$(wc -l < "$log")
   echo "scroll $first 600 400 8 250" >&5
@@ -340,17 +340,17 @@ for n in 2 3 4 5; do
   chrome_await "^cdp: title [^ ]* b$n fcp" 30 "b$n didn't paint in Chrome's new tab"
 done
 targets=$(for n in 1 2 3 4 5; do sed -n "s/^cdp: title \([^ ]*\) b$n fcp$/\1/p" "$log" | head -1; done)
-sleep 10
+sleep 10 # the new tabs' loads settling, before switching counts
 chrome_switch() {
   switch_key=$((switch_key % 5 + 1))
   echo "activate $(echo "$targets" | sed -n "${switch_key}p")" >&5
-  sleep 0.5
+  sleep 0.5 # the pace: two switches a second
 }
 bench_power chrome-switch chrome_switch
 bench_row chrome-power-switch "Power, switching tabs, Chrome for Testing" "$power, CPU $cpu" "ilo's"
 echo "open ${site}bench-video.html?v1" >&5
 chrome_await "^cdp: title [^ ]* v1 playing" 30 "the video didn't play in Chrome"
-sleep 5
+sleep 5 # the video's start, before its playing counts
 bench_power chrome-video idle_moment
 bench_row chrome-power-video "Power, playing a video, Chrome for Testing" "$power, CPU $cpu" "ilo's"
 bench_chrome_quit
