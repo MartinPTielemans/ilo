@@ -74,7 +74,6 @@
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_content_client.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -619,14 +618,12 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     // as the profile starts, ilo having no startup preference for it to read (#1934).
     std::string disabled = command_line->GetSwitchValueASCII(switches::kDisableFeatures);
     disabled += disabled.empty() ? "" : ",";
-    // Two of Chrome 157's new defaults stay off, as they were on 156. A new extension isn't
-    // pinned unless the browser imported from pinned it (the app's import/extensions.rs), and a
-    // typed host that has no https falls back to http with no warning page before it.
+    // And a new extension isn't pinned, as on 156, unless the browser imported from pinned it (the
+    // app's import/extensions.rs): Chromium 157 pins each one as it's installed.
     command_line->AppendSwitchASCII(
         switches::kDisableFeatures,
         disabled + features::kClearSessionStorageDiskStateOnStartup.name + "," +
-            features::kExtensionsPinnedByDefault.name + "," +
-            features::kHttpsFirstBalancedModeAutoEnable.name);
+            features::kExtensionsPinnedByDefault.name);
     // Blink's eye in a password field, Chrome's on Windows: it shows only once the user types into
     // the empty field, and goes, masking it again, as the field loses focus or is filled in or set
     // by the page, so a saved password is never shown. The core blurs a tab's page each time the
