@@ -13,6 +13,26 @@
 # Chrome hands to the browser running, as in links.sh (#1426). Windows shows a toast only for an
 # installed copy, which the run's isn't, so the run sends that launch for the click.
 
+# What macOS keeps of the app's and its alert helpers' leave to notify, as "<id> allowed; <id> not
+# allowed": usernoted's own preferences, by bundle id, where bit 25 of an app's flags is Settings'
+# Allow Notifications. ncprefs holds none of it on macOS 26 (#2396).
+kept_answers() {
+  python3 -I -c '
+import os, plistlib, sys
+path = os.path.expanduser("~/Library/Group Containers/group.com.apple.usernoted/Library/Preferences/group.com.apple.usernoted.plist")
+try:
+    with open(path, "rb") as f:
+        apps = plistlib.load(f).get("apps", [])
+except (OSError, plistlib.InvalidFileException):
+    sys.exit()
+print("; ".join(
+    each["bundle-id"] + (" allowed" if each.get("flags", 0) & 1 << 25 else " not allowed")
+    for each in apps
+    if each.get("bundle-id", "") == sys.argv[1]
+    or each.get("bundle-id", "").startswith(sys.argv[1] + ".framework.")))
+' "$app_id"
+}
+
 notify=
 if [ "$(uname)" = Darwin ]; then
   if [ "$(sysctl -n kern.hv_vmm_present)" != 1 ] || ! csrutil status | grep -q disabled; then
@@ -23,6 +43,11 @@ if [ "$(uname)" = Darwin ]; then
     codesign --verify --deep --strict --verbose=2 "$app"/Contents/Frameworks/*Framework.framework \
       > "$out/notifications-codesign.txt" 2>&1 ||
       fail "the framework's signature doesn't hold: $(tail -3 "$out/notifications-codesign.txt")"
+    # macOS asks only an app it has no answer for, so a check VM that ran the app before has to
+    # have that answer taken out before this run, or the run can't press Allow (#2396).
+    kept=$(kept_answers)
+    [ -z "$kept" ] ||
+      fail "macOS keeps an earlier answer for the app's notifications, so it won't ask: $kept"
     clang++ -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
       fail "check/banner.mm didn't build: $(cat "$out/banner-build.log")"
     # The hosted runner's image turns Notification Center's agent off, which draws the banners:
@@ -191,8 +216,7 @@ EOF
       echo "usernoted:"
       log show --last 3m --style compact --predicate \
         'process == "usernoted" OR subsystem == "com.apple.UserNotifications"' 2>&1 | tail -80
-      echo "ncprefs:"
-      defaults read com.apple.ncprefs apps 2>&1 | grep -B3 -A8 "$app_id" || true
+      echo "kept answers: $(kept_answers)"
     } > "$out/notifications-macos.txt"
   }
   # Waits for more lines matching $1 in the app's log than the $2 there were, for up to 10 s.
