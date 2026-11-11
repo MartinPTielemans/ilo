@@ -2,7 +2,7 @@
 //! answers.
 
 use super::*;
-use web_time::Instant;
+use std::time::Instant;
 
 /// A window's shell's requests, as calls to the core. The core reports back once each call has
 /// returned.

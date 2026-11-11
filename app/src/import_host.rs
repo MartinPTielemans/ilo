@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
-use web_time::SystemTime;
+use std::time::SystemTime;
 
 use browser::import::found::{Address, Page, Split, Tab};
 use browser::import::plan::{Existing, ExistingSpace, Row};
