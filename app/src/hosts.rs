@@ -561,6 +561,17 @@ impl boost_editor::Host for BoostEditorHost {
         }
     }
 
+    fn resize(&self, height: f32, corners: &[(f32, f32, f32)]) {
+        let shape: Vec<f64> = corners
+            .iter()
+            .flat_map(|&(x, y, radius)| [x, y, radius].map(f64::from))
+            .collect();
+        unsafe {
+            platform::host_set_overlay_shape(BOOST_EDITOR, shape.as_ptr(), shape.len() / 3);
+            platform::host_set_overlay_height(BOOST_EDITOR, height.into());
+        }
+    }
+
     fn hide(&self) {
         unsafe { platform::host_hide_overlay(BOOST_EDITOR) };
     }
