@@ -237,6 +237,10 @@ fn the_command_bar_moves_it_and_the_page_keeps_the_keyboard(cx: &mut TestAppCont
         "{calls:?}"
     );
     assert_eq!(listed(cx), [("Move Sidebar to the Left".to_owned(), false)]);
+    // What sidebar-right.sh types, which lists that move alone.
+    let names = cx.update(|_, cx| bar_commands("move sidebar", cx));
+    let names: Vec<_> = names.iter().map(|row| row.name.to_string()).collect();
+    assert_eq!(names, ["Move Sidebar to the Left"]);
     shell.update(cx, |shell, cx| {
         shell.run(Command::MoveSidebar, "command bar", cx)
     });

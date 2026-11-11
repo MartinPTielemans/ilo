@@ -30,6 +30,11 @@ on:
         type: choice
         options: [xvfb, sway, kwin, wayland]
         default: xvfb
+      trace:
+        description: >-
+          The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
+          #2377's, latency among them; empty for latency alone in tabs and no traced switches
+        default: ''
 
 concurrency:
   group: check-linux-${{ github.ref }}
@@ -328,6 +333,7 @@ jobs:
           SESSION: ${{ matrix.session }}
           RUNS: ${{ matrix.runs }}
           RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
+          CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
           # The runner's C.UTF-8 names no country, for which Chromium's search engines leave out
           # DuckDuckGo, the one the core picks, so the command bar would offer no search.
           LANG: en_US.UTF-8
@@ -347,9 +353,10 @@ jobs:
           for run in $RUNS; do
             start=$SECONDS
             status=0
-            # The updates run builds a Flatpak first.
+            # The updates run builds a Flatpak first, and perf measures Chrome beside the app.
             limit=20m
             [ "$run" != updates ] || limit=45m
+            [ "$run" != perf ] || limit=40m
             timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
             [ ! -d build/check ] || mv build/check "$dir/$run"
             pkill -9 -f "$PWD/build/Browser/" || true

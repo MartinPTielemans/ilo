@@ -2079,6 +2079,8 @@ impl Settings {
             vec![
                 position
                     .child(self.drawn("sidebar position".into()))
+                    // Drawn again once the side changes, which check.sh waits for.
+                    .child(self.drawn(format!("sidebar position {}", side_title(right))))
                     .into_any_element(),
             ],
         );
