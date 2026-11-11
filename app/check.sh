@@ -7,7 +7,7 @@
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp rules
 #   ranking appearance about sync sync-account sync-devices switch-frames devices pair filled
 #   scripting notifications calls battery battery-os policies hosts idle handback webrtc count
-#   translate pictures boosts
+#   translate pictures boosts sidebar-right
 # The store run installs from Google's Web Store, as sync-extensions does on one device for the
 # account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
 # adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
@@ -25,7 +25,7 @@
 # Perf measures the browser against #456's targets, and Chrome beside it, which takes it 16 minutes,
 # so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
-# take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
+# take it full screen for a moment. Passkeys, scripting and sidebar-right are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
 # ilo's Flatpak on Linux, which a repository of the run's own updates (check/updates.sh).
 # In a check VM the check turns the Mac's appearance dark for the runs, which read the window's
@@ -108,7 +108,7 @@ runs="$runs split favorites cards extensions adblock adblock-lists windows priva
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp rules ranking"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
-runs="$runs handback webrtc count translate pictures boosts"
+runs="$runs handback webrtc count translate pictures boosts sidebar-right"
 named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
 for run in "$@"; do
   case " $runs $named " in
@@ -197,9 +197,10 @@ saved="$profile_dir/Spaces.json"
 launch_frame="$(dirname "$saved")/launch-frame"
 # The mcp run turns agents on with a token of its own, which a failed one left. The keys run gives
 # Go to Space 1 ⌃⌘1 and leaves the favorites out of ⌘1–⌘8, which a failed one left for the runs after.
-# The translate run always translates Spanish, which a failed one left.
+# The translate run always translates Spanish, which a failed one left. The sidebar-right run moves
+# the sidebar to the right, which a failed one left for the runs after, which expect it on the left.
 rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts" \
-  "$(dirname "$saved")/Always Translated"
+  "$(dirname "$saved")/Always Translated" "$(dirname "$saved")/sidebar-right"
 # DevTools open where the profile last had them, so an undocked try would leave them in a window.
 # The find run docks them, so they start on the right. The restore run's download goes in the
 # check's own folder, never the user's Downloads. A failed extensions run may have left one of its

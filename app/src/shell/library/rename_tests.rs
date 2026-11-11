@@ -272,7 +272,7 @@ fn the_brush_opens_the_theme_picker_beside_itself(cx: &mut TestAppContext) {
         f32::from(brush(0).x) + CARD_BRUSH / 2.,
         f32::from(brush(0).y),
     );
-    let (left, top, _) = theme_picker::placed(theme_picker::At::Row(end), height);
+    let (left, top, _) = theme_picker::placed(theme_picker::At::Row(end), false, height);
     assert_eq!(
         themes.borrow().last().copied(),
         Some((left, top)),

@@ -276,6 +276,7 @@ pub fn show(
     picked: Picked,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<IconPicker>(cx);
     let Some(window) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) else {
         return;
     };

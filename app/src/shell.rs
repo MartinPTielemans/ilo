@@ -18,7 +18,7 @@ use gpui::{
     FocusHandle, Focusable, FontWeight, Global, HitboxBehavior, Hsla, Image, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
     Point, Rgba, Role, ScrollHandle, SharedString, Size, Subscription, Task, Window,
-    WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowTextSystem, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -110,6 +110,8 @@ mod panes;
 mod permission;
 mod portrait;
 #[cfg(test)]
+mod side_tests;
+#[cfg(test)]
 mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
@@ -119,6 +121,7 @@ mod picture;
 mod recent_downloads;
 #[cfg(test)]
 mod recorder;
+mod return_mark;
 mod rows;
 mod scripting;
 mod scroller;
@@ -197,7 +200,7 @@ pub use rows::LoneSpaceHeader;
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
-pub use sidebar::{SidebarEdge, edge_reveals};
+pub use sidebar::{SidebarEdge, SidebarRight, edge_reveals, sidebar_right};
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
@@ -1846,6 +1849,9 @@ pub struct Shell {
     /// Whether Show Space Header keeps a lone unnamed Space's name row, as `LoneSpaceHeader` said
     /// as the window last drew.
     lone_header: bool,
+    /// Whether the sidebar is on the window's right, as `SidebarRight` said as the window last
+    /// drew (`Shell::right`).
+    right: bool,
     forced_tone: Option<Tone>,
     window_active: bool,
     window_watches: Vec<Subscription>,
@@ -2192,6 +2198,7 @@ impl Shell {
             new_note: cx.try_global::<NewNoteOn>().is_none_or(|on| on.0),
             clean_links: cx.try_global::<CleanLinksOn>().is_none_or(|on| on.0),
             lone_header: false,
+            right: false,
             forced_tone: None,
             window_active: true,
             window_main: true,
@@ -2702,6 +2709,13 @@ impl Shell {
             Some(progress) => from + (to - from) * progress,
             None => to,
         }
+    }
+
+    /// Where the card's top-left corner is across the window, the Library's push aside: past the
+    /// sidebar on the left, at the inset with it on the right, and 0 for a full-screen page.
+    pub(super) fn card_corner(&self) -> f32 {
+        let card = page_frame(self.viewport, self.card_left(), 0.);
+        f32::from(sidebar::mirrored(self.right, self.viewport.width, card).left())
     }
 
     /// The Spaces, by id, name, colour, profile, icon and the name of the agent each belongs to,
@@ -3879,7 +3893,8 @@ impl Shell {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let below_rows = at.x < px(self.card_left()) && at.y >= px(self.under_tiles());
+        let in_sidebar = self.from_side(f32::from(at.x)) < self.card_left();
+        let below_rows = in_sidebar && at.y >= px(self.under_tiles());
         let sidebar = !self.page_fullscreen && self.library.is_none() && self.form().is_none();
         if sidebar && below_rows {
             self.run(Command::NewTab, "sidebar", cx);
@@ -4186,6 +4201,11 @@ impl Render for Shell {
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);
+        // The side is read once a frame, and everything that places by it reads `self.right`.
+        let right = sidebar::sidebar_right(cx) && self.little.is_none();
+        if right != self.right {
+            self.set_sidebar_right(right, cx);
+        }
         self.full_screen_step("drawn", window.viewport_size());
         self.step_opening(window, cx);
         self.stop_videos(window, cx);
@@ -4445,12 +4465,20 @@ impl Render for Shell {
         // The sidebar leaves with the card's edge, all of it by the time the edge stops.
         let width = self.width();
         let sidebar_left = (card_left - width) * width / (width - CARD_INSET);
+        // On the right, the same motion mirrored: it leaves past the window's right edge.
+        let sidebar_left = match self.right {
+            true => f32::from(self.viewport.width) - width - sidebar_left,
+            false => sidebar_left,
+        };
         let sidebar_shown = !self.page_fullscreen
             && opacity > 0.
             && (!self.sidebar_hidden || self.sidebar_motion.is_some());
         let sidebar = sidebar_shown.then(|| {
             let scale = self.sidebar_scale();
-            let origin = point(px(width + RECEDE_X), self.viewport.height / 2.);
+            let origin = point(
+                px(self.from_side(width + RECEDE_X)),
+                self.viewport.height / 2.,
+            );
             // Whole: the Library fades in over it rather than cutting it (`library_opacity`).
             let sidebar = self
                 .sidebar(cx)
@@ -4460,7 +4488,7 @@ impl Render for Shell {
             // Its buttons recede with it, over the Library, as the window's do in Arc. Full screen
             // has none.
             let buttons = self.sidebar_buttons() && !window.is_fullscreen();
-            let buttons = buttons.then(|| self.window_buttons(cx));
+            let buttons = buttons.then(|| self.window_buttons(Some(self.viewport.width), cx));
             let receding = div().absolute().size_full().opacity(opacity);
             scaled(receding.child(sidebar).children(buttons), scale, origin)
         });
@@ -4471,7 +4499,7 @@ impl Render for Shell {
         let edge = docked.then(|| self.sidebar_edge(cx));
         let own_buttons = self
             .draws_own_window_buttons()
-            .then(|| self.window_buttons(cx));
+            .then(|| self.window_buttons(Some(self.viewport.width), cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
         self.breath.arm(cx);
@@ -4657,7 +4685,7 @@ impl Shell {
                     .child(self.space_pages(cx))
                     // Over the pages, which they scroll with when they're tall.
                     .children(self.tiles(cx).map(|tiles| self.with_page(tiles)))
-                    .children(self.beside_pages())
+                    .children(self.beside_pages(cx))
                     .child(rest.h(px(self.under_tiles() - URL_FIELD_TOP)))
                     .children(self.dragged_tile(cx))
                     .children(self.turning_drag())
@@ -4703,9 +4731,9 @@ impl Shell {
                 // Beside the form, the page's URL field and favorites are the shown Space's, over
                 // it (beside_form). Elsewhere it's drawn whole, with its own (beside_pages), over
                 // its place here, which keeps its menu.
-                Some(other) if form.is_some() => {
-                    self.still_page(other, self.tiles_room()).into_any_element()
-                }
+                Some(other) if form.is_some() => self
+                    .still_page(other, self.tiles_room(), cx)
+                    .into_any_element(),
                 Some(_) => div().into_any_element(),
                 None => continue,
             };
@@ -4786,7 +4814,7 @@ impl Shell {
 
     /// Another Space's page as it shows once shown, while it slides in or out: its name, and its
     /// rows with the tab it would show selected, `room` under its top. It takes no input.
-    fn still_page(&self, space: &Space, room: f32) -> impl IntoElement + use<> {
+    fn still_page(&self, space: &Space, room: f32, cx: &App) -> impl IntoElement + use<> {
         let selected = self.browser.space_tab(space.id);
         let row = |tab: u64| {
             let depth = space.listed_depth(tab);
@@ -4809,6 +4837,7 @@ impl Shell {
                         pane == tab,
                         pane == selected,
                         speaker,
+                        cx,
                     )
                 });
                 let developer = panes.contains(&selected) && self.page(selected).developer_mode;
@@ -4825,7 +4854,14 @@ impl Shell {
             let page = self.page(tab);
             let icon = div()
                 .when(page.unloaded, |icon| icon.opacity(SLEEPING_FAVICON))
-                .child(self.tab_icon(tab));
+                .child(self.with_return_mark(
+                    &self.palette,
+                    tab,
+                    FAVICON_SIZE,
+                    self.tab_bitmap_in(&self.palette, tab),
+                    || self.tab_icon(tab),
+                    cx,
+                ));
             let bright = tab == selected || page.developer_mode;
             let developer = tab == selected && page.developer_mode;
             row.child(
@@ -5044,6 +5080,12 @@ impl Shell {
         self.step_split_folds(window, cx);
         self.step_foot(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
+        // On the right, its window ends at the browser window's right edge, and the panel comes
+        // out of that edge.
+        let left = match self.right {
+            true => f32::from(window.viewport_size().width) - left - self.width(),
+            false => left,
+        };
         // Unless a field in the panel has it.
         if !self.reveal_focus.contains_focused(window, cx) {
             window.focus(&self.reveal_focus, cx);
@@ -5082,7 +5124,7 @@ impl Shell {
                     .border(px(0.5))
                     .border_color(self.palette.faint(REVEAL_BORDER))
                     .bg(self.gradient(Some(self.palette.underlay.into())))
-                    .child(self.window_buttons(cx))
+                    .child(self.window_buttons(Some(px(self.width())), cx))
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
@@ -5103,10 +5145,13 @@ impl Shell {
         self.window_button_geometry.unwrap_or_default().frames()
     }
 
-    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel.
-    fn window_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel. With the sidebar
+    /// on the right they're mirrored `across` what they're drawn in, so close is at its corner, as
+    /// AppKit's are; the Library's column draws them as they are.
+    fn window_buttons(&self, across: Option<Pixels>, cx: &mut Context<Self>) -> AnyElement {
+        let right = self.right && across.is_some();
         if cfg!(target_os = "windows") {
-            return self.windows_buttons(cx);
+            return self.windows_buttons(right, cx);
         }
         let zoom = if self.maximized {
             "icons/window-restore.svg"
@@ -5119,7 +5164,12 @@ impl Shell {
             (WindowButton::Zoom, zoom),
         ];
         let frames = self.window_button_frames();
-        let row = Bounds::from_corners(frames[0].origin, frames[2].bottom_right());
+        let frames =
+            frames.map(|frame| sidebar::mirrored(right, across.unwrap_or_default(), frame));
+        let row = Bounds::from_corners(
+            point(frames[0].left().min(frames[2].left()), frames[0].top()),
+            point(frames[0].right().max(frames[2].right()), frames[2].bottom()),
+        );
         div()
             .absolute()
             .left(row.left())
@@ -5161,8 +5211,9 @@ impl Shell {
 
     /// Windows' own buttons where the Mac's show, in Windows' order: minimize, maximize and close,
     /// so a Windows user doesn't read the window as a Mac port's (#1244). The host offers Snap
-    /// layouts over maximize, the middle one (platform/windows/host.cc's FrameHit).
-    fn windows_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// layouts over maximize, the middle one (platform/windows/host.cc's FrameHit). On the `right`
+    /// the group keeps its order at the right corner, close at the corner as Windows has it.
+    fn windows_buttons(&self, right: bool, cx: &mut Context<Self>) -> AnyElement {
         let maximize = match self.maximized {
             true => "icons/window-windows-restore.svg",
             false => "icons/window-windows-maximize.svg",
@@ -5176,9 +5227,13 @@ impl Shell {
         let (second, _) = WINDOW_BUTTONS[1];
         let ink = Hsla::from(self.palette.glyph(NAV));
         let plate = self.palette.plate(NAV_HOVERED);
+        let inset = px(first - WINDOWS_BUTTON_PLATE / 2.);
         div()
             .absolute()
-            .left(px(first - WINDOWS_BUTTON_PLATE / 2.))
+            .map(|row| match right {
+                true => row.right(inset),
+                false => row.left(inset),
+            })
             .top(px(WINDOW_BUTTON_Y - WINDOWS_BUTTON_PLATE / 2.))
             .flex()
             .gap(px(second - first - WINDOWS_BUTTON_PLATE))
@@ -5547,14 +5602,20 @@ fn folder_icon(palette: &Palette, open: bool, elided: bool) -> AnyElement {
         .into_any_element()
 }
 
+/// The bitmap `favicon` draws for `favicon`: a one-colour favicon the sidebar's tint would hide
+/// is drawn in the ink.
+fn favicon_source(palette: &Palette, favicon: Option<Arc<Image>>) -> Option<return_mark::Source> {
+    let favicon = favicon?;
+    Some(match tile_theme::ink_copy(&favicon, palette.tone) {
+        Some(copy) => return_mark::Source::Decoded(copy),
+        None => return_mark::Source::Encoded(favicon),
+    })
+}
+
 /// A tab's favicon, or a globe for a page without one.
 fn favicon(palette: &Palette, favicon: Option<Arc<Image>>) -> AnyElement {
-    match favicon {
-        // A one-colour favicon the sidebar's tint would hide is drawn in the ink.
-        Some(favicon) => match tile_theme::ink_copy(&favicon, palette.tone) {
-            Some(copy) => img(copy).size(px(FAVICON_DRAWN)).into_any_element(),
-            None => img(favicon).size(px(FAVICON_DRAWN)).into_any_element(),
-        },
+    match favicon_source(palette, favicon) {
+        Some(source) => source.img().size(px(FAVICON_DRAWN)).into_any_element(),
         None => svg()
             .path("icons/globe.svg")
             .size(px(FAVICON_DRAWN))
