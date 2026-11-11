@@ -21,7 +21,7 @@ impl Shell {
     }
 
     /// The Today rows of `space` sorted by site, if that would change their order. A split view
-    /// keeps its place: its pages can be on different sites.
+    /// joins no site: its pages can be on different sites.
     pub(super) fn sorted_by_site(&self, space: u64) -> Option<Vec<u64>> {
         let rows = self.today_rows(space);
         let sites: Vec<(u64, Option<String>)> = (rows.iter())

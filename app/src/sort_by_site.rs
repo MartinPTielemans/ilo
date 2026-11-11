@@ -1,5 +1,6 @@
 //! Sort Today Tabs by Site (#2344): each site's Today tabs come together at its first tab's place,
-//! in the order they were in, and the rest stay where they are. The shell's command and the agents'
+//! in the order they were in, and every row takes its place by where it first appears, so every
+//! site is together after it. The shell's command and the agents'
 //! tool both sort by this, with the engine's sites (bc_url_site), so a user and an agent get the
 //! same list.
 
@@ -17,8 +18,9 @@ pub fn made_up_site(url: &str) -> Option<String> {
     (!site.is_empty()).then_some(site)
 }
 
-/// `rows` in their new order: a row is its id and its site, None for one that keeps its place,
-/// such as a split view or a page that isn't on the web.
+/// `rows` in their new order: a row is its id and its site, None for one that joins none, such as
+/// a split view or a page that isn't on the web. That one, like a site with one tab, takes its
+/// place by where it appears, so the sites gathered from below it come above it.
 pub fn sorted(rows: &[(u64, Option<String>)]) -> Vec<u64> {
     let mut placed: Vec<&str> = Vec::new();
     let mut order = Vec::with_capacity(rows.len());
@@ -69,7 +71,7 @@ mod tests {
     }
 
     /// Each site gathers at its first tab's place, its tabs in the order they were in; a site with
-    /// one tab, a split and a page off the web ("") stay where they fall.
+    /// one tab, a split and a page off the web ("") join nothing and fall after them.
     #[test]
     fn each_site_gathers_at_its_first_tabs_place() {
         let list = rows(&["a", "b", "a", "c", "", "b", "a", "d"]);

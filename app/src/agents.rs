@@ -2934,7 +2934,7 @@ impl Agents {
         let mut rows: Vec<(u64, usize, Option<String>)> = Vec::new();
         for tab in today {
             let split = self.browser.split(tab.id, cx);
-            // A split's first tab stands for its row; a split keeps its place.
+            // A split's first tab stands for its row; a split joins no site.
             if split.first().is_some_and(|&first| first != tab.id) {
                 continue;
             }

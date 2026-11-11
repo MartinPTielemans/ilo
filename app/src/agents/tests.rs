@@ -5907,7 +5907,7 @@ mod sessions {
 }
 
 /// An agent sorts its own Space's Today tabs by site, by the user's command's rule (#2344): its
-/// pinned tab and its split stay where they are, the user's Space isn't touched, and it's one entry
+/// pinned tab stays where it is, its split joins no site, the user's Space isn't touched, and it's one entry
 /// in the log. Sorted already, it says so and nothing moves. A task has no such tool.
 #[gpui::test]
 fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
