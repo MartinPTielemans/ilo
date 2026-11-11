@@ -174,7 +174,7 @@ jobs:
           [ -n "$step" ] || { echo "::error::The line stopped without naming the step."; exit 1; }
           bash -c "$step"
           mkdir "$RUNNER_TEMP/out"
-          tools/install-check.sh "$ILO_RELEASE_URL" "$RUNNER_TEMP/out"
+          bash tools/install-check.sh "$ILO_RELEASE_URL" "$RUNNER_TEMP/out"
           cp "$RUNNER_TEMP/refused.log" "$RUNNER_TEMP/out/"
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
