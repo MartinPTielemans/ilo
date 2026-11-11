@@ -271,12 +271,11 @@ jobs:
           if (-not (& $started)) { Start-Process explorer.exe }
           "Explorer: " + (Get-Process explorer | ForEach-Object Id)
 
-      # Microsoft's Japanese and Korean IMEs, among the user's input methods, for the runs that
-      # compose with them (the driver's ime ja and ime ko), which look for them in the user's
-      # language list. Language.Basic is the capability that has each, about 100 s from Windows
-      # Update; Server 2022 has no Install-Language.
-      - name: Japanese and Korean IMEs
-        id: ime
+      # Microsoft's Japanese IME, one of the user's input methods, for the runs that compose with it
+      # (the driver's ime ja), which look for it in the user's language list. Language.Basic is the
+      # capability that has it, about 100 s from Windows Update; Server 2022 has no Install-Language.
+      - name: Japanese IME
+        id: japanese
         env:
           RUNS: ${{ inputs.runs }}
         run: |
@@ -286,17 +285,15 @@ jobs:
           for run in $(grep -l Get-WinUserLanguageList check/*.sh | sed 's|^check/\(.*\)\.sh$|\1|'); do
             case $runs in *" $run "*) need=1 ;; esac
           done
-          [ -n "$need" ] || { echo "No run composes with an IME, so none is installed."; exit 0; }
+          [ -n "$need" ] || { echo "No run composes with the Japanese IME, so none is installed."; exit 0; }
           echo "need=1" >> "$GITHUB_OUTPUT"
-      - if: ${{ steps.ime.outputs.need == '1' }}
+      - if: ${{ steps.japanese.outputs.need == '1' }}
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
           Add-WindowsCapability -Online -Name "Language.Basic~~~ja-JP~0.0.1.0" | Out-Null
-          Add-WindowsCapability -Online -Name "Language.Basic~~~ko-KR~0.0.1.0" | Out-Null
           $languages = Get-WinUserLanguageList
           $languages.Add("ja-JP")
-          $languages.Add("ko-KR")
           Set-WinUserLanguageList $languages -Force
           Get-WinUserLanguageList | Format-List LanguageTag, InputMethodTips
 
