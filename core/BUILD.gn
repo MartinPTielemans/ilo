@@ -361,6 +361,8 @@ source_set("browser_core") {
     "developer_mode.h",
     "device_chooser.cc",
     "device_chooser.h",
+    "dialog_keys.cc",
+    "dialog_keys.h",
     "downloads.cc",
     "downloads.h",
     "drm_request.cc",
