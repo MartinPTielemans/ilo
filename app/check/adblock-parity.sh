@@ -84,6 +84,17 @@ while [ "$engine" != off ] && ! grep -q "^browser: title $tab ad script blocked"
     sleep 0.1
   done
 done
+# A build without the engine --ad-block-engine names (#2116) blocks with uBlock Origin, so the run
+# would compare uBlock Origin with itself, where live sites alone make it look worse (#2284).
+engine_log='^browser: ad block engine \(loaded\|compiled\) in '
+if [ -n "$engine_switch" ] && ! grep -q "$engine_log" "$log"; then
+  exec 3>&- 5>&-
+  quit
+  rm -rf "$scratch"
+  echo "skip all: no $engine engine in this build, so it blocked with uBlock Origin, which" \
+    "adblock-parity measures"
+  exit 0
+fi
 echo "requests $(app_path "$PWD/$requests")" >&5
 for _ in $(seq 100); do
   grep -q '^cdp: recording requests' "$cdp_log" && break

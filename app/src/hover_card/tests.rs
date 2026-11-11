@@ -42,6 +42,7 @@ fn row(tab: u64) -> Anchor {
     Anchor {
         row: Bounds::new(point(px(8.), px(top)), size(px(224.), px(34.))),
         window: window(),
+        left: false,
     }
 }
 
@@ -508,6 +509,26 @@ fn a_card_goes_beside_its_row_and_stays_inside_the_window() {
         ..row(0)
     };
     assert_eq!(place(narrow, tall).0, 400. - WIDTH - EDGE);
+}
+
+/// With the sidebar on the right, a card opens on its row's left, toward the page, as far from it as
+/// on the left, and keeps EDGE from the window's left edge (#2375).
+#[test]
+fn a_card_opens_toward_the_page_from_a_sidebar_on_the_right() {
+    let tall = height(INNER * PICTURE_MOST);
+    let mirrored = Anchor {
+        row: Bounds::new(point(px(768.), px(136.)), size(px(224.), px(34.))),
+        left: true,
+        ..row(1)
+    };
+    let (left, top) = place(mirrored, tall);
+    assert_eq!((left, top), (768. - GAP - WIDTH, 136.));
+    let narrow = Anchor {
+        row: Bounds::new(point(px(176.), px(136.)), size(px(224.), px(34.))),
+        window: size(px(400.), px(700.)),
+        ..mirrored
+    };
+    assert_eq!(place(narrow, tall).0, EDGE);
 }
 
 /// Each button, clicked where the card draws it, as the pointer comes onto the card from the row,
