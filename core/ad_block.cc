@@ -696,15 +696,14 @@ void LoadInto(Profile* profile) {
   if (profile->IsOffTheRecord()) {
     return;
   }
-  // The browser's own reads the lists uBlock Origin comes with, which then stays out.
-  if (NativeAdBlock()) {
-    ReadListsOnce();
-    return;
+  // uBlock Origin, unless the browser's own blocks, which reads the lists uBlock Origin comes with.
+  if (!NativeAdBlock()) {
+    Followers()[profile] = std::make_unique<Follower>(profile);
+    Load(profile);
   }
-  Followers()[profile] = std::make_unique<Follower>(profile);
-  Load(profile);
   ReadListsOnce();
-  // Here, as the last of the profile's extensions has loaded and none has run yet.
+  // Here, as the last of the profile's extensions has loaded and none has run yet, with either
+  // ad blocker.
   HoldExtensionsForSafeStart(profile);
 }
 
