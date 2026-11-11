@@ -32,6 +32,17 @@ jobs:
         with:
           path: ${{ runner.temp }}/gperf
           key: gperf_3.1-1build1-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04
+      # Proof only (#2425): with the cache hit, every Ubuntu mirror is unreachable, as on 11-11.
+      - if: steps.gperf.outputs.cache-hit == 'true'
+        run: |
+          printf '0.0.0.0 %s\n' azure.archive.ubuntu.com archive.ubuntu.com security.ubuntu.com | sudo tee -a /etc/hosts
+          ! getent hosts azure.archive.ubuntu.com | command grep -v '^0\.0\.0\.0'
+      # Proof only (#2425): what the image has of the demo's and Flatpak's apt packages.
+      - run: |
+          dpkg-query -W -f='${Package} ${Version} ${db:Status-Abbrev}\n' 'libclang*' xdotool openbox xauth flatpak 2>&1 || true
+          ls -d /usr/lib/llvm-*/lib/libclang.so* 2>&1 || true
+          update-alternatives --display clang-format 2>&1 | head -3 || true
+          command -v gperf || echo "no gperf before the install"
       - if: steps.gperf.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/gperf"
@@ -53,6 +64,9 @@ jobs:
             echo "$tool $("$tool" --version | head -1), from the runner image"
           done
           sudo npm install -g --prefix /usr esbuild typescript
+          gperf --version | head -1
+      # Proof only (#2425): the compile after it proves nothing for the install.
+      - run: echo "proof only, so the compile is skipped"; exit 1
 
       # The tree takes about 40 GB. The runner's second disk has more room than its first.
       - name: Make room
