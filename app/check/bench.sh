@@ -149,14 +149,16 @@ done || echo unknown)
 chrome_version=$("$CHECK_CHROME" --version 2> /dev/null || echo unknown)
 echo "bench: ilo $ilo_version on Chromium $engine_version, beside $chrome_version"
 
-# The app, on page $1 with the driver, in a profile of the bench's own made for each launch: the app
-# brings back the tabs before, whose titles would give the last run's score at once, and a Speedometer
-# tab brought back would run again under power's.
+# The app, on page $1 with the driver, in a profile of the bench's own, without the tabs before: the
+# app brings them back, whose titles would give the last run's score at once, and a Speedometer tab
+# brought back would run again under power's. The rest of the profile stays, uBlock Origin's compiled
+# lists with it, as a user's does.
 ilo_profile="$bench_dir/ilo-profile"
+rm -rf "$ilo_profile"
+mkdir -p "$ilo_profile"
 step=0
 ilo_launch() {
-  rm -rf "$ilo_profile"
-  mkdir -p "$ilo_profile"
+  rm -f "$ilo_profile/Spaces.json" "$ilo_profile/launch-frame"
   log="$bench_dir/ilo-$2.log"
   step=0
   BROWSER_DRIVE=1 BROWSER_URL="$1" BROWSER_PROFILE_DIR="$ilo_profile" "$browser" \
@@ -173,6 +175,13 @@ ilo_await() {
   done
   fail "$3"
 }
+
+# A launch to warm the profile first: a new profile's uBlock Origin compiles its lists, which took
+# 4-7 % of the CPU in the idle windows after it.
+ilo_launch "${site}bench.html?b1" warm
+ilo_await "^browser: title [0-9]* b1 fcp" 60 "the warming launch's page didn't paint"
+sleep 60
+quit 30
 
 speedometer_url="${site}speedometer/index.html?startAutomatically=true"
 : > "$bench_dir/ilo-speedometer"
@@ -244,8 +253,7 @@ chrome_display=$(display_bounds)
 chrome_at=$(echo "$chrome_display" | awk '{ print $1 + 40 "," $2 + 40 }')
 bench_chrome() {
   log="$bench_dir/chrome-$2.log"
-  # A profile of its own each launch too, as the app's.
-  rm -rf "$chrome_dir"
+  rm -f "$chrome_dir/DevToolsActivePort"
   "$CHECK_CHROME" --user-data-dir="$chrome_dir" --no-first-run --no-default-browser-check \
     --use-mock-keychain --password-store=basic --remote-debugging-port=0 \
     --window-position="$chrome_at" --window-size=1280,800 "$1" \
