@@ -543,7 +543,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
             platform::host_since_launch()
         });
         dock_dot::open(Rc::new(DockDot), cx);
+        gpui::launch_mark("app dock dot");
         settings::read_switches(cx);
+        gpui::launch_mark("app switches read");
         // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
         // which the host writes as the first window opens, under its AppUserModelID.
         if let (Ok(title), Ok(switch)) = (
@@ -552,9 +554,13 @@ unsafe extern "C" fn started(_: *mut c_void) {
         ) {
             unsafe { platform::host_set_little_task(title.as_ptr(), switch.as_ptr()) };
         }
+        gpui::launch_mark("app little task");
         needs_you_host::start(cx);
+        gpui::launch_mark("app needs-you started");
         daily_count_host::start(cx);
+        gpui::launch_mark("app daily count started");
         open_window(None, None, cx);
+        gpui::launch_mark("app open_window returned");
         // Launched by New Incognito Window while ilo wasn't running, the private window opens
         // over the first.
         if launch_asks_private_window() {

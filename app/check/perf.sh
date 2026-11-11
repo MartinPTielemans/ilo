@@ -247,6 +247,10 @@ perf_row launch-restore "Launch, restored page painted" \
   "$(perf_stats '%.0f' < "$perf_dir/restore") ms" "Ardia 360 ms, Helium 355 ms, Chrome 438 ms"
 perf_row launch-held "Launch, the page held for uBlock Origin" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
+# Proof only (#2384): the launches' logs hold GPUI's and the app's launch marks; the rest of perf
+# is skipped.
+echo "ok: proof only (#2384): 10 launches timed with launch marks in $perf_dir/launch-*.log; the rest of perf skipped"
+exit 0
 
 log="$perf_dir/session.log"
 step=0

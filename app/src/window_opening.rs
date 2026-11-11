@@ -197,8 +197,10 @@ pub(crate) fn open_window_as(
     // GPUI's own X11 window, which its window opens in, as the view the core holds.
     #[cfg(target_os = "linux")]
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
+    gpui::launch_mark("app host window made");
     let after = from.as_ref().map(|from| from.ui_view);
     let id = open_browser_window(ui_view, after, own, saved, at)?;
+    gpui::launch_mark("app core window made");
     // A saved window maximized as it quit, at the frame it un-maximizes to, as the core kept it.
     // Before its UI opens, so that starts at the maximized size.
     if let Some(index) =
@@ -241,6 +243,7 @@ pub(crate) fn open_window_as(
         Some(_) => gpui_linux::open_next_window_in_surface(ui_view, 0, 0),
         None => gpui_linux::open_next_window_in(ui_view as usize as u32),
     }
+    gpui::launch_mark("app opening GPUI's window");
     // Transparent, over the window's material.
     let options = WindowOptions {
         window_background: WindowBackgroundAppearance::Transparent,
@@ -250,6 +253,7 @@ pub(crate) fn open_window_as(
         ..Default::default()
     };
     let window = cx.open_window(options, |window, cx| {
+        gpui::launch_mark("app GPUI window made, building the shell");
         let shell = cx.new(|cx| {
             // The page keeps its place in the card as the window resizes.
             cx.observe_window_bounds(window, move |shell: &mut Shell, window, cx| {
@@ -308,6 +312,7 @@ pub(crate) fn open_window_as(
                 (None, None) => Shell::new(engine, cx),
             }
         });
+        gpui::launch_mark("app shell built");
         window.focus(&shell.focus_handle(cx), cx);
         // As Settings › Features has it, which the core read with the Spaces.
         let little = unsafe { crate::bc::bc_little_windows() };
@@ -346,8 +351,10 @@ pub(crate) fn open_window_as(
         // As at a launch below 20 %, before there was a window to hear it.
         let battery = BATTERY_SAVER.get();
         shell.update(cx, |shell, cx| shell.set_battery_saver(battery, cx));
+        gpui::launch_mark("app shell set up");
         shell
     });
+    gpui::launch_mark("app GPUI window opened");
     let window = match window {
         Ok(window) => window,
         Err(error) => {
@@ -383,7 +390,9 @@ pub(crate) fn open_window_as(
     let first = from.is_none();
     // Once the page frame is set, so the tab shown loads at its size, and before the window is on
     // screen, so the core's reports of its tabs can come before its first frame.
+    gpui::launch_mark("app restoring spaces");
     let restored = first && restore_spaces(id, window, cx);
+    gpui::launch_mark("app spaces restored");
     // Under Wayland the compositor can answer a window the restore puts back full screen with a
     // configure of no size before its first frame, which Chromium, holding the full screen it asked
     // for (chromium-wayland-state-after-ack.patch), gives no bounds, and the frame it then commits
@@ -419,6 +428,7 @@ pub(crate) fn open_window_as(
         },
         _ => unsafe { platform::host_show_window(ui_view) },
     }
+    gpui::launch_mark("app window shown");
     DRAWN_BEFORE_SHOWN.set(drawn.then(Instant::now));
     log_frame(id, ui_view);
     if !first {
@@ -452,6 +462,7 @@ pub(crate) fn open_window_as(
             if !pending.replace(false) {
                 return;
             }
+            gpui::launch_mark("app finish, spawning UI shown");
             // Once the frame this precedes is drawn.
             cx.spawn(async move |cx| {
                 unsafe { platform::host_close_launch_window() };
@@ -483,7 +494,13 @@ pub(crate) fn open_window_as(
                 });
                 // Deferred, as the shell's window is borrowed while it draws.
                 let next = move |window: &mut Window| {
-                    window.on_next_frame(move |_, cx| cx.defer(on_frame))
+                    window.on_next_frame(move |_, cx| {
+                        gpui::launch_mark("app second frame's callback");
+                        cx.defer(move |cx| {
+                            gpui::launch_mark("app second frame's deferred step");
+                            on_frame(cx)
+                        })
+                    })
                 };
                 // The picture stays over the sidebar until a frame drawn once AppKit has handed
                 // over the links that launched the browser, so the restored tab never shows
