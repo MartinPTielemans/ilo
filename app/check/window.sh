@@ -124,7 +124,7 @@ motion=
 if [ "$(uname)" = Darwin ] || windows; then
   motion=full
 fi
-BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
+BROWSER_DIAG_RENDERS=1 BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -1131,12 +1131,28 @@ hover_out() {
 # below the rows. Not in a subshell, which would lose send's step. uBlock Origin's background page,
 # in an extension's process, works when it will: on Wayland it took about 0.8 s of the 4 s, with
 # the sidebar docked or out, which isn't the windows' drawing measured here.
+# #2400's proof branch: each process's ticks over the window measured, its type, and the log's
+# lines the window spans.
+cpu_each() {
+  for p in $(pgrep -f -- "$procs"); do
+    line=$(tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null)
+    kind=$(echo "$line" | grep -o -- '--type=[a-z-]*' | head -1)
+    case $line in *--extension-process*) kind="$kind,extension" ;; esac
+    echo "$p ${kind:-browser} $(sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null | awk '{ print $12 + $13 }')"
+  done
+}
 rest_cpu() {
   send move 100 600
   sleep 1 # the hover's fade out, before the window measured
   local from
+  echo "diag rest from log line $(wc -l < "$log")" >> "$out/window-cpu.txt"
+  cpu_each > "$out/cpu-from-$step"
   from=$(cpu --extension-process)
   sleep 4 # the window measured
+  cpu_each > "$out/cpu-to-$step"
+  echo "diag rest to log line $(wc -l < "$log")" >> "$out/window-cpu.txt"
+  awk 'NR == FNR { was[$1] = $3; next } { printf "diag cpu %s %s %d ticks\n", $1, $2, $3 - was[$1] }' \
+    "$out/cpu-from-$step" "$out/cpu-to-$step" >> "$out/window-cpu.txt"
   set -- $from $(cpu --extension-process)
   rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
 }
