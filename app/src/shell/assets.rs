@@ -447,6 +447,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/nav-sidebar.svg"),
     ),
     (
+        "icons/nav-sidebar-right.svg",
+        include_bytes!("../../assets/icons/nav-sidebar-right.svg"),
+    ),
+    (
         "icons/nav-stop.svg",
         include_bytes!("../../assets/icons/nav-stop.svg"),
     ),
@@ -469,6 +473,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/panel-left.svg",
         include_bytes!("../../assets/icons/panel-left.svg"),
+    ),
+    (
+        "icons/panel-right.svg",
+        include_bytes!("../../assets/icons/panel-right.svg"),
     ),
     (
         "icons/paw-print.svg",

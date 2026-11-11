@@ -27,8 +27,8 @@ fi
 # One patch a crate: gpui_macos's, gpui_windows's and gpui_linux's embed GPUI in Chromium's window
 # and loop, gpui's scales what's painted, lets the tests stand in for an assistive app, adds the
 # Edit menu's Paste and Match Style and caps a window's frame rate only while the app isn't the
-# active one, and gpui_wgpu's draws with Vulkan alone on Linux and builds its pipelines once for
-# all windows.
+# active one, and gpui_wgpu's draws with Vulkan alone on Linux and builds each pipeline once for
+# all windows, the first time one draws with it.
 git -C .deps/zed apply "$PWD/patches/gpui-macos-embedded.patch" "$PWD/patches/gpui-windows-embedded.patch" \
   "$PWD/patches/gpui-linux-embedded.patch" "$PWD/patches/gpui-scale.patch" \
   "$PWD/patches/gpui-wgpu-vulkan.patch"
@@ -43,7 +43,7 @@ sha256() { if command -v shasum >/dev/null; then shasum -a 256 "$@"; else sha256
 vendor() {
   crate=.deps/$1-$2.crate
   if ! echo "$3  $crate" | sha256 -c --status 2>/dev/null; then
-    curl -sSfL "https://static.crates.io/crates/$1/$1-$2.crate" -o "$crate"
+    curl -sSfL --retry 5 "https://static.crates.io/crates/$1/$1-$2.crate" -o "$crate"
     echo "$3  $crate" | sha256 -c --status
   fi
   rm -rf ".deps/$1" "${crate%.crate}"
@@ -67,7 +67,7 @@ if [ "$(uname -s)" = Darwin ]; then
   SPARKLE_SHA256=1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27
   archive=.deps/Sparkle-$SPARKLE.tar.xz
   if ! echo "$SPARKLE_SHA256  $archive" | sha256 -c --status 2>/dev/null; then
-    curl -sSfL "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE/Sparkle-$SPARKLE.tar.xz" -o "$archive"
+    curl -sSfL --retry 5 "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE/Sparkle-$SPARKLE.tar.xz" -o "$archive"
     echo "$SPARKLE_SHA256  $archive" | sha256 -c --status
   fi
   rm -rf .deps/Sparkle

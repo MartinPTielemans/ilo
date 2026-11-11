@@ -30,6 +30,15 @@ on:
         type: choice
         options: [xvfb, sway, kwin, wayland]
         default: xvfb
+      rebuild:
+        description: Build the app, even if a check of this commit kept one
+        type: boolean
+        default: false
+      trace:
+        description: >-
+          The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
+          #2377's, latency among them; empty for latency alone in tabs and no traced switches
+        default: ''
 
 concurrency:
   group: check-linux-${{ github.ref }}
@@ -49,6 +58,7 @@ env:
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
     webrtc tab-drag count ranking everyday hosts policies translate pictures boosts rules
+    switch-frames
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
@@ -57,7 +67,7 @@ env:
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
     blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
     window windows
-    media pictures boosts
+    media pictures boosts links notifications switch-frames
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |
@@ -131,8 +141,89 @@ jobs:
           echo "legs=[${legs%,}]" | tee -a "$GITHUB_OUTPUT"
           echo "all=$all" >> "$GITHUB_OUTPUT"
 
-  shards:
+  # The app, built once for every leg, or taken from another check of this commit, which kept it for
+  # 3 days (app-artifact.sh, #2199).
+  build:
     needs: gate
+    if: needs.gate.outputs.check == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    # The run that has the app, none when there's no engine to build it on.
+    outputs:
+      run: ${{ steps.kept.outputs.run || (steps.upload.outcome == 'success' && github.run_id) || '' }}
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The shards' Engine step says why when there's none.
+      - id: engine
+        run: |
+          status=0
+          ../engine/fetch.sh > /dev/null || status=$?
+          case $status in
+          0) echo "found=true" >> "$GITHUB_OUTPUT" ;;
+          2) ;;
+          *) exit "$status" ;;
+          esac
+      - id: kept
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          run=
+          [ "$REBUILD" = true ] || run=$(../.github/scripts/app-artifact.sh find "app-linux-$GITHUB_SHA")
+          echo "run=$run" | tee -a "$GITHUB_OUTPUT"
+      # bindgen reads the core's header with libclang, and GPUI links fontconfig, Wayland, xcb and
+      # xkbcommon.
+      - if: ${{ steps.engine.outputs.found == 'true' && steps.kept.outputs.run == '' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        if: ${{ steps.engine.outputs.found == 'true' && steps.kept.outputs.run == '' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: check-linux-${{ hashFiles('app/Cargo.lock', 'app/linux/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
+          restore-keys: |
+            check-linux-
+            app-linux-
+      - id: build
+        if: ${{ steps.engine.outputs.found == 'true' && steps.kept.outputs.run == '' }}
+        run: rustup update stable --no-self-update && ./setup.sh && ./build.sh
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - if: ${{ steps.build.outcome == 'success' }}
+        run: ../.github/scripts/app-artifact.sh pack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app.tar"
+      - id: upload
+        if: ${{ steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-linux-${{ github.sha }}
+          path: ${{ runner.temp }}/app.tar
+          retention-days: 3
+          overwrite: true
+
+  shards:
+    needs: [gate, build]
     if: needs.gate.outputs.check == 'true'
     name: check ${{ matrix.session }}${{ matrix.of > 1 && format(' {0}/{1}', matrix.shard, matrix.of) || '' }}
     strategy:
@@ -230,10 +321,32 @@ jobs:
         with:
           packages: flatpak flatpak-builder ostree xdg-desktop-portal
 
-      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
-      # branch pushed main's out of the repository's 10 GB (#1969).
-      - id: cache
+      # The build job's app, unless this leg compiles for itself: the ime leg's drops.sh and ime.sh
+      # build their tools into target/, and a named updates or nightly run builds the app again.
+      - id: own
         if: ${{ steps.engine.outputs.found == 'true' }}
+        env:
+          SESSION: ${{ matrix.session }}
+          RUNS: ${{ matrix.runs }}
+          NAMED: ${{ inputs.runs }}
+        run: |
+          own=
+          case " $SESSION $RUNS " in *" ime "* | *" nightly "*) own=true ;; esac
+          case " $RUNS " in *" updates "*) [ -z "$NAMED" ] || own=true ;; esac
+          echo "own=$own" | tee -a "$GITHUB_OUTPUT"
+      - if: ${{ steps.engine.outputs.found == 'true' && steps.own.outputs.own != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: app-linux-${{ github.sha }}
+          path: ${{ runner.temp }}/app
+          run-id: ${{ needs.build.outputs.run }}
+          github-token: ${{ github.token }}
+      - if: ${{ steps.engine.outputs.found == 'true' && steps.own.outputs.own != 'true' }}
+        run: ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app/app.tar"
+
+      # main's build cache, which the build job saves.
+      - id: cache
+        if: ${{ steps.own.outputs.own == 'true' }}
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -245,17 +358,8 @@ jobs:
             check-linux-
             app-linux-
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
+      - if: ${{ steps.own.outputs.own == 'true' }}
         run: ./setup.sh && ./build.sh
-
-      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            app/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       # The sync-account, sync-devices, sync-extensions and sync-versions runs sign in to an
       # ilo-server of their own, on SQLite with a throwaway account, never the hosted one: built from
@@ -328,6 +432,7 @@ jobs:
           SESSION: ${{ matrix.session }}
           RUNS: ${{ matrix.runs }}
           RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
+          CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
           # The runner's C.UTF-8 names no country, for which Chromium's search engines leave out
           # DuckDuckGo, the one the core picks, so the command bar would offer no search.
           LANG: en_US.UTF-8
@@ -347,16 +452,22 @@ jobs:
           for run in $RUNS; do
             start=$SECONDS
             status=0
-            # The updates run builds a Flatpak first.
+            # The updates run builds a Flatpak first, and perf measures Chrome beside the app.
             limit=20m
             [ "$run" != updates ] || limit=45m
+            [ "$run" != perf ] || limit=40m
             timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
             [ ! -d build/check ] || mv build/check "$dir/$run"
             pkill -9 -f "$PWD/build/Browser/" || true
             # A run that passes may have skipped steps, or all of itself, such as when the app
             # wasn't the active one.
             skipped=$(grep '^skip: ' "$dir/$run.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
-            if [ "$status" = 0 ]; then
+            # A run that skips all of itself, as one whose build lacks what it checks, says why on a
+            # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
+            whole=$(grep -m1 '^skip all: ' "$dir/$run.log" | cut -c11- | tr '|\t' '/ ') || true
+            if [ "$status" = 0 ] && [ -n "$whole" ]; then
+              result="skip: $whole"
+            elif [ "$status" = 0 ]; then
               result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
             else
               result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run.log" | cut -c7- | tr '|\t' '/ ')"
@@ -430,8 +541,8 @@ jobs:
           fi
           [ -n "$crashed" ] || { echo "No run crashed, so no symbols are kept."; exit 0; }
           mkdir -p "$out/symbols"
-          objcopy --only-keep-debug target/release/libBrowser.so "$out/symbols/libBrowser.so.debug"
-          id=$(readelf -n target/release/libBrowser.so | sed -n 's/^ *Build ID: //p')
+          objcopy --only-keep-debug build/Browser/libBrowser.so "$out/symbols/libBrowser.so.debug"
+          id=$(readelf -n build/Browser/libBrowser.so | sed -n 's/^ *Build ID: //p')
           echo "::warning::$crashed crashed: libBrowser.so's symbols, build id $id, are in symbols/ in the artifact. addr2line -f -C -e libBrowser.so.debug names a frame's offset."
 
       # The check job puts the legs' files back together as one check-linux artifact.
@@ -583,7 +694,7 @@ jobs:
                 'any(.[]; .session == $s and ((" " + .runs + " ") | contains(" " + $r + " ")))' > /dev/null; then
                 result=$(result "$session" "$run")
                 case $result in
-                passed*) ;;
+                passed* | skip:*) ;;
                 failed*) failure "$session" "$run" "$result" "The $run run failed on $session. Its log: $where$run.log in the artifact." ;;
                 *) unfinished "$result" ;;
                 esac

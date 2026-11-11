@@ -438,7 +438,10 @@ impl Shell {
                     }
                     let took = shell.update(cx, |shell, cx| {
                         let over = match in_window {
-                            true => event.position.x < px(shell.card_left() + shell.card_push()),
+                            true => {
+                                let x = shell.from_side(f32::from(event.position.x));
+                                x < shell.card_left() + shell.card_push()
+                            }
                             false => bounds.contains(&event.position),
                         };
                         (over || shell.swipe.is_some()) && shell.scroll(event, window, cx)

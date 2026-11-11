@@ -320,7 +320,9 @@ over_left=$toast
   fail "the toast went from ${over_right:-nowhere} to ${over_left:-nowhere}, not to the left pane's corner"
 ../tools/window-screenshot.sh "$pid" "$out/split-toast.png" all || fail "no window to capture"
 # In the sidebar the split is one row, which ⌘2 shows under a tab opened above it, with the pane
-# focused last, and a click on its right segment shows that pane focused.
+# focused last, and a click on its right segment shows that pane focused. The left pane has the
+# row, so the right one is its favicon at the row's end, 190 to 220 of the 228 pt sidebar (#2340):
+# the click's press comes before a frame draws the row's ✕ under the pointer.
 open_from_bar example.net
 c=$tab
 expect "^browser: today $c $a $b\$" "the new tab isn't above the split: Today is \"$(today)\""
@@ -328,7 +330,7 @@ send key 2 cmd
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" \
   "⌘2 didn't show the split with its pane focused last"
 expect "^browser: panes $a $b\$" "⌘2 didn't show both panes"
-send click 170 $(row 1 | cut -d' ' -f2)
+send click 205 $(row 1 | cut -d' ' -f2)
 expect "^browser: selected $b\( in .*\)\{0,1\}\$" \
   "a click on the split's right segment didn't focus it"
 read_keyboard
