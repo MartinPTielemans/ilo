@@ -38,8 +38,8 @@
 # their pinned URLs back there, and leaves an unloaded one. ⌘-click and ⇧-click choose rows,
 # whose menu and ⇧⌘C copy their links, one a line, and ⌘D, New Folder and ⌘W pin, folder and
 # close them all, each one step for ⌘Z. Sort Today Tabs by Site puts each site's tabs together at
-# its first tab's place, one step for ⌘Z, and the order comes back after a quit. Reports how long
-# switches take.
+# its first tab's place, recorded light and dark, dimmed in the Tabs menu then, one step for ⌘Z,
+# and the order comes back after a quit. Reports how long switches take.
 
 # A Space's Today tabs. The page opens a tab of its own from its button, the way a link to a new tab
 # does, p in it plays a quiet tone until x, and u has it ask before it's left, or stop asking. The
@@ -1582,16 +1582,47 @@ else
   exec 3>&-
   quit
 fi
-# Sort Today Tabs by Site, from the command bar, puts the served page's two tabs together at the
-# first one's place, 127.0.0.1 and localhost being two sites of one server, and ⌘Z and ⇧⌘Z take it
-# back and do it again. The core keeps the sorted order across a quit (#2344).
+# Sort Today Tabs by Site, from the command bar, puts the served page's tabs together at each
+# site's first tab's place, 127.0.0.1 and localhost being two sites of one server, records the rows
+# sliding there, light and dark, and the Tabs menu shows it dimmed once they're together. ⌘Z and ⇧⌘Z
+# take it back and do it again, and the core keeps the sorted order across a quit (#2344).
 # The URL of tab $1, as the app last heard it.
 url_of() {
   grep "^browser: page $1 back " "$log" | tail -1 | sed 's/.* //'
 }
+# The Tabs menu lists Sort Today Tabs by Site, dimmed if $1 is "(disabled)".
+sort_item() {
+  send menubar Tabs
+  expect "^browser: menu bar Tabs: .*, Sort Today Tabs by Site$1, " \
+    "the Tabs menu's Sort Today Tabs by Site wasn't ${2:-there}"
+}
+# Sorts with the command bar in appearance $1, recording the rows sliding, and captures the window
+# and, on the Mac, the Tabs menu open with the command dimmed.
+sort_in() {
+  send menu "Appearance › $1"
+  scheme=$(echo "$1" | tr A-Z a-z)
+  expect "^browser: appearance $scheme\$" "View › Appearance › $1 didn't change the appearance"
+  expect_tabs "$before" "$s3" "before Sort Today Tabs by Site, $scheme"
+  sort_item "" "offered with the sites apart"
+  record "sort-by-site-$scheme" 3
+  bar_command sort-by-site "Sort Today Tabs by Site" "sort today"
+  expect '^browser: sorted by site ' "Sort Today Tabs by Site didn't sort"
+  expect_tabs "$after" "$s3" "after Sort Today Tabs by Site, $scheme"
+  recorded
+  ../tools/window-screenshot.sh "$pid" "$out/sorted-by-site-$scheme.png" || fail "no window to capture"
+  sort_item " (disabled)" "dimmed with every site together"
+  if [ "$(uname)" = Darwin ]; then
+    post openmenu Tabs
+    expect '^browser: menu tracked New Tab' "the Tabs menu didn't open"
+    ../tools/window-screenshot.sh "$pid" "$out/tabs-menu-sorted-$scheme.png" ||
+      fail "no window to capture"
+    post dismiss
+  fi
+}
 log="$out/tabs-sort.log"
 step=0
 rm -f "$saved" "$launch_frame"
+forget_appearance
 BROWSER_DRIVE=1 BROWSER_URL="${site}notes.txt" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -1604,50 +1635,61 @@ if [ "$active" != 1 ]; then
   echo "skip: Sort Today Tabs by Site. Browser wasn't the active app, so the page ignored the click."
   sorted=skipped
 else
-  for page in "http://localhost:$port/notes.txt" "${site}notes.txt?again"; do
+  # New tabs open at the top, so Today reads 127.0.0.1, localhost, 127.0.0.1, localhost, 127.0.0.1.
+  for page in "http://localhost:$port/notes.txt" "${site}notes.txt?again" \
+    "http://localhost:$port/notes.txt?2" "${site}notes.txt?3"; do
     send key t cmd
     expect '^browser: command bar shown$' "⌘T didn't open the command bar"
     send type "$page"
     send key return
     expect "^browser: loaded [0-9]* $page\$" "$page didn't load in a tab"
   done
-  other=$(today | cut -d' ' -f2)
-  again=$(today | cut -d' ' -f1)
-  expect_tabs "$again $other $first" "$again" "before Sort Today Tabs by Site"
-  bar_command sort-by-site "Sort Today Tabs by Site" "sort today"
-  expect '^browser: sorted by site ' "Sort Today Tabs by Site didn't sort"
-  expect_tabs "$again $first $other" "$again" "after Sort Today Tabs by Site"
-  ../tools/window-screenshot.sh "$pid" "$out/sorted-by-site.png" || fail "no window to capture"
+  s3=$(today | cut -d' ' -f1)
+  l2=$(today | cut -d' ' -f2)
+  s2=$(today | cut -d' ' -f3)
+  l1=$(today | cut -d' ' -f4)
+  before="$s3 $l2 $s2 $l1 $first"
+  after="$s3 $s2 $first $l2 $l1"
+  sort_in Light
   send key z cmd
-  expect_tabs "$again $other $first" "$again" "after ⌘Z undid Sort Today Tabs by Site"
+  expect_tabs "$before" "$s3" "after ⌘Z undid Sort Today Tabs by Site"
   send key z cmd shift
-  expect_tabs "$again $first $other" "$again" "after ⇧⌘Z sorted again"
+  expect_tabs "$after" "$s3" "after ⇧⌘Z sorted again"
+  send key z cmd
+  expect_tabs "$before" "$s3" "after ⌘Z undid it again"
+  sort_in Dark
+  send menu "Appearance › Automatic"
   exec 3>&-
   quit
+  forget_appearance
   log="$out/tabs-sort-restored.log"
   step=0
   BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await '^browser: restored in ' || fail "the relaunch after Sort Today Tabs by Site didn't restore"
-  await '^browser: today [0-9]* [0-9]* [0-9]*$' || fail "Today didn't come back with its three tabs"
+  await '^browser: today [0-9]* [0-9]* [0-9]* [0-9]* [0-9]*$' ||
+    fail "Today didn't come back with its five tabs"
   urls=""
   for tab in $(today); do
     await "^browser: page $tab back " || fail "the restored tab $tab reported no page"
     urls="$urls $(url_of "$tab")"
   done
-  [ "$urls" = " ${site}notes.txt?again ${site}notes.txt http://localhost:$port/notes.txt" ] ||
+  [ "$urls" = " ${site}notes.txt?3 ${site}notes.txt?again ${site}notes.txt http://localhost:$port/notes.txt?2 http://localhost:$port/notes.txt" ] ||
     fail "the sorted order didn't come back after a quit: Today's pages are$urls"
   exec 3>&-
   quit
-  sorted="Sort Today Tabs by Site from the command bar puts a site's tabs together at its first tab's place, ⌘Z and ⇧⌘Z undo and redo it, and the order comes back after a quit"
+  sorted="Sort Today Tabs by Site from the command bar puts each site's tabs together at its first tab's place, light and dark, and the Tabs menu dims it then; ⌘Z and ⇧⌘Z undo and redo it, and the order comes back after a quit"
 fi
 echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, a pick of View Media… lists it above View Archive…, its equal for \"view\", back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
 [ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
   "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \
   "commits in another site's renderer and $committed: $out/command-bar-moved.png"
-[ "$sorted" = skipped ] || echo "  $sorted: $out/sorted-by-site.png."
+[ "$sorted" = skipped ] || echo "  $sorted: $out/sorted-by-site-light.png," \
+  "$out/sorted-by-site-dark.png, the rows sliding in $out/sort-by-site-light.mp4 and" \
+  "$out/sort-by-site-dark.mp4, and on the Mac the Tabs menu in $out/tabs-menu-sorted-light.png" \
+  "and $out/tabs-menu-sorted-dark.png."
 echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms): $chrome_ms."
 echo "  A site search for example: the core listed $listed_rows rows, the bar one."
 echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/bar-close.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/numbered.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/remove-tooltip.png, $out/site-search-settings.png, $out/bar-picked.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"
