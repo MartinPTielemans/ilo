@@ -2920,6 +2920,11 @@ fn main() {
                     preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Left, cx);
                 }
             }
+            // PREVIEW_MODEL_MENU=claude or codex shows Settings › Agents' Model menu for that CLI as
+            // it opens, from the CLI's recorded list, light with PREVIEW_APPEARANCE=light (#2455).
+            if let Ok(cli) = std::env::var("PREVIEW_MODEL_MENU") {
+                preview_model_menu(bounds, &cli, cx);
+            }
             // PREVIEW_PAGE_MENU=<link|image|text|field>,<x>,<y>[,<key>…] shows a page's menu there, made
             // up as Chrome builds it for a link, an image, selected text or a misspelt word in a text
             // field, and then presses the keys in ilo's menu, such as `s,right` for a submenu.
@@ -3038,6 +3043,44 @@ fn preview_page_menu(
             .update(cx, |shell, _, cx| shell.show_page_menu(1, items, at, cx))
             .ok();
         press_keys(window, keys, cx).await;
+    })
+    .detach();
+}
+
+/// A CLI's Model menu as Settings › Agents opens it with Default chosen, its models as the CLI's
+/// recorded answer lists them, in the light or dark Settings.
+fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
+    use browser::agents::ready::{claude_listed, codex_listed};
+    let answer = |text: &str| serde_json::from_str(text).unwrap_or_default();
+    let models = match cli {
+        "codex" => Some(codex_listed(&answer(include_str!(
+            "agents/runner/answers/codex-0.167.1-model-list.json"
+        )))),
+        _ => claude_listed(&answer(include_str!(
+            "agents/runner/answers/claude-2.1.322-initialize.json"
+        ))),
+    }
+    .unwrap_or_default();
+    let (_, items) =
+        browser::agents::task::model_menu("", models.default.as_deref(), models.listed);
+    let light = preview_tone() == Some(Tone::Light);
+    if menu::open_at(Rc::new(PreviewMenu), bounds, cx).is_none() {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        cx.update(|cx| {
+            let request = menu::Request {
+                items,
+                at: point(px(40.), px(40.)),
+                area: Bounds::new(point(px(0.), px(0.)), bounds.size),
+                look: menu::Look::plain(light),
+                chosen: menu::picked(|_, _| {}),
+            };
+            menu::show(request, cx);
+        });
     })
     .detach();
 }

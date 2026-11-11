@@ -73,6 +73,8 @@ pub struct MenuEntry {
     pub favicon: Option<Arc<Image>>,
     /// Whether it heads the items after it, as Arc's Tab Options does, never to be chosen.
     pub header: bool,
+    /// Words after its title in the secondary ink, which say more of it, as Default's model.
+    pub detail: Option<SharedString>,
 }
 
 impl MenuEntry {
@@ -105,6 +107,7 @@ impl MenuEntry {
             page: false,
             favicon: None,
             header: false,
+            detail: None,
         }
     }
 
