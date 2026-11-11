@@ -268,7 +268,10 @@ stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's
 # keyboard there, as the user's would, so its keys are the dialog's on every session.
 warned() {
   go_from_bar "$plain"
-  expect "^browser: page $tab trouble network -20\$" "$plain had no warning before http again"
+  # The core says a tab's trouble as it changes, and a tab still on the warning keeps it.
+  expect "^browser: loaded $tab chrome-error://chromewebdata/\$" "$plain's warning before http didn't load again"
+  [ "$(grep "^browser: page $tab trouble " "$log" | tail -1)" = "browser: page $tab trouble network -20" ] ||
+    expect "^browser: page $tab trouble network -20\$" "$plain had no warning before http again"
   send state
   echo "note: with Chrome's warning before http up, the keyboard is in $key, on $focus"
   [ "$key" != NativeWidgetMacNSWindow ] || return 0
