@@ -7,7 +7,7 @@
 //! giving the first Space its colour or signing in to sync; Skip doesn't. The flow ends with the
 //! command bar up over the first Space, and a line on the card under it saying what the bar is.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -324,6 +324,8 @@ pub(super) struct Onboarding {
     switched: Option<(OptIn, Instant)>,
     /// Where the opt-ins' rows and switches are drawn (opt_in_frame).
     frames: Frames,
+    /// Where the step's button is drawn, once the step has settled (button_frame).
+    pub(super) button: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// When the step came, which its motion runs from.
     pub(super) since: Instant,
     /// The step before, leaving as this one comes, and how far into it it was when it left.
@@ -397,6 +399,7 @@ impl Shell {
             os: self.browser.os(),
             switched: None,
             frames: Frames::default(),
+            button: Rc::default(),
             since: Instant::now(),
             leaving: None,
             ending: None,
@@ -1013,9 +1016,12 @@ impl Shell {
             view.update(cx, |view, cx| view.set_look(look, cx));
             embedded(view.into()).when(signed_out, |body| body.mt(px(LINE_GAP)))
         });
+        let drawn = (self.onboarding.as_ref())
+            .map(|onboarding| (onboarding.button.clone(), onboarding.settled));
         let button = (!button.is_empty()).then(|| {
             div()
                 .id("onboarding-continue")
+                .relative()
                 .mt(px(BUTTON_GAP))
                 .h(px(BUTTON_HEIGHT))
                 .px(px(BUTTON_INSET))
@@ -1038,6 +1044,7 @@ impl Shell {
                     super::key_name("enter", super::OFF_THE_MAC),
                     with_alpha(PAPER, CHIP),
                 ))
+                .children(drawn.map(|(at, settled)| button_frame(at, settled)))
         });
         layer.child(
             div()
@@ -1210,6 +1217,20 @@ impl Shell {
             .child(if back { "Back" } else { "Skip" })
             .child(chip)
     }
+}
+
+/// Keeps where the step's button is drawn once the step has `settled`, for a test to click it.
+fn button_frame(at: Rc<Cell<Option<Bounds<Pixels>>>>, settled: bool) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| {
+            if settled {
+                at.set(Some(bounds));
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .inset_0()
 }
 
 /// Where each opt-in's row and switch is drawn, by the opt-in and "row" or "switch".
