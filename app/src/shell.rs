@@ -1794,6 +1794,10 @@ pub struct Shell {
     zapping: Option<u64>,
     /// The tab whose page Arrange is on (#2347), one at a time, as Zap.
     arranging: Option<u64>,
+    /// What the core last said of the mode, and its ⌘Z history.
+    arrange_mode: arrange::Mode,
+    /// What Arrange's mini bar was last asked to show, so it's asked again only on a change.
+    mini_bar_shown: Option<crate::mini_bar::Shown>,
     boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Library › Boosts' list, the window's profile's, read as it's shown.
     boost_list: Vec<crate::boosts::Boost>,
@@ -2165,6 +2169,8 @@ impl Shell {
             boost_pending: None,
             zapping: None,
             arranging: None,
+            arrange_mode: arrange::Mode::default(),
+            mini_bar_shown: None,
             boost_card_drawn: Rc::default(),
             boost_list: Vec::new(),
             battery_saver: None,
@@ -4413,6 +4419,7 @@ impl Render for Shell {
             log!("{line}");
         }
         self.show_page_dialog(cx);
+        self.show_mini_bar(cx);
         let card_left = self.card_left();
         self.update_palette(cx);
         let focus_color = packed(self.palette.accent.into());

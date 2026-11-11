@@ -673,6 +673,287 @@ fn no_arrange_in_a_private_window_or_an_agents_space(cx: &mut TestAppContext) {
     }
 }
 
+/// Arrange on tab 10's page, from the card, with the calls so far taken.
+fn arranging(shell: &Entity<Shell>, host: &Recorder, cx: &mut VisualTestContext) {
+    shell.update(cx, |shell, cx| shell.start_arrange(cx));
+    assert!(shell.read_with(cx, |shell, _| shell.arranging(10)));
+    host.take();
+}
+
+/// With the page focused, ↑ and ↓ ask the core for the box around or inside the one selected and
+/// escape is Done; other keys, and these once the mode is off, are the page's.
+#[gpui::test]
+fn arrange_keys_with_the_page_focused(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    let key = |keystroke: &str, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.run_arrange_key(10, keystroke, cx))
+    };
+    assert!(key("up", cx));
+    assert!(key("down", cx));
+    assert!(!key("a", cx));
+    assert!(!key("left", cx));
+    assert_eq!(
+        arrange_calls(&host),
+        ["arrange 10 Outer", "arrange 10 Inner"]
+    );
+    assert!(
+        !shell.update(cx, |shell, cx| shell.run_arrange_key(11, "up", cx)),
+        "a key in another tab's page went to the mode"
+    );
+
+    assert!(key("escape", cx));
+    assert_eq!(arrange_calls(&host), ["arrange 10 false"]);
+    assert!(!key("up", cx));
+    assert!(!key("escape", cx));
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+}
+
+/// With the UI holding the keyboard, the same keys do the same.
+#[gpui::test]
+fn arrange_keys_with_the_ui_focused(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+    cx.simulate_keystrokes("up down");
+    cx.run_until_parked();
+    assert_eq!(
+        arrange_calls(&host),
+        ["arrange 10 Outer", "arrange 10 Inner"]
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), ["arrange 10 false"]);
+    cx.simulate_keystrokes("up down");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+}
+
+/// ⌘Z takes back the mode's steps last first: the core's with its Undo, and a Hide, which is Zap's
+/// rule, as Zap's Undo does. The save that follows the core's Undo is no step of the user's, and
+/// with nothing left ⌘Z does nothing while the mode is on.
+#[gpui::test]
+fn undo_takes_back_the_modes_steps_last_first(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", ARRANGED, cx);
+        shell.boost_zapped(10, Some("#promo"), cx);
+        shell.arrange_saved(10, "example.com", ARRANGED, cx);
+    });
+    host.take();
+    cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), ["arrange 10 Undo"]);
+    // The core saves what its Undo left.
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", ARRANGED, cx)
+    });
+    host.take();
+
+    // With the page focused, as the page hands ⌘Z over.
+    assert!(shell.update(cx, |shell, cx| shell.run_arrange_key(10, "cmd-z", cx)));
+    let calls = arrange_calls(&host);
+    assert!(
+        calls.iter().all(|call| !call.contains("#promo")) && !calls.is_empty(),
+        "the Hide wasn't taken back: {calls:?}"
+    );
+    assert_eq!(
+        folder
+            .boost("example.com")
+            .filter(|css| css.contains("#promo")),
+        None
+    );
+
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), ["arrange 10 Undo"]);
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+}
+
+/// Reset takes back the core's changes, so ⌘Z after it has only the Hides left.
+#[gpui::test]
+fn reset_leaves_undo_the_hides(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", ARRANGED, cx);
+        shell.boost_zapped(10, Some("#promo"), cx);
+        shell.ask_arrange(10, crate::boosts::arrange::Ask::Reset, cx);
+    });
+    let calls = arrange_calls(&host);
+    assert_eq!(calls.last().map(String::as_str), Some("arrange 10 Reset"));
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", "", cx)
+    });
+    host.take();
+
+    assert!(shell.update(cx, |shell, cx| shell.run_arrange_key(10, "cmd-z", cx)));
+    let calls = arrange_calls(&host);
+    assert!(
+        !calls.is_empty() && calls.iter().all(|call| !call.starts_with("arrange ")),
+        "⌘Z after Reset asked the core: {calls:?}"
+    );
+    assert!(shell.update(cx, |shell, cx| shell.run_arrange_key(10, "cmd-z", cx)));
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+}
+
+/// What the core says of the mode is kept while it's on that tab, and goes with it.
+#[gpui::test]
+fn the_modes_state_goes_with_the_mode(cx: &mut TestAppContext) {
+    use crate::boosts::arrange::{State, Step};
+    let (shell, host, _folder, cx) = window(cx);
+    let selected = State {
+        step: Step::Selected,
+        selection: Some([20., 40., 300., 120.]),
+        can_undo: true,
+        ..State::default()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.arrange_state(10, selected.clone(), cx)
+    });
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrange_shown().cloned()),
+        None
+    );
+
+    arranging(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.arrange_state(11, selected.clone(), cx);
+    });
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrange_shown().cloned()),
+        Some(State::default()),
+        "another tab's state was kept"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.arrange_state(10, selected.clone(), cx)
+    });
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrange_shown().cloned()),
+        Some(selected)
+    );
+    shell.update(cx, |shell, cx| shell.arrange_ended(10, cx));
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrange_shown().cloned()),
+        None
+    );
+}
+
+/// The mini bar's calls alone.
+fn mini_bar_calls(host: &Recorder) -> Vec<String> {
+    let calls = host.take().into_iter();
+    calls.filter(|call| call.starts_with("mini bar")).collect()
+}
+
+/// Presses the mini bar's `press`, as a click on it does.
+fn press_mini_bar(host: &Recorder, press: crate::mini_bar::Press, cx: &mut VisualTestContext) {
+    let (tab, on_press) = host.mini_bar.borrow().clone().expect("no mini bar");
+    cx.update(|_, cx| on_press(tab, press, cx));
+    cx.run_until_parked();
+}
+
+/// The mini bar shows at the box of the thing selected, over its page: Hide, then Put back once it
+/// has a change, and the pin first while it floats. It goes while the page scrolls, when the core
+/// gives no box, and with the mode. Its presses are the core's asks.
+#[gpui::test]
+fn the_mini_bar_follows_the_thing_selected(cx: &mut TestAppContext) {
+    use crate::boosts::arrange::{Outcome, State, Step};
+    use crate::mini_bar::Press;
+    let (shell, host, _folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    let state = |change, on_screen, selection| State {
+        step: Step::Selected,
+        change,
+        on_screen,
+        selection,
+        ..State::default()
+    };
+    let set = |state: State, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.arrange_state(10, state, cx));
+        cx.run_until_parked();
+    };
+    let page = shell.read_with(cx, |shell, _| shell.pane_frame(10).unwrap().0);
+    let at = |x: f32, y: f32| {
+        let (x, y) = (f32::from(page.origin.x) + x, f32::from(page.origin.y) + y);
+        format!("{x},{y}")
+    };
+
+    set(
+        state(Outcome::None, false, Some([20., 40., 300., 120.])),
+        cx,
+    );
+    assert_eq!(
+        mini_bar_calls(&host),
+        [format!("mini bar 10 at {}: Hide", at(20., 40.))]
+    );
+    press_mini_bar(&host, Press::Hide, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 Hide"]);
+
+    set(
+        state(Outcome::Trades, false, Some([20., 40., 300., 120.])),
+        cx,
+    );
+    assert_eq!(
+        mini_bar_calls(&host),
+        [format!("mini bar 10 at {}: Hide, Put back", at(20., 40.))]
+    );
+    press_mini_bar(&host, Press::PutBack, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 PutBack"]);
+
+    set(
+        state(Outcome::Floats, true, Some([60., 80., 200., 100.])),
+        cx,
+    );
+    assert_eq!(
+        mini_bar_calls(&host),
+        [format!(
+            "mini bar 10 at {}: Stays on screen, Hide, Put back",
+            at(60., 80.)
+        )]
+    );
+    press_mini_bar(&host, Press::Pin, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 ScrollsWithPage"]);
+    set(
+        state(Outcome::Floats, false, Some([60., 80., 200., 100.])),
+        cx,
+    );
+    host.take();
+    press_mini_bar(&host, Press::Pin, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 StaysOnScreen"]);
+
+    // The page scrolls: no box, so no bar, until it rests.
+    set(state(Outcome::Floats, false, None), cx);
+    assert_eq!(mini_bar_calls(&host), ["mini bar none"]);
+    set(
+        state(Outcome::Floats, false, Some([60., 30., 200., 100.])),
+        cx,
+    );
+    assert_eq!(
+        mini_bar_calls(&host),
+        [format!(
+            "mini bar 10 at {}: Scrolls with page, Hide, Put back",
+            at(60., 30.)
+        )]
+    );
+
+    // The same state again asks nothing.
+    set(
+        state(Outcome::Floats, false, Some([60., 30., 200., 100.])),
+        cx,
+    );
+    assert_eq!(mini_bar_calls(&host), Vec::<String>::new());
+
+    cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(mini_bar_calls(&host), ["mini bar none"]);
+}
+
 /// The core takes its own default for a motion value outside its range (bc_arrange_look), so one
 /// of the sidebar's springs moved past it would be dropped without a word: each stays inside.
 #[test]

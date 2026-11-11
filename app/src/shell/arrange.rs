@@ -6,13 +6,17 @@
 //! As Zap, it's the user's alone: offered only where a Boost is, never in an agent's Space or a
 //! private window, and no agent tool reaches it, its list or its file (principle 3).
 
-use gpui::{Context, FontWeight, div, prelude::*, px, svg};
+use std::rc::Rc;
+
+use gpui::{Bounds, Context, FontWeight, div, point, prelude::*, px, size, svg};
 
 use super::{
     NAV_RADIUS, Shell, TITLE, URL_FIELD,
     permission::{Look, card_button_as},
 };
+use crate::boosts::arrange::{Ask, Outcome, State, Step};
 use crate::boosts::{self, Arranged};
+use crate::mini_bar::{self, OnPress, Press};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::theme::packed;
 use crate::tokens::shell::boost::motion::REST;
@@ -20,6 +24,34 @@ use crate::tokens::shell::boost::{
     LIST_TOP, MARK_LINE, MARK_RADIUS, MISFIT, PUT_BACK, PUT_BACK_GLYPH, ROW_GAP, ROW_TOP,
 };
 use crate::tokens::shell::permission::{BUTTON_GAP, DETAIL};
+
+/// A step of the user's in the mode that ⌘Z takes back: the core's change, or a Hide, which is
+/// Zap's CSS. Zap's own undo is its card's, so the mode keeps its own history rather than the
+/// window's, and it goes with the mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Undoable {
+    Core,
+    Hide,
+}
+
+/// The mode on the tab it's on: what the core last said, and the user's steps for ⌘Z.
+#[derive(Default)]
+pub(super) struct Mode {
+    state: State,
+    history: Vec<Undoable>,
+    /// Saves still to come from the mode's own Undo and Reset, which aren't the user's steps.
+    quiet: usize,
+}
+
+impl Mode {
+    /// A change came back from the page: a step of the user's, unless it's the mode's own.
+    pub(super) fn kept(&mut self, step: Undoable) {
+        match step {
+            Undoable::Core if self.quiet > 0 => self.quiet -= 1,
+            step => self.history.push(step),
+        }
+    }
+}
 
 impl Shell {
     /// The card's Arrange: the mode on the page shown, in place of the card and of Zap.
@@ -48,15 +80,147 @@ impl Shell {
         };
         if self.browser.arrange(tab, Some(&look), cx) {
             self.arranging = Some(tab);
+            self.arrange_mode = Mode::default();
         }
         cx.notify();
     }
 
     pub(super) fn stop_arrange(&mut self, cx: &mut Context<Self>) {
         if let Some(tab) = self.arranging.take() {
+            self.arrange_mode = Mode::default();
             self.browser.arrange(tab, None, cx);
             cx.notify();
         }
+    }
+
+    /// The core says where the user is in the mode on `tab`'s page.
+    pub fn arrange_state(&mut self, tab: u64, state: State, cx: &mut Context<Self>) {
+        if !self.arranging(tab) || self.arrange_mode.state == state {
+            return;
+        }
+        // check.sh reads this line.
+        log!(
+            "browser: arrange {tab} {:?} {:?}{}",
+            state.step,
+            state.change,
+            if state.selection.is_some() {
+                " selected"
+            } else {
+                ""
+            }
+        );
+        self.arrange_mode.state = state;
+        cx.notify();
+    }
+
+    /// What Arrange's mini bar shows: Hide, Put back once the thing has a change, and the pin while
+    /// it floats, at the box of the thing selected on a page shown here; nothing while none is
+    /// selected or the page scrolls, when the core gives no box.
+    fn mini_bar(&self) -> Option<mini_bar::Shown> {
+        let tab = self.arranging.filter(|&tab| tab != 0)?;
+        let state = &self.arrange_mode.state;
+        let [x, y, width, height] = state.selection.filter(|_| state.step == Step::Selected)?;
+        let (page, _) = self.pane_frame(tab)?;
+        let at = page.origin + point(px(x), px(y));
+        let changed = matches!(
+            state.change,
+            Outcome::Settles | Outcome::Trades | Outcome::Floats
+        );
+        Some(mini_bar::Shown {
+            tab,
+            selection: Bounds::new(at, size(px(width), px(height))),
+            page,
+            pin: (state.change == Outcome::Floats).then_some(state.on_screen),
+            put_back: changed,
+            accent: self.palette().accent.into(),
+        })
+    }
+
+    /// Asks for the mini bar as the mode's state, the page's place or the tab shown changed.
+    pub(super) fn show_mini_bar(&mut self, cx: &mut Context<Self>) {
+        let shown = self.mini_bar();
+        if shown == self.mini_bar_shown {
+            return;
+        }
+        self.mini_bar_shown = shown.clone();
+        let shell = cx.entity().downgrade();
+        let on_press: OnPress = Rc::new(move |tab, press, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.press_mini_bar(tab, press, cx));
+        });
+        self.browser
+            .show_mini_bar(shown.map(|shown| (shown, on_press)), cx);
+    }
+
+    /// A press on the mini bar: the pin moves a floating thing between staying on screen and
+    /// scrolling with the page, Hide is Zap's, and Put back takes the thing's change back.
+    pub fn press_mini_bar(&mut self, tab: u64, press: Press, cx: &mut Context<Self>) {
+        let ask = match press {
+            Press::Pin if self.arrange_mode.state.on_screen => Ask::ScrollsWithPage,
+            Press::Pin => Ask::StaysOnScreen,
+            Press::Hide => Ask::Hide,
+            Press::PutBack => Ask::PutBack,
+        };
+        self.ask_arrange(tab, ask, cx);
+    }
+
+    /// What the core last said of the mode on the page shown, while it's on there.
+    pub fn arrange_shown(&self) -> Option<&State> {
+        self.arranging(self.field_tab())
+            .then_some(&self.arrange_mode.state)
+    }
+
+    /// Asks the mode on `tab`'s page for `ask`, as the mini bar's buttons and the keys do.
+    pub(super) fn ask_arrange(&mut self, tab: u64, ask: Ask, cx: &mut Context<Self>) {
+        if !self.arranging(tab) {
+            return;
+        }
+        if ask == Ask::Reset {
+            // Reset takes back the core's changes, not Zap's hides, and its save is no step.
+            self.arrange_mode
+                .history
+                .retain(|step| *step == Undoable::Hide);
+            self.arrange_mode.quiet += 1;
+        }
+        self.browser.arrange_do(tab, ask, cx);
+    }
+
+    /// ⌘Z while arranging: the mode's last step back, the core's or a Hide, which is Zap's. Says
+    /// whether there was one.
+    pub(super) fn undo_arrange(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
+        if !self.arranging(tab) {
+            return false;
+        }
+        match self.arrange_mode.history.pop() {
+            Some(Undoable::Core) => {
+                self.arrange_mode.quiet += 1;
+                self.browser.arrange_do(tab, Ask::Undo, cx);
+            }
+            Some(Undoable::Hide) => self.undo_zap(cx),
+            None => {}
+        }
+        // ⌘Z is the mode's while it's on, with or without a step to take back.
+        true
+    }
+
+    /// The mode's keys on `tab`'s page, with the page focused or the UI: ↑ and ↓ for the box
+    /// around or inside, ⌘Z for its last step and escape for Done. Says whether `keystroke` was
+    /// one.
+    pub fn run_arrange_key(&mut self, tab: u64, keystroke: &str, cx: &mut Context<Self>) -> bool {
+        if !self.arranging(tab) {
+            return false;
+        }
+        match keystroke {
+            "up" => self.ask_arrange(tab, Ask::Outer, cx),
+            "down" => self.ask_arrange(tab, Ask::Inner, cx),
+            "escape" => self.stop_arrange(cx),
+            _ if super::keys::user_keys(cx).command_for(keystroke, false)
+                == Some(super::commands::Command::Undo) =>
+            {
+                return self.undo_arrange(tab, cx);
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Whether Arrange is on on `tab`'s page.
@@ -73,6 +237,9 @@ impl Shell {
         self.read_profile_boosts(profile, cx);
         let changes = boosts::with(|boosts| boosts.save_arrangement(profile, &shown, bytes));
         self.browser.show_boosts(changes, cx);
+        if self.arranging(tab) {
+            self.arrange_mode.kept(Undoable::Core);
+        }
         self.boosts_changed(cx);
     }
 
@@ -80,6 +247,7 @@ impl Shell {
     pub fn arrange_ended(&mut self, tab: u64, cx: &mut Context<Self>) {
         if self.arranging == Some(tab) {
             self.arranging = None;
+            self.arrange_mode = Mode::default();
             cx.notify();
         }
     }

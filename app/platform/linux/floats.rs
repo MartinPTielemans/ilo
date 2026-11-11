@@ -1,8 +1,8 @@
 //! The floats of platform/host.h on Linux: the zoom HUD, the split view's drop targets, the toast,
-//! the tooltip, the link target and the hover card, which float over a browser window without the
-//! keyboard, as their windows do on the Mac. GPUI shows each as an overlay of that window
-//! (overlays.rs) that lets the pointer through to what's under it, but for the toast's plate while
-//! it has buttons and the hover card's, for its buttons.
+//! the tooltip, the link target, the hover card and Arrange's mini bar, which float over a browser
+//! window without the keyboard, as their windows do on the Mac. GPUI shows each as an overlay of
+//! that window (overlays.rs) that lets the pointer through to what's under it, but for the toast's
+//! plate while it has buttons, the hover card's and the mini bar's, for their buttons.
 //!
 //! The hover card's motion is the UI's (src/hover_card.rs), from its window's first frame on
 //! screen, so the host shows and hides it at once. On X11 with no compositor, which draws an
@@ -36,6 +36,7 @@ enum Kind {
     Tooltip,
     LinkTarget,
     Card,
+    MiniBar,
 }
 
 struct Float {
@@ -80,6 +81,8 @@ thread_local! {
     static LINK_POINTER: Cell<Option<extern "C" fn(f64, f64)>> = const { Cell::new(None) };
     /// The hover card's margin round its plate, and what runs as the user leaves it.
     static CARD: RefCell<(f64, Option<extern "C" fn()>)> = const { RefCell::new((0., None)) };
+    /// The mini bar's margin round it (host_add_mini_bar), and its size, as the UI gave it.
+    static MINI_BAR: Cell<(f64, f64, f64)> = const { Cell::new((0., 0., 0.)) };
 }
 
 fn add(kind: Kind, view: *mut c_void) {
@@ -169,6 +172,17 @@ fn bounds(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
         Kind::Card => {
             let margin = CARD.with_borrow(|(margin, _)| *margin);
             (left - margin, top - margin)
+        }
+        // Where the UI put the bar, at the size it gave, with the margin round it.
+        Kind::MiniBar => {
+            let (margin, width, height) = MINI_BAR.get();
+            return Some(Bounds::new(
+                point(px((left - margin) as f32), px((top - margin) as f32)),
+                size(
+                    px((width + 2. * margin) as f32),
+                    px((height + 2. * margin) as f32),
+                ),
+            ));
         }
     };
     Some(Bounds::new(
@@ -337,6 +351,7 @@ pub(crate) fn forget_window(ui_view: *mut c_void) {
         Kind::Tooltip,
         Kind::LinkTarget,
         Kind::Card,
+        Kind::MiniBar,
     ] {
         if find(kind, |float| {
             float.over == ui_view || float.fading == ui_view
@@ -344,6 +359,57 @@ pub(crate) fn forget_window(ui_view: *mut c_void) {
         {
             hide(kind);
         }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_add_mini_bar(mini_bar_view: *mut c_void, margin: f64) {
+    MINI_BAR.set((margin, 0., 0.));
+    add(Kind::MiniBar, mini_bar_view);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_show_mini_bar(
+    ui_view: *mut c_void,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) {
+    let margin = MINI_BAR.get().0;
+    MINI_BAR.set((margin, width, height));
+    let Some((view, before)) = find(Kind::MiniBar, |float| {
+        (float.left, float.top) = (x, y);
+        (float.view, float.over)
+    }) else {
+        return;
+    };
+    // Only the bar takes the pointer, for its buttons; the margin round it lets it through, and
+    // the keyboard stays with the browser window. Where its window can't blend with the page, it's
+    // cut to the bar, without the shadow round it, as the hover card is.
+    let (margin, width, height) = (margin as f32, width as f32, height as f32);
+    let plate = Bounds::new(point(px(margin), px(margin)), size(px(width), px(height)));
+    gpui_linux::set_overlay_pointer(view, Some(&[plate]));
+    if !gpui_linux::overlays_blend() {
+        let radius = browser::tokens::mini_bar::RADIUS;
+        let (right, bottom) = (margin + width, margin + height);
+        let corners = [
+            (margin, margin),
+            (right, margin),
+            (right, bottom),
+            (margin, bottom),
+        ];
+        gpui_linux::set_overlay_outline(view, &corners.map(|(x, y)| (x, y, radius)));
+    }
+    if show(Kind::MiniBar, ui_view).is_some() && before != ui_view {
+        eprintln!("browser: mini bar shown");
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_hide_mini_bar() {
+    if hide(Kind::MiniBar) {
+        eprintln!("browser: mini bar hidden");
     }
 }
 

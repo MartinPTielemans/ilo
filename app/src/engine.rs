@@ -1022,6 +1022,19 @@ impl Browser for Engine {
         false
     }
 
+    fn arrange_do(&self, tab: u64, ask: browser::boosts::arrange::Ask, _: &mut App) {
+        log!("browser: arrange {tab} {ask:?}: no core call yet");
+    }
+
+    fn show_mini_bar(
+        &self,
+        shown: Option<(browser::mini_bar::Shown, browser::mini_bar::OnPress)>,
+        cx: &mut App,
+    ) {
+        let window = self.window;
+        with_overlays(move |cx| browser::mini_bar::show(window, shown, cx), cx);
+    }
+
     fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> browser::boosts::Arranged {
         boosts_host::set_arrangement(profile, site, bytes)
     }

@@ -361,6 +361,24 @@ thread_local! {
     pub(crate) static TOAST_VIEW: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
 }
 
+/// Arrange's mini bar's requests, to the host's mini bar window, over the browser window it names.
+pub(crate) struct MiniBarHost;
+
+impl browser::mini_bar::Host for MiniBarHost {
+    fn show(&self, window: u64, place: Bounds<Pixels>) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (x, y) = (place.origin.x.into(), place.origin.y.into());
+        let (width, height) = (place.size.width.into(), place.size.height.into());
+        unsafe { platform::host_show_mini_bar(view, x, y, width, height) };
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_mini_bar() };
+    }
+}
+
 /// The toast's requests, to the host's toast window.
 pub(crate) struct ToastHost {
     /// The toast's view, for the share menu its Share button shows, once its window is open.

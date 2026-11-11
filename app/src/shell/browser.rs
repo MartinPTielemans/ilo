@@ -416,6 +416,17 @@ pub trait Browser {
     ) -> bool {
         false
     }
+    /// Asks Arrange on `tab`'s page for `ask`: the box around or inside, Hide, Put back, the pin,
+    /// Undo or Reset. What it does comes back in `Shell::arrange_state` and `arrange_saved`.
+    fn arrange_do(&self, _tab: u64, _ask: crate::boosts::arrange::Ask, _cx: &mut App) {}
+    /// Shows Arrange's mini bar over this window's page for the thing selected, or moves it, or
+    /// hides it for none (`crate::mini_bar`).
+    fn show_mini_bar(
+        &self,
+        _shown: Option<(crate::mini_bar::Shown, crate::mini_bar::OnPress)>,
+        _cx: &mut App,
+    ) {
+    }
     /// Gives `site`'s pages in `profile` the arrangement read from its file, `bytes`, or takes it
     /// away with none, from their next load and at once on those open. The core places it only
     /// while it's what the user kept in the browser, and says what it made of it. The user's
