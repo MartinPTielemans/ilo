@@ -43,7 +43,7 @@ index 16d451f008..bb3d226cf2 100644
          Ok(PreparedWebGraphics { context, surface })
      }
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index a148a4ccfb..c116ec74c6 100644
+index a148a4ccfb..76e8ec86b3 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -14,7 +14,7 @@ use std::cell::RefCell;
@@ -346,7 +346,28 @@ index a148a4ccfb..c116ec74c6 100644
      atlas_sampler: wgpu::Sampler,
      atlas_texture_bind_groups: FxHashMap<AtlasTextureId, CachedTextureBindGroup>,
      globals_buffer: wgpu::Buffer,
-@@ -663,7 +904,7 @@ impl WgpuRendererCore {
+@@ -418,10 +659,16 @@ impl WgpuRenderer {
+                     })
+             };
+ 
+-        let transparent_alpha_mode = pick_alpha_mode(&[
+-            wgpu::CompositeAlphaMode::PreMultiplied,
+-            wgpu::CompositeAlphaMode::Inherit,
+-        ])?;
++        // wgpu lists only Opaque for a browser's WebGPU canvas, which takes "premultiplied" too.
++        let transparent_alpha_mode =
++            if context.adapter.get_info().backend == wgpu::Backend::BrowserWebGpu {
++                wgpu::CompositeAlphaMode::PreMultiplied
++            } else {
++                pick_alpha_mode(&[
++                    wgpu::CompositeAlphaMode::PreMultiplied,
++                    wgpu::CompositeAlphaMode::Inherit,
++                ])?
++            };
+ 
+         let opaque_alpha_mode = pick_alpha_mode(&[
+             wgpu::CompositeAlphaMode::Opaque,
+@@ -663,7 +910,7 @@ impl WgpuRendererCore {
  
      fn create_pipelines(
          device: &wgpu::Device,
@@ -355,7 +376,7 @@ index a148a4ccfb..c116ec74c6 100644
          surface_format: wgpu::TextureFormat,
          alpha_mode: wgpu::CompositeAlphaMode,
          path_sample_count: u32,
-@@ -719,221 +960,26 @@ impl WgpuRendererCore {
+@@ -719,221 +966,26 @@ impl WgpuRendererCore {
              _ => wgpu::BlendState::ALPHA_BLENDING,
          };
  
@@ -594,7 +615,33 @@ index a148a4ccfb..c116ec74c6 100644
          }
      }
  
-@@ -1063,19 +1109,42 @@ impl WgpuRenderer {
+@@ -991,6 +1043,25 @@ impl WgpuRendererCore {
+ }
+ 
+ impl WgpuRenderer {
++    /// Resizes the surface unless the GPU still has work in flight, which WebGL can't wait for
++    /// within a task: wgpu's reconfigure would then panic. Returns false when it waited, for the
++    /// caller to try again next frame. Browser WebGPU always reports its queue empty.
++    pub fn try_update_drawable_size(&mut self, size: Size<DevicePixels>) -> bool {
++        #[cfg(target_family = "wasm")]
++        if let Some(core) = self.core() {
++            let idle = core
++                .resources
++                .device
++                .poll(wgpu::PollType::Poll)
++                .is_ok_and(|status| status.is_queue_empty());
++            if !idle {
++                return false;
++            }
++        }
++        self.update_drawable_size(size);
++        true
++    }
++
+     /// Records the new drawable size and reconfigures the surface when one is present.
+     /// The size is kept even without GPU resources so that recovery restores it.
+     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
+@@ -1063,19 +1134,42 @@ impl WgpuRenderer {
          self.surface_config.alpha_mode = new_alpha_mode;
          let format = self.surface_config.format;
  
@@ -646,7 +693,7 @@ index a148a4ccfb..c116ec74c6 100644
  
          if let RendererState::Ready { surface, core } = &self.state {
              surface.configure(&core.resources.device, &self.surface_config);
-@@ -1206,6 +1275,39 @@ impl WgpuRenderer {
+@@ -1206,6 +1300,39 @@ impl WgpuRenderer {
      }
  }
  
@@ -686,7 +733,7 @@ index a148a4ccfb..c116ec74c6 100644
  impl WgpuRendererCore {
      fn new(
          context: &WgpuContext,
-@@ -1219,14 +1321,17 @@ impl WgpuRendererCore {
+@@ -1219,14 +1346,17 @@ impl WgpuRendererCore {
          let uses_webgl_instance_data = context.uses_webgl_instance_data();
          let dual_source_blending =
              context.supports_dual_source_blending() && !uses_webgl_instance_data;
@@ -710,7 +757,7 @@ index a148a4ccfb..c116ec74c6 100644
              uses_webgl_instance_data,
          );
          let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-@@ -1519,13 +1624,13 @@ impl WgpuRendererCore {
+@@ -1519,13 +1649,13 @@ impl WgpuRendererCore {
                  match batch {
                      PrimitiveBatch::Quads(range) => self.draw_instances(
                          &instance_bindings.quads,
@@ -726,7 +773,7 @@ index a148a4ccfb..c116ec74c6 100644
                          instance_range(range),
                          &mut pass,
                      ),
-@@ -1567,7 +1672,7 @@ impl WgpuRendererCore {
+@@ -1567,7 +1697,7 @@ impl WgpuRendererCore {
                      }
                      PrimitiveBatch::Underlines(range) => self.draw_instances(
                          &instance_bindings.underlines,
@@ -735,7 +782,7 @@ index a148a4ccfb..c116ec74c6 100644
                          instance_range(range),
                          &mut pass,
                      ),
-@@ -1575,7 +1680,7 @@ impl WgpuRendererCore {
+@@ -1575,7 +1705,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.monochrome_sprites,
                              texture_id,
@@ -744,7 +791,7 @@ index a148a4ccfb..c116ec74c6 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1585,11 +1690,7 @@ impl WgpuRendererCore {
+@@ -1585,11 +1715,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.subpixel_sprites,
                              texture_id,
@@ -757,7 +804,7 @@ index a148a4ccfb..c116ec74c6 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1598,7 +1699,7 @@ impl WgpuRendererCore {
+@@ -1598,7 +1724,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.polychrome_sprites,
                              texture_id,
@@ -766,7 +813,7 @@ index a148a4ccfb..c116ec74c6 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1816,7 +1917,7 @@ impl WgpuRendererCore {
+@@ -1816,7 +1942,7 @@ impl WgpuRendererCore {
              &path_intermediate_view,
          );
          let resources = self.resources();
@@ -775,7 +822,7 @@ index a148a4ccfb..c116ec74c6 100644
          pass.set_bind_group(0, &resources.globals_bind_group, &[]);
          pass.set_bind_group(1, &instances.bind_group, &[]);
          pass.set_bind_group(2, &texture, &[]);
-@@ -1881,7 +1982,7 @@ impl WgpuRendererCore {
+@@ -1881,7 +2007,7 @@ impl WgpuRendererCore {
                  ..Default::default()
              });
  
@@ -784,7 +831,7 @@ index a148a4ccfb..c116ec74c6 100644
              pass.set_bind_group(0, &resources.path_globals_bind_group, &[]);
              pass.set_bind_group(1, &vertex_binding.bind_group, &[]);
              // The path rasterization shader loads records by vertex index
-@@ -2411,109 +2512,117 @@ impl WgpuHeadlessRenderer {
+@@ -2411,109 +2537,117 @@ impl WgpuHeadlessRenderer {
              .render_target
              .as_ref()
              .ok_or_else(|| anyhow::anyhow!("Headless render target was not created"))?;
