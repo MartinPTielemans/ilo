@@ -7,6 +7,10 @@
 /// Writes a line to stderr, as `eprintln!` does, but in one write where `eprintln!` makes one for
 /// each piece, so a line Chromium logs at the same time can't land inside it, where the checks
 /// wouldn't find it.
+pub mod heap_sites;
+#[global_allocator]
+static HEAP: heap_sites::Sampling = heap_sites::Sampling;
+
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {{
