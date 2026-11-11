@@ -202,6 +202,7 @@ unsafe extern "C" {
     pub fn host_hide_drop_targets();
     pub fn host_focus(view: *mut c_void);
     pub fn host_show_window_buttons(ui_view: *mut c_void, shown: bool);
+    pub fn host_set_sidebar_right(ui_view: *mut c_void, right: bool);
     pub fn host_press_window_button(ui_view: *mut c_void, button: i32);
     pub fn host_set_window_on_top(ui_view: *mut c_void, on: bool);
     #[cfg(target_os = "macos")]
@@ -395,6 +396,16 @@ unsafe extern "C" {
     pub fn host_set_toast_plate(x: f64, y: f64, width: f64, height: f64);
     pub fn host_show_toast(ui_view: *mut c_void);
     pub fn host_hide_toast();
+    pub fn host_add_foot_bar(foot_bar_view: *mut c_void);
+    pub fn host_show_foot_bar(
+        ui_view: *mut c_void,
+        left: f64,
+        right: f64,
+        bottom: f64,
+        width: f64,
+        height: f64,
+    );
+    pub fn host_hide_foot_bar();
     pub fn host_add_tooltip(tooltip_view: *mut c_void, margin: f64, away: extern "C" fn());
     pub fn host_show_tooltip(ui_view: *mut c_void, overlay: c_int, left: f64, top: f64, fade: f64);
     pub fn host_hide_tooltip(fade: f64);

@@ -3,7 +3,8 @@
 //! the chrome's face (`crate::face`). It's registered the first time one of them draws, never at
 //! launch, since registering a font makes GPUI shape every line again once.
 
-use std::{borrow::Cow, time::Instant};
+use std::borrow::Cow;
+use web_time::Instant;
 
 use gpui::{App, FontWeight, Global, ParentElement, SharedString, Styled, div, px};
 

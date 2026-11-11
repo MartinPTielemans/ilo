@@ -542,6 +542,25 @@ void host_show_toast(void* ui_view);
 // Hides the toast's window.
 void host_hide_toast(void);
 
+// Makes the window of |foot_bar_view| the foot bar: the bar a mode of the page, such as Arrange's
+// and pointing's, shows over the page's bottom centre, as a child of the browser window. A click on
+// it reaches its buttons, but it never takes the keyboard, which stays with the browser window and
+// so with the page. It starts hidden.
+void host_add_foot_bar(void* foot_bar_view);
+
+// Shows the foot bar's window over |ui_view|'s window, or moves it there: |width| by |height|
+// points, centred between |left| and |right| points in from the edges of the window's content,
+// with its bottom |bottom| points over the content's. It keeps those as the window resizes.
+void host_show_foot_bar(void* ui_view,
+                        double left,
+                        double right,
+                        double bottom,
+                        double width,
+                        double height);
+
+// Hides the foot bar's window.
+void host_hide_foot_bar(void);
+
 // Makes the window of |tooltip_view| the tooltip's, which floats over a browser window as its
 // child when shown, and lets the mouse through and never takes the keyboard. It starts hidden.
 // |away| is called when that window stops being key or the app stops being active, which hide it,
@@ -609,6 +628,11 @@ int host_ask(const char* message, const char* detail, const char* const* buttons
 // Shows the close, minimize and zoom buttons of |ui_view|'s window, or hides them, as Arc does
 // while its sidebar is hidden.
 void host_show_window_buttons(void* ui_view, bool shown);
+
+// Puts |ui_view|'s window's close, minimize and zoom buttons at its right, mirrored, so close is at
+// the corner, and the reveal's window and the edge that brings it out at the right too, or back on
+// the left: Sidebar position (#2375). The UI lays out the rest.
+void host_set_sidebar_right(void* ui_view, bool right);
 
 // The Mac's close, minimize and zoom buttons as AppKit draws them in |ui_view|'s window, for the
 // copies the UI draws in their place: each one's centre across from the window's left edge, their

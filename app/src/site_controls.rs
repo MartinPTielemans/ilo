@@ -8,11 +8,8 @@
 //! `Host`. Tab and the arrows take a ring over its tiles, rows and footer buttons, and space or
 //! return does what a click on the ringed one does (#1382).
 
-use std::{
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, ClickEvent, Context, FocusHandle, Global, Image, KeyBinding, MouseButton,
@@ -105,6 +102,8 @@ use crate::tokens::site_controls::LOCK_TEXT_GAP;
 use crate::tokens::site_controls::MANAGED_OPACITY;
 use crate::tokens::site_controls::MORE_FILL;
 use crate::tokens::site_controls::MORE_GLYPH;
+use crate::tokens::site_controls::{PROFILE_CHEVRON, PROFILE_CHEVRON_GAP, PROFILE_NAME_MIN};
+use crate::tooltip::text_width;
 // Down the body, each from the top of what's above it.
 const HEADING_CAP: f32 = TILE_HEIGHT + 14.;
 use crate::tokens::site_controls::HEADING_TO_TILES;
@@ -332,6 +331,19 @@ pub enum Run {
     Passwords,
     /// An item of the extension's tile's menu.
     ExtensionItem(SharedString, ExtensionItem),
+    /// The page in a Space of the profile, as a link from another app lands (#2339).
+    OpenInProfile(u64),
+    /// New Space's form, its Space in the profile, for one none of the user's Spaces is in.
+    NewSpaceInProfile(u64),
+}
+
+/// The tab's profile and the user's others, for the footer's chip, while there's more than one
+/// (#2339). A private window has none, as its session shares none of the profile's logins.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profiles {
+    pub name: SharedString,
+    /// Each other profile: its id, its name, and whether one of the user's Spaces is in it.
+    pub others: Vec<(u64, SharedString, bool)>,
 }
 
 /// An action tile. Arc's row is Share, Boost, Capture a portion and Capture the full page, each a
@@ -530,6 +542,7 @@ struct Open {
     /// The browser window's size, which tooltips stay inside.
     window: Size<Pixels>,
     extensions: Vec<Extension>,
+    profiles: Option<Profiles>,
     /// The grid's order as it last drew, by id.
     drawn: Vec<SharedString>,
     /// None until the core first reports, which is when it shows.
@@ -600,6 +613,7 @@ enum Stop {
     Device(usize),
     Reset,
     Lock,
+    Profile,
     More,
 }
 
@@ -800,8 +814,10 @@ pub fn show(
     place: Place,
     window: Size<Pixels>,
     extensions: Vec<Extension>,
+    profiles: Option<Profiles>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<SiteControls>(cx);
     update(cx, |panel, _, cx| {
         if panel
             .open
@@ -818,6 +834,7 @@ pub fn show(
             beak,
             window,
             extensions,
+            profiles,
             drawn: Vec::new(),
             site: None,
             height: 0.,
@@ -956,6 +973,19 @@ fn describe(site: &Site) -> String {
             }
         }
     )
+}
+
+/// The profile chip's right edge, a gap before "…" (#2339), where it stays whatever the lock says.
+const PROFILE_RIGHT: f32 = WIDTH - PADDING - FOOTER - GAP;
+/// The chip as its glyph and chevron alone.
+const PROFILE_ALONE: f32 =
+    LOCK_LEFT + LOCK_SLOT + PROFILE_CHEVRON_GAP + PROFILE_CHEVRON + LOCK_RIGHT;
+
+/// Whether the lock is its glyph alone, a square like "…": a secure connection's beside the
+/// profile's chip, so the name has the room. A page that isn't secure keeps its words, as that
+/// warning matters more than the profile, and the chip gives way to its glyph instead.
+fn lock_alone(site: &Site, profiles: Option<&Profiles>) -> bool {
+    profiles.is_some() && matches!(site.connection, Connection::Secure)
 }
 
 /// The lock button's words: Chrome's short ones for the connection, the page's own for a file or
@@ -1188,6 +1218,37 @@ impl SiteControls {
         });
         self.host
             .menu(vec![MenuEntry::new("Remove", true)], position, chosen, cx);
+    }
+
+    /// Shows the profile chip's menu at `position`: this page in each other profile, or New Space
+    /// in one none of the user's Spaces is in, and runs the item chosen.
+    fn profiles(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(profiles) = self.open.as_ref().and_then(|open| open.profiles.clone()) else {
+            return;
+        };
+        let (items, runs): (Vec<MenuEntry>, Vec<Run>) = (profiles.others.iter())
+            .map(|(id, name, has_space)| match has_space {
+                true => (
+                    MenuEntry::named(format!("Open in {name}"), true),
+                    Run::OpenInProfile(*id),
+                ),
+                false => (
+                    MenuEntry::named(format!("New Space in {name}…"), true),
+                    Run::NewSpaceInProfile(*id),
+                ),
+            })
+            .unzip();
+        let titles: Vec<SharedString> = items.iter().map(|item| item.title.clone()).collect();
+        let panel = cx.weak_entity();
+        let chosen = Box::new(move |index: Option<usize>, cx: &mut App| {
+            let Some((run, name)) =
+                index.and_then(|index| Some((runs.get(index)?.clone(), titles[index].to_string())))
+            else {
+                return;
+            };
+            panel.update(cx, |panel, cx| panel.run(&name, run, cx)).ok();
+        });
+        self.host.menu(items, position, chosen, cx);
     }
 
     /// Shows the "…" menu at `position`, and runs the item chosen.
@@ -1466,6 +1527,9 @@ impl SiteControls {
         if site.certificate {
             stops.push((Stop::Lock, footer(PADDING)));
         }
+        if open.profiles.is_some() {
+            stops.push((Stop::Profile, footer(PROFILE_RIGHT - FOOTER)));
+        }
         stops.push((Stop::More, footer(WIDTH - PADDING - FOOTER)));
         stops
     }
@@ -1522,6 +1586,18 @@ impl SiteControls {
                 .find(|each| &each.id == id)
                 .map(|each| each.title.clone()),
             Stop::AddExtension => Some("Add Extension".into()),
+            // A lock or a chip that's a glyph alone names itself in its tooltip.
+            Stop::Lock => (open.site.as_ref())
+                .filter(|site| lock_alone(site, open.profiles.as_ref()))
+                .map(lock_label),
+            Stop::Profile => (open.profiles.as_ref())
+                .filter(|_| {
+                    !open
+                        .site
+                        .as_ref()
+                        .is_some_and(|site| lock_alone(site, open.profiles.as_ref()))
+                })
+                .map(|profiles| profiles.name.clone()),
             _ => None,
         };
         open.keyed = Some(stop);
@@ -1552,7 +1628,12 @@ impl SiteControls {
         let under = point(frame.left(), frame.bottom());
         let menu = matches!(
             stop,
-            Stop::Engine | Stop::Passwords | Stop::Permission(_) | Stop::Device(_) | Stop::More
+            Stop::Engine
+                | Stop::Passwords
+                | Stop::Permission(_)
+                | Stop::Device(_)
+                | Stop::Profile
+                | Stop::More
         );
         match stop {
             Stop::Tile(name) => {
@@ -1586,6 +1667,7 @@ impl SiteControls {
             }
             Stop::Reset => self.reset(cx),
             Stop::Lock => self.run("certificate", Run::Certificate, cx),
+            Stop::Profile => self.profiles(under, cx),
             Stop::More => self.more(under, cx),
         }
         if menu {
@@ -1962,28 +2044,59 @@ impl SiteControls {
         }
     }
 
-    fn footer(&self, site: &Site, y: f32, cx: &mut Context<Self>) -> [gpui::AnyElement; 2] {
+    fn footer(
+        &self,
+        site: &Site,
+        y: f32,
+        system: &gpui::WindowTextSystem,
+        cx: &mut Context<Self>,
+    ) -> [gpui::AnyElement; 3] {
         let lock = match site.connection {
             Connection::Secure => "icons/lock.svg",
             _ => "icons/lock-open.svg",
         };
         let palette = palette::current(cx);
+        let profiles = self.open.as_ref().and_then(|open| open.profiles.clone());
+        let alone = lock_alone(site, profiles.as_ref());
+        let room = match &profiles {
+            Some(_) => PROFILE_RIGHT - PROFILE_ALONE - GAP - PADDING,
+            None => WIDTH - 2. * PADDING - FOOTER - GAP,
+        };
+        let square = Bounds::new(point(px(PADDING), px(y)), size(px(FOOTER), px(FOOTER)));
+        let label = lock_label(site);
+        let medium = gpui::FontWeight::MEDIUM;
+        // Where the lock ends: its square alone, or its words, which a chip never cuts.
+        let lock_width = match alone {
+            true => FOOTER,
+            false => (LOCK_LEFT
+                + LOCK_SLOT
+                + LOCK_TEXT_GAP
+                + text_width(&label, NAME_SIZE, medium, system).ceil()
+                + LOCK_RIGHT)
+                .min(room),
+        };
         let button = div()
             .id("site-lock")
             .when(self.a11y, |button| {
-                button_named(button, lock_label(site), (false, site.certificate, false))
+                button_named(button, label.clone(), (false, site.certificate, false))
             })
             .absolute()
             .left(px(PADDING))
             .top(px(y))
             .h(px(FOOTER))
-            .max_w(px(WIDTH - 2. * PADDING - FOOTER - GAP))
+            .max_w(px(room))
             .rounded(px(LOCK_RADIUS))
             .bg(palette.plate(PLATE))
             .flex()
             .items_start()
-            .pl(px(LOCK_LEFT))
-            .pr(px(LOCK_RIGHT))
+            .when(!alone, |button| button.pl(px(LOCK_LEFT)).pr(px(LOCK_RIGHT)))
+            .when(alone, |button| {
+                button.w(px(FOOTER)).justify_center().on_hover(cx.listener(
+                    move |panel, hovered: &bool, _, cx| {
+                        panel.tooltip(label.clone(), square, *hovered, cx)
+                    },
+                ))
+            })
             .child(
                 div()
                     .flex_none()
@@ -1999,19 +2112,21 @@ impl SiteControls {
                             .text_color(palette.on_overlay_glyph(TEXT)),
                     ),
             )
-            .child(
-                div()
-                    .min_w_0()
-                    .ml(px(LOCK_TEXT_GAP))
-                    .mt(px(text_top(LOCK_CAP, NAME_SIZE)))
-                    .h(px(LINE))
-                    .line_height(px(LINE))
-                    .text_size(px(NAME_SIZE))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(palette.on_overlay(TEXT))
-                    .truncate()
-                    .child(lock_label(site)),
-            )
+            .when(!alone, |button| {
+                button.child(
+                    div()
+                        .min_w_0()
+                        .ml(px(LOCK_TEXT_GAP))
+                        .mt(px(text_top(LOCK_CAP, NAME_SIZE)))
+                        .h(px(LINE))
+                        .line_height(px(LINE))
+                        .text_size(px(NAME_SIZE))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(palette.on_overlay(TEXT))
+                        .truncate()
+                        .child(lock_label(site)),
+                )
+            })
             .map(|button| match site.certificate {
                 true => button
                     .hover(move |style| style.bg(palette.state(PLATE, STATE_HOVERED)))
@@ -2048,7 +2163,113 @@ impl SiteControls {
                     .text_color(palette.on_overlay_glyph(TEXT)),
             )
             .children(self.ring(&Stop::More, Some(FOOTER / 2.), cx));
-        [button.into_any_element(), more.into_any_element()]
+        let chip = profiles.map(|profiles| {
+            let name = text_width(&profiles.name, NAME_SIZE, medium, system).ceil();
+            self.profile_chip(&profiles, PADDING + lock_width + GAP, name, y, cx)
+        });
+        let chip = chip.map_or_else(|| div().into_any_element(), |chip| chip.into_any_element());
+        [button.into_any_element(), chip, more.into_any_element()]
+    }
+
+    /// The profile's chip, against "…" (#2339), in the room from `left`: the Profiles glyph, the
+    /// name `name` wide and a chevron. The name gives way first, cut at its end, and with too
+    /// little room it goes, the name then in its tooltip, as an ellipsis alone would read as a
+    /// second "…". Its menu opens the page in another profile.
+    fn profile_chip(
+        &self,
+        profiles: &Profiles,
+        left: f32,
+        name: f32,
+        y: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let palette = palette::current(cx);
+        let room = PROFILE_RIGHT - left - PROFILE_ALONE - LOCK_TEXT_GAP;
+        let alone = room < name.min(PROFILE_NAME_MIN);
+        let cut = room < name;
+        let square = Bounds::new(
+            point(px(PROFILE_RIGHT - FOOTER), px(y)),
+            size(px(FOOTER), px(FOOTER)),
+        );
+        let name = profiles.name.clone();
+        let chip =
+            div()
+                .id("site-profile")
+                .when(self.a11y, |chip| {
+                    button_named(chip, said("Profile", &name), (true, true, false))
+                })
+                .h(px(FOOTER))
+                .min_w_0()
+                .rounded(px(LOCK_RADIUS))
+                .bg(palette.plate(PLATE))
+                .hover(move |style| style.bg(palette.state(PLATE, STATE_HOVERED)))
+                .active(move |style| style.bg(palette.state(PLATE, STATE_PRESSED)))
+                .flex()
+                .items_start()
+                .pl(px(LOCK_LEFT))
+                .pr(px(LOCK_RIGHT))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(LOCK_SLOT))
+                        .h(px(FOOTER))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            svg()
+                                .path("icons/users.svg")
+                                .size(px(LOCK_GLYPH))
+                                .text_color(palette.on_overlay_glyph(TEXT)),
+                        ),
+                )
+                .when(!alone, |chip| {
+                    chip.child(
+                        div()
+                            .min_w_0()
+                            .ml(px(LOCK_TEXT_GAP))
+                            .mt(px(text_top(LOCK_CAP, NAME_SIZE)))
+                            .h(px(LINE))
+                            .line_height(px(LINE))
+                            .text_size(px(NAME_SIZE))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(palette.on_overlay(TEXT))
+                            .truncate()
+                            .child(name.clone()),
+                    )
+                })
+                .when(cut, |chip| {
+                    chip.on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
+                        panel.tooltip(name.clone(), square, *hovered, cx)
+                    }))
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .ml(px(PROFILE_CHEVRON_GAP))
+                        .h(px(FOOTER))
+                        .flex()
+                        .items_center()
+                        .child(
+                            svg()
+                                .path("icons/chevron-down.svg")
+                                .size(px(PROFILE_CHEVRON))
+                                .text_color(palette.on_overlay(SECONDARY)),
+                        ),
+                )
+                .on_click(cx.listener(|panel, event: &ClickEvent, _, cx| {
+                    panel.profiles(event.position(), cx)
+                }))
+                .children(self.ring(&Stop::Profile, Some(LOCK_RADIUS), cx));
+        // Against "…", the name giving way first.
+        div()
+            .absolute()
+            .left(px(left))
+            .top(px(y))
+            .w(px(PROFILE_RIGHT - left))
+            .flex()
+            .justify_end()
+            .child(chip)
     }
 }
 
@@ -2271,7 +2492,7 @@ impl Render for SiteControls {
             .children(extensions)
             .children(settings.into_iter().flatten())
             .child(divider)
-            .children(self.footer(&site, at.footer, cx));
+            .children(self.footer(&site, at.footer, &window.text_system().clone(), cx));
         root.child(scaled(card, scale, origin))
     }
 }

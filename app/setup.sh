@@ -14,7 +14,7 @@ if [ ! -d .deps/zed ]; then
     https://github.com/zed-industries/zed .deps/zed
   git -C .deps/zed checkout -q "$ZED_REV"
 fi
-PATCHED="crates/gpui crates/gpui_macos crates/gpui_windows crates/gpui_linux crates/gpui_wgpu"
+PATCHED="crates/gpui crates/gpui_macos crates/gpui_windows crates/gpui_linux crates/gpui_wgpu crates/gpui_web"
 # The files a patch adds go too; `git add -N` them to see them in a regenerated patch.
 git -C .deps/zed reset -q -- $PATCHED
 git -C .deps/zed checkout -q -- $PATCHED
@@ -26,12 +26,16 @@ if [ "$(git -C .deps/zed rev-parse HEAD)" != "$ZED_REV" ]; then
 fi
 # One patch a crate: gpui_macos's, gpui_windows's and gpui_linux's embed GPUI in Chromium's window
 # and loop, gpui's scales what's painted, lets the tests stand in for an assistive app, adds the
-# Edit menu's Paste and Match Style and caps a window's frame rate only while the app isn't the
-# active one, and gpui_wgpu's draws with Vulkan alone on Linux and builds its pipelines once for
-# all windows.
+# Edit menu's Paste and Match Style, caps a window's frame rate only while the app isn't the
+# active one and leaves the site's demo only the image decoders and regex tables it uses,
+# gpui_wgpu's draws with Vulkan alone on Linux, builds each pipeline once for all windows, the
+# first time one draws with it, resizes a canvas under WebGL without waiting on the GPU, which
+# WebGL can't, and lets a browser's WebGPU canvas be see-through, and gpui_web's draws the site's
+# demo in the site's canvas, see-through where it draws nothing, leaving the page its keys and
+# scrolling.
 git -C .deps/zed apply "$PWD/patches/gpui-macos-embedded.patch" "$PWD/patches/gpui-windows-embedded.patch" \
   "$PWD/patches/gpui-linux-embedded.patch" "$PWD/patches/gpui-scale.patch" \
-  "$PWD/patches/gpui-wgpu-vulkan.patch"
+  "$PWD/patches/gpui-wgpu.patch" "$PWD/patches/gpui-web-page.patch"
 
 # GPUI's accessibility adapters for the Mac and for AT-SPI, at the versions Cargo.lock has, with
 # what upstream lacks: VoiceOver's menu action and a folder's open state, and AT-SPI's expanded
@@ -43,7 +47,7 @@ sha256() { if command -v shasum >/dev/null; then shasum -a 256 "$@"; else sha256
 vendor() {
   crate=.deps/$1-$2.crate
   if ! echo "$3  $crate" | sha256 -c --status 2>/dev/null; then
-    curl -sSfL "https://static.crates.io/crates/$1/$1-$2.crate" -o "$crate"
+    curl -sSfL --retry 5 "https://static.crates.io/crates/$1/$1-$2.crate" -o "$crate"
     echo "$3  $crate" | sha256 -c --status
   fi
   rm -rf ".deps/$1" "${crate%.crate}"
@@ -67,7 +71,7 @@ if [ "$(uname -s)" = Darwin ]; then
   SPARKLE_SHA256=1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27
   archive=.deps/Sparkle-$SPARKLE.tar.xz
   if ! echo "$SPARKLE_SHA256  $archive" | sha256 -c --status 2>/dev/null; then
-    curl -sSfL "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE/Sparkle-$SPARKLE.tar.xz" -o "$archive"
+    curl -sSfL --retry 5 "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE/Sparkle-$SPARKLE.tar.xz" -o "$archive"
     echo "$SPARKLE_SHA256  $archive" | sha256 -c --status
   fi
   rm -rf .deps/Sparkle

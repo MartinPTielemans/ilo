@@ -24,6 +24,11 @@ on:
         description: Build the app, even if a check of this commit kept one
         type: boolean
         default: false
+      trace:
+        description: >-
+          The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
+          #2377's, latency among them; empty for latency alone in tabs and no traced switches
+        default: ''
 
 concurrency:
   group: check-windows-${{ github.ref }}
@@ -124,7 +129,7 @@ jobs:
         mcp keys sync sync-account sync-devices split trouble window clear handback restore little
         battery-os adblock adblock-lists battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
-        pictures boosts
+        pictures boosts foot-bar
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
@@ -397,6 +402,7 @@ jobs:
           RUNS: ${{ steps.runs.outputs.list }}
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/windows-${{ matrix.shard }}.tsv
+          CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
@@ -424,7 +430,10 @@ jobs:
             ":"*" $run "*)
               start=$SECONDS
               status=0
-              timeout 20m ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
+              # Perf measures Chrome beside the app.
+              limit=20m
+              [ "$run" != perf ] || limit=40m
+              timeout "$limit" ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               # By the app's path, never by image name, which would reach any other Chrome. Before
               # the move, as Windows won't move a folder a process still has a file open in.
               pkill -9 -f "$(cygpath -m "$PWD/build/Browser")/" || true
@@ -437,7 +446,12 @@ jobs:
                 cp -r build/check "$out/$run" || true
                 rm -rf build/check || true
               fi
-              if [ "$status" = 0 ]; then
+              # A run that skips all of itself, as one whose build lacks what it checks, says why on a
+              # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
+              whole=$(grep -m1 '^skip all: ' "$out/$run.log" | cut -c11- | tr '|' '/') || true
+              if [ "$status" = 0 ] && [ -n "$whole" ]; then
+                result="skip: $whole"
+              elif [ "$status" = 0 ]; then
                 result="passed in $((SECONDS - start)) s"
               else
                 # A run that ends without a FAIL line, such as one whose tool is missing, mustn't
