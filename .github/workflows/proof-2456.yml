@@ -14,7 +14,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,22 +36,27 @@ jobs:
           echo "released $tag"
           gh release download "$tag" -R "$GITHUB_REPOSITORY" -p ilo-linux-x86_64.flatpak -D "$dir"
           flatpak install --user -y --noninteractive "$dir/ilo-linux-x86_64.flatpak"
-      # Main's app as its newest check kept it, on the engine main fetches.
-      - name: Main's app
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # Main's app, this branch being main and the proof's files, built as check-linux builds it, on
+      # the engine main fetches, from main's build cache.
+      - name: Main's engine
+        working-directory: app
         run: |
-          read -r run sha < <(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" --jq \
-            '[.artifacts[] | select((.expired | not) and (.name | startswith("app-linux-")) and .workflow_run.head_branch == "main")][0] | "\(.workflow_run.id) \(.workflow_run.head_sha)"')
-          echo "main $sha, run $run"
-          git worktree add "$RUNNER_TEMP/main" "$sha"
-          cd "$RUNNER_TEMP/main/app"
-          engine=$(../engine/fetch.sh)
-          echo "engine $engine"
-          gh run download "$run" -R "$GITHUB_REPOSITORY" -n "app-linux-$sha" -D "$RUNNER_TEMP/art"
-          ../.github/scripts/app-artifact.sh unpack "$engine" "$RUNNER_TEMP/art/app.tar"
-          ls build/Browser | head
-      - run: dbus-run-session -- xvfb-run -a -s '-screen 0 1440x900x24' bash .github/proof-2456.sh "$RUNNER_TEMP/main/app/build/Browser"
+          ../engine/fetch.sh
+          git log -1 --format='main %H %s' "$(git merge-base HEAD origin/main)"
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: check-linux-${{ hashFiles('app/Cargo.lock', 'app/linux/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
+          restore-keys: |
+            check-linux-
+            app-linux-
+      - name: Main's app
+        working-directory: app
+        run: rustup update stable --no-self-update && ./setup.sh && ./build.sh
+      - run: dbus-run-session -- xvfb-run -a -s '-screen 0 1440x900x24' bash .github/proof-2456.sh "$PWD/app/build/Browser"
       - if: always()
         run: cat "$RUNNER_TEMP/proof/summary" || true
       - if: always()
