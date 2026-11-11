@@ -30,10 +30,28 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# A process's PID and start time, which tell it from a later one given the same PID.
+started() { awk -v p="$1" '{ sub(/.*\) /, ""); print p, $20 }' "/proc/$1/stat" 2>/dev/null; }
+
 if [ "${1:-}" = --steps ]; then
   # Inside the session (headless.sh --then), with its displays and the app's log in $LOG.
   mode=$2 out=$3
   : > "$out/$mode.failed"
+  # The leg's browser's processes, for the run to name any that outlive the leg: its own session's
+  # (run.sh wrote its PID, which headless.sh's setsid made the session's), and its crash handler,
+  # which Crashpad starts in a session of its own, by the leg's profile it's given. By name, as the
+  # sandbox makes the helpers' executables unreadable; fcitx5 and vkbd share the session.
+  track() {
+    local sid p
+    sid=$(cat "$out/$mode.pid")
+    for p in $(ps -e -o pid= -o sid= | awk -v s="$sid" '$2 == s { print $1 }') \
+      $(pgrep -f -- "$BROWSER_PROFILE_DIR"); do
+      case $(cat "/proc/$p/comm" 2>/dev/null) in chrome*) started "$p" || true ;; esac
+    done >> "$out/$mode.pids"
+  }
+  hold=
+  trap 'track; [ -z "$hold" ] || kill "$hold" 2>/dev/null || true' EXIT
+  track
   fail() {
     echo "FAIL ($mode): $1" | tee -a "$out/$mode.failed" >&2
     exit 1
@@ -49,11 +67,7 @@ if [ "${1:-}" = --steps ]; then
   mark() { wc -l < "$LOG"; }
   # The app's own process, not its helpers, is still there and logged no crash after line $1.
   alive() {
-    local p up=
-    for p in $(pgrep -x chrome); do
-      grep -qa -- --type= "/proc/$p/cmdline" || up=1
-    done
-    [ -n "$up" ] || fail "the app quit $2"
+    kill -0 "$(cat "$out/$mode.pid")" 2>/dev/null || fail "the app quit $2"
     ! tail -n "+$(($1 + 1))" "$LOG" | grep -qE 'Received signal|panicked' || fail "the app crashed $2"
   }
   click() { "$VKBD" --click "$1" "$2"; }
@@ -68,7 +82,6 @@ if [ "${1:-}" = --steps ]; then
   if [ "$mode" = x11 ]; then
     "$VKBD" --hold 120 &
     hold=$!
-    trap 'kill $hold 2>/dev/null || true' EXIT
     sleep 0.5 # for the held keyboard to join the seat
   fi
 
@@ -229,6 +242,7 @@ EOF
 # the app a keyboard leave, which closes an overlay as the user leaving it.
 cat > "$home/run.sh" <<EOF
 #!/bin/bash
+echo \$\$ > "$out/\$1.pid"
 [ -z "\${WAYLAND_DISPLAY:-}" ] || [ "\$1" = no-keyboard ] || "$VKBD" --hold 600 &
 env XDG_CONFIG_HOME=$home/config XDG_DATA_HOME=$home/data XDG_CACHE_HOME=$home/cache \\
   fcitx5 --disable=notificationitem,notifications,kimpanel,clipboard,fcitx4frontend \\
@@ -257,12 +271,22 @@ url="data:text/html,$(python3 -I -c 'import sys, urllib.parse; print(urllib.pars
 failed=
 for mode in $modes; do
   x11=; [ "$mode" = x11 ] && x11=--x11
-  rm -rf "$home/profile"
+  # Each leg its own profile, as the last one's browser may not be gone yet.
   dbus-run-session --config-file="$home/bus.conf" -- \
-    env BROWSER_PROFILE_DIR="$home/profile" BROWSER_URL="$url" \
+    env BROWSER_PROFILE_DIR="$home/profile-$mode" BROWSER_URL="$url" \
     ../tools/headless.sh $x11 --then "$PWD/check/ime.sh --steps $mode $out" \
     "$out/$mode.png" 'browser: loaded' "$home/run.sh" "$mode" build/Browser/chrome \
     > "$out/$mode-run.log" 2>&1 || true
+  # Any of the leg's browser's processes still there now that the leg is over, by the PIDs it
+  # tracked, with how long each has run.
+  if [ -s "$out/$mode.pids" ]; then
+    sort -u "$out/$mode.pids" | while read -r p start; do
+      [ "$(started "$p")" = "$p $start" ] || continue
+      ps -o pid=,ppid=,sid=,etimes=,args= -p "$p" | awk -v m="$mode" '{
+        printf "still running after the %s leg: pid %s, parent %s, session %s, up %s s: ", m, $1, $2, $3, $4
+        $1 = $2 = $3 = $4 = ""; sub(/^ +/, ""); print substr($0, 1, 300) }' || true
+    done | tee "$out/$mode.alive"
+  fi
   if [ ! -f "$out/$mode.passed" ]; then
     failed=1
     cat "$out/$mode.failed" 2>/dev/null || echo "FAIL ($mode): see $out/$mode-run.log" >&2
