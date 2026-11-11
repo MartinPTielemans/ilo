@@ -558,6 +558,14 @@ page_shortcut() {
   send key "$1" cmd
   expect "^browser: command $2 via page$" "⌘$(echo "$1" | tr a-z A-Z) with the page focused didn't reach the UI"
 }
+# Command $1 ran once since the last command was sent, which $2 names: under Wayland GPUI reads a
+# page's key after Chromium, and once the app's answer has given the UI the keyboard, as closing
+# the page that had it does, GPUI would run the key again (#2442). Read once the command's effect
+# is logged, which comes after a second run would.
+ran_once() {
+  ran=$(since | grep -c "^browser: command $1 via ")
+  [ "$ran" = 1 ] || fail "$2 ran $1 $ran times"
+}
 
 # What the sidebar last logged of $1, "sidebar hovered" or "sidebar tools": 1 or shown, 0 or hidden,
 # or nothing before its first change.
