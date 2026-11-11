@@ -13,9 +13,9 @@
 # Chrome hands to the browser running, as in links.sh (#1426). Windows shows a toast only for an
 # installed copy, which the run's isn't, so the run sends that launch for the click.
 
-# What macOS keeps of the app's and its alert helpers' leave to notify, as "<id> allowed; <id> not
-# allowed": usernoted's own preferences, by bundle id, where bit 25 of an app's flags is Settings'
-# Allow Notifications. ncprefs holds none of it on macOS 26 (#2396).
+# What macOS keeps of the leave to notify of the app and of its alert helper, the two that post, as
+# "<id> allowed|refused <flags>" lines. On macOS 26 it's in usernoted's own preferences, by bundle
+# id, where bit 25 of an app's flags is Settings' Allow Notifications; ncprefs holds none (#2396).
 kept_answers() {
   python3 -I -c '
 import os, plistlib, sys
@@ -25,15 +25,16 @@ try:
         apps = plistlib.load(f).get("apps", [])
 except (OSError, plistlib.InvalidFileException):
     sys.exit()
-print("; ".join(
-    each["bundle-id"] + (" allowed" if each.get("flags", 0) & 1 << 25 else " not allowed")
-    for each in apps
-    if each.get("bundle-id", "") == sys.argv[1]
-    or each.get("bundle-id", "").startswith(sys.argv[1] + ".framework.")))
-' "$app_id"
+for each in apps:
+    if each.get("bundle-id") in sys.argv[1:]:
+        flags = each.get("flags", 0)
+        print(each["bundle-id"], "allowed" if flags & 1 << 25 else "refused", flags)
+' "$app_id" "$app_id.framework.AlertNotificationService"
 }
 
 notify=
+allowed=0
+kept_note=
 if [ "$(uname)" = Darwin ]; then
   if [ "$(sysctl -n kern.hv_vmm_present)" != 1 ] || ! csrutil status | grep -q disabled; then
     echo "skip: notifications, which presses macOS's banners only in a check VM with System Integrity Protection off."
@@ -43,11 +44,15 @@ if [ "$(uname)" = Darwin ]; then
     codesign --verify --deep --strict --verbose=2 "$app"/Contents/Frameworks/*Framework.framework \
       > "$out/notifications-codesign.txt" 2>&1 ||
       fail "the framework's signature doesn't hold: $(tail -3 "$out/notifications-codesign.txt")"
-    # macOS asks only an app it has no answer for, so a check VM that ran the app before has to
-    # have that answer taken out before this run, or the run can't press Allow (#2396).
+    # macOS asks only an app it has no answer for, and keeps that answer: one that was refused
+    # delivers the page's notifications to no banner, and one that was allowed is asked no more, as
+    # on a VM that ran this check before. The run never changes what macOS keeps, as it runs on
+    # real Macs too; a check VM clears it before the run to be asked as a new app is (#2396).
     kept=$(kept_answers)
-    [ -z "$kept" ] ||
-      fail "macOS keeps an earlier answer for the app's notifications, so it won't ask: $kept"
+    refused=$(echo "$kept" | awk '$2 == "refused" { printf "%s%s, flags %s", sep, $1, $3; sep = "; " }')
+    [ -z "$refused" ] ||
+      fail "macOS keeps an earlier answer for the app's notifications as not allowed: $refused"
+    allowed=$(echo "$kept" | grep -c ' allowed ' || true)
     clang++ -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
       fail "check/banner.mm didn't build: $(cat "$out/banner-build.log")"
     # The hosted runner's image turns Notification Center's agent off, which draws the banners:
@@ -153,6 +158,11 @@ PY
   # app, never Chromium (#2126). The banner's log is in $notes.
   allow() {
     [ "$notify" = mac ] || return 0
+    if [ "$allowed" = 2 ]; then
+      echo "kept: allowed" > "$out/notifications-asked.txt"
+      kept_note=", macOS having kept its answer, allowed, for the app and its alert helper"
+      return
+    fi
     for _ in 1 2; do
       "$out/banner" Notifications Allow >> "$notes" 2>&1 || break
     done
@@ -216,7 +226,8 @@ EOF
       echo "usernoted:"
       log show --last 3m --style compact --predicate \
         'process == "usernoted" OR subsystem == "com.apple.UserNotifications"' 2>&1 | tail -80
-      echo "kept answers: $(kept_answers)"
+      echo "kept answers:"
+      kept_answers
     } > "$out/notifications-macos.txt"
   }
   # Waits for more lines matching $1 in the app's log than the $2 there were, for up to 10 s.
@@ -313,7 +324,7 @@ EOF
       windows) notifier="Windows' toast, as a launch with its id," ;;
       *) notifier="the desktop's notification server" ;;
     esac
-    echo "ok: a click on a site's notification, which $notifier sends through Chromium's bridge, shows its tab's Space and the tab in its window, brought in front of another, whether or not the page's handler focuses it, and a page that does switches once. Window: $out/notification-clicked.png"
+    echo "ok: a click on a site's notification, which $notifier sends through Chromium's bridge, shows its tab's Space and the tab in its window, brought in front of another, whether or not the page's handler focuses it, and a page that does switches once${kept_note}. Window: $out/notification-clicked.png"
   fi
   site_notifications take-back
   kill $buses 2> /dev/null || true
