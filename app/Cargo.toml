@@ -25,6 +25,8 @@ path = "src/bridge.rs"
 prod = []
 
 [dependencies]
+# #2138, not for merge: heap_sites' stacks.
+backtrace = "0.3"
 gpui = { path = ".deps/zed/crates/gpui" }
 gpui_platform = { path = ".deps/zed/crates/gpui_platform", features = ["font-kit", "runtime_shaders"] }
 # The version GPUI decodes with, for a favicon's pixels and the images drawn from them.
@@ -120,3 +122,7 @@ zbus = { version = "5.13", default-features = false, features = ["async-io", "p2
 [patch.crates-io]
 accesskit_macos = { path = ".deps/accesskit_macos" }
 accesskit_atspi_common = { path = ".deps/accesskit_atspi_common" }
+
+# #2138, not for merge: heap_sites' stacks with their files and lines.
+[profile.release]
+debug = "line-tables-only"
