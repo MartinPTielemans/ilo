@@ -84,10 +84,26 @@ index 4ad4cc77b3..48291220e4 100644
              self.end_gesture();
  
 diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
-index 622c1cb604..697ce244f7 100644
+index 622c1cb604..ed6eeaa147 100644
 --- a/crates/gpui_windows/src/directx_atlas.rs
 +++ b/crates/gpui_windows/src/directx_atlas.rs
-@@ -161,17 +161,18 @@ impl DirectXAtlasTextures {
+@@ -107,6 +107,7 @@ impl AtlasBackend for DirectXAtlasTextures {
+ 
+     fn remove(&mut self, tile: AtlasTile) {
+         let id = tile.texture_id;
++        let atlas = self as *const Self;
+ 
+         let textures = match id.kind {
+             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
+@@ -122,6 +123,7 @@ impl AtlasBackend for DirectXAtlasTextures {
+             texture.allocator.deallocate(tile.tile_id.into());
+             texture.decrement_ref_count();
+             if texture.is_unreferenced() {
++                eprintln!("browser: gpu atlas {:p} {:?} freed", atlas, texture.id.kind);
+                 textures.free_list.push(texture.id.index as usize);
+             } else {
+                 *texture_slot = Some(texture);
+@@ -161,17 +163,18 @@ impl DirectXAtlasTextures {
          min_size: Size<DevicePixels>,
          kind: AtlasTextureKind,
      ) -> Option<&mut DirectXAtlasTexture> {
@@ -111,8 +127,24 @@ index 622c1cb604..697ce244f7 100644
          let pixel_format;
          let bind_flag;
          let bytes_per_pixel;
+@@ -216,6 +219,15 @@ impl DirectXAtlasTextures {
+                 .ok()?;
+         }
+         let texture = texture.unwrap();
++        // Proof only (#2317): each atlas texture, by its atlas.
++        eprintln!(
++            "browser: gpu atlas {:p} {:?} {}x{} {} bytes",
++            self as *const Self,
++            kind,
++            size.width.0,
++            size.height.0,
++            size.width.0 as u64 * size.height.0 as u64 * bytes_per_pixel as u64
++        );
+ 
+         let texture_list = match kind {
+             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
-index 98a13f304c..6cfbd572ae 100644
+index 98a13f304c..8407705904 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
 @@ -73,16 +73,36 @@ struct DirectXResources {
@@ -157,7 +189,15 @@ index 98a13f304c..6cfbd572ae 100644
  struct DirectXRenderPipelines {
      shadow_pipeline: PipelineState<Shadow>,
      quad_pipeline: PipelineState<Quad>,
-@@ -409,7 +429,6 @@ impl DirectXRenderer {
+@@ -163,6 +183,7 @@ impl DirectXRenderer {
+         let devices = DirectXRendererDevices::new(directx_devices, disable_direct_composition)
+             .context("Creating DirectX devices")?;
+         let atlas = Arc::new(DirectXAtlas::new(&devices.device, &devices.device_context));
++        eprintln!("browser: gpu renderer {:?} made", hwnd);
+ 
+         let resources = DirectXResources::new(&devices, 1, 1, hwnd, disable_direct_composition)
+             .context("Creating DirectX resources")?;
+@@ -409,7 +430,6 @@ impl DirectXRenderer {
      /// goes through MetalRenderer; this is the Windows analogue). Draws into
      /// the existing render target, copies it into a `D3D11_USAGE_STAGING`
      /// texture, maps it, and converts BGRA to RGBA.
@@ -165,7 +205,19 @@ index 98a13f304c..6cfbd572ae 100644
      pub(crate) fn render_to_image(
          &mut self,
          scene: &Scene,
-@@ -618,16 +637,21 @@ impl DirectXRenderer {
+@@ -516,6 +536,11 @@ impl DirectXRenderer {
+         }
+ 
+         resources.recreate_resources(devices, width, height)?;
++        eprintln!(
++            "browser: gpu swap chain {:?} {}x{} x{} {} bytes",
++            self.hwnd, width, height, BUFFER_COUNT,
++            width as u64 * height as u64 * 4 * BUFFER_COUNT as u64
++        );
+ 
+         unsafe {
+             devices
+@@ -618,16 +643,21 @@ impl DirectXRenderer {
          }
  
          let devices = self.devices.as_ref().context("devices missing")?;
@@ -189,7 +241,7 @@ index 98a13f304c..6cfbd572ae 100644
                  None,
              );
          }
-@@ -660,9 +684,9 @@ impl DirectXRenderer {
+@@ -660,9 +690,9 @@ impl DirectXRenderer {
          // Resolve MSAA to non-MSAA intermediate texture
          unsafe {
              devices.device_context.ResolveSubresource(
@@ -201,7 +253,7 @@ index 98a13f304c..6cfbd572ae 100644
                  0,
                  RENDER_TARGET_FORMAT,
              );
-@@ -704,6 +728,10 @@ impl DirectXRenderer {
+@@ -704,6 +734,10 @@ impl DirectXRenderer {
  
          let devices = self.devices.as_ref().context("devices missing")?;
          let resources = self.resources.as_ref().context("resources missing")?;
@@ -212,7 +264,7 @@ index 98a13f304c..6cfbd572ae 100644
          self.pipelines.path_sprite_pipeline.update_buffer(
              &devices.device,
              &devices.device_context,
-@@ -713,7 +741,7 @@ impl DirectXRenderer {
+@@ -713,7 +747,7 @@ impl DirectXRenderer {
          // Draw the sprites with the path texture
          self.pipelines.path_sprite_pipeline.draw_with_texture(
              &devices.device_context,
@@ -221,7 +273,7 @@ index 98a13f304c..6cfbd572ae 100644
              slice::from_ref(&self.globals.sampler),
              sprites.len() as u32,
          )
-@@ -889,25 +917,15 @@ impl DirectXResources {
+@@ -889,25 +923,15 @@ impl DirectXResources {
              )?
          };
  
@@ -250,7 +302,7 @@ index 98a13f304c..6cfbd572ae 100644
              viewport,
          })
      }
-@@ -919,21 +937,12 @@ impl DirectXResources {
+@@ -919,21 +943,12 @@ impl DirectXResources {
          width: u32,
          height: u32,
      ) -> Result<()> {
@@ -276,7 +328,7 @@ index 98a13f304c..6cfbd572ae 100644
          self.viewport = viewport;
          Ok(())
      }
-@@ -1359,20 +1368,12 @@ fn create_resources(
+@@ -1359,20 +1374,12 @@ fn create_resources(
      width: u32,
      height: u32,
  ) -> Result<(
@@ -297,7 +349,7 @@ index 98a13f304c..6cfbd572ae 100644
      let viewport = D3D11_VIEWPORT {
          TopLeftX: 0.0,
          TopLeftY: 0.0,
-@@ -1381,15 +1382,7 @@ fn create_resources(
+@@ -1381,15 +1388,7 @@ fn create_resources(
          MinDepth: 0.0,
          MaxDepth: 1.0,
      };
