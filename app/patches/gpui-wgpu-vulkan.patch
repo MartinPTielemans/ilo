@@ -88,7 +88,7 @@ index 16d451f008..86c32284ee 100644
              backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
              flags: wgpu::InstanceFlags::default(),
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index a148a4ccfb..c116ec74c6 100644
+index a148a4ccfb..66e4457b3b 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -14,7 +14,7 @@ use std::cell::RefCell;
@@ -391,7 +391,23 @@ index a148a4ccfb..c116ec74c6 100644
      atlas_sampler: wgpu::Sampler,
      atlas_texture_bind_groups: FxHashMap<AtlasTextureId, CachedTextureBindGroup>,
      globals_buffer: wgpu::Buffer,
-@@ -663,7 +904,7 @@ impl WgpuRendererCore {
+@@ -302,9 +543,13 @@ impl WgpuRenderer {
+             .window_handle()
+             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
+ 
++        let display_handle = window
++            .display_handle()
++            .map_err(|e| anyhow::anyhow!("Failed to get display handle: {e}"))?;
++
+         let target = wgpu::SurfaceTargetUnsafe::RawHandle {
+-            // Fall back to the display handle already provided via InstanceDescriptor::display.
+-            raw_display_handle: None,
++            // The window's own display: an instance made before any window has none (#2384).
++            raw_display_handle: Some(display_handle.as_raw()),
+             raw_window_handle: window_handle.as_raw(),
+         };
+ 
+@@ -663,7 +908,7 @@ impl WgpuRendererCore {
  
      fn create_pipelines(
          device: &wgpu::Device,
@@ -400,7 +416,7 @@ index a148a4ccfb..c116ec74c6 100644
          surface_format: wgpu::TextureFormat,
          alpha_mode: wgpu::CompositeAlphaMode,
          path_sample_count: u32,
-@@ -719,221 +960,26 @@ impl WgpuRendererCore {
+@@ -719,221 +964,26 @@ impl WgpuRendererCore {
              _ => wgpu::BlendState::ALPHA_BLENDING,
          };
  
@@ -639,7 +655,7 @@ index a148a4ccfb..c116ec74c6 100644
          }
      }
  
-@@ -1063,19 +1109,42 @@ impl WgpuRenderer {
+@@ -1063,19 +1113,42 @@ impl WgpuRenderer {
          self.surface_config.alpha_mode = new_alpha_mode;
          let format = self.surface_config.format;
  
@@ -691,7 +707,7 @@ index a148a4ccfb..c116ec74c6 100644
  
          if let RendererState::Ready { surface, core } = &self.state {
              surface.configure(&core.resources.device, &self.surface_config);
-@@ -1206,6 +1275,39 @@ impl WgpuRenderer {
+@@ -1206,6 +1279,39 @@ impl WgpuRenderer {
      }
  }
  
@@ -731,7 +747,7 @@ index a148a4ccfb..c116ec74c6 100644
  impl WgpuRendererCore {
      fn new(
          context: &WgpuContext,
-@@ -1219,14 +1321,17 @@ impl WgpuRendererCore {
+@@ -1219,14 +1325,17 @@ impl WgpuRendererCore {
          let uses_webgl_instance_data = context.uses_webgl_instance_data();
          let dual_source_blending =
              context.supports_dual_source_blending() && !uses_webgl_instance_data;
@@ -755,7 +771,7 @@ index a148a4ccfb..c116ec74c6 100644
              uses_webgl_instance_data,
          );
          let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-@@ -1519,13 +1624,13 @@ impl WgpuRendererCore {
+@@ -1519,13 +1628,13 @@ impl WgpuRendererCore {
                  match batch {
                      PrimitiveBatch::Quads(range) => self.draw_instances(
                          &instance_bindings.quads,
@@ -771,7 +787,7 @@ index a148a4ccfb..c116ec74c6 100644
                          instance_range(range),
                          &mut pass,
                      ),
-@@ -1567,7 +1672,7 @@ impl WgpuRendererCore {
+@@ -1567,7 +1676,7 @@ impl WgpuRendererCore {
                      }
                      PrimitiveBatch::Underlines(range) => self.draw_instances(
                          &instance_bindings.underlines,
@@ -780,7 +796,7 @@ index a148a4ccfb..c116ec74c6 100644
                          instance_range(range),
                          &mut pass,
                      ),
-@@ -1575,7 +1680,7 @@ impl WgpuRendererCore {
+@@ -1575,7 +1684,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.monochrome_sprites,
                              texture_id,
@@ -789,7 +805,7 @@ index a148a4ccfb..c116ec74c6 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1585,11 +1690,7 @@ impl WgpuRendererCore {
+@@ -1585,11 +1694,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.subpixel_sprites,
                              texture_id,
@@ -802,7 +818,7 @@ index a148a4ccfb..c116ec74c6 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1598,7 +1699,7 @@ impl WgpuRendererCore {
+@@ -1598,7 +1703,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.polychrome_sprites,
                              texture_id,
@@ -811,7 +827,7 @@ index a148a4ccfb..c116ec74c6 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1816,7 +1917,7 @@ impl WgpuRendererCore {
+@@ -1816,7 +1921,7 @@ impl WgpuRendererCore {
              &path_intermediate_view,
          );
          let resources = self.resources();
@@ -820,7 +836,7 @@ index a148a4ccfb..c116ec74c6 100644
          pass.set_bind_group(0, &resources.globals_bind_group, &[]);
          pass.set_bind_group(1, &instances.bind_group, &[]);
          pass.set_bind_group(2, &texture, &[]);
-@@ -1881,7 +1982,7 @@ impl WgpuRendererCore {
+@@ -1881,7 +1986,7 @@ impl WgpuRendererCore {
                  ..Default::default()
              });
  
@@ -829,7 +845,56 @@ index a148a4ccfb..c116ec74c6 100644
              pass.set_bind_group(0, &resources.path_globals_bind_group, &[]);
              pass.set_bind_group(1, &vertex_binding.bind_group, &[]);
              // The path rasterization shader loads records by vertex index
-@@ -2411,109 +2512,117 @@ impl WgpuHeadlessRenderer {
+@@ -2129,17 +2234,13 @@ impl WgpuRenderer {
+     /// different instance will cause a "Device does not exist" panic because
+     /// the wgpu device is bound to its originating instance.
+     #[cfg(not(target_family = "wasm"))]
+-    pub fn replace_surface<W: HasWindowHandle>(
++    pub fn replace_surface<W: HasWindowHandle + HasDisplayHandle>(
+         &mut self,
+         window: &W,
+         config: WgpuSurfaceConfig,
+         instance: &wgpu::Instance,
+     ) -> anyhow::Result<()> {
+-        let window_handle = window
+-            .window_handle()
+-            .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
+-
+-        let surface = create_surface(instance, window_handle.as_raw())?;
++        let surface = create_surface(instance, window)?;
+ 
+         let width = (config.size.width.0 as u32).max(1);
+         let height = (config.size.height.0 as u32).max(1);
+@@ -2214,10 +2315,6 @@ impl WgpuRenderer {
+             .as_ref()
+             .is_none_or(|ctx| ctx.device_lost());
+ 
+-        let window_handle = window
+-            .window_handle()
+-            .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
+-
+         let surface = if needs_new_context {
+             log::warn!("GPU device lost, recreating context...");
+ 
+@@ -2232,7 +2329,7 @@ impl WgpuRenderer {
+             std::thread::sleep(std::time::Duration::from_millis(350));
+ 
+             let instance = WgpuContext::instance(Some(Box::new(window.clone())));
+-            let surface = create_surface(&instance, window_handle.as_raw())?;
++            let surface = create_surface(&instance, window)?;
+             let new_context =
+                 WgpuContext::new_rejecting_software(instance, &surface, self.compositor_gpu)?;
+             *gpu_context.borrow_mut() = Some(new_context);
+@@ -2240,7 +2337,7 @@ impl WgpuRenderer {
+         } else {
+             let ctx_ref = gpu_context.borrow();
+             let instance = &ctx_ref.as_ref().unwrap().instance;
+-            create_surface(instance, window_handle.as_raw())?
++            create_surface(instance, window)?
+         };
+ 
+         let config = WgpuSurfaceConfig {
+@@ -2411,109 +2508,117 @@ impl WgpuHeadlessRenderer {
              .render_target
              .as_ref()
              .ok_or_else(|| anyhow::anyhow!("Headless render target was not created"))?;
@@ -1043,3 +1108,28 @@ index a148a4ccfb..c116ec74c6 100644
  }
  
  #[cfg(all(
+@@ -2546,14 +2651,20 @@ fn instance_range(range: Range<usize>) -> Range<u32> {
+ #[cfg(not(target_family = "wasm"))]
+ fn create_surface(
+     instance: &wgpu::Instance,
+-    raw_window_handle: raw_window_handle::RawWindowHandle,
++    window: &(impl HasWindowHandle + HasDisplayHandle),
+ ) -> anyhow::Result<wgpu::Surface<'static>> {
++    let window_handle = window
++        .window_handle()
++        .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
++    let display_handle = window
++        .display_handle()
++        .map_err(|e| anyhow::anyhow!("Failed to get display handle: {e}"))?;
+     unsafe {
+         instance
+             .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+-                // Fall back to the display handle already provided via InstanceDescriptor::display.
+-                raw_display_handle: None,
+-                raw_window_handle,
++                // The window's own display: an instance made before any window has none (#2384).
++                raw_display_handle: Some(display_handle.as_raw()),
++                raw_window_handle: window_handle.as_raw(),
+             })
+             .map_err(|e| anyhow::anyhow!("{e}"))
+     }

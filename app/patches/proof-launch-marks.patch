@@ -188,7 +188,7 @@ index 86c32284ee..8df9d07bf4 100644
                          "Selected GPU (passed configuration test): {} ({:?})",
                          info.name,
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index c116ec74c6..e791435262 100644
+index 66e4457b3b..c9a75bb2a4 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -405,6 +405,7 @@ impl PipelineCache {
@@ -215,7 +215,7 @@ index c116ec74c6..e791435262 100644
          let window_handle = window
              .window_handle()
              .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
-@@ -557,6 +560,7 @@ impl WgpuRenderer {
+@@ -561,6 +564,7 @@ impl WgpuRenderer {
              .as_ref()
              .map(|ctx| ctx.instance.clone())
              .unwrap_or_else(|| WgpuContext::instance(Some(Box::new(window.clone()))));
@@ -223,7 +223,7 @@ index c116ec74c6..e791435262 100644
  
          // Safety: The caller guarantees that the window handle is valid for the
          // lifetime of this renderer. In practice, the RawWindow struct is created
-@@ -567,6 +571,7 @@ impl WgpuRenderer {
+@@ -571,6 +575,7 @@ impl WgpuRenderer {
                  .map_err(|e| anyhow::anyhow!("Failed to create surface: {e}"))?
          };
  
@@ -231,7 +231,7 @@ index c116ec74c6..e791435262 100644
          let mut ctx_ref = gpu_context.borrow_mut();
          let context = match ctx_ref.as_mut() {
              Some(context) => {
-@@ -577,15 +582,18 @@ impl WgpuRenderer {
+@@ -581,15 +586,18 @@ impl WgpuRenderer {
          };
  
          let atlas = Arc::new(WgpuAtlas::from_context(context));
