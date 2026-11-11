@@ -122,7 +122,9 @@ pub(crate) fn save_launch_picture(cx: &mut App) {
     // A launch that doesn't bring the windows back shows their Spaces without Today tabs, so a
     // picture of this sidebar would show tabs that aren't there. Without one it shows the plain
     // window, as a new profile's first launch does.
-    if !unsafe { bc::bc_restore_windows() } {
+    // The hosts take and show the column at the window's left, so with the sidebar on the right
+    // the launch shows the plain window too.
+    if !unsafe { bc::bc_restore_windows() } || browser::shell::sidebar_right(cx) {
         forget_launch_pictures();
         log!("browser: launch picture not taken");
         return;

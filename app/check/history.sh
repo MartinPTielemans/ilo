@@ -2,9 +2,10 @@
 # the header's buttons, which dim with nowhere to go, and from a swipe over the page. Reload loads
 # the page again, and while a page loads, reload is stop, which ⌘., escape and the button do. A
 # tab's row shows its page's favicon, and keeps it until the next page has loaded without one. A
-# host typed in the command bar goes over https first, then http, and a local one over http. A
-# right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, the last deleting
-# the site's cookies, storage and cache, not another site's, before the page loads again.
+# host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
+# warning before http, and a local one over http. A right-click on reload lists Reload, Hard Reload
+# and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache, not
+# another site's, before the page loads again.
 
 # Back, forward, reload and stop. stuck.test leads to a server that takes connections and never
 # answers, so its page keeps loading until it's stopped, and $plain to the check's own, which has no
@@ -137,21 +138,41 @@ EOF
   expect_page example.org 1 0 "after $what stopped the load"
 done
 
-# A host typed without a scheme goes over https first, and over http once https fails; a local one
-# goes over http at once. The check's server answers a TLS handshake as a bad request.
+# A host typed without a scheme goes over https first; a local one goes over http at once. Once
+# https fails, Chromium 156 falls back to http, and from 157, whose HTTPS-First balanced mode is on
+# by default, Chrome's "Connection is not secure" warning comes instead, at the http address, with
+# ERR_BLOCKED_BY_CLIENT, until the user continues to the site. The check's server answers a TLS
+# handshake as a bad request.
 tls() {
   grep -a -c 'code 400, message Bad request' "$out/site.log" || true
 }
+await '^browser: settings about Version .*, on Chromium [0-9]' ||
+  fail "the engine's version wasn't said"
+major=$(sed -n 's/^browser: settings about .*on Chromium \([0-9]*\)\..*/\1/p' "$log" | head -1)
 before=$(tls)
 go_from_bar "$plain"
 expect "^browser: page $tab back 1 forward 0 loading 0 http://$plain/\$" \
-  "$plain didn't come over http: $(grep "^browser: page $tab" "$log" | tail -1)"
-# The page itself, not a warning before it: Chrome's HTTPS-First warning keeps the http address.
-expect "^browser: loaded $tab http://$plain/\$" \
-  "$plain's own page didn't load over http: $(grep "^browser: loaded $tab" "$log" | tail -1)"
-[ "$(tls)" -gt "$before" ] || fail "$plain came over http without trying https first"
+  "$plain didn't come to its http address: $(grep "^browser: page $tab" "$log" | tail -1)"
+if [ "$major" -ge 157 ]; then
+  expect "^browser: page $tab trouble network -20\$" \
+    "$plain had no warning before http: $(grep "^browser: loaded $tab" "$log" | tail -1)"
+  expect "^browser: loaded $tab chrome-error://chromewebdata/\$" \
+    "the warning before http didn't load"
+else
+  expect "^browser: loaded $tab http://$plain/\$" \
+    "$plain's own page didn't load over http: $(grep "^browser: loaded $tab" "$log" | tail -1)"
+fi
+[ "$(tls)" -gt "$before" ] || fail "$plain came to http without trying https first"
 before=$(tls)
-go_from_bar "$nearby:$port"
+# go_from_bar's steps, with a ⌘L of its own to name: under Wayland, ⌘L on Chrome's warning with the
+# keyboard in the page doesn't open the command bar (#2416, quarantined on that failure alone).
+page="$plain's page"
+[ "$major" -lt 157 ] || page="Chrome's warning before http"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L on $page didn't open the command bar"
+send type "$nearby:$port"
+send key return
+expect '^browser: command bar hidden$' "going to $nearby:$port didn't close the command bar"
 expect "^browser: page $tab back 1 forward 0 loading 0 http://$nearby:$port/\$" \
   "$nearby:$port didn't come over http: $(grep "^browser: page $tab" "$log" | tail -1)"
 [ "$(tls)" = "$before" ] || fail "$nearby:$port was tried over https"
@@ -241,4 +262,4 @@ stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's
 exec 3>&-
 quit
 kill "$stuck"
-echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and falls back to http, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
+echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"

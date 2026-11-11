@@ -12,7 +12,10 @@
 #
 # - Launch to the page painted, 5 times, with BROWSER_URL, as a link from another app opens it.
 # - Launch to the restored page painted, 5 times, with no URL, its last tab put back.
-# - The window on screen, as each of those 10 launches logged it.
+# - The first window on screen, as each of those 10 launches logged it: the launch window, on the
+#   Mac and Windows, which shows the last sidebar where the browser window will open before the
+#   browser starts, as #242 and Ardia's method time it; on Linux, which has none, the browser window.
+#   The browser window on screen too, a row of its own.
 # - Then one session, as Ardia's: memory at 1 tab, 30 s after launch; idle CPU and wakeups over
 #   the minute after, and again 2 minutes after the page loaded (settled); 19 new tabs opened from
 #   ⌘T's bar, ↩ to their page painted; memory at 10 and 20 tabs, 10 s and 15 s after; idle at 20
@@ -180,7 +183,8 @@ perf_stamp
 clock=$((stamp - clock))
 
 # Launches the app, on page $1 or with none to put back the last, and waits for page $2 to paint:
-# sets $painted to the ms from just before the launch, and $on_screen to the window's time.
+# sets $painted to the ms from just before the launch, $on_screen to the first window's time, and
+# $browser_on_screen to the browser window's.
 perf_launch() {
   log="$perf_dir/launch-$3.log"
   perf_stamp
@@ -201,7 +205,12 @@ perf_launch() {
   done
   [ "${fcp:-0}" -gt "$launched" ] || fail "launch $3's page $2 didn't paint"
   painted=$((fcp - launched))
-  on_screen=$(sed -n 's/^browser: window on screen at \([0-9.]*\) ms$/\1/p' "$log" | head -1)
+  browser_on_screen=$(sed -n 's/^browser: window on screen at \([0-9.]*\) ms$/\1/p' "$log" | head -1)
+  # Linux logs the launch window's line with no window behind it (platform/linux/host.cc).
+  on_screen=$browser_on_screen
+  if [ "$(uname)" = Darwin ] || windows; then
+    on_screen=$(sed -n 's/^browser: launch window at \([0-9.]*\) ms$/\1/p' "$log" | head -1)
+  fi
   # The core holds a launch's first page until uBlock Origin is ready (core/ad_block.cc).
   held=$(sed -n 's/^.*browser: ad blocking held a page \([0-9]*\) ms.*$/\1/p' "$log" | head -1)
   quit
@@ -209,6 +218,7 @@ perf_launch() {
 : > "$perf_dir/link"
 : > "$perf_dir/restore"
 : > "$perf_dir/on-screen"
+: > "$perf_dir/browser-on-screen"
 : > "$perf_dir/held"
 # The first launch makes the profile, which the others find, as a user's, so it isn't counted.
 perf_launch "$page?warm" warm warm
@@ -217,18 +227,22 @@ for n in 1 2 3 4 5; do
   perf_launch "$page?link$n" "link$n" "link$n"
   echo "$painted" >> "$perf_dir/link"
   echo "$on_screen" >> "$perf_dir/on-screen"
+  echo "$browser_on_screen" >> "$perf_dir/browser-on-screen"
   echo "${held:-0}" >> "$perf_dir/held"
 done
 for n in 1 2 3 4 5; do
   perf_launch "" link5 "restore$n"
   echo "$painted" >> "$perf_dir/restore"
   echo "$on_screen" >> "$perf_dir/on-screen"
+  echo "$browser_on_screen" >> "$perf_dir/browser-on-screen"
   echo "${held:-0}" >> "$perf_dir/held"
 done
 perf_row launch-link "Launch, link to page painted" "$(perf_stats '%.0f' < "$perf_dir/link") ms" \
   "Ardia 413 ms, Chrome 484 ms"
 perf_row launch-window "Launch, window on screen" "$(perf_stats '%.0f' < "$perf_dir/on-screen") ms" \
   "Ardia 280 ms, Chrome 424 ms (gate: ≤ Chrome)"
+perf_row launch-browser-window "Launch, browser window on screen" \
+  "$(perf_stats '%.0f' < "$perf_dir/browser-on-screen") ms" "none: on Linux it's the row above"
 perf_row launch-restore "Launch, restored page painted" \
   "$(perf_stats '%.0f' < "$perf_dir/restore") ms" "Ardia 360 ms, Helium 355 ms, Chrome 438 ms"
 perf_row launch-held "Launch, the page held for uBlock Origin" \
