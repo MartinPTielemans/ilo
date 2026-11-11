@@ -553,10 +553,10 @@ chrome_launch() {
     $([ -z "$chrome_at" ] || echo "--window-position=${chrome_at% *},${chrome_at#* }" \
       --window-size=1280,800) "$@" "$chrome_url" < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
   pid=$!
-  # Its port, then the browser's path, once DevTools listens, which a runner's first launch of it,
-  # from a cold disk, took 15.5 s to (#2385).
+  # Its port, then the browser's path, with no newline after, once DevTools listens, which a
+  # runner's first launch of it, from a cold disk, took 15.5 s to (#2385).
   tries=0
-  until [ "$(wc -l < "$chrome_dir/DevToolsActivePort" 2> /dev/null || echo 0)" -ge 2 ]; do
+  until grep -q '^/devtools/browser/' "$chrome_dir/DevToolsActivePort" 2> /dev/null; do
     kill -0 "$pid" 2> /dev/null || return 1
     tries=$((tries + 1))
     [ "$tries" -le 600 ] || fail "Chrome's DevTools didn't listen within 60 s of its launch"
