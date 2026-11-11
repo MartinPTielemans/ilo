@@ -4736,13 +4736,13 @@ void host_set_sidebar_right(void* ui_view, bool right) {
   }
   objc_setAssociatedObject(window, &kSidebarRight, right ? @YES : nil,
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-  // AppKit places the buttons as it lays the title bar out, which it does again once asked.
+  // AppKit places the buttons as the window's frame view changes size, and not when its layout is
+  // only marked or the style mask set again (check/titlebar-right.sh on a hosted Mac, run
+  // 42943383202), so the frame view grows by a point and back. The window's frame stays as it is.
   NSView* frame = window.contentView.superview;
-  NSView* titlebar = [window standardWindowButton:NSWindowCloseButton].superview;
-  for (NSView* view : {frame, titlebar}) {
-    view.needsLayout = YES;
-  }
-  [frame layoutSubtreeIfNeeded];
+  const NSSize size = frame.frame.size;
+  [frame setFrameSize:NSMakeSize(size.width + 1, size.height)];
+  [frame setFrameSize:size];
   if (browser->reveal_monitor) {
     PlaceReveal(browser);
   }
