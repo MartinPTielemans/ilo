@@ -33,6 +33,10 @@
 # process of its own, so each time from a key includes one process start, which the run says.
 
 serve
+# Windows turns the display off after the runner's idle minutes, which DevTools' input never resets
+# as the driver's does, and Chrome then takes its window as hidden, whose new tab reports no paint
+# (#2385), so the display stays on.
+! windows || powercfg -change -monitor-timeout-ac 0 || echo "perf: the display's timeout stays"
 perf_dir="$out/perf"
 rm -rf "$perf_dir"
 mkdir -p "$perf_dir"
