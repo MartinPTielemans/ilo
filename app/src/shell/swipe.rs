@@ -388,7 +388,7 @@ impl Shell {
         let still = ScrollDelta::Pixels(Point::default());
         if cut.lifted {
             self.web_undecided = None;
-            self.scroll_at(&phase(TouchPhase::Ended, still), at, window, cx);
+            self.web_lift(&phase(TouchPhase::Ended, still), at, window, cx);
         }
         if cut.landed {
             self.web_undecided = Some(Point::default());
@@ -435,7 +435,29 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if self.web_wheel.quiet(now) {
-            self.scroll_at(lift, now, window, cx);
+            self.web_lift(lift, now, window, cx);
+        }
+    }
+
+    /// The fingers lifted, as a browser's wheel events tell some events after they did: by then
+    /// their momentum has moved the page on, as the app's settle would have, so the settle keeps no
+    /// more of their speed than lands it without passing its place. Their full speed still says
+    /// which Space it lands on.
+    fn web_lift(
+        &mut self,
+        lift: &ScrollEvent,
+        at: Instant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.settle.as_ref().map(|settle| settle.start);
+        self.scroll_at(lift, at, window, cx);
+        if let Some(settle) = self
+            .settle
+            .as_mut()
+            .filter(|settle| Some(settle.start) != before)
+        {
+            settle.spend();
         }
     }
 
