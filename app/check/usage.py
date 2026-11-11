@@ -10,9 +10,12 @@ every process of the browser.
   usage.py idle-kinds A B     prints the CPU from snapshot A to B by kind of process, the most first
   usage.py idle FILE...      prints each window's CPU, % of one core, and wakeups a second, from
                              each snapshot to the next, as "cpu wakeups" a line
+  usage.py power A B         prints the mW the processes used from snapshot A to B, on the Mac
 
 On the Mac it's proc_pid_rusage's: phys_footprint, user and system time, and package idle and
-interrupt wakeups, as Ardia's acperf.swift reads them. Linux has no wakeup count, so it's each
+interrupt wakeups, as Ardia's acperf.swift reads them, and each process's energy in nJ, which
+macOS 12's flavor 6 (ri_energy_nj) counts for the process's CPUs, not its GPU's or the display's,
+as no tool reads those without root (powermetrics). Linux has no wakeup count, so it's each
 thread's context switches, and memory is RssAnon and VmSwap, Chromium's private footprint there.
 On Windows it's NtQuerySystemInformation's processes: PagefileUsage (private bytes, Chromium's
 footprint there), user and kernel time, and each thread's context switches. Context switches count
@@ -50,6 +53,20 @@ def mac(procs, kinds):
                          "wired", "resident", "footprint", "start", "exit")
         ]
 
+    # rusage_info_v6, to ri_energy_nj, then room for what a later macOS adds after it.
+    v6 = ["user", "system", "idle_wakeups", "interrupt_wakeups", "pageins", "wired", "resident",
+          "footprint", "start", "exit", "child_user", "child_system", "child_idle_wakeups",
+          "child_interrupt_wakeups", "child_pageins", "child_elapsed", "read", "written",
+          "qos_default", "qos_maintenance", "qos_background", "qos_utility", "qos_legacy",
+          "qos_user_initiated", "qos_user_interactive", "billed_system", "serviced_system",
+          "logical_writes", "max_footprint", "instructions", "cycles", "billed_energy",
+          "serviced_energy", "interval_max_footprint", "runnable", "flags", "user_ptime",
+          "system_ptime", "pinstructions", "pcycles", "energy_nj", "penergy_nj"]
+
+    class RusageV6(ctypes.Structure):
+        _fields_ = [("uuid", ctypes.c_uint8 * 16)] + [(name, ctypes.c_uint64) for name in v6] + [
+            ("rest", ctypes.c_uint64 * 32)]
+
     timebase = Timebase()
     lib.mach_timebase_info(ctypes.byref(timebase))
     seen = {}
@@ -64,7 +81,14 @@ def mac(procs, kinds):
         ns = (info.user + info.system) * timebase.numer / timebase.denom
         seen[pid] = [kind_of(args), ns / 1e9, info.idle_wakeups + info.interrupt_wakeups,
                      info.footprint]
+        energy = RusageV6()
+        if lib.proc_pid_rusage(int(pid), 6, ctypes.byref(energy)) == 0:
+            energies[pid] = energy.energy_nj
     return seen
+
+
+# Each process's energy in nJ by its pid, on the Mac, which mac() fills.
+energies = {}
 
 
 def linux(procs, kinds):
@@ -166,7 +190,7 @@ def main():
         taker = {"darwin": mac, "win32": windows}.get(sys.platform, linux)
         seen = taker(procs, sys.argv[4:] == ["kinds"])
         with open(path, "w") as f:
-            json.dump({"time": time.time(), "procs": seen}, f)
+            json.dump({"time": time.time(), "procs": seen, "energy": energies}, f)
     elif command == "memory":
         seen = read(sys.argv[2])["procs"]
         print(f"{sum(p[3] for p in seen.values()) / 1048576:.0f} {len(seen)}")
@@ -193,6 +217,13 @@ def main():
                 cpu += max(now[1] - was[1], 0)
                 wakeups += max(now[2] - was[2], 0)
             print(f"{cpu * 100 / secs:.3f} {wakeups / secs:.2f}")
+    elif command == "power":
+        a, b = read(sys.argv[2]), read(sys.argv[3])
+        if not b.get("energy"):
+            sys.exit("usage.py: the snapshots have no energy, which only the Mac's have")
+        secs = b["time"] - a["time"]
+        nj = sum(max(now - a["energy"].get(pid, 0), 0) for pid, now in b["energy"].items())
+        print(f"{nj / 1e6 / secs:.2f}")
     else:
         sys.exit(f"usage.py: no command {command}")
 
