@@ -195,6 +195,18 @@ fn a_store_copy_says_the_store_updates_it(cx: &mut TestAppContext) {
     assert!(about.asked().is_empty());
 }
 
+/// The native Linux install says its line updates it, with no button, as nothing in ilo can.
+#[gpui::test]
+fn an_install_sh_copy_says_to_run_it_again(cx: &mut TestAppContext) {
+    let mut about = shown(Updater::Script, cx);
+    assert_eq!(
+        about.reads(),
+        (Some("Run install.sh again to update".into()), None)
+    );
+    about.cx.update(|_, cx| act(Action::Check, cx));
+    assert!(about.asked().is_empty());
+}
+
 /// A dev build has no updater, so the row is the version alone, as it was.
 #[gpui::test]
 fn a_dev_build_has_no_button(cx: &mut TestAppContext) {
@@ -429,6 +441,7 @@ fn only_a_copy_with_a_nightly_feed_offers_it(_: &mut TestAppContext) {
     let cases = [
         (Updater::Own, None),
         (Updater::Store, Some(Track::Release)),
+        (Updater::Script, Some(Track::Release)),
         (Updater::None, Some(Track::Release)),
     ];
     for (updater, followed) in cases {

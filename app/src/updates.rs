@@ -28,6 +28,8 @@ pub enum Updater {
     None,
     /// The Microsoft Store, which updates a copy installed from it.
     Store,
+    /// install.sh, whose line run again updates the native Linux install it made (#2453).
+    Script,
     /// ilo's own: Sparkle, Windows' (platform/windows/updates.cc) or Flatpak's portal.
     Own,
 }
@@ -443,6 +445,9 @@ pub fn words(
                 Some(concat!("The Microsoft Store updates ", env!("APP_NAME")).into()),
                 None,
             );
+        }
+        Updater::Script => {
+            return (Some("Run install.sh again to update".into()), None);
         }
         Updater::Own => {}
     }

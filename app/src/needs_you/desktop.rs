@@ -15,8 +15,19 @@ const PORTAL_NOTIFICATION: &str = "org.freedesktop.portal.Notification";
 /// The portal's default action, which isn't the app's own (`app.`), so its click comes back as
 /// ActionInvoked rather than as a D-Bus activation the browser doesn't take.
 const OPEN: &str = "open";
-/// The desktop entry the desktop knows ilo by (branding/id), for the notification's icon and name.
+/// The Flatpak's desktop entry (branding/id), which main.rs names in CHROME_DESKTOP unless the
+/// native install's launcher named its own.
 const APP_ID: &str = include_str!("../../branding/id").trim_ascii();
+
+/// The desktop entry the desktop knows ilo by, for the notification's icon and name: the one
+/// CHROME_DESKTOP names, as the windows are, without its ".desktop".
+fn desktop_entry() -> String {
+    let named = std::env::var("CHROME_DESKTOP").unwrap_or_default();
+    match named.strip_suffix(".desktop") {
+        Some(entry) if !entry.is_empty() => entry.to_string(),
+        _ => APP_ID.to_string(),
+    }
+}
 
 /// The notifications' way to the desktop.
 #[derive(Clone)]
@@ -95,8 +106,9 @@ impl Desktop {
                 .await?;
             return Ok(());
         }
+        let entry = desktop_entry();
         let hints: HashMap<&str, Value> = HashMap::from([
-            ("desktop-entry", Value::from(APP_ID)),
+            ("desktop-entry", Value::from(entry.as_str())),
             ("suppress-sound", Value::from(true)),
             ("urgency", Value::from(1u8)),
         ]);
@@ -112,7 +124,7 @@ impl Desktop {
                 &(
                     env!("APP_NAME"),
                     0u32,
-                    APP_ID,
+                    entry.as_str(),
                     title,
                     body,
                     actions,
