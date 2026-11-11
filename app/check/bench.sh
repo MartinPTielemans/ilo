@@ -149,11 +149,14 @@ done || echo unknown)
 chrome_version=$("$CHECK_CHROME" --version 2> /dev/null || echo unknown)
 echo "bench: ilo $ilo_version on Chromium $engine_version, beside $chrome_version"
 
-# The app, on page $1 with the driver, in the bench's own profile.
+# The app, on page $1 with the driver, in a profile of the bench's own made for each launch: the app
+# brings back the tabs before, whose titles would give the last run's score at once, and a Speedometer
+# tab brought back would run again under power's.
 ilo_profile="$bench_dir/ilo-profile"
-mkdir -p "$ilo_profile"
 step=0
 ilo_launch() {
+  rm -rf "$ilo_profile"
+  mkdir -p "$ilo_profile"
   log="$bench_dir/ilo-$2.log"
   step=0
   BROWSER_DRIVE=1 BROWSER_URL="$1" BROWSER_PROFILE_DIR="$ilo_profile" "$browser" \
@@ -241,7 +244,8 @@ chrome_display=$(display_bounds)
 chrome_at=$(echo "$chrome_display" | awk '{ print $1 + 40 "," $2 + 40 }')
 bench_chrome() {
   log="$bench_dir/chrome-$2.log"
-  rm -f "$chrome_dir/DevToolsActivePort"
+  # A profile of its own each launch too, as the app's.
+  rm -rf "$chrome_dir"
   "$CHECK_CHROME" --user-data-dir="$chrome_dir" --no-first-run --no-default-browser-check \
     --use-mock-keychain --password-store=basic --remote-debugging-port=0 \
     --window-position="$chrome_at" --window-size=1280,800 "$1" \
