@@ -589,15 +589,19 @@ recorded() {
   fail "the window's recording didn't finish: $said"
 }
 # GitHub's hosted Mac starts a recording and never gets its first frame, ReplayKit's -5822 (#1108),
-# so there the run goes on without it, saying so. Anywhere else a recording that started and then
-# failed fails the run.
+# and a check VM's guest stops a stream partway through, ScreenCaptureKit's -3821 (#2396). The
+# motion can't be taken again once it's driven, so the run goes on without the video, saying so.
+# Any other recording that started and then failed fails the run.
 unrecorded() {
   said=$(tail -1 "${recording%.mp4}-record.log")
+  stopped=$(grep '^the stream ended by itself.*Code=-3821 ' "${recording%.mp4}-record.log" | tail -1)
   case "${GITHUB_ACTIONS:-}: $said" in
-  true:*Code=-5822*) ;;
-  *) return 1 ;;
+  true:*Code=-5822*)
+    echo "skip: recording $(basename "$recording" .mp4), as the hosted Mac's recording got no first frame: $said" ;;
+  *)
+    [ -n "$stopped" ] || return 1
+    echo "skip: recording $(basename "$recording" .mp4), as the system stopped it: $stopped" ;;
   esac
-  echo "skip: recording $(basename "$recording" .mp4), as the hosted Mac's recording got no first frame: $said"
   recording=""
 }
 # The driver's clicks come with no move, and one in the sidebar tells it the pointer is there, so
