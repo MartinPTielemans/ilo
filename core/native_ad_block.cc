@@ -488,7 +488,9 @@ class LetThrough : public base::SupportsUserData::Data {
     return *through;
   }
 
-  void Let(const std::string& host) { until_[host] = base::TimeTicks::Now() + kLetThrough; }
+  void Let(std::string_view host) {
+    until_[std::string(host)] = base::TimeTicks::Now() + kLetThrough;
+  }
 
   // Whether |host|, or a domain it's under, is let through.
   bool Lets(std::string_view host) {
