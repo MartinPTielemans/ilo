@@ -43,7 +43,7 @@ index 16d451f008..bb3d226cf2 100644
          Ok(PreparedWebGraphics { context, surface })
      }
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index a148a4ccfb..c116ec74c6 100644
+index a148a4ccfb..58b21c5021 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -14,7 +14,7 @@ use std::cell::RefCell;
@@ -55,7 +55,7 @@ index a148a4ccfb..c116ec74c6 100644
  
  const MAX_INSTANCE_BUFFER_SIZE: u64 = 256 * 1024 * 1024;
  
-@@ -123,17 +123,197 @@ pub struct WgpuSurfaceConfig {
+@@ -123,17 +123,221 @@ pub struct WgpuSurfaceConfig {
      pub preferred_present_mode: Option<wgpu::PresentMode>,
  }
  
@@ -113,8 +113,25 @@ index a148a4ccfb..c116ec74c6 100644
 +            });
 +        let vs_entry = format!("vs_{entry}");
 +        let fs_entry = format!("fs_{entry}");
++        fn rss_anon_kib() -> i64 {
++            std::fs::read_to_string("/proc/self/status")
++                .ok()
++                .and_then(|status| {
++                    status.lines().find_map(|line| {
++                        line.strip_prefix("RssAnon:")?
++                            .trim()
++                            .trim_end_matches(" kB")
++                            .trim()
++                            .parse()
++                            .ok()
++                    })
++                })
++                .unwrap_or(-1)
++        }
++        let rss_before = rss_anon_kib();
++        let started = std::time::Instant::now();
 +
-+        self.device
++        let pipeline = self.device
 +            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 +                label: Some(name),
 +                layout: Some(&pipeline_layout),
@@ -147,7 +164,14 @@ index a148a4ccfb..c116ec74c6 100644
 +                },
 +                multiview_mask: None,
 +                cache: None,
-+            })
++            });
++        eprintln!(
++            "browser: gpu pipeline {name} built in {} ms, RssAnon {} -> {} KiB",
++            started.elapsed().as_millis(),
++            rss_before,
++            rss_anon_kib()
++        );
++        pipeline
 +    }
 +
 +    /// An instanced pipeline that draws to the window with its blend.
@@ -263,7 +287,7 @@ index a148a4ccfb..c116ec74c6 100644
  }
  
  /// One frame allocation of instance data, ready to bind.
-@@ -160,6 +340,7 @@ struct WgpuBindGroupLayouts {
+@@ -160,6 +364,7 @@ struct WgpuBindGroupLayouts {
      globals: wgpu::BindGroupLayout,
      instances: wgpu::BindGroupLayout,
      texture: wgpu::BindGroupLayout,
@@ -271,7 +295,7 @@ index a148a4ccfb..c116ec74c6 100644
      surfaces: wgpu::BindGroupLayout,
  }
  
-@@ -178,12 +359,72 @@ enum InstanceData {
+@@ -178,12 +383,72 @@ enum InstanceData {
      },
  }
  
@@ -346,7 +370,7 @@ index a148a4ccfb..c116ec74c6 100644
      atlas_sampler: wgpu::Sampler,
      atlas_texture_bind_groups: FxHashMap<AtlasTextureId, CachedTextureBindGroup>,
      globals_buffer: wgpu::Buffer,
-@@ -663,7 +904,7 @@ impl WgpuRendererCore {
+@@ -663,13 +928,14 @@ impl WgpuRendererCore {
  
      fn create_pipelines(
          device: &wgpu::Device,
@@ -355,7 +379,14 @@ index a148a4ccfb..c116ec74c6 100644
          surface_format: wgpu::TextureFormat,
          alpha_mode: wgpu::CompositeAlphaMode,
          path_sample_count: u32,
-@@ -719,221 +960,26 @@ impl WgpuRendererCore {
+         dual_source_blending: bool,
+         uses_webgl_instance_data: bool,
+     ) -> WgpuPipelines {
++        eprintln!("browser: gpu pipelines keyed {surface_format:?} {alpha_mode:?} samples {path_sample_count}");
+         // Diagnostic guard: verify the device actually has
+         // DUAL_SOURCE_BLENDING. We have a crash report (ZED-5G1) where a
+         // feature mismatch caused a wgpu-hal abort, but we haven't
+@@ -719,221 +985,26 @@ impl WgpuRendererCore {
              _ => wgpu::BlendState::ALPHA_BLENDING,
          };
  
@@ -594,7 +625,7 @@ index a148a4ccfb..c116ec74c6 100644
          }
      }
  
-@@ -1063,19 +1109,42 @@ impl WgpuRenderer {
+@@ -1063,19 +1134,42 @@ impl WgpuRenderer {
          self.surface_config.alpha_mode = new_alpha_mode;
          let format = self.surface_config.format;
  
@@ -646,7 +677,7 @@ index a148a4ccfb..c116ec74c6 100644
  
          if let RendererState::Ready { surface, core } = &self.state {
              surface.configure(&core.resources.device, &self.surface_config);
-@@ -1206,6 +1275,39 @@ impl WgpuRenderer {
+@@ -1206,6 +1300,39 @@ impl WgpuRenderer {
      }
  }
  
@@ -686,7 +717,7 @@ index a148a4ccfb..c116ec74c6 100644
  impl WgpuRendererCore {
      fn new(
          context: &WgpuContext,
-@@ -1219,14 +1321,17 @@ impl WgpuRendererCore {
+@@ -1219,14 +1346,17 @@ impl WgpuRendererCore {
          let uses_webgl_instance_data = context.uses_webgl_instance_data();
          let dual_source_blending =
              context.supports_dual_source_blending() && !uses_webgl_instance_data;
@@ -710,7 +741,7 @@ index a148a4ccfb..c116ec74c6 100644
              uses_webgl_instance_data,
          );
          let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-@@ -1519,13 +1624,13 @@ impl WgpuRendererCore {
+@@ -1519,13 +1649,13 @@ impl WgpuRendererCore {
                  match batch {
                      PrimitiveBatch::Quads(range) => self.draw_instances(
                          &instance_bindings.quads,
@@ -726,7 +757,7 @@ index a148a4ccfb..c116ec74c6 100644
                          instance_range(range),
                          &mut pass,
                      ),
-@@ -1567,7 +1672,7 @@ impl WgpuRendererCore {
+@@ -1567,7 +1697,7 @@ impl WgpuRendererCore {
                      }
                      PrimitiveBatch::Underlines(range) => self.draw_instances(
                          &instance_bindings.underlines,
@@ -735,7 +766,7 @@ index a148a4ccfb..c116ec74c6 100644
                          instance_range(range),
                          &mut pass,
                      ),
-@@ -1575,7 +1680,7 @@ impl WgpuRendererCore {
+@@ -1575,7 +1705,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.monochrome_sprites,
                              texture_id,
@@ -744,7 +775,7 @@ index a148a4ccfb..c116ec74c6 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1585,11 +1690,7 @@ impl WgpuRendererCore {
+@@ -1585,11 +1715,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.subpixel_sprites,
                              texture_id,
@@ -757,7 +788,7 @@ index a148a4ccfb..c116ec74c6 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1598,7 +1699,7 @@ impl WgpuRendererCore {
+@@ -1598,7 +1724,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.polychrome_sprites,
                              texture_id,
@@ -766,7 +797,7 @@ index a148a4ccfb..c116ec74c6 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1816,7 +1917,7 @@ impl WgpuRendererCore {
+@@ -1816,7 +1942,7 @@ impl WgpuRendererCore {
              &path_intermediate_view,
          );
          let resources = self.resources();
@@ -775,7 +806,7 @@ index a148a4ccfb..c116ec74c6 100644
          pass.set_bind_group(0, &resources.globals_bind_group, &[]);
          pass.set_bind_group(1, &instances.bind_group, &[]);
          pass.set_bind_group(2, &texture, &[]);
-@@ -1881,7 +1982,7 @@ impl WgpuRendererCore {
+@@ -1881,7 +2007,7 @@ impl WgpuRendererCore {
                  ..Default::default()
              });
  
@@ -784,7 +815,7 @@ index a148a4ccfb..c116ec74c6 100644
              pass.set_bind_group(0, &resources.path_globals_bind_group, &[]);
              pass.set_bind_group(1, &vertex_binding.bind_group, &[]);
              // The path rasterization shader loads records by vertex index
-@@ -2411,109 +2512,117 @@ impl WgpuHeadlessRenderer {
+@@ -2411,109 +2537,117 @@ impl WgpuHeadlessRenderer {
              .render_target
              .as_ref()
              .ok_or_else(|| anyhow::anyhow!("Headless render target was not created"))?;
