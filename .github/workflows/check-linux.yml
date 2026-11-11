@@ -30,6 +30,11 @@ on:
         type: choice
         options: [xvfb, sway, kwin, wayland]
         default: xvfb
+      trace:
+        description: >-
+          The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
+          #2377's, latency among them; empty for latency alone in tabs and no traced switches
+        default: ''
 
 concurrency:
   group: check-linux-${{ github.ref }}
@@ -48,7 +53,8 @@ env:
     extensions capture popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
-    webrtc tab-drag count ranking everyday hosts policies translate pictures boosts switch-frames
+    webrtc tab-drag count ranking everyday hosts policies translate pictures boosts rules
+    switch-frames
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
@@ -57,7 +63,7 @@ env:
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
     blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
     window windows
-    media pictures boosts
+    media pictures boosts links notifications
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |
@@ -328,6 +334,7 @@ jobs:
           SESSION: ${{ matrix.session }}
           RUNS: ${{ matrix.runs }}
           RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
+          CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
           # The runner's C.UTF-8 names no country, for which Chromium's search engines leave out
           # DuckDuckGo, the one the core picks, so the command bar would offer no search.
           LANG: en_US.UTF-8
@@ -347,16 +354,22 @@ jobs:
           for run in $RUNS; do
             start=$SECONDS
             status=0
-            # The updates run builds a Flatpak first.
+            # The updates run builds a Flatpak first, and perf measures Chrome beside the app.
             limit=20m
             [ "$run" != updates ] || limit=45m
+            [ "$run" != perf ] || limit=40m
             timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
             [ ! -d build/check ] || mv build/check "$dir/$run"
             pkill -9 -f "$PWD/build/Browser/" || true
             # A run that passes may have skipped steps, or all of itself, such as when the app
             # wasn't the active one.
             skipped=$(grep '^skip: ' "$dir/$run.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
-            if [ "$status" = 0 ]; then
+            # A run that skips all of itself, as one whose build lacks what it checks, says why on a
+            # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
+            whole=$(grep -m1 '^skip all: ' "$dir/$run.log" | cut -c11- | tr '|\t' '/ ') || true
+            if [ "$status" = 0 ] && [ -n "$whole" ]; then
+              result="skip: $whole"
+            elif [ "$status" = 0 ]; then
               result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
             else
               result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run.log" | cut -c7- | tr '|\t' '/ ')"
@@ -583,7 +596,7 @@ jobs:
                 'any(.[]; .session == $s and ((" " + .runs + " ") | contains(" " + $r + " ")))' > /dev/null; then
                 result=$(result "$session" "$run")
                 case $result in
-                passed*) ;;
+                passed* | skip:*) ;;
                 failed*) failure "$session" "$run" "$result" "The $run run failed on $session. Its log: $where$run.log in the artifact." ;;
                 *) unfinished "$result" ;;
                 esac
