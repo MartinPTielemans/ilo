@@ -27,6 +27,8 @@
 #   through DevTools from the first switch to the last, as in #2377: perf/trace-ilo.json and
 #   trace-chrome.json, and a row a switch in traced-switches.tsv, with its span, failing unless
 #   each switch to a loaded tab has one. ilo's then go to 4 tabs without their page, unseen 2 hours.
+#   The first 3 of the 19 new tabs before them are traced too, in trace-ilo-newtab.json and
+#   trace-chrome-newtab.json, for where a new tab's time goes (#2383).
 #
 # Idle is measured in 10 s windows, six to the minute, and memory is summed over every process of
 # the browser, as check/usage.py says for each OS. On Linux and the Mac the shell's clock is a
@@ -375,11 +377,10 @@ quit
 # trace, and the run fails unless each switch to a loaded tab has one: the trace is what this leg
 # is for.
 traced_tsv="$perf_dir/traced-switches.tsv"
-# Traces into perf/$1 what the command after does, through the DevTools client logging to $2, then
-# adds its switches, kept in perf/$4, to the table as browser $3's, with the browser's log $5.
-perf_trace() {
-  perf_trace_file=$1 perf_trace_log=$2 perf_trace_browser=$3 perf_trace_rows=$4 perf_trace_app=$5
-  shift 5
+# Traces into perf/$1 what the command after does, through the DevTools client logging to $2.
+perf_traced() {
+  perf_trace_file=$1 perf_trace_log=$2
+  shift 2
   since=$(wc -l < "$perf_trace_log")
   echo "trace start $trace_categories" >&5
   perf_cdp_await "$perf_trace_log" "$since" '^cdp: tracing$' "DevTools didn't start tracing"
@@ -390,6 +391,14 @@ perf_trace() {
     "DevTools didn't write $perf_trace_file"
   ! tail -n +$((since + 1)) "$perf_trace_log" | grep -q "^cdp: traced .* lossy$" ||
     echo "perf: $perf_trace_file: the browser dropped some of the trace"
+}
+# Traces the command after into perf/$1 with perf_traced, then adds its switches, kept in perf/$4,
+# to the table as browser $3's, with the browser's log $5.
+perf_trace() {
+  perf_trace_browser=$3 perf_trace_rows=$4 perf_trace_app=$5
+  perf_trace_at=$1 perf_trace_via=$2
+  shift 5
+  perf_traced "$perf_trace_at" "$perf_trace_via" "$@"
   [ -s "$traced_tsv" ] || printf 'browser\tkind\tpage\tshown\tkey_ms\tshown_ms\ttab_state\tspan_ms\tselected_ms\tlet_go_ms\n' > "$traced_tsv"
   python3 -I check/switch_table.py "$perf_trace_browser" "$perf_dir/$perf_trace_file" \
     "$perf_dir/$perf_trace_rows" ${perf_trace_app:+"$perf_trace_app"} >> "$traced_tsv" 2> "$perf_dir/traced-missing" ||
@@ -466,7 +475,15 @@ if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
   send click $page_point
   [ "$active" = 1 ] || fail "Browser wasn't the active app for the traced switches"
   : > "$perf_dir/traced-newtab"
-  for n in $(seq 2 20); do
+  # The first 3 new tabs, traced on their own into perf/trace-ilo-newtab.json, for where a new
+  # tab's ms go (#2383).
+  perf_traced_opens() {
+    for n in 2 3 4; do
+      perf_open "t$n" traced-newtab
+    done
+  }
+  perf_traced trace-ilo-newtab.json "$cdp_log" perf_traced_opens
+  for n in $(seq 5 20); do
     perf_open "t$n" traced-newtab
   done
   perf_until $((loaded + 15))
@@ -750,10 +767,15 @@ else
       chrome_launch t1 || fail "Chrome didn't stay open for its traced switches: $(tail -3 "$perf_dir/chrome.log")"
       chrome_await "^cdp: title [^ ]* t1 fcp " "Chrome's traced launch didn't paint its page"
       : > "$perf_dir/chrome-traced-newtab"
-      for n in $(seq 2 20); do
-        chrome_open "t$n" chrome-traced-newtab
-        perf_until $((typed / 1000 + 2))
-      done
+      chrome_traced_opens() {
+        for n in $(seq "$1" "$2"); do
+          chrome_open "t$n" chrome-traced-newtab
+          perf_until $((typed / 1000 + 2))
+        done
+      }
+      # As ilo's, its first 3 new tabs traced on their own, into perf/trace-chrome-newtab.json.
+      perf_traced trace-chrome-newtab.json "$log" chrome_traced_opens 2 4
+      chrome_traced_opens 5 20
       perf_until $((loaded + 15))
       perf_trace trace-chrome.json "$log" chrome chrome-traced-switch-rows "" \
         chrome_switches t chrome-traced-switch spaced
