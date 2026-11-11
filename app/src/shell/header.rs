@@ -496,7 +496,7 @@ impl Shell {
     /// Site Controls' Open in <profile> (#2339): the tab's page in a new tab of the first of the
     /// user's Spaces in `profile`, shown, as Little ilo's picker goes to that profile's first
     /// Space. It loads fresh there, as the profile's cookies are its own (decision 5).
-    pub(crate) fn open_in_profile(&mut self, tab: u64, profile: u64, cx: &mut Context<Self>) {
+    pub fn open_in_profile(&mut self, tab: u64, profile: u64, cx: &mut Context<Self>) {
         let url = self.page(tab).url;
         let Some(space) = self.users_space_in(profile) else {
             return;
@@ -507,7 +507,7 @@ impl Shell {
 
     /// Site Controls' New Space in <profile>…, for a profile none of the user's Spaces is in: New
     /// Space's form, its Space in `profile`.
-    pub(crate) fn new_space_in_profile(&mut self, profile: u64, cx: &mut Context<Self>) {
+    pub fn new_space_in_profile(&mut self, profile: u64, cx: &mut Context<Self>) {
         self.new_space_from(None, Some(profile), cx);
     }
 
