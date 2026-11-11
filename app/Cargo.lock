@@ -678,6 +678,7 @@ dependencies = [
  "gpui_macos",
  "gpui_platform",
  "gpui_web",
+ "gpui_wgpu",
  "gpui_windows",
  "image",
  "js-sys",
