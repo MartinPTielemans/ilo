@@ -167,6 +167,9 @@ pub enum Command {
     /// Keeps the window over other apps' windows, or lets it go back among them (Arc's Window ›
     /// Stay On Top).
     StayOnTop,
+    /// Moves the sidebar to the window's other side, Settings' Sidebar position, in every window.
+    /// The command bar's alone, with no key (#2375).
+    MoveSidebar,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -414,6 +417,10 @@ const HIDE_SIDEBAR: &str = "Hide Sidebar";
 /// Window › Stay On Top, and the command bar's row that ends it while it's on.
 pub const STAY_ON_TOP: &str = "Stay On Top";
 const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
+
+/// The command bar's rows for Sidebar position, of which it lists the one that would move it.
+const SIDEBAR_TO_RIGHT: &str = "Move Sidebar to the Right";
+const SIDEBAR_TO_LEFT: &str = "Move Sidebar to the Left";
 
 /// The page's Developer Mode's rows in the command bar, of which it lists the one that would change
 /// it (Arc's, in sentence case).
@@ -665,6 +672,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         DONT_STAY_ON_TOP,
         Command::StayOnTop,
         &["float", "always on top", "pin window"],
+    ),
+    (
+        SIDEBAR_TO_RIGHT,
+        Command::MoveSidebar,
+        &["side", "position", "left", "right"],
+    ),
+    (
+        SIDEBAR_TO_LEFT,
+        Command::MoveSidebar,
+        &["side", "position", "left", "right"],
     ),
     (
         trace::RECORD,
@@ -1232,6 +1249,7 @@ impl Command {
             Command::TaskManager => "task-manager",
             Command::RecordTrace => "record-trace",
             Command::StayOnTop => "stay-on-top",
+            Command::MoveSidebar => "move-sidebar",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1663,6 +1681,11 @@ impl Shell {
                 return self.update_menus(cx);
             }
             Command::StayOnTop => return self.toggle_on_top(cx),
+            Command::MoveSidebar => {
+                return self
+                    .browser
+                    .keep_sidebar_right(!super::sidebar_right(cx), cx);
+            }
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -1984,7 +2007,7 @@ impl Shell {
             return;
         }
         let at = match self.url_field_bounds() {
-            Some(field) => point(field.center().x, field.bottom()) + self.sidebar_origin.get(),
+            Some(field) => point(field.center().x, field.bottom()),
             None => {
                 let page = self.page_frame(self.viewport).0;
                 point(page.center().x, page.top())
@@ -2305,6 +2328,7 @@ impl Shell {
             | Command::Appearance(_)
             | Command::RecordTrace
             | Command::StayOnTop
+            | Command::MoveSidebar
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -2378,6 +2402,13 @@ impl Shell {
                     })
             .then_some(name),
             Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
+            Command::MoveSidebar => {
+                let to = match super::sidebar_right(cx) {
+                    true => SIDEBAR_TO_LEFT,
+                    false => SIDEBAR_TO_RIGHT,
+                };
+                (name == to).then_some(name)
+            }
             _ => Some(name),
         }
     }

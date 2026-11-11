@@ -736,7 +736,11 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken.height
         );
     }
-    let picture = taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height));
+    // A picture of the column on the left, from before the sidebar moved right, is none of this
+    // window's (settings::set_sidebar_right).
+    let right = settings::sidebar_right_kept();
+    let picture =
+        taken.filter(|taken| !maximized && !right && launch_picture::shows(taken, width, height));
     let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
         (taken.width, taken.height, taken.foot_top)
     });

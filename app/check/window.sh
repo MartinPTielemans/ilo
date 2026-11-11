@@ -1127,17 +1127,35 @@ hover_out() {
   send move $(row 0)
   expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
 }
-# rest_cpu: $rest, the CPU in seconds the browser's processes take in 4 s with the pointer still,
-# below the rows. Not in a subshell, which would lose send's step. uBlock Origin's background page,
-# in an extension's process, works when it will: on Wayland it took about 0.8 s of the 4 s, with
-# the sidebar docked or out, which isn't the windows' drawing measured here.
+# drawing_cpu: "<seconds> <processes>", as cpu gives them, of what draws. uBlock Origin works when
+# it will, which isn't the windows' drawing measured here: its background page, in an extension's
+# process, took about 0.8 s of 4 s on Wayland, and what it asks of the browser runs in Chromium's
+# worker pools and IO threads, where it took 1.6 s of 4 s on Wayland while neither window drew a
+# frame (#2400). On Linux the threads say what they are, so those are left out of every process;
+# elsewhere only the extension's process is.
+drawing_cpu() {
+  if windows || [ ! -d /proc ]; then
+    cpu --extension-process
+    return
+  fi
+  for p in $(pgrep -f -- "$procs"); do
+    tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -qF -e --extension-process && continue
+    echo "$p 0"
+    for t in /proc/$p/task/*; do
+      case $(cat "$t/comm" 2> /dev/null) in ThreadPool* | Chrome_IOThread | Chrome_ChildIOT) continue ;; esac
+      echo "$p $(sed 's/^.*) //' "$t/stat" 2> /dev/null | awk '{ print $12 + $13 }')"
+    done
+  done | awk -v hz="$(getconf CLK_TCK)" '!($1 in seen) { seen[$1]; n++ } { t += $2 } END { printf "%.2f %d\n", t / hz, n }'
+}
+# rest_cpu: $rest, the CPU in seconds what draws takes in 4 s with the pointer still, below the
+# rows. Not in a subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
   sleep 1 # the hover's fade out, before the window measured
   local from
-  from=$(cpu --extension-process)
+  from=$(drawing_cpu)
   sleep 4 # the window measured
-  set -- $from $(cpu --extension-process)
+  set -- $from $(drawing_cpu)
   rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
 }
 rest_cpu

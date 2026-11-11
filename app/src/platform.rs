@@ -202,6 +202,7 @@ unsafe extern "C" {
     pub fn host_hide_drop_targets();
     pub fn host_focus(view: *mut c_void);
     pub fn host_show_window_buttons(ui_view: *mut c_void, shown: bool);
+    pub fn host_set_sidebar_right(ui_view: *mut c_void, right: bool);
     pub fn host_press_window_button(ui_view: *mut c_void, button: i32);
     pub fn host_set_window_on_top(ui_view: *mut c_void, on: bool);
     #[cfg(target_os = "macos")]

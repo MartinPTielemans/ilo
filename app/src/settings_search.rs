@@ -77,6 +77,7 @@ pub fn also(name: &str) -> &'static [&'static str] {
         "Tasks from the command bar" => &["agent tasks", "ask claude", "ask codex"],
         "Appearance" => &["dark mode", "light mode"],
         "Show the hidden sidebar at the window's edge" => &["edge reveal", "auto hide"],
+        "Sidebar position" => &["sidebar on the right", "right sidebar"],
         "Show what's new after an update" => &["release notes", "changelog"],
         "Check for updates automatically" => &["auto update", "software update"],
         "Dock icon takes the Space's color" => &["dock dot"],

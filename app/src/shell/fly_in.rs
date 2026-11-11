@@ -112,7 +112,7 @@ impl Shell {
     fn bin_center(&self) -> (f32, f32) {
         let height = f32::from(self.viewport.height);
         (
-            LIBRARY_BACK_INSET + NAV_SIZE / 2. + BIN_RIGHT,
+            self.column_x() + LIBRARY_BACK_INSET + NAV_SIZE / 2. + BIN_RIGHT,
             height - FOOTER_HEIGHT / 2. - BIN_UP,
         )
     }
