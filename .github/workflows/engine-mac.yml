@@ -27,7 +27,8 @@ permissions:
 
 jobs:
   build-1:
-    # macos-15 has Xcode up to 26.3, and Chromium 156 builds with the 26.5 SDK (mac_sdk.gni).
+    # macos-15 has Xcode up to 26.3, and Chromium 156 and 157 build with the 26.5 SDK (mac_sdk.gni's
+    # universal SDK; engine/setup.sh).
     runs-on: macos-26
     timeout-minutes: 358
     permissions:
