@@ -256,5 +256,85 @@ fn change(change: &Value) -> Option<Change> {
     })
 }
 
+/// What the user asks of the mode on the page, as the core takes it (`bc_tab_arrange_do`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// ↑: the box around the one pointed at or selected.
+    Outer,
+    /// ↓: the box inside it.
+    Inner,
+    /// The core's last change undone: a settle, a trade, a float or a pin.
+    Undo,
+    /// The selected thing hidden, by Zap's rule.
+    Hide,
+    /// The selected thing back where the page had it.
+    PutBack,
+    /// A floating thing pinned to the screen, or to the page.
+    StaysOnScreen,
+    ScrollsWithPage,
+    /// Every change on the page undone.
+    Reset,
+}
+
+/// Where the user is in the mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Step {
+    #[default]
+    Pointing,
+    Carrying,
+    /// Carried and rested, the page showing what the drop would do.
+    Preview,
+    Selected,
+}
+
+/// What a drop does, or did, to the thing carried or selected.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Outcome {
+    #[default]
+    None,
+    Settles,
+    Trades,
+    Floats,
+    Refused,
+}
+
+/// Why the core refuses a drop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Refused {
+    #[default]
+    Fits,
+    DoesntFit,
+    NotShown,
+    Covered,
+}
+
+/// A thing on the page as the core names it: its kind's token and the page's own words, either
+/// empty. An empty kind is nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Element {
+    pub kind: String,
+    pub name: String,
+}
+
+/// The mode on a tab's page, as the core tells it (`tab_arrange_state`): once a step changes and
+/// once a scroll starts and rests, never each frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct State {
+    pub step: Step,
+    pub element: Element,
+    pub change: Outcome,
+    /// What a settle goes between, or a trade's other thing in `before`.
+    pub before: Element,
+    pub after: Element,
+    pub refused: Refused,
+    /// While a floating thing is selected, whether it stays on screen rather than scrolling.
+    pub on_screen: bool,
+    pub can_undo: bool,
+    pub can_reset: bool,
+    /// The selected thing's box in points from the page view's top-left, as x, y, width and
+    /// height: none while nothing is selected and while the page scrolls.
+    pub selection: Option<[f32; 4]>,
+}
+
 #[cfg(test)]
 mod tests;

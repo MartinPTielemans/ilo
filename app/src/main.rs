@@ -261,6 +261,12 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     {
         return (true, "zap");
     }
+    // Arrange's keys, ↑ ↓ ⌘Z and escape, are the mode's while it's on, not the page's.
+    if update_tab_window(tab, |shell, cx| shell.run_arrange_key(tab, &keystroke, cx))
+        .unwrap_or(false)
+    {
+        return (true, "arrange");
+    }
     if update_tab_window(tab, |shell, cx| {
         shell.run_extension_key(&keystroke, "page", cx)
     })

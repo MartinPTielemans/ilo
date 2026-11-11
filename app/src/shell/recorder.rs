@@ -1077,6 +1077,10 @@ impl Browser for Recorder {
         look.is_some() && !self.arrange_refused.get()
     }
 
+    fn arrange_do(&self, tab: u64, ask: crate::boosts::arrange::Ask, _: &mut App) {
+        self.record(format!("arrange {tab} {ask:?}"))
+    }
+
     fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> crate::boosts::Arranged {
         let changes = crate::boosts::arrange::read(bytes).map_or(0, |changes| changes.len());
         self.record(format!("arrangement {profile} {site}: {changes} changes"));

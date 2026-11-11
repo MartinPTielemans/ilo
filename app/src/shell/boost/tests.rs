@@ -672,3 +672,174 @@ fn no_arrange_in_a_private_window_or_an_agents_space(cx: &mut TestAppContext) {
         assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
     }
 }
+
+/// Arrange on tab 10's page, from the card, with the calls so far taken.
+fn arranging(shell: &Entity<Shell>, host: &Recorder, cx: &mut VisualTestContext) {
+    shell.update(cx, |shell, cx| shell.start_arrange(cx));
+    assert!(shell.read_with(cx, |shell, _| shell.arranging(10)));
+    host.take();
+}
+
+/// With the page focused, ↑ and ↓ ask the core for the box around or inside the one selected and
+/// escape is Done; other keys, and these once the mode is off, are the page's.
+#[gpui::test]
+fn arrange_keys_with_the_page_focused(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    let key = |keystroke: &str, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.run_arrange_key(10, keystroke, cx))
+    };
+    assert!(key("up", cx));
+    assert!(key("down", cx));
+    assert!(!key("a", cx));
+    assert!(!key("left", cx));
+    assert_eq!(
+        arrange_calls(&host),
+        ["arrange 10 Outer", "arrange 10 Inner"]
+    );
+    assert!(
+        !shell.update(cx, |shell, cx| shell.run_arrange_key(11, "up", cx)),
+        "a key in another tab's page went to the mode"
+    );
+
+    assert!(key("escape", cx));
+    assert_eq!(arrange_calls(&host), ["arrange 10 false"]);
+    assert!(!key("up", cx));
+    assert!(!key("escape", cx));
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+}
+
+/// With the UI holding the keyboard, the same keys do the same.
+#[gpui::test]
+fn arrange_keys_with_the_ui_focused(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+    cx.simulate_keystrokes("up down");
+    cx.run_until_parked();
+    assert_eq!(
+        arrange_calls(&host),
+        ["arrange 10 Outer", "arrange 10 Inner"]
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), ["arrange 10 false"]);
+    cx.simulate_keystrokes("up down");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+}
+
+/// ⌘Z takes back the mode's steps last first: the core's with its Undo, and a Hide, which is Zap's
+/// rule, as Zap's Undo does. The save that follows the core's Undo is no step of the user's, and
+/// with nothing left ⌘Z does nothing while the mode is on.
+#[gpui::test]
+fn undo_takes_back_the_modes_steps_last_first(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", ARRANGED, cx);
+        shell.boost_zapped(10, Some("#promo"), cx);
+        shell.arrange_saved(10, "example.com", ARRANGED, cx);
+    });
+    host.take();
+    cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), ["arrange 10 Undo"]);
+    // The core saves what its Undo left.
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", ARRANGED, cx)
+    });
+    host.take();
+
+    // With the page focused, as the page hands ⌘Z over.
+    assert!(shell.update(cx, |shell, cx| shell.run_arrange_key(10, "cmd-z", cx)));
+    let calls = arrange_calls(&host);
+    assert!(
+        calls.iter().all(|call| !call.contains("#promo")) && !calls.is_empty(),
+        "the Hide wasn't taken back: {calls:?}"
+    );
+    assert_eq!(
+        folder
+            .boost("example.com")
+            .filter(|css| css.contains("#promo")),
+        None
+    );
+
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), ["arrange 10 Undo"]);
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+}
+
+/// Reset takes back the core's changes, so ⌘Z after it has only the Hides left.
+#[gpui::test]
+fn reset_leaves_undo_the_hides(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", ARRANGED, cx);
+        shell.boost_zapped(10, Some("#promo"), cx);
+        shell.ask_arrange(10, crate::boosts::arrange::Ask::Reset, cx);
+    });
+    let calls = arrange_calls(&host);
+    assert_eq!(calls.last().map(String::as_str), Some("arrange 10 Reset"));
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", "", cx)
+    });
+    host.take();
+
+    assert!(shell.update(cx, |shell, cx| shell.run_arrange_key(10, "cmd-z", cx)));
+    let calls = arrange_calls(&host);
+    assert!(
+        !calls.is_empty() && calls.iter().all(|call| !call.starts_with("arrange ")),
+        "⌘Z after Reset asked the core: {calls:?}"
+    );
+    assert!(shell.update(cx, |shell, cx| shell.run_arrange_key(10, "cmd-z", cx)));
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+}
+
+/// What the core says of the mode is kept while it's on that tab, and goes with it.
+#[gpui::test]
+fn the_modes_state_goes_with_the_mode(cx: &mut TestAppContext) {
+    use crate::boosts::arrange::{State, Step};
+    let (shell, host, _folder, cx) = window(cx);
+    let selected = State {
+        step: Step::Selected,
+        selection: Some([20., 40., 300., 120.]),
+        can_undo: true,
+        ..State::default()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.arrange_state(10, selected.clone(), cx)
+    });
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrange_shown().cloned()),
+        None
+    );
+
+    arranging(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.arrange_state(11, selected.clone(), cx);
+    });
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrange_shown().cloned()),
+        Some(State::default()),
+        "another tab's state was kept"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.arrange_state(10, selected.clone(), cx)
+    });
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrange_shown().cloned()),
+        Some(selected)
+    );
+    shell.update(cx, |shell, cx| shell.arrange_ended(10, cx));
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrange_shown().cloned()),
+        None
+    );
+}

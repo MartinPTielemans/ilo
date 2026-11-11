@@ -1792,6 +1792,8 @@ pub struct Shell {
     zapping: Option<u64>,
     /// The tab whose page Arrange is on (#2347), one at a time, as Zap.
     arranging: Option<u64>,
+    /// What the core last said of the mode, and its ⌘Z history.
+    arrange_mode: arrange::Mode,
     boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Library › Boosts' list, the window's profile's, read as it's shown.
     boost_list: Vec<crate::boosts::Boost>,
@@ -2160,6 +2162,7 @@ impl Shell {
             boost_pending: None,
             zapping: None,
             arranging: None,
+            arrange_mode: arrange::Mode::default(),
             boost_card_drawn: Rc::default(),
             boost_list: Vec::new(),
             battery_saver: None,
