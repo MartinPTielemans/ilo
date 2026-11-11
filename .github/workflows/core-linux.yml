@@ -23,11 +23,11 @@ jobs:
           go-version: '1.26'
           cache: false
 
+      - uses: ./.github/actions/apt-install
+        with:
+          packages: gperf clang-format ninja-build
       - name: Install tools
-        run: |
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq gperf clang-format ninja-build
-          sudo npm install -g --prefix /usr esbuild typescript
+        run: sudo npm install -g --prefix /usr esbuild typescript
 
       # The tree takes about 40 GB. The runner's second disk has more room than its first.
       - name: Make room

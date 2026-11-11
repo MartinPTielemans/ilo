@@ -1,11 +1,18 @@
-# Installs Ubuntu packages from the .debs a run on the same runner image kept in the Actions cache,
-# so a warm run reads neither the mirror's index nor its packages: azure.archive.ubuntu.com stalls
-# for up to an hour on some (#1969). The key is the image's own version, which GitHub bumps about
-# weekly, so the cached .debs are exactly what apt chose on that image and install without an index.
-# A miss installs from the mirror as before, starting from the last image's .debs, and on main keeps
-# what it fetched. A self-hosted runner installs from its mirror as before, with no cache.
+# How every workflow installs Ubuntu packages (#2425).
+# - Packages the runner already has installed are left out. A step that needs none of the rest
+#   uses no apt at all.
+# - On a GitHub-hosted runner, the rest install from the .debs that a run on the same runner image
+#   kept in the Actions cache. A warm run then reads neither the mirror's index nor its packages:
+#   azure.archive.ubuntu.com stalls for up to an hour on some runners (#1969). The key is the
+#   image's own version, which GitHub bumps about weekly, so the cached .debs are exactly what apt
+#   chose on that image and install without an index. A miss installs from the mirror, starting
+#   from the last image's .debs, and on main keeps what it fetched.
+# - A self-hosted runner installs from its own mirror, with no cache.
+# - Fetching from the mirror is retried with a backoff, with each retry said in the log. The azure
+#   mirror failed to resolve for over an hour on 11-11 (#2425), which no retry outlasts, so from the
+#   third try a hosted runner leaves it out and fetches from the image's other mirrors, Ubuntu's own.
 name: Install Ubuntu packages
-description: apt-get install through a cache of the .debs, keyed on the runner image and the list.
+description: apt-get install of what the runner lacks, through a cache of the .debs, retried.
 inputs:
   packages:
     description: The packages, separated by spaces or lines
@@ -17,39 +24,86 @@ runs:
   using: composite
   steps:
     - id: key
-      if: runner.environment == 'github-hosted'
       shell: bash
       env:
         PACKAGES: ${{ inputs.packages }}
         OPTIONS: ${{ inputs.options }}
       run: |
-        list=$(printf '%s\n' $OPTIONS -- $(printf '%s\n' $PACKAGES | sort -u) | sha256sum | cut -c1-16)
+        set -euo pipefail
+        want=() have=()
+        for package in $(printf '%s\n' $PACKAGES | sort -u); do
+          if [ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null)" = "ii " ]; then
+            have+=("$package")
+          else
+            want+=("$package")
+          fi
+        done
+        [ "${#have[@]}" = 0 ] || echo "Already on the runner: ${have[*]}"
+        if [ "${#want[@]}" = 0 ]; then
+          echo "Nothing to install, so no apt."
+          echo "want=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "want=${want[*]}" >> "$GITHUB_OUTPUT"
+        list=$(printf '%s\n' $OPTIONS -- "${want[@]}" | sha256sum | cut -c1-16)
         echo "dir=$RUNNER_TEMP/apt-$list" >> "$GITHUB_OUTPUT"
-        echo "prefix=apt-$list-$ImageOS-" >> "$GITHUB_OUTPUT"
-        echo "key=apt-$list-$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+        echo "prefix=apt-$list-${ImageOS:-}-" >> "$GITHUB_OUTPUT"
+        echo "key=apt-$list-${ImageOS:-}-${ImageVersion:-}" >> "$GITHUB_OUTPUT"
 
     - id: restore
-      if: runner.environment == 'github-hosted'
+      if: runner.environment == 'github-hosted' && steps.key.outputs.want != ''
       uses: actions/cache/restore@v4
       with:
         path: ${{ steps.key.outputs.dir }}
         key: ${{ steps.key.outputs.key }}
         restore-keys: ${{ steps.key.outputs.prefix }}
 
-    - shell: bash
+    - if: steps.key.outputs.want != ''
+      shell: bash
       env:
-        PACKAGES: ${{ inputs.packages }}
+        PACKAGES: ${{ steps.key.outputs.want }}
         OPTIONS: ${{ inputs.options }}
         HOSTED: ${{ runner.environment == 'github-hosted' }}
         HIT: ${{ steps.restore.outputs.cache-hit }}
         DIR: ${{ steps.key.outputs.dir }}
       run: |
         set -euo pipefail
-        # A stalled download times out in 20 s and is retried, rather than hanging the run.
+        # A stalled download times out in 20 s and is retried at once; an outage of minutes is
+        # retried below.
         apt=(sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+        # The index once a job: a later install in the job reads the one the first fetched. A retry
+        # fetches it again.
+        update=
+        [ -e "$RUNNER_TEMP/apt-updated" ] || update=1
+        fetch() {
+          if [ -n "$update" ]; then
+            "${apt[@]}" update -q
+            touch "$RUNNER_TEMP/apt-updated"
+          fi
+          "${apt[@]}" "$@"
+        }
+        # Six tries, 15 s, 30 s, 1, 2 and 4 min apart: about 8 minutes in all.
+        retried() {
+          local tries=0 wait=15 mirrors=/etc/apt/apt-mirrors.txt
+          until fetch "$@"; do
+            tries=$((tries + 1))
+            if [ "$tries" = 6 ]; then
+              echo "::error::apt-get $1 failed 6 times over about 8 minutes (#2425)."
+              return 1
+            fi
+            if [ "$tries" = 2 ] && [ "$HOSTED" = true ] && grep -q 'azure\.archive\.ubuntu\.com' "$mirrors" 2>/dev/null; then
+              sudo sed -i '/azure\.archive\.ubuntu\.com/d' "$mirrors"
+              echo "::warning::apt-get $1 failed twice, so it leaves out the azure mirror and fetches from $(cut -f1 "$mirrors" | tr '\n' ' ')(#2425)."
+            fi
+            echo "::warning::apt-get $1 failed (try $tries of 6), so it's tried again in $wait s (#2425)."
+            sleep "$wait"
+            wait=$((wait * 2))
+            update=1
+          done
+          [ "$tries" = 0 ] || echo "::notice::apt-get $1 passed on try $((tries + 1)) of 6 (#2425)."
+        }
         if [ "$HOSTED" != true ]; then
-          "${apt[@]}" update -q
-          "${apt[@]}" install -yq $OPTIONS $PACKAGES
+          retried install -yq $OPTIONS $PACKAGES
           exit 0
         fi
         shopt -s nullglob
@@ -66,13 +120,9 @@ runs:
           fix=-f
         fi
         mkdir -p "$DIR/partial"
-        # Once a job: a second install in the job reads the index the first fetched.
-        if [ ! -e "$RUNNER_TEMP/apt-updated" ]; then
-          "${apt[@]}" update -q
-          touch "$RUNNER_TEMP/apt-updated"
-        fi
         # apt takes a restored .deb whose version and hash match the index, and fetches the rest.
-        "${apt[@]}" -o Dir::Cache::Archives="$DIR" install -yq $fix $OPTIONS $PACKAGES
+        apt+=(-o Dir::Cache::Archives="$DIR")
+        retried install -yq $fix $OPTIONS $PACKAGES
         # The last image's .debs that the mirror no longer has go, and the rest stay with the new.
         sudo apt-get -o Dir::Cache::Archives="$DIR" autoclean -q
         sudo rm -rf "$DIR/partial" "$DIR/lock"
@@ -80,7 +130,7 @@ runs:
         echo "$(ls "$DIR" | wc -l) packages to cache, $(du -sh "$DIR" | cut -f1)"
 
     # Main alone saves, as the build caches (#1969): every ref reads main's.
-    - if: runner.environment == 'github-hosted' && steps.restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+    - if: runner.environment == 'github-hosted' && steps.key.outputs.want != '' && steps.restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
       uses: actions/cache/save@v4
       with:
         path: ${{ steps.key.outputs.dir }}
