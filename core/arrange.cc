@@ -11,6 +11,7 @@
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "browser_core/arrange_rule.h"
 #include "browser_core/arrangement.h"
 #include "browser_core/boosts.h"
 #include "browser_core/host.h"
@@ -1372,9 +1373,8 @@ bool Arrange::Start(const Look& look) {
   }
   content::WebContents* contents = web_contents();
   Space* space = Space::Holding(tab_);
-  // The user's alone: never in an agent's Space or a private window, and only on a web page.
-  if (Site().empty() || contents->GetBrowserContext()->IsOffTheRecord() ||
-      (space && space->agent())) {
+  if (!arrange_rule::MayStart(Site(), contents->GetBrowserContext()->IsOffTheRecord(),
+                              space && space->agent())) {
     return false;
   }
   // Zap takes the page's presses too.
