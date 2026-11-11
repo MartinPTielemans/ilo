@@ -4,7 +4,7 @@
 # tab's row shows its page's favicon, and keeps it until the next page has loaded without one. A
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
 # warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
-# and a local one over http. A right-click on reload lists Reload, Hard Reload
+# and stays as escape closes the command bar over it, and a local one over http. A right-click on reload lists Reload, Hard Reload
 # and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache, not
 # another site's, before the page loads again.
 
@@ -291,7 +291,16 @@ if [ "$major" -ge 157 ]; then
   expect '^browser: command new-tab via page$' "⌘T on Chrome's warning before http didn't reach the UI"
   expect '^browser: command bar shown$' "⌘T on Chrome's warning before http didn't open the command bar"
   send key escape
+  escaped=$step
   expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened"
+  # The escape is the bar's alone. Under Wayland the window hears it too, where views' focus manager
+  # gave it to the warning as its Go back (#2443). The state's round trip comes after a back that
+  # escape started.
+  send state
+  sed -n "/^browser: drive $escaped: /,\$p" "$log" | grep -q "^browser: page $tab back [01] forward [01] loading 1 " &&
+    fail "escape closing the command bar over Chrome's warning before http also left the warning"
+  [ "$(grep "^browser: page $tab trouble " "$log" | tail -1)" = "browser: page $tab trouble network -20" ] ||
+    fail "Chrome's warning before http went as escape closed the command bar over it: $(grep "^browser: page $tab trouble " "$log" | tail -1)"
   # The warning's in a second tab, so one ⌘W on it is seen to close that tab alone: under Wayland
   # the UI, which the closed tab gives the keyboard, read the press again and ran it twice (#2442).
   kept=$tab
@@ -311,4 +320,4 @@ fi
 exec 3>&-
 quit
 kill "$stuck"
-echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, where ⌘L, ⌘T and ⌘W reach the UI, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
+echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, where ⌘L, ⌘T and ⌘W reach the UI and escape closes the command bar alone, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
