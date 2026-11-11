@@ -1903,6 +1903,15 @@ mod tests {
         }
     }
 
+    /// Share favorites' captions under its drawings are its menu titles in sentence case, on
+    /// every OS, so the two can't drift apart.
+    #[test]
+    fn share_favorites_captions_are_its_titles_in_sentence_case() {
+        for scope in crate::shell::FavoritesScope::ALL {
+            assert_eq!(sentence_case(scope.title()), scope.caption());
+        }
+    }
+
     fn titles(has_icon: bool, has_theme: bool) -> Vec<String> {
         let items = space_menu_head(1, has_icon, has_theme);
         items
