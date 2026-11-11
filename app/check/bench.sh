@@ -25,7 +25,9 @@ fi
 [ -n "${CHECK_CHROME:-}" ] || CHECK_CHROME=$(../tools/chrome-for-testing.sh) ||
   fail "Chrome for Testing didn't download"
 serve
-bench_dir="$out/bench"
+# Absolute, as Chromium's sandboxed helpers take the profile's path: with a relative one each of
+# them crashed at its start, until the GPU process's last.
+bench_dir="$PWD/$out/bench"
 rm -rf "$bench_dir"
 mkdir -p "$bench_dir"
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/ilo-bench"
@@ -246,7 +248,8 @@ bench_chrome() {
     < /dev/null >> "$bench_dir/chrome.log" 2>&1 &
   pid=$!
   tries=0
-  until [ "$(wc -l < "$chrome_dir/DevToolsActivePort" 2> /dev/null || echo 0)" -ge 2 ]; do
+  # Its port, then the browser's path, with no newline after.
+  until grep -q '^/devtools/browser/' "$chrome_dir/DevToolsActivePort" 2> /dev/null; do
     kill -0 "$pid" 2> /dev/null || fail "Chrome exited at its launch: $(tail -3 "$bench_dir/chrome.log")"
     tries=$((tries + 1))
     [ "$tries" -le 600 ] || fail "Chrome's DevTools didn't listen within 60 s of its launch"
