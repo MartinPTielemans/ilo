@@ -789,6 +789,7 @@ void ProxyForAdBlock(content::BrowserContext* context,
                      content::ContentBrowserClient::URLLoaderFactoryType type,
                      const url::Origin& request_initiator,
                      const net::IsolationInfo& isolation_info,
+                     ukm::SourceIdObj ukm_source_id,
                      network::URLLoaderFactoryBuilder& factory_builder) {
   using Type = content::ContentBrowserClient::URLLoaderFactoryType;
   if (!NativeAdBlock() || !UserSettings().ad_blocking || type == Type::kDownload ||
@@ -813,7 +814,7 @@ void ProxyForAdBlock(content::BrowserContext* context,
       OffSites(Profile::FromBrowserContext(context)->GetOriginalProfile()).MatchesURL(page)) {
     return;
   }
-  ProxyForNativeAdBlock(factory_builder);
+  ProxyForNativeAdBlock(factory_builder, frame, ukm_source_id.ToInt64());
 }
 
 bool AdBlockingOffAt(content::BrowserContext* context, const GURL& url) {

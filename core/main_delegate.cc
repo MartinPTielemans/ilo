@@ -428,7 +428,7 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
         navigation_id, ukm_source_id, factory_builder, header_client, bypass_redirect_checks,
         disable_secure_dns, factory_override, navigation_response_task_runner,
         is_for_network_service);
-    ProxyForAdBlock(browser_context, frame, type, request_initiator, isolation_info,
+    ProxyForAdBlock(browser_context, frame, type, request_initiator, isolation_info, ukm_source_id,
                     factory_builder);
   }
 

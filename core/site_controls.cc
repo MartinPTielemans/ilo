@@ -10,12 +10,14 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
 #include "browser_core/host.h"
+#include "browser_core/native_ad_block.h"
 #include "browser_core/passwords.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
@@ -325,6 +327,9 @@ SiteControls::SiteControls(content::WebContents* contents)
 }
 
 SiteControls::~SiteControls() {
+  if (NativeAdBlock()) {
+    StopWatchingNativeAdBlocked();
+  }
   if (Window* window = Window::FromId(window_)) {
     window->ShowEveryExtensionAction(false);
   }
@@ -364,6 +369,12 @@ void SiteControls::Read() {
     // It lists the permissions and the connection now, and the cookies later, which the panel
     // doesn't show.
     page_info_->InitializeUiState(this, base::DoNothing());
+  }
+  // The browser's own ad blocker counts what it blocked on the page, which comes a moment later.
+  if (NativeAdBlock()) {
+    native_blocked_ = -1;
+    WatchNativeAdBlocked(web_contents(), base::BindRepeating(&SiteControls::NativeAdBlocked,
+                                                             weak_factory_.GetWeakPtr()));
   }
   Changed();
 }
@@ -421,6 +432,11 @@ void SiteControls::OnExtensionActionUpdated(extensions::ExtensionAction* action,
   }
 }
 
+void SiteControls::NativeAdBlocked(int blocked) {
+  native_blocked_ = blocked;
+  Changed();
+}
+
 void SiteControls::OnShuttingDown() {
   actions_.Reset();
 }
@@ -444,6 +460,13 @@ void SiteControls::Report() {
   Passwords* passwords =
       Passwords::Of(Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
   if (passwords && !passwords->ready()) {
+    return;
+  }
+  // uBlock Origin never sees the pages the system's engine shows.
+  const int ad_blocking =
+      SystemPageOf(web_contents()) ? BC_AD_BLOCKING_NONE : AdBlockingOf(web_contents());
+  // It waits for the browser's own ad blocker's count too, which reports again.
+  if (ad_blocking == BC_AD_BLOCKING_ON && NativeAdBlock() && native_blocked_ < 0) {
     return;
   }
   const std::vector<Passwords::Login> logins =
@@ -494,11 +517,12 @@ void SiteControls::Report() {
     devices[i].kind = device_kinds[i].c_str();
   }
   const std::string connection = base::UTF16ToUTF8(connection_summary_);
-  // uBlock Origin never sees the pages the system's engine shows.
-  const int ad_blocking =
-      SystemPageOf(web_contents()) ? BC_AD_BLOCKING_NONE : AdBlockingOf(web_contents());
-  const std::string ad_blocked =
-      ad_blocking == BC_AD_BLOCKING_ON ? AdBlockedOn(web_contents()) : std::string();
+  std::string ad_blocked;
+  if (ad_blocking == BC_AD_BLOCKING_ON) {
+    ad_blocked = !NativeAdBlock()      ? AdBlockedOn(web_contents())
+                 : native_blocked_ > 0 ? base::NumberToString(native_blocked_)
+                                       : std::string();
+  }
   // Chrome counts every row it lists in its button's words; these are the lines the panel shows.
   const std::string reset =
       resettable ? base::UTF16ToUTF8(l10n_util::GetPluralStringFUTF16(
