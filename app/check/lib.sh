@@ -859,6 +859,25 @@ start_with_cdp() {
   helper=$!
   exec 5> "$scratch/cdp"
 }
+# The display the app opens on, "X Y WIDTH HEIGHT" in points from the main display's top left, as
+# Chrome's --window-position takes a place: with BROWSER_DISPLAY=builtin the Mac's own screen, as the
+# app's host finds it (platform/mac/host.mm), so a Chrome a run starts doesn't cover what's playing
+# on another, else the main display.
+display_bounds() {
+  [ "$(uname)" = Darwin ] || fail "display_bounds is the Mac's"
+  osascript -l JavaScript -e '
+    ObjC.import("AppKit");
+    ObjC.import("CoreGraphics");
+    const screens = $.NSScreen.screens.js;
+    const main = screens[0].frame;
+    const builtin = ObjC.unwrap(
+      $.NSProcessInfo.processInfo.environment.objectForKey("BROWSER_DISPLAY")) == "builtin";
+    const own = screens.find((screen) => builtin &&
+      $.CGDisplayIsBuiltin(screen.deviceDescription.objectForKey("NSScreenNumber").unsignedIntValue));
+    const frame = (own || screens[0]).frame;
+    [frame.origin.x, main.size.height - frame.origin.y - frame.size.height, frame.size.width,
+     frame.size.height].map(Math.round).join(" ");' || fail "the displays didn't say where the Mac's own is"
+}
 # Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
 # serves every run after, so only cleanup stops it: a run that did would leave the next its address
 # and no server (#1369).
