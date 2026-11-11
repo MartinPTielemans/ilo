@@ -23,6 +23,7 @@ use browser::import::sources::{Os, Roots};
 use browser::link_preview;
 use browser::log;
 use browser::menu;
+use browser::mini_bar;
 use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
@@ -2853,6 +2854,14 @@ fn main() {
                 })
                 .detach();
             }
+            // PREVIEW_MINI_BAR=selected shows Arrange's mini bar over a made-up thing selected on the
+            // page, with Hide and Put back; =float adds the pin, the thing staying on screen, and
+            // =scrolls the pin with the thing scrolling with the page.
+            if let Ok(kind) = std::env::var("PREVIEW_MINI_BAR")
+                && let Some(shell) = shell_window
+            {
+                preview_mini_bar(&kind, shell, bounds, cx);
+            }
             // PREVIEW_MENU=<x>,<y>[,<key>…] right-clicks there in the window, as on a row or a Space's
             // name, and then presses the keys in ilo's menu, such as `m,right` for a submenu.
             if let Ok(what) = std::env::var("PREVIEW_MENU") {
@@ -2990,6 +2999,77 @@ fn preview_page_menu(
 
 /// ilo's menu over the preview's window, whose host can't move it: its window covers the preview's.
 struct PreviewMenu;
+
+thread_local! {
+    /// Where the mini bar asked to go.
+    static MINI_BAR_PLACE: std::cell::Cell<Option<Bounds<Pixels>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+struct PreviewMiniBar;
+
+impl mini_bar::Host for PreviewMiniBar {
+    fn show(&self, _: u64, place: Bounds<Pixels>) {
+        MINI_BAR_PLACE.set(Some(place));
+    }
+
+    fn hide(&self) {}
+}
+
+/// Shows Arrange's mini bar over a made-up thing selected on the page of the preview's `window` at
+/// `bounds`: a box at the page's right, as the mock's. The bar sizes its window to what it shows,
+/// so a hidden one lays it out first, as the host would place it.
+fn preview_mini_bar(
+    kind: &str,
+    window: gpui::WindowHandle<Shell>,
+    bounds: Bounds<Pixels>,
+    cx: &mut App,
+) {
+    let Ok((page, palette)) = window.read_with(cx, |shell, _| {
+        (shell.page_frame(bounds.size).0, shell.palette())
+    }) else {
+        return;
+    };
+    let pin = match kind {
+        "float" => Some(true),
+        "scrolls" => Some(false),
+        _ => None,
+    };
+    let selection = Bounds::new(
+        page.origin + point(page.size.width - px(360.), px(260.)),
+        size(px(280.), px(140.)),
+    );
+    let shown = mini_bar::Shown {
+        tab: 0,
+        selection,
+        page,
+        pin,
+        put_back: true,
+        accent: palette.accent.into(),
+    };
+    let on_press: mini_bar::OnPress =
+        Rc::new(|_, press, _| log!("preview: mini bar {} pressed", press.name()));
+    let hidden = Bounds::new(bounds.origin, size(px(1.), px(1.)));
+    let Some(measuring) = mini_bar::open_at(Rc::new(PreviewMiniBar), hidden, false, cx) else {
+        return;
+    };
+    mini_bar::show(0, Some((shown.clone(), on_press.clone())), cx);
+    let _ = measuring.update(cx, |_, window, _| window.remove_window());
+    let Some(place) = MINI_BAR_PLACE.get() else {
+        return;
+    };
+    let at = Bounds::new(bounds.origin + place.origin, place.size);
+    if mini_bar::open_at(Rc::new(PreviewMiniBar), at, true, cx).is_some() {
+        mini_bar::show(0, Some((shown, on_press)), cx);
+        // The made-up box, for the captures.
+        let (x, y) = (f32::from(selection.origin.x), f32::from(selection.origin.y));
+        let (w, h) = (
+            f32::from(selection.size.width),
+            f32::from(selection.size.height),
+        );
+        log!("preview: mini bar shown over {x},{y} {w}x{h}");
+    }
+}
 
 impl menu::Host for PreviewMenu {
     fn show(&self, _: Bounds<Pixels>, _: &[Bounds<Pixels>]) {}

@@ -843,3 +843,113 @@ fn the_modes_state_goes_with_the_mode(cx: &mut TestAppContext) {
         None
     );
 }
+
+/// The mini bar's calls alone.
+fn mini_bar_calls(host: &Recorder) -> Vec<String> {
+    let calls = host.take().into_iter();
+    calls.filter(|call| call.starts_with("mini bar")).collect()
+}
+
+/// Presses the mini bar's `press`, as a click on it does.
+fn press_mini_bar(host: &Recorder, press: crate::mini_bar::Press, cx: &mut VisualTestContext) {
+    let (tab, on_press) = host.mini_bar.borrow().clone().expect("no mini bar");
+    cx.update(|_, cx| on_press(tab, press, cx));
+    cx.run_until_parked();
+}
+
+/// The mini bar shows at the box of the thing selected, over its page: Hide, then Put back once it
+/// has a change, and the pin first while it floats. It goes while the page scrolls, when the core
+/// gives no box, and with the mode. Its presses are the core's asks.
+#[gpui::test]
+fn the_mini_bar_follows_the_thing_selected(cx: &mut TestAppContext) {
+    use crate::boosts::arrange::{Outcome, State, Step};
+    use crate::mini_bar::Press;
+    let (shell, host, _folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    let state = |change, on_screen, selection| State {
+        step: Step::Selected,
+        change,
+        on_screen,
+        selection,
+        ..State::default()
+    };
+    let set = |state: State, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.arrange_state(10, state, cx));
+        cx.run_until_parked();
+    };
+    let page = shell.read_with(cx, |shell, _| shell.pane_frame(10).unwrap().0);
+    let at = |x: f32, y: f32| {
+        let (x, y) = (f32::from(page.origin.x) + x, f32::from(page.origin.y) + y);
+        format!("{x},{y}")
+    };
+
+    set(
+        state(Outcome::None, false, Some([20., 40., 300., 120.])),
+        cx,
+    );
+    assert_eq!(
+        mini_bar_calls(&host),
+        [format!("mini bar 10 at {}: Hide", at(20., 40.))]
+    );
+    press_mini_bar(&host, Press::Hide, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 Hide"]);
+
+    set(
+        state(Outcome::Trades, false, Some([20., 40., 300., 120.])),
+        cx,
+    );
+    assert_eq!(
+        mini_bar_calls(&host),
+        [format!("mini bar 10 at {}: Hide, Put back", at(20., 40.))]
+    );
+    press_mini_bar(&host, Press::PutBack, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 PutBack"]);
+
+    set(
+        state(Outcome::Floats, true, Some([60., 80., 200., 100.])),
+        cx,
+    );
+    assert_eq!(
+        mini_bar_calls(&host),
+        [format!(
+            "mini bar 10 at {}: Stays on screen, Hide, Put back",
+            at(60., 80.)
+        )]
+    );
+    press_mini_bar(&host, Press::Pin, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 ScrollsWithPage"]);
+    set(
+        state(Outcome::Floats, false, Some([60., 80., 200., 100.])),
+        cx,
+    );
+    host.take();
+    press_mini_bar(&host, Press::Pin, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 StaysOnScreen"]);
+
+    // The page scrolls: no box, so no bar, until it rests.
+    set(state(Outcome::Floats, false, None), cx);
+    assert_eq!(mini_bar_calls(&host), ["mini bar none"]);
+    set(
+        state(Outcome::Floats, false, Some([60., 30., 200., 100.])),
+        cx,
+    );
+    assert_eq!(
+        mini_bar_calls(&host),
+        [format!(
+            "mini bar 10 at {}: Scrolls with page, Hide, Put back",
+            at(60., 30.)
+        )]
+    );
+
+    // The same state again asks nothing.
+    set(
+        state(Outcome::Floats, false, Some([60., 30., 200., 100.])),
+        cx,
+    );
+    assert_eq!(mini_bar_calls(&host), Vec::<String>::new());
+
+    cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(mini_bar_calls(&host), ["mini bar none"]);
+}

@@ -1252,6 +1252,11 @@ bool g_settings_placed = false;
 // The UI's view of the browser window the toast shows over, while it shows.
 void* g_toast_over = nullptr;
 
+// Arrange's mini bar, and the UI's view of the browser window it shows over while it shows. Its
+// place in that window's content goes with the window as it moves (Moved).
+Floating g_mini_bar;
+void* g_mini_bar_over = nullptr;
+
 // Where the toast's window goes over |ui_view|'s browser window, in points from its content's top
 // left: at the focused page's top right corner, which in a split view is its pane's, and as wide as
 // that page from its left edge, so no toast runs past its window (#1462).
@@ -3294,6 +3299,9 @@ void host_forget_window(void* ui_view) {
     Forget(it->second.floating);
     g_reveals.erase(it);
   }
+  if (g_mini_bar_over == ui_view) {
+    host_hide_mini_bar();
+  }
   g_pane_corners.erase(ui_view);
   g_page_lefts.erase(ui_view);
   std::erase(UiViews(), Hwnd(ui_view));
@@ -3992,6 +4000,28 @@ void host_hide_toast(void) {
   g_toast_over = nullptr;
   g_toast.plate = RECT{};
   Hide(g_toast);
+}
+
+void host_add_mini_bar(void* mini_bar_view) {
+  Adopt(g_mini_bar, mini_bar_view, false, nullptr);
+  // A click on its buttons leaves the keyboard where it was, with the browser window and the page,
+  // where the mode has its keys, as the hover card's does.
+  SetWindowLongPtrW(g_mini_bar.hwnd, GWL_EXSTYLE,
+                    GetWindowLongPtrW(g_mini_bar.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
+}
+
+void host_show_mini_bar(void* ui_view, double x, double y, double width, double height) {
+  g_mini_bar_over = ui_view;
+  const bool shown = IsWindowVisible(g_mini_bar.hwnd);
+  Show(g_mini_bar, ui_view, x, y, width, height, false);
+  if (!shown) {
+    LogShown(g_mini_bar, "mini bar");
+  }
+}
+
+void host_hide_mini_bar(void) {
+  g_mini_bar_over = nullptr;
+  Hide(g_mini_bar);
 }
 
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {

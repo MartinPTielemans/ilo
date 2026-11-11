@@ -723,6 +723,11 @@ pub(crate) fn finish_opening(
         // Auto-archive at launch can come before there's a toast to show its note in.
         show_archive_note(cx);
     }
+    if let Some(bar) = browser::mini_bar::open(Rc::new(MiniBarHost), cx)
+        && let Ok(view) = bar.update(cx, |_, window, _| ns_view(window))
+    {
+        unsafe { platform::host_add_mini_bar(view) };
+    }
     if let Some(capture) = capture::open(Rc::new(CaptureHost { toast: toast_host }), cx)
         && let Ok(view) = capture.update(cx, |_, window, _| ns_view(window))
     {

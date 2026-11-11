@@ -6,14 +6,17 @@
 //! As Zap, it's the user's alone: offered only where a Boost is, never in an agent's Space or a
 //! private window, and no agent tool reaches it, its list or its file (principle 3).
 
-use gpui::{Context, FontWeight, div, prelude::*, px, svg};
+use std::rc::Rc;
+
+use gpui::{Bounds, Context, FontWeight, div, point, prelude::*, px, size, svg};
 
 use super::{
     NAV_RADIUS, Shell, TITLE, URL_FIELD,
     permission::{Look, card_button_as},
 };
-use crate::boosts::arrange::{Ask, State};
+use crate::boosts::arrange::{Ask, Outcome, State, Step};
 use crate::boosts::{self, Arranged};
+use crate::mini_bar::{self, OnPress, Press};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::theme::packed;
 use crate::tokens::shell::boost::{
@@ -102,6 +105,56 @@ impl Shell {
         );
         self.arrange_mode.state = state;
         cx.notify();
+    }
+
+    /// What Arrange's mini bar shows: Hide, Put back once the thing has a change, and the pin while
+    /// it floats, at the box of the thing selected on a page shown here; nothing while none is
+    /// selected or the page scrolls, when the core gives no box.
+    fn mini_bar(&self) -> Option<mini_bar::Shown> {
+        let tab = self.arranging.filter(|&tab| tab != 0)?;
+        let state = &self.arrange_mode.state;
+        let [x, y, width, height] = state.selection.filter(|_| state.step == Step::Selected)?;
+        let (page, _) = self.pane_frame(tab)?;
+        let at = page.origin + point(px(x), px(y));
+        let changed = matches!(
+            state.change,
+            Outcome::Settles | Outcome::Trades | Outcome::Floats
+        );
+        Some(mini_bar::Shown {
+            tab,
+            selection: Bounds::new(at, size(px(width), px(height))),
+            page,
+            pin: (state.change == Outcome::Floats).then_some(state.on_screen),
+            put_back: changed,
+            accent: self.palette().accent.into(),
+        })
+    }
+
+    /// Asks for the mini bar as the mode's state, the page's place or the tab shown changed.
+    pub(super) fn show_mini_bar(&mut self, cx: &mut Context<Self>) {
+        let shown = self.mini_bar();
+        if shown == self.mini_bar_shown {
+            return;
+        }
+        self.mini_bar_shown = shown.clone();
+        let shell = cx.entity().downgrade();
+        let on_press: OnPress = Rc::new(move |tab, press, cx| {
+            let _ = shell.update(cx, |shell, cx| shell.press_mini_bar(tab, press, cx));
+        });
+        self.browser
+            .show_mini_bar(shown.map(|shown| (shown, on_press)), cx);
+    }
+
+    /// A press on the mini bar: the pin moves a floating thing between staying on screen and
+    /// scrolling with the page, Hide is Zap's, and Put back takes the thing's change back.
+    pub fn press_mini_bar(&mut self, tab: u64, press: Press, cx: &mut Context<Self>) {
+        let ask = match press {
+            Press::Pin if self.arrange_mode.state.on_screen => Ask::ScrollsWithPage,
+            Press::Pin => Ask::StaysOnScreen,
+            Press::Hide => Ask::Hide,
+            Press::PutBack => Ask::PutBack,
+        };
+        self.ask_arrange(tab, ask, cx);
     }
 
     /// What the core last said of the mode on the page shown, while it's on there.
