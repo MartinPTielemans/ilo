@@ -240,20 +240,13 @@ expect '^browser: title [0-9]* value y$' "⌘A in the page didn't select all"
 
 # Korean composes in the page a syllable at a time, from a 2-set keyboard: one key can commit a
 # syllable and start the next, backspace takes a letter off the syllable composing, and return
-# commits and goes on to the page, which Japanese input keeps for itself (#2457). On the Mac it's
-# the driver's scripted Korean input method, and on Windows Microsoft's Korean IME, where the runner
-# has it (check-windows.yml installs it for this run).
-korean=
+# commits and goes on to the page, which Japanese input keeps for itself (#2457). It's the Mac
+# driver's scripted Korean input method; check/ime.sh covers Linux with fcitx5's Hangul engine.
 if [ "$(uname)" = Linux ]; then
   echo "skip: Korean in a page: the Linux driver types plain keys there; check/ime.sh covers it with fcitx5's Hangul engine."
 elif windows; then
-  powershell.exe -NoProfile -NonInteractive -Command "(Get-WinUserLanguageList).InputMethodTips" \
-    2> /dev/null | grep -qi '0412:' && korean=1
-  [ -n "$korean" ] || echo "skip: Korean in a page: the runner has no Korean IME."
+  echo "skip: Korean in a page: the driver can't type through Microsoft's Korean IME yet (#2474)."
 else
-  korean=1
-fi
-if [ -n "$korean" ]; then
   send ime ko
   send type gksr
   expect '^browser: title [0-9]* value y한ㄱ$' \
@@ -328,8 +321,8 @@ else
   in_browser RenderWidgetHostViewCocoa "after the command bar closed"
 fi
 # Korean right after ⌘L: the bar composes 안녕하세요, its 요 still composing, and one escape
-# commits it and closes the bar, as a Korean input method passes the key on. Not on Windows, where
-# the IME composes in the page the keys the host holds for the bar (#1784).
+# commits it and closes the bar, as a Korean input method passes the key on. On the Mac only, as
+# the page step above is (#2474); check/ime.sh composes in the bar under Wayland.
 if [ "$(uname)" != Linux ] && ! windows; then
   send ime ko
   typed_after l dkssudgktpdy
