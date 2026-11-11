@@ -53,7 +53,7 @@ expect '^browser: menu shown ' "a click on Sidebar position didn't open its menu
 post choose Right
 expect '^browser: sidebar on the right$' "choosing Right didn't move the sidebar"
 [ -e "$profile_dir/sidebar-right" ] || fail "Right isn't kept: no sidebar-right in the profile"
-settings_drew 'Tabs & Sidebar'
+expect '^browser: settings sidebar position Right at ' "Sidebar position didn't show Right"
 shot settings
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -71,6 +71,7 @@ send move $((width - 400)) 300
 send move $((width - 3)) 300
 send move $((width - 3)) 306
 expect '^browser: reveal shown$' "the pointer at the right edge didn't bring the sidebar out"
+expect '^browser: reveal window shown$' "the sidebar out didn't come on screen"
 shot revealed
 send move $((width - 400)) 300
 send key s cmd
@@ -85,6 +86,7 @@ expect '^browser: window left full screen$' "the window didn't leave full screen
 side_buttons "after full screen" right
 
 send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type move sidebar
 expect '^browser: command bar commands "move sidebar": Move Sidebar to the Left$' \
   "the command bar didn't list only Move Sidebar to the Left: $(grep '^browser: command bar commands' "$log" | tail -1)"
