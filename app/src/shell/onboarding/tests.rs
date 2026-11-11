@@ -1217,10 +1217,11 @@ fn imports_open_tabs_on(press: Press, cx: &mut TestAppContext) {
         }
     }
     cx.run_until_parked();
+    // Mail's tab is pinned, as its bookmark on the bar is.
     assert_eq!(
         browser.today(),
-        ["https://open.example.com/", "https://mail.example.com/"],
-        "the open tabs weren't placed"
+        ["https://open.example.com/"],
+        "the open tab wasn't placed"
     );
     waited(cx, IMPORT_HOLD);
     assert_ne!(step(&shell, cx), Some(Step::Import), "placed, it went on");
