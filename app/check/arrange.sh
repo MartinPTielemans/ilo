@@ -4,16 +4,18 @@
 # bar's pin turns between staying on screen and scrolling with the page. The mini bar's Hide is
 # Zap's rule and ⌘Z takes it back, its Put back takes a change back, and ⌘Z with the page focused
 # takes back the last change. Each change is saved in the site's .arrange.json as it happens. An
-# agent's call on the page while the user arranges it is refused, in the activity log. Reloaded,
+# agent's call on the page while the user arranges it is refused, in the activity log, and nothing
+# of the page reaches it. Reloaded,
 # the page shows the arrangement, and the run measures whether its first frame already did, in
 # arrange-first-frame.txt, and says which in its summary rather than failing: a flash there is what
 # would bring a renderer hook at document start (#2347's slice 2 plan). Edited outside ilo, the
 # file stays off, and Site Controls' Turn On keeps it. A private window shows the profile's
 # arrangement but offers no Boost to arrange. The foot bar's Reset takes the site's arrangement
 # away, and the page is its own again.
-# It needs the engine with Arrange's core (slice 2): on one without it, it says it skips. The core's
-# lines it reads are the app's on #2414 but for the foot bar's, which the foot bar's slice logs as
-# the Boost card does its place: "browser: foot bar <tab> <button> at <x> <y> <w> <h>".
+# It needs the engine with Arrange's core (slice 2): on one without it, it says it skips. It reads
+# the core's own lines, which carry Chromium's prefix, the app's on #2414, and the foot bar's,
+# which the foot bar's slice logs as the Boost card does its place:
+# "browser: foot bar <tab> <button> at <x> <y> <w> <h>".
 
 serve
 # The page says in its title where its things are, each time that changes: the column's and the
@@ -164,6 +166,7 @@ EOF
   send click $((bx + bw * 3 / 4)) $((by + bh - 26))
   expect "^browser: arrange $tab started\$" "the card's Arrange didn't start Arrange"
   expect "^browser: arrange $tab on\$" "the card's Arrange didn't ask the core for the mode"
+  expect "browser: tab $tab arrange on\$" "the core didn't turn the mode on"
   expect "^browser: boost card $tab closed\$" "the card stayed open over the mode"
 }
 # Sets $mx, $my, $mw and $mh to the mini bar's window, which is the bar and its shadow's margin
@@ -211,7 +214,9 @@ shows "$own" "a click in the mode reached the page"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-picked.png" || fail "no window to capture"
 
 # An agent's call on the page while the user arranges it is refused, with why, in the activity
-# log. The client is the bridge on two pipes, as in the mcp run.
+# log, as the page is the user's: the core checks that before its rule for a page being arranged,
+# which only an agent's own tab could reach, and the mode is never offered there. The client is
+# the bridge on two pipes, as in the mcp run.
 case "$(uname -s)" in
   MINGW* | MSYS*) on='^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ;;
   *) on='^browser: agents server on /.*/Agents\.sock$' ;;
@@ -250,17 +255,19 @@ print(("error: " if result["isError"] else "") + result["content"][0]["text"])'
 ask '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
   > "$out/arrange-mcp-initialize.json"
 printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&4
-arranging='The user is arranging this page.'
+not_its='The tab isn.t in the agent.s own Space\.'
 for tool in read_page press_key; do
   case $tool in
     read_page) refused=$(call read_page "{\"tab\":$tab}" 1) ;;
     press_key) refused=$(call press_key "{\"tab\":$tab,\"key\":\"Tab\"}" 2) ;;
   esac
-  [ "$refused" = "error: $arranging" ] || fail "$tool on the page being arranged answered: $refused"
-  await "^browser: agent activity mcp-client $tab $tool refused: $arranging\$" ||
+  echo "$refused" | grep -q "^error: $not_its\$" ||
+    fail "$tool on the page being arranged answered: $refused"
+  await "^browser: agent activity mcp-client $tab $tool refused: $not_its\$" ||
     fail "the refused $tool didn't reach the activity log"
 done
 grep -q "^browser: tab text $tab " "$log" && fail "the core read the page being arranged"
+grep -q "browser: tab $tab arrange off\$" "$log" && fail "the agent's calls ended the mode"
 exec 4>&- 5<&-
 
 # Carry and settle: the first carried to the edge under the second settles there, the page making
@@ -269,6 +276,7 @@ carry $(slot 0) $(slot_edge 1)
 expect "^browser: arrange $tab Preview Settles\$" "a rest at an edge didn't show a settle"
 send release $(slot_edge 1)
 expect "^browser: arrange $tab Selected Settles selected\$" "letting go at an edge didn't settle"
+expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle"
 shows 'b,a,c,w side s,n hidden - float -' "the settle didn't move the thing under the second"
 kept 1 "the settle wasn't saved"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-settled.png" || fail "no window to capture"
@@ -278,6 +286,7 @@ carry $(slot 2) $(slot 0)
 expect "^browser: arrange $tab Preview Trades\$" "a rest on a thing's middle didn't show a trade"
 send release $(slot 0)
 expect "^browser: arrange $tab Selected Trades selected\$" "letting go on a thing's middle didn't trade"
+expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade"
 shows 'c,a,b,w side s,n hidden - float -' "the trade didn't swap the two"
 kept 2 "the trade wasn't saved"
 
@@ -296,6 +305,7 @@ carry $(side_slot 1) $(page_at 300 760) cmd
 expect "^browser: arrange $tab Preview Floats\$" "a rest with ⌘ held didn't show a float"
 send release $(page_at 300 760) cmd
 expect "^browser: arrange $tab Selected Floats selected\$" "letting go with ⌘ held didn't float"
+expect "browser: tab $tab arrange saved 3 changes\$" "the core didn't save the float"
 kept 3 "the float wasn't saved"
 for _ in $(seq 100); do
   case "$(said)" in *" float n:"*) break ;; esac
@@ -315,6 +325,7 @@ shows "c,a,b,w side s hidden - float n:$pinned" "the pin didn't turn the float b
 
 # ⌘Z with the page focused takes back the last change, the float.
 send key z cmd
+expect "browser: tab $tab arrange saved 2 changes\$" "⌘Z with the page focused didn't reach the mode"
 shows 'c,a,b,w side s,n hidden - float -' "⌘Z didn't take back the float"
 kept 2 "⌘Z's step back wasn't saved"
 
@@ -322,12 +333,14 @@ kept 2 "⌘Z's step back wasn't saved"
 send click $(slot 1)
 expect "^browser: arrange $tab Selected Settles selected\$" "a click didn't select the settled thing"
 press_mini_bar last "put back"
+expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save Put back"
 kept 1 "Put back didn't take the change back"
 
 # Hide, the mini bar's first button on a thing with no change, is Zap's rule, which ⌘Z takes back.
 send click $(slot 3)
 expect "^browser: arrange $tab Selected None selected\$" "a click didn't select the wide section"
 press_mini_bar first hide
+expect "browser: tab $tab arrange hid " "the core didn't hand Hide to Zap"
 for _ in $(seq 100); do
   case "$(said)" in *" hidden w "*) break ;; esac
   sleep 0.1
@@ -345,6 +358,7 @@ grep -q '/\* Zap \*/$' "$css" && fail "⌘Z left Zap's rule in the Boost: $(cat 
 # Escape is Done.
 send key escape
 expect "^browser: arrange $tab off\$" "escape didn't end the mode"
+expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
 kept_column=$(said | sed 's/^col \([^ ]*\) .*/\1/')
 
 # Reloaded, the page places the arrangement as it loads. The run measures, and says, whether the
@@ -442,6 +456,7 @@ $(grep "^browser: foot bar $tab Reset at " "$log" | tail -1 | cut -d' ' -f7-)
 EOF
 [ -n "$rh" ] || fail "the foot bar didn't offer Reset"
 send click $((rx + rw / 2)) $((ry + rh / 2))
+expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Reset"
 shows "$own" "Reset didn't put the page back"
 for _ in $(seq 100); do
   [ -e "$arranged" ] || break
@@ -459,8 +474,8 @@ echo "ok: from the Boost card's Arrange, a click picked a thing with the page ta
   "carry settled it at an edge, traded it on a thing's middle, was refused where it didn't fit," \
   "and with ⌘ floated it, whose pin turned it to scroll with the page and back. ⌘Z took the float" \
   "back, Put back the settle, and Hide was Zap's rule, which ⌘Z took back. Each change was saved" \
-  "in $host.arrange.json. An agent's read_page and press_key on the page were refused as the user" \
-  "arranged it, in the activity log. Reloaded, the page placed the arrangement, and $first_frame." \
+  "in $host.arrange.json. An agent's read_page and press_key on the page the user arranged were" \
+  "refused as not its own, in the activity log. Reloaded, the page placed the arrangement, and $first_frame." \
   "Edited outside ilo it stayed off, and Site Controls' Turn On kept it. A private window's page" \
   "was arranged, with no Boost offered, and the foot bar's Reset gave the page its own layout." \
   "Windows: $out/arrange-on.png, $out/arrange-picked.png, $out/arrange-settled.png," \
