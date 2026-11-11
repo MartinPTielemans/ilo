@@ -30,7 +30,9 @@ jobs:
           gh release download v0.1.15 -R "$GITHUB_REPOSITORY" -p ilo-linux-x86_64.flatpak -D "$dir"
           flatpak install --user -y --noninteractive "$dir/ilo-linux-x86_64.flatpak"
           flatpak info --user app.ilo.browser
-      - run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash .github/proof-2454.sh
+      - env:
+          PROOF_SUB_ONLY: '1'
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash .github/proof-2454.sh
       - if: always()
         uses: actions/upload-artifact@v4
         with:

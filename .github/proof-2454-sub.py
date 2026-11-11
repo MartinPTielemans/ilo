@@ -5,6 +5,7 @@ must, as it can't name the handler's pid from its namespace."""
 import ctypes
 import functools
 import os
+import signal
 import subprocess
 
 print = functools.partial(print, flush=True)
@@ -25,8 +26,11 @@ sys.stdin.readline()
 for line in open("/proc/self/status"):
     if line.startswith(("NSpid:", "Seccomp:")):
         print("  parent", line.strip())
-child = subprocess.Popen(["flatpak-spawn", "--sandbox", "--expose-pids", "python3", "-c", CHILD],
-                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+# From /, as the sub-sandbox has none of the Flatpak's folders but its own.
+child = subprocess.Popen(["flatpak-spawn", "--sandbox", "--expose-pids", "--directory=/", "python3",
+                          "-c", CHILD], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+                         cwd="/")
+signal.alarm(60)
 first = child.stdout.readline().split()
 print("  child says:", first)
 own_pid, address = int(first[1]), int(first[2])

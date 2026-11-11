@@ -63,6 +63,16 @@ crash() {
   say "$1 (pid $2) sent SIG$3: minidumps $before -> $(dumps); alive after: $(kill -0 "$2" 2> /dev/null && echo yes || echo no)"
 }
 
+sub() {
+  say "memory of a sub-sandboxed child, as a renderer is:"
+  timeout 120 flatpak run --filesystem="$PWD/.github:ro" --command=python3 app.ilo.browser \
+    "$PWD/.github/proof-2454-sub.py" 2>&1 | tee -a "$summary"
+}
+if [ -n "${PROOF_SUB_ONLY:-}" ]; then
+  sub
+  exit 0
+fi
+
 page='data:text/html,<title>probe</title><h1>probe</h1>'
 launch signals --env=BROWSER_URL="$page"
 crash renderer "$(pid_of renderer)" SEGV
@@ -93,7 +103,5 @@ say "memory without ptrace, in the sandbox:"
 flatpak run --filesystem="$PWD/.github:ro" --command=python3 app.ilo.browser \
   "$PWD/.github/proof-2454-mem.py" 2>&1 | tee -a "$summary"
 
-say "memory of a sub-sandboxed child, as a renderer is:"
-flatpak run --filesystem="$PWD/.github:ro" --command=python3 app.ilo.browser \
-  "$PWD/.github/proof-2454-sub.py" 2>&1 | tee -a "$summary"
+sub
 exit 0
