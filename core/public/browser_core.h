@@ -2429,6 +2429,13 @@ BC_EXPORT bool bc_window_redo_remove_suggestion(bc_id window, bc_id removal);
 // 0 if the window is closing or gone.
 BC_EXPORT bc_id bc_tab_open(bc_id window, const char* url, bool when_shown);
 
+// As bc_tab_open, for the address the user typed as |typed|, which the core reads as Chrome's
+// address bar does: written with http://, |url| loads over http as written, not tried over https
+// first by HTTPS-Upgrades or by HTTPS-First, which Chrome's bar lets a typed http:// skip too.
+// Typed without a scheme, or null, it's bc_tab_open's load.
+BC_EXPORT bc_id bc_tab_open_typed(bc_id window, const char* url, bool when_shown,
+                                  const char* typed);
+
 // Copies up to |capacity| bytes of the URL Chrome's address bar goes to for |text| typed in it into
 // |url|, UTF-8 and ending in a NUL, and returns the URL's length without it: the page |text| names,
 // else a search for it with the default search engine of the profile |window| shows, DuckDuckGo
@@ -2482,6 +2489,10 @@ BC_EXPORT void bc_tab_show(bc_id tab, bc_rect frame);
 // opens in a tab it opened, at the top of its Space's Today tabs, shown if its window shows that
 // Space, and closing that tab shows the pinned one again.
 BC_EXPORT void bc_tab_navigate(bc_id tab, const char* url);
+
+// As bc_tab_navigate, for the address the user typed as |typed|, read as bc_tab_open_typed reads
+// it.
+BC_EXPORT void bc_tab_navigate_typed(bc_id tab, const char* url, const char* typed);
 
 // Goes back, or forward, in the tab's history, if it has a page that way.
 BC_EXPORT void bc_tab_go_back(bc_id tab);
