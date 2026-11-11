@@ -157,6 +157,21 @@ source_set("sync_spaces_newer") {
   public_deps = [ ":sync_spaces_proto" ]
 }
 
+# Whether a site's arrangement is placed: its file checked against the schema and the record of
+# the one the user made or turned on, apart so browser_core_unittests tests the rule alone.
+source_set("arrangement") {
+  sources = [
+    "arrangement.cc",
+    "arrangement.h",
+  ]
+  deps = [
+    "//base",
+    "//components/pref_registry",
+    "//components/prefs",
+    "//crypto",
+  ]
+}
+
 # When auto-archive takes a Today tab, Never too, apart so browser_core_unittests tests the rule
 # alone.
 source_set("archive_rule") {
@@ -381,6 +396,7 @@ source_set("browser_core") {
 
   deps = [
     ":archive_rule",
+    ":arrangement",
     ":drm_request",
     ":mini_player_place",
     ":other_tabs",
@@ -667,6 +683,7 @@ source_set("browser_core") {
 test("browser_core_unittests") {
   sources = [
     "archive_rule_unittest.cc",
+    "arrangement_unittest.cc",
     "agent_download_hold_unittest.cc",
     "mini_player_place_unittest.cc",
     "other_tabs_unittest.cc",
@@ -687,6 +704,7 @@ test("browser_core_unittests") {
   ]
   deps = [
     ":archive_rule",
+    ":arrangement",
     ":agent_download_hold",
     ":mini_player_place",
     ":other_tabs",
