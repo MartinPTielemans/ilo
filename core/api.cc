@@ -69,6 +69,7 @@
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/typed_http.h"
 #include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
 #include "browser_core/window.h"
@@ -164,8 +165,9 @@ Profile* ProfileOf(const browser_core::Window& window) {
 }
 
 // Loads |url| in the tab, as Chrome loads what's typed in its location bar or a bookmark, giving a
-// tab without its page one first.
-void LoadInTab(bc_id id, const GURL& url, ui::PageTransition transition) {
+// tab without its page one first. With |typed_http| it's an http address the user wrote out, which
+// loads as written (TypedHttp).
+void LoadInTab(bc_id id, const GURL& url, ui::PageTransition transition, bool typed_http) {
   content::WebContents* contents = browser_core::Window::PageOf(id);
   tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
   if (!tab) {
@@ -180,6 +182,7 @@ void LoadInTab(bc_id id, const GURL& url, ui::PageTransition transition) {
     NavigateParams params(tab->GetBrowserWindowInterface(), url, transition);
     params.disposition = WindowOpenDisposition::CURRENT_TAB;
     params.source_contents = contents;
+    params.url_typed_with_http_scheme = typed_http;
     Navigate(&params);
   });
 }
@@ -653,7 +656,9 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
   }
   Profile* profile = space ? browser_core::ProfileFor(space->profile()) : nullptr;
   content::WebContents* contents =
-      window && profile ? window->OpenTab(profile, target, /*when_shown=*/false) : nullptr;
+      window && profile
+          ? window->OpenTab(profile, target, /*when_shown=*/false, /*typed_http=*/false)
+          : nullptr;
   if (!contents) {
     return 0;
   }
@@ -672,7 +677,7 @@ bool bc_agent_navigate(const char* agent, bc_id tab, const char* url) {
       !target.SchemeIsHTTPOrHTTPS() || !browser_core::Window::PageOf(tab)) {
     return false;
   }
-  LoadInTab(tab, target, ui::PAGE_TRANSITION_TYPED);
+  LoadInTab(tab, target, ui::PAGE_TRANSITION_TYPED, /*typed_http=*/false);
   return true;
 }
 
@@ -1777,11 +1782,13 @@ bool bc_window_redo_remove_suggestion(bc_id window_id, bc_id removal) {
   return window && window->RedoRemoveSuggestion(removal);
 }
 
-bc_id bc_tab_open(bc_id window_id, const char* url, bool when_shown) {
+static bc_id OpenTyped(bc_id window_id, const char* url, bool when_shown, const char* typed) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   Profile* profile = window ? ProfileOf(*window) : nullptr;
+  const GURL to(url);
+  const bool typed_http = typed && browser_core::TypedHttp(typed, to);
   content::WebContents* contents =
-      window && profile ? window->OpenTab(profile, GURL(url), when_shown) : nullptr;
+      window && profile ? window->OpenTab(profile, to, when_shown, typed_http) : nullptr;
   if (!contents) {
     return 0;
   }
@@ -1790,6 +1797,14 @@ bc_id bc_tab_open(bc_id window_id, const char* url, bool when_shown) {
     space->Add(tab, /*opener=*/0, /*foreground=*/false);
   }
   return tab;
+}
+
+bc_id bc_tab_open(bc_id window_id, const char* url, bool when_shown) {
+  return OpenTyped(window_id, url, when_shown, nullptr);
+}
+
+bc_id bc_tab_open_typed(bc_id window_id, const char* url, bool when_shown, const char* typed) {
+  return OpenTyped(window_id, url, when_shown, typed);
 }
 
 // The profile |window_id| shows, else the one the core started with.
@@ -1885,17 +1900,26 @@ void bc_tab_show(bc_id id, bc_rect frame) {
   }
 }
 
-void bc_tab_navigate(bc_id id, const char* url) {
+static void NavigateTyped(bc_id id, const char* url, const char* typed) {
   const GURL to(url);
+  const bool typed_http = typed && browser_core::TypedHttp(typed, to);
   const browser_core::Tab* tab = browser_core::Tab::Get(id);
   browser_core::Window* window = tab ? browser_core::Window::Holding(id) : nullptr;
   browser_core::Space* space = browser_core::Space::Holding(id);
   // As in Arc, a pinned tab keeps what it was pinned as: another address opens in a tab of its own.
   if (window && space && space->IsPinned(id) && tab->Url() != to) {
-    window->OpenFromPinned(id, to);
+    window->OpenFromPinned(id, to, typed_http);
     return;
   }
-  LoadInTab(id, to, ui::PAGE_TRANSITION_TYPED);
+  LoadInTab(id, to, ui::PAGE_TRANSITION_TYPED, typed_http);
+}
+
+void bc_tab_navigate(bc_id id, const char* url) {
+  NavigateTyped(id, url, nullptr);
+}
+
+void bc_tab_navigate_typed(bc_id id, const char* url, const char* typed) {
+  NavigateTyped(id, url, typed);
 }
 
 void bc_tab_back_to_pinned_url(bc_id id) {
@@ -1907,7 +1931,7 @@ void bc_tab_back_to_pinned_url(bc_id id) {
   }
   // A tab already there doesn't load it again.
   if (tab->Url() != url) {
-    LoadInTab(id, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
+    LoadInTab(id, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK, /*typed_http=*/false);
   }
 }
 

@@ -332,12 +332,16 @@ class Window : public web_modal::WebContentsModalDialogHost,
   static void LetProfileGo(Profile* profile);
 
   // Opens a tab for |profile| loading |url|, not shown, or with |when_shown| an http(s) |url| only
-  // once it's first shown. Null while the window is closing or Chromium is quitting.
-  content::WebContents* OpenTab(Profile* profile, const GURL& url, bool when_shown);
+  // once it's first shown, and with |typed_http| as the http address the user wrote out
+  // (TypedHttp). Null while the window is closing or Chromium is quitting.
+  content::WebContents* OpenTab(Profile* profile,
+                                const GURL& url,
+                                bool when_shown,
+                                bool typed_http);
   // Opens |url| in a tab |pinned| opened, as a link opened in front, so it's at the top of the
   // Today tabs, shown if the window shows its Space, and closing it shows |pinned| again. Null as
   // OpenTab.
-  content::WebContents* OpenFromPinned(bc_id pinned, const GURL& url);
+  content::WebContents* OpenFromPinned(bc_id pinned, const GURL& url, bool typed_http);
 
   // Opens a tab in no Space for |opener|'s profile, loading |url| at once as a link in |opener|'s
   // page would, not shown: a link preview, which the app shows in a view of its own. Null while
