@@ -724,6 +724,8 @@ else
     perf_memory chrome-1
     perf_row chrome-memory-1 "Chrome here, memory, 1 tab" \
       "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+    # cdp.py asks for the titles each 50 ms, which idle mustn't count.
+    echo "titles off" >&5
     perf_idle chrome-idle-1
     perf_row chrome-idle-cpu-1 "Chrome here, idle CPU, 1 tab" "$cpu" "ilo's"
     perf_row chrome-idle-wakeups-1 "Chrome here, idle wakeups, 1 tab" "$wakeups /s" "ilo's"
@@ -731,6 +733,7 @@ else
     perf_idle chrome-settled-1
     perf_row chrome-settled-cpu-1 "Chrome here, idle CPU, 1 tab, settled" "$cpu" "ilo's"
     perf_row chrome-settled-wakeups-1 "Chrome here, idle wakeups, 1 tab, settled" "$wakeups /s" "ilo's"
+    echo titles >&5
     # A couple of seconds apart, as before Chrome's new tabs were timed.
     : > "$perf_dir/chrome-newtab"
     for n in 2 3 4 5 6 7 8 9 10; do
@@ -751,6 +754,7 @@ else
       "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
     perf_row chrome-newtab "Chrome here, new tab, cdp.py's stamp to page painted" \
       "$(perf_stats '%.0f' < "$perf_dir/chrome-newtab") ms" "ilo's, the gate"
+    echo "titles off" >&5
     perf_idle chrome-idle-20
     perf_row chrome-idle-cpu-20 "Chrome here, idle CPU, 20 tabs" "$cpu" "ilo's, the gate"
     perf_row chrome-idle-wakeups-20 "Chrome here, idle wakeups, 20 tabs" "$wakeups /s" "ilo's, the gate"
@@ -758,6 +762,7 @@ else
     perf_idle chrome-settled-20
     perf_row chrome-settled-cpu-20 "Chrome here, idle CPU, 20 tabs, settled" "$cpu" "ilo's"
     perf_row chrome-settled-wakeups-20 "Chrome here, idle wakeups, 20 tabs, settled" "$wakeups /s" "ilo's"
+    echo titles >&5
     chrome_switches c chrome-switch
     perf_row chrome-switch "Chrome here, tab switch, cdp.py's stamp to page shown" \
       "$(perf_stats '%.0f' < "$perf_dir/chrome-switch") ms" "ilo's, the gate"

@@ -39,7 +39,10 @@ takes a command a line on its standard input:
                   logs "cdp: recording requests"
 For perf's Chrome on the same runner (check/perf.sh), which has no driver of its own:
   titles          logs "cdp: title TARGET TITLE" for each page's title now, then each time a page's
-                  changes, where perf's page stamps its paint and each time it's shown
+                  changes, where perf's page stamps its paint and each time it's shown. DevTools
+                  says a title only as its page navigates, so it asks each 50 ms: the stamp is the
+                  page's own, so the asking isn't in the time
+  titles off      stops asking, as idle and power are measured, then logs "cdp: titles off"
   open URL        logs "cdp: opening at MS", the Unix ms, then opens URL in a new tab in front,
                   as a link from another app does, and logs "cdp: opened TARGET"
   activate TARGET logs "cdp: activating TARGET at MS", then shows the tab, through its window's tab
@@ -141,6 +144,10 @@ else:
 lock = threading.Lock()
 # Whether page titles are logged as they change, once titles asks.
 titles = False
+# The title logged last for each page, by its target.
+logged = {}
+# One message at a time on the pipe or the socket, from the main thread, the reader and the poller.
+sending = threading.Lock()
 replies = {}
 answered = threading.Condition(lock)
 events = []
@@ -156,7 +163,9 @@ def log(line):
 
 
 def log_title(info):
-    if info["type"] == "page":
+    """Logs a page's title if it isn't the one logged last for it; under the lock."""
+    if info["type"] == "page" and logged.get(info["targetId"]) != info["title"]:
+        logged[info["targetId"]] = info["title"]
         log("title %s %s" % (info["targetId"], info["title"]))
 
 
@@ -168,7 +177,8 @@ def call(method, params=None, session=None):
     message = {"id": number, "method": method, "params": params or {}}
     if session:
         message["sessionId"] = session
-    send(json.dumps(message).encode())
+    with sending:
+        send(json.dumps(message).encode())
     with answered:
         answered.wait_for(lambda: number in replies)
         reply = replies.pop(number)
@@ -183,8 +193,9 @@ def post(method, params, session):
     with lock:
         sent += 1
         number = sent
-    send(json.dumps({"id": number, "method": method, "params": params,
-                     "sessionId": session}).encode())
+    with sending:
+        send(json.dumps({"id": number, "method": method, "params": params,
+                         "sessionId": session}).encode())
 
 
 def record(message):
@@ -277,11 +288,25 @@ def attach(wanted):
     log("attached")
 
 
+def poll_titles():
+    """Logs each page's title as it changes, while titles is on."""
+    while True:
+        if titles:
+            infos = call("Target.getTargets")["targetInfos"]
+            with answered:
+                if titles:
+                    for info in infos:
+                        log_title(info)
+        time.sleep(0.05)
+
+
 attached = session = authenticator = None
 if page:
     attach(lambda url: url.endswith(page))
 # Sessions on the other pages shows looked in, by their targets.
 sessions = {}
+# The thread that asks for the titles, once titles starts it.
+poller = None
 
 
 def trace_end(path):
@@ -426,14 +451,23 @@ for line in sys.stdin:
     elif words == ["titles"]:
         with answered:
             titles = True
-            # The pages' titles now, the last each event said, as the reader logs those after.
-            now = {}
-            for event in events:
-                if event and event["method"] in ("Target.targetCreated",
-                                                 "Target.targetInfoChanged"):
-                    now[event["params"]["targetInfo"]["targetId"]] = event["params"]["targetInfo"]
-            for info in now.values():
-                log_title(info)
+            if not poller:
+                # The pages' titles now, the last each event said, before the reader and the
+                # poller log those after.
+                now = {}
+                for event in events:
+                    if event and event["method"] in ("Target.targetCreated",
+                                                     "Target.targetInfoChanged"):
+                        info = event["params"]["targetInfo"]
+                        now[info["targetId"]] = info
+                for info in now.values():
+                    log_title(info)
+                poller = threading.Thread(target=poll_titles, daemon=True)
+                poller.start()
+    elif words == ["titles", "off"]:
+        with answered:
+            titles = False
+        log("titles off")
     elif words[:1] == ["open"] and len(words) == 2:
         log("opening at %d" % (time.time() * 1000))
         log("opened " + call("Target.createTarget", {"url": words[1]})["targetId"])
