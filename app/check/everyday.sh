@@ -97,19 +97,44 @@ send clickkey $at
 expect '^browser: ask where to save on$' "a click didn't turn Ask where to save each file on"
 everyday_key d
 from=$step
-# Longer than the download took with Ask off, which is a moment from the run's own server.
-sleep 3
+# Whether Chrome's chooser asking where to save is up. Only the Mac's driver logs it, so elsewhere
+# it's found among the app's windows by its title.
+chooser_shown() {
+  if [ "$(uname)" = Darwin ]; then
+    grep -q '^browser: save panel offers everyday' "$log"
+  elif windows; then
+    python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" | grep -q '#32770 "Save As" visible'
+  elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    swaymsg -t get_tree |
+      jq -e --argjson pid "$(app_pid)" 'any(.. | objects; .pid? == $pid and .name? == "Save File")' > /dev/null
+  else
+    xdotool search --onlyvisible --pid "$(window_pid)" --name '^Save File$' > /dev/null 2>&1
+  fi
+}
+# Escape before the chooser is up leaves it up, the download asking, and the app's quit waiting on
+# it (#2512), so the run waits for the chooser, and once it's up the download hasn't saved.
+shown=
+for _ in $(seq 100); do
+  chooser_shown && shown=1 && break
+  kill -0 "$pid" 2>/dev/null || gone
+  sleep 0.1
+done
+[ -n "$shown" ] || fail "with Ask on, no chooser asked where to save the page's download"
 [ "$(sed -n "/^browser: drive $from: /,\$p" "$log" | grep -c '^browser: download [0-9]* done everyday')" = 0 ] ||
   fail "with Ask on, the page's download saved by itself"
 ../tools/window-screenshot.sh "$pid" "$out/everyday-ask.png" all || fail "no window to capture"
 if [ "$(uname)" = Darwin ]; then
   # Chrome's panel is out of process, where a posted escape never reaches it, and while it's up
   # the app won't quit: the driver keeps it off screen and cancels it.
-  grep -q '^browser: save panel offers everyday' "$log" || fail "with Ask on, no save panel asked where to save"
   send savecancel
   expect '^browser: save panel cancelled$' "the save panel wasn't cancelled"
 else
   send key escape
+  for _ in $(seq 50); do
+    chooser_shown || break
+    sleep 0.1
+  done
+  ! chooser_shown || fail "escape didn't close the chooser asking where to save"
 fi
 everyday_section General
 in_sight "switch ask where to save" || fail "Settings didn't draw Ask where to save each file"
