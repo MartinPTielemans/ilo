@@ -24,6 +24,7 @@
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/arrange.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
 #include "browser_core/cast_dialog.h"
@@ -242,6 +243,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     RegisterDownloadPrefs();
     developer_mode::RegisterProfilePrefs();
     notes::RegisterProfilePrefs();
+    Arrange::RegisterProfilePrefs();
     RegisterWebRtc();
     widevine::Start();
   }

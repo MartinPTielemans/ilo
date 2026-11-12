@@ -777,6 +777,9 @@ typedef struct bc_sidebar_backup {
   const char* label;
 } bc_sidebar_backup;
 
+// Declared further down, with bc_tab_arrange; tab_arrange_state hands the app one.
+typedef struct bc_arrange_state bc_arrange_state;
+
 typedef struct bc_host {
   // Passed back to every callback.
   void* context;
@@ -1263,6 +1266,28 @@ typedef struct bc_host {
   // first launch, which comes before the app has a window: the app reads that one's command line.
   // The user's alone: agents get no windows.
   void (*app_new_window)(void* context, bool private_window);
+  // Arrange (bc_tab_arrange) changed what it shows on the tab's page: |state| says the step, the
+  // element and what a drop does, for the foot bar's line and the mini bar. Once for each change of
+  // step, element or drop, and while the page scrolls only as the scroll starts and once it rests,
+  // never a frame at a time. It lasts only for the call.
+  void (*tab_arrange_state)(void* context, bc_id tab, const bc_arrange_state* state);
+  // Arrange ended on the tab without the app asking: the page changed, Zap began, or the tab moved
+  // into an agent's Space.
+  void (*tab_arrange_ended)(void* context, bc_id tab);
+  // The user changed |site|'s arrangement in the tab's Arrange: |arrangement| is all of it, |size|
+  // bytes of JSON for the app to write to Boosts/<site>.arrange.json, or empty after Reset, for the
+  // app to remove the file. The core records these bytes as turned on before this comes, so the
+  // file read back is BC_ARRANGEMENT_ON.
+  void (*tab_arrange_saved)(void* context, bc_id tab, const char* site, const char* arrangement,
+                            size_t size);
+  // Which of |site|'s saved changes found no element on the tab's page: the indexes in its
+  // arrangement's list of changes, which are skipped, never matched to the nearest thing, while the
+  // rest apply. As the page loads, once more as the 1.5 s hold for late elements ends, and after
+  // the user changes the arrangement; none once all fit. The page places a change as soon as its
+  // element comes, but this count waits for the next of those. For Site Controls' "No longer fits"
+  // and the list's dimmed rows.
+  void (*tab_arrangement_fits)(void* context, bc_id tab, const char* site,
+                               const uint32_t* misfits, size_t count);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2854,6 +2879,140 @@ BC_EXPORT bool bc_profile_turn_on_boost_script(bc_id profile, const char* site, 
                                                size_t size);
 // Turn Off and Delete…: forgets the script turned on for |site|, which is then new, and off.
 BC_EXPORT void bc_profile_forget_boost_script(bc_id profile, const char* site);
+
+// Arrange (#2347, docs/ux-spec.md › Boosts): the user drags the page's own elements where they want
+// them, and the page closes behind them. An arrangement is data, a list of changes the core places
+// with its own code, the same for every site: one element settled before or after another, two
+// traded, one floating over the page, and none other. Hiding is Zap's rule in the Boost's CSS. The
+// user's alone: no agent, page, sync, link or import starts the mode or changes an arrangement, and
+// an agent's call in a tab while it's arranging is refused, in the activity log.
+
+// How Arrange's marks in the page look, from the app's tokens and the Space's accent: the outline,
+// the drop line, a trade's fill and the label over the element, in |accent| with |label| for the
+// label's text; the place the carried element left, dashed in |ink|; colours as 0xRRGGBB, |line|
+// and |radius| in CSS pixels, up to 16. The label names the element's kind by the app's word for
+// its ARIA role or tag in |kinds|, |count| of them, else |other|, then its own words.
+typedef struct bc_arrange_kind {
+  const char* kind;
+  const char* word;
+} bc_arrange_kind;
+typedef struct bc_arrange_look {
+  uint32_t accent;
+  uint32_t label;
+  uint32_t ink;
+  double line;
+  double radius;
+  const bc_arrange_kind* kinds;
+  size_t count;
+  const char* other;
+} bc_arrange_look;
+
+// Turns Arrange on or off on the tab's page, with |look| for the marks, which may be null to turn
+// it off. While on, a left press, its drag and its release go to Arrange instead of the page, the
+// page's moves still reach it, and the marks are drawn in the page where its scripts can neither
+// style nor cover them, and are gone once it ends; the foot bar and the mini bar are the app's.
+// Returns whether it's on: never for a tab in an agent's Space, a private window, or a page that
+// isn't http(s). Turning it on ends Zap on the tab, with tab_boost_zap_ended, and
+// bc_tab_boost_zap ends it, with tab_arrange_ended, as both take the page's presses. A new page
+// ends it, with tab_arrange_ended.
+BC_EXPORT bool bc_tab_arrange(bc_id tab, bool on, const bc_arrange_look* look);
+
+// What the user asks of Arrange, by the keys the app takes before the page and the bars' buttons:
+// point at the box around the one pointed at (↑) or inside it (↓); undo the last change of the
+// mode's; hide the selected element, as Zap does, with tab_boost_zapped for the app to add to the
+// Boost; put the selected element's change back; keep a floating element on screen, or let it
+// scroll with the page; and Reset, which puts back every change of the site's.
+#define BC_ARRANGE_DO_OUTER 0
+#define BC_ARRANGE_DO_INNER 1
+#define BC_ARRANGE_DO_UNDO 2
+#define BC_ARRANGE_DO_HIDE 3
+#define BC_ARRANGE_DO_PUT_BACK 4
+#define BC_ARRANGE_DO_STAYS_ON_SCREEN 5
+#define BC_ARRANGE_DO_SCROLLS_WITH_PAGE 6
+#define BC_ARRANGE_DO_RESET 7
+// Does |action|, a BC_ARRANGE_DO_ value, on the tab's Arrange. Nothing while it's off.
+BC_EXPORT void bc_tab_arrange_do(bc_id tab, int action);
+
+// Arrange's steps: the pointer is over an element; one is lifted and carried; the carry rested
+// and the page shows the drop as it would be; one is let go, or picked, and stays selected.
+#define BC_ARRANGE_POINTING 0
+#define BC_ARRANGE_CARRYING 1
+#define BC_ARRANGE_PREVIEW 2
+#define BC_ARRANGE_SELECTED 3
+// What a drop does, or what the selected element's change does: none, as at the place it left;
+// settles between two elements, the page making room; trades places with another; floats over the
+// page, where it's let go or with ⌘ held; or refused, as |refused| says why.
+#define BC_ARRANGE_NONE 0
+#define BC_ARRANGE_SETTLES 1
+#define BC_ARRANGE_TRADES 2
+#define BC_ARRANGE_FLOATS 3
+#define BC_ARRANGE_REFUSED 4
+// Why: the two don't fit each other's places, one overflowing at the other's width or a place
+// being in a table, a grid or a line of text; the page doesn't show the element, as inside a closed
+// <details>, which can't be picked; or it's placed, but the page draws over it, so it may be
+// covered.
+#define BC_ARRANGE_FITS 0
+#define BC_ARRANGE_DOESNT_FIT 1
+#define BC_ARRANGE_NOT_SHOWN 2
+#define BC_ARRANGE_COVERED 3
+
+// An element as Arrange names it, for the app's words: |kind| is its ARIA role, or its tag name
+// when it has none, such as "link", "img", "video" or "nav", and |name| the page's own words for
+// it, its label or the start of its text, up to 60 characters, or "". An empty |kind| is none.
+typedef struct bc_arrange_element {
+  const char* kind;
+  const char* name;
+} bc_arrange_element;
+
+typedef struct bc_arrange_state {
+  // A BC_ARRANGE_ step.
+  int step;
+  // The element pointed at, carried or selected.
+  bc_arrange_element element;
+  // A BC_ARRANGE_ change: what a drop here does while carrying or in a preview, what the selected
+  // element's change does, and none while pointing.
+  int change;
+  // A settle's place, between |before| and |after|, either empty at its container's start or end,
+  // or a trade's other element in |before|.
+  bc_arrange_element before;
+  bc_arrange_element after;
+  // Why a change is refused, or that a placed one may be covered: a BC_ARRANGE_ value, FITS if
+  // neither.
+  int refused;
+  // A floating element stays on screen, rather than scrolling with the page.
+  bool on_screen;
+  // Whether Undo and Reset have a change of the site's to take back.
+  bool can_undo;
+  bool can_reset;
+  // The selected element's border, in points from the top-left of the page's view, for the mini
+  // bar, or a box 0 wide when nothing is selected or while the page scrolls.
+  bc_rect box;
+} bc_arrange_state;
+
+// What the core makes of a site's arrangement, the bytes of Boosts/<site>.arrange.json: on, as the
+// user made it in this profile on this computer or turned it on; new, never turned on here; changed
+// outside the browser since; or refused whole, failing its schema or over a limit. Only ON is
+// placed: one changed outside could put a button where another is expected.
+#define BC_ARRANGEMENT_ON 0
+#define BC_ARRANGEMENT_NEW 1
+#define BC_ARRANGEMENT_CHANGED 2
+#define BC_ARRANGEMENT_REFUSED 3
+// The limits past which an arrangement is refused whole, with 2 KB to any string in it.
+#define BC_ARRANGEMENT_MAX_BYTES 65536
+#define BC_ARRANGEMENT_MAX_CHANGES 64
+
+// Gives |site| in |profile| the arrangement the app read from its file, |size| bytes, or takes it
+// away with null |arrangement|. Returns its BC_ARRANGEMENT_ state: the site's pages place it as
+// they commit, those open now at once, only while it's BC_ARRANGEMENT_ON, and nothing runs for a
+// site with none. A private window's pages take their profile's. The user's, as
+// bc_profile_set_boost.
+BC_EXPORT int bc_profile_set_arrangement(bc_id profile, const char* site, const char* arrangement,
+                                         size_t size);
+// Turn On, in Site Controls, which only the user's click calls: records |arrangement|, |size|
+// bytes, as turned on for |site|, and places it as bc_profile_set_arrangement does. False for one
+// refused. The user's alone: no agent, page, sync, link or import calls it.
+BC_EXPORT bool bc_profile_turn_on_arrangement(bc_id profile, const char* site,
+                                              const char* arrangement, size_t size);
 
 // Takes the tab's playing video into Picture in Picture, or brings it back, as
 // bc_site_controls' picture_in_picture says it can. Then tab_site_controls.
