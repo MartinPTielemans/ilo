@@ -45,16 +45,19 @@ card_go() {
   pid=$!
   exec 3> "$out/drive"
   await_load
-  await '^browser: title [0-9]* card up$' || fail "the page's card didn't show"
+  # The app brings back the goes' tabs before, so this go's is the one that loaded its hash.
+  await "^browser: loaded [0-9]* .*#$1\$" || fail "the page for $1 didn't load"
+  tab=$(grep "^browser: loaded [0-9]* .*#$1\$" "$log" | tail -1 | cut -d' ' -f3)
+  await "^browser: title $tab card up\$" || fail "the page's card didn't show"
   send key f cmd
   expect '^browser: find bar shown$' "⌘F didn't open the find bar"
   send type "no thanks"
   expect '^browser: find [0-9]* open 1 of [0-9]* no thanks$' "the find didn't find the card's No thanks"
   if [ "$1" != plain ]; then
-    await '^browser: title [0-9]* card redrawn$' || fail "the card didn't redraw"
+    await "^browser: title $tab card redrawn\$" || fail "the card didn't redraw"
     # The find finds the new card's No thanks, as the store's did before its escape.
     for _ in $(seq 50); do
-      sed -n '/^browser: title [0-9]* card redrawn$/,$p' "$log" | grep -q '^browser: find bar drew "no thanks" 1/1' && break
+      sed -n "/^browser: title $tab card redrawn$/,\$p" "$log" | grep -q '^browser: find bar drew "no thanks" 1/1' && break
       sleep 0.1
     done
   fi
