@@ -198,7 +198,7 @@ pub(crate) unsafe extern "C" fn space_changed(_: *mut c_void, space: bc::bc_id) 
             shell.set_tabs(space, pinned, today, splits.clone(), folders.clone(), cx)
         });
         // A tab the user held from an agent that left its Space ends its hold.
-        agents::space_changed(space, cx);
+        browser::agents::space_changed(space, cx);
     });
 }
 
