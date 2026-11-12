@@ -390,6 +390,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
 }
 
 unsafe extern "C" fn started(_: *mut c_void) {
+    gpui::launch_mark("app started fn");
     // Chromium's message loop dispatches GPUI's messages, as its run loop does on the Mac.
     #[cfg(target_os = "windows")]
     gpui_windows::embed();
@@ -476,7 +477,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         }
         !display.is_null()
     };
+    gpui::launch_mark("app embedded set up");
     let application = gpui_platform::application().with_assets(shell::Assets);
+    gpui::launch_mark("app application made");
     // On X11, as Chromium is, even with a Wayland display in the environment.
     #[cfg(target_os = "linux")]
     let application = match wayland {
@@ -489,7 +492,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         )),
     };
     let app = application.run_embedded(move |cx| {
+        gpui::launch_mark("app run_embedded closure");
         browser::face::register(cx);
+        gpui::launch_mark("app faces registered");
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
         settings::read_look(cx);
@@ -498,6 +503,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         settings::read_clean_links(cx);
         translate_host::read_always(cx);
         give_host_appearance(shell::app_appearance(cx));
+        gpui::launch_mark("app settings read");
         shell::bind_keys(cx);
         browser::text_input::bind_keys(cx);
         #[cfg(target_os = "linux")]
@@ -537,7 +543,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
             KeyBinding::new("alt-cmd-h", HideOthers, Some(shell::KEY_CONTEXT)),
             KeyBinding::new("cmd-m", Minimize, Some(shell::KEY_CONTEXT)),
         ]);
+        gpui::launch_mark("app keys and menu bound");
         cx.set_menus(menus(&shell::MenuBar::default(), None, None, false));
+        gpui::launch_mark("app menus set");
         // check.sh reads this line, as launches are timed from it.
         log!("browser: started at {:.1} ms", unsafe {
             platform::host_since_launch()
@@ -554,7 +562,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         }
         needs_you_host::start(cx);
         daily_count_host::start(cx);
+        gpui::launch_mark("app open_window");
         open_window(None, None, cx);
+        gpui::launch_mark("app open_window returned");
         // Launched by New Incognito Window while ilo wasn't running, the private window opens
         // over the first.
         if launch_asks_private_window() {
