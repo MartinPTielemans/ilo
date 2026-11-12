@@ -45,6 +45,8 @@ git -C .deps/zed apply "$PWD/patches/gpui-macos-embedded.patch" "$PWD/patches/gp
   "$PWD/patches/gpui-linux-embedded.patch" "$PWD/patches/gpui-scale.patch" \
   "$PWD/patches/gpui-wgpu.patch" "$PWD/patches/gpui-web-page.patch" \
   "$PWD/patches/gpui-apple-atlas.patch"
+# Proof only (#2384): GPUI's launch marks, over the patches above.
+git -C .deps/zed apply "$PWD/patches/proof-launch-marks.patch"
 
 # GPUI's accessibility adapters for the Mac and for AT-SPI, at the versions Cargo.lock has, with
 # what upstream lacks: VoiceOver's menu action and a folder's open state, and AT-SPI's expanded
