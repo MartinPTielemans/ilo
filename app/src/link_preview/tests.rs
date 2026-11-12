@@ -1,7 +1,7 @@
 //! The link preview's geometry, keys and clicks, on a host that records what it asks of its window
 //! and the core.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 
@@ -10,6 +10,8 @@ use super::*;
 #[derive(Default)]
 struct Recorder {
     calls: RefCell<Vec<String>>,
+    /// Whether the page shows under the window, as on Windows and Linux.
+    under: Cell<bool>,
 }
 
 impl Recorder {
@@ -37,7 +39,7 @@ impl Host for Recorder {
     // A frame of the motion, which tells nothing of what the user did.
     fn drew(&self, _: Bounds<Pixels>, _: f32, _: f32) {}
     fn page_under(&self) -> bool {
-        false
+        self.under.get()
     }
     fn release(&self) {
         self.push("release".into());
@@ -112,14 +114,19 @@ struct Shown {
 
 impl Shown {
     fn new(cx: &mut TestAppContext) -> Self {
-        let host = Rc::new(Recorder::default());
+        let mut shown = Self::on(Recorder::default(), cx);
+        assert_eq!(shown.calls(), [PLACED, "show 1"]);
+        shown
+    }
+
+    fn on(host: Recorder, cx: &mut TestAppContext) -> Self {
+        let host = Rc::new(host);
         let window = cx.update(|cx| open(host.clone(), cx));
         let window = window.expect("no window for the link preview");
         let cx = VisualTestContext::from_window(window.into(), cx);
         cx.simulate_resize(size(px(800.), px(600.)));
         let mut shown = Shown { cx, host };
         shown.show(TAB);
-        assert_eq!(shown.calls(), [PLACED, "show 1"]);
         shown
     }
 
@@ -239,6 +246,40 @@ fn it_shows_the_site() {
     assert_eq!(site_of("https://example.org"), "example.org");
     assert_eq!(site_of("http://localhost:50821/b.html"), "localhost");
     assert_eq!(site_of("http://[::1]:8080/"), "[::1]");
+}
+
+/// Where its page shows under the window, it's laid out in the card's frame from the first, at
+/// half its size around the link, to where it rests, and goes into the link as the card shrinks
+/// back, before the window's page has the keyboard back: its resting frame never shows outside the
+/// card (#2519).
+#[gpui::test]
+fn a_page_under_the_window_moves_with_the_card(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    let mut shown = Shown::on(host, cx);
+    assert_eq!(shown.calls()[..2], ["place 7 348 153 219 214 r8", "show 1"]);
+    // A frame once it has settled lays the page out where it rests. The motion's clock is the
+    // wall's, so its window came on screen as long ago as it opens.
+    shown.cx.cx.update(|cx| {
+        update(cx, |preview, _, _| {
+            let shown = preview.preview.as_mut().expect("no preview");
+            shown.shown = Some(Instant::now() - Duration::from_secs_f32(OPEN));
+        })
+    });
+    shown.cx.update(|window, _| window.refresh());
+    shown.cx.run_until_parked();
+    assert_eq!(shown.calls(), [PLACED]);
+    shown.keys("escape");
+    assert_eq!(
+        shown.calls(),
+        [
+            "place 7 400 200 1 1 r0",
+            "release",
+            "hide",
+            "close 7",
+            CLOSED
+        ]
+    );
 }
 
 /// Esc closes it back into the link, and its page once it has left.

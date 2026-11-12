@@ -465,6 +465,8 @@ struct Preview {
     /// When its window was first on screen, where the motion starts.
     shown: Option<Instant>,
     settled: bool,
+    /// Where its page was laid out last.
+    placed: Bounds<Pixels>,
     /// Once it's leaving: when, how, and where the motion was.
     leaving: Option<(Instant, Leave, Pose)>,
     _leave: Option<Task<()>>,
@@ -626,7 +628,7 @@ pub fn show(
         preview.finish(cx);
         // check.sh reads this line.
         log!("browser: link preview {tab} {url}");
-        let shown = Preview {
+        let mut shown = Preview {
             window,
             page,
             radius,
@@ -640,10 +642,18 @@ pub fn show(
             asked: Instant::now(),
             shown: None,
             settled: false,
+            placed: page_in(card(page)),
             leaving: None,
             _leave: None,
         };
-        preview.host.place(tab, page_in(card(page)), RADIUS);
+        let mut corners = RADIUS;
+        // A page under the window starts in the card's first frame, and each frame lays it out.
+        if preview.host.page_under() {
+            let pose = shown.drawn(cx);
+            shown.placed = frames(pose, page, link).2.intersect(&shown.placed);
+            corners = RADIUS * pose.scale;
+        }
+        preview.host.place(tab, shown.placed, corners);
         preview.host.show(window);
         preview.preview = Some(shown);
         // The page has the keyboard, and the preview's keys are there once a click gives it to the
@@ -666,7 +676,11 @@ pub fn page_moved(window: u64, (page, radius): (Bounds<Pixels>, f32), cx: &mut A
         }
         shown.page = page;
         shown.radius = radius;
-        host.place(shown.tab, page_in(card(page)), RADIUS);
+        // A page under the window is laid out by the frame it draws next.
+        match host.page_under() {
+            true => shown.placed = Bounds::default(),
+            false => host.place(shown.tab, page_in(card(page)), RADIUS),
+        }
         cx.notify();
     });
 }
@@ -788,6 +802,14 @@ impl LinkPreview {
             "closing"
         };
         log!("browser: link preview {what} ({why})");
+        // A page under the window goes as the card starts to shrink, while it still has the
+        // keyboard, which release gives back. One dismissed was released already, as the user
+        // left, and laying it out would take the keyboard after them.
+        if how == Leave::Close && self.host.page_under() && why != "dismissed" {
+            let (_, about, _) = frames(shown.pose(), shown.page, shown.link);
+            self.host
+                .place(shown.tab, Bounds::new(about, size(px(1.), px(1.))), 0.);
+        }
         self.host.release();
         let tab = shown.tab;
         shown._leave = Some(cx.spawn(async move |preview, cx| {
@@ -931,14 +953,22 @@ impl Render for LinkPreview {
         let (card_frame, about, page) = frames(pose, shown.page, shown.link);
         let under = self.host.page_under();
         // A page under the window shows only where it rests, and the host hears again as that
-        // moves.
+        // moves. Nothing of the window's draws over it but the dim, which it shows through, so
+        // it's laid out in the card's frame as that grows, and goes as the card shrinks back
+        // (leave), or its resting frame would show from the first frame to the last (#2519).
+        let closing = matches!(shown.leaving, Some((_, Leave::Close, _)));
         let page = match under {
+            true if closing => Bounds::new(about, Size::default()),
             true => page.intersect(&page_in(card(shown.page))),
             false => page,
         };
         let page_radius = shown.page_radius(pose.kept);
         if moving || settling || under {
             self.host.drew(page, page_radius * pose.scale, pose.page);
+        }
+        if under && shown.leaving.is_none() && shown.placed != page {
+            shown.placed = page;
+            self.host.place(shown.tab, page, page_radius * pose.scale);
         }
         if settling {
             // check.sh reads these lines, the button's before it waits on the other, to rest on it.
