@@ -253,8 +253,6 @@ struct Floating {
   std::optional<RECT> plate;
   // Called after the event, when the user leaves it for a window that isn't its own.
   void (*dismissed)(void) = nullptr;
-  // Set while the host hides it, so that isn't the user leaving it.
-  bool hiding = false;
   // Counts its fades, so one that ends after it showed or hid again leaves it be.
   int fades = 0;
   // Counts the overlays' shows and hides, so a show still to come after a hide leaves it hidden.
@@ -408,7 +406,7 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
       }
       // Shown, even once Windows has hidden it with its browser window, which takes the keyboard
       // from it only then.
-      if (LOWORD(wparam) == WA_INACTIVE && !floating->hiding && Shows(floating->life)) {
+      if (LOWORD(wparam) == WA_INACTIVE && Shows(floating->life)) {
         const HWND to = reinterpret_cast<HWND>(lparam);
         LogIn("focus", "%s loses the keyboard to %p %s%s, pressed %d", FloatingName(hwnd),
               static_cast<void*>(to), ClassName(to).c_str(),
@@ -707,9 +705,7 @@ void Hide(Floating& floating) {
   if (!floating.hwnd) {
     return;
   }
-  floating.hiding = true;
   PutAway(floating.hwnd, GetWindow(floating.hwnd, GW_OWNER), actions);
-  floating.hiding = false;
 }
 
 // A floating window the UI has hidden never keeps the keyboard. Windows makes the one a browser
@@ -3927,11 +3923,12 @@ void host_release_site_controls(void) {
     return;
   }
   g_site_controls.mouse_through = true;
-  if (GetForegroundWindow() == g_site_controls.hwnd) {
-    g_site_controls.hiding = true;
-    SetForegroundWindow(GetWindow(g_site_controls.hwnd, GW_OWNER));
-    g_site_controls.hiding = false;
-  }
+  // Released, it closes on screen as a fade out does, and gives the keyboard back as one starts.
+  // Still marked as shown with the keyboard, it took the keyboard back from the browser window it
+  // had just given it to, and kept what was typed while it closed (#2563).
+  g_site_controls.keyboard = false;
+  PutAway(g_site_controls.hwnd, GetWindow(g_site_controls.hwnd, GW_OWNER),
+          Step(g_site_controls.life, OverlayEvent::kHide, kLater));
   fprintf(stderr, "browser: site controls released\n");
 }
 
