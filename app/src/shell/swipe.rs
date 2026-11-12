@@ -409,8 +409,17 @@ impl Shell {
             }
             None => Some(event.delta),
         };
-        let took = moved
-            .is_none_or(|delta| self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx));
+        // Until the lift is found, momentum moves the pages as fingers would, on past the Space they
+        // take. There only fingers going faster than they have yet move them further: one swipe
+        // takes one Space, and past it fingers only stretch the band.
+        let held = !self.web_wheel.fastest()
+            && self
+                .swipe
+                .as_ref()
+                .is_some_and(|swipe| self.past_next(swipe));
+        let took = moved.is_none_or(|delta| {
+            held || self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx)
+        });
         let lift = phase(TouchPhase::Ended, still);
         self.web_wheel_quiet = Some(cx.spawn_in(window, async move |shell, cx| {
             // Slowed fingers lift after GAP, and others after LONG.
@@ -424,6 +433,12 @@ impl Shell {
             }
         }));
         took
+    }
+
+    /// Whether `swipe` has taken the pages past the Space beside the one it began on.
+    fn past_next(&self, swipe: &Swipe) -> bool {
+        let across = swipe.across == Some(true) && swipe.cards.is_none() && !swipe.library;
+        across && self.swiped_to(swipe).abs() > self.width()
     }
 
     /// No wheel event since the last, at `now`: fingers still down lift, as `lift`.

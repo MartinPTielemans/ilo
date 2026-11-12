@@ -552,9 +552,14 @@ impl Run {
     }
 }
 
-/// A hard flick lands on the next Space, as the app's does, and once the demo finds the fingers
-/// lifted, the page settles there without heading on toward the Space after, however long the
-/// momentum runs; the two pages drawn as it moves never overlap.
+/// How much further than the app's a hard flick may take the page past its Space, in Spaces: a
+/// browser's lift comes some events late, and that much is a few pixels.
+const PAST_SLACK: f32 = 0.02;
+
+/// A hard flick lands on the next Space, as the app's does, goes no further past it than the app's
+/// give or take PAST_SLACK, and once the demo finds the fingers lifted, the page settles there
+/// without heading on toward the Space after, however long the momentum runs; the two pages drawn
+/// as it moves never overlap.
 #[gpui::test]
 fn a_hard_flick_settles_on_one_space(cx: &mut TestAppContext) {
     for (peak, tau) in [(2., 400.), (4., 400.), (6., 400.), (4., 800.)] {
@@ -573,6 +578,11 @@ fn a_hard_flick_settles_on_one_space(cx: &mut TestAppContext) {
                     assert_eq!(demo.shown, app.shown, "{way}: the Spaces shown");
                     assert_eq!(demo.heads_away(), None, "{way}: after the lift");
                     assert_eq!(demo.overlaps(), None, "{way}: pages over each other");
+                    let (past, app_past) = (demo.past(), app.past());
+                    assert!(
+                        past <= app_past + PAST_SLACK,
+                        "{way}: {past:.3} of a Space past its place, the app {app_past:.3}"
+                    );
                 }
             }
         }
@@ -604,7 +614,7 @@ fn hard_flick_stats(cx: &mut TestAppContext) {
                     let demo = in_demo(cx, &events, delivery, end);
                     shown += usize::from(demo.shown != app.shown);
                     away += usize::from(demo.heads_away().is_some());
-                    further += usize::from(demo.past() > app.past() + 0.02);
+                    further += usize::from(demo.past() > app.past() + PAST_SLACK);
                     app_past = app_past.max(app.past());
                     demo_past = demo_past.max(demo.past());
                 }
