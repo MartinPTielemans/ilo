@@ -375,6 +375,18 @@ send rightdragto $(($1 + 60)) $(($2 + 16))
 expect "^browser: menu highlights $(cased 'Copy Link') at " "dragging onto Copy Link didn't highlight it"
 send rightrelease $(($1 + 60)) $(($2 + 16))
 expect "^browser: menu chose $(cased 'Copy Link')\$" "letting go on Copy Link didn't pick it"
+# The first click after an item chosen with the pointer lands in the page, and the window stays
+# where it was: on Windows the press that opened the menu, whose release the menu took, left the
+# browser window holding the mouse captured, so the click went to the UI over the page (#2516).
+send order
+[ "$focus" != RenderWidgetHostViewCocoa ] ||
+  fail "the page had the keyboard before the click into it, which then can't say where the click went"
+chosen_frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+send click $page_point
+in_browser RenderWidgetHostViewCocoa "a click into the page right after a menu item chosen with the pointer"
+send order
+[ "$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)" = "$chosen_frame" ] ||
+  fail "a click into the page right after a menu item chosen with the pointer moved the window from $chosen_frame"
 # A click outside closes the menu, and goes no further.
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the top Today row didn't show its menu"
