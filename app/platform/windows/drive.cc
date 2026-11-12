@@ -187,6 +187,11 @@ POINT g_real_move{};
 ULONG_PTR g_real_move_number = 0;
 bool g_real_move_again = false;
 void RealMoveTo(POINT at, bool again = false);
+// The real input a step sends after it brought the app in front, held for the steps that send it
+// once the app has had a turn, while it's true.
+std::vector<INPUT> g_real_held;
+bool g_real_holding = false;
+bool g_real_resending = false;
 
 // Whether the desktop is the check's own, which real input may take: a GitHub runner's, or one
 // BROWSER_DRIVE_OWN_DESKTOP=1 says is. Never a developer's, whose pointer and keys it would take.
@@ -471,14 +476,37 @@ void SendReal(INPUT input) {
       input.type == INPUT_KEYBOARD
           ? (input.ki.dwFlags & KEYEVENTF_KEYUP) != 0
           : (input.mi.dwFlags & (MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP)) != 0;
-  if (!move && !let_go && !OursInFront()) {
-    BringInFront();
+  if (g_real_holding) {
+    g_real_held.push_back(input);
+    return;
   }
   if (!move && !let_go && !OursInFront()) {
-    const HWND front = GetForegroundWindow();
-    fprintf(stderr, "browser: drive: real input withheld, another app's %s is in front\n",
-            front ? Utf8(ClassOf(front)).c_str() : "nothing");
-    return;
+    BringInFront();
+    if (!OursInFront()) {
+      const HWND front = GetForegroundWindow();
+      fprintf(stderr, "browser: drive: real input withheld, another app's %s is in front\n",
+              front ? Utf8(ClassOf(front)).c_str() : "nothing");
+      return;
+    }
+    // The app takes its turn first, as it does before a hand's next key: a window coming in
+    // front hands the keyboard on as it settles, such as to a dialog shown meanwhile, and a key
+    // sent at once went to the page under the dialog instead (#2544). What the step sends after
+    // this is held with it. Held once: sent again, it goes at once.
+    if (!g_real_resending) {
+      g_real_holding = true;
+      g_real_held.push_back(input);
+      g_steps.push_front({[] {
+        g_real_holding = false;
+        g_real_resending = true;
+        for (const INPUT& held : std::exchange(g_real_held, {})) {
+          SendReal(held);
+        }
+        g_real_resending = false;
+      }});
+      g_steps.push_front({[] {}});
+      g_steps.push_front({[] {}});
+      return;
+    }
   }
   // Hooks set later are called first, as the menu's are once it shows: the driver's go in front
   // again, so they hear each event before one of the host's takes it.
@@ -553,15 +581,19 @@ void RealModifiers(int to) {
   static const std::pair<int, UINT> keys[] = {{kCtrl, VK_CONTROL}, {kShift, VK_SHIFT},
                                               {kAlt, VK_MENU},     {0, VK_LWIN},
                                               {0, VK_RWIN}};
-  // Held in order and let go in reverse, the last held first, as a hand does.
+  // Those let go first, the last held first, then those held, in order, as a hand does: Alt
+  // pressed while the ⌃ a ⌘ key kept was still down made a chord of it, not ⌥ tapped alone.
+  for (auto key = std::rbegin(keys); key != std::rend(keys); ++key) {
+    if (!(to & key->first) && (GetAsyncKeyState(key->second) & 0x8000)) {
+      if (key->second == VK_LWIN || key->second == VK_RWIN) {
+        fprintf(stderr, "browser: drive: lets go of the Windows key the desktop held\n");
+      }
+      RealKey(key->second, true);
+    }
+  }
   for (const auto& [modifier, vk] : keys) {
     if ((to & modifier) && !(GetAsyncKeyState(vk) & 0x8000)) {
       RealKey(vk, false);
-    }
-  }
-  for (auto key = std::rbegin(keys); key != std::rend(keys); ++key) {
-    if (!(to & key->first) && (GetAsyncKeyState(key->second) & 0x8000)) {
-      RealKey(key->second, true);
     }
   }
 }
@@ -1781,6 +1813,17 @@ bool Run(const std::string& line) {
       const WORD each = *up;
       g_steps.push_back({[send, each] { send(each, true); }, 15});
     }
+    // What Windows did with them, for a check that waits on it in vain, as Win+D's.
+    g_steps.push_back({[] {
+      const HWND front = GetForegroundWindow();
+      const HWND driven = Driven();
+      fprintf(stderr, "browser: drive: after realkey, %s in front, the driven window %s\n",
+              front ? Utf8(ClassOf(front)).c_str() : "nothing",
+              !driven                ? "gone"
+              : IsIconic(driven)     ? "minimized"
+              : IsWindowVisible(driven) ? "shown"
+                                        : "hidden");
+    }});
     return true;
   }
   // The windows the app has over its browser windows that are on screen, by their own visibility:
