@@ -282,6 +282,26 @@ fn a_page_under_the_window_moves_with_the_card(cx: &mut TestAppContext) {
     );
 }
 
+/// Under Reduce Motion the card fades in where it rests, and a page under the window, which can't
+/// fade, waits at the link until the card has.
+#[gpui::test]
+fn under_reduce_motion_a_page_under_the_window_waits_for_the_card(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let host = Recorder::default();
+    host.under.set(true);
+    let mut shown = Shown::on(host, cx);
+    assert_eq!(shown.calls(), ["place 7 400 200 1 1 r16", "show 1"]);
+    shown.cx.cx.update(|cx| {
+        update(cx, |preview, _, _| {
+            let shown = preview.preview.as_mut().expect("no preview");
+            shown.shown = Some(Instant::now() - Duration::from_secs_f32(OPEN));
+        })
+    });
+    shown.cx.update(|window, _| window.refresh());
+    shown.cx.run_until_parked();
+    assert_eq!(shown.calls(), [PLACED]);
+}
+
 /// Esc closes it back into the link, and its page once it has left.
 #[gpui::test]
 fn escape_closes_it(cx: &mut TestAppContext) {

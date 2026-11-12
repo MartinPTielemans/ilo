@@ -172,6 +172,12 @@ fn page_in(card: Bounds<Pixels>) -> Bounds<Pixels> {
     )
 }
 
+/// Where a page under the window goes while it isn't to show: a point, at `about`, as the core
+/// lays a page out in a frame of some size.
+fn away(about: Point<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(about, size(px(1.), px(1.)))
+}
+
 /// The card with its page at `page`.
 fn card_around(page: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(
@@ -646,14 +652,20 @@ pub fn show(
             leaving: None,
             _leave: None,
         };
-        let mut corners = RADIUS;
-        // A page under the window starts in the card's first frame, and each frame lays it out.
+        let (mut at, mut corners) = (shown.placed, RADIUS);
+        // A page under the window starts in the card's first frame, and each frame lays it out:
+        // under Reduce Motion, once the card has faded in.
         if preview.host.page_under() {
             let pose = shown.drawn(cx);
-            shown.placed = frames(pose, page, link).2.intersect(&shown.placed);
-            corners = RADIUS * pose.scale;
+            let (_, about, first) = frames(pose, page, link);
+            (at, corners) = (first.intersect(&shown.placed), RADIUS * pose.scale);
+            shown.placed = at;
+            if crate::motion::still(cx) {
+                shown.placed = Bounds::new(about, Size::default());
+                at = away(about);
+            }
         }
-        preview.host.place(tab, shown.placed, corners);
+        preview.host.place(tab, at, corners);
         preview.host.show(window);
         preview.preview = Some(shown);
         // The page has the keyboard, and the preview's keys are there once a click gives it to the
@@ -807,8 +819,7 @@ impl LinkPreview {
         // left, and laying it out would take the keyboard after them.
         if how == Leave::Close && self.host.page_under() && why != "dismissed" {
             let (_, about, _) = frames(shown.pose(), shown.page, shown.link);
-            self.host
-                .place(shown.tab, Bounds::new(about, size(px(1.), px(1.))), 0.);
+            self.host.place(shown.tab, away(about), 0.);
         }
         self.host.release();
         let tab = shown.tab;
@@ -956,9 +967,12 @@ impl Render for LinkPreview {
         // moves. Nothing of the window's draws over it but the dim, which it shows through, so
         // it's laid out in the card's frame as that grows, and goes as the card shrinks back
         // (leave), or its resting frame would show from the first frame to the last (#2519).
+        // Under Reduce Motion the card fades in where it rests, and the page, which can't fade,
+        // waits for it.
         let closing = matches!(shown.leaving, Some((_, Leave::Close, _)));
+        let held = closing || (pose.page < 1. && crate::motion::still(cx));
         let page = match under {
-            true if closing => Bounds::new(about, Size::default()),
+            true if held => Bounds::new(about, Size::default()),
             true => page.intersect(&page_in(card(shown.page))),
             false => page,
         };
@@ -968,7 +982,11 @@ impl Render for LinkPreview {
         }
         if under && shown.leaving.is_none() && shown.placed != page {
             shown.placed = page;
-            self.host.place(shown.tab, page, page_radius * pose.scale);
+            let at = match held {
+                true => away(about),
+                false => page,
+            };
+            self.host.place(shown.tab, at, page_radius * pose.scale);
         }
         if settling {
             // check.sh reads these lines, the button's before it waits on the other, to rest on it.
