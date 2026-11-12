@@ -278,6 +278,12 @@ struct Menu {
   bool give_back = true;
   // Bumped by each show and hide, so a show posted before a hide doesn't put the menu back.
   unsigned showing = 0;
+  // Where the pointer rested as it showed, until the pointer leaves it. Windows sends the window
+  // under a resting pointer a move to where it is as windows show and hide, which a native menu
+  // ignores; it would take the highlight from the checked item of a pop-up opened from the
+  // keyboard, so ↓ went from the item under the pointer instead (#2544).
+  bool resting = false;
+  POINT rest{};
 };
 Menu g_menu;
 // The thread hooks that watch the pointer and the keys while the menu shows.
@@ -1788,9 +1794,16 @@ bool MenuTakesPointer(WPARAM message, POINT pt) {
 }
 
 LRESULT CALLBACK MenuMouse(int code, WPARAM wparam, LPARAM lparam) {
-  if (code == HC_ACTION && DesktopPointerHeard() &&
-      MenuTakesPointer(wparam, reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->pt)) {
-    return 1;
+  if (code == HC_ACTION && DesktopPointerHeard()) {
+    const POINT pt = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->pt;
+    const bool moved = wparam == WM_MOUSEMOVE || wparam == WM_NCMOUSEMOVE;
+    if (moved && g_menu.resting && pt.x == g_menu.rest.x && pt.y == g_menu.rest.y) {
+      return 1;
+    }
+    g_menu.resting = g_menu.resting && !moved;
+    if (MenuTakesPointer(wparam, pt)) {
+      return 1;
+    }
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
@@ -4304,6 +4317,7 @@ void host_show_menu_window(void* ui_view,
     PlaceAndShow(g_menu.hwnd, frame.left, frame.top, wide, high, true);
     SetForegroundWindow(g_menu.hwnd);
     SetFocus(g_menu.hwnd);
+    g_menu.resting = GetCursorPos(&g_menu.rest);
     InstallMenuHooks();
     // check.sh reads this line.
     fprintf(stderr, "browser: menu window at %.0f,%.0f %.0fx%.0f\n", left, top, width, height);
