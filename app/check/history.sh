@@ -285,11 +285,30 @@ warned() {
   [ "$key" = NativeWidgetMacNSWindow ] ||
     fail "a click on Chrome's warning before http at $warning didn't give it the keyboard: $key, $focus"
 }
+# The way a shortcut on the warning reaches the UI, one way an OS: on the Mac AppKit offers a ⌘
+# shortcut to the browser window's views too, so GPUI runs it from the UI; on Linux and Windows the
+# key goes to the warning alone, whose keys the core asks about as a page's (dialog_keys.cc).
+route=page
+[ "$(uname)" != Darwin ] || route=ui
+# Command $1 ran once since the last key, $2, and by this OS's way. Read once its effect is logged.
+ran_on_warning() {
+  ran_once "$1" "$2 on Chrome's warning before http"
+  since | grep -q "^browser: command $1 via $route\$" ||
+    fail "$2 on Chrome's warning before http ran $1 $(since | sed -n "s/^browser: command $1 //p"), not via $route"
+}
 if [ "$major" -ge 157 ]; then
   warned
   send key t cmd
-  expect '^browser: command new-tab via page$' "⌘T on Chrome's warning before http didn't reach the UI"
+  expect '^browser: command new-tab via ' "⌘T on Chrome's warning before http didn't reach the UI"
   expect '^browser: command bar shown$' "⌘T on Chrome's warning before http didn't open the command bar"
+  ran_on_warning new-tab "one ⌘T"
+  # The Mac's warning is a window of its own, which had the keyboard: the bar takes it from there.
+  # Elsewhere the second tab's address, typed into the bar below, shows the bar has it.
+  if [ "$(uname)" = Darwin ]; then
+    send state
+    [ "$key" = GPUIPanel ] && [ "$focus" = GPUIView ] ||
+      fail "⌘T on Chrome's warning before http opened the command bar without the keyboard, which is in $key, on $focus"
+  fi
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened"
   # The warning's in a second tab, so one ⌘W on it is seen to close that tab alone: under Wayland
@@ -304,9 +323,9 @@ if [ "$major" -ge 157 ]; then
   expect "^browser: loaded $tab http://$nearby:$port/\$" "$nearby:$port didn't load in the second tab"
   warned
   send key w cmd
-  expect '^browser: command close-tab via page$' "⌘W on Chrome's warning before http didn't reach the UI"
+  expect '^browser: command close-tab via ' "⌘W on Chrome's warning before http didn't reach the UI"
   expect_tabs "$kept" "$kept" "after one ⌘W on Chrome's warning before http"
-  ran_once close-tab "one ⌘W on Chrome's warning before http"
+  ran_on_warning close-tab "one ⌘W"
 fi
 exec 3>&-
 quit
