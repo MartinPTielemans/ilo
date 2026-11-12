@@ -717,6 +717,17 @@ void Tab::LoadWaiting() {
   StateChanged();
 }
 
+void Tab::SetPageMayClose(bool may) {
+  if (page_may_close_ == may) {
+    return;
+  }
+  page_may_close_ = may;
+  // The renderer reads it from the page's preferences (OverrideWebPreferences in main_delegate.cc).
+  if (web_contents()) {
+    web_contents()->NotifyPreferencesChanged();
+  }
+}
+
 void Tab::SetMuted(bool muted) {
   if (!web_contents()) {
     if (unloaded_) {

@@ -2605,6 +2605,17 @@ void bc_tab_set_icon(bc_id id, const char* icon) {
   }
 }
 
+void bc_tab_set_page_may_close(bc_id id, bool may) {
+  // Never an agent's tab, which a page's close would take from under the agent.
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  if (may && space && space->agent()) {
+    return;
+  }
+  if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
+    tab->SetPageMayClose(may);
+  }
+}
+
 void bc_tab_set_muted(bc_id id, bool muted) {
   if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
     tab->SetMuted(muted);
