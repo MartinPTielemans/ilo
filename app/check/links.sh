@@ -364,7 +364,7 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey $(drawn "link remove 0")
+  click_in_sight "link remove 0"
   expect "$(rules_drawn none "Little ilo")" "the trash didn't take the Meet rule, leaving the empty box"
   ../tools/window-screenshot.sh "$pid" "$out/links-rules-empty.png" || fail "no window to capture"
   post clickkey $(drawn "link otherwise")
@@ -399,7 +399,7 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey $(drawn "link add")
+  click_in_sight "link add"
   expect '^browser: link rule 0 field has the keyboard$' "+ didn't give the new rule's field the keyboard"
   send type work
   expect "$(rules_drawn 'URL contains "work" → [^,;]*' "$front")" "the rule didn't take the text typed"
@@ -417,7 +417,7 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey $(drawn "link add")
+  click_in_sight "link add"
   expect '^browser: link rule 1 field has the keyboard$' "+ didn't give the second rule's field the keyboard"
   send insert "${site}index.html"
   post clickkey $(drawn "link condition 1")
@@ -449,13 +449,13 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey $(drawn "link remove 0")
+  click_in_sight "link remove 0"
   expect "$(rules_drawn 'URL contains "work" → work' work)" "the trash didn't take the rule away"
   send key z cmd
   expect "$(rules_drawn "$exact, URL contains \"work\" → work" work)" \
     "⌘Z didn't bring the rule the trash took back to its place"
   ../tools/window-screenshot.sh "$pid" "$out/links-rule-back.png" || fail "no window to capture"
-  send clickkey $(drawn "link remove 0")
+  click_in_sight "link remove 0"
   expect "$(rules_drawn 'URL contains "work" → work' work)" "the trash didn't take the rule away again"
   # A rule to Little ilo opens its links in one, for the Space in front: the second, the last link
   # to the window having shown it.

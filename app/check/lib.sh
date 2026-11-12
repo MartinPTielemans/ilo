@@ -482,6 +482,15 @@ in_sight() {
   rest=$(drawn_after "$1" "^browser: drive $step: ") && at=$rest
   return 0
 }
+# Clicks Settings' control $1 in the card, where the card shows it whole, as in_sight scrolls it:
+# one at $(drawn …) under a short window's edge takes the click on nothing (#2503). $2 is the
+# driver's command, clickkey unless named. in_sight's variables are its own here, so a caller's at,
+# a mark it awaits from, keeps.
+click_in_sight() {
+  local at sight top bottom y by rest
+  in_sight "$1" || fail "Settings didn't draw $1"
+  send "${2:-clickkey}" $at
+}
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
 # checks it). Escape closes it, leaving the window with no page that the steps after expect. With
 # a path, the windows are captured there while it's open.

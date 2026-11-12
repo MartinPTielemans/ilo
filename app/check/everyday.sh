@@ -58,7 +58,7 @@ before=$(sed -n 's/^browser: title [0-9]* ratio \(.*\)$/\1/p' "$log" | tail -1)
 
 # Page zoom at 125%, then back to 100%.
 everyday_section General
-send clickkey $(drawn "page zoom")
+click_in_sight "page zoom"
 expect '^browser: menu shown ' "a click on Page zoom didn't open its menu"
 post choose 125%
 expect '^browser: page zoom 125%$' "choosing 125% didn't set the page zoom"
@@ -68,7 +68,7 @@ expect '^browser: title [0-9]* ratio 1\.25$' \
   "at 125% the page's devicePixelRatio isn't 1.25: $(grep 'ratio' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/everyday-zoomed.png" || fail "no window to capture"
 everyday_section General
-send clickkey $(drawn "page zoom")
+click_in_sight "page zoom"
 expect '^browser: menu shown ' "a click on Page zoom didn't open its menu again"
 post choose "100% (default)"
 expect '^browser: page zoom 100% (default)$' "choosing 100% didn't set the page zoom back"
@@ -77,14 +77,14 @@ expect "^browser: title [0-9]* ratio $before\$" "back at 100% the page isn't at 
 
 # Notifications' question off: the page's request is denied without asking.
 everyday_section Privacy
-send clickkey $(drawn "switch notification prompts")
+click_in_sight "switch notification prompts"
 expect '^browser: notification prompts off$' "a click didn't turn notification prompts off"
 ../tools/window-screenshot.sh "$pid" "$out/everyday-privacy.png" || fail "no window to capture"
 everyday_key n
 expect '^browser: title [0-9]* notifications denied$' \
   "with the question off, the page's request wasn't denied: $(grep 'notifications' "$log" | tail -1)"
 everyday_section Privacy
-send clickkey $(drawn "switch notification prompts")
+click_in_sight "switch notification prompts"
 expect '^browser: notification prompts on$' "a click didn't turn notification prompts on again"
 
 # Ask where to save off, as by default: the download saves by itself. On: it doesn't.
