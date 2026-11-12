@@ -5423,6 +5423,12 @@ bool host_window_on_active_space(void* ui_view) {
   return !browser || !browser->window || browser->window.onActiveSpace;
 }
 
+bool host_window_full_screen(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  // AppKit sets the mask as the transition starts.
+  return browser && browser->window && (browser->window.styleMask & NSWindowStyleMaskFullScreen);
+}
+
 bool host_enter_full_screen(void* ui_view) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser || !browser->window) {

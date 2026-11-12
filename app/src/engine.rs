@@ -1558,6 +1558,11 @@ impl Browser for Engine {
     }
 
     #[cfg(target_os = "macos")]
+    fn full_screen_now(&self) -> bool {
+        unsafe { platform::host_window_full_screen(self.ui_view) }
+    }
+
+    #[cfg(target_os = "macos")]
     fn on_active_space(&self) -> bool {
         unsafe { platform::host_window_on_active_space(self.ui_view) }
     }
