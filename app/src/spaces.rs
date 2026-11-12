@@ -247,11 +247,18 @@ pub(crate) unsafe extern "C" fn archive_changed(
             title: text(tab.title),
             archived: tab.archived,
             little: tab.little,
+            snoozed_until: tab.snoozed_until,
+            space: tab.space,
         })
         .collect();
     // check.sh waits for this line.
     log!("browser: archive {count} tabs");
     update_shells(|shell, cx| shell.set_archive(archive.clone(), cx));
+}
+
+pub(crate) unsafe extern "C" fn tab_unsnoozed(_: *mut c_void, tab: bc::bc_id) {
+    log!("browser: tab {tab} unsnoozed");
+    update_shells(|shell, cx| shell.tab_unsnoozed(tab, cx));
 }
 
 pub(crate) unsafe extern "C" fn sidebar_backups_changed(

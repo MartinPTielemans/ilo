@@ -8,6 +8,8 @@
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/host.h"
 #include "browser_core/session.h"
+#include "browser_core/snooze.h"
+#include "browser_core/space.h"
 
 namespace browser_core {
 
@@ -47,11 +49,14 @@ void Report() {
   std::vector<bc_archived_tab> tabs;
   tabs.reserve(Tabs().size());
   for (const ArchivedTab& tab : Tabs()) {
+    const Space* space = Space::WithNode(tab.space);
     tabs.push_back({.id = tab.id,
                     .url = tab.url.spec().c_str(),
                     .title = tab.title.c_str(),
                     .archived = tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull(),
-                    .little = tab.little});
+                    .little = tab.little,
+                    .snoozed_until = tab.snoozed_until.InMillisecondsFSinceUnixEpoch(),
+                    .space = space ? space->id() : 0});
   }
   Host().archive_changed(Host().context, tabs.data(), tabs.size());
 }
@@ -65,17 +70,23 @@ void PostReport() {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, base::BindOnce(&Report));
 }
 
-// Saves it with the Spaces, and tells the app.
+// Saves it with the Spaces, tells the app, and has the snoozed tab due first waited for.
 void Changed() {
   SessionChanged();
   PostReport();
+  ScheduleSnoozes();
 }
 
+// Drops what's older than 30 days, then the oldest over 500. A snoozed tab stays till it's back.
 void Prune() {
   const base::Time oldest = base::Time::Now() - kKeepFor;
-  std::erase_if(Tabs(), [oldest](const ArchivedTab& tab) { return tab.archived < oldest; });
-  if (Tabs().size() > kMaxArchived) {
-    Tabs().resize(kMaxArchived);
+  std::erase_if(Tabs(), [oldest](const ArchivedTab& tab) {
+    return tab.snoozed_until.is_null() && tab.archived < oldest;
+  });
+  for (size_t index = Tabs().size(); Tabs().size() > kMaxArchived && index-- > 0;) {
+    if (Tabs()[index].snoozed_until.is_null()) {
+      Tabs().erase(Tabs().begin() + index);
+    }
   }
 }
 
@@ -93,6 +104,7 @@ void LoadArchive(std::vector<ArchivedTab> archived) {
   Prune();
   if (!Tabs().empty()) {
     PostReport();
+    ScheduleSnoozes();
   }
 }
 
@@ -100,16 +112,33 @@ void Archive(bc_id tab,
              const GURL& url,
              const std::string& title,
              const base::Uuid& space,
-             bool little) {
+             bool little,
+             base::Time snoozed_until) {
   Tabs().insert(Tabs().begin(), {.id = NewId(),
                                  .url = url,
                                  .title = title,
                                  .archived = base::Time::Now(),
                                  .tab = tab,
                                  .little = little,
-                                 .space = space});
+                                 .space = space,
+                                 .snoozed_until = snoozed_until});
   Prune();
   Changed();
+}
+
+bool SnoozeArchived(bc_id id, base::Time until) {
+  auto it = std::ranges::find(Tabs(), id, &ArchivedTab::id);
+  if (it == Tabs().end()) {
+    return false;
+  }
+  // One that stays is a tab closed now, its 30 days counted from here, so a long snooze that
+  // ends without its Space isn't dropped at once.
+  if (until.is_null() && !it->snoozed_until.is_null()) {
+    it->archived = base::Time::Now();
+  }
+  it->snoozed_until = until;
+  Changed();
+  return true;
 }
 
 void Unarchive(bc_id tab) {

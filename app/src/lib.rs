@@ -157,6 +157,7 @@ pub mod settings_search;
 pub mod settling;
 pub mod shell;
 pub mod site_controls;
+pub mod snooze;
 pub mod space_icon;
 pub mod text_input;
 pub mod theme;

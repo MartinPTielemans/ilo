@@ -286,9 +286,10 @@ fn panel_width(
     .map(|at| &entries[at])
     .filter(|entry| !entry.title.is_empty())
     .map(|entry| {
-        let trailing = match &entry.shortcut {
-            Some(keys) => GAP + width_of(&keystroke_label(keys)),
-            None => 0.,
+        let trailing = match (&entry.shortcut, &entry.note) {
+            (Some(keys), _) => GAP + width_of(&keystroke_label(keys)),
+            (None, Some(note)) => GAP + width_of(note),
+            (None, None) => 0.,
         };
         let detail = (entry.detail.as_ref()).map_or(0., |detail| DETAIL_GAP + width_of(detail));
         width_of(&entry.title) + detail + trailing
@@ -1505,6 +1506,7 @@ impl ContextMenu {
         };
         let submenu = tracking.layout.level_of(item).is_some();
         let shortcut = entry.shortcut.as_deref().map(keystroke_label);
+        let note = entry.note.clone();
         let pressed = lit && tracking.pressed;
         let check = lay.checks.then(|| {
             div().w(px(CHECK)).flex_none().when(entry.checked, |slot| {
@@ -1550,7 +1552,13 @@ impl ContextMenu {
                     .child(keys.clone())
                     .into_any_element(),
             ),
-            (None, false) => None,
+            (None, false) => note.map(|note| {
+                div()
+                    .flex_none()
+                    .text_color(secondary)
+                    .child(note)
+                    .into_any_element()
+            }),
         };
         let a11y = self.a11y;
         let name = match &entry.detail {
@@ -1559,6 +1567,7 @@ impl ContextMenu {
         };
         let enabled = entry.enabled || entry.header;
         let (checked, keys) = (entry.checked, shortcut.clone());
+        let spoken_note = entry.note.clone();
         let header = entry.header;
         let radio = checked && level != 0;
         // Where it stands among the level's items, as VoiceOver says it: "3 of 11".
@@ -1628,6 +1637,7 @@ impl ContextMenu {
                         row.aria_toggled(gpui::accesskit::Toggled::True)
                     })
                     .when_some(keys, |row, keys| row.aria_keyshortcuts(keys))
+                    .when_some(spoken_note, |row, note| row.aria_description(note))
                     .when(submenu, |row| row.aria_expanded(open))
                     .when(lit, |row| row.aria_active_descendant())
                     .a11y_synthetic_children(move |builder| {

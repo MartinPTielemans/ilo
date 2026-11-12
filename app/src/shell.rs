@@ -113,6 +113,8 @@ mod portrait;
 #[cfg(test)]
 mod side_tests;
 #[cfg(test)]
+mod snooze_tests;
+#[cfg(test)]
 mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
@@ -132,6 +134,7 @@ mod side_panel;
 mod sidebar;
 mod sidebar_backups;
 mod sidebar_keys;
+mod snooze;
 mod space_form;
 mod space_order;
 mod split_fold;
@@ -1627,6 +1630,8 @@ pub struct Shell {
     pane_corner: (f32, f32, f32),
     /// Every Space's archived tabs, newest first, and the favicons asked for their URLs.
     archive: Vec<Archived>,
+    /// The tabs back from a snooze by themselves and not shown since, each marked unread (#2350).
+    unsnoozed: HashSet<u64>,
     page_favicons: HashMap<SharedString, Option<Arc<Image>>>,
     /// The profile's downloads, newest first, and the file icons asked for them.
     downloads: Vec<Download>,
@@ -2076,6 +2081,7 @@ impl Shell {
             link_over: None,
             pane_corner: (0., 0., 0.),
             archive: Vec::new(),
+            unsnoozed: HashSet::new(),
             page_favicons: HashMap::new(),
             downloads: Vec::new(),
             download_icons: HashMap::new(),
@@ -3279,6 +3285,9 @@ impl Shell {
                 }
             }
             _ => log!("browser: selected {tab}"),
+        }
+        if self.unsnoozed.remove(&tab) {
+            cx.notify();
         }
         let hidden = self.panes(self.selected);
         self.selected = tab;

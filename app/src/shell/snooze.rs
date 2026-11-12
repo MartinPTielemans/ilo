@@ -1,0 +1,266 @@
+//! Snoozing Today tabs (#2350): the tab's menu's Snooze and the chosen rows', Pick a Date and
+//! Time…, the toast with Undo, and the dot on a tab back by itself.
+
+use std::rc::Rc;
+
+use chrono::NaiveDateTime;
+use gpui::{App, Context, SharedString};
+
+use super::{
+    Archived, Shell, host,
+    menus::{MenuAction, MenuEntry},
+    undo::{Edit, What},
+};
+use crate::{
+    dialog::{Field, Question},
+    snooze::{self, Choice},
+};
+
+impl Shell {
+    /// The core brought `tab` back from a snooze by itself, at the top of its Space's Today tabs:
+    /// its row is marked unread until it's shown. Nothing else happens, and nothing takes focus.
+    pub fn tab_unsnoozed(&mut self, tab: u64, cx: &mut Context<Self>) {
+        if self.selected != tab && self.unsnoozed.insert(tab) {
+            cx.notify();
+        }
+    }
+
+    /// Whether `tab` can be snoozed: a Today tab of the user's own Space, in a regular window. A
+    /// pinned tab or favorite stays, and a private, Little ilo or Blank window's tab and an
+    /// agent's have no Space of the user's to come back to.
+    pub(super) fn snoozable(&self, tab: u64) -> bool {
+        !self.one_space()
+            && self.little.is_none()
+            && (self.shown_space())
+                .is_some_and(|space| space.agent.is_empty() && space.today.contains(&tab))
+    }
+
+    /// Snooze's submenu, under the item at `parent`, for `tabs`: each time the short list has
+    /// now, ending with when it means, then Pick a Date and Time….
+    pub(super) fn snooze_items(
+        &self,
+        tabs: Vec<u64>,
+        parent: usize,
+    ) -> Vec<(MenuEntry, &'static str, MenuAction)> {
+        let now = snooze::now();
+        let mut items: Vec<(MenuEntry, &'static str, MenuAction)> = Vec::new();
+        for choice in Choice::ALL {
+            let Some(at) = choice.at(now) else {
+                continue;
+            };
+            let entry = MenuEntry {
+                note: Some(snooze::short(at, now).into()),
+                ..MenuEntry::new(choice.name(), true).under(parent)
+            };
+            let tabs = tabs.clone();
+            items.push((
+                entry,
+                "snooze",
+                Box::new(move |shell, cx| shell.snooze_tabs(tabs, at, cx)),
+            ));
+        }
+        items.push((MenuEntry::line().under(parent), "", Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::new("Pick a Date and Time…", true).under(parent),
+            "snooze-pick",
+            Box::new(move |shell, cx| shell.pick_snooze(tabs, cx)),
+        ));
+        items
+    }
+
+    /// Snoozes the Today tabs among `tabs` until `at`, as one step ⌘Z takes back, and says when
+    /// they come back in a toast with Undo. `tabs` is as Close's step has them: they snooze last
+    /// first, and come back first first.
+    pub(super) fn snooze_tabs(
+        &mut self,
+        tabs: Vec<u64>,
+        at: NaiveDateTime,
+        cx: &mut Context<Self>,
+    ) {
+        let tabs: Vec<u64> = tabs
+            .into_iter()
+            .filter(|&tab| self.snoozable(tab))
+            .collect();
+        let what = match tabs.len() {
+            0 => return,
+            1 => What::SNOOZE_TAB,
+            _ => What::SNOOZE_TABS,
+        };
+        let until = snooze::millis(at);
+        // Chosen rows that snooze leave the choice, as Close Tabs clears it.
+        if tabs.iter().any(|tab| self.chosen.contains(tab)) {
+            self.chosen.clear();
+            self.chosen_from = 0;
+        }
+        let back = Edit::Snooze { tabs, until }.apply(self, cx);
+        if back.is_none() {
+            return;
+        }
+        self.keep(what, back, cx);
+        let words = snooze::words(at, snooze::now());
+        self.offer_undo(&format!("Snoozed until {words}"), cx);
+    }
+
+    /// What the bar's Snooze Tab snoozes: the chosen rows' Today tabs, or the Today tab shown.
+    pub(super) fn tabs_to_snooze(&self) -> Vec<u64> {
+        match self.chosen.is_empty() {
+            true => (self.snoozable(self.selected))
+                .then(|| self.panes(self.selected).into_iter().rev().collect())
+                .unwrap_or_default(),
+            false => self.chosen_to_snooze(),
+        }
+    }
+
+    /// The chosen rows' Today tabs, each split's pages too, as Close Tabs has them.
+    pub(super) fn chosen_to_snooze(&self) -> Vec<u64> {
+        let today = self.today();
+        let rows = self.chosen_tabs();
+        (rows.iter().filter(|row| today.contains(row)))
+            .flat_map(|&row| self.panes(row).into_iter().rev())
+            .collect()
+    }
+
+    /// Pick a Date and Time… for `tabs`, which snooze until the time picked.
+    pub(super) fn pick_snooze(&mut self, tabs: Vec<u64>, cx: &mut Context<Self>) {
+        self.pick_time(move |shell, at, cx| shell.snooze_tabs(tabs, at, cx), cx);
+    }
+
+    /// An archived tab's second line: its site, after when it comes back and to which Space if
+    /// it's snoozed, as that's where it shows up without being asked.
+    pub(super) fn archived_detail(&self, tab: &Archived) -> String {
+        let site = host(&tab.url);
+        let Some(at) = (tab.snoozed_until > 0.)
+            .then(|| snooze::local(tab.snoozed_until))
+            .flatten()
+        else {
+            return site.to_string();
+        };
+        let until = snooze::short(at, snooze::now());
+        match self.spaces.iter().find(|space| space.id == tab.space) {
+            Some(space) => format!("Snoozed until {until} in {} · {site}", space.name),
+            None => format!("Snoozed until {until} · {site}"),
+        }
+    }
+
+    /// A snoozed tab's menu in the archive: Bring Back Now in Restore Tab's place, as they'd do
+    /// the same, then Change Time with the short list, Copy URL, and Delete from Archive.
+    pub(super) fn snoozed_menu(
+        &mut self,
+        id: u64,
+        url: SharedString,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        type Run = Box<dyn FnOnce(&mut Shell, &mut Context<Shell>)>;
+        let mut items: Vec<(MenuEntry, Run)> = vec![
+            (
+                MenuEntry::new("Bring Back Now", true),
+                Box::new(move |shell, cx| shell.restore_archived(id, cx)),
+            ),
+            (MenuEntry::new("Change Time", true), Box::new(|_, _| {})),
+        ];
+        let now = snooze::now();
+        for choice in Choice::ALL {
+            let Some(at) = choice.at(now) else {
+                continue;
+            };
+            let entry = MenuEntry {
+                note: Some(snooze::short(at, now).into()),
+                ..MenuEntry::new(choice.name(), true).under(1)
+            };
+            items.push((entry, Box::new(move |shell, cx| shell.resnooze(id, at, cx))));
+        }
+        items.push((MenuEntry::line().under(1), Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::new("Pick a Date and Time…", true).under(1),
+            Box::new(move |shell, cx| {
+                shell.pick_time(move |shell, at, cx| shell.resnooze(id, at, cx), cx)
+            }),
+        ));
+        items.push((
+            MenuEntry::new("Copy URL", true),
+            Box::new(move |shell, cx| {
+                let link = shell.copied_link(&url);
+                shell.copy(&link, "Copied URL", cx)
+            }),
+        ));
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
+        items.push((
+            MenuEntry::new("Delete from Archive", true).destructive(),
+            Box::new(move |shell, cx| {
+                // check.sh waits for this line.
+                log!("browser: remove archived {id}");
+                shell.delete_archived(id, cx);
+            }),
+        ));
+        let (entries, mut runs): (Vec<MenuEntry>, Vec<Run>) = items.into_iter().unzip();
+        let shell = cx.weak_entity();
+        self.browser.context_menu(
+            entries,
+            position,
+            false,
+            self.menu_look(),
+            Box::new(move |chosen, cx| {
+                if let Some(chosen) = chosen.filter(|&chosen| chosen < runs.len()) {
+                    let run = runs.swap_remove(chosen);
+                    shell.update(cx, |shell, cx| run(shell, cx)).ok();
+                }
+            }),
+            cx,
+        );
+    }
+
+    /// Snoozes archived tab `id` until `at` instead.
+    fn resnooze(&mut self, id: u64, at: NaiveDateTime, cx: &mut Context<Self>) {
+        let until = snooze::millis(at);
+        log!("browser: snooze archived {id} until {until}");
+        self.browser.snooze_archived(id, until, cx);
+    }
+
+    /// Pick a Date and Time…: asks for a day and a time in the dialog New Profile asks for a name
+    /// in, starting with Tomorrow Morning's, all selected, and runs `then` with it. The line under
+    /// the field says the time ilo reads as the user types, and Snooze waits while it reads none.
+    fn pick_time(
+        &mut self,
+        then: impl FnOnce(&mut Shell, NaiveDateTime, &mut Context<Shell>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let now = snooze::now();
+        let start = Choice::TomorrowMorning
+            .at(now)
+            .map(|at| snooze::full(at, now))
+            .unwrap_or_default();
+        let question = Question {
+            icon: None,
+            message: "Snooze Until".into(),
+            detail: "A day and a time, such as “Friday 17:30” or “24 Nov 09:00”.".into(),
+            list: Vec::new(),
+            action: "Snooze".into(),
+            cancel: "Cancel".into(),
+            tone: crate::dialog::Tone::Accent,
+            also: None,
+            fields: vec![Field {
+                placeholder: "Day and time".into(),
+                text: start.into(),
+                secure: false,
+                reads: Some(Rc::new(|text: &str| {
+                    let now = snooze::now();
+                    snooze::read(text, now)
+                        .map(|at| SharedString::from(snooze::full(at, now)))
+                        .map_err(SharedString::from)
+                })),
+            }],
+            check: None,
+            on_return: crate::dialog::Return::Action,
+        };
+        let shell = cx.weak_entity();
+        let picked = Box::new(move |texts: Vec<String>, cx: &mut App| {
+            let typed = texts.first().map_or("", String::as_str);
+            // Read again as it's answered, the clock having moved on since it was typed.
+            if let Ok(at) = snooze::read(typed, snooze::now()) {
+                shell.update(cx, |shell, cx| then(shell, at, cx)).ok();
+            }
+        });
+        self.browser.tell(question, picked, cx);
+    }
+}

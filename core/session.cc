@@ -574,6 +574,10 @@ std::optional<std::string> ToJson(const Saved& saved) {
                        .Set("title", tab.title)
                        .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull())
                        .Set("little", tab.little));
+    if (!tab.snoozed_until.is_null()) {
+      archive.back().GetDict().Set("snoozed_until",
+                                   tab.snoozed_until.InMillisecondsFSinceUnixEpoch());
+    }
     if (tab.space.is_valid()) {
       archive.back().GetDict().Set("space", tab.space.AsLowercaseString());
     }
@@ -837,12 +841,16 @@ std::optional<Saved> Read(const base::FilePath& path) {
       std::optional<double> archived = tab ? tab->FindDouble("archived") : std::nullopt;
       if (url && title && archived && GURL(*url).is_valid()) {
         const std::string* space = tab->FindString("space");
+        const std::optional<double> snoozed_until = tab->FindDouble("snoozed_until");
         saved.archive.push_back(
             {.url = GURL(*url),
              .title = *title,
              .archived = base::Time::FromMillisecondsSinceUnixEpoch(*archived),
              .little = tab->FindBool("little").value_or(false),
-             .space = space ? base::Uuid::ParseLowercase(*space) : base::Uuid()});
+             .space = space ? base::Uuid::ParseLowercase(*space) : base::Uuid(),
+             .snoozed_until = snoozed_until
+                                  ? base::Time::FromMillisecondsSinceUnixEpoch(*snoozed_until)
+                                  : base::Time()});
       }
     }
   }
