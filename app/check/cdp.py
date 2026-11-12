@@ -33,8 +33,8 @@ takes a command a line on its standard input:
                   takes the keyboard a moment after its page loads
   hidden FILE [BASE]
                   writes to FILE, as JSON, what the attached page's ad blocker hides: the
-                  selectors of its style sheets' display: none rules, an extension's injected
-                  ones or the browser's user ones, that match elements in the page, each with the
+                  selectors of the display: none rules, from an extension's injected sheets or
+                  the browser's user ones, that the page's hidden elements match, each with the
                   elements it matches and those still shown; and with BASE, an earlier run's
                   FILE for the same site, the selectors it hid that match shown elements now.
                   Logs "cdp: hidden SELECTORS ELEMENTS SHOWN missed SELECTORS ELEMENTS"
@@ -422,89 +422,78 @@ def focus(prefix):
     return value or "none"
 
 
-# The display: none rules of the sheets given, a selector at a time, with the elements in the page
-# each matches and those of them shown, a box with an area; and those of the earlier run's
-# selectors that match shown elements now. A selector the page's own engine can't take, as an
-# extended filter's, is skipped.
-HIDDEN = """((texts, before) => {
-  const split = (list) => {
-    const out = [];
-    let depth = 0, start = 0, quote = null;
-    for (let i = 0; i < list.length; i++) {
-      const c = list[i];
-      if (quote) {
-        if (c === "\\\\") i++;
-        else if (c === quote) quote = null;
-      } else if (c === '"' || c === "'") quote = c;
-      else if (c === "(" || c === "[") depth++;
-      else if (c === ")" || c === "]") depth--;
-      else if (c === "," && depth === 0) {
-        out.push(list.slice(start, i).trim());
-        start = i + 1;
-      }
-    }
-    out.push(list.slice(start).trim());
-    return out.filter(Boolean);
-  };
-  const count = (selector) => {
+# The elements the page has at display: none, but not under one, with their parent shown: where
+# an ad blocker's hiding would show. An extension's injected sheets and the browser's user ones
+# never come to DevTools as the page's style sheets do, but their rules do, as they match a node.
+HIDDEN_NOW = """(() => {
+  const kept = new Set(["SCRIPT", "STYLE", "TEMPLATE", "HEAD", "META", "LINK", "TITLE",
+                        "NOSCRIPT", "BR", "PARAM", "SOURCE", "TRACK"]);
+  const found = [];
+  for (const element of document.querySelectorAll("body *")) {
+    if (kept.has(element.tagName) || getComputedStyle(element).display !== "none") continue;
+    const parent = element.parentElement;
+    if (parent && getComputedStyle(parent).display === "none") continue;
+    found.push(element);
+    if (found.length === 1000) break;
+  }
+  return found;
+})()"""
+# Each selector's elements in the page and those of them shown, a box with an area; a selector the
+# page's own engine can't take, as an extended filter's, is skipped.
+COUNT = """((selectors) => {
+  const counted = {};
+  for (const selector of selectors) {
     let found;
-    try { found = document.querySelectorAll(selector); } catch (e) { return null; }
+    try { found = document.querySelectorAll(selector); } catch (e) { continue; }
     let shown = 0;
     for (const element of found) {
       const box = element.getBoundingClientRect();
       if (box.width > 0 && box.height > 0 && getComputedStyle(element).visibility !== "hidden") shown++;
     }
-    return [found.length, shown];
-  };
-  const hidden = {};
-  for (const text of texts) {
-    const sheet = new CSSStyleSheet();
-    try { sheet.replaceSync(text); } catch (e) { continue; }
-    for (const rule of sheet.cssRules) {
-      if (!(rule instanceof CSSStyleRule) || rule.style.display !== "none") continue;
-      for (const selector of split(rule.selectorText)) {
-        if (selector in hidden) continue;
-        const counted = count(selector);
-        if (counted && counted[0]) hidden[selector] = counted;
-      }
-    }
+    counted[selector] = [found.length, shown];
   }
-  const missed = {};
-  for (const selector of before) {
-    const counted = count(selector);
-    if (counted && counted[1]) missed[selector] = counted[1];
-  }
-  return JSON.stringify({hidden, missed});
+  return JSON.stringify(counted);
 })"""
 
 
+def count(selectors):
+    reply = call("Runtime.evaluate", {"expression": "%s(%s)" % (COUNT, json.dumps(selectors)),
+                                      "returnByValue": True}, session)
+    return json.loads(reply.get("result", {}).get("value") or "{}")
+
+
 def hidden(path, base):
-    with answered:
-        start = len(events)
+    """What the ad blocker hides on the attached page: the selectors of the display: none rules,
+    from an extension's injected sheets or the browser's user ones, that the page's hidden
+    elements match. ORIGINS counts the display: none rules they match by where they come from."""
+    listed = call("Runtime.evaluate", {"expression": HIDDEN_NOW}, session)["result"]
+    items = call("Runtime.getProperties", {"objectId": listed["objectId"], "ownProperties": True},
+                 session)["result"]
     call("DOM.enable", {}, session)
-    # Each sheet the page's documents have comes as an event before the reply does.
+    call("DOM.getDocument", {"depth": 0}, session)
     call("CSS.enable", {}, session)
-    with answered:
-        added = [event["params"]["header"] for event in events[start:]
-                 if event and event.get("sessionId") == session
-                 and event["method"] == "CSS.styleSheetAdded"]
-    main = call("Page.getFrameTree", {}, session)["frameTree"]["frame"]["id"]
     origins = {}
-    texts = []
-    for header in added:
-        if header["frameId"] != main:
+    selectors = set()
+    for item in items:
+        if not item["name"].isdigit():
             continue
-        origins[header["origin"]] = origins.get(header["origin"], 0) + 1
-        if header["origin"] in ("injected", "user"):
-            texts.append(call("CSS.getStyleSheetText", {"styleSheetId": header["styleSheetId"]},
-                              session)["text"])
+        node = call("DOM.requestNode", {"objectId": item["value"]["objectId"]}, session)["nodeId"]
+        styles = call("CSS.getMatchedStylesForNode", {"nodeId": node}, session)
+        for match in styles.get("matchedCSSRules", []):
+            rule = match["rule"]
+            if not any(prop["name"] == "display" and prop["value"].startswith("none")
+                       for prop in rule["style"]["cssProperties"]):
+                continue
+            origins[rule["origin"]] = origins.get(rule["origin"], 0) + 1
+            if rule["origin"] in ("injected", "user"):
+                texts = rule["selectorList"]["selectors"]
+                selectors.update(texts[i]["text"] for i in match["matchingSelectors"])
+    call("Runtime.releaseObject", {"objectId": listed["objectId"]}, session)
     call("CSS.disable", {}, session)
     call("DOM.disable", {}, session)
     before = list(json.load(open(base, encoding="utf-8"))["hidden"]) if base else []
-    expression = "%s(%s, %s)" % (HIDDEN, json.dumps(texts), json.dumps(before))
-    reply = call("Runtime.evaluate", {"expression": expression, "returnByValue": True}, session)
-    found = json.loads(reply.get("result", {}).get("value") or '{"hidden": {}, "missed": {}}')
-    found["origins"] = origins
+    found = {"hidden": count(sorted(selectors)), "elements": sum(item["name"].isdigit() for item in items), "origins": origins}
+    found["missed"] = {selector: shown for selector, (_, shown) in count(before).items() if shown}
     with open(path, "w", encoding="utf-8") as out:
         json.dump(found, out)
     return "%d %d %d missed %d %d" % (
