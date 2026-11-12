@@ -12,7 +12,10 @@
 # first site, and the probe waits for the ad script to load rather than be blocked. With
 # ADBLOCK_PARITY_BASELINE naming the sites.tsv an earlier run left, it fails where this run is worse:
 #   - a site that loaded there and doesn't here;
-#   - a host blocked on a site there that this run let through on that site.
+#   - a host blocked on a site there that this run let through on that site;
+#   - 3 or more elements' selectors on a site, or 10 in the run, whose every element the baseline's
+#     run hid and some of which this run shows, as an ad's box the engine's hiding missed. Each
+#     selector is an element's tag, id and classes, read 8 s after the load (cdp.py's hidden).
 # A host neither run requested counts for neither, as the ads a site serves change from load to
 # load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If the check
 # still stands in either run, the site isn't compared, and the result names it, as a bot check has
@@ -20,7 +23,8 @@
 # whether an ad showed before the video played 5 s, and it fails where the baseline's played with
 # no ad and this run's showed one or didn't play. It needs the network and the sites, so it runs
 # only when named: ./check.sh adblock-parity.
-# It leaves adblock-parity/sites.tsv, a capture a site, and the requests recorded.
+# It leaves adblock-parity/sites.tsv, a capture a site, the requests recorded, and in hidden/ what
+# each site hid, which a run with uBlock Origin copies beside its table for the next to compare.
 engine=${engine:-ublock}
 
 serve
@@ -245,12 +249,12 @@ rm -rf "$scratch"
 [ -s "$requests" ] || fail "DevTools recorded no requests"
 # What's wrong, if anything, as a here-document in a command substitution trips the Mac's bash 3.2.
 result="$dir/result.txt"
-python3 -I - "$requests" "$starts" "$videos" "$dir/sites.tsv" "${ADBLOCK_PARITY_BASELINE:-}" > "$result" << 'PY' || fail "$(cat "$result")"
+python3 -I - "$requests" "$starts" "$videos" "$hides" "$dir/sites.tsv" "${ADBLOCK_PARITY_BASELINE:-}" > "$result" << 'PY' || fail "$(cat "$result")"
 
-import json, sys
+import json, os, re, sys
 from urllib.parse import urlsplit
 
-recorded, starts, watched, table, baseline = sys.argv[1:]
+recorded, starts, watched, hides, table, baseline = sys.argv[1:]
 # Each request: its address, when it went, and whether the ad blocker blocked it or answered it
 # with a stand-in, an extension's resource it redirected the request to. Its later events come by
 # its id, which a later request can take again, once a renderer's process id comes back: an id sent
@@ -306,6 +310,11 @@ for i, s in enumerate(sites):
     s["allowed"] = sorted({host(r) for r in mine if r["how"] == "allowed"})
     s["blocked_n"] = sum(r["how"] == "blocked" for r in mine)
     s["standin_n"] = sum(r["how"] == "stand-in" for r in mine)
+    # What the baseline hid all of and this run shows, as cdp.py's hidden says, or None where
+    # there's no saying: no baseline's file for the site, or no look at it.
+    hid = os.path.join(hides, re.sub("[^A-Za-z0-9]", "_", s["url"]) + ".json")
+    s["missed"] = (sorted(json.load(open(hid, encoding="utf-8"))["missed"])
+                   if baseline and os.path.exists(hid) else None)
 
 def video_cell(video):
     if not video:
@@ -321,14 +330,16 @@ def video_of(cell):
 
 with open(table, "w", encoding="utf-8") as out:
     out.write("site\tloaded\tload_ms\trequests\tblocked\tstand_ins\tblocked_hosts\tallowed_hosts"
-              "\tbot_check\tvideo\n")
+              "\tbot_check\tvideo\tmissed\n")
     for s in sites:
         out.write("\t".join([s["url"], "1" if s["loaded"] else "0", s["load_ms"], str(s["requests"]),
                              str(s["blocked_n"]), str(s["standin_n"]), ",".join(s["blocked"]),
                              ",".join(s["allowed"]), "1" if s["bot"] else "0",
-                             video_cell(s["video"])]) + "\n")
+                             video_cell(s["video"]),
+                             "" if s["missed"] is None else str(len(s["missed"]))]) + "\n")
 
 worse = []
+site_missed = False
 # A site that was Cloudflare's bot check in this run or the baseline's, which an older table
 # doesn't say.
 unchecked = [s["url"] for s in sites if s["bot"]]
@@ -358,6 +369,18 @@ if baseline:
         through = sorted(set(b[6].split(",")) & set(s["allowed"]) - set(s["blocked"]) - {""})
         if through:
             worse.append(f"{s['url']} let through what the baseline blocked: {', '.join(through)}")
+        # uBlock Origin against itself shows at most 2 of these a site, from a page that changes
+        # between loads, as a menu button drawn for one width; an engine that hides nothing, 3 to 19
+        # on half the sites.
+        if s["missed"] and len(s["missed"]) >= 3:
+            site_missed = True
+            worse.append(f"{s['url']} showed what the baseline hid all of: {', '.join(s['missed'])}")
+# Misses too few a site to fail one still add up, where an engine misses a little everywhere:
+# uBlock Origin against itself shows at most 3 in a run.
+missed = [(s["url"], m) for s in sites if s["url"] not in unchecked for m in s["missed"] or []]
+if len(missed) >= 10 and not site_missed:
+    worse.append(f"{len(missed)} selectors the baseline hid all of showed: "
+                 + ", ".join(f"{m} on {url}" for url, m in missed))
 loaded = [s for s in sites if s["loaded"]]
 times = sorted(int(s["load_ms"]) for s in loaded)
 median = times[len(times) // 2] if times else 0
@@ -368,6 +391,7 @@ if worse:
 print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median; "
       f"{sum(s['blocked_n'] for s in sites)} requests blocked and "
       f"{sum(s['standin_n'] for s in sites)} given a stand-in, of {sum(s['requests'] for s in sites)}"
+      + (f"; {len(missed)} selectors the baseline hid all of showed" if baseline else "")
       + "".join(f"; {s['url']}'s video {video_said(s['video'])}" for s in sites if s["video"])
       + (f"; not compared, as Cloudflare's bot check stood in: {', '.join(unchecked)}" if unchecked else ""))
 if worse:

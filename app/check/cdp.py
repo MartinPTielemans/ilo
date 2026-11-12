@@ -41,7 +41,7 @@ takes a command a line on its standard input:
                   style sheet, as the ad blocker's hiding would be, each as the selector its tag,
                   id and classes make, with the elements that selector takes in the page and
                   those of them shown; and with BASE, an earlier run's FILE for the same site, its
-                  selectors that take more shown elements now than they did then.
+                  selectors none of whose elements were shown then and some are now.
                   Logs "cdp: hidden SELECTORS ELEMENTS SHOWN missed SELECTORS ELEMENTS in MS ms"
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
@@ -505,9 +505,10 @@ def hidden(path, base):
     began = time.monotonic()
     found = {"hidden": count(evaluate(HIDDEN_NOW) or [])}
     before = json.load(open(base, encoding="utf-8"))["hidden"] if base else {}
-    # Shown now where fewer were then: what the earlier run hid and this one shows.
+    # What the earlier run hid all of and this one shows some of. A selector whose elements were
+    # partly shown then, as a column's, is the page's own layout, which changes from load to load.
     found["missed"] = {selector: shown for selector, (_, shown) in count(list(before)).items()
-                       if shown > before[selector][1]}
+                       if shown and not before[selector][1]}
     found["ms"] = int((time.monotonic() - began) * 1000)
     with open(path, "w", encoding="utf-8") as out:
         json.dump(found, out)
