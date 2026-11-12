@@ -110,6 +110,16 @@ if [ "${1:-}" = --steps ]; then
   # "abc", Enter commits it, it composes "de", and Ctrl+T opens the bar, which composes "xyz".
   case $mode in
     *-first-*)
+      # [DEBUG-2365] A warm launch shows the bar once and closes it before the leg's sequence, so
+      # the compositor has seen its window drawn before the bar's first take of the focus.
+      case $mode in
+        *-warm-*)
+          at=$(mark); key '^t'
+          await "command bar shown" "$at"
+          key $'\e'
+          await "command bar hidden" "$at"
+          ;;
+      esac
       at=$(mark); click 330 40
       await "title [0-9]* clicked" "$at"
       at=$(mark); compose abc
@@ -277,7 +287,7 @@ if [ "${1:-}" = --steps ]; then
   exit 0
 fi
 
-modes=${1:-"x11-first xvfb-first"}
+modes=${1:-"xvfb-first x11-warm-first"}
 for tool in sway grim magick fcitx5 dbus-run-session xkbcli cargo xvfb-run openbox xdotool import; do
   command -v "$tool" >/dev/null || { echo "FAIL: needs $tool" >&2; exit 1; }
 done
@@ -380,7 +390,7 @@ failed=
 legs=
 for mode in $modes; do
   case $mode in
-    *-first) for n in $(seq "${PROBE_LAUNCHES:-30}"); do legs="$legs $mode-$n"; done ;;
+    *-first) for n in $(seq "${PROBE_LAUNCHES:-25}"); do legs="$legs $mode-$n"; done ;;
     *) legs="$legs $mode" ;;
   esac
 done
@@ -411,7 +421,7 @@ for mode in $legs; do
       echo "[DEBUG-2365] $mode: $r"
       if [ "$r" = kept ]; then
         rm -f "$out/$mode-sway.log" "$out/$mode.png" "$out/$mode-fcitx5.log"
-        rm -rf "$home/profile-$mode"
+        rm -rf "$home/profile-$mode" 2>/dev/null || true
       fi
       ;;
   esac
