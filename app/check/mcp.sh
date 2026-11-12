@@ -1682,7 +1682,7 @@ STOP
   fi
   settings_drew Agents
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
-  send clickkey $(drawn "switch agents")
+  click_in_sight "switch agents"
   expect '^browser: agents off$' "a click on the switch didn't turn agents off"
   for _ in $(seq 30); do [ -e "$socket" ] || break; sleep 0.1; done
   [ -e "$socket" ] && fail "the socket stayed once agents were off"

@@ -2,7 +2,7 @@
 //! page: once the window's first frame is on screen, and with the window it came from full screen,
 //! once it's full screen too (docs/ux-spec.md › Window › New window).
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{Context, Window};
 
@@ -14,7 +14,7 @@ pub(crate) struct Opening {
     asked: Instant,
     /// Whether it goes full screen first, as the window it came from was.
     full_screen: bool,
-    /// Whether it has asked to go full screen.
+    /// Whether it has asked to go full screen, which it does once.
     entering: bool,
     /// Whether its first frame on screen has been drawn, which it can have been as it came on
     /// screen.
@@ -81,7 +81,13 @@ impl Shell {
             window.request_animation_frame();
             return;
         }
-        if self.opening.take().is_some_and(|opening| opening.entering) {
+        // Whoever took it there: the shell, AppKit as the window opened, or AppKit before the shell
+        // drew, which the shell hears from the window's bounds and so never asks (#2482).
+        if self
+            .opening
+            .take()
+            .is_some_and(|opening| opening.full_screen)
+        {
             // check.sh reads this line.
             log!("browser: new window went full screen");
         }
@@ -234,6 +240,35 @@ mod tests {
                 .count(),
             1,
             "it didn't ask once whether the window was full screen"
+        );
+    }
+
+    /// A window the shell heard was full screen before its first frame, as from the window's
+    /// bounds when AppKit took it there as it opened, opens its bar at once, never asking, which
+    /// would take it out (#2482).
+    #[gpui::test]
+    fn a_new_window_heard_full_screen_before_its_frame_opens_its_bar_at_once(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx, host) = window(cx);
+        shell.update(cx, |shell, cx| {
+            shell.open_bar_when_shown(Instant::now(), true, false);
+            shell.set_full_screen(true, cx);
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert_eq!(
+            bars(&host),
+            1,
+            "the bar waited for a full screen the shell had"
+        );
+        assert!(
+            !host.take().iter().any(|call| call == "enter full screen"),
+            "it asked for a full screen it had"
+        );
+        assert!(
+            shell.read_with(cx, |shell, _| shell.full_screen && shell.opening.is_none()),
+            "the shell lost the full screen or kept waiting"
         );
     }
 

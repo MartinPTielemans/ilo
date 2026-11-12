@@ -9,11 +9,8 @@
 //! as on Linux, the page shows in the browser window under this one, which leaves it a hole and
 //! draws the card's rim round it. What it asks of its window and the core goes through `Host`.
 
-use std::{
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, FocusHandle, FontWeight, Global, Hsla, Image,
@@ -624,6 +621,7 @@ pub fn show(
     archived: Option<u64>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<LinkPreview>(cx);
     update(cx, |preview, gpui_window, cx| {
         preview.finish(cx);
         // check.sh reads this line.

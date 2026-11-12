@@ -2,10 +2,8 @@
 //! the newest next to the button, coming and going as Arc's do, of the kinds picked from the
 //! button's menu, the Library's captures among them (docs/ux-spec.md › Downloads).
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
+use std::{sync::Arc, time::Duration};
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use gpui::{
     AnyElement, Context, Image, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Task,
