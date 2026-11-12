@@ -1768,6 +1768,11 @@ LRESULT CALLBACK OwnerProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     }
   } else if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) {
     KeepKeyboard(hwnd);
+  } else if (message == WM_ACTIVATEAPP && wparam && hwnd == GetActiveWindow()) {
+    // The app comes in front with this window still its active one, as after a dialog shown while
+    // another app was in front: Windows activates nothing again, so the dialog takes the keyboard
+    // back here (#2544).
+    KeepKeyboard(hwnd);
   } else if (message == WM_NCDESTROY) {
     RemoveWindowSubclass(hwnd, OwnerProc, kOwner);
   }
@@ -3092,12 +3097,22 @@ void host_maximize_window(void* ui_view) {
   HWND key = GetForegroundWindow();
   DWORD process = 0;
   GetWindowThreadProcessId(key, &process);
+  // With another app in front, as when the app relaunches behind it, the app's own active window
+  // is the one to give back, as it comes in front with the app (#2544).
+  const bool in_front = process == GetCurrentProcessId();
+  if (!in_front) {
+    key = GetActiveWindow();
+  }
   // As Chromium's own Maximize does.
   SendMessageW(root, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
   // Maximizing activates it too, which a window a relaunch brings back behind the one in front
   // mustn't be (#1454): the keyboard goes back to the app's window that had it.
-  if (key && key != root && key != g_launch.hwnd && process == GetCurrentProcessId()) {
-    SetForegroundWindow(key);
+  if (key && key != root && key != g_launch.hwnd) {
+    if (in_front) {
+      SetForegroundWindow(key);
+    } else {
+      SetActiveWindow(key);
+    }
   }
   // Maximizing brings it to the front, and the launch window stays over it until the UI has drawn.
   if (g_launch.hwnd) {
@@ -4117,6 +4132,12 @@ void host_set_toast_plate(double x, double y, double width, double height) {
 void host_show_toast(void* ui_view) {
   g_toast_over = ui_view;
   auto [left, top, width, height] = ToastPlace(ui_view);
+  // GPUI keeps where the pointer was when the toast hid, and Windows tells a hidden window nothing
+  // of the pointer leaving: a toast clicked away and the next shown in its place took itself as
+  // hovered and stayed past its time (#2544, as #2076 on the Mac). It hears the pointer leave first.
+  if (g_toast.hwnd && !IsWindowVisible(g_toast.hwnd)) {
+    SendMessageW(g_toast.hwnd, WM_MOUSELEAVE, 0, 0);
+  }
   Show(g_toast, ui_view, left, top, width, height, false);
   // It shows at once, without a fade, as the Mac's does.
   LogShown(g_toast, "toast");
