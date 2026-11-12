@@ -290,6 +290,8 @@ Menu g_menu;
 HHOOK g_menu_mouse_hook = nullptr;
 HHOOK g_menu_key_hook = nullptr;
 
+void KeyboardFromHidden(HWND hwnd);
+
 LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
                               UINT_PTR, DWORD_PTR data) {
   auto* floating = reinterpret_cast<Floating*>(data);
@@ -342,6 +344,9 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
     case WM_ACTIVATE:
       if (LOWORD(wparam) != WA_INACTIVE) {
         floating->keyboard = floating->shown;
+        if (!floating->shown) {
+          KeyboardFromHidden(hwnd);
+        }
       }
       // Shown, even once Windows has hidden it with its browser window, which takes the keyboard
       // from it only then.
@@ -492,6 +497,11 @@ HWND InsertAfter(HWND hwnd) {
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate) {
   const HWND after = InsertAfter(hwnd);
   SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
+  // GPUI reads the window's DPI again, as a child window's after its parent's changed, and lays out
+  // only if it did. Made hidden at the screen's top left, on a display at one scale, and moved here
+  // to a browser window on one at another, it may not have heard the move, and drew at the old
+  // scale in the frame sized at this one: Peek's card at 0.8 of its page's frame (#2541).
+  SendMessageW(hwnd, WM_DPICHANGED_AFTERPARENT, 0, 0);
   if (activate) {
     ShowWindow(hwnd, SW_SHOW);
   } else if (!IsWindowVisible(hwnd)) {
@@ -586,6 +596,36 @@ void Hide(Floating& floating) {
       SetFocus(focus);
     }
   }
+}
+
+// A floating window the UI has hidden never keeps the keyboard. Windows makes the one a browser
+// window last gave the keyboard to the active window again as that window comes back, as after
+// Win+D, even one the host keeps off screen, where it took what the user typed unseen and Ctrl+T
+// closed it again (#2545). Its browser window takes the keyboard back once Windows is done.
+void KeyboardFromHidden(HWND hwnd) {
+  Later([hwnd] {
+    if (!IsWindow(hwnd) || GetForegroundWindow() != hwnd) {
+      return;
+    }
+    const auto found = FloatingByHwnd().find(hwnd);
+    const bool shown =
+        found != FloatingByHwnd().end() ? found->second->shown : g_menu.hwnd == hwnd && g_menu.shown;
+    HWND owner = GetWindow(hwnd, GW_OWNER);
+    if (shown || !owner || !IsWindowVisible(owner) || IsIconic(owner)) {
+      return;
+    }
+    fprintf(stderr, "browser: %s hidden, its browser window takes the keyboard\n",
+            FloatingName(hwnd));
+    HWND focus = nullptr;
+    if (auto held = FocusAfterOverlay().find(owner); held != FocusAfterOverlay().end()) {
+      focus = held->second;
+      FocusAfterOverlay().erase(held);
+    }
+    SetForegroundWindow(owner);
+    if (focus && IsWindow(focus)) {
+      SetFocus(focus);
+    }
+  });
 }
 
 // Shows |floating| over |ui_view|'s window at |left|, |top|, fading in over |fade| seconds: from
@@ -4252,6 +4292,9 @@ void host_add_menu_window(void* view,
         }
         if (message == WM_WINDOWPOSCHANGING && !g_menu.shown) {
           reinterpret_cast<WINDOWPOS*>(lparam)->flags &= ~SWP_SHOWWINDOW;
+        }
+        if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE && !g_menu.shown) {
+          KeyboardFromHidden(hwnd);
         }
         // Asked to close, it closes as Esc does, where Windows would destroy the window the app
         // goes on using, as an overlay's (FloatingProc, #1362).

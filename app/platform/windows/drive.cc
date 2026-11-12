@@ -52,6 +52,10 @@
 // composes them, in a page too: "nihongo" composes にほんご, space converts it to 日本語. ime ko does
 // the same with Microsoft's Korean IME, in Hangul: "gksrmf" composes 한글 (#2457).
 // fullscreen puts the window full screen or takes it out through the core, as Linux's driver does.
+// realkey <key> [win] [ctrl] [shift] [alt] presses a key with Windows' own modifiers, unlike key's,
+// as a hand does, through SendInput: Windows itself handles it, as it does Win+D, which no posted
+// message stands in for. It goes to the desktop's foreground window, whichever app's that is, so
+// the driver refuses it unless the desktop is the check's own: CI's, or BROWSER_DRIVE_OWN_DESKTOP=1.
 // The others, pageswipe, displays, hide, backdrop and openmenu, Windows has nothing the driver can
 // stand in for yet: each logs "browser: drive: unsupported <command>" before drive.mm's "can't do
 // that", so a run fails at once.
@@ -1648,6 +1652,53 @@ bool Run(const std::string& line) {
     ShowWindow(root, IsIconic(root) ? SW_SHOWNOACTIVATE : SW_SHOWMINNOACTIVE);
     return true;
   }
+  if (action == "realkey") {
+    const char* ci = std::getenv("CI");
+    const char* own = std::getenv("BROWSER_DRIVE_OWN_DESKTOP");
+    if (!(ci && *ci) && !(own && std::string(own) == "1")) {
+      fprintf(stderr, "browser: drive: realkey refused, the desktop isn't the check's own\n");
+      return false;
+    }
+    std::string key;
+    words >> key;
+    int typed = 0;
+    const UINT vk = VirtualKey(key, &typed);
+    if (!vk || typed) {
+      return false;
+    }
+    std::vector<WORD> keys;
+    std::string word;
+    while (words >> word) {
+      const WORD modifier = word == "win"     ? VK_LWIN
+                            : word == "ctrl"  ? VK_CONTROL
+                            : word == "shift" ? VK_SHIFT
+                            : word == "alt"   ? VK_MENU
+                                              : 0;
+      if (!modifier) {
+        return false;
+      }
+      keys.push_back(modifier);
+    }
+    keys.push_back(static_cast<WORD>(vk));
+    // Each key down 15 ms after the last, held 80 ms, then up in turn, as a hand's.
+    const auto send = [](WORD vk, bool up) {
+      INPUT input{};
+      input.type = INPUT_KEYBOARD;
+      input.ki.wVk = vk;
+      input.ki.dwFlags =
+          (up ? KEYEVENTF_KEYUP : 0) | (vk == VK_LWIN || Extended(vk) ? KEYEVENTF_EXTENDEDKEY : 0);
+      SendInput(1, &input, sizeof input);
+    };
+    for (size_t at = 0; at < keys.size(); ++at) {
+      const WORD down = keys[at];
+      g_steps.push_back({[send, down] { send(down, false); }, at + 1 < keys.size() ? 15u : 80u});
+    }
+    for (auto up = keys.rbegin(); up != keys.rend(); ++up) {
+      const WORD each = *up;
+      g_steps.push_back({[send, each] { send(each, true); }, 15});
+    }
+    return true;
+  }
   // The windows the app has over its browser windows that are on screen, by their own visibility:
   // its overlays, its menu and Chromium's bubbles, each owned by its browser window.
   // pip logs Chromium's Picture in Picture window's frame, "browser: pip at <x> <y> <width>
@@ -1696,6 +1747,38 @@ bool Run(const std::string& line) {
       }
     }
     fprintf(stderr, "browser: overlays shown %s\n", shown.empty() ? "none" : shown.c_str());
+    return true;
+  }
+  // The DPI Windows gives the driven browser window and each window the host floats over one,
+  // shown or not, and the system's, from when the user signed in (#2541): "browser: dpis system 96,
+  // window 120, command bar 120, link preview 96".
+  if (action == "dpis") {
+    std::string line = "system " + std::to_string(GetDpiForSystem()) + ", window " +
+                       std::to_string(GetDpiForWindow(Driven()));
+    for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+      if (const char* name = Ours(top) ? host_floating_name(top) : nullptr) {
+        line += std::string(", ") + name + " " + std::to_string(GetDpiForWindow(top));
+      }
+    }
+    fprintf(stderr, "browser: dpis %s\n", line.c_str());
+    return true;
+  }
+  // Where Peek's page is, the page in front in the driven browser window, in pixels from its
+  // content's top left, for the frame the preview's card has it in (#2541).
+  if (action == "peek") {
+    HWND root = Driven();
+    for (HWND child = root ? GetWindow(root, GW_CHILD) : nullptr; child;
+         child = GetWindow(child, GW_HWNDNEXT)) {
+      if (IsWindowVisible(child) && IsChromium(child)) {
+        RECT rect;
+        GetWindowRect(child, &rect);
+        MapWindowPoints(HWND_DESKTOP, root, reinterpret_cast<POINT*>(&rect), 2);
+        fprintf(stderr, "browser: peek page %ld %ld %ld %ld\n", rect.left, rect.top,
+                rect.right - rect.left, rect.bottom - rect.top);
+        return true;
+      }
+    }
+    fprintf(stderr, "browser: peek page none\n");
     return true;
   }
   // The windows on screen over the driven browser window, front first, down to it, by Windows' own
@@ -2008,18 +2091,37 @@ bool Run(const std::string& line) {
     return true;
   }
   // As Windows tells a window that moved to a display of another scale, |percent|, keeping its
-  // size in pixels: Chromium and the core take the scale the message carries (#1823).
+  // size in pixels: Chromium and the core take the scale the message carries (#1823). With a name
+  // after it, such as "link preview", the window the host floats by that name hears it instead, so
+  // GPUI draws it at that scale where Windows has another, as one made hidden on another display
+  // and moved to the browser window's does (#2541).
   if (action == "dpi") {
     int percent = 0;
     if (!(words >> percent) || percent < 100 || percent > 500) {
       return false;
     }
-    g_steps.push_back({[percent] {
+    std::string name;
+    std::getline(words >> std::ws, name);
+    g_steps.push_back({[percent, name] {
       HWND root = Driven();
+      if (!name.empty()) {
+        root = nullptr;
+        for (HWND top = GetTopWindow(nullptr); top && !root; top = GetWindow(top, GW_HWNDNEXT)) {
+          const char* floating = Ours(top) ? host_floating_name(top) : nullptr;
+          root = floating && name == floating ? top : nullptr;
+        }
+        if (!root) {
+          fprintf(stderr, "browser: dpi found no %s\n", name.c_str());
+          return;
+        }
+      }
       RECT rect{};
       GetWindowRect(root, &rect);
       const WORD dpi = static_cast<WORD>(MulDiv(USER_DEFAULT_SCREEN_DPI, percent, 100));
       SendMessageW(root, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&rect));
+      if (!name.empty()) {
+        fprintf(stderr, "browser: dpi %d told %s\n", dpi, name.c_str());
+      }
     }, 300});
     return true;
   }
