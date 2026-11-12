@@ -22,7 +22,7 @@ pub(crate) fn sign_in_close() -> bool {
 }
 
 /// Settings' switch. Turned off, a window about to close stays.
-pub(crate) fn set_sign_in_close(on: bool) {
+pub(crate) fn set_sign_in_close(on: bool, cx: &mut App) {
     let path = off_path();
     _ = if on {
         std::fs::remove_file(path)
@@ -33,7 +33,7 @@ pub(crate) fn set_sign_in_close(on: bool) {
         for window in
             LINK_TABS.with_borrow(|tabs| tabs.values().map(|l| l.window).collect::<Vec<_>>())
         {
-            update_window(window, |shell, cx| shell.set_little_closing(false, cx));
+            update_window_in(window, cx, |shell, cx| shell.set_little_closing(false, cx));
         }
     }
 }
@@ -85,7 +85,7 @@ pub(crate) fn tab_loaded(tab: u64, url: &str, cx: &mut App) {
     };
     // The bar says the window's closing for as long as this page shows.
     let done = sign_in_close() && sign_in_done(&before, url);
-    update_window(window, |shell, cx| shell.set_little_closing(done, cx));
+    update_window_in(window, cx, |shell, cx| shell.set_little_closing(done, cx));
     if !done {
         return;
     }
