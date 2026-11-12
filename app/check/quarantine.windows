@@ -4,3 +4,5 @@
 # Only the memory rows at 10 and 20 tabs fail perf's gate (check/perf.sh), so this names them alone.
 perf #2138 2026-11-10 ilo took more than 10 % over Chrome on this runner: memory,
 windows #2607 2026-11-12 let go where nothing took it: the page's field lost what was typed
+tabs #2616 2026-11-12 the window back from Win+D left its hidden command bar with the keyboard
+restore #2617 2026-11-12 the app exited with status 139
