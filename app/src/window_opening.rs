@@ -197,8 +197,10 @@ pub(crate) fn open_window_as(
     // GPUI's own X11 window, which its window opens in, as the view the core holds.
     #[cfg(target_os = "linux")]
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
+    gpui::launch_mark("app host window made");
     let after = from.as_ref().map(|from| from.ui_view);
     let id = open_browser_window(ui_view, after, own, saved, at)?;
+    gpui::launch_mark("app core window made");
     // A saved window maximized as it quit, at the frame it un-maximizes to, as the core kept it.
     // Before its UI opens, so that starts at the maximized size.
     if let Some(index) =
@@ -249,7 +251,9 @@ pub(crate) fn open_window_as(
             .map(|size| gpui::WindowBounds::Windowed(Bounds::new(point(px(0.), px(0.)), size))),
         ..Default::default()
     };
+    gpui::launch_mark("app gpui open_window");
     let window = cx.open_window(options, |window, cx| {
+        gpui::launch_mark("app window closure");
         let shell = cx.new(|cx| {
             // The page keeps its place in the card as the window resizes.
             cx.observe_window_bounds(window, move |shell: &mut Shell, window, cx| {
@@ -308,6 +312,7 @@ pub(crate) fn open_window_as(
                 (None, None) => Shell::new(engine, cx),
             }
         });
+        gpui::launch_mark("app shell made");
         window.focus(&shell.focus_handle(cx), cx);
         // As Settings › Features has it, which the core read with the Spaces.
         let little = unsafe { crate::bc::bc_little_windows() };
@@ -352,8 +357,10 @@ pub(crate) fn open_window_as(
         // As at a launch below 20 %, before there was a window to hear it.
         let battery = BATTERY_SAVER.get();
         shell.update(cx, |shell, cx| shell.set_battery_saver(battery, cx));
+        gpui::launch_mark("app window closure done");
         shell
     });
+    gpui::launch_mark("app gpui open_window returned");
     let window = match window {
         Ok(window) => window,
         Err(error) => {
@@ -389,7 +396,9 @@ pub(crate) fn open_window_as(
     let first = from.is_none();
     // Once the page frame is set, so the tab shown loads at its size, and before the window is on
     // screen, so the core's reports of its tabs can come before its first frame.
+    gpui::launch_mark("app restoring");
     let restored = first && restore_spaces(id, window, cx);
+    gpui::launch_mark("app restored");
     // Under Wayland the compositor can answer a window the restore puts back full screen with a
     // configure of no size before its first frame, which Chromium, holding the full screen it asked
     // for (chromium-wayland-state-after-ack.patch), gives no bounds, and the frame it then commits
