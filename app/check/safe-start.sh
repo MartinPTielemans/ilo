@@ -1,13 +1,12 @@
 # check.sh runs this at 655.
-# Safe start (#2345): a crash at launch, the browser killed in its first minute, changes nothing
-# by itself, as the next launch loads the profile's extension and Boost as before. A second in a
-# row starts the third launch safe: the core holds the extension and the ad blocker, which the
-# Extensions menu then doesn't list, the site's Boost doesn't show, and the card at the sidebar's
-# foot says so. Its Turn Back On restarts the browser, into a normal launch, and the next launch
-# loads them both again, the profile's own switches as they were. The mark is one line in the
-# app's folder, "Last launch", which check.sh takes away before each run. That a crash after the
-# first minute counts nothing is the unit tests' (safe_start.rs), as waiting it out costs a
-# minute.
+# Safe start (#2345): a crash at launch, the browser killed in its first minute, changes nothing by
+# itself, as the next launch loads the profile's extension and Boost as before. A second in a row
+# starts the third launch safe: the core holds the extension and the ad blocker, the Extensions menu
+# then doesn't list the extension, the site's Boost doesn't show, and the card at the sidebar's foot
+# says so. Its Turn Back On restarts the browser, into a normal launch, and the next launch loads
+# them both again, the profile's own switches as they were. The mark is one line in the app's
+# folder, "Last launch", which check.sh takes away before each run. That a crash after the first
+# minute counts nothing is the unit tests' (safe_start.rs), as waiting it out costs a minute.
 
 serve
 printf '%s' '<!doctype html><meta charset="utf-8"><title>Safe</title>
@@ -55,10 +54,13 @@ launch_said() {
 in_log() {
   grep -q "$1" "$log"
 }
-# A launch that loaded the extension, the ad blocker and the Boost, as normal.
+# A launch that loaded the extension and the Boost, as normal. The ad blocker is Settings › Ad
+# blocking, never an extension list's (#2113), so the menu lists the check's extension alone.
 loaded_all() {
-  await "^browser: extensions menu [a-p]* $ublock\$" ||
-    fail "the Extensions menu didn't list Check Safe Start and the ad blocker: $(grep '^browser: extensions menu' "$log")"
+  await '^browser: extensions menu [a-p]\{32\}$' ||
+    fail "the Extensions menu didn't list Check Safe Start: $(grep '^browser: extensions menu' "$log")"
+  in_log "^browser: extensions menu .*$ublock" &&
+    fail "the Extensions menu listed the ad blocker: $(grep '^browser: extensions menu' "$log" | tail -1)"
   await "$boosted" || fail "the site's Boost didn't show: $(grep '^browser: title' "$log" | tail -1)"
   in_log 'browser: safe start holds' && fail "the core held extensions in a normal launch"
   in_log '^browser: safe start card shown$' && fail "a normal launch showed the safe-start card"
