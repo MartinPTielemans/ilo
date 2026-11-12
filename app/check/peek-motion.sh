@@ -1,6 +1,8 @@
 # Peek grows from the link and shrinks back into it showing only the card: at a point inside its
 # resting frame, every frame shows the window's own page there until the card reaches it, and
-# again once the card has left it as it closes, never Peek's page laid out where it rests (#2519).
+# again once the card has left it as it closes, never Peek's page laid out where it rests; inside
+# the card no frame shows the window's page undimmed; and Peek's page is laid out at its resting
+# size from the first, never resized by the motion (#2519).
 # It films opens and closes (tools/window-frames.sh, which keeps every picture) and reads
 # each frame with check/peek_motion.py, which takes where the motion is from the dim the frame
 # shows over the window's page. Its frames: build/check/peek-frames/open-1, close-1 and on.
@@ -13,7 +15,9 @@ if [ "$(uname)" = Darwin ]; then
 fi
 serve
 # The window's page is one green, its top 40% a link to another site, localhost, and Peek's page
-# one magenta, so a frame says whose page shows at a point. The titles say "ready" once drawn.
+# one magenta, so a frame says whose page shows at a point. The titles say "ready" once drawn, and
+# Peek's its size as its first script read it and how many times it was resized since: it's laid
+# out where it rests from the first, never in the motion's frames (#2519).
 target="http://localhost:$port/peek-motion-target.html"
 printf '%s' "<title>loading</title>
 <body style=\"margin:0;height:100vh;background:rgb(0,176,0)\">
@@ -22,8 +26,13 @@ A link to another site</a>
 <script>requestAnimationFrame(() => requestAnimationFrame(() => document.title = \"ready\"));</script>" \
   > "$out/site/peek-motion.html"
 printf '%s' "<title>loading</title><body style=\"margin:0;height:100vh;background:rgb(224,0,224)\">
-<script>requestAnimationFrame(() => requestAnimationFrame(() => document.title = \"peek ready\"));</script>" \
-  > "$out/site/peek-motion-target.html"
+<script>
+const size = innerWidth + 'x' + innerHeight;
+let resized = 0;
+const say = () => document.title = 'peek ready ' + size + ' resized ' + resized;
+addEventListener('resize', () => { resized++; say(); });
+requestAnimationFrame(() => requestAnimationFrame(say));
+</script>" > "$out/site/peek-motion-target.html"
 log="$out/peek-motion.log"
 frames="$out/peek-frames"
 step=0
@@ -101,9 +110,14 @@ round() {
   expect '^browser: link preview shown$' "Peek's window didn't show"
   expect '^browser: link preview settled$' "Peek didn't settle"
   stop_film
-  expect "^browser: title $p peek ready\$" "Peek's page didn't draw"
+  expect "^browser: title $p peek ready " "Peek's page didn't draw"
   rest=$(grep '^browser: link preview page at ' "$log" | tail -1 | sed 's/^browser: link preview page at //')
   [ -n "$rest" ] || fail "Peek didn't say where its page rests"
+  # Its size where it rests, in points, as its first script read it, to the point, and never resized.
+  said=$(grep "^browser: title $p peek ready " "$log" | tail -1 | sed 's/.*peek ready //')
+  echo "$rest $said" | awk '{ split($8, size, "x");
+      exit !(size[1] - $3 <= 1 && $3 - size[1] <= 1 && size[2] - $4 <= 1 && $4 - size[2] <= 1 && $10 == 0) }' ||
+    fail "Peek's page read its size as ${said%% *}, resized ${said##* } times, against its resting $(echo "$rest" | cut -d' ' -f3,4)"
   film "close-$1"
   send key escape
   expect '^browser: link preview hidden$' "Esc didn't close Peek"
@@ -132,6 +146,6 @@ case $status in
    fi
    echo "skip: peek-motion, as the frames can't say where the card is here: $(grep -v '^open-\|^close-' "$out/peek-motion.txt" | tail -1)"
    exit 0 ;;
-*) fail "Peek's resting frame shows outside its card as it moves: $(grep 'FAIL' "$out/peek-motion.txt" | tr '\n' ' ')" ;;
+*) fail "a frame shows Peek's resting frame outside its card, or the window's page undimmed inside it: $(grep 'FAIL' "$out/peek-motion.txt" | tr '\n' ' ')" ;;
 esac
-echo "ok: Peek grows from the link and shrinks back into it with only its card on screen: each frame shows the window's page at a point of Peek's resting frame until the card reaches it and once it has left. Frames: build/check/peek-frames, read in build/check/peek-motion.txt"
+echo "ok: Peek grows from the link and shrinks back into it with only its card on screen: each frame shows the window's page at a point of Peek's resting frame until the card reaches it and once it has left, never undimmed inside the card, and its page read its resting size from its first script, never resized. Frames: build/check/peek-frames, read in build/check/peek-motion.txt"

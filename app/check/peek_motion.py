@@ -13,7 +13,8 @@ the preview opens and closes, so a point of the window's page outside the card, 
 motion's progress, and with it the card's scale on the preview's curves (link_preview.rs). A point
 inside the page's resting frame, P, near the corner furthest from where it grows, is outside the
 card until the card's scale reaches it: until then P must show the window's own page, as it does
-on the Mac, and never Peek's.
+on the Mac, and never Peek's. A point inside the card at every scale, Q, must never show the
+window's page as it is, undimmed, while the dim is up: the card has its plate there, or Peek's page.
 """
 import os
 import struct
@@ -97,8 +98,11 @@ def main():
     reach = max((p[0] - fx) / (edge[0] - fx), (p[1] - fy) / (edge[1] - fy))
     # D, the window's page under the dim, below the card, or above it if the card is low.
     d = (px + pw / 2, py + ph + RIM + 12)
+    # Q, the resting frame's centre drawn in toward where it grows to its smallest scale.
+    q = (fx + (px + pw / 2 - fx) * FROM_SCALE, fy + (py + ph / 2 - fy) * FROM_SCALE)
     print("P %.0f,%.0f (inside the resting frame; the card reaches it at scale %.2f), D %.0f,%.0f "
-          "(the window's page, below the card)" % (p + (reach,) + d))
+          "(the window's page, below the card), Q %.0f,%.0f (inside the card at every scale)"
+          % (p + (reach,) + d + q))
 
     def hue(rgb):
         r, g, b = rgb
@@ -126,28 +130,28 @@ def main():
             path = os.path.join(folder, filming, name)
             width = struct.unpack_from(">I", open(path, "rb").read(24), 16)[0]
             scale = width / content_width
-            last = (int(max(p[0], d[0]) * scale), int(max(p[1], d[1]) * scale))
+            last = (int(max(p[0], d[0], q[0]) * scale), int(max(p[1], d[1], q[1]) * scale))
             width, height, size, picture = read_png(path, last)
 
             def at(point):
                 x, y = int(point[0] * scale), int(point[1] * scale)
                 return tuple(picture[y][x * size:x * size + 3])
 
-            rows.append((name[:-4], at(p), at(d)))
+            rows.append((name[:-4], at(p), at(d), at(q)))
         # The window's page as it is, at D in the first frame, before the click.
         if base is None:
             base = rows[0][2]
             print("the window's page at D before the click: %s" % (base,))
         # The dim's progress at D, from its green: 0 is the page as it is, 1 the dim at rest.
         g0 = base[1]
-        dims = [max(0.0, min(1.0, (g0 - dd[1]) / ((g0 - DIM) * DIM_OPACITY))) for _, _, dd in rows]
+        dims = [max(0.0, min(1.0, (g0 - dd[1]) / ((g0 - DIM) * DIM_OPACITY))) for _, _, dd, _ in rows]
         if max(dims) < 0.8:
             print("%s: the dim never reached its rest at D (%.2f at most), so it isn't drawn blended "
                   "here and the frames can't say where the motion is" % (filming, max(dims)))
             unreadable = True
             continue
         caught = wrong = 0
-        for (name, pp, dd), dim in zip(rows, dims):
+        for (name, pp, dd, qq), dim in zip(rows, dims):
             if motion == "open":
                 scale = FROM_SCALE + (1 - FROM_SCALE) * bezier(*OPEN_CURVE, dim)
             else:
@@ -158,19 +162,24 @@ def main():
             inside = 0.05 < dim and scale > reach + MARGIN
             mid = 0.05 < dim < 0.95
             verdict = ""
+            bare = dim > 0.2 and all(abs(a - b) <= 6 for a, b in zip(qq, base))
             if outside and hue(pp) != "page":
                 verdict = "WRONG: Peek's frame shows outside the card"
+                wrong += 1
+            elif bare:
+                verdict = "WRONG: the window's page shows undimmed inside the card"
                 wrong += 1
             elif outside and mid:
                 verdict = "ok: the window's page outside the card"
                 caught += 1
             elif inside:
                 verdict = "card"
-            print("%s %s dim %.2f scale %.2f P %s %s D %s %s" % (
-                filming, name, dim, scale, hue(pp), pp, dd, verdict))
+            print("%s %s dim %.2f scale %.2f P %s %s D %s Q %s %s" % (
+                filming, name, dim, scale, hue(pp), pp, dd, qq, verdict))
         caught_in[motion] += caught
         if wrong:
-            print("%s: FAIL: %d frames show Peek's resting frame outside the card" % (filming, wrong))
+            print("%s: FAIL: %d frames show Peek's resting frame outside the card or the window's page "
+                  "undimmed inside it" % (filming, wrong))
             failed = True
         else:
             print("%s: %d frames mid-motion show the window's page at P, outside the card"
