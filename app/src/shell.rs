@@ -3725,10 +3725,7 @@ impl Shell {
     /// unless a page took it there, and leaving takes that away.
     pub fn set_full_screen(&mut self, entered: bool, cx: &mut Context<Self>) {
         self.full_screen = entered;
-        // A new window waiting for its full screen opens its bar at the next frame.
-        if self.opening.is_some() {
-            cx.notify();
-        }
+        self.opening_heard(entered, cx);
         // There for the page, or back, with no resize to end the hold, as a window already its
         // screen's size goes: held on, the page stayed put for good, under the Library (#1633).
         if entered == self.page_fullscreen && self.page_held.take().is_some() {
