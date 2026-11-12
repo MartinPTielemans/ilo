@@ -1042,8 +1042,15 @@ impl Browser for Fake {
         self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
     }
 
+    // Safari's engine is the Mac's alone, so elsewhere the note offers what each system's does.
     fn can_use_system_engine(&self) -> bool {
-        true
+        cfg!(target_os = "macos")
+    }
+
+    // PREVIEW_DRM=default draws the note as where ilo is the system's default browser.
+    fn elsewhere(&self) -> Option<browser::shell::Elsewhere> {
+        let default = || std::env::var("PREVIEW_DRM").is_ok_and(|drm| drm == "default");
+        browser::shell::Elsewhere::on(self.os(), default)
     }
 
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
@@ -2509,8 +2516,8 @@ fn main() {
                         };
                         shell.set_page(tab, page, cx);
                     }
-                    // PREVIEW_DRM=1 has the first tab's page ask for video ilo plays only in Apple's
-                    // engine, so its note shows.
+                    // PREVIEW_DRM=1 has the first tab's page ask for video ilo can't play, so its
+                    // note shows, offering what this system's does (#2468).
                     if std::env::var_os("PREVIEW_DRM").is_some() {
                         shell.set_media_unsupported(1, "com.widevine.alpha", cx);
                     }
@@ -3550,6 +3557,7 @@ impl gpui::Render for PicturesPage {
             Pictures::Appearance(_) => Section::General,
         };
         let column = settings_column::column(
+            &Default::default(),
             section,
             dark,
             Rc::default(),
@@ -3785,6 +3793,7 @@ impl gpui::Render for AccountPage {
             cx,
         );
         let column = settings_column::column(
+            &Default::default(),
             Section::Sync,
             dark,
             Rc::default(),
@@ -4072,7 +4081,7 @@ mod web {
                 selected: get(&space, "selected").as_string(),
             })
             .collect();
-        trace(&canvas);
+        let notes = trace(&canvas);
         gpui_web::draw_in(canvas);
         gpui_platform::web_init();
         gpui_platform::single_threaded_web()
@@ -4095,6 +4104,9 @@ mod web {
                         let mut shell =
                             shell_of(&favorites, &spaces, &mut icons, &mut space_ids, cx);
                         shell.force_tone(tone);
+                        if let Some(notes) = &notes {
+                            shell.note_wheel(notes.clone());
+                        }
                         pages = favorites
                             .iter()
                             .chain(
@@ -4118,37 +4130,68 @@ mod web {
     }
 
     /// With `?trace` on the page, records the wheel events over the demo, when the trackpad gave each
-    /// and when the page heard it, and puts a button on the page that saves them as JSON: a real
-    /// swipe, to check what `shell::swipe`'s model assumes of a trackpad and a browser against.
-    fn trace(canvas: &web_sys::HtmlCanvasElement) {
+    /// and when the page heard it, the page's frames while they come, and what the demo decided of
+    /// each swipe from them, and puts a button on the page that saves them as JSON: a real swipe,
+    /// to check what `shell::swipe`'s model assumes of a trackpad and a browser against, and to
+    /// replay through the model (`replay_wheel_trace`). Gives the shell what to tell its decisions.
+    fn trace(canvas: &web_sys::HtmlCanvasElement) -> Option<shell::WheelNotes> {
+        // Version 2 added `frames`, `decisions` and each event's `demo`; version 1 had no version.
         const RECORD: &str = r#"
             if (!new URLSearchParams(location.search).has("trace")) return;
-            const events = [];
+            const events = [], frames = [], decisions = [];
+            let heard = -Infinity, framing = false;
             const button = document.createElement("button");
             const label = () => { button.textContent = `Save wheel trace (${events.length} events)`; };
+            // Frames only for a second after the wheel's last event, so an idle page stays idle.
+            const frame = (now) => {
+                frames.push(now);
+                framing = performance.now() - heard < 1000;
+                if (framing) requestAnimationFrame(frame);
+            };
             canvas.addEventListener("wheel", (event) => {
                 const { timeStamp: stamp, deltaX: x, deltaY: y, deltaMode: mode } = event;
-                events.push({ stamp, heard: performance.now(), x, y, mode });
+                heard = performance.now();
+                events.push({ stamp, heard, x, y, mode });
+                if (!framing) {
+                    framing = true;
+                    requestAnimationFrame(frame);
+                }
                 label();
             }, { capture: true, passive: true });
             Object.assign(button.style, { position: "fixed", right: "12px", bottom: "12px",
                 zIndex: "2147483647", font: "13px system-ui, sans-serif", padding: "6px 10px" });
             button.onclick = () => {
-                const trace = { userAgent: navigator.userAgent, devicePixelRatio, events };
+                const trace = { version: 2, userAgent: navigator.userAgent, devicePixelRatio,
+                    events, frames, decisions };
                 const link = document.createElement("a");
                 link.href = URL.createObjectURL(new Blob([JSON.stringify(trace)], { type: "application/json" }));
                 link.download = "ilo-wheel-trace.json";
                 link.click();
-                events.length = 0;
+                events.length = frames.length = decisions.length = 0;
                 label();
             };
             label();
             document.body.append(button);
+            // The demo hears each event after this listener, so its decisions are the last event's,
+            // or with no event, its quiet timer's. "wheel" marks an event it took as a swipe's.
+            return (kind, what) => {
+                const event = events.length - 1;
+                if (kind !== "wheel") decisions.push({ event, heard: performance.now(), kind, what });
+                else if (event >= 0) events[event].demo = true;
+            };
         "#;
         let record = js_sys::Function::new_with_args("canvas", RECORD);
-        if let Err(error) = record.call1(&JsValue::NULL, canvas) {
-            log!("couldn't record wheel events: {error:?}");
-        }
+        let note = match record.call1(&JsValue::NULL, canvas) {
+            Ok(note) => note.dyn_into::<js_sys::Function>().ok()?,
+            Err(error) => {
+                log!("couldn't record wheel events: {error:?}");
+                return None;
+            }
+        };
+        Some(Rc::new(move |kind: &'static str, what: &str| {
+            let (kind, what) = (JsValue::from_str(kind), JsValue::from_str(what));
+            note.call2(&JsValue::NULL, &kind, &what).ok();
+        }))
     }
 
     /// Opens the command bar and gives it the keyboard, as ⌘K (⌃K) in the demo does: the site calls

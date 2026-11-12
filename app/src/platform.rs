@@ -294,7 +294,7 @@ unsafe extern "C" {
     pub fn host_key_repeated() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_paste(text: *mut c_char, capacity: usize) -> usize;
-    pub fn host_open_in_safari(url: *const c_char);
+    pub fn host_open_elsewhere(url: *const c_char);
     pub fn host_open_full_disk_access();
     pub fn host_share(
         ui_view: *mut c_void,

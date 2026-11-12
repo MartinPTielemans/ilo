@@ -367,6 +367,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.note("wheel", "");
         let ScrollDelta::Pixels(delta) = event.delta else {
             return self.scroll_at(event, at, window, cx);
         };
@@ -386,11 +387,13 @@ impl Shell {
             ..event.clone()
         };
         let still = ScrollDelta::Pixels(Point::default());
-        if cut.lifted {
+        if let Some(why) = cut.lifted {
+            self.note("lift", why);
             self.web_undecided = None;
             self.web_lift(&phase(TouchPhase::Ended, still), at, window, cx);
         }
-        if cut.landed {
+        if let Some(why) = cut.landed {
+            self.note("land", why);
             self.web_undecided = Some(Point::default());
             self.scroll_at(&phase(TouchPhase::Started, still), at, window, cx);
         }
@@ -409,8 +412,24 @@ impl Shell {
             }
             None => Some(event.delta),
         };
-        let took = moved
-            .is_none_or(|delta| self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx));
+        let deciding = self
+            .swipe
+            .as_ref()
+            .is_none_or(|swipe| swipe.across.is_none());
+        // Until the lift is found, momentum moves the pages as fingers would, on past the Space they
+        // take. There only fingers going faster than they have yet move them further: one swipe
+        // takes one Space, and past it fingers only stretch the band.
+        let held = !self.web_wheel.fastest()
+            && self
+                .swipe
+                .as_ref()
+                .is_some_and(|swipe| self.past_next(swipe));
+        let took = moved.is_none_or(|delta| {
+            held || self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx)
+        });
+        if deciding && let Some(across) = self.swipe.as_ref().and_then(|swipe| swipe.across) {
+            self.note("axis", if across { "across" } else { "along" });
+        }
         let lift = phase(TouchPhase::Ended, still);
         self.web_wheel_quiet = Some(cx.spawn_in(window, async move |shell, cx| {
             // Slowed fingers lift after GAP, and others after LONG.
@@ -426,6 +445,12 @@ impl Shell {
         took
     }
 
+    /// Whether `swipe` has taken the pages past the Space beside the one it began on.
+    fn past_next(&self, swipe: &Swipe) -> bool {
+        let across = swipe.across == Some(true) && swipe.cards.is_none() && !swipe.library;
+        across && self.swiped_to(swipe).abs() > self.width()
+    }
+
     /// No wheel event since the last, at `now`: fingers still down lift, as `lift`.
     fn web_quiet(
         &mut self,
@@ -434,7 +459,8 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.web_wheel.quiet(now) {
+        if let Some(why) = self.web_wheel.quiet(now) {
+            self.note("lift", why);
             self.web_lift(lift, now, window, cx);
         }
     }
@@ -451,13 +477,36 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let before = self.settle.as_ref().map(|settle| settle.start);
+        let (from, library) = (
+            self.swipe.as_ref().map(|swipe| swipe.from),
+            self.library_open,
+        );
         self.scroll_at(lift, at, window, cx);
+        if self.library_open != library {
+            self.note("library", if self.library_open { "open" } else { "closed" });
+        }
         if let Some(settle) = self
             .settle
             .as_mut()
             .filter(|settle| Some(settle.start) != before)
         {
             settle.spend();
+            let space = settle.space;
+            let index = |id| self.spaces.iter().position(|space| space.id == id);
+            if let Some((to, from)) = index(space).zip(from.and_then(index)) {
+                self.note("space", &format!("{:+}", to as i64 - from as i64));
+            }
+        }
+    }
+
+    /// Has the demo's `?trace` told each thing the wheel's events decide of a swipe.
+    pub fn note_wheel(&mut self, notes: super::WheelNotes) {
+        self.web_notes = Some(notes);
+    }
+
+    fn note(&self, kind: &'static str, what: &str) {
+        if let Some(notes) = &self.web_notes {
+            notes(kind, what);
         }
     }
 

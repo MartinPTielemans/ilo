@@ -824,9 +824,11 @@ bool host_key_repeated(void);
 // NUL, and returns its whole length in bytes without the NUL, 0 if it holds none.
 size_t host_paste(char* text, size_t capacity);
 
-// Opens |url| in Safari, which plays the protected video the engine can't. A driven run only logs it,
-// so checks never launch Safari.
-void host_open_in_safari(const char* url);
+// Opens |url| in the browser the protected-playback card offers for video the engine can't play:
+// Safari on the Mac, and the system's default browser on Windows, which the card offers only while
+// that isn't this app (#2468). Linux offers none. A driven run only logs it, so checks never launch
+// another browser.
+void host_open_elsewhere(const char* url);
 
 // Shows System Settings' list of apps with Full Disk Access, which an import from Safari needs. A
 // driven run only logs it, so checks never open System Settings.

@@ -5290,7 +5290,7 @@ void host_open_full_disk_access(void) {
                                    @"Privacy_AllFiles"]];
 }
 
-void host_open_in_safari(const char* url) {
+void host_open_elsewhere(const char* url) {
   NSURL* page = [NSURL URLWithString:@(url)];
   // Only web pages go to another app.
   if (![page.scheme isEqualToString:@"http"] && ![page.scheme isEqualToString:@"https"]) {

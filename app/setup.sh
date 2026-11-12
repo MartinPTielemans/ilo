@@ -14,16 +14,24 @@ if [ ! -d .deps/zed ]; then
     https://github.com/zed-industries/zed .deps/zed
   git -C .deps/zed checkout -q "$ZED_REV"
 fi
-PATCHED="crates/gpui crates/gpui_macos crates/gpui_windows crates/gpui_linux crates/gpui_wgpu crates/gpui_web"
-# The files a patch adds go too; `git add -N` them to see them in a regenerated patch.
-git -C .deps/zed reset -q -- $PATCHED
-git -C .deps/zed checkout -q -- $PATCHED
-git -C .deps/zed clean -fdq -- $PATCHED
+# Every change in the checkout goes, not only in the crates this checkout patches: one a branch
+# patched that this one doesn't would stay patched and break its build. The files a patch adds go
+# too; `git add -N` them to see them in a regenerated patch.
+git -C .deps/zed reset -q
+git -C .deps/zed checkout -q -- .
+git -C .deps/zed clean -fdq
 # A checkout made for an earlier pin moves to this one.
 if [ "$(git -C .deps/zed rev-parse HEAD)" != "$ZED_REV" ]; then
   git -C .deps/zed fetch -q origin "$ZED_REV"
   git -C .deps/zed checkout -q "$ZED_REV"
 fi
+# Downloaded code can bring instructions for coding agents (Zed's tell agents to edit its
+# README). They're written for that project's contributors and don't apply to work here. The reset
+# above brings Zed's back, so they go before anything else can fail.
+find .deps/zed \( -name AGENTS.md -o -name CLAUDE.md -o -name GEMINI.md -o -name .rules \
+  -o -name .cursorrules -o -name .windsurfrules -o -name .clinerules -o -name copilot-instructions.md \
+  -o -name .agents -o -name .claude -o -name .codex -o -name .cursor -o -name .factory \
+  -o -name .gemini -o -name .junie \) -prune -exec rm -rf {} +
 # One patch a crate: gpui_macos's, gpui_windows's and gpui_linux's embed GPUI in Chromium's window
 # and loop, gpui's scales what's painted, lets the tests stand in for an assistive app, adds the
 # Edit menu's Paste and Match Style, caps a window's frame rate only while the app isn't the
@@ -125,10 +133,3 @@ case $(uname -s) in
     fi
     ;;
 esac
-
-# Downloaded code can bring instructions for coding agents (Zed's tell agents to edit its
-# README). They're written for that project's contributors and don't apply to work here.
-find .deps/zed \( -name AGENTS.md -o -name CLAUDE.md -o -name GEMINI.md -o -name .rules \
-  -o -name .cursorrules -o -name .windsurfrules -o -name .clinerules -o -name copilot-instructions.md \
-  -o -name .agents -o -name .claude -o -name .codex -o -name .cursor -o -name .factory \
-  -o -name .gemini -o -name .junie \) -prune -exec rm -rf {} +
