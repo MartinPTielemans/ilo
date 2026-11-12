@@ -159,18 +159,26 @@ first_frame=$(grep -m1 '^browser: link preview first frame in ' "$log" | sed 's/
 [ -n "$first_frame" ] || fail "the preview didn't log its first frame"
 ../tools/window-screenshot.sh "$pid" "$out/preview-open.png" || fail "no window to capture"
 # On Windows the card holds Peek's page where the core shows it: the frame the UI draws it in, at its
-# window's scale, and the page's in the browser window, in pixels, apart by 2 at most. The page is
-# under the preview's window there, which is made once and hidden between previews (#2541).
+# window's scale, and the page's in the browser window, in pixels, each edge within 3 of the other's,
+# as the core rounds the page's frame in DIPs. The page is under the preview's window there, which
+# is made once and hidden between previews (#2541). Either may still be moving, for up to 5 s.
 peek_frame() { # <when>
-  send peek
-  expect '^browser: peek page ' "$1: the driver found no page"
-  page=$(grep '^browser: peek page ' "$log" | tail -1 | cut -d' ' -f4-)
-  card=$(grep '^browser: link preview page frame ' "$log" | tail -1 | cut -d' ' -f6-)
+  for _ in $(seq 10); do
+    send peek
+    expect '^browser: peek page ' "$1: the driver found no page"
+    page=$(grep '^browser: peek page ' "$log" | tail -1 | cut -d' ' -f4-)
+    card=$(grep '^browser: link preview page frame ' "$log" | tail -1 | cut -d' ' -f6-)
+    echo "$card $page" | awk '{ for (i = 1; i <= 4; i++) { d = $i - $(i + 7); if (i > 2) d += $(i - 2) - $(i + 5); if (d > 3 || d < -3) exit 1 } }' &&
+      break
+    page=
+    sleep 0.5
+  done
   send dpis
   expect '^browser: dpis ' "$1: the driver named no DPIs"
   dpis=$(grep '^browser: dpis ' "$log" | tail -1 | cut -d' ' -f3-)
+  page=${page:-$(grep '^browser: peek page ' "$log" | tail -1 | cut -d' ' -f4-)}
   echo "$1: the card holds the page at $card, and the page is at $page; DPIs: $dpis" >> "$out/preview-frames.txt"
-  echo "$card $page" | awk '{ for (i = 1; i <= 4; i++) if ((d = $i - $(i + 7)) > 2 || d < -2) exit 1 }' ||
+  echo "$card $page" | awk '{ for (i = 1; i <= 4; i++) { d = $i - $(i + 7); if (i > 2) d += $(i - 2) - $(i + 5); if (d > 3 || d < -3) exit 1 } }' ||
     fail "$1: Peek's card holds its page at $card, in pixels, but the page is at $page (DPIs: $dpis)"
 }
 rm -f "$out/preview-frames.txt"
@@ -183,8 +191,9 @@ in_order "after Esc" '^browser: link preview closing (escape)$' '^browser: link 
 still_home "after Esc"
 
 # On Windows, the display's scale goes up a step while the preview's window is hidden, as Settings'
-# Scale changes it, and back, and the preview opens at each: the card still holds the page where the
-# core shows it (#2541). The display goes back to its scale even if the run fails.
+# Scale changes it, and back, and the preview opens at each, and then up a step again while it's
+# open: the card still holds the page where the core shows it (#2541). The display goes back to its
+# scale even if the run fails.
 scaled="its display's scale stayed as it was"
 if windows; then
   read -r scale_at scale_least scale_most << EOF
@@ -216,9 +225,19 @@ EOF
     content_not "$content" || fail "the window's content stayed $content points back at the display's scale"
     open_preview "back at the display's scale"
     peek_frame "back at the display's scale"
+    # And up a step with the preview open, which lays out again over the window at the new scale.
+    content_at=$content
+    run_undo="python3 -I check/scale.py set $scale_at"
+    python3 -I check/scale.py set $((scale_at + 1)) > /dev/null
+    content_not "$content_at" || fail "the window's content stayed $content_at points at the display's next scale, the preview open"
+    await '^browser: link preview page frame .* at scale [0-9.]*$' || true
+    peek_frame "at the display's next scale, the preview open"
     send key escape
-    expect '^browser: link preview hidden$' "Esc didn't close the preview back at the display's scale"
-    scaled="it held as the display's scale went a step up and back with the preview hidden"
+    expect '^browser: link preview hidden$' "Esc didn't close the preview at the display's next scale, opened at the one before"
+    python3 -I check/scale.py set "$scale_at" > /dev/null
+    run_undo=
+    content_not "$content" || fail "the window's content stayed $content points back at the display's scale"
+    scaled="it held as the display's scale went a step up and back with the preview hidden, and up with it open"
   fi
 fi
 
