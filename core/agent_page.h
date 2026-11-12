@@ -89,8 +89,12 @@ class AgentPage : public content::WebContentsObserver,
     std::string text;
     // When waiting for its element, or for the page to settle, gives up.
     base::TimeTicks deadline;
-    // Whether the page was still busy when it stopped waiting for it to settle.
+    // Whether the page was still busy when it stopped waiting for it to settle: loading, or what it
+    // shows still changing.
     bool busy = false;
+    // Whether requests the page made were still open then, or had only just ended, though it was
+    // neither loading nor changing, as a page that polls or sends beacons keeps them (#2355).
+    bool requests = false;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
