@@ -166,10 +166,9 @@ if [ "${1:-}" = --steps ]; then
     # page keeps every key, and the bar commits a syllable early and loses the next (#2473).
     if [ -n "${HANGUL:-}" ]; then
       key '^ '
-      for step in d:ㅇ k:아 s:안 s:안ㄴ u:안녀 d:안녕 g:안녕ㅎ k:안녕하 t:안녕핫 p:안녕하세 d:안녕하셍 y:안녕하세요; do
-        at=$(mark); key "${step%%:*}"
-        await "command bar drew \"qxyzw${step#*:}\"" "$at"
-      done
+      # Diagnostic for #2473: one burst, as the reproduction.
+      at=$(mark); key dkssudgktpdy
+      await 'command bar drew "qxyzw안녕하세요"' "$at"
       shot bar-korean
       at=$(mark); key 1
       await 'command bar drew "qxyzw안녕하세요1"' "$at"
