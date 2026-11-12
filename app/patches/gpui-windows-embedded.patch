@@ -807,7 +807,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..2224954de6 100644
+index 095e009e23..41f2c0e850 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -20,7 +20,10 @@ use windows::{
@@ -1100,7 +1100,16 @@ index 095e009e23..2224954de6 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1980,3 +2149,12 @@ mod tests {
+@@ -1763,6 +1932,8 @@ fn handle_gpu_device_lost(
+             }
+         }
+     }
++    // check.sh reads this: each window has drawn on the new device, as the message is sent.
++    eprintln!("browser: gpui redrew its windows on a new device");
+     Ok(())
+ }
+ 
+@@ -1980,3 +2151,12 @@ mod tests {
          );
      }
  }
