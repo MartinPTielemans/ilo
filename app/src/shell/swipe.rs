@@ -416,8 +416,17 @@ impl Shell {
             .swipe
             .as_ref()
             .is_none_or(|swipe| swipe.across.is_none());
-        let took = moved
-            .is_none_or(|delta| self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx));
+        // Until the lift is found, momentum moves the pages as fingers would, on past the Space they
+        // take. There only fingers going faster than they have yet move them further: one swipe
+        // takes one Space, and past it fingers only stretch the band.
+        let held = !self.web_wheel.fastest()
+            && self
+                .swipe
+                .as_ref()
+                .is_some_and(|swipe| self.past_next(swipe));
+        let took = moved.is_none_or(|delta| {
+            held || self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx)
+        });
         if deciding && let Some(across) = self.swipe.as_ref().and_then(|swipe| swipe.across) {
             self.note("axis", if across { "across" } else { "along" });
         }
@@ -434,6 +443,12 @@ impl Shell {
             }
         }));
         took
+    }
+
+    /// Whether `swipe` has taken the pages past the Space beside the one it began on.
+    fn past_next(&self, swipe: &Swipe) -> bool {
+        let across = swipe.across == Some(true) && swipe.cards.is_none() && !swipe.library;
+        across && self.swiped_to(swipe).abs() > self.width()
     }
 
     /// No wheel event since the last, at `now`: fingers still down lift, as `lift`.
