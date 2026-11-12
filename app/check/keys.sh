@@ -230,7 +230,7 @@ if [ -n "$korean" ]; then
   send key return
   send ime off
   send type x
-  expect '^browser: title [0-9]* value abcd한글x$' \
+  expect '^browser: title [0-9]* value abcd한글 x$' \
     "return didn't commit 한글 in the page: $(grep '^browser: title' "$log" | tail -1)"
   send key a cmd
   send type abcd
