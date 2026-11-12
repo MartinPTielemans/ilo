@@ -146,6 +146,7 @@ pub mod motion;
 pub mod needs_you;
 pub mod notes;
 pub mod offer;
+pub mod overlay_life;
 pub mod palette;
 pub mod passwords;
 pub mod settings_card;

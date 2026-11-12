@@ -120,6 +120,13 @@ impl Browser for Made {
         )
     }
 
+    fn space_of(&self, tab: u64, _: &App) -> u64 {
+        let tabs = self.tabs.borrow();
+        tabs.iter()
+            .find(|each| each.0 == tab)
+            .map_or(0, |each| each.1)
+    }
+
     fn may_act(&self, agent: &str, tab: u64, action: &str, _: &mut App) -> Result<(), String> {
         self.checked.borrow_mut().push(action.into());
         if self.held.borrow().contains(&tab) {
@@ -5961,3 +5968,5 @@ mod sessions {
         assert_eq!(space(31), Some(2));
     }
 }
+
+mod holds;

@@ -116,7 +116,12 @@ cleanup() {
 fail() {
   failed=1
   echo "FAIL: $1" >&2
-  grep -v '^$' "$log" | tail -5 >&2
+  # After a wait that ran out, what it waited for and what came instead (#2566).
+  if [ -n "${waited_for:-}" ]; then
+    wait_report >&2
+  else
+    grep -v '^$' "$log" | tail -5 >&2
+  fi
   # What the window showed, for a failure the log doesn't explain, as on CI.
   if [ -n "${pid:-}" ] && [ -n "${out:-}" ] && kill -0 "$pid" 2>/dev/null; then
     ../tools/window-screenshot.sh "$pid" "$out/failed.png" > /dev/null 2>&1 || true
@@ -142,6 +147,8 @@ own_count_logs=
 # Fails the check if a launch's log says a count was sent and it named no server of the run's own:
 # that count reached the hosted server. check.sh asks after each run.
 counted_nowhere() {
+  # The run is over, and so is what its last wait was about.
+  waited_for=
   for counted in $(grep -rlx --include='*.log' 'browser: daily count sent' "$out" || true); do
     case " $own_count_logs " in
       *" $counted "*) ;;
@@ -160,12 +167,84 @@ engine_has() {
 }
 # Waits up to 30 s for a line matching $1 in the log of the current run.
 await() {
+  wait_begins
   for _ in $(seq 300); do
     grep -q "$1" "$log" && return 0
-    kill -0 "$pid" 2>/dev/null || gone
+    kill -0 "$pid" 2>/dev/null || {
+      ran_out "$1" "" exited
+      gone
+    }
     sleep 0.1
   done
+  ran_out "$1" ""
   return 1
+}
+# A wait for a line starts: the one before it, met or not, is no longer what a failure is about.
+# Seconds by the shell's clock where it has one, as Git Bash forks slowly, or else by date's.
+wait_begins() {
+  waited_for=
+  wait_began=${SECONDS:-$(date +%s)}
+}
+# Notes, for fail, a wait for a line matching $1 that ran out, or that the app's exit ended with
+# $3 "exited", which read the app's lines from command $2 on, or all of them.
+ran_out() {
+  waited_for=$1
+  waited_from=$2
+  waited_end=${3:-}
+  waited_secs=$((${SECONDS:-$(date +%s)} - ${wait_began:-0}))
+}
+# What fail says after a wait ran out, for someone who has never seen the run (#2566): what it
+# waited for and how long, the app's lines from the wait's command on, and the log's lines nearest
+# to what it waited for, those starting as the pattern's plain start does. Most often the line came,
+# but in another form, from another layer, or before the command.
+wait_report() {
+  local plain= near= at=
+  if [ "$waited_end" = exited ]; then
+    echo "The app exited during a wait for a line matching: $waited_for"
+  else
+    echo "The wait ran out after ${waited_secs} s, for a line matching: $waited_for"
+  fi
+  if [ -n "$waited_from" ]; then
+    echo "What the app logged from command $waited_from ($(sed -n "s/^browser: drive $waited_from: //p" "$log" | head -1)) on, the last 40 lines:"
+    since "$waited_from" | grep -v '^$' | fold_alike | tail -40 | sed 's/^/  /'
+    at=$(grep -n "^browser: drive $waited_from: " "$log" | head -1 | cut -d: -f1)
+  else
+    echo "What the app logged last, 40 lines:"
+    grep -v '^$' "$log" | fold_alike | tail -40 | sed 's/^/  /'
+  fi
+  # The pattern's start up to its first special character, then a word shorter each time while two
+  # are left, until some line starts with it: "browser:" alone would match every line. No "[." in
+  # the bracket, which starts a collating symbol there.
+  plain=$(printf '%s\n' "$waited_for" | sed 's/^\^//; s/[]$*.\\[].*//; s/ *$//')
+  while [ "${plain% *}" != "$plain" ]; do
+    near=$(awk -v plain="$plain" 'index($0, plain) == 1 { print NR ": " $0 }' "$log" | tail -5)
+    if [ -n "$near" ]; then
+      echo "The log's last lines starting \"$plain\", by line number${at:+ (command $waited_from is line $at)}:"
+      printf '%s\n' "$near" | sed 's/^/  /'
+      break
+    fi
+    plain=${plain% *}
+  done
+  [ -n "$near" ] || echo "No line in the log starts as the pattern does."
+  waited_for=
+}
+# Folds each run of lines that are alike but for their numbers into its first and last line,
+# saying how many there were.
+fold_alike() {
+  awk '
+    function flush() {
+      if (n == 1) print first
+      else if (same) print first "  (" n " times)"
+      else {
+        print first
+        if (n > 2) print "... " n - 2 " more like it ..."
+        print last
+      }
+    }
+    { key = $0; gsub(/[0-9]+/, "#", key) }
+    n && key == run { n++; last = $0; if ($0 != first) same = 0; next }
+    { if (n) flush(); run = key; first = last = $0; n = 1; same = 1 }
+    END { if (n) flush() }'
 }
 # Puts View › Appearance back to Automatic, the profile's first, by taking away the choice the core
 # keeps with the Spaces, and the file an older app kept it in, which a run that picks Light or Dark
@@ -401,28 +480,34 @@ share='\(, Share…\( (disabled)\)\?\|, Share › [^,]*\(, Share › [^,]*\)*\)\
 # Waits for a line matching $1 logged after the last command was sent, or after command $3, and
 # fails with $2.
 expect() {
+  wait_begins
   for _ in $(seq 100); do
     logged "$1" "${3:-}" && return 0
     exited_without "$1" "$2" "${3:-}"
     sleep 0.1
   done
+  ran_out "$1" "${3:-$step}"
   fail "$2"
 }
 # expect, for up to 30 s, for what waits on a process that may still be starting.
 expect_late() {
+  wait_begins
   for _ in $(seq 300); do
     sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1" && return 0
     sleep 0.1
   done
+  ran_out "$1" "$step"
   fail "$2"
 }
 # expect, looking every 10 ms, for a press that has to land within the first frames of a motion.
 expect_soon() {
+  wait_begins
   for _ in $(seq 1000); do
     logged "$1" && return 0
     exited_without "$1" "$2"
     sleep 0.01
   done
+  ran_out "$1" "$step"
   fail "$2"
 }
 # A line matching $1 was logged after the last command was sent, or after command $2.
@@ -432,7 +517,10 @@ logged() {
 # The app that was to log $1 is gone without it, which says why the step $2 failed. It's looked
 # for again, as the app may have logged it as it went.
 exited_without() {
-  [ -z "${pid:-}" ] || kill -0 "$pid" 2>/dev/null || logged "$1" "${3:-}" || fail "the app exited: $2"
+  [ -z "${pid:-}" ] || kill -0 "$pid" 2>/dev/null || logged "$1" "${3:-}" || {
+    ran_out "$1" "${3:-$step}" exited
+    fail "the app exited: $2"
+  }
 }
 # Settings has drawn its tab $1, or whichever it shows, since the last command, on showing or on a
 # change of tab: until it has, a click in it finds nothing to land on (#1101, #1133).
