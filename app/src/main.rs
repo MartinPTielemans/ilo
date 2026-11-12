@@ -673,9 +673,12 @@ unsafe extern "C" fn agent_request_done(
 }
 
 unsafe extern "C" fn launching(_: *mut c_void) {
-    // While Chromium starts, about 280 ms before the first window opens (#2384).
+    // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
+    // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
     #[cfg(target_os = "linux")]
-    gpui_wgpu::WgpuContext::make_instance_early();
+    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+        gpui_wgpu::WgpuContext::make_instance_early();
+    }
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
