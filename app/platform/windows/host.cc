@@ -568,10 +568,55 @@ void TellScale(HWND hwnd) {
   SendMessageW(hwnd, WM_DPICHANGED_AFTERPARENT, 0, 0);
 }
 
+// The windows the host cloaked rather than hid, as the shell had them cloaked for Show desktop.
+std::set<HWND>& CloakedForShell() {
+  static std::set<HWND> windows;
+  return windows;
+}
+
+void Cloak(HWND hwnd, BOOL cloak) {
+  DwmSetWindowAttribute(hwnd, DWMWA_CLOAK, &cloak, sizeof cloak);
+}
+
+// Takes |hwnd| off screen. With the command bar in front, Win+D cloaks every window rather than
+// minimizing them, and puts back what it cloaked at the second Win+D only if no window has been
+// hidden meanwhile: the bar, hidden as it lost the keyboard, left nothing to come back (#2616). One
+// the shell has cloaked is cloaked by the app too, and hidden once the app is active again.
+void OffScreen(HWND hwnd) {
+  DWORD cloaked = 0;
+  if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) &&
+      (cloaked & DWM_CLOAKED_SHELL)) {
+    Cloak(hwnd, TRUE);
+    CloakedForShell().insert(hwnd);
+    return;
+  }
+  ShowWindow(hwnd, SW_HIDE);
+}
+
+// Hides what OffScreen cloaked: |hwnd|, or with none every one but the active window, which Windows
+// gives the keyboard back to and KeyboardFromHidden hides once its browser window has it.
+void HideCloaked(HWND hwnd = nullptr) {
+  const HWND active = GetForegroundWindow();
+  for (auto it = CloakedForShell().begin(); it != CloakedForShell().end();) {
+    if (hwnd ? *it != hwnd : *it == active) {
+      ++it;
+      continue;
+    }
+    if (IsWindow(*it)) {
+      ShowWindow(*it, SW_HIDE);
+      Cloak(*it, FALSE);
+    }
+    it = CloakedForShell().erase(it);
+  }
+}
+
 // Carries out a show's |actions| for |hwnd|, a window the app floats over a browser window: puts it
 // at |x|, |y|, |width| by |height|, tells it its scale, and puts it on screen, with the pointer and
 // the keyboard if it takes them. PutAway carries out a hide's.
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, uint16_t actions) {
+  if (actions & kOnScreen) {
+    HideCloaked(hwnd);
+  }
   TakePointer(hwnd, actions);
   const HWND after = InsertAfter(hwnd);
   if (actions & kPlace) {
@@ -685,7 +730,7 @@ void PutAway(HWND hwnd, HWND back, uint16_t actions) {
     ReleaseCapture();
   }
   if (actions & kOffScreen) {
-    ShowWindow(hwnd, SW_HIDE);
+    OffScreen(hwnd);
   }
   if (!(actions & kGiveBack)) {
     return;
@@ -730,6 +775,7 @@ void KeyboardFromHidden(HWND hwnd) {
     fprintf(stderr, "browser: %s hidden, its browser window takes the keyboard\n",
             FloatingName(hwnd));
     GiveKeyboard(owner);
+    HideCloaked(hwnd);
   });
 }
 
@@ -1177,6 +1223,10 @@ bool OurThread(DWORD thread) {
 // about to come to the front, or as one of ours is, before the foreground event, as AppKit's
 // will-resign-active comes before the other app is in front.
 void AppActivating(bool active, DWORD thread) {
+  // Once the shell has put back what it cloaked for Show desktop.
+  if (active && !CloakedForShell().empty()) {
+    Later([] { HideCloaked(); });
+  }
   if (active && !g_active) {
     g_active = true;
     if (g_became_active) {
