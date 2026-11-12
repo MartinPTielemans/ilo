@@ -1816,12 +1816,13 @@ size_t bc_search_url(bc_id window,
   return search.is_valid() ? CopyString(search.spec(), url, capacity) : 0;
 }
 
-bc_id bc_tab_open_preview(bc_id opener_id, const char* url) {
+bc_id bc_tab_open_preview(bc_id opener_id, const char* url, bc_rect frame) {
   content::WebContents* opener = browser_core::Tab::FromId(opener_id);
   tabs::TabInterface* tab = opener ? tabs::TabInterface::MaybeGetFromContents(opener) : nullptr;
   browser_core::Window* window =
       tab ? browser_core::Window::ForBrowser(tab->GetBrowserWindowInterface()) : nullptr;
-  content::WebContents* preview = window && url ? window->OpenPreview(*opener, GURL(url)) : nullptr;
+  content::WebContents* preview =
+      window && url ? window->OpenPreview(*opener, GURL(url), ToRect(frame).size()) : nullptr;
   return preview ? browser_core::Tab::IdOf(preview) : 0;
 }
 

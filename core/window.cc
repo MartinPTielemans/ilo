@@ -53,6 +53,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/tab_list/tab_removed_reason.h"
 #include "chrome/browser/ui/browser_active_state_manager/browser_active_state_manager.h"
 #include "chrome/browser/ui/browser_tabrestore.h"
@@ -75,6 +76,7 @@
 #include "components/sessions/core/serialized_navigation_entry.h"
 #include "components/sessions/core/serialized_user_agent_override.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
@@ -1554,21 +1556,40 @@ content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url) {
   return contents;
 }
 
-content::WebContents* Window::OpenPreview(content::WebContents& opener, const GURL& url) {
-  BrowserWindowInterface* browser =
-      BrowserFor(Profile::FromBrowserContext(opener.GetBrowserContext()));
+content::WebContents* Window::OpenPreview(content::WebContents& opener,
+                                          const GURL& url,
+                                          const gfx::Size& size) {
+  Profile* profile = Profile::FromBrowserContext(opener.GetBrowserContext());
+  BrowserWindowInterface* browser = BrowserFor(profile);
   if (!browser) {
     return nullptr;
   }
-  NavigateParams params(browser, url, ui::PAGE_TRANSITION_LINK);
+  // Made here and loaded once it's sized, rather than by Navigate, which makes a background tab,
+  // sizes it to the active tab's page and loads it at once, so the preview's page read the window's
+  // page's size and drew a frame at it before the app's size came (#2539).
+  content::WebContents::CreateParams create(profile,
+                                            tab_util::GetSiteInstanceForNewTab(profile, url));
+  create.initially_hidden = true;
+#if defined(USE_AURA)
+  create.context = widget_->GetNativeWindow();
+#endif
+  NavigateParams params(browser, content::WebContents::Create(create));
   params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
-  // What the page would have sent with the link, by the policy Chrome's pages default to.
-  params.referrer = content::Referrer(
-      opener.GetLastCommittedURL(), network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin);
   // No Space takes it until the app keeps it, so the app isn't told of it as a tab opened.
   base::AutoReset<bool> opening(&opening_tab_, true);
   Navigate(&params);
-  return params.navigated_or_inserted_contents;
+  content::WebContents* preview = params.navigated_or_inserted_contents;
+  if (!preview) {
+    return nullptr;
+  }
+  // Inserting a background tab sized it to the active tab's page.
+  preview->Resize(gfx::Rect(size));
+  NavigateParams load(browser, url, ui::PAGE_TRANSITION_LINK);
+  // What the page would have sent with the link, by the policy Chrome's pages default to.
+  load.referrer = content::Referrer(
+      opener.GetLastCommittedURL(), network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin);
+  preview->GetController().LoadURLWithParams(LoadURLParamsFromNavigateParams(preview, &load));
+  return preview;
 }
 
 void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {

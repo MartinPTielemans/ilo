@@ -340,9 +340,11 @@ class Window : public web_modal::WebContentsModalDialogHost,
   content::WebContents* OpenFromPinned(bc_id pinned, const GURL& url);
 
   // Opens a tab in no Space for |opener|'s profile, loading |url| at once as a link in |opener|'s
-  // page would, not shown: a link preview, which the app shows in a view of its own. Null while
-  // the window is closing or Chromium is quitting.
-  content::WebContents* OpenPreview(content::WebContents& opener, const GURL& url);
+  // page would, not shown: a link preview, which the app shows in a view of its own at |size|, its
+  // page's size from before it loads. Null while the window is closing or Chromium is quitting.
+  content::WebContents* OpenPreview(content::WebContents& opener,
+                                    const GURL& url,
+                                    const gfx::Size& size);
   // Opens a tab for |profile| with |history|, at its |current| page, not shown, with |storage| for
   // its sessionStorage if it isn't null, else a new one. It loads once it's shown. Null while the
   // window is closing or Chromium is quitting.

@@ -47,7 +47,8 @@ fn open_preview_in(
         let Ok(text) = CString::new(url.as_ref()) else {
             return;
         };
-        let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr()) };
+        let at = rect(link_preview::resting(page.0));
+        let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr(), at) };
         if preview == 0 {
             log!("browser: link preview over {over} not opened");
             return;
