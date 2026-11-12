@@ -4132,12 +4132,6 @@ void host_set_toast_plate(double x, double y, double width, double height) {
 void host_show_toast(void* ui_view) {
   g_toast_over = ui_view;
   auto [left, top, width, height] = ToastPlace(ui_view);
-  // GPUI keeps where the pointer was when the toast hid, and Windows tells a hidden window nothing
-  // of the pointer leaving: a toast clicked away and the next shown in its place took itself as
-  // hovered and stayed past its time (#2544, as #2076 on the Mac). It hears the pointer leave first.
-  if (g_toast.hwnd && !IsWindowVisible(g_toast.hwnd)) {
-    SendMessageW(g_toast.hwnd, WM_MOUSELEAVE, 0, 0);
-  }
   Show(g_toast, ui_view, left, top, width, height, false);
   // It shows at once, without a fade, as the Mac's does.
   LogShown(g_toast, "toast");
@@ -4146,7 +4140,15 @@ void host_show_toast(void* ui_view) {
 void host_hide_toast(void) {
   g_toast_over = nullptr;
   g_toast.plate = RECT{};
+  const bool shown = g_toast.hwnd && IsWindowVisible(g_toast.hwnd);
   Hide(g_toast);
+  // GPUI keeps where the pointer was when the toast hid, and Windows tells a hidden window nothing
+  // of the pointer leaving: a toast clicked away and the next shown in its place took itself as
+  // hovered and stayed past its time (#2544, as #2076 on the Mac). It hears the pointer leave as it
+  // hides, posted, as GPUI drops what a window hears while the UI is busy, as it is here.
+  if (shown) {
+    PostMessageW(g_toast.hwnd, WM_MOUSELEAVE, 0, 0);
+  }
 }
 
 void host_add_foot_bar(void* foot_bar_view) {
