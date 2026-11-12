@@ -6,7 +6,18 @@ use super::*;
 /// Opens a tab loading `url` at the top of the Today tabs of the Space `window` shows, and shows
 /// it there.
 pub(crate) fn open_tab(window: bc::bc_id, url: &str) {
-    let tab = open_tab_behind(window, url, false);
+    show_tab(window, open_tab_behind(window, url, false));
+}
+
+/// Opens a tab as `open_tab` does, but an http(s) page loads in a task of its own once shown, so
+/// a launch's first page isn't on the way to its window (#2384).
+pub(crate) fn open_tab_loading_after(window: bc::bc_id, url: &str) -> u64 {
+    let tab = open_tab_behind(window, url, true);
+    show_tab(window, tab);
+    tab
+}
+
+fn show_tab(window: bc::bc_id, tab: u64) {
     if tab != 0 {
         unsafe { bc::bc_window_select(window, tab) };
     }

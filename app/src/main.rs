@@ -364,7 +364,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     let notes = UPDATE_NOTES.take().or_else(first_launch_notes);
     let notes = browser::updates::notes_to_open(notes, std::path::Path::new(&profile_dir()));
     match std::env::var("BROWSER_URL") {
-        Ok(url) => open_tab(window, &url),
+        Ok(url) => _ = open_tab_loading_after(window, &url),
         Err(_) if !restored && links.is_empty() && notes.is_none() => {
             let onboarding = std::env::var("BROWSER_ONBOARDING").ok();
             shell

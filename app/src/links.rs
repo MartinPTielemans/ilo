@@ -215,10 +215,7 @@ pub(crate) fn open_link_in(
     if space != unsafe { bc::bc_window_space(window) } {
         unsafe { bc::bc_window_show_space(window, space) };
     }
-    let tab = open_tab_behind(window, url, false);
-    if tab != 0 {
-        unsafe { bc::bc_window_select(window, tab) };
-    }
+    let tab = open_tab_loading_after(window, url);
     (window, tab, space)
 }
 
