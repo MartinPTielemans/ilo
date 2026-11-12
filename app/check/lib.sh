@@ -162,8 +162,21 @@ counted_nowhere() {
 # Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
 # step that needs a core change: an engine built before it skips the step, saying so.
 engine_has() {
-  local commit
-  commit=$(../engine/fetch.sh commit 2> /dev/null) && git diff --quiet "$commit" -- "$@"
+  local commit file
+  if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    commit=$(../engine/fetch.sh commit 2> /dev/null) && git diff --quiet "$commit" -- "$@"
+    return
+  fi
+  # A copy of the tree with no repository, as a check VM's (#2554): build.sh compared it.
+  [ -f build/engine-changes ] ||
+    fail "this tree has no repository and build/engine-changes isn't there, so whether the engine has ${*} is unknown: build with ./build.sh where git is, and copy build/ with the app"
+  for file in "$@"; do
+    case $file in
+      ../*) file=${file#../} ;;
+      *) file=app/$file ;;
+    esac
+    ! grep -qxF "$file" build/engine-changes || return 1
+  done
 }
 # Waits up to 30 s for a line matching $1 in the log of the current run.
 await() {
