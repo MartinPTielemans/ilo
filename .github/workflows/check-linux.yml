@@ -396,11 +396,14 @@ jobs:
       # have it: ilo's Flatpak, installed from the release's bundle, which runs in bubblewrap's
       # user namespaces as Chromium's sandbox does.
       - if: ${{ steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' sync-versions ') }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: flatpak
+      - if: ${{ steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' sync-versions ') }}
         env:
           GH_TOKEN: ${{ github.token }}
           OLD: 0.1.12
         run: |
-          sudo apt-get install -yq flatpak
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           dir=$(mktemp -d)
