@@ -325,8 +325,24 @@ jobs:
           $verdict = [regex]::Match($said, 'Manifest validation succeeded[^\r\n]*').Value
           "- winget validate: $verdict (exit code $code)" >> $env:GITHUB_STEP_SUMMARY
           winget settings --enable LocalManifestFiles
-          winget install --manifest $dir --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-          $code = $LASTEXITCODE
+          # Bounded, so an install that never ends fails saying what was still running and what the
+          # screen showed, not at the job's timeout.
+          $winget = Start-Process -PassThru -NoNewWindow -FilePath (Get-Command winget).Source -ArgumentList `
+            'install', '--manifest', $dir, '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity'
+          $null = $winget.Handle
+          if (-not $winget.WaitForExit(600000)) {
+            $running = Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -gt $winget.StartTime } |
+              ForEach-Object { "$($_.ProcessId) (from $($_.ParentProcessId)) $($_.Name): $($_.CommandLine)" }
+            $running
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $screen = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $shot = New-Object Drawing.Bitmap $screen.Width, $screen.Height
+            [Drawing.Graphics]::FromImage($shot).CopyFromScreen($screen.Location, [Drawing.Point]::Empty, $screen.Size)
+            $shot.Save("$env:RUNNER_TEMP\winget\hung.png")
+            "- FAIL: winget install --manifest didn't finish in 10 min. Started since, still running: $($running -join '; '). The screen then: hung.png in the winget-checked artifact." >> $env:GITHUB_STEP_SUMMARY
+            exit 1
+          }
+          $code = $winget.ExitCode
           "winget install exit code: $code"
           $app = "$env:LOCALAPPDATA\Programs\ilo\chrome.exe"
           if ($code -ne 0 -or -not (Test-Path $app)) {
@@ -349,4 +365,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: winget-checked
-          path: ${{ runner.temp }}/winget
+          path: |
+            ${{ runner.temp }}/winget
+            !${{ runner.temp }}/winget/*.exe
