@@ -696,6 +696,11 @@ pub trait Browser {
     /// does, unless it is already, which it returns: AppKit takes a window opened from a
     /// full-screen one there itself.
     fn enter_full_screen(&self, cx: &mut App) -> bool;
+    /// Whether the window is full screen or on its way, as the window has it at once: the shell
+    /// hears it a frame or more later, AppKit's once the transition is over (#2553).
+    fn full_screen_now(&self) -> bool {
+        self.window_full_screen()
+    }
     /// Whether the window is on the macOS desktop shown: one AppKit takes full screen isn't until
     /// macOS has moved there, and an overlay opened before is left on the desktop it came from.
     fn on_active_space(&self) -> bool {

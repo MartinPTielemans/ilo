@@ -1,8 +1,13 @@
 //! What Help › Copy Build Info copies and Help › Report a Problem… fills a new issue with: the
-//! app's version and build, its engine's, the system's and the chip. Nothing leaves the computer
-//! until the user submits the issue GitHub shows them.
+//! app's version and build, its engine's, the system's and the chip, and on Linux and Windows how
+//! the app is installed, with Linux's session and desktop. Nothing leaves the computer until the
+//! user submits the issue GitHub shows them.
 
 use std::sync::LazyLock;
+
+use gpui::App;
+
+use crate::updates::{self, Updater};
 
 /// Where a new issue is filed: a default service URL, which a fork changes (branding/issues).
 pub const NEW_ISSUE: &str = env!("APP_ISSUES");
@@ -23,16 +28,21 @@ pub struct BuildInfo {
     pub system: String,
     /// The processor: "Apple M2 Pro", else the architecture.
     pub chip: String,
+    /// How this copy is installed and, on Linux, the session and desktop it runs in, as the bug
+    /// report form's Linux or Windows field asks: "Flatpak, Wayland, Hyprland". None on the Mac,
+    /// where the form asks for none.
+    pub setup: Option<String>,
 }
 
 impl BuildInfo {
     /// This copy's, read from the system when asked.
-    pub fn here() -> Self {
+    pub fn here(cx: &App) -> Self {
         BuildInfo {
             version: version(),
             engine: ENGINE_VERSION.clone(),
             system: system(),
             chip: chip(),
+            setup: here_setup(updates::updater(cx)),
         }
     }
 
@@ -46,21 +56,83 @@ impl BuildInfo {
         );
         lines.push(self.system.clone());
         lines.push(self.chip.clone());
+        lines.extend(self.setup.clone());
         lines.join("\n")
     }
 
-    /// A new issue at `new_issue` on the bug report form, its version, Chromium and system fields
-    /// filled with these (.github/ISSUE_TEMPLATE/bug_report.yml's ids).
+    /// A new issue at `new_issue` on the bug report form, its version, Chromium, operating system,
+    /// system and this system's install fields filled with these
+    /// (.github/ISSUE_TEMPLATE/bug_report.yml's ids).
     pub fn issue_url(&self, new_issue: &str) -> String {
         let mut fields = vec![("template", "bug_report.yml".to_owned())];
         fields.push(("version", self.version.clone()));
         fields.extend(self.engine.clone().map(|engine| ("chromium", engine)));
+        fields.push(("platform", PLATFORM.to_owned()));
         fields.push(("os", format!("{}, {}", self.system, self.chip)));
+        // The form's field for this system's install: one for Linux, one for Windows.
+        let field = if cfg!(windows) { "windows" } else { "linux" };
+        fields.extend(self.setup.clone().map(|setup| (field, setup)));
         let query: Vec<String> = fields
             .iter()
             .map(|(name, value)| format!("{name}={}", escape(value)))
             .collect();
         format!("{new_issue}?{}", query.join("&"))
+    }
+}
+
+/// The system's family, as the bug report form's Operating system offers it.
+const PLATFORM: &str = if cfg!(target_os = "macos") {
+    "macOS"
+} else if cfg!(windows) {
+    "Windows"
+} else {
+    "Linux"
+};
+
+/// How this copy is installed, and on Linux its session and desktop, read when asked.
+#[cfg(target_os = "linux")]
+fn here_setup(_: Updater) -> Option<String> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
+    Some(linux_setup(
+        crate::flatpak::in_flatpak(),
+        gpui::guess_compositor(),
+        desktop.as_deref(),
+    ))
+}
+
+#[cfg(windows)]
+fn here_setup(updater: Updater) -> Option<String> {
+    Some(windows_install(updater).to_owned())
+}
+
+/// The Mac's form asks for none, and the preview's web build has none to tell.
+#[cfg(not(any(target_os = "linux", windows)))]
+fn here_setup(_: Updater) -> Option<String> {
+    None
+}
+
+/// The Flatpak from ilo's releases or not, which the form takes as built from source, the session
+/// GPUI connects to, and the desktop, as the form's Linux field asks for them.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_setup(flatpak: bool, session: &str, desktop: Option<&str>) -> String {
+    let install = if flatpak {
+        "Flatpak"
+    } else {
+        "built from source"
+    };
+    let mut words = vec![install, session];
+    words.extend(desktop.filter(|desktop| !desktop.is_empty()));
+    words.join(", ")
+}
+
+/// What installed this copy, from what updates it: winget runs the same installer as a download
+/// does, so the two can't be told apart, and a build that updates itself not at all is a dev build.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_install(updater: Updater) -> &'static str {
+    match updater {
+        Updater::Store => "the Microsoft Store",
+        Updater::Own => "the installer or winget",
+        Updater::None => "built from source",
     }
 }
 
@@ -162,9 +234,85 @@ fn system() -> String {
         .unwrap_or_else(|| "Linux".to_owned())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(windows)]
+fn system() -> String {
+    let read = |name| windows_current_version(name);
+    windows_system(
+        read("ProductName").as_deref(),
+        read("DisplayVersion").as_deref(),
+        read("CurrentBuildNumber").as_deref(),
+    )
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn system() -> String {
     std::env::consts::OS.to_owned()
+}
+
+/// Windows's edition, release and build: "Windows 11 Pro 24H2 (build 26100)". Windows 11 still
+/// names itself Windows 10 in the registry, so its build, 22000 on, says which it is.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_system(product: Option<&str>, release: Option<&str>, build: Option<&str>) -> String {
+    fn given(text: Option<&str>) -> Option<&str> {
+        text.map(str::trim).filter(|text| !text.is_empty())
+    }
+    let build: Option<u32> = given(build).and_then(|build| build.parse().ok());
+    let mut words = vec![given(product).unwrap_or("Windows").to_owned()];
+    if build.is_some_and(|build| build >= WINDOWS_11) {
+        words[0] = words[0].replacen("Windows 10", "Windows 11", 1);
+    }
+    words.extend(given(release).map(str::to_owned));
+    words.extend(build.map(|build| format!("(build {build})")));
+    words.join(" ")
+}
+
+/// The first build of Windows 11.
+const WINDOWS_11: u32 = 22000;
+
+/// Whether this is Windows 11, which rounds a window's corners, by its build.
+#[cfg(windows)]
+pub fn windows_11() -> bool {
+    static BUILD: LazyLock<u32> = LazyLock::new(|| {
+        windows_current_version("CurrentBuildNumber")
+            .and_then(|build| build.trim().parse().ok())
+            .unwrap_or(0)
+    });
+    *BUILD >= WINDOWS_11
+}
+
+/// A text value of Windows's own key for its version, as the registry holds it.
+#[cfg(windows)]
+fn windows_current_version(name: &str) -> Option<String> {
+    windows_machine_text(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion", name)
+}
+
+/// A text value under HKEY_LOCAL_MACHINE's `folder`, if it's there.
+#[cfg(windows)]
+fn windows_machine_text(folder: &str, name: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+    let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (folder, name) = (wide(folder), wide(name));
+    let mut text = [0u16; 256];
+    let mut size = std::mem::size_of_val(&text) as u32;
+    // SAFETY: both names end in a nul, and `size` is `text`'s size in bytes, which the call
+    // writes no further than, and sets to what it wrote.
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            folder.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            text.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    (read == 0).then(|| {
+        let text = &text[..(size as usize / 2).min(text.len())];
+        String::from_utf16_lossy(text)
+            .trim_end_matches('\0')
+            .to_owned()
+    })
 }
 
 /// The processor's name, else the architecture's.
@@ -180,7 +328,12 @@ fn chip() -> String {
         let line = info.lines().find(|line| line.starts_with("model name"))?;
         Some(line.split_once(':')?.1.to_owned())
     });
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    let name = windows_machine_text(
+        r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+        "ProcessorNameString",
+    );
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     let name: Option<String> = None;
     (name.map(|name| name.trim().to_owned()))
         .filter(|name| !name.is_empty())
@@ -197,6 +350,7 @@ mod tests {
             engine: Some("156.0.7600.12".into()),
             system: "macOS 15.1".into(),
             chip: "Apple M2 Pro".into(),
+            setup: None,
         }
     }
 
@@ -210,6 +364,49 @@ mod tests {
                 " 0.1.0 (4321)\nChromium 156.0.7600.12\nmacOS 15.1\nApple M2 Pro"
             )
         );
+    }
+
+    /// On Windows, the system and the chip come from the registry, not the fallbacks, which
+    /// named them "windows" and "x86_64" (#2458).
+    #[cfg(windows)]
+    #[test]
+    fn reads_windows_version_and_processor() {
+        let system = system();
+        assert!(
+            system.starts_with("Windows ") && system.contains("(build "),
+            "expected the edition and build from Windows's version key, read: {system}"
+        );
+        let chip = chip();
+        assert_ne!(
+            chip,
+            std::env::consts::ARCH,
+            "expected the processor's name from the registry, read only the architecture"
+        );
+    }
+
+    /// Windows is named by its edition, release and build, Windows 11 by its build though the
+    /// registry calls it Windows 10, and what the registry lacks is left out (#2458).
+    #[test]
+    fn names_windows_edition_release_and_build() {
+        let named = |product, release, build| windows_system(product, release, build);
+        assert_eq!(
+            named(Some("Windows 10 Pro"), Some("24H2"), Some("26100")),
+            "Windows 11 Pro 24H2 (build 26100)"
+        );
+        assert_eq!(
+            named(Some("Windows 10 Home"), Some("22H2"), Some("19045")),
+            "Windows 10 Home 22H2 (build 19045)"
+        );
+        assert_eq!(
+            named(
+                Some("Windows Server 2022 Datacenter"),
+                Some(""),
+                Some("20348")
+            ),
+            "Windows Server 2022 Datacenter (build 20348)"
+        );
+        assert_eq!(named(None, None, None), "Windows");
+        assert_eq!(named(Some(" "), None, Some("x")), "Windows");
     }
 
     #[test]
@@ -227,9 +424,50 @@ mod tests {
         let url = made_up().issue_url("https://github.com/o/r/issues/new");
         assert_eq!(
             url,
-            "https://github.com/o/r/issues/new?template=bug_report.yml&version=0.1.0%20%284321%29\
-             &chromium=156.0.7600.12&os=macOS%2015.1%2C%20Apple%20M2%20Pro"
+            format!(
+                "https://github.com/o/r/issues/new?template=bug_report.yml&version=0.1.0%20%284321%29\
+                 &chromium=156.0.7600.12&platform={PLATFORM}&os=macOS%2015.1%2C%20Apple%20M2%20Pro"
+            )
         );
+    }
+
+    /// Linux's and Windows's install go in the form's field for that system, and Copy Build Info
+    /// copies them last (#2458).
+    #[test]
+    fn fills_the_install_field() {
+        let info = BuildInfo {
+            setup: Some("Flatpak, Wayland, Hyprland".into()),
+            ..made_up()
+        };
+        let field = if cfg!(windows) { "windows" } else { "linux" };
+        assert!(
+            info.issue_url(NEW_ISSUE)
+                .ends_with(&format!("&{field}=Flatpak%2C%20Wayland%2C%20Hyprland")),
+        );
+        assert!(
+            info.text()
+                .ends_with("\nApple M2 Pro\nFlatpak, Wayland, Hyprland")
+        );
+    }
+
+    #[test]
+    fn names_linuxs_install_session_and_desktop() {
+        assert_eq!(
+            linux_setup(true, "Wayland", Some("Hyprland")),
+            "Flatpak, Wayland, Hyprland"
+        );
+        assert_eq!(
+            linux_setup(false, "X11", Some("")),
+            "built from source, X11"
+        );
+        assert_eq!(linux_setup(false, "X11", None), "built from source, X11");
+    }
+
+    #[test]
+    fn names_what_installed_a_windows_copy() {
+        assert_eq!(windows_install(Updater::Store), "the Microsoft Store");
+        assert_eq!(windows_install(Updater::Own), "the installer or winget");
+        assert_eq!(windows_install(Updater::None), "built from source");
     }
 
     #[test]
@@ -261,9 +499,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn reads_this_computer() {
-        let info = BuildInfo::here();
+    #[gpui::test]
+    fn reads_this_computer(cx: &mut gpui::TestAppContext) {
+        let info = cx.update(|cx| BuildInfo::here(cx));
         assert!(info.version.starts_with(env!("CARGO_PKG_VERSION")));
         assert!(!info.system.is_empty());
         assert!(!info.chip.is_empty());

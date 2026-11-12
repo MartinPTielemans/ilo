@@ -28,7 +28,8 @@
 # takes the page's title again, scrolls, takes a screenshot and closes a tab, pins a tab of its own, unpins it and removes it, and a page that asks before it's left stays open, with no
 # dialog, until the agent discards it. Its download asks first, and Allow Once downloads the
 # file, which the answer names, and Never leaves none. It sends requests to its tab's site, carrying a session it
-# never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't. A bank's site asks first, in a card whose Allow Once opens it. Always Allow
+# never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't. Settings
+# › Agents opens each request to where it went and what it sent, or that the denied one wasn't. A bank's site asks first, in a card whose Allow Once opens it. Always Allow
 # opens it from then on, as Settings › Agents lists with its Revoke. A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab.
@@ -1075,6 +1076,43 @@ CARD
   [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
     fail "the denied change answered: $changed"
   [ "$(grep -c "$posted" "$out/site.log")" = 1 ] || fail "the denied change reached the site"
+  # Settings › Agents lists each request by what it did, and a press opens it to where it went and
+  # what it sent, or, for the change the user said no to, that it wasn't sent (#2326). Each row's
+  # name holds its entry's id, which counts up, and its method.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  fi
+  settings_drew Agents
+  drawn 'request [0-9]* POST' > /dev/null || fail "Settings › Agents drew no change"
+  posts=$(sed -n 's/^browser: settings request \([0-9]*\) POST at .*/\1/p' "$log" | sort -nu)
+  allowed_id=$(printf '%s\n' "$posts" | head -1)
+  denied_id=$(printf '%s\n' "$posts" | tail -1)
+  read_id=$(sed -n 's/^browser: settings request \([0-9]*\) GET at .*/\1/p' "$log" | sort -nu | tail -1)
+  [ -n "$read_id" ] && [ "$allowed_id" != "$denied_id" ] ||
+    fail "Settings › Agents didn't list the read and both changes: $(grep '^browser: settings request ' "$log")"
+  # Opens the request $1, sent with the method $2, and checks its line says it shows $3. The oldest
+  # first, the lowest, so a row opened doesn't move the next one. The name is whole, as in_sight
+  # finds a scrolled row by its fixed text.
+  open_request() {
+    in_sight "request $1 $2" || fail "Settings › Agents didn't draw request $1"
+    send clickkey $at
+    expect "^browser: settings request $1 opened " "a click on request $1 didn't open it"
+    shown=$(sed -n "s/^browser: settings request $1 opened //p" "$log" | tail -1)
+    [ "$shown" = "$3" ] || fail "request $1 opened to show \"$shown\", not \"$3\""
+  }
+  open_request "$read_id" GET "to http://localhost:$port/api/me, sent: "
+  open_request "$allowed_id" POST "to http://localhost:$port/api/items, sent: title: Milk"
+  open_request "$denied_id" POST "to http://localhost:$port/api/items, not sent: title: Milk"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-requests.png" || fail "no window to capture"
+  # Back to General, for the visits below to click Agents.
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 
   # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.
   opened=$(call open_tab '{"url":"example.com"}')
@@ -1682,7 +1720,7 @@ STOP
   fi
   settings_drew Agents
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
-  send clickkey $(drawn "switch agents")
+  click_in_sight "switch agents"
   expect '^browser: agents off$' "a click on the switch didn't turn agents off"
   for _ in $(seq 30); do [ -e "$socket" ] || break; sleep 0.1; done
   [ -e "$socket" ] && fail "the socket stayed once agents were off"
@@ -1736,7 +1774,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
