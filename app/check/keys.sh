@@ -200,6 +200,43 @@ grep -q '^browser: title [0-9]* page saw cmd-l$' "$log" || fail "⌘L with the p
 grep -q '^browser: command find via page$' "$log" && fail "the page kept ⌘F, but the UI ran it too"
 grep -q '^browser: command \(back\|forward\) via page$' "$log" && fail "⌘← or ⌘→ in the page's text field went back or forward"
 
+# Korean goes before Japanese: leaving Microsoft's Japanese IME freezes the runner's thread (#2474).
+# Korean composes in the page a syllable at a time, from a 2-set keyboard: one key can commit a
+# syllable and start the next, backspace takes a letter off the syllable composing, and return
+# commits and goes on to the page, which Japanese input keeps for itself (#2457). On the Mac it's
+# the driver's scripted Korean input method, and on Windows Microsoft's Korean IME, where the runner
+# has it (check-windows.yml installs it for this run).
+korean=
+if [ "$(uname)" = Linux ]; then
+  echo "skip: Korean in a page: the Linux driver types plain keys there; check/ime.sh covers it with fcitx5's Hangul engine."
+elif windows; then
+  powershell.exe -NoProfile -NonInteractive -Command "(Get-WinUserLanguageList).InputMethodTips" \
+    2> /dev/null | grep -qi '0412:' && korean=1
+  [ -n "$korean" ] || echo "skip: Korean in a page: the runner has no Korean IME."
+else
+  korean=1
+fi
+if [ -n "$korean" ]; then
+  send ime ko
+  send type gksr
+  expect '^browser: title [0-9]* value abcd한ㄱ$' \
+    "the page didn't commit 한 and compose ㄱ: $(grep '^browser: title' "$log" | tail -1)"
+  send type mf
+  expect '^browser: title [0-9]* value abcd한글$' \
+    "the page didn't compose 한글: $(grep '^browser: title' "$log" | tail -1)"
+  send key backspace
+  expect '^browser: title [0-9]* value abcd한그$' "backspace didn't take ㄹ off the syllable composing"
+  send type f
+  send key return
+  send ime off
+  send type x
+  expect '^browser: title [0-9]* value abcd한글x$' \
+    "return didn't commit 한글 in the page: $(grep '^browser: title' "$log" | tail -1)"
+  send key a cmd
+  send type abcd
+  expect '^browser: title [0-9]* value abcd$' "⌘A in the page didn't select all"
+fi
+
 # The driver's scripted input method stands in for Japanese input, which is system-wide. On Windows
 # it's Microsoft's Japanese IME itself, where the runner has it (check-windows.yml installs it for
 # this run): the driver's ime ja sends the keys through Windows' input queue, and "nihongo"
@@ -237,42 +274,6 @@ expect "^browser: title [0-9]* value abcd${composed}x\$" "⇧⌘Z in the page's 
 send key a cmd
 send type y
 expect '^browser: title [0-9]* value y$' "⌘A in the page didn't select all"
-
-# Korean composes in the page a syllable at a time, from a 2-set keyboard: one key can commit a
-# syllable and start the next, backspace takes a letter off the syllable composing, and return
-# commits and goes on to the page, which Japanese input keeps for itself (#2457). On the Mac it's
-# the driver's scripted Korean input method, and on Windows Microsoft's Korean IME, where the runner
-# has it (check-windows.yml installs it for this run).
-korean=
-if [ "$(uname)" = Linux ]; then
-  echo "skip: Korean in a page: the Linux driver types plain keys there; check/ime.sh covers it with fcitx5's Hangul engine."
-elif windows; then
-  powershell.exe -NoProfile -NonInteractive -Command "(Get-WinUserLanguageList).InputMethodTips" \
-    2> /dev/null | grep -qi '0412:' && korean=1
-  [ -n "$korean" ] || echo "skip: Korean in a page: the runner has no Korean IME."
-else
-  korean=1
-fi
-if [ -n "$korean" ]; then
-  send ime ko
-  send type gksr
-  expect '^browser: title [0-9]* value y한ㄱ$' \
-    "the page didn't commit 한 and compose ㄱ: $(grep '^browser: title' "$log" | tail -1)"
-  send type mf
-  expect '^browser: title [0-9]* value y한글$' \
-    "the page didn't compose 한글: $(grep '^browser: title' "$log" | tail -1)"
-  send key backspace
-  expect '^browser: title [0-9]* value y한그$' "backspace didn't take ㄹ off the syllable composing"
-  send type f
-  send key return
-  send ime off
-  send type x
-  expect '^browser: title [0-9]* value y한글x$' \
-    "return didn't commit 한글 in the page: $(grep '^browser: title' "$log" | tail -1)"
-  send key a cmd
-  send type y
-  expect '^browser: title [0-9]* value y$' "⌘A in the page didn't select all"
-fi
 
 # Keys typed right after ⌘T, ⌘L or ⌘F land in the field it opens, in order and a composition
 # whole, never in the page (Ardia P§7). They go with no wait after the shortcut, and where they

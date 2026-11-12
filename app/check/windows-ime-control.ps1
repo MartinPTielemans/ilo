@@ -1,6 +1,6 @@
 # Control for #2474, on its handover branch only: a plain WinForms window, no Chromium or GPUI,
-# composes with Microsoft's Japanese IME as check/keys.sh does in ilo, turns it off, and leaves it
-# for the US keyboard, which froze ilo's UI thread. Logs each step to $args[0].
+# composes with Microsoft's Korean IME, turns it off, and leaves it for the
+# Japanese IME: leaving the Japanese IME froze a plain window's thread too (run 43139097668). Logs each step to $args[0].
 $log = $args[0]
 function Say($message) { Add-Content -Path $log -Value $message }
 Add-Type -AssemblyName System.Windows.Forms
@@ -48,27 +48,22 @@ $timer.Add_Tick({
       Say ("in front: " + ([K]::GetForegroundWindow() -eq $form.Handle))
     }
     1 {
-      $ja = [K]::Layout(0x0411)
-      Say ("activating Japanese " + $ja.ToString("x"))
-      [K]::ActivateKeyboardLayout($ja, 0) | Out-Null
-      Say ("the thread's " + [K]::GetKeyboardLayout(0).ToString("x"))
-    }
-    2 { [K]::Key(0xF2); Say "hiragana sent" }
-    3 { [K]::Key(0x4E); [K]::Key(0x49); [K]::Key(0x48); [K]::Key(0x4F); Say "niho typed" }
-    4 { [K]::Key(0x0D); Say ("return sent, the field has " + $box.Text) }
-    5 { [K]::Key(0x19); Say "kanji sent" }
-    6 {
-      $us = [K]::Layout(0x0409)
-      Say ("activating US " + $us.ToString("x"))
-      [K]::ActivateKeyboardLayout($us, 0) | Out-Null
-      Say ("left the Japanese IME: the thread's " + [K]::GetKeyboardLayout(0).ToString("x"))
-    }
-    7 {
       $ko = [K]::Layout(0x0412)
       Say ("activating Korean " + $ko.ToString("x"))
       [K]::ActivateKeyboardLayout($ko, 0) | Out-Null
       Say ("the thread's " + [K]::GetKeyboardLayout(0).ToString("x"))
     }
+    2 { [K]::Key(0x15); Say "hangul sent" }
+    3 { [K]::Key(0x47); [K]::Key(0x4B); [K]::Key(0x53); [K]::Key(0x52); Say "gksr typed" }
+    4 { [K]::Key(0x0D); Say ("return sent, the field has " + $box.Text) }
+    5 { [K]::Key(0x15); Say "hangul sent again" }
+    6 {
+      $ja = [K]::Layout(0x0411)
+      Say ("activating Japanese " + $ja.ToString("x"))
+      [K]::ActivateKeyboardLayout($ja, 0) | Out-Null
+      Say ("left the Korean IME: the thread's " + [K]::GetKeyboardLayout(0).ToString("x"))
+    }
+    7 { Say ("the field has " + $box.Text) }
     8 { $form.Close() }
   }
   $script:step++

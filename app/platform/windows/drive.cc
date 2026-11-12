@@ -2021,19 +2021,14 @@ bool Run(const std::string& line) {
         fprintf(stderr, "browser: drive: no Korean IME\n");
         return false;
       }
-      // Diagnostic for #2474. ActivateKeyboardLayout from the Japanese IME never returned, to the
-      // Korean IME (run 43134495200) or to the US keyboard (43135787319). This asks the focused
-      // window to switch, as Win+Space does, whose DefWindowProc activates the layout.
+      // Diagnostic for #2474. Leaving the Japanese IME freezes the thread on the runner, a plain
+      // window's too (run 43139097668), so keys.sh composes Korean first, from the US keyboard.
       g_steps.push_back({[korean] {
-        HWND target = KeyTarget();
-        fprintf(stderr, "browser: drive: ko: requesting %p of %p, the thread's %p\n", korean,
-                target, GetKeyboardLayout(0));
-        fflush(stderr);
-        PostMessageW(target, WM_INPUTLANGCHANGEREQUEST, 0, reinterpret_cast<LPARAM>(korean));
-      }, 300});
-      g_steps.push_back({[] {
-        fprintf(stderr, "browser: drive: ko: after the request, the thread's %p\n",
+        fprintf(stderr, "browser: drive: ko: activating %p, the thread's %p\n", korean,
                 GetKeyboardLayout(0));
+        fflush(stderr);
+        ActivateKeyboardLayout(korean, 0);
+        fprintf(stderr, "browser: drive: ko: activated, the thread's %p\n", GetKeyboardLayout(0));
         fflush(stderr);
       }});
       g_steps.push_back({[] {
@@ -2059,7 +2054,14 @@ bool Run(const std::string& line) {
         fprintf(stderr, "browser: drive: no Japanese IME\n");
         return false;
       }
-      g_steps.push_back({[japanese] { ActivateKeyboardLayout(japanese, 0); }});
+      g_steps.push_back({[japanese] {
+        fprintf(stderr, "browser: drive: ja: activating %p, the thread's %p\n", japanese,
+                GetKeyboardLayout(0));
+        fflush(stderr);
+        ActivateKeyboardLayout(japanese, 0);
+        fprintf(stderr, "browser: drive: ja: activated, the thread's %p\n", GetKeyboardLayout(0));
+        fflush(stderr);
+      }});
       g_japanese = AddSentKey(kImeHiragana);
       return true;
     }
