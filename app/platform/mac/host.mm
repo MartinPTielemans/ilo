@@ -442,6 +442,8 @@ struct Overlay {
   double grow_time = kOverlayGrow;
   double grow_fade = kOverlayGrowFade;
   double fade_out = 0;
+  // From the driver's makekey: its window is made key at its next hide, as its fade out starts.
+  bool key_at_hide = false;
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
@@ -2812,12 +2814,13 @@ static void KeyboardFromHidden(const Overlay& overlay) {
   [KeyWindowOver(over) makeKeyWindow];
 }
 
-// For the driver: makes overlay |name|'s window key, as AppKit can make a hidden one, and says
-// whether there is one.
+// For the driver: overlay |name|'s window is made key at its next hide, in the turn its fade out
+// starts, as AppKit can make a fading one key. A fade can be 110 ms, too short for a driver command
+// to land in it every time. Says whether there is one.
 bool HostMakeOverlayKey(const char* name) {
   for (Overlay& overlay : g_overlays) {
     if (overlay.window && strcmp(overlay.name, name) == 0) {
-      [overlay.window makeKeyWindow];
+      overlay.key_at_hide = true;
       return true;
     }
   }
@@ -3142,6 +3145,11 @@ void host_hide_overlay(int index) {
   }
   [KeyWindowOver(browser) makeKeyWindow];
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
+  if (overlay->key_at_hide) {
+    overlay->key_at_hide = false;
+    fprintf(stderr, "browser: made %s key\n", overlay->name);
+    [overlay->window makeKeyWindow];
+  }
 }
 
 void host_dismiss_overlay(int index) {

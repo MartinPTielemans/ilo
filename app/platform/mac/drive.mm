@@ -174,9 +174,9 @@
 //                                         alert shown, Chrome's too
 //   dismiss                               closes the menu a right click or openmenu showed,
 //                                         choosing none
-//   makekey <overlay>                     makes the window of <overlay>, such as command bar,
-//                                         key, shown or not, as AppKit can, logging "browser:
-//                                         made <overlay> key"
+//   makekey <overlay>                     makes the window of <overlay>, such as theme picker,
+//                                         key at its next hide, as its fade out starts, as
+//                                         AppKit can, logging "browser: made <overlay> key"
 //   ime on|ko|off                         the scripted input method, for keys to the UI or the
 //                                         page, Chromium's or Safari's engine's: on, letters add
 //                                         to a composition, space converts it to 日本語, return
@@ -2223,7 +2223,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (!HostMakeOverlayKey(name.c_str())) {
       return false;
     }
-    fprintf(stderr, "browser: made %s key\n", name.c_str());
+    done();
     return true;
   }
   if (action == "dismiss") {
