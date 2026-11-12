@@ -115,13 +115,17 @@ impl Follow {
 
 /// How far to move a pane's page, `view` in the window, so `control` shows whole between `top`
 /// and `bottom` points in from its edges: as little as that takes, its top first where it can't.
+/// One that covers all it shows already shows all it can, as the pane itself does, whose controls
+/// leave it the keyboard as a press takes it, and is left where it is (#2522).
 fn into_sight(view: Bounds<Pixels>, control: Bounds<Pixels>, top: f32, bottom: f32) -> f32 {
     let (from, to) = (
         f32::from(view.origin.y) + top,
         f32::from(view.bottom()) - bottom,
     );
     let (y, end) = (f32::from(control.origin.y), f32::from(control.bottom()));
-    if y < from {
+    if y <= from && end >= to {
+        0.
+    } else if y < from {
         from - y
     } else if end > to {
         -(end - to).min(y - from)
