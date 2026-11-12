@@ -812,7 +812,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..41f2c0e850 100644
+index 095e009e23..ca96f169ff 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -20,7 +20,10 @@ use windows::{
@@ -1051,7 +1051,33 @@ index 095e009e23..41f2c0e850 100644
          });
  
          Ok(Box::new(window))
-@@ -1409,7 +1545,7 @@ impl WindowsPlatformInner {
+@@ -1253,21 +1389,11 @@ impl WindowsPlatformInner {
+         Some(0)
+     }
+ 
++    // In Chromium the process is the core's to end. The browser windows hear the session end too, in
++    // whatever order Windows tells the app's windows, and end it through Chrome once it has written
++    // what must be kept (#1990). Exiting here first, as ilo behind another app's window did, ran
++    // chrome.dll's teardown under its running threads, which Chrome makes a crash (#2617).
+     fn handle_end_session(&self) -> Option<isize> {
+-        let mut shutdown_completed = false;
+-        self.with_callback(
+-            |callbacks| &callbacks.quit,
+-            |callback| shutdown_completed = callback(),
+-        );
+-        log::logger().flush();
+-        if shutdown_completed {
+-            std::process::exit(0);
+-        }
+-
+-        // Shutdown couldn't run synchronously, since the AppCell is already borrowed.
+-        // Windows may terminate the application as soon as we return from this handler, but if we post a WM_QUIT message now,
+-        // we may get to gracefully shut down the app before we're terminated by the OS.
+-        unsafe { PostQuitMessage(0) };
+         Some(0)
+     }
+ 
+@@ -1409,7 +1535,7 @@ impl WindowsPlatformInner {
  impl Drop for WindowsPlatform {
      fn drop(&mut self) {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
@@ -1060,7 +1086,7 @@ index 095e009e23..41f2c0e850 100644
          }
          unsafe {
              if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
-@@ -1637,10 +1773,43 @@ fn file_save_dialog(
+@@ -1637,10 +1763,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -1105,7 +1131,7 @@ index 095e009e23..41f2c0e850 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1763,6 +1932,8 @@ fn handle_gpu_device_lost(
+@@ -1763,6 +1922,8 @@ fn handle_gpu_device_lost(
              }
          }
      }
@@ -1114,7 +1140,7 @@ index 095e009e23..41f2c0e850 100644
      Ok(())
  }
  
-@@ -1980,3 +2151,12 @@ mod tests {
+@@ -1980,3 +2141,12 @@ mod tests {
          );
      }
  }
