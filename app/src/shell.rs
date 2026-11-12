@@ -168,7 +168,7 @@ pub use commands::{
 };
 pub use display_face::display_text;
 pub use drag::{WindowDragEnd, dropped_urls};
-pub use drm_note::PlayReady;
+pub use drm_note::{Elsewhere, PlayReady};
 pub use extensions::{
     Extension, ExtensionAction, ExtensionCommand, menu_item as extension_menu_item,
     pin_menu_item as extension_pin_menu_item,
