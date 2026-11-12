@@ -190,11 +190,19 @@ perf_launch() {
   perf_stamp
   launched=$stamp
   if [ -n "$1" ]; then
-    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+    # shellcheck disable=SC2086 # proof only (#2384): the traced launches' flags, a word each
+    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $perf_launch_args < /dev/null > "$log" 2>&1 &
   else
-    BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+    # shellcheck disable=SC2086 # proof only (#2384)
+    BROWSER_PROFILE_DIR="$profile_dir" "$browser" $perf_launch_args < /dev/null > "$log" 2>&1 &
   fi
   pid=$!
+  # Proof only (#2384): the process's start since boot and the two clocks, to put the app's times
+  # (from its start, CLOCK_BOOTTIME) on the trace's (CLOCK_MONOTONIC).
+  if [ -n "${perf_launch_args:-}" ]; then
+    cat "/proc/$pid/stat" > "$perf_dir/launch-$3.stat" 2> /dev/null || true
+    python3 -I -c 'import time, os; print(os.sysconf("SC_CLK_TCK"), time.clock_gettime(time.CLOCK_BOOTTIME), time.clock_gettime(time.CLOCK_MONOTONIC))' > "$perf_dir/launch-$3.clocks"
+  fi
   # A tab put back has its last title, an earlier launch's paint, until its page loads.
   fcp=0
   for _ in $(seq 300); do
@@ -222,20 +230,30 @@ perf_launch() {
 : > "$perf_dir/held"
 # The first launch makes the profile, which the others find, as a user's, so it isn't counted.
 perf_launch "$page?warm" warm warm
-for n in 1 2 3 4 5; do
-  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
-  perf_launch "$page?link$n" "link$n" "link$n"
-  echo "$painted" >> "$perf_dir/link"
-  echo "$on_screen" >> "$perf_dir/on-screen"
-  echo "$browser_on_screen" >> "$perf_dir/browser-on-screen"
-  echo "${held:-0}" >> "$perf_dir/held"
+perf_launch_args=
+# Proof only (#2384): link launches alternate before (BROWSER_PROOF_BEFORE: the first page loads
+# within the window's task, as on main) and after, 10 of each; a row each in perf/ab.tsv.
+printf 'launch\tpainted\twindow_on_screen\theld\n' > "$perf_dir/ab.tsv"
+for n in 1 2 3 4 5 6 7 8 9 10; do
+  for when in before after; do
+    if [ $when = before ]; then export BROWSER_PROOF_BEFORE=1; else unset BROWSER_PROOF_BEFORE; fi
+    rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+    perf_launch "$page?link$n$when" "link$n$when" "link$n-$when"
+    echo "$painted" >> "$perf_dir/link"
+    echo "$on_screen" >> "$perf_dir/on-screen"
+    echo "$browser_on_screen" >> "$perf_dir/browser-on-screen"
+    echo "${held:-0}" >> "$perf_dir/held"
+    printf 'link%s-%s\t%s\t%s\t%s\n' "$n" "$when" "$painted" "$browser_on_screen" "${held:-0}" >> "$perf_dir/ab.tsv"
+  done
 done
+unset BROWSER_PROOF_BEFORE
 for n in 1 2 3 4 5; do
-  perf_launch "" link5 "restore$n"
+  perf_launch "" link10after "restore$n"
   echo "$painted" >> "$perf_dir/restore"
   echo "$on_screen" >> "$perf_dir/on-screen"
   echo "$browser_on_screen" >> "$perf_dir/browser-on-screen"
   echo "${held:-0}" >> "$perf_dir/held"
+  printf 'restore%s\t%s\t%s\t%s\n' "$n" "$painted" "$browser_on_screen" "${held:-0}" >> "$perf_dir/ab.tsv"
 done
 perf_row launch-link "Launch, link to page painted" "$(perf_stats '%.0f' < "$perf_dir/link") ms" \
   "Ardia 413 ms, Chrome 484 ms"
@@ -247,6 +265,23 @@ perf_row launch-restore "Launch, restored page painted" \
   "$(perf_stats '%.0f' < "$perf_dir/restore") ms" "Ardia 360 ms, Helium 355 ms, Chrome 438 ms"
 perf_row launch-held "Launch, the page held for uBlock Origin" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
+# Proof only (#2384): 5 restore launches and 3 link launches, traced from Chromium's start, not
+# counted, for where the restored tab's load and the link's are. The trace is written at the quit.
+launch_categories=startup,toplevel,disabled-by-default-toplevel.flow,browser,content,navigation,loading,ui,views,gpu,viz,cc,benchmark,base,mojom
+for n in 1 2 3 4 5 6 7 8; do
+  perf_launch_args="--enable-tracing=$launch_categories --enable-tracing-format=json --trace-startup-file=$PWD/$perf_dir/trace-launch-$n.json"
+  if [ "$n" -le 5 ]; then
+    perf_launch "" link10after "trace$n"
+  else
+    rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+    perf_launch "$page?trace$n" "trace$n" "trace$n"
+  fi
+  perf_launch_args=
+  [ -s "$perf_dir/trace-launch-$n.json" ] || fail "launch trace $n wasn't written"
+  echo "perf: traced launch $n: window on screen at $browser_on_screen ms, page painted $painted ms"
+done
+echo "ok: proof only (#2384): 25 launches timed, in $perf_dir/ab.tsv, and 8 traced; the rest of perf skipped"
+exit 0
 
 log="$perf_dir/session.log"
 step=0

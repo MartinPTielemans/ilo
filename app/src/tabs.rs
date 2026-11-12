@@ -12,7 +12,9 @@ pub(crate) fn open_tab(window: bc::bc_id, url: &str) {
 /// Opens a tab as `open_tab` does, but an http(s) page loads in a task of its own once shown, so
 /// a launch's first page isn't on the way to its window (#2384).
 pub(crate) fn open_tab_loading_after(window: bc::bc_id, url: &str) -> u64 {
-    let tab = open_tab_behind(window, url, true);
+    // Proof only (#2384): BROWSER_PROOF_BEFORE loads it within this task, as before.
+    let when_shown = std::env::var_os("BROWSER_PROOF_BEFORE").is_none();
+    let tab = open_tab_behind(window, url, when_shown);
     show_tab(window, tab);
     tab
 }
