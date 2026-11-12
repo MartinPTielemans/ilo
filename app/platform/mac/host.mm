@@ -2730,6 +2730,8 @@ void host_set_overlay_elevation(int index,
   [overlay->shadow setFrame:NSZeroRect display:NO];
 }
 
+static void KeyboardFromHidden(const Overlay& overlay);
+
 void host_add_overlay(int index, void* overlay_view, double radius, void (*dismissed)(void)) {
   if (index < 0 || index >= int(std::size(g_overlays))) {
     return;
@@ -2768,6 +2770,11 @@ void host_add_overlay(int index, void* overlay_view, double radius, void (*dismi
                     Browser* browser = BrowserOf(window);
                     if (each->shown && window == each->window) {
                       KeepFirstResponder(*each);
+                    } else if (window == each->window) {
+                      // Hidden, or fading out after the UI hid it, and AppKit made it key anyway:
+                      // its panel class can become key, and what the user types would go to it
+                      // unseen. Its browser window takes the keyboard back, as on Windows (#2594).
+                      KeyboardFromHidden(*each);
                     } else if (each->shown) {
                       // What took the keyboard, for the next time an overlay is shown and deaf
                       // (#1314): the release build's log is stderr alone.
@@ -2791,6 +2798,30 @@ void host_add_overlay(int index, void* overlay_view, double radius, void (*dismi
                       }
                     }
                   }];
+}
+
+// A hidden overlay made key gives the keyboard to the browser window it showed over, if that's still
+// open, as host_hide_overlay does.
+static void KeyboardFromHidden(const Overlay& overlay) {
+  Browser* over = overlay.over;
+  if (!over || std::none_of(g_browsers.begin(), g_browsers.end(),
+                            [over](const auto& browser) { return browser.get() == over; })) {
+    return;
+  }
+  fprintf(stderr, "browser: %s hidden, its browser window takes the keyboard\n", overlay.name);
+  [KeyWindowOver(over) makeKeyWindow];
+}
+
+// For the driver: makes overlay |name|'s window key, as AppKit can make a hidden one, and says
+// whether there is one.
+bool HostMakeOverlayKey(const char* name) {
+  for (Overlay& overlay : g_overlays) {
+    if (overlay.window && strcmp(overlay.name, name) == 0) {
+      [overlay.window makeKeyWindow];
+      return true;
+    }
+  }
+  return false;
 }
 
 void host_set_overlay_shape(int index, const double* corners, size_t count) {
