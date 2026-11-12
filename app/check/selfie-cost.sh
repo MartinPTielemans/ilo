@@ -3,6 +3,7 @@
 # compiled by one before that quit before the selfie, as after a list update. Each leg launches on
 # 3 tabs and from 30 s switches tabs by ⌘2/⌘3, with a new tab from ⌘T's bar each 10th, until 10 s
 # after the selfie is in both stores, sampling every thread's CPU each 250 ms.
+serve
 cost_dir="$out/selfie-cost"
 rm -rf "$cost_dir"
 mkdir -p "$cost_dir"
