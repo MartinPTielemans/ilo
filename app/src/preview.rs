@@ -3557,6 +3557,7 @@ impl gpui::Render for PicturesPage {
             Pictures::Appearance(_) => Section::General,
         };
         let column = settings_column::column(
+            &Default::default(),
             section,
             dark,
             Rc::default(),
@@ -3792,6 +3793,7 @@ impl gpui::Render for AccountPage {
             cx,
         );
         let column = settings_column::column(
+            &Default::default(),
             Section::Sync,
             dark,
             Rc::default(),
