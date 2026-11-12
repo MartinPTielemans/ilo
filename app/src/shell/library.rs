@@ -303,6 +303,12 @@ enum DownloadChoice {
     Clear,
 }
 
+/// Where a download's Trash puts the file, by Windows' own name for it there (#2468).
+const TRASH: &str = match cfg!(all(target_os = "windows", not(test))) {
+    true => "Move to Recycle Bin",
+    false => "Move to Trash",
+};
+
 /// The menu a right-click on `download`'s row shows, what can be done with it where it is, with
 /// Clear List enabled if any download is `finished`.
 fn download_menu_items(
@@ -341,7 +347,7 @@ fn download_menu_items(
                 DownloadAction::Show,
             ),
             (
-                MenuEntry::new("Move to Trash", true).destructive(),
+                MenuEntry::new(TRASH, true).destructive(),
                 Some(DownloadChoice::Trash),
             ),
         ],
