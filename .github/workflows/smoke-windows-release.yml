@@ -325,6 +325,15 @@ jobs:
           $verdict = [regex]::Match($said, 'Manifest validation succeeded[^\r\n]*').Value
           "- winget validate: $verdict (exit code $code)" >> $env:GITHUB_STEP_SUMMARY
           winget settings --enable LocalManifestFiles
+          # From winget-pkgs, a trusted source, winget marks the setup it downloads as from a trusted
+          # site. From a local manifest it marks it from the internet, so SmartScreen holds it at its
+          # "unrecognized app" dialog and the silent install never starts. Trusting the host the release
+          # downloads from gives the setup winget-pkgs' mark.
+          foreach ($map in 'Domains', 'EscDomains') {
+            $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\$map\github.com"
+            $null = New-Item -Force $key
+            Set-ItemProperty $key https 2
+          }
           # Bounded, so an install that never ends fails saying what was still running and what the
           # screen showed, not at the job's timeout.
           $winget = Start-Process -PassThru -NoNewWindow -FilePath (Get-Command winget).Source -ArgumentList `
