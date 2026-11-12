@@ -604,14 +604,25 @@ impl Shell {
                     cx,
                 ))
         });
-        let site_controls = tools.then(|| {
+        // While a request to show notifications is held quietly, the Site Controls button is its
+        // bell, at rest as well as under the pointer: a press opens them at Notifications, whose
+        // Allow or Block answers it (#2323). One button, so nothing moves as the tools fade in.
+        let held = self.held_notifications(self.field_tab());
+        let site_controls = (tools || held.is_some()).then(|| {
+            let tab = self.field_tab();
+            let from = if held.is_some() { "bell" } else { "sidebar" };
+            let name: SharedString = match &held {
+                Some(site) => format!("{site} wants to send notifications").into(),
+                None => "Site Controls".into(),
+            };
             self.field_tool("site-controls", end)
+                .when(held.is_some(), |button| button.opacity(1.))
                 .when(self.a11y, |button| {
                     button
-                        .button_named("Site Controls")
+                        .button_named(name.clone())
                         .pressed_by_mouse_down(true, false)
                 })
-                .when(live, |button| {
+                .when(live || held.is_some(), |button| {
                     button
                         .block_mouse_except_scroll()
                         .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
@@ -619,15 +630,41 @@ impl Shell {
                         // closes it first, and its press then toggles rather than opens it again.
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|shell, _, _, cx| {
+                            cx.listener(move |shell, _, _, cx| {
                                 cx.stop_propagation();
-                                shell.run(Command::SiteControls, "sidebar", cx);
+                                shell.browser.tooltip(None, cx);
+                                shell.run(Command::SiteControls, from, cx);
                             }),
                         )
                 })
+                .when(held.is_some(), |button| {
+                    button
+                        .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                            let frame = shell.bell_drawn.get();
+                            let tip = (*hovered && shell.dragging().is_none())
+                                .then(|| {
+                                    frame.map(|frame| {
+                                        (
+                                            Tip::named(name.clone()),
+                                            Anchor::under(frame, shell.viewport),
+                                        )
+                                    })
+                                })
+                                .flatten();
+                            shell.hover_tip(tip, cx);
+                        }))
+                        .child(super::permission::card_listener(
+                            "notification bell",
+                            &self.bell_drawn,
+                            tab,
+                        ))
+                })
                 .child(
                     svg()
-                        .path("icons/sliders-horizontal.svg")
+                        .path(match held {
+                            Some(_) => "icons/bell-off.svg",
+                            None => "icons/sliders-horizontal.svg",
+                        })
                         .size(px(URL_BUTTON_GLYPH))
                         .text_color(self.palette.glyph(NAV)),
                 )
@@ -702,52 +739,7 @@ impl Shell {
                 )
                 .child(frame)
         });
-        // A request to show notifications held quietly, its bell before the leaf's place: a press
-        // opens the Site Controls at Notifications, whose Allow or Block answers it (#2323).
-        let bell_end = leaf_end + if leaf.is_some() { TOOL_PITCH } else { 0. };
-        let bell = self.held_notifications(self.field_tab()).map(|site| {
-            let tab = self.field_tab();
-            let tip: SharedString = format!("{site} wants to send notifications").into();
-            self.field_tool("notification-bell", bell_end)
-                .opacity(1.)
-                .when(self.a11y, |button| button.button_named(tip.clone()))
-                .block_mouse_except_scroll()
-                .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
-                .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
-                    let frame = shell.bell_drawn.get();
-                    let tip = (*hovered && shell.dragging().is_none())
-                        .then(|| {
-                            frame.map(|frame| {
-                                (
-                                    Tip::named(tip.clone()),
-                                    Anchor::under(frame, shell.viewport),
-                                )
-                            })
-                        })
-                        .flatten();
-                    shell.hover_tip(tip, cx);
-                }))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|shell, _, _, cx| {
-                        cx.stop_propagation();
-                        shell.browser.tooltip(None, cx);
-                        shell.run(Command::SiteControls, "bell", cx);
-                    }),
-                )
-                .child(
-                    svg()
-                        .path("icons/bell-off.svg")
-                        .size(px(URL_BUTTON_GLYPH))
-                        .text_color(self.palette.glyph(NAV)),
-                )
-                .child(super::permission::card_listener(
-                    "notification bell",
-                    &self.bell_drawn,
-                    tab,
-                ))
-        });
-        if bell.is_none() {
+        if held.is_none() {
             self.bell_drawn.set(None);
         }
         let engine = self.engine_mark(self.field_tab());
@@ -795,8 +787,8 @@ impl Shell {
             Some(_) => text_end.max(leaf_end + URL_BUTTON_SIZE),
             None => text_end,
         };
-        let text_end = match bell {
-            Some(_) => text_end.max(bell_end + URL_BUTTON_SIZE),
+        let text_end = match held {
+            Some(_) => text_end.max(end + URL_BUTTON_SIZE),
             None => text_end,
         };
         // A button, as it is: a press opens the command bar on the URL, where it's edited. It's
@@ -841,7 +833,6 @@ impl Shell {
             .children(engine)
             .children(key)
             .children(translate)
-            .children(bell)
             .children(leaf)
             .children(devtools)
             .children(copy)
@@ -944,9 +935,12 @@ impl Shell {
                 )
         };
         let devtools = tools && self.page(tab).developer_mode;
+        // A held request's bell, in the Site Controls' place at rest too (#2323).
+        let held = self.held_notifications(tab).is_some();
         let text_end = match tools {
             true if devtools => SITE_CONTROLS_END + 2. * TOOL_PITCH + URL_BUTTON_SIZE,
             true => SITE_CONTROLS_END + TOOL_PITCH + URL_BUTTON_SIZE,
+            false if held => SITE_CONTROLS_END + URL_BUTTON_SIZE,
             false => URL_FIELD_TEXT_X - PLATE_INSET,
         };
         let field = div()
@@ -978,9 +972,13 @@ impl Shell {
                 reach.child(self.key_glyph())
             }))
             .when(tools, |field| {
-                field
-                    .child(tool(SITE_CONTROLS_END + TOOL_PITCH, LINK))
-                    .child(tool(SITE_CONTROLS_END, "icons/sliders-horizontal.svg"))
+                field.child(tool(SITE_CONTROLS_END + TOOL_PITCH, LINK))
+            })
+            .when(tools && !held, |field| {
+                field.child(tool(SITE_CONTROLS_END, "icons/sliders-horizontal.svg"))
+            })
+            .when(held, |field| {
+                field.child(tool(SITE_CONTROLS_END, "icons/bell-off.svg").opacity(1.))
             })
             .when(devtools, |field| {
                 field.child(tool(SITE_CONTROLS_END + 2. * TOOL_PITCH, DEVTOOLS_GLYPH))

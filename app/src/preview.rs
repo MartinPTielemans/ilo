@@ -2947,6 +2947,13 @@ fn main() {
                     preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Left, cx);
                 }
             }
+            // PREVIEW_POINTER=<x>,<y> moves the pointer there in the window, as over the URL field,
+            // for a capture whose display lends no pointer, as Xvfb's doesn't (#2323).
+            if let Ok(at) = std::env::var("PREVIEW_POINTER") {
+                if let Some(shell) = shell_window {
+                    preview_pointer(shell.into(), &at, cx);
+                }
+            }
             // PREVIEW_MODEL_MENU=<claude|codex>[,<model>] shows Settings › Agents' Model menu for that
             // CLI as it opens, from the CLI's recorded list, on Default or the model chosen, light
             // with PREVIEW_APPEARANCE=light (#2455).
@@ -3019,6 +3026,30 @@ fn preview_menu(
             })
             .ok();
         press_keys(window, keys, cx).await;
+    })
+    .detach();
+}
+
+/// Moves the pointer to `at`, "<x>,<y>", in the shell's `window`, once the shell has drawn.
+fn preview_pointer(window: gpui::AnyWindowHandle, at: &str, cx: &mut App) {
+    let mut numbers = at.split(',').map(|part| part.trim().parse::<f32>().ok());
+    let (Some(Some(x)), Some(Some(y))) = (numbers.next(), numbers.next()) else {
+        return;
+    };
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        let moved = gpui::MouseMoveEvent {
+            position: point(px(x), px(y)),
+            pressed_button: None,
+            modifiers: gpui::Modifiers::default(),
+        };
+        window
+            .update(cx, |_, window, cx| {
+                window.dispatch_event(gpui::PlatformInput::MouseMove(moved), cx);
+            })
+            .ok();
     })
     .detach();
 }

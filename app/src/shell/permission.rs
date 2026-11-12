@@ -465,8 +465,9 @@ mod tests {
     }
 
     /// A request to show notifications with no click behind it puts no card over the sidebar and
-    /// doesn't bring a hidden one out: a bell waits in the URL field, named for the site, whose
-    /// press opens the Site Controls, where the user answers it (#2323).
+    /// doesn't bring a hidden one out: a bell waits in the URL field, in the Site Controls' place
+    /// with the pointer away and over the sidebar alike, whose press opens them, where the user
+    /// answers it (#2323).
     #[gpui::test]
     fn a_quiet_request_waits_behind_a_bell(cx: &mut TestAppContext) {
         let host = Rc::new(Recorder::default());
@@ -493,6 +494,26 @@ mod tests {
                 "a quiet request drew the card"
             );
             shell.bell_drawn.get().expect("the bell wasn't drawn")
+        });
+        let field = shell.read_with(cx, |shell, _| {
+            assert!(!shell.tools_shown(), "the field's tools showed at rest");
+            shell.url_field_bounds().expect("no URL field")
+        });
+        let place = field.right() - px(crate::tokens::shell::header::SITE_CONTROLS_END);
+        assert_eq!(
+            bell.right(),
+            place,
+            "the bell isn't in the Site Controls' place"
+        );
+        cx.simulate_mouse_move(point(px(100.), px(300.)), None, Modifiers::none());
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(shell.tools_shown(), "the field's tools didn't come in");
+            assert_eq!(
+                shell.bell_drawn.get(),
+                Some(bell),
+                "the bell moved with the tools"
+            );
         });
         let middle = point(
             bell.origin.x + bell.size.width / 2.,
