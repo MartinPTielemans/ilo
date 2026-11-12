@@ -52,7 +52,7 @@ nightly_check() {
   nightly_about
   await '^browser: settings about Nightly ' || fail "About didn't name the build Nightly"
   # shellcheck disable=SC2046 # x and y
-  click_in_sight "update check"
+  send clickkey $(drawn "update check")
   expect '^browser: update check asked$' "About's Check for Updates didn't ask the updater"
   nightly_read nightly "$build" "with nightly builds on, the check didn't read the nightly feed" 1
   ../tools/window-screenshot.sh "$pid" "$out/nightly-on.png" all || fail "no window to capture"
@@ -62,7 +62,7 @@ nightly_check() {
   send clickkey $at
   expect '^browser: nightly builds off$' "the switch didn't turn nightly builds off"
   # shellcheck disable=SC2046 # x and y
-  click_in_sight "update check"
+  send clickkey $(drawn "update check")
   nightly_read updates "$older" "with nightly builds off, the check didn't read the release feed" 1
   ../tools/window-screenshot.sh "$pid" "$out/nightly-off.png" all || fail "no window to capture"
   exec 3>&-
@@ -74,7 +74,7 @@ nightly_check() {
   nightly_launch relaunched
   nightly_about
   # shellcheck disable=SC2046 # x and y
-  click_in_sight "update check"
+  send clickkey $(drawn "update check")
   nightly_read updates "$older" "relaunched, the check didn't read the release feed" 2
   at=$(drawn "switch nightly builds") || fail "About has no Get nightly builds switch"
   # shellcheck disable=SC2086 # x and y
