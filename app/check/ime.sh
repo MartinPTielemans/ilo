@@ -177,15 +177,13 @@ if [ "${1:-}" = --steps ]; then
     ! tail -n "+$((at + 1))" "$LOG" | grep -q "command bar go" || fail "Enter while composing opened the URL"
     shown=qxyzw
 
-    # Korean in the bar, through text-input-v3, whose commit and next syllable come in one done: a
-    # key at a time, each syllable drawn before the next key, as a person types. In one burst, the
-    # page keeps every key, and the bar commits a syllable early and loses the next (#2473).
+    # Korean in the bar, through text-input-v3, whose commit and next syllable come in one done: in
+    # one burst, as the page takes it, the bar keeps every key. Before its caret waited for the
+    # field's layout, the bar committed a syllable early and lost the next (#2473).
     if [ -n "${HANGUL:-}" ]; then
       key '^ '
-      for step in d:ㅇ k:아 s:안 s:안ㄴ u:안녀 d:안녕 g:안녕ㅎ k:안녕하 t:안녕핫 p:안녕하세 d:안녕하셍 y:안녕하세요; do
-        at=$(mark); key "${step%%:*}"
-        await "command bar drew \"qxyzw${step#*:}\"" "$at"
-      done
+      at=$(mark); key dkssudgktpdy
+      await 'command bar drew "qxyzw안녕하세요"' "$at"
       shot bar-korean
       at=$(mark); key 1
       await 'command bar drew "qxyzw안녕하세요1"' "$at"
