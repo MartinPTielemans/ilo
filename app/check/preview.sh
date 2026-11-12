@@ -255,6 +255,7 @@ if windows; then
   send dpi "$told" link preview
   none_since '^browser: dpi found no ' || fail "the driver found no preview window to tell $told %"
   open_preview "its window told $told % while hidden"
+  ../tools/window-screenshot.sh "$pid" "$out/preview-told.png" || fail "no window to capture"
   peek_frame "its window told $told % while hidden"
   send key escape
   expect '^browser: link preview hidden$' "Esc didn't close the preview whose window was told $told %"
