@@ -2326,11 +2326,26 @@ impl Settings {
             Some("Counted from when you leave the window.".into()),
             vec![little_archive.into_any_element()],
         ));
+        let sign_in_close = self.toggle(
+            "sign-in pages close",
+            "Close sign-in pages when done",
+            crate::sign_in_close::sign_in_close(),
+            set_sign_in_close,
+            accent,
+            cx,
+        );
+        let sign_in_close = nested(setting(
+            look,
+            "Close sign-in pages when done",
+            Some("When an app's sign-in finishes in Little ilo, its window closes.".into()),
+            vec![sign_in_close],
+        ));
         // Its own settings only while it's on.
         let little: Vec<Row> = [little]
             .into_iter()
             .chain(menu_bar)
             .chain(little_on.then_some(little_archive))
+            .chain(little_on.then_some(sign_in_close))
             .collect();
         let previews = unsafe { bc::bc_link_previews() };
         let previews = self.toggle(
@@ -4522,6 +4537,10 @@ fn set_warn_before_quitting(warn: bool, _: &mut App) {
 
 fn set_little_in_menu_bar(on: bool, _: &mut App) {
     crate::set_little_in_menu_bar(on);
+}
+
+fn set_sign_in_close(on: bool, _: &mut App) {
+    crate::sign_in_close::set_sign_in_close(on);
 }
 
 fn set_little_windows(on: bool, cx: &mut App) {
