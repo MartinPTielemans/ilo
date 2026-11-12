@@ -326,7 +326,7 @@ expect '^browser: command settings via page$' "⌘, from the page didn't run Set
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
 settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings.png" || fail "no window to capture"
-send clickkey $(drawn "switch warn before quitting")
+click_in_sight "switch warn before quitting"
 expect '^browser: warn before quitting off$' "a click on Ask before quitting didn't turn it off"
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"

@@ -2043,6 +2043,8 @@ impl Browser for Engine {
                 return;
             };
             let space = little_home(space, main);
+            // The user's now, which no page closes away.
+            crate::sign_in_close::link_tab_left(tab);
             unsafe {
                 if bc::bc_window_space(main) != space {
                     bc::bc_window_show_space(main, space);

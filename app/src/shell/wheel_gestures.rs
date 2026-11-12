@@ -62,9 +62,11 @@ pub(super) struct WheelGestures {
     /// The gesture's last events, newest last.
     recent: VecDeque<Wheel>,
     /// The fingers' speed at each of their last events, over HOLD, over WINDOW and since the event
-    /// before, and the fastest they went.
+    /// before, and the fastest they went over WINDOW.
     speeds: VecDeque<(Instant, f32, f32)>,
     peak: f32,
+    /// The fastest the fingers went over any one event.
+    quickest: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -92,11 +94,12 @@ enum State {
 }
 
 /// What a wheel event says of the fingers, ahead of its own delta, which moves them or, after
-/// they've lifted, is momentum.
+/// they've lifted, is momentum: whether they lifted and landed, each with the rule that said so,
+/// which the demo's `?trace` records.
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct Cut {
-    pub lifted: bool,
-    pub landed: bool,
+    pub lifted: Option<&'static str>,
+    pub landed: Option<&'static str>,
 }
 
 impl WheelGestures {
@@ -108,7 +111,7 @@ impl WheelGestures {
             last = None;
             self.recent.clear();
             self.speeds.clear();
-            self.peak = 0.;
+            (self.peak, self.quickest) = (0., 0.);
         }
         // The first event of a gesture is as long as a trackpad's between events.
         let since = last.map_or(Duration::from_millis(8), |last| at.duration_since(last.at));
@@ -141,10 +144,11 @@ impl WheelGestures {
             .is_some_and(|&(_, speed, _)| speed.signum() != now.signum())
         {
             self.speeds.clear();
-            self.peak = 0.;
+            (self.peak, self.quickest) = (0., 0.);
         }
         self.speeds.push_back((at, now, speed));
         self.peak = self.peak.max(now.abs());
+        self.quickest = self.quickest.max(speed.abs());
         while self.speeds.len() > HELD
             && self
                 .speeds
@@ -157,25 +161,26 @@ impl WheelGestures {
             State::Fingers if fresh => (
                 State::Fingers,
                 Cut {
-                    lifted: true,
-                    landed: true,
+                    lifted: Some("silence"),
+                    landed: Some("silence"),
                 },
             ),
             State::Idle | State::Momentum { .. } if fresh => (
                 State::Fingers,
                 Cut {
-                    landed: true,
+                    landed: Some("silence"),
                     ..Cut::default()
                 },
             ),
             State::Idle => (
                 State::Fingers,
                 Cut {
-                    landed: true,
+                    landed: Some("first"),
                     ..Cut::default()
                 },
             ),
             State::Fingers if self.falling() || self.whole() && self.slowing() => {
+                let why = if self.falling() { "falling" } else { "slowing" };
                 let state = State::Momentum {
                     sign: now.signum(),
                     slowest: now.abs(),
@@ -184,7 +189,7 @@ impl WheelGestures {
                 (
                     state,
                     Cut {
-                        lifted: true,
+                        lifted: Some(why),
                         ..Cut::default()
                     },
                 )
@@ -203,12 +208,12 @@ impl WheelGestures {
                     // The fingers' own speed is taken from here on.
                     self.recent.retain(|wheel| wheel.at == at);
                     self.speeds.clear();
-                    self.peak = 0.;
+                    (self.peak, self.quickest) = (0., 0.);
                     (
                         State::Fingers,
                         Cut {
-                            lifted: stopped,
-                            landed: true,
+                            lifted: stopped.then_some("stopped"),
+                            landed: Some(if turned { "turned" } else { "rose" }),
                         },
                     )
                 } else {
@@ -220,7 +225,7 @@ impl WheelGestures {
                             smallest,
                         },
                         Cut {
-                            lifted: stopped,
+                            lifted: stopped.then_some("stopped"),
                             ..Cut::default()
                         },
                     )
@@ -324,17 +329,26 @@ impl WheelGestures {
             && now <= SLOWED * self.peak
     }
 
+    /// Whether the fingers went faster over their last event than over any before.
+    pub(super) fn fastest(&self) -> bool {
+        self.speeds
+            .back()
+            .is_some_and(|&(_, _, speed)| speed.abs() >= self.quickest)
+    }
+
     /// No event since the last, at `now`: whether that lifts fingers still down, after GAP if they
-    /// had slowed and LONG if not. What comes next is their momentum until it turns or rises.
-    pub(super) fn quiet(&mut self, now: Instant) -> bool {
-        let Some(last) = self.recent.back() else {
-            return false;
+    /// had slowed and LONG if not, as the rule that said so. What comes next is their momentum
+    /// until it turns or rises.
+    pub(super) fn quiet(&mut self, now: Instant) -> Option<&'static str> {
+        let last = self.recent.back()?;
+        let (wait, why) = match self.slowed() {
+            true => (GAP, "quiet"),
+            false => (LONG, "long quiet"),
         };
-        let wait = if self.slowed() { GAP } else { LONG };
         if now.duration_since(last.at) < wait || !matches!(self.state, State::Fingers) {
-            return false;
+            return None;
         }
         self.state = self.lifted();
-        true
+        Some(why)
     }
 }
