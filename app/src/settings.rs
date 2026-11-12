@@ -4539,8 +4539,8 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
     crate::set_little_in_menu_bar(on);
 }
 
-fn set_sign_in_close(on: bool, _: &mut App) {
-    crate::sign_in_close::set_sign_in_close(on);
+fn set_sign_in_close(on: bool, cx: &mut App) {
+    crate::sign_in_close::set_sign_in_close(on, cx);
 }
 
 fn set_little_windows(on: bool, cx: &mut App) {
