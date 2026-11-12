@@ -443,6 +443,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/nav-sidebar.svg"),
     ),
     (
+        "icons/nav-sidebar-right.svg",
+        include_bytes!("../../assets/icons/nav-sidebar-right.svg"),
+    ),
+    (
         "icons/nav-stop.svg",
         include_bytes!("../../assets/icons/nav-stop.svg"),
     ),
@@ -465,6 +469,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/panel-left.svg",
         include_bytes!("../../assets/icons/panel-left.svg"),
+    ),
+    (
+        "icons/panel-right.svg",
+        include_bytes!("../../assets/icons/panel-right.svg"),
     ),
     (
         "icons/paw-print.svg",
@@ -857,9 +865,11 @@ mod tests {
             ] {
                 assert!(svg.contains(want), "{name}: needs {want}");
             }
+            // The Library's books have one solid, as its Spaces' cards do, at the one stroke.
+            let fills = if name == "library.svg" { 2 } else { 1 };
             assert_eq!(
                 svg.matches("fill=").count(),
-                1,
+                fills,
                 "{name}: an outline has no fill"
             );
             checked += 1;

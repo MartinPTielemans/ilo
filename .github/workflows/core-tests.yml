@@ -1,0 +1,120 @@
+# The core's unit tests, browser_core_unittests, for a head, without an engine build (#2392). A head
+# that adds or changes a core test is green here before its engine is dispatched, so a wrong test
+# costs minutes rather than an engine. It runs on the Linux engine's runner, in the tree that runner
+# keeps (engine-linux.yml): prepare.sh --kept brings the tree to the head's core and series, and
+# test.sh rebuilds what changed with the test binary and runs it. A head on another Chromium tag or
+# with other GN args than the tree's is refused within seconds, as preparing or rebuilding the tree
+# whole takes hours and changes the next engine's tree; its tests wait for its engine. Run by hand on
+# the head's branch, with an optional gtest filter:
+#   gh workflow run core-tests.yml --ref <branch> -f filter='SpaceTest.*'
+# and on pushes to core-tests/ branches, which only those who can push here make. Never on pull
+# requests, as the repository is public.
+name: Core tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: A gtest filter, such as SpaceTest.*:SplitView*; empty runs every test.
+        type: string
+        default: ''
+      yielded:
+        description: Set by tools/engine-yield.sh on a retry after it gave the runner to a release.
+        type: boolean
+        default: false
+  push:
+    branches: ['core-tests/**']
+
+# The runner takes one job at a time, so this never builds beside an engine. A group of its own
+# keeps a run here from replacing an engine build that waits in the engine's group, or one of those
+# it, as engine-windows-cross.yml has it. Of a branch's waiting runs only the newest is kept.
+concurrency:
+  group: core-tests-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # A retry after the run gave the runner to a release waits here, on GitHub's runner, until the
+  # release has it (tools/engine-yield.sh).
+  wait:
+    name: Releases first
+    if: github.repository == 'MartinPTielemans/ilo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.yielded && 310 || 5 }}
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - if: inputs.yielded
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/engine-yield.sh?ref=$GITHUB_SHA" \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/engine-yield.sh" || exit 0
+          bash "$RUNNER_TEMP/engine-yield.sh" wait
+
+  test:
+    needs: wait
+    runs-on: [self-hosted, linux, x64, ilo-engine]
+    # Minutes when the tree was last built from a nearby head; a series that changes a header much
+    # of Chromium includes recompiles that much.
+    timeout-minutes: 240
+    permissions:
+      actions: write
+      contents: read
+    env:
+      # As engine-linux.yml: a job per 3 GB of the job's 22 GB.
+      BUILD_JOBS: 7
+      FILTER: ${{ inputs.filter }}
+    steps:
+      # A run that gets the runner while a release's engine waits gives it back, before any
+      # checkout, and is dispatched again with its filter.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          ENGINE_YIELD_INPUTS: filter=${{ inputs.filter }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/engine-yield.sh?ref=$GITHUB_SHA" \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/engine-yield.sh" || exit 0
+          bash "$RUNNER_TEMP/engine-yield.sh" yield
+      # With its history, where tree.sh finds the versions of our patches the tree has in it.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # prepare.sh asks for the Go that Dawn's code generators need, as the engine's run does.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: false
+      - name: Prepare
+        id: prepare
+        shell: bash
+        run: |
+          [ -n "${ILO_ENGINE_ROOT:-}" ] || { echo "The runner doesn't set ILO_ENGINE_ROOT."; exit 1; }
+          status=0
+          engine/linux/prepare.sh --kept "$ILO_ENGINE_ROOT/linux" 2>&1 | tee "$RUNNER_TEMP/prepare.log" || status=$?
+          if [ "$status" = 3 ]; then
+            echo "refused=$(sed -n 's/^prepare: //p' "$RUNNER_TEMP/prepare.log" | tail -n 1)" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+      - name: Test the core
+        run: |
+          flags=(--test-launcher-summary-output="$RUNNER_TEMP/core-tests.json")
+          [ -z "$FILTER" ] || flags+=(--gtest_filter="$FILTER")
+          engine/linux/test.sh "$ILO_ENGINE_ROOT/linux" "${flags[@]}"
+      - name: Summary
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REFUSED: ${{ steps.prepare.outputs.refused }}
+        run: |
+          if [ -n "$REFUSED" ]; then
+            printf '### Core tests on %s\n\nNot run on the engine tree: %s. Its tests wait for its engine.\n' \
+              "${GITHUB_SHA::12}" "$REFUSED" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [ ! -f "$RUNNER_TEMP/core-tests.json" ]; then
+            printf '### Core tests on %s\n\nNo results: the run stopped before the tests did, in the log above.\n' \
+              "${GITHUB_SHA::12}" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          python3 -I engine/linux/test-summary.py "$RUNNER_TEMP/core-tests.json" "$GITHUB_SHA" "$GITHUB_REF_NAME" "$FILTER" |
+            tee -a "$GITHUB_STEP_SUMMARY"

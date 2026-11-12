@@ -1247,6 +1247,10 @@ impl Browser for Engine {
         unsafe { platform::host_show_window_buttons(self.ui_view, shown) };
     }
 
+    fn set_sidebar_right(&self, right: bool, _: &mut App) {
+        unsafe { platform::host_set_sidebar_right(self.ui_view, right) };
+    }
+
     fn little_drawn(&self, _: &mut App) {
         unsafe { platform::host_grow_little_window(self.ui_view) };
     }
@@ -1383,13 +1387,9 @@ impl Browser for Engine {
         }
     }
 
-    fn can_open_in_safari(&self) -> bool {
-        true
-    }
-
-    fn open_in_safari(&self, url: &str, _: &mut App) {
+    fn open_elsewhere(&self, url: &str, _: &mut App) {
         if let Ok(url) = CString::new(url) {
-            unsafe { platform::host_open_in_safari(url.as_ptr()) };
+            unsafe { platform::host_open_elsewhere(url.as_ptr()) };
         }
     }
 
@@ -1669,10 +1669,11 @@ impl Browser for Engine {
         place: site_controls::Place,
         window: gpui::Size<Pixels>,
         extensions: Vec<site_controls::Extension>,
+        profiles: Option<site_controls::Profiles>,
         cx: &mut App,
     ) {
         with_overlays(
-            move |cx| site_controls::show(tab, place, window, extensions, cx),
+            move |cx| site_controls::show(tab, place, window, extensions, profiles, cx),
             cx,
         );
     }
@@ -1764,6 +1765,10 @@ impl Browser for Engine {
 
     fn settings(&self, cx: &mut App) {
         settings::show(cx);
+    }
+
+    fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
+        settings::set_sidebar_right(right, cx);
     }
 
     fn shortcuts(&self, cx: &mut App) {
@@ -2038,6 +2043,8 @@ impl Browser for Engine {
                 return;
             };
             let space = little_home(space, main);
+            // The user's now, which no page closes away.
+            crate::sign_in_close::link_tab_left(tab);
             unsafe {
                 if bc::bc_window_space(main) != space {
                     bc::bc_window_show_space(main, space);

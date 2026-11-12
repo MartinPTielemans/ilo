@@ -330,6 +330,8 @@ class SystemPageMac : public SystemPage {
     config.applicationNameForUserAgent = SafariName();
     // A video's full screen button takes it full screen in WebKit's own window.
     config.preferences.elementFullscreenEnabled = YES;
+    // No site-safety lookups with Apple's service, as Chromium's pages make none (#2322).
+    config.preferences.fraudulentWebsiteWarningEnabled = NO;
     web_ = [[WebKitClass(@"WKWebView") alloc] initWithFrame:NSZeroRect configuration:config];
     web_.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     web_.allowsMagnification = YES;
