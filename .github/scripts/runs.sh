@@ -1,5 +1,5 @@
 #!/bin/bash
-# The runs a Mac or Windows check does, from app/check.sh's list (check.sh --runs). runs=all takes longer than the
+# The runs a Mac or Windows check does, from check.sh --runs. runs=all takes longer than the
 # check job's 120 minutes there, so it's dealt across three jobs (#2271): the long named runs in a
 # job of their own, and the rest in two that 0.1.14's runs (42746639869, 42750992772) timed at
 # about 60 minutes each on Windows and 45 on the Mac. A new run goes in the first.
