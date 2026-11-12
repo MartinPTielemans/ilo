@@ -914,10 +914,10 @@ fn a_swipe_never_moves_more_than_one_space_in_many_timings(cx: &mut TestAppConte
 /// What the demo decided of a swipe: the trace's event it decided at, and the kind and what.
 type Decision = (usize, String, String);
 
-/// `trace`, as the demo's `?trace` saves it, through the demo from the middle of five Spaces, with
-/// what it decided. A version 2 trace marks the events the demo took, and the rest went elsewhere
-/// on the page; an earlier one gives them all.
-fn replay(cx: &mut TestAppContext, trace: &serde_json::Value) -> (Run, Vec<Decision>) {
+/// `trace`, as the demo's `?trace` saves it, through the demo from `space` of five, with what it
+/// decided. A version 2 trace marks the events the demo took, and the rest went elsewhere on the
+/// page; an earlier one gives them all.
+fn replay(cx: &mut TestAppContext, trace: &serde_json::Value, space: u64) -> (Run, Vec<Decision>) {
     let events = trace["events"].as_array().cloned().unwrap_or_default();
     let marked = events.iter().any(|event| event.get("demo").is_some());
     let number = |event: &serde_json::Value, key: &str| event[key].as_f64().unwrap_or(0.);
@@ -925,7 +925,9 @@ fn replay(cx: &mut TestAppContext, trace: &serde_json::Value) -> (Run, Vec<Decis
     let decided = Rc::new(RefCell::new(Vec::new()));
     let index = Rc::new(Cell::new(0));
     let (notes, at) = (decided.clone(), index.clone());
-    let listen: Send = Box::new(move |shell, _, _, _| {
+    let listen: Send = Box::new(move |shell, _, _, cx| {
+        shell.set_space(space, cx);
+        shell.settle = None;
         let (notes, at) = (notes.clone(), at.clone());
         // As the page's trace does, "wheel" only marks an event the demo took.
         shell.note_wheel(Rc::new(move |kind, what| {
@@ -968,9 +970,10 @@ fn replay(cx: &mut TestAppContext, trace: &serde_json::Value) -> (Run, Vec<Decis
 /// replays a trace the demo's `?trace` saved through the demo, and prints what it decides at each
 /// event beside what the page decided, marking where they differ. The model decides as the page
 /// did unless the page's events came at other times than they say, or the code has changed since.
-/// Space moves are counted from where the swipe began, as the replay starts from another Space; a
-/// swipe into the Library from the first Space only goes to the next. The app can't be replayed:
-/// a browser's events don't say where AppKit's phases fall.
+/// Space moves are counted from where the swipe began. The replay starts on the Space
+/// `WHEEL_TRACE_SPACE` names, 1 to 5 and the middle one by default, so give the one the page's
+/// swipes began on, such as 1 for the site's first. The app can't be replayed: a browser's events
+/// don't say where AppKit's phases fall.
 #[gpui::test]
 #[ignore]
 fn replay_wheel_trace(cx: &mut TestAppContext) {
@@ -987,7 +990,9 @@ fn replay_wheel_trace(cx: &mut TestAppContext) {
             (event, text("kind"), text("what"))
         })
         .collect();
-    let (run, replayed) = replay(cx, &trace);
+    let space =
+        std::env::var("WHEEL_TRACE_SPACE").map_or(3, |space| space.parse().expect("1 to 5"));
+    let (run, replayed) = replay(cx, &trace, space);
     let frames: Vec<f64> = trace["frames"]
         .as_array()
         .into_iter()
@@ -1041,7 +1046,7 @@ fn a_replayed_trace_tells_the_demos_decisions(cx: &mut TestAppContext) {
         })
         .collect();
     let trace = serde_json::json!({ "version": 2, "events": events });
-    let (run, decided) = replay(cx, &trace);
+    let (run, decided) = replay(cx, &trace, 3);
     let kinds: Vec<&str> = decided.iter().map(|(_, kind, _)| kind.as_str()).collect();
     let said = |kind: &str| decided.iter().find(|d| d.1 == kind).map(|d| d.2.as_str());
     assert_eq!(said("axis"), Some("across"), "{decided:?}");
