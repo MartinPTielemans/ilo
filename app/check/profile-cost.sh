@@ -111,11 +111,11 @@ for n in 1 2 4; do
     say "$name: window on screen at $on_screen ms, page painted $((fcp - launched)) ms after the launch"
     pc_measure "$name" "$dir"
     if [ "$round" = 3 ] && [ "$n" -gt 1 ]; then
-      before=$(grep -c '^browser: space [0-9]* in' "$log")
+      before=$(grep -c '^browser: space [0-9]* in' "$log" || true)
       sent=$(date +%s%3N)
       send key 2 ctrl
       for _ in $(seq 100); do
-        [ "$(grep -c '^browser: space [0-9]* in' "$log")" -gt "$before" ] && break
+        [ "$(grep -c '^browser: space [0-9]* in' "$log" || true)" -gt "$before" ] && break
         sleep 0.02
       done
       say "$name: ⌃2 to the second profile's Space shown in about $(($(date +%s%3N) - sent)) ms ($(grep '^browser: space [0-9]* in' "$log" | tail -1))"
