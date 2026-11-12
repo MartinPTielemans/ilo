@@ -1450,9 +1450,11 @@ bool Run(const std::string& line) {
     return true;
   }
   // The DPI Windows gives the driven browser window and each window the host floats over one,
-  // shown or not (#2541): "browser: dpis window 120, command bar 120, link preview 96".
+  // shown or not, and the system's, from when the user signed in (#2541): "browser: dpis system 96,
+  // window 120, command bar 120, link preview 96".
   if (action == "dpis") {
-    std::string line = "window " + std::to_string(GetDpiForWindow(Driven()));
+    std::string line = "system " + std::to_string(GetDpiForSystem()) + ", window " +
+                       std::to_string(GetDpiForWindow(Driven()));
     for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
       if (const char* name = Ours(top) ? host_floating_name(top) : nullptr) {
         line += std::string(", ") + name + " " + std::to_string(GetDpiForWindow(top));
