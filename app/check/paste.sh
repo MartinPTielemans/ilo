@@ -1,6 +1,6 @@
 # Linux only: what another app copies pastes into the UI's fields, the command bar from ⌘T and the
-# address field's from ⌘L, as it does into a page's, and what the UI copies and cuts reaches the
-# other apps (#2463). Another app copies with wl-copy in sway's sessions, Wayland's and Xwayland's,
+# address field's from ⌘L, as it does into a page's, so does what a page copies, and what the UI
+# copies and cuts reaches the other apps (#2463). Another app copies with wl-copy in sway's sessions, Wayland's and Xwayland's,
 # and with xclip under Xvfb, and the clipboard is read back the same way. A page's field is the
 # control: Chromium has always pasted there. The UI's fields have no primary selection, so a
 # middle click pastes only into a page; the run says whether it did, without failing on it. It runs
@@ -64,6 +64,22 @@ copy_elsewhere pageclip1
 send click $page_point
 paste_over
 expect '^browser: title [0-9]* page pageclip1$' "a page's field didn't paste another app's copy"
+
+# What a page copies, which Chromium then holds on the UI's own connection under Wayland and in its
+# own X window under X11, pastes into the command bar.
+send key a cmd
+send type pagecopy9
+expect '^browser: title [0-9]* page pagecopy9$' "typing didn't reach the page's field"
+send key a cmd
+send key c cmd
+clip_holds pagecopy9 || fail "⌘C in a page didn't reach the clipboard, which held \"$(read_clip)\""
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't show the command bar"
+paste_over
+expect '^browser: command bar drew "pagecopy9"$' \
+  "the command bar didn't paste what a page copied, \"pagecopy9\""
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
 # The command bar pastes what another app copied before it opened, and while it's open.
 copy_elsewhere barclip2
@@ -129,5 +145,5 @@ helper=
 exec 3>&-
 quit
 echo "ok: another app's copy pastes into a page's field, the command bar from ⌘T, before and while" \
-  "it's open, and the address field from ⌘L, and the bar's copy and cut reach another app and the" \
-  "page; $primary (${BROWSER_HEADLESS:+sway }$([ -n "${WAYLAND_DISPLAY:-}" ] && echo Wayland || echo X11))."
+  "it's open, and the address field from ⌘L, a page's copy pastes into the bar, and the bar's copy" \
+  "and cut reach another app and the page; $primary (${BROWSER_HEADLESS:+sway }$([ -n "${WAYLAND_DISPLAY:-}" ] && echo Wayland || echo X11))."
