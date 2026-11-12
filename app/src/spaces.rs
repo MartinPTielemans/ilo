@@ -257,7 +257,6 @@ pub(crate) unsafe extern "C" fn archive_changed(
 }
 
 pub(crate) unsafe extern "C" fn tab_unsnoozed(_: *mut c_void, tab: bc::bc_id) {
-    // check.sh waits for this line.
     log!("browser: tab {tab} unsnoozed");
     update_shells(|shell, cx| shell.tab_unsnoozed(tab, cx));
 }

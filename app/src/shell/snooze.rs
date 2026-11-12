@@ -213,7 +213,6 @@ impl Shell {
     /// Snoozes archived tab `id` until `at` instead.
     fn resnooze(&mut self, id: u64, at: NaiveDateTime, cx: &mut Context<Self>) {
         let until = snooze::millis(at);
-        // check.sh waits for this line.
         log!("browser: snooze archived {id} until {until}");
         self.browser.snooze_archived(id, until, cx);
     }

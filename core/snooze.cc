@@ -67,7 +67,7 @@ void ComeBack() {
       SnoozeArchived(id, base::Time());
       continue;
     }
-    // check.sh reads this line, an error since our builds print no warnings.
+    // An error, since our builds print no warnings.
     LOG(ERROR) << "browser: tab " << tab << " back from snooze";
     // Posted, after the Space's change, so the app has the tab when it hears.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(

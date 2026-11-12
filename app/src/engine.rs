@@ -525,7 +525,6 @@ impl Browser for Engine {
     }
 
     fn snooze(&self, tab: u64, until: f64, _: &mut App) -> bool {
-        // check.sh waits for this line.
         log!("browser: snooze {tab} until {until}");
         unsafe { bc::bc_tab_snooze(tab, until) }
     }
