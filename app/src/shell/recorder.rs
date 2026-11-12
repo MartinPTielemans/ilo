@@ -244,9 +244,28 @@ pub(super) struct Recorder {
     pub(super) sync_server: Cell<bool>,
     /// The videos opened that haven't given their first frame yet.
     videos_starting: RefCell<Vec<u64>>,
+    /// The Shell that set_agents and show_share_sheet read, as the core's do: turning agents off
+    /// ends their ask, which reads every Shell, and the share sheet finds its tab's window.
+    reads: RefCell<Option<WeakEntity<super::Shell>>>,
 }
 
 impl Recorder {
+    /// From now on, the calls that read Shells in the app read `shell` (#2459).
+    pub(super) fn reads_shell(&self, shell: WeakEntity<super::Shell>) {
+        *self.reads.borrow_mut() = Some(shell);
+    }
+
+    fn read_shell(&self, cx: &App) {
+        if let Some(shell) = self
+            .reads
+            .borrow()
+            .as_ref()
+            .and_then(|shell| shell.upgrade())
+        {
+            shell.read(cx);
+        }
+    }
+
     /// A host for another window of the same core.
     pub(super) fn beside(other: &Recorder) -> Self {
         Recorder {
@@ -1390,7 +1409,8 @@ impl Browser for Recorder {
         self.share_sheet.get()
     }
 
-    fn show_share_sheet(&self, tab: u64, url: &str, title: &str, _: Point<Pixels>, _: &mut App) {
+    fn show_share_sheet(&self, tab: u64, url: &str, title: &str, _: Point<Pixels>, cx: &mut App) {
+        self.read_shell(cx);
         self.record(format!("share sheet {tab} {url} {title}"))
     }
 
@@ -1750,7 +1770,8 @@ impl Browser for Recorder {
         self.agents.get()
     }
 
-    fn set_agents(&self, on: bool, _: &mut App) {
+    fn set_agents(&self, on: bool, cx: &mut App) {
+        self.read_shell(cx);
         self.agents.set(Some(on));
         self.record(format!("agents {on}"))
     }
