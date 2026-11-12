@@ -105,7 +105,8 @@ fn here_setup(updater: Updater) -> Option<String> {
     Some(windows_install(updater).to_owned())
 }
 
-#[cfg(target_os = "macos")]
+/// The Mac's form asks for none, and the preview's web build has none to tell.
+#[cfg(not(any(target_os = "linux", windows)))]
 fn here_setup(_: Updater) -> Option<String> {
     None
 }
