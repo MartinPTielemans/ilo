@@ -10,7 +10,7 @@
   stroke-linecap="round"
   stroke-linejoin="round"
 >
-  <path d="M4 4v16" />
+  <path d="M3.5 4v16" />
   <rect width="5" height="13" x="7.75" y="7" rx="1.5" fill="currentColor" />
   <path d="m16.75 6.5 3.25 13.5" />
 </svg>
