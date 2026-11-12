@@ -128,7 +128,12 @@ fi
 # profile uBlock Origin's selfie took, as it wrote it about a minute in, in whichever rest the run
 # had reached (#2502). A user's launches after the first are on it, so on a profile with none a
 # launch first stays until it's written, and quits.
-ublock_selfie || selfie_launch "$url" "$out/window-selfie.log"
+if ublock_selfie; then
+  echo "window: the profile has uBlock Origin's selfie"
+else
+  selfie_launch "$url" "$out/window-selfie.log"
+  echo "window: uBlock Origin wrote its selfie $selfie_at s into a launch before the run's"
+fi
 BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
