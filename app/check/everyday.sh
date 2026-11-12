@@ -110,7 +110,8 @@ chooser_shown() {
     swaymsg -t get_tree |
       jq -e --argjson pid "$(app_pid)" 'any(.. | objects; .pid? == $pid and .name? == "Save File")' > /dev/null
   else
-    xdotool search --onlyvisible --pid "$(window_pid)" --name '^Save File$' > /dev/null 2>&1
+    # --all, or xdotool takes a window meeting any one condition: any of the app's shown.
+    xdotool search --all --onlyvisible --pid "$(window_pid)" --name '^Save File$' > /dev/null 2>&1
   fi
 }
 # Escape before the chooser is up leaves it up, the download asking, and the app's quit waiting on
@@ -128,7 +129,6 @@ if [ -z "$shown" ]; then
 fi
 [ "$(sed -n "/^browser: drive $from: /,\$p" "$log" | grep -c '^browser: download [0-9]* done everyday')" = 0 ] ||
   fail "with Ask on, the page's download saved by itself"
-# Under Xvfb the chooser may not have drawn yet, so the capture can show the page alone.
 ../tools/window-screenshot.sh "$pid" "$out/everyday-ask.png" all || fail "no window to capture"
 if [ "$(uname)" = Darwin ]; then
   # Chrome's panel is out of process, where a posted escape never reaches it, and while it's up
@@ -143,19 +143,10 @@ else
   elif [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     # The driver's keys go to the app's own windows, so the X server's go to the chooser, as
     # ilo-server.sh's do to the sign-in window. Sway gives the chooser the keyboard as it opens.
-    # X maps GTK's window before it draws or takes keys, and nothing says when it does, so the
-    # escape goes again each second it stays.
-    for _ in $(seq 10); do
-      chooser=$(xdotool search --onlyvisible --pid "$(window_pid)" --name '^Save File$' | head -1)
-      [ -n "$chooser" ] || break
-      xdotool windowactivate --sync "$chooser" 2>/dev/null || xdotool windowfocus --sync "$chooser" ||
-        fail "the chooser asking where to save couldn't have the keyboard"
-      xdotool key Escape
-      for _ in $(seq 10); do
-        chooser_shown || break
-        sleep 0.1
-      done
-    done
+    chooser=$(xdotool search --all --onlyvisible --pid "$(window_pid)" --name '^Save File$' | head -1)
+    xdotool windowactivate --sync "$chooser" 2>/dev/null || xdotool windowfocus --sync "$chooser" ||
+      fail "the chooser asking where to save couldn't have the keyboard"
+    xdotool key Escape
   else
     send key escape
   fi
