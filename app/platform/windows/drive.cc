@@ -165,7 +165,8 @@ ULONG_PTR const kRealNumber = (static_cast<ULONG_PTR>(1) << 40) - 1;
 // The number of the last real event sent, and of the last the UI thread has taken off its queue.
 ULONG_PTR g_real_sent = 0;
 ULONG_PTR g_real_heard = 0;
-// The last real key sent, which the keyboard hook matches, as a key's hook has no extra information.
+// The last real key sent, which the keyboard hook matches, as a key's hook has no extra
+// information.
 UINT g_real_vk = 0;
 bool g_real_up = false;
 // The modifiers the real keyboard holds now.
@@ -342,13 +343,34 @@ bool TargetInKey(double x, double y, Target* target) {
   return true;
 }
 
+// Where real input landed, as check.sh names it: one of the host's floating windows, such as the
+// theme picker or the menu, else a browser window's page or UI, else the window's class.
+std::string Landed(HWND hwnd) {
+  const HWND root = GetAncestor(hwnd, GA_ROOT);
+  if (const char* floating = host_floating_name(root)) {
+    return floating;
+  }
+  if (BrowserIndex(root) >= 0) {
+    return IsChromium(hwnd) ? "a browser window's page" : "a browser window's UI";
+  }
+  return Utf8(ClassOf(root));
+}
+
 // The driver's real events as the UI thread takes them off its queue, before a hook of the host's
-// can take one and pass it no further, as the menu's do.
+// can take one and pass it no further, as the menu's do. Each press and key logs where it landed,
+// for the list of what real input reached (#2544).
 LRESULT CALLBACK HearRealPointer(int code, WPARAM wparam, LPARAM lparam) {
-  if (code == HC_ACTION) {
-    const ULONG_PTR extra = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->dwExtraInfo;
-    if ((extra & ~kRealNumber) == kRealTag) {
-      g_real_heard = std::max(g_real_heard, extra & kRealNumber);
+  const auto* hook = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam);
+  if (code == HC_ACTION && (hook->dwExtraInfo & ~kRealNumber) == kRealTag) {
+    g_real_heard = std::max(g_real_heard, hook->dwExtraInfo & kRealNumber);
+    switch (wparam) {
+      case WM_LBUTTONDOWN:
+      case WM_RBUTTONDOWN:
+      case WM_MBUTTONDOWN:
+      case WM_LBUTTONDBLCLK:
+      case WM_NCLBUTTONDOWN:
+      case WM_NCRBUTTONDOWN:
+        fprintf(stderr, "browser: drive: real press in %s\n", Landed(hook->hwnd).c_str());
     }
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
@@ -358,6 +380,11 @@ LRESULT CALLBACK HearRealKey(int code, WPARAM wparam, LPARAM lparam) {
   const bool up = (static_cast<DWORD>(lparam) & 0x80000000u) != 0;
   if (code == HC_ACTION && g_real_vk && wparam == g_real_vk && up == g_real_up) {
     g_real_heard = g_real_sent;
+    if (!up && wparam != VK_CONTROL && wparam != VK_SHIFT && wparam != VK_MENU) {
+      const HWND focus = GetFocus();
+      fprintf(stderr, "browser: drive: real key %#x in %s\n", static_cast<unsigned>(wparam),
+              Landed(focus ? focus : GetActiveWindow()).c_str());
+    }
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
@@ -450,10 +477,13 @@ void RealPointerTo(POINT at) {
   }
   INPUT input{};
   input.type = INPUT_MOUSE;
-  input.mi.dx = static_cast<LONG>(std::lround((at.x - GetSystemMetrics(SM_XVIRTUALSCREEN)) *
-                                              65535.0 / (GetSystemMetrics(SM_CXVIRTUALSCREEN) - 1)));
-  input.mi.dy = static_cast<LONG>(std::lround((at.y - GetSystemMetrics(SM_YVIRTUALSCREEN)) *
-                                              65535.0 / (GetSystemMetrics(SM_CYVIRTUALSCREEN) - 1)));
+  // SendInput's absolute places run from 0 to 65535 across the whole desktop.
+  const auto along = [](LONG at, int start, int size) {
+    return static_cast<LONG>(std::lround((at - GetSystemMetrics(start)) * 65535.0 /
+                                         (GetSystemMetrics(size) - 1)));
+  };
+  input.mi.dx = along(at.x, SM_XVIRTUALSCREEN, SM_CXVIRTUALSCREEN);
+  input.mi.dy = along(at.y, SM_YVIRTUALSCREEN, SM_CYVIRTUALSCREEN);
   input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
   SendReal(input);
 }
@@ -2413,8 +2443,8 @@ void drive_start(void) {
   RegisterClassW(&window_class);
   g_driver = CreateWindowExW(0, window_class.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
                              nullptr, window_class.hInstance, nullptr);
-  // Real input takes the desktop's pointer and keyboard, so only on a desktop that's the check's own:
-  // a CI runner's, or one BROWSER_DRIVE_OWN_DESKTOP=1 says is. Never a developer's own.
+  // Real input takes the desktop's pointer and keyboard, so only on a desktop that's the check's
+  // own: a CI runner's, or one BROWSER_DRIVE_OWN_DESKTOP=1 says is. Never a developer's own.
   const auto set = [](const wchar_t* name, const wchar_t* value) {
     wchar_t got[16] = L"";
     return GetEnvironmentVariableW(name, got, 16) > 0 && wcscmp(got, value) == 0;
