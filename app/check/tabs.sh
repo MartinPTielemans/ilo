@@ -1325,6 +1325,17 @@ if windows; then
     expect '^browser: new tab plate 0$' "$1 left New Tab's plate selected"
     overlays_none "$1"
   }
+  # Where each window over the page is, "x,y" in points, in the driver's order, once there's one.
+  overlays_at() {
+    for _ in $(seq 20); do
+      send overlays
+      at=$(grep '^browser: overlays shown ' "$log" | tail -1 | grep -o ' at [0-9-]*,[0-9-]*' |
+        cut -c5- | tr '\n' ' ')
+      [ -n "$at" ] && return 0
+      sleep 0.1
+    done
+    fail "$1"
+  }
   # The toast from ⌘Z and the hover card under the pointer go by themselves.
   away
   for _ in $(seq 100); do
@@ -1394,7 +1405,9 @@ if windows; then
       "the window back from Win+D left its hidden command bar with the keyboard"
     send realkey t ctrl
     expect '^browser: command bar shown$' "Ctrl+T after Win+D and back didn't open the command bar"
-    expect '^browser: command bar window shown$' "the command bar after Win+D isn't on screen"
+    overlays_at "the command bar after Win+D isn't on screen"
+    send realkey g
+    expect '^browser: command bar drew "g"$' "what's typed after Win+D didn't go into the command bar"
     ../tools/window-screenshot.sh "$pid" "$out/command-bar-after-win-d.png" || fail "no window to capture"
     send key escape
     bar_gone "Esc in the command bar after Win+D"
@@ -1403,17 +1416,6 @@ if windows; then
   fi
   # Moved with the bar open, the window takes the bar along, over the same place, where it stayed
   # behind on the screen, and the window's menu closes, as the Mac's do (#1364).
-  # Where each window over the page is, "x,y" in points, in the driver's order, once there's one.
-  overlays_at() {
-    for _ in $(seq 20); do
-      send overlays
-      at=$(grep '^browser: overlays shown ' "$log" | tail -1 | grep -o ' at [0-9-]*,[0-9-]*' |
-        cut -c5- | tr '\n' ' ')
-      [ -n "$at" ] && return 0
-      sleep 0.1
-    done
-    fail "$1"
-  }
   send order
   frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
   read -r frame_x frame_y frame_width frame_height <<FRAME
