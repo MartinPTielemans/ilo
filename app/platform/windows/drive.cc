@@ -55,7 +55,7 @@
 // realkey <key> [win] [ctrl] [shift] [alt] presses a key with Windows' own modifiers, unlike key's,
 // as a hand does, through SendInput: Windows itself handles it, as it does Win+D, which no posted
 // message stands in for. It goes to the desktop's foreground window, whichever app's that is, so
-// the driver refuses it unless the desktop is the check's own: CI's, or BROWSER_DRIVE_OWN_DESKTOP=1.
+// the driver refuses it unless the desktop is the check's own (OwnDesktop).
 // The others, pageswipe, displays, hide, backdrop and openmenu, Windows has nothing the driver can
 // stand in for yet: each logs "browser: drive: unsupported <command>" before drive.mm's "can't do
 // that", so a run fails at once.
@@ -176,6 +176,16 @@ UINT g_real_vk = 0;
 bool g_real_up = false;
 HHOOK g_real_mouse_hook = nullptr;
 HHOOK g_real_key_hook = nullptr;
+
+// Whether the desktop is the check's own, which real input may take: a GitHub runner's, or one
+// BROWSER_DRIVE_OWN_DESKTOP=1 says is. Never a developer's, whose pointer and keys it would take.
+bool EnvIs(const wchar_t* name, const wchar_t* value) {
+  wchar_t got[16] = L"";
+  return GetEnvironmentVariableW(name, got, 16) > 0 && wcscmp(got, value) == 0;
+}
+bool OwnDesktop() {
+  return EnvIs(L"GITHUB_ACTIONS", L"true") || EnvIs(L"BROWSER_DRIVE_OWN_DESKTOP", L"1");
+}
 // The last press, a click's or a drag's: its window, place on screen, button and time.
 struct Click {
   HWND hwnd = nullptr;
@@ -1653,9 +1663,7 @@ bool Run(const std::string& line) {
     return true;
   }
   if (action == "realkey") {
-    const char* ci = std::getenv("CI");
-    const char* own = std::getenv("BROWSER_DRIVE_OWN_DESKTOP");
-    if (!(ci && *ci) && !(own && std::string(own) == "1")) {
+    if (!OwnDesktop()) {
       fprintf(stderr, "browser: drive: realkey refused, the desktop isn't the check's own\n");
       return false;
     }
@@ -2571,14 +2579,8 @@ void drive_start(void) {
   RegisterClassW(&window_class);
   g_driver = CreateWindowExW(0, window_class.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
                              nullptr, window_class.hInstance, nullptr);
-  // Real input takes the desktop's pointer and keyboard, so only on a desktop that's the check's
-  // own: a CI runner's, or one BROWSER_DRIVE_OWN_DESKTOP=1 says is. Never a developer's own.
-  const auto set = [](const wchar_t* name, const wchar_t* value) {
-    wchar_t got[16] = L"";
-    return GetEnvironmentVariableW(name, got, 16) > 0 && wcscmp(got, value) == 0;
-  };
-  if (set(L"BROWSER_DRIVE_REAL", L"1")) {
-    g_real = set(L"GITHUB_ACTIONS", L"true") || set(L"BROWSER_DRIVE_OWN_DESKTOP", L"1");
+  if (EnvIs(L"BROWSER_DRIVE_REAL", L"1")) {
+    g_real = OwnDesktop();
     fprintf(stderr, g_real ? "browser: drive: real input\n"
                            : "browser: drive: real input refused, this desktop isn't the check's "
                              "own: BROWSER_DRIVE_OWN_DESKTOP=1 says one is\n");
