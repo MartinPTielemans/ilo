@@ -2183,17 +2183,8 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ];
             ("clear", rows)
         }
-        // The Library's row, whose glyph the sidebar foot's button shares.
-        "library" => {
-            let keys = shell::keystroke_label("shift-cmd-l");
-            let open = Suggestion::from(shell::BarCommand {
-                name: "Open Library…".into(),
-                command: Command::ViewLibrary,
-                shortcut: Some(keys.into()),
-                matched: Match::Name,
-            });
-            ("library", vec![open, search("library")])
-        }
+        // The bar adds Open Library… itself, whose glyph the sidebar foot's button shares.
+        "library" => ("library", vec![search("library")]),
         "sites" => (
             "wik",
             vec![
@@ -2244,7 +2235,8 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ],
         ),
     };
-    let rows_shown = rows.len();
+    // The command the bar adds for what's typed takes a row too.
+    let rows_shown = rows.len() + usize::from(mode == "library");
     let bounds = Bounds::new(
         at,
         size(px(command_bar::WIDTH), px(command_bar::height(rows_shown))),
