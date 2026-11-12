@@ -234,9 +234,85 @@ fn system() -> String {
         .unwrap_or_else(|| "Linux".to_owned())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(windows)]
+fn system() -> String {
+    let read = |name| windows_current_version(name);
+    windows_system(
+        read("ProductName").as_deref(),
+        read("DisplayVersion").as_deref(),
+        read("CurrentBuildNumber").as_deref(),
+    )
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn system() -> String {
     std::env::consts::OS.to_owned()
+}
+
+/// Windows's edition, release and build: "Windows 11 Pro 24H2 (build 26100)". Windows 11 still
+/// names itself Windows 10 in the registry, so its build, 22000 on, says which it is.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_system(product: Option<&str>, release: Option<&str>, build: Option<&str>) -> String {
+    fn given(text: Option<&str>) -> Option<&str> {
+        text.map(str::trim).filter(|text| !text.is_empty())
+    }
+    let build: Option<u32> = given(build).and_then(|build| build.parse().ok());
+    let mut words = vec![given(product).unwrap_or("Windows").to_owned()];
+    if build.is_some_and(|build| build >= WINDOWS_11) {
+        words[0] = words[0].replacen("Windows 10", "Windows 11", 1);
+    }
+    words.extend(given(release).map(str::to_owned));
+    words.extend(build.map(|build| format!("(build {build})")));
+    words.join(" ")
+}
+
+/// The first build of Windows 11.
+const WINDOWS_11: u32 = 22000;
+
+/// Whether this is Windows 11, which rounds a window's corners, by its build.
+#[cfg(windows)]
+pub fn windows_11() -> bool {
+    static BUILD: LazyLock<u32> = LazyLock::new(|| {
+        windows_current_version("CurrentBuildNumber")
+            .and_then(|build| build.trim().parse().ok())
+            .unwrap_or(0)
+    });
+    *BUILD >= WINDOWS_11
+}
+
+/// A text value of Windows's own key for its version, as the registry holds it.
+#[cfg(windows)]
+fn windows_current_version(name: &str) -> Option<String> {
+    windows_machine_text(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion", name)
+}
+
+/// A text value under HKEY_LOCAL_MACHINE's `folder`, if it's there.
+#[cfg(windows)]
+fn windows_machine_text(folder: &str, name: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+    let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (folder, name) = (wide(folder), wide(name));
+    let mut text = [0u16; 256];
+    let mut size = std::mem::size_of_val(&text) as u32;
+    // SAFETY: both names end in a nul, and `size` is `text`'s size in bytes, which the call
+    // writes no further than, and sets to what it wrote.
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            folder.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            text.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    (read == 0).then(|| {
+        let text = &text[..(size as usize / 2).min(text.len())];
+        String::from_utf16_lossy(text)
+            .trim_end_matches('\0')
+            .to_owned()
+    })
 }
 
 /// The processor's name, else the architecture's.
@@ -252,7 +328,12 @@ fn chip() -> String {
         let line = info.lines().find(|line| line.starts_with("model name"))?;
         Some(line.split_once(':')?.1.to_owned())
     });
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    let name = windows_machine_text(
+        r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+        "ProcessorNameString",
+    );
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     let name: Option<String> = None;
     (name.map(|name| name.trim().to_owned()))
         .filter(|name| !name.is_empty())
@@ -283,6 +364,31 @@ mod tests {
                 " 0.1.0 (4321)\nChromium 156.0.7600.12\nmacOS 15.1\nApple M2 Pro"
             )
         );
+    }
+
+    /// Windows is named by its edition, release and build, Windows 11 by its build though the
+    /// registry calls it Windows 10, and what the registry lacks is left out (#2458).
+    #[test]
+    fn names_windows_edition_release_and_build() {
+        let named = |product, release, build| windows_system(product, release, build);
+        assert_eq!(
+            named(Some("Windows 10 Pro"), Some("24H2"), Some("26100")),
+            "Windows 11 Pro 24H2 (build 26100)"
+        );
+        assert_eq!(
+            named(Some("Windows 10 Home"), Some("22H2"), Some("19045")),
+            "Windows 10 Home 22H2 (build 19045)"
+        );
+        assert_eq!(
+            named(
+                Some("Windows Server 2022 Datacenter"),
+                Some(""),
+                Some("20348")
+            ),
+            "Windows Server 2022 Datacenter (build 20348)"
+        );
+        assert_eq!(named(None, None, None), "Windows");
+        assert_eq!(named(Some(" "), None, Some("x")), "Windows");
     }
 
     #[test]
