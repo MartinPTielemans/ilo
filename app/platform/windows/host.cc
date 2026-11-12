@@ -58,6 +58,8 @@ extern "C" const char* host_floating_name(void* hwnd);
 extern "C" bool browser_log_on(const char* area);
 // The app's (src/overlay_life.rs): an overlay's next life, in the low byte, and what the host does.
 extern "C" uint32_t browser_overlay_step(uint8_t life, uint8_t event, uint8_t flags);
+// Below, for Disown, which hides the menu as the UI would.
+extern "C" void host_hide_menu_window(void);
 
 namespace {
 
