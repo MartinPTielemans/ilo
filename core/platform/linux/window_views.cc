@@ -225,6 +225,13 @@ struct Slot {
   gfx::PointF scaled_about;
 };
 
+// How a link preview's page is drawn, for the motion of the app's card round it (DrawPageIn).
+struct Drawn {
+  float scale = 1;
+  gfx::PointF about;
+  float opacity = 1;
+};
+
 // Where |slot| shows in the window's content, drawn at its scale.
 gfx::RectF ShownFrame(const Slot& slot) {
   const gfx::Rect frame = slot.holder->bounds();
@@ -437,6 +444,7 @@ class WindowViews : public views::WidgetObserver,
     aura::Window* holder = HolderFor(preview_);
     if (preview_.page != page) {
       Empty(preview_);
+      preview_drawn_ = Drawn();
       if (page->parent()) {
         page->parent()->RemoveChild(page);
       }
@@ -452,7 +460,41 @@ class WindowViews : public views::WidgetObserver,
     content()->StackChildAtTop(holder);
     holder->Show();
     LayOut(preview_, size);
+    DrawPreview();
     ShowThrough();
+  }
+
+  // Draws the link preview's page at |scale| of its frame about |about|, in the window's content,
+  // and at |opacity|, by its holder's transform and opacity, so it's never laid out again for it.
+  // The window's shape and input region keep its frame: the app's overlay covers all but the
+  // card's hole, and under that is the page, or the window's own.
+  void DrawPreview(aura::Window* page, float scale, const gfx::PointF& about, float opacity) {
+    if (preview_.page != page) {
+      return;
+    }
+    preview_drawn_ = {scale, about, opacity};
+    DrawPreview();
+  }
+
+  void DrawPreview() {
+    aura::Window* holder = preview_.holder.get();
+    if (!holder) {
+      return;
+    }
+    const Drawn& drawn = preview_drawn_;
+    gfx::Transform transform;
+    if (drawn.scale != 1) {
+      // A layer's transform is about its own top-left.
+      const float in_x = drawn.about.x() - holder->bounds().x();
+      const float in_y = drawn.about.y() - holder->bounds().y();
+      transform.Translate(in_x, in_y);
+      transform.Scale(drawn.scale, drawn.scale);
+      transform.Translate(-in_x, -in_y);
+    }
+    if (holder->transform() != transform) {
+      holder->SetTransform(transform);
+    }
+    holder->layer()->SetOpacity(drawn.opacity);
   }
 
   // Sizes each slot to its insets.
@@ -463,6 +505,7 @@ class WindowViews : public views::WidgetObserver,
     }
     LayOut(side_panel_, size);
     LayOut(preview_, size);
+    DrawPreview();
     ring_.Fit();
     ScalePanes();
   }
@@ -1195,6 +1238,8 @@ class WindowViews : public views::WidgetObserver,
   // under it.
   Slot preview_;
   SkColor4f preview_color_ = SkColors::kWhite;
+  // How its page is drawn for the card's motion (DrawPreview).
+  Drawn preview_drawn_;
   // After the slots, so it leaves its holder before that goes.
   FocusRing ring_;
   double corner_radius_ = 0;
@@ -1475,6 +1520,17 @@ void ShowPageIn(views::Widget* widget,
   WindowViews* views = widget ? ViewsOf(widget) : nullptr;
   if (views && page) {
     views->ShowPreview(page, frame, corner_radius);
+  }
+}
+
+void DrawPageIn(views::Widget* widget,
+                gfx::NativeView page,
+                float scale,
+                const gfx::PointF& about,
+                float opacity) {
+  WindowViews* views = widget ? ViewsOf(widget) : nullptr;
+  if (views && page) {
+    views->DrawPreview(page, scale, about, opacity);
   }
 }
 

@@ -1839,6 +1839,17 @@ void bc_tab_show_in(bc_id id, void* view, bc_rect frame, double corner_radius) {
   contents->Focus();
 }
 
+void bc_tab_draw_preview(bc_id id, double scale, double about_x, double about_y, double opacity) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (!contents || browser_core::Window::Showing(id) || !(scale > 0)) {
+    return;
+  }
+  browser_core::Window* window = browser_core::Window::Holding(id);
+  browser_core::platform::DrawPageIn(window ? window->widget() : nullptr, contents->GetNativeView(),
+                                     static_cast<float>(scale), gfx::PointF(about_x, about_y),
+                                     static_cast<float>(std::clamp(opacity, 0.0, 1.0)));
+}
+
 void bc_window_keep_preview(bc_id window_id, bc_id id) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   browser_core::Space* space = window ? browser_core::Space::FromId(window->space()) : nullptr;
