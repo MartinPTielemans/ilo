@@ -250,6 +250,9 @@ await "^browser: loaded $tab $callback?code=abc\$" || fail "the sign-in didn't c
 await "^browser: little window $little sign-in done at $callback?code=abc\$" ||
   fail "the callback with a code didn't end the sign-in"
 await "^browser: little bar closing true\$" || fail "the sign-in's Little ilo bar didn't say it was closing"
+# The bar's words, for the PR: the window has the 2 s of its pause to be caught in.
+../tools/window-screenshot.sh "$pid" "$out/links-sign-in-closing.png" all ||
+  echo "note: the sign-in's Little ilo window closed before its capture"
 await "^browser: little window $little closed after its sign-in\$" ||
   fail "the sign-in's Little ilo window didn't close after its pause"
 await "^browser: window closed $little\$" || fail "the sign-in's Little ilo window stayed open"
