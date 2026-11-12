@@ -574,6 +574,16 @@ impl Walk<'_> {
             for state in &states {
                 line.push_str(&format!(" ({state})"));
             }
+            // A native select's choices, the page's own: the core leaves out which one is chosen.
+            let choices = node.get("choices").and_then(Value::as_array);
+            let choices: Vec<_> = choices
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            if !choices.is_empty() {
+                line.push_str(&format!(" (options: {})", listed(&choices)));
+            }
             let before = (self.lines.len(), self.size);
             self.add(Line {
                 depth,
@@ -626,6 +636,21 @@ pub fn clip(text: &str, chars: usize) -> String {
         Some((end, _)) => format!("{}…", &text[..end]),
         None => text.into(),
     }
+}
+
+/// How many of a select's choices its line names: enough for any form's, while a country list's
+/// says how many more there are, which `select` finds by name.
+const CHOICES_NAMED: usize = 40;
+
+/// A select's choices as its line names them, each quoted.
+fn listed(choices: &[&str]) -> String {
+    let mut named: Vec<_> = (choices.iter().take(CHOICES_NAMED))
+        .map(|choice| format!("\"{}\"", clip(choice, 80)))
+        .collect();
+    if choices.len() > CHOICES_NAMED {
+        named.push(format!("and {} more", choices.len() - CHOICES_NAMED));
+    }
+    named.join(", ")
 }
 
 /// Words that pay or order, as a button's name has them.
@@ -746,6 +771,32 @@ mod tests {
             "name": { "value": name },
             "childIds": children,
         })
+    }
+
+    /// A native select's line names its choices, the page's own, as the core gives them without
+    /// which one is chosen, and a long list says how many more there are (#2355).
+    #[test]
+    fn a_selects_line_names_its_choices() {
+        let countries: Vec<String> = (1..=45).map(|n| format!("Country {n}")).collect();
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Form", &["2", "3"]),
+            node("2", "combobox", "Answer", &[]),
+            node("3", "combobox", "Country", &[]),
+        ];
+        nodes[1]["backendDOMNodeId"] = json!(20);
+        nodes[1]["choices"] = json!(["Yes", "No"]);
+        nodes[2]["backendDOMNodeId"] = json!(30);
+        nodes[2]["choices"] = json!(countries);
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
+        assert!(
+            outline.contains("- combobox \"Answer\" [e1] (options: \"Yes\", \"No\")\n"),
+            "{outline}"
+        );
+        assert!(
+            outline.contains("\"Country 39\", \"Country 40\", and 5 more)"),
+            "{outline}"
+        );
+        assert!(!outline.contains("Country 41"), "{outline}");
     }
 
     /// The outline names what an agent can act on with refs that stay while the page does, gives
