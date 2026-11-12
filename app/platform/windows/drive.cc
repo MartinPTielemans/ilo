@@ -1615,6 +1615,10 @@ HRESULT DriveDrag(IDataObject* data, DWORD, DWORD* effect, POINT* at) {
     g_drag_target->DragLeave();
   }
   EndDrag();
+  // DoDragDrop's loop takes the pointer for a window of its own, which ends the press that started
+  // the drag. Held on, the window the tab left kept the pointer, and the driver sent it the click
+  // meant for the window the tab opened in (#2607).
+  ReleaseCapture();
   data->AddRef();
   g_drag = data;
   AppDrag drag;
@@ -1748,7 +1752,10 @@ bool Run(const std::string& line) {
     // never over another app's, nor over one Stay On Top keeps on top, which a click can't put
     // under it and which SetWindowPos would take out of the topmost windows.
     HWND root = Driven();
-    for (size_t index = 0; index < 64; index++) {
+    // The others are behind a window on top already, and put after it, Windows would make them
+    // topmost too: still over a window opened later, while it had the keyboard (#2607).
+    const bool on_top = GetWindowLongPtrW(root, GWL_EXSTYLE) & WS_EX_TOPMOST;
+    for (size_t index = 0; index < 64 && !on_top; index++) {
       HWND other = Browser(index);
       const bool topmost = other && (GetWindowLongPtrW(other, GWL_EXSTYLE) & WS_EX_TOPMOST);
       if (other && other != root && !topmost) {
