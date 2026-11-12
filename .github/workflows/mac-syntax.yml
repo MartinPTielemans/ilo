@@ -13,6 +13,9 @@ on:
       - app/platform/host.h
       - core/public/**
       - .github/workflows/mac-syntax.yml
+  # A push runs it only for commits new to the repo: a commit already on another ref is skipped, so
+  # a header that doesn't parse can reach an engine build unchecked. This runs it on any ref.
+  workflow_dispatch:
 
 concurrency:
   group: mac-syntax-${{ github.ref }}

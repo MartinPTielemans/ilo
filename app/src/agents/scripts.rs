@@ -5,7 +5,7 @@
 //! so off refuses reads too. Each Apple Event is one entry of the activity log, refused or not,
 //! under the sender's name, and none reads a page or opens one that isn't http or https.
 
-use std::time::SystemTime;
+use web_time::SystemTime;
 
 use gpui::{Context, SharedString};
 

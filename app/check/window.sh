@@ -140,6 +140,23 @@ check_buttons() {
   { [ "${2:-}" = hidden ] || windows; } && expected="hidden hidden hidden"
   [ "$buttons" = "$expected" ] || fail "$1: the window's buttons are at $buttons, not $expected"
 }
+# capture <png> <shown>: captures the window into png. Under Wayland, sway keeps showing the
+# window's last frame, or its own grey where there was none, until the app's next frame reaches it,
+# so there it captures again until the function shown passes on the capture, 100 captures at most.
+# $captures counts them and $redraw says how long it took (#2336).
+capture() {
+  wayland=
+  [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ] && wayland=1 && start=$(date +%s%N)
+  ../tools/window-screenshot.sh "$pid" "$1" || fail "no window to capture"
+  captures=1
+  redraw=
+  [ -n "$wayland" ] || return 0
+  while ! "$2" "$1" && [ $captures -lt 100 ]; do
+    ../tools/window-screenshot.sh "$pid" "$1" || fail "no window to capture"
+    captures=$((captures + 1))
+  done
+  redraw="$(( ($(date +%s%N) - start) / 1000000 )) ms, capture $captures"
+}
 # Waits for a page's full screen $1 (enter or exit) to end in the window and the UI to have placed
 # the page and drawn at the window's new size. Their lines carry the clock the core's and the host's
 # do (drive.mm, tab.cc).
@@ -401,16 +418,10 @@ await "^browser: title $tab gap ready\$" || fail "gap.html didn't draw"
 # in the layout's list, which check_layout would read.
 send resize 1200 700
 expect '^browser: drawn at 1200x700$' "the window didn't draw widened over gap.html"
-../tools/window-screenshot.sh "$pid" "$out/resize-gap.png" || fail "no window to capture"
 # Under Wayland the UI lays out the new size before the window shows a frame at it, and until it
-# does, sway's own grey, 63 63 63, fills the rest of the width sway gave it, so it's captured again.
-captures=1
-if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-  while [ "$(pixel "$out/resize-gap.png" 0.97 0.5)" = "63 63 63" ] && [ $captures -lt 100 ]; do
-    ../tools/window-screenshot.sh "$pid" "$out/resize-gap.png" || fail "no window to capture"
-    captures=$((captures + 1))
-  done
-fi
+# does, sway's own grey, 63 63 63, fills the rest of the width sway gave it.
+widened() { [ "$(pixel "$1" 0.97 0.5)" != "63 63 63" ]; }
+capture "$out/resize-gap.png" widened
 grep -q "^browser: title $tab gap drew\$" "$log" && fail "gap.html drew at the new size before the capture"
 set -- $(pixel "$out/resize-gap.png" 0.97 0.5)
 [ "$captures" = 1 ] || set -- "$@" "in capture $captures"
@@ -529,14 +540,25 @@ resized_once "the page leaving full screen itself" "${view#* }"
 # full screen then takes the window again, and escape brings both back. The empty sidebar's colour,
 # where the page would be if it still filled the window, is the same as before each time.
 windowed=$content
-../tools/window-screenshot.sh "$pid" "$out/before-green-button.png" || fail "no window to capture"
 sidebar_at="$(awk -v w="$width" 'BEGIN { print 110 / w }') 0.6"
+# Just inside the page view's left edge, the page's own margin.
+page_at="$(awk -v x="${view%%,*}" -v w="$width" 'BEGIN { print (x + 4) / w }') 0.6"
+# Colours $1 and $2 differ by more than 8 in a channel.
+differ() {
+  echo "$1 $2" | awk '{ for (i = 1; i <= 3; i++) if ($i - $(i + 3) > 8 || $(i + 3) - $i > 8) exit 0; exit 1 }'
+}
+# The windowed frame is on screen in capture $1: the sidebar isn't the page beside it. Until then
+# the page fills the window where the sidebar is.
+windowed_shown() { differ "$(pixel "$1" $sidebar_at)" "$(pixel "$1" $page_at)"; }
+capture "$out/before-green-button.png" windowed_shown
+[ -z "$wayland" ] || windowed_shown "$out/before-green-button.png" ||
+  fail "before the green button, with the window laid out windowed, the page still covers the sidebar after $redraw"
+redraws=${redraw:+"before the green button $redraw"}
 sidebar=$(pixel "$out/before-green-button.png" $sidebar_at)
 # The sidebar in capture $1 has its colour from before, within 8 in each channel.
 sidebar_back() {
   sidebar_now=$(pixel "$1" $sidebar_at)
-  echo "$sidebar_now $sidebar" |
-    awk '{ for (i = 1; i <= 3; i++) if ($i - $(i + 3) > 8 || $(i + 3) - $i > 8) exit 1 }'
+  ! differ "$sidebar_now" "$sidebar"
 }
 send key f
 expect '^browser: page entered full screen$' "the page didn't go full screen before the green button"
@@ -551,7 +573,8 @@ check_layout "after the green button took the page's window out of full screen"
 check_buttons "after the green button took the page's window out of full screen"
 [ "$content" = "$windowed" ] ||
   fail "after the green button the window's content is $content, not $windowed as before"
-../tools/window-screenshot.sh "$pid" "$out/green-button.png" || fail "no window to capture"
+capture "$out/green-button.png" sidebar_back
+redraws=${redraws:+"$redraws, "}${redraw:+"after the green button $redraw"}
 sidebar_back "$out/green-button.png" ||
   fail "after the green button the sidebar is $sidebar_now, not $sidebar: the page still covers it"
 send key f
@@ -563,9 +586,11 @@ expect '^browser: page left full screen$' "escape didn't take the page out of fu
 expect '^browser: window left full screen$' "the window didn't leave full screen with the page after the green button"
 check_layout "after the page's full screen after the green button"
 check_buttons "after the page's full screen after the green button"
-../tools/window-screenshot.sh "$pid" "$out/green-button-again.png" || fail "no window to capture"
+capture "$out/green-button-again.png" sidebar_back
+redraws=${redraws:+"$redraws, "}${redraw:+"after the page's next full screen $redraw"}
 sidebar_back "$out/green-button-again.png" ||
   fail "after the page's next full screen the sidebar is $sidebar_now, not $sidebar: the page still covers it"
+[ -z "${redraws:-}" ] || echo "window: under Wayland the windowed frame reached the capture $redraws"
 
 # The page's window full screen on a second display, the main one, as for a video on an external
 # monitor, and the display going away, then and again as the window leaves full screen: the window
@@ -1102,17 +1127,35 @@ hover_out() {
   send move $(row 0)
   expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
 }
-# rest_cpu: $rest, the CPU in seconds the browser's processes take in 4 s with the pointer still,
-# below the rows. Not in a subshell, which would lose send's step. uBlock Origin's background page,
-# in an extension's process, works when it will: on Wayland it took about 0.8 s of the 4 s, with
-# the sidebar docked or out, which isn't the windows' drawing measured here.
+# drawing_cpu: "<seconds> <processes>", as cpu gives them, of what draws. uBlock Origin works when
+# it will, which isn't the windows' drawing measured here: its background page, in an extension's
+# process, took about 0.8 s of 4 s on Wayland, and what it asks of the browser runs in Chromium's
+# worker pools and IO threads, where it took 1.6 s of 4 s on Wayland while neither window drew a
+# frame (#2400). On Linux the threads say what they are, so those are left out of every process;
+# elsewhere only the extension's process is.
+drawing_cpu() {
+  if windows || [ ! -d /proc ]; then
+    cpu --extension-process
+    return
+  fi
+  for p in $(pgrep -f -- "$procs"); do
+    tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -qF -e --extension-process && continue
+    echo "$p 0"
+    for t in /proc/$p/task/*; do
+      case $(cat "$t/comm" 2> /dev/null) in ThreadPool* | Chrome_IOThread | Chrome_ChildIOT) continue ;; esac
+      echo "$p $(sed 's/^.*) //' "$t/stat" 2> /dev/null | awk '{ print $12 + $13 }')"
+    done
+  done | awk -v hz="$(getconf CLK_TCK)" '!($1 in seen) { seen[$1]; n++ } { t += $2 } END { printf "%.2f %d\n", t / hz, n }'
+}
+# rest_cpu: $rest, the CPU in seconds what draws takes in 4 s with the pointer still, below the
+# rows. Not in a subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
   sleep 1 # the hover's fade out, before the window measured
   local from
-  from=$(cpu --extension-process)
+  from=$(drawing_cpu)
   sleep 4 # the window measured
-  set -- $from $(cpu --extension-process)
+  set -- $from $(drawing_cpu)
   rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
 }
 rest_cpu

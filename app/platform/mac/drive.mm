@@ -76,6 +76,11 @@
 //                                         Settings, which a run can't do: macOS lets no background
 //                                         process make an app active, and a hidden app on a runner
 //                                         with nothing else in front stays the active one
+//   yield <pid>                           hands the app's activation to the app of process <pid>,
+//                                         another copy of the app, as the Little ilo window does
+//                                         to the app behind it, logging "browser: yielded to
+//                                         <pid>": the active app may give it away, though no
+//                                         background process can take it
 //   place <x> <y> <width> <height>        moves and resizes the window to that frame, in points
 //                                         from the main display's top-left corner
 //   screen                                logs the screen the app opens windows on, the main
@@ -107,7 +112,8 @@
 //                                         no key window titled <text>, windows <title> | <title>",
 //                                         the app's windows shown, the key one marked "(key)"
 //   pasteboard                            logs the text on the run's pasteboard, which stands in
-//                                         for the clipboard, as "browser: pasteboard text <text>"
+//                                         for the clipboard, as "browser: pasteboard text <text>",
+//                                         after its types, as "browser: pasteboard types <types>"
 //   savepanel <path>                      picks <path> in the save panel the app began, once it
 //                                         has, through the panel's completion handler, logging
 //                                         "browser: save panel answered", or "browser: no save
@@ -181,6 +187,9 @@
 //                                         <agent> and the name <name>, as agent code will once
 //                                         there is some, logging "browser: made space <space> for
 //                                         agent <agent>"
+//   agentopen <agent> <url>               the agent opens <url> in a tab of its Space, as its
+//                                         MCP tool does, logging "browser: agent <agent> opened
+//                                         <tab>"
 //   agentmayact <agent> <tab> [action]    logs whether the agent may do the action, "navigate" if none,
 //                                         to the tab, as "browser: agent <agent> may act on
 //                                         <tab>: <0|1>", and if not "browser: agent <agent>
@@ -1275,6 +1284,24 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "yield") {
+    pid_t pid;
+    if (!(words >> pid)) {
+      return false;
+    }
+    NSRunningApplication* to = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    if (!to) {
+      return false;
+    }
+    // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
+    if (@available(macOS 14, *)) {
+      [NSApp yieldActivationToApplication:to];
+      [to activateFromApplication:NSRunningApplication.currentApplication options:0];
+    }
+    fprintf(stderr, "browser: yielded to %d\n", pid);
+    done();
+    return true;
+  }
   if (action == "hide") {
     if (NSApp.hidden) {
       [NSApp unhide:nil];
@@ -1705,6 +1732,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "agentopen") {
+    std::string agent, url;
+    if (!(words >> agent >> url)) {
+      return false;
+    }
+    const bc_id tab = bc_agent_open_tab(agent.c_str(), url.c_str());
+    if (!tab) {
+      return false;
+    }
+    fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
+    done();
+    return true;
+  }
   if (action == "agentmayact") {
     std::string agent;
     bc_id tab;
@@ -1851,6 +1891,8 @@ bool Run(const std::string& line, void (^done)(void)) {
     return true;
   }
   if (action == "pasteboard") {
+    fprintf(stderr, "browser: pasteboard types %s\n",
+            [g_pasteboard.types componentsJoinedByString:@" "].UTF8String ?: "");
     fprintf(stderr, "browser: pasteboard text %s\n",
             [g_pasteboard stringForType:NSPasteboardTypeString].UTF8String ?: "");
     done();

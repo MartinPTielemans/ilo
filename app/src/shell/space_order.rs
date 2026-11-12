@@ -3,7 +3,8 @@
 //! the gap the pointer is over, draws the drop line there, and glides the dots and the cards to
 //! their new places once the browser reports the new order.
 
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
+use web_time::Instant;
 
 use gpui::{
     AnyElement, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, MouseButton, MouseUpEvent,

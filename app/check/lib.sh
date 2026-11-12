@@ -255,6 +255,15 @@ exited() {
   [ "$(uname)" != Darwin ] || echo "engine sites after the quit: $(engine_sites)"
   return 0
 }
+# What the runs that trace record: tabs, and perf's traced switches. Unset, it's latency, Chrome's
+# tab switch spans, which tabs reads, and perf traces nothing. CHECK_TRACE_CATEGORIES names others for
+# a breakdown, as #2377's, latency among them, and a run on CI takes them from its check workflow's
+# trace input. More than latency fills tabs' trace before its run ends, so then it keeps the run's
+# last part, and says how many of its switches have a span; perf traces only its switches, through
+# DevTools, so its buffer holds them all.
+trace_categories=${CHECK_TRACE_CATEGORIES:-latency}
+trace_mode=
+[ "$trace_categories" = latency ] || trace_mode=--trace-startup-record-mode=record-continuously
 # A quit Apple Event goes through -[NSApplication terminate:], the way macOS quits apps when the
 # user logs out. On Windows each browser window is asked to close, as its close button does, and
 # Chromium quits with its last one: taskkill without /F closed one of two (#1017). On Linux SIGINT
@@ -449,23 +458,29 @@ drawn_after() {
 # held title and its fade, where the card shows a row whole ("browser: settings card shows <top> to
 # <bottom>"). One drawn past them, as a section with more rows than the window's height puts at its
 # foot, is under the card's edge, where a press lands on nothing, so the card scrolls it into
-# sight first, from its middle, and at is where the frame after that draws it (#1950). Windows
-# can scroll less than asked, so it scrolls again, up to three times more, while the row is still
-# out of sight. Returns 1 if it never drew it.
+# sight first, from its middle, and at is where the frame after that draws it (#1950). Returns 1
+# if it never drew it.
 in_sight() {
   at=$(drawn "$1") || return 1
   sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
   [ -n "$sight" ] || return 0
   top=${sight%% to *}
   bottom=${sight##* to }
-  for _ in 1 2 3 4; do
-    y=${at#* }
-    [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
-    # Past it by its row's half, 24, and a little more.
-    if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
-    send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
-    at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
-  done
+  y=${at#* }
+  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+  # Past it by its row's half, 24, and a little more.
+  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+  at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
+  # GPUI on Windows takes the driver's wheel messages for lines, about two thirds of the points
+  # asked, which can leave the row under the edge: scroll the rest. Where the card can't scroll
+  # further, nothing draws again and at stays where it was.
+  y=${at#* }
+  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+  rest=$(drawn_after "$1" "^browser: drive $step: ") && at=$rest
+  return 0
 }
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
 # checks it). Escape closes it, leaving the window with no page that the steps after expect. With
@@ -542,6 +557,14 @@ in_browser() {
 page_shortcut() {
   send key "$1" cmd
   expect "^browser: command $2 via page$" "⌘$(echo "$1" | tr a-z A-Z) with the page focused didn't reach the UI"
+}
+# Command $1 ran once since the last command was sent, which $2 names: under Wayland GPUI reads a
+# page's key after Chromium, and once the app's answer has given the UI the keyboard, as closing
+# the page that had it does, GPUI would run the key again (#2442). Read once the command's effect
+# is logged, which comes after a second run would.
+ran_once() {
+  ran=$(since | grep -c "^browser: command $1 via ")
+  [ "$ran" = 1 ] || fail "$2 ran $1 $ran times"
 }
 
 # What the sidebar last logged of $1, "sidebar hovered" or "sidebar tools": 1 or shown, 0 or hidden,
@@ -852,6 +875,25 @@ start_with_cdp() {
   fi
   helper=$!
   exec 5> "$scratch/cdp"
+}
+# The display the app opens on, "X Y WIDTH HEIGHT" in points from the main display's top left, as
+# Chrome's --window-position takes a place: with BROWSER_DISPLAY=builtin the Mac's own screen, as the
+# app's host finds it (platform/mac/host.mm), so a Chrome a run starts doesn't cover what's playing
+# on another, else the main display.
+display_bounds() {
+  [ "$(uname)" = Darwin ] || fail "display_bounds is the Mac's"
+  osascript -l JavaScript -e '
+    ObjC.import("AppKit");
+    ObjC.import("CoreGraphics");
+    const screens = $.NSScreen.screens.js;
+    const main = screens[0].frame;
+    const builtin = ObjC.unwrap(
+      $.NSProcessInfo.processInfo.environment.objectForKey("BROWSER_DISPLAY")) == "builtin";
+    const own = screens.find((screen) => builtin &&
+      $.CGDisplayIsBuiltin(screen.deviceDescription.objectForKey("NSScreenNumber").unsignedIntValue));
+    const frame = (own || screens[0]).frame;
+    [frame.origin.x, main.size.height - frame.origin.y - frame.size.height, frame.size.width,
+     frame.size.height].map(Math.round).join(" ");' || fail "the displays didn't say where the Mac's own is"
 }
 # Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
 # serves every run after, so only cleanup stops it: a run that did would leave the next its address
