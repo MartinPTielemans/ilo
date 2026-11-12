@@ -58,9 +58,11 @@ pub(super) struct WheelGestures {
     /// The gesture's last events, newest last.
     recent: VecDeque<Wheel>,
     /// The fingers' speed at each of their last events, over HOLD, over WINDOW and since the event
-    /// before, and the fastest they went.
+    /// before, and the fastest they went over WINDOW.
     speeds: VecDeque<(Instant, f32, f32)>,
     peak: f32,
+    /// The fastest the fingers went over any one event.
+    quickest: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -104,7 +106,7 @@ impl WheelGestures {
             last = None;
             self.recent.clear();
             self.speeds.clear();
-            self.peak = 0.;
+            (self.peak, self.quickest) = (0., 0.);
         }
         // The first event of a gesture is as long as a trackpad's between events.
         let since = last.map_or(Duration::from_millis(8), |last| at.duration_since(last.at));
@@ -137,10 +139,11 @@ impl WheelGestures {
             .is_some_and(|&(_, speed, _)| speed.signum() != now.signum())
         {
             self.speeds.clear();
-            self.peak = 0.;
+            (self.peak, self.quickest) = (0., 0.);
         }
         self.speeds.push_back((at, now, speed));
         self.peak = self.peak.max(now.abs());
+        self.quickest = self.quickest.max(speed.abs());
         while self.speeds.len() > HELD
             && self
                 .speeds
@@ -199,7 +202,7 @@ impl WheelGestures {
                     // The fingers' own speed is taken from here on.
                     self.recent.retain(|wheel| wheel.at == at);
                     self.speeds.clear();
-                    self.peak = 0.;
+                    (self.peak, self.quickest) = (0., 0.);
                     (
                         State::Fingers,
                         Cut {
@@ -309,6 +312,13 @@ impl WheelGestures {
             && now < then
             && now >= gentle * then
             && now <= SLOWED * self.peak
+    }
+
+    /// Whether the fingers went faster over their last event than over any before.
+    pub(super) fn fastest(&self) -> bool {
+        self.speeds
+            .back()
+            .is_some_and(|&(_, _, speed)| speed.abs() >= self.quickest)
     }
 
     /// No event since the last, at `now`: whether that lifts fingers still down, after GAP if they
