@@ -170,7 +170,7 @@ peek_frame() { # <when>
   expect '^browser: dpis ' "$1: the driver named no DPIs"
   dpis=$(grep '^browser: dpis ' "$log" | tail -1 | cut -d' ' -f3-)
   echo "$1: the card holds the page at $card, and the page is at $page; DPIs: $dpis" >> "$out/preview-frames.txt"
-  echo "$card $page" | awk '{ for (i = 1; i <= 4; i++) if ((d = $i - $(i + 6)) > 2 || d < -2) exit 1 }' ||
+  echo "$card $page" | awk '{ for (i = 1; i <= 4; i++) if ((d = $i - $(i + 7)) > 2 || d < -2) exit 1 }' ||
     fail "$1: Peek's card holds its page at $card, in pixels, but the page is at $page (DPIs: $dpis)"
 }
 rm -f "$out/preview-frames.txt"
