@@ -464,6 +464,18 @@ fn the_demo_swipes_as_the_app_does_while_the_fingers_drift(cx: &mut TestAppConte
     }
 }
 
+/// Drags that turn back past where they began, which a browser summing two events a frame at 60
+/// Hz once had the demo lift and land on the next Space mid-drag, where the app turns to the one
+/// before: seed 13 a hand slowing evenly enough, over a few frames, to read as momentum's steady
+/// fall, and seed 25 the hand braking for its turn as momentum's gentle one.
+#[gpui::test]
+fn the_demo_turns_back_as_the_app_does(cx: &mut TestAppContext) {
+    for seed in [13, 25] {
+        let events = random_gesture(2, seed);
+        swipes_as_the_app_does(cx, &format!("turn back, seed {seed}"), &events);
+    }
+}
+
 fn swipes_as_the_app_does(cx: &mut TestAppContext, name: &str, events: &[Event]) {
     const STEP_SLACK: f32 = 0.05;
     let end = events.last().map_or(0., |event| event.at_ms) + 400.;
@@ -744,12 +756,19 @@ fn random_gesture(kind: usize, seed: u64) -> Vec<Event> {
 }
 
 /// For many gestures of each kind, how often the demo shows other Spaces than the app, and how
-/// much later it first asks for one.
+/// much later it first asks for one. `SWIPE_KIND=0` to `3` runs one kind, so the four can run
+/// apart.
 #[gpui::test]
 #[ignore]
 fn swipe_model_stats(cx: &mut TestAppContext) {
     let kinds = ["slow drag", "flick", "turn back", "two flicks"];
+    let only = std::env::var("SWIPE_KIND")
+        .ok()
+        .and_then(|kind| kind.parse().ok());
     for (kind, name) in kinds.iter().enumerate() {
+        if only.is_some_and(|only: usize| only != kind) {
+            continue;
+        }
         for delivery in deliveries() {
             let (mut wrong, mut lags, mut examples) = (0, Vec::new(), Vec::new());
             for seed in 0..60 {
