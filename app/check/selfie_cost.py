@@ -101,21 +101,25 @@ def report(samples, actions, launch, selfie, leg):
         if ms >= launch + 30000:
             total[c] = total.get(c, 0) + t
     print(f"probe (#2502) {leg}: from 30 s to the end, CPU ms: " + ", ".join(f"{c} {t * 1000 // hz}" for c, t in sorted(total.items())))
-    pool = sorted((ms, t) for (ms, c), t in per.items() if c == "browser/pool")
+    def cpu(cls, at, took):
+        # The class's CPU in the action's span, as ms a second: the samples after its start
+        # until the one after its end.
+        t = sum(t for (ms, c), t in per.items() if c == cls and at < ms <= at + took + 250)
+        return t * 1000 // hz * 1000 // max(took + 250, 250)
     rows = {"busy": {}, "quiet": {}}
     for line in open(actions):
         at, what, took = line.split()
-        at, took = int(at), float(took)
-        busy = sum(t for ms, t in pool if at < ms <= at + 500) * 1000 // hz
-        print(f"probe (#2502) {leg}: action at {(at - launch) / 1000:.1f} s: {what} {took:.0f} ms, the browser's pool {busy} ms of CPU in its 500 ms")
-        side = "busy" if busy >= 100 else "quiet"
+        at, took = int(at), int(float(took))
+        ext, pool, main = cpu("extension", at, took), cpu("browser/pool", at, took), cpu("browser/main", at, took)
+        print(f"probe (#2502) {leg}: action at {(at - launch) / 1000:.1f} s: {what} {took} ms; while it waited, CPU ms a second: extension {ext}, browser pool {pool}, browser main {main}")
+        side = "busy" if ext >= 500 else "quiet"
         rows[side].setdefault(what, []).append(took)
     for side, by in rows.items():
         for what, v in sorted(by.items()):
             v.sort()
             n = len(v)
             m = v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
-            print(f"probe (#2502) {leg}: {what} with the pool {side}: median {m:.0f} ms ({v[0]:.0f}–{v[-1]:.0f}, n={n})")
+            print(f"probe (#2502) {leg}: {what} with the extension {side}: median {m:.0f} ms ({v[0]:.0f}–{v[-1]:.0f}, n={n})")
 
 
 if __name__ == "__main__":

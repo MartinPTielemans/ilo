@@ -1,8 +1,9 @@
 # Probe for #2502, never merged: what uBlock Origin's selfie write costs a user. Two legs, each on a
 # profile of its own: "new", a new profile's first launch, and "update", a launch whose lists were
 # compiled by one before that quit before the selfie, as after a list update. Each leg launches on
-# 3 tabs and from 30 s switches tabs by ⌘2/⌘3, with a new tab from ⌘T's bar each 3rd, until 10 s
-# after the selfie is in both stores, sampling every thread's CPU each 250 ms.
+# 3 tabs and from 30 s opens new tabs from ⌘T's bar, by turns of the page from http and from a
+# file, until 10 s after the selfie is in both stores, sampling every thread's CPU each 250 ms on
+# Linux.
 serve
 cost_dir="$out/selfie-cost"
 rm -rf "$cost_dir"
@@ -35,17 +36,26 @@ document.addEventListener("visibilitychange", () => {
 </script>
 HTML
 cost_page="${site}cost.html"
+# The same page from a file, whose requests uBlock Origin's listeners (http and https alone) never
+# see: a new tab of it held as the http one is would be held by the browser, not the extension.
+cost_file="$PWD/$out/site/cost.html"
+! windows || cost_file="/$(cygpath -m "$cost_file")"
+cost_file="file://$cost_file"
 now_ms() { date +%s%3N; }
+# A new tab from ⌘T's bar on the page from http, or from a file with $1 file, closed once painted.
 cost_open() {
   n=$((n + 1))
+  local kind=${1:-http} url=$cost_page
+  [ "$kind" = http ] || url=$cost_file
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar for p$n"
-  send type "$cost_page?p$n"
+  send type "$url?p$n"
   t0=$(now_ms)
   send key return
   expect_late "^browser: title [0-9]* p$n fcp " "p$n didn't paint in its new tab"
   fcp=$(sed -n "s/^browser: title [0-9]* p$n fcp //p" "$log" | tail -1)
-  echo "$t0 newtab $((fcp - t0))" >> "$cost_dir/$leg-actions"
+  echo "$t0 newtab-$kind $((fcp - t0))" >> "$cost_dir/$leg-actions"
+  [ "$n" -le 3 ] || send key w cmd
 }
 cost_switch() {
   k=$((2 + i % 2))
@@ -71,8 +81,11 @@ cost_leg() {
   await "^browser: title [0-9]* p1 fcp " || fail "the leg's first page didn't paint"
   send click $page_point
   rm -f "$cost_dir/stop"
-  python3 -I check/selfie_cost.py sample "$cost_dir/$leg-samples" "$procs" "$cost_dir/stop" &
-  cost_sampler=$!
+  cost_sampler=
+  if [ "$(uname)" = Linux ]; then
+    python3 -I check/selfie_cost.py sample "$cost_dir/$leg-samples" "$procs" "$cost_dir/stop" &
+    cost_sampler=$!
+  fi
   : > "$cost_dir/$leg-actions"
   n=1
   i=0
@@ -92,15 +105,22 @@ cost_leg() {
     fi
     [ -z "$end" ] || [ "$now" -lt "$end" ] || break
     i=$((i + 1))
-    if [ $((i % 3)) = 0 ]; then cost_open; else cost_switch; fi
-    sleep 0.3
+    if [ $((i % 2)) = 0 ]; then cost_open http; else cost_open file; fi
+    sleep 0.2
   done
   touch "$cost_dir/stop"
-  wait "$cost_sampler"
+  [ -z "$cost_sampler" ] || wait "$cost_sampler"
   quit
   [ -n "$selfie_ms" ] || fail "uBlock Origin wrote no selfie in leg $leg's 180 s"
-  python3 -I check/selfie_cost.py report "$cost_dir/$leg-samples" "$cost_dir/$leg-actions" \
-    "$launched" "$selfie_ms" "$leg"
+  if [ -n "$cost_sampler" ]; then
+    python3 -I check/selfie_cost.py report "$cost_dir/$leg-samples" "$cost_dir/$leg-actions" \
+      "$launched" "$selfie_ms" "$leg"
+  else
+    echo "probe (#2502) $leg: the selfie in both stores $(((selfie_ms - launched) / 1000)) s after launch"
+    while read -r at what took; do
+      echo "probe (#2502) $leg: action at $(((at - launched) / 100))e-1 s: $what $took ms"
+    done < "$cost_dir/$leg-actions"
+  fi
 }
 profile_dir="$PWD/$cost_dir/new-profile"
 mkdir -p "$profile_dir"
