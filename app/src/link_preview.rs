@@ -173,9 +173,11 @@ fn page_in(card: Bounds<Pixels>) -> Bounds<Pixels> {
 }
 
 /// Where a page under the window waits while it isn't to show, at its size where it rests, `rest`:
-/// left of the window's content, past any margin round it, where the window clips it.
+/// left of the window's content, past any margin round it, where the window clips it. It moves by
+/// whole points, so the core lays it out at the same whole size as where it rests.
 fn out_of_sight(rest: Bounds<Pixels>) -> Bounds<Pixels> {
-    Bounds::new(point(-rest.size.width - px(1000.), rest.top()), rest.size)
+    let by = f32::from(rest.right()).ceil() + 1000.;
+    Bounds::new(point(rest.left() - px(by), rest.top()), rest.size)
 }
 
 /// The card with its page at `page`.
