@@ -945,6 +945,17 @@ impl Render for LinkPreview {
             let [keep, _] = buttons_in(controls_over(card(shown.page)));
             let (x, y) = (f32::from(keep.center().x), f32::from(keep.center().y));
             log!("browser: link preview keep button at {x} {y}");
+            // And where the card holds the page, in the pixels it's drawn in, for the page's frame
+            // in the browser window's (#2541).
+            let (frame, scale) = (page_in(card(shown.page)), window.scale_factor());
+            let pixels = |at: Pixels| (f32::from(at) * scale).round();
+            log!(
+                "browser: link preview page frame {} {} {} {} at scale {scale}",
+                pixels(frame.left()),
+                pixels(frame.top()),
+                pixels(frame.size.width),
+                pixels(frame.size.height)
+            );
             log!("browser: link preview settled");
         }
         let palette = palette::current(cx);

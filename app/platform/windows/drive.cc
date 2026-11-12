@@ -1449,6 +1449,36 @@ bool Run(const std::string& line) {
     fprintf(stderr, "browser: overlays shown %s\n", shown.empty() ? "none" : shown.c_str());
     return true;
   }
+  // The DPI Windows gives the driven browser window and each window the host floats over one,
+  // shown or not (#2541): "browser: dpis window 120, command bar 120, link preview 96".
+  if (action == "dpis") {
+    std::string line = "window " + std::to_string(GetDpiForWindow(Driven()));
+    for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+      if (const char* name = Ours(top) ? host_floating_name(top) : nullptr) {
+        line += std::string(", ") + name + " " + std::to_string(GetDpiForWindow(top));
+      }
+    }
+    fprintf(stderr, "browser: dpis %s\n", line.c_str());
+    return true;
+  }
+  // Where Peek's page is, the page in front in the driven browser window, in pixels from its
+  // content's top left, for the frame the preview's card has it in (#2541).
+  if (action == "peek") {
+    HWND root = Driven();
+    for (HWND child = root ? GetWindow(root, GW_CHILD) : nullptr; child;
+         child = GetWindow(child, GW_HWNDNEXT)) {
+      if (IsWindowVisible(child) && IsChromium(child)) {
+        RECT rect;
+        GetWindowRect(child, &rect);
+        MapWindowPoints(HWND_DESKTOP, root, reinterpret_cast<POINT*>(&rect), 2);
+        fprintf(stderr, "browser: peek page %ld %ld %ld %ld\n", rect.left, rect.top,
+                rect.right - rect.left, rect.bottom - rect.top);
+        return true;
+      }
+    }
+    fprintf(stderr, "browser: peek page none\n");
+    return true;
+  }
   // The windows on screen over the driven browser window, front first, down to it, by Windows' own
   // z-order (#1419): the host's floating windows by their names, another of the app's by what front
   // calls it, and another app's as "other" and its title. Cloaked ones aren't on screen.
