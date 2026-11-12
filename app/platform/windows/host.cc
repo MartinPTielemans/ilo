@@ -489,6 +489,11 @@ HWND InsertAfter(HWND hwnd) {
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate) {
   const HWND after = InsertAfter(hwnd);
   SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
+  // GPUI reads the window's DPI again, as a child window's after its parent's changed, and lays out
+  // only if it did. Made hidden at the screen's top left, on a display at one scale, and moved here
+  // to a browser window on one at another, it may not have heard the move, and drew at the old
+  // scale in the frame sized at this one: Peek's card at 0.8 of its page's frame (#2541).
+  SendMessageW(hwnd, WM_DPICHANGED_AFTERPARENT, 0, 0);
   if (activate) {
     ShowWindow(hwnd, SW_SHOW);
   } else if (!IsWindowVisible(hwnd)) {
