@@ -43,6 +43,10 @@
 // composes them, in a page too: "nihongo" composes にほんご, space converts it to 日本語. ime ko does
 // the same with Microsoft's Korean IME, in Hangul: "gksrmf" composes 한글 (#2457).
 // fullscreen puts the window full screen or takes it out through the core, as Linux's driver does.
+// realkey <key> [win] [ctrl] [shift] [alt] presses a key with Windows' own modifiers, unlike key's,
+// as a hand does, through SendInput: Windows itself handles it, as it does Win+D, which no posted
+// message stands in for. It goes to the desktop's foreground window, whichever app's that is, so
+// the driver refuses it unless the desktop is the check's own: CI's, or BROWSER_DRIVE_OWN_DESKTOP=1.
 // The others, pageswipe, displays, hide, backdrop and openmenu, Windows has nothing the driver can
 // stand in for yet: each logs "browser: drive: unsupported <command>" before drive.mm's "can't do
 // that", so a run fails at once.
@@ -1397,6 +1401,53 @@ bool Run(const std::string& line) {
       return false;
     }
     ShowWindow(root, IsIconic(root) ? SW_SHOWNOACTIVATE : SW_SHOWMINNOACTIVE);
+    return true;
+  }
+  if (action == "realkey") {
+    const char* ci = std::getenv("CI");
+    const char* own = std::getenv("BROWSER_DRIVE_OWN_DESKTOP");
+    if (!(ci && *ci) && !(own && std::string(own) == "1")) {
+      fprintf(stderr, "browser: drive: realkey refused, the desktop isn't the check's own\n");
+      return false;
+    }
+    std::string key;
+    words >> key;
+    int typed = 0;
+    const UINT vk = VirtualKey(key, &typed);
+    if (!vk || typed) {
+      return false;
+    }
+    std::vector<WORD> keys;
+    std::string word;
+    while (words >> word) {
+      const WORD modifier = word == "win"     ? VK_LWIN
+                            : word == "ctrl"  ? VK_CONTROL
+                            : word == "shift" ? VK_SHIFT
+                            : word == "alt"   ? VK_MENU
+                                              : 0;
+      if (!modifier) {
+        return false;
+      }
+      keys.push_back(modifier);
+    }
+    keys.push_back(static_cast<WORD>(vk));
+    // Each key down 15 ms after the last, held 80 ms, then up in turn, as a hand's.
+    const auto send = [](WORD vk, bool up) {
+      INPUT input{};
+      input.type = INPUT_KEYBOARD;
+      input.ki.wVk = vk;
+      input.ki.dwFlags =
+          (up ? KEYEVENTF_KEYUP : 0) | (vk == VK_LWIN || Extended(vk) ? KEYEVENTF_EXTENDEDKEY : 0);
+      SendInput(1, &input, sizeof input);
+    };
+    for (size_t at = 0; at < keys.size(); ++at) {
+      const WORD down = keys[at];
+      g_steps.push_back({[send, down] { send(down, false); }, at + 1 < keys.size() ? 15u : 80u});
+    }
+    for (auto up = keys.rbegin(); up != keys.rend(); ++up) {
+      const WORD each = *up;
+      g_steps.push_back({[send, each] { send(each, true); }, 15});
+    }
     return true;
   }
   // The windows the app has over its browser windows that are on screen, by their own visibility:
