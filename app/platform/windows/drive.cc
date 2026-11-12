@@ -1500,6 +1500,38 @@ bool Run(const std::string& line) {
     fprintf(stderr, "browser: overlays shown %s\n", shown.empty() ? "none" : shown.c_str());
     return true;
   }
+  // The DPI Windows gives the driven browser window and each window the host floats over one,
+  // shown or not, and the system's, from when the user signed in (#2541): "browser: dpis system 96,
+  // window 120, command bar 120, link preview 96".
+  if (action == "dpis") {
+    std::string line = "system " + std::to_string(GetDpiForSystem()) + ", window " +
+                       std::to_string(GetDpiForWindow(Driven()));
+    for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+      if (const char* name = Ours(top) ? host_floating_name(top) : nullptr) {
+        line += std::string(", ") + name + " " + std::to_string(GetDpiForWindow(top));
+      }
+    }
+    fprintf(stderr, "browser: dpis %s\n", line.c_str());
+    return true;
+  }
+  // Where Peek's page is, the page in front in the driven browser window, in pixels from its
+  // content's top left, for the frame the preview's card has it in (#2541).
+  if (action == "peek") {
+    HWND root = Driven();
+    for (HWND child = root ? GetWindow(root, GW_CHILD) : nullptr; child;
+         child = GetWindow(child, GW_HWNDNEXT)) {
+      if (IsWindowVisible(child) && IsChromium(child)) {
+        RECT rect;
+        GetWindowRect(child, &rect);
+        MapWindowPoints(HWND_DESKTOP, root, reinterpret_cast<POINT*>(&rect), 2);
+        fprintf(stderr, "browser: peek page %ld %ld %ld %ld\n", rect.left, rect.top,
+                rect.right - rect.left, rect.bottom - rect.top);
+        return true;
+      }
+    }
+    fprintf(stderr, "browser: peek page none\n");
+    return true;
+  }
   // The windows on screen over the driven browser window, front first, down to it, by Windows' own
   // z-order (#1419): the host's floating windows by their names, another of the app's by what front
   // calls it, and another app's as "other" and its title. Cloaked ones aren't on screen.
@@ -1801,18 +1833,37 @@ bool Run(const std::string& line) {
     return true;
   }
   // As Windows tells a window that moved to a display of another scale, |percent|, keeping its
-  // size in pixels: Chromium and the core take the scale the message carries (#1823).
+  // size in pixels: Chromium and the core take the scale the message carries (#1823). With a name
+  // after it, such as "link preview", the window the host floats by that name hears it instead, so
+  // GPUI draws it at that scale where Windows has another, as one made hidden on another display
+  // and moved to the browser window's does (#2541).
   if (action == "dpi") {
     int percent = 0;
     if (!(words >> percent) || percent < 100 || percent > 500) {
       return false;
     }
-    g_steps.push_back({[percent] {
+    std::string name;
+    std::getline(words >> std::ws, name);
+    g_steps.push_back({[percent, name] {
       HWND root = Driven();
+      if (!name.empty()) {
+        root = nullptr;
+        for (HWND top = GetTopWindow(nullptr); top && !root; top = GetWindow(top, GW_HWNDNEXT)) {
+          const char* floating = Ours(top) ? host_floating_name(top) : nullptr;
+          root = floating && name == floating ? top : nullptr;
+        }
+        if (!root) {
+          fprintf(stderr, "browser: dpi found no %s\n", name.c_str());
+          return;
+        }
+      }
       RECT rect{};
       GetWindowRect(root, &rect);
       const WORD dpi = static_cast<WORD>(MulDiv(USER_DEFAULT_SCREEN_DPI, percent, 100));
       SendMessageW(root, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&rect));
+      if (!name.empty()) {
+        fprintf(stderr, "browser: dpi %d told %s\n", dpi, name.c_str());
+      }
     }, 300});
     return true;
   }
