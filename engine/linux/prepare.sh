@@ -46,7 +46,7 @@ flags=("${CFLAGS:-}" "${CXXFLAGS:-}" "${CPPFLAGS:-}")
 
 tag=$(git config -f "$engine/pins.ini" ungoogled-chromium-portablelinux.tag)
 [ -z "$kept" ] || [ "$(cat "$src/.portablelinux-tag" 2>/dev/null)" = "$tag" ] ||
-  not_kept "the tree is prepared from $(cat "$src/.portablelinux-tag" 2>/dev/null || echo nothing), not $tag"
+  not_kept "the tree is prepared from '$(cat "$src/.portablelinux-tag" 2>/dev/null || echo nothing)', and this head pins '$tag'"
 ucl=$work/ucl
 if [ "$(git -C "$ucl" describe --tags --exact-match 2>/dev/null)" != "$tag" ]; then
   rm -rf "$ucl"
