@@ -1739,10 +1739,16 @@ void KeepKeyboard(HWND root) {
   }
   Later([root] {
     HWND hwnd = KeepsKeyboard(root);
-    if (!hwnd || GetForegroundWindow() != root) {
+    if (!hwnd) {
       return;
     }
     const char* name = host_floating_name(hwnd);
+    if (GetForegroundWindow() != root) {
+      // check.sh shows this line when a step's keys went to the wrong window.
+      fprintf(stderr, "browser: %s leaves the keyboard: its window is no longer in front\n",
+              name ? name : "window");
+      return;
+    }
     // check.sh reads this line.
     fprintf(stderr, "browser: %s takes the keyboard back from its window\n",
             name ? name : "window");

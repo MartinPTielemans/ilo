@@ -446,7 +446,9 @@ bool OursInFront() {
 // Brings the driven window in front when another app is, as a run that launches the app again
 // finds the runner's console there, which a process that isn't in front can't take the foreground
 // from. Windows lets it once input has come since, so an Alt pressed and let go goes first, to
-// the app in front, as automation tools do: Alt alone does nothing in a console.
+// the app in front, as automation tools do: Alt alone does nothing in a console. The window comes
+// back as a hand's taskbar click or Alt+Tab brings it, with its last active window, such as the
+// quit dialog it owns, rather than itself.
 void BringInFront() {
   const HWND front = GetForegroundWindow();
   const HWND aim = g_real_aim && IsWindowVisible(g_real_aim) ? g_real_aim : Driven();
@@ -454,12 +456,13 @@ void BringInFront() {
   if (!root) {
     return;
   }
+  const HWND popup = GetLastActivePopup(root);
   INPUT alt[2]{};
   alt[0].type = alt[1].type = INPUT_KEYBOARD;
   alt[0].ki.wVk = alt[1].ki.wVk = VK_MENU;
   alt[1].ki.dwFlags = KEYEVENTF_KEYUP;
   SendInput(2, alt, sizeof alt[0]);
-  SetForegroundWindow(root);
+  SetForegroundWindow(popup && IsWindowVisible(popup) ? popup : root);
   fprintf(stderr, "browser: drive: brings the app in front of another app's %s: %s\n",
           front ? Utf8(ClassOf(front)).c_str() : "nothing", OursInFront() ? "in front" : "not");
 }
@@ -497,6 +500,9 @@ void SendReal(INPUT input) {
       g_real_held.push_back(input);
       g_steps.push_front({[] {
         g_real_holding = false;
+        // Where the app's turn left the keyboard, for a check that finds the input went elsewhere.
+        fprintf(stderr, "browser: drive: after the app's turn, the keyboard is in %s\n",
+                Landed(GetForegroundWindow()).c_str());
         g_real_resending = true;
         for (const INPUT& held : std::exchange(g_real_held, {})) {
           SendReal(held);
