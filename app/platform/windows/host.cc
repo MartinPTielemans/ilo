@@ -1884,7 +1884,8 @@ void KeepKeyboard(HWND root) {
   }
   Later([root] {
     HWND hwnd = KeepsKeyboard(root);
-    if (!hwnd) {
+    // Asked twice for one activation, it has the keyboard already.
+    if (!hwnd || GetForegroundWindow() == hwnd) {
       return;
     }
     const char* name = host_floating_name(hwnd);
@@ -1917,12 +1918,17 @@ LRESULT CALLBACK OwnerProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     if (~flags & SWP_NOSIZE) {
       CaptureWindowSized(hwnd);
     }
-  } else if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) {
-    KeepKeyboard(hwnd);
-  } else if (message == WM_ACTIVATEAPP && wparam && hwnd == GetActiveWindow()) {
-    // The app comes in front with this window still its active one, as after a dialog shown while
-    // another app was in front: Windows activates nothing again, so the dialog takes the keyboard
-    // back here (#2544).
+  } else if ((message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) ||
+             (message == WM_ACTIVATEAPP && wparam)) {
+    // The app comes in front with this window still its thread's active one, as after a dialog
+    // shown while another app was in front: Windows sends it no WM_ACTIVATE then, and its
+    // WM_ACTIVATEAPP comes before it's the active window again, so the dialog is asked on either.
+    // KeepKeyboard waits until the window is in front (#2544).
+    if (Shows(g_dialog.life) && GetWindow(g_dialog.hwnd, GW_OWNER) == hwnd) {
+      // check.sh shows this line when the dialog didn't get the keys.
+      fprintf(stderr, "browser: dialog's window %s\n",
+              message == WM_ACTIVATE ? "activated" : "comes in front with its app");
+    }
     KeepKeyboard(hwnd);
   } else if (message == WM_DPICHANGED) {
     ScaleChanged(hwnd);
