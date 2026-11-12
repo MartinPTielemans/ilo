@@ -120,19 +120,24 @@ video() {
 # seconds its video played, or none for no video, as YouTube's bot check has none. An ad plays
 # before the video does, so the player is read each half second from the load until the video
 # has played 5 s, or for 30 s. Chrome lets a page start a video with sound only once the user has
-# acted on it, so a video that waits at its start gets k, YouTube's play key, once, as a user's
-# press of play.
+# acted on it, so a video still waiting at its start 3 s on gets k, YouTube's play key, once, as a
+# user's press of play. Sooner, the key can land as the player starts the video itself, and pause
+# it.
 videos="$dir/videos.txt"
 : > "$videos"
 watch_video() {
-  ad=no-ad played=none pressed= since=$(date +%s)
+  ad=no-ad played=none pressed= waiting= since=$(date +%s)
   while [ $(($(date +%s) - since)) -lt 30 ]; do
     said=$(video https://www.youtube.com/watch)
     case $said in
       none | '') ;;
       '0.0 paused '*)
-        [ -n "$pressed" ] || send key k
-        pressed=1 played=0.0
+        waiting=${waiting:-$(date +%s)}
+        if [ -z "$pressed" ] && [ $(($(date +%s) - waiting)) -ge 3 ]; then
+          send key k
+          pressed=1
+        fi
+        played=0.0
         case $said in *' ad') ad=ad ;; esac
         ;;
       *' ad') ad=ad ;;
