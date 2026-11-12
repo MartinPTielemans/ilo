@@ -1258,6 +1258,12 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   const bool pinned = from->IsPinned(tab);
   const GURL url = from->PinnedUrl(tab);
   const bc_id next = from->NextAfterLeaving(tab, &Tab::Loaded);
+  // In a Space it's the user's or the agent's, and its page closes it no longer.
+  for (bc_id each : {tab, moved}) {
+    if (Tab* page = Tab::Get(each)) {
+      page->SetPageMayClose(false);
+    }
+  }
   // A Today tab keeps its node's id, so sync moves it on the account's other devices rather than
   // closing it into their archives and opening it again there.
   const Space::Node* node = pinned ? nullptr : from->NodeOf(tab);
