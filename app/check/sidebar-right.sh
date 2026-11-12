@@ -48,8 +48,11 @@ if [ "$(sed -n 's/^browser: settings shown //p' "$log" | tail -1)" != "Tabs & Si
   expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its tab"
   settings_drew 'Tabs & Sidebar'
 fi
-# Sidebar position is two drawings of the window (#2407): a click on Right's picks it.
-send clickkey $(drawn "sidebar position option Right")
+# Sidebar position is two drawings of the window (#2407): a click on Right's picks it. The picker
+# is at the pane's foot, under the card's edge where the screen is short, as on the Mac's check
+# VMs: in_sight scrolls it up (#2503).
+in_sight "sidebar position option Right" || fail "Settings didn't draw Right's drawing"
+send clickkey $at
 expect '^browser: sidebar on the right$' "a click on Right's drawing didn't move the sidebar"
 [ -e "$profile_dir/sidebar-right" ] || fail "Right isn't kept: no sidebar-right in the profile"
 expect '^browser: settings sidebar position Right at ' "Sidebar position didn't show Right"
