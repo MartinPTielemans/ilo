@@ -648,7 +648,8 @@ painted(() => document.title = "fields");
     case "$read" in *"$secret"*) fail "reading the fields page gave a field's value, $secret" ;; esac
   done
 
-  # The outline names the fields by ref, the password field off limits, and gives no value.
+  # The outline names the fields by ref, the password field off limits, and gives no value. A
+  # select's line names its options, the page's own, and never which one is chosen (#2355).
   outline=$(call snapshot "{\"tab\":$agent_tab}")
   printf '%s\n' "$outline" > "$out/mcp-outline.txt"
   case "$outline" in
@@ -656,8 +657,14 @@ painted(() => document.title = "fields");
     *) fail "the fields page's outline was: $outline" ;;
   esac
   for secret in $secrets; do
+    [ "$secret" = chosen-by-ada ] && continue
     case "$outline" in *"$secret"*) fail "the fields page's outline gave a field's value, $secret" ;; esac
   done
+  chosen=$(printf '%s\n' "$outline" | grep 'chosen-by-ada')
+  case "$chosen" in
+    *'- combobox [e'*'(options: "Pick one", "chosen-by-ada")') ;;
+    *) fail "the select's line didn't name just its options: $chosen" ;;
+  esac
   ref_of() { printf '%s\n' "$outline" | sed -n "s/.*- $1 \"$2\" \[\(e[0-9]*\)\].*/\1/p" | head -1; }
   password=$(ref_of textbox Password)
   refused=$(call type "{\"tab\":$agent_tab,\"ref\":\"$password\",\"text\":\"by-the-agent\"}")
@@ -842,6 +849,10 @@ painted(() => document.title = "choose");
   printf '%s\n' "$outline" > "$out/mcp-choose.txt"
   status=$(ref_of combobox Status)
   priority=$(ref_of combobox Priority)
+  case "$outline" in
+    *"- combobox \"Status\" [$status] (options: \"Open\", \"Pending\", \"Closed\")"*) ;;
+    *) fail "the select's line didn't name its options: $(printf '%s\n' "$outline" | grep Status)" ;;
+  esac
   [ -n "$status" ] && [ -n "$priority" ] ||
     fail "the choosing page's fields had the refs '$status' and '$priority'"
   chose=$(call select "{\"tab\":$choose_tab,\"ref\":\"$status\",\"option\":\"closed\"}")
