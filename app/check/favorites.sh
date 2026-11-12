@@ -319,7 +319,7 @@ send resize $size
 expect "^browser: drawn at ${size% *}x${size#* }\$" "the window didn't draw back at its size"
 # ⌘, from the page opens Settings on General. Its switch turns the warning before quitting off;
 # on Tabs & Sidebar, the menu of the profile's pop-up button sets how long its Today tabs wait for
-# the archive, the favorites' sets who shares them, and on the Mac, the haptics' switch turns them
+# the archive, a click on a drawing of Share favorites (#2430) sets who shares them, and on the Mac, the haptics' switch turns them
 # off; and ⌘W hides it.
 send key , cmd
 expect '^browser: command settings via page$' "⌘, from the page didn't run Settings"
@@ -337,11 +337,19 @@ expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 
 send choose 24 hours
 expect '^browser: profile [0-9]* archive tabs after 24 hours$' \
   "choosing 24 hours in Settings didn't set it"
-post clickkey $(drawn favorites)
-expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces (checked), In Each Space")\$" \
-  "a click on Share favorites didn't show the choices, with Each Profile's Spaces chosen"
-send choose "$(cased 'In Each Space')"
-expect "^browser: favorites scope In Each Space\$" "choosing In Each Space in Settings didn't set it"
+in_sight "share favorites In Each Profile's Spaces" ||
+  fail "Share favorites didn't show In Each Profile's Spaces chosen"
+# Picked in the dark look, and in the light one below, to capture the row in each.
+send menu "Appearance › Dark"
+expect '^browser: appearance dark$' "View › Appearance › Dark didn't change the appearance"
+in_sight "share favorites option In each Space" || fail "Settings didn't draw In Each Space's drawing"
+send clickkey $at
+expect "^browser: favorites scope In Each Space\$" "a click on In Each Space's drawing didn't set it"
+expect "^browser: settings share favorites In Each Space at " "Share favorites didn't show In Each Space"
+../tools/window-screenshot.sh "$pid" "$out/settings-share-favorites-dark.png" ||
+  fail "no window to capture"
+send menu "Appearance › Automatic"
+expect '^browser: appearance automatic$' "View › Appearance › Automatic didn't change the appearance"
 if [ "$(uname)" = Darwin ]; then
   # Under the card's edge where the screen is short, below Battery Saver's row: in_sight scrolls
   # it up.
@@ -505,7 +513,10 @@ expect "^browser: selected $x\( in .*\)\{0,1\}\$" "a click on the first Today ro
 none_since '^browser: dragged' "$let_go" || fail "a tile's drag escape put back dropped it"
 send click $(tiled_row 1) alt
 expect "^browser: splits $x+$y\$" "⌥-click on the second Today row didn't split it with the first"
-send drag $(tiled_row 0) 180 112
+# The ⌥-click focused the right pane, which has the row's width, so the drag presses the left one's
+# favicon, folded at the row's start (#2340), and the split shows focused there.
+send drag 24 $(tiled_row 0 | cut -d' ' -f2) 180 112
+expect "^browser: selected $x\( in .*\)\{0,1\}\$" "a press on the split's left segment didn't focus it"
 expect "^browser: dragged $x to favorites 1\$" "the split's row dragged onto the tiles didn't go there"
 expect "^browser: favorites $a $x\$" "the split isn't one favorite: the favorites are \"$(favorites)\""
 expect "^browser: favorite splits $x+$y\$" "the split dragged onto the tiles isn't a favorite split"
@@ -738,11 +749,20 @@ expect '^browser: menu shown 12 hours (default), 24 hours (checked), 7 days, 30 
 send choose "12 hours (default)"
 expect '^browser: profile [0-9]* archive tabs after 12 hours (default)$' \
   "choosing 12 hours didn't set it"
-post clickkey $(drawn favorites)
-expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces, In Each Space (checked)")\$" \
-  "Settings didn't keep Each Space across the quit"
-send choose "$(cased "In Each Profile's Spaces")"
-expect "^browser: favorites scope In Each Profile's Spaces\$" "choosing Each Profile's Spaces didn't set it"
+in_sight "share favorites In Each Space" || fail "Settings didn't keep Each Space across the quit"
+send menu "Appearance › Light"
+expect '^browser: appearance light$' "View › Appearance › Light didn't change the appearance"
+in_sight "share favorites option In each profile's Spaces" ||
+  fail "Settings didn't draw In Each Profile's Spaces' drawing"
+send clickkey $at
+expect "^browser: favorites scope In Each Profile's Spaces\$" \
+  "a click on In Each Profile's Spaces' drawing didn't set it"
+expect "^browser: settings share favorites In Each Profile's Spaces at " \
+  "Share favorites didn't show In Each Profile's Spaces"
+../tools/window-screenshot.sh "$pid" "$out/settings-share-favorites-light.png" ||
+  fail "no window to capture"
+send menu "Appearance › Automatic"
+expect '^browser: appearance automatic$' "View › Appearance › Automatic didn't change the appearance"
 if [ "$(uname)" = Darwin ]; then
   in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
   send clickkey $at

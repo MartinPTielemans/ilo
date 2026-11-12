@@ -673,6 +673,12 @@ unsafe extern "C" fn agent_request_done(
 }
 
 unsafe extern "C" fn launching(_: *mut c_void) {
+    // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
+    // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
+    #[cfg(target_os = "linux")]
+    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+        gpui_wgpu::WgpuContext::make_instance_early();
+    }
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
@@ -736,7 +742,11 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken.height
         );
     }
-    let picture = taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height));
+    // A picture of the column on the left, from before the sidebar moved right, is none of this
+    // window's (settings::set_sidebar_right).
+    let right = settings::sidebar_right_kept();
+    let picture =
+        taken.filter(|taken| !maximized && !right && launch_picture::shows(taken, width, height));
     let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
         (taken.width, taken.height, taken.foot_top)
     });

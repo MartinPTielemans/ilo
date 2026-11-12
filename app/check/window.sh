@@ -1127,21 +1127,69 @@ hover_out() {
   send move $(row 0)
   expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
 }
-# rest_cpu: $rest, the CPU in seconds the browser's processes take in 4 s with the pointer still,
-# below the rows. Not in a subshell, which would lose send's step. uBlock Origin's background page,
-# in an extension's process, works when it will: on Wayland it took about 0.8 s of the 4 s, with
-# the sidebar docked or out, which isn't the windows' drawing measured here.
+# drawing_procs: "<seconds>\t<command line>" of each process of what draws. uBlock Origin works
+# when it will, which isn't the windows' drawing measured here: its background page, in an
+# extension's process, took about 0.8 s of 4 s on Wayland, and what it asks of the browser runs in
+# Chromium's worker pools and IO threads, where it took 1.6 s of 4 s on Wayland while neither window
+# drew a frame (#2400). On Linux the threads say what they are, so those are left out of every
+# process; elsewhere only the extension's process is.
+drawing_procs() {
+  if windows; then
+    powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' -and \
+      \$_.CommandLine -notlike '*--extension-process*' } | ForEach-Object {
+      ('{0:F2}' -f ((\$_.UserModeTime + \$_.KernelModeTime) / 1e7)) + [char]9 + \$_.CommandLine }" | tr -d '\r'
+  elif [ -d /proc ]; then
+    for p in $(pgrep -f -- "$procs"); do
+      line=$(tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null)
+      case $line in *--extension-process*) continue ;; esac
+      for t in /proc/$p/task/*; do
+        case $(cat "$t/comm" 2> /dev/null) in ThreadPool* | Chrome_IOThread | Chrome_ChildIOT) continue ;; esac
+        sed 's/^.*) //' "$t/stat" 2> /dev/null
+      done | awk -v hz="$(getconf CLK_TCK)" -v line="$line" '{ t += $12 + $13 } END { printf "%.2f\t%s\n", t / hz, line }'
+    done
+  else
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' -e --extension-process | awk '{
+      s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]
+      $1 = ""; printf "%.2f\t%s\n", s, substr($0, 2) }'
+  fi
+}
+# drawing_cpu: "<seconds> <processes> <kind>=<seconds>...", the CPU of what draws and each kind of
+# process's share: the browser's own, the GPU's, the network service's, the pages' renderers, other
+# utilities and anything else (#2502).
+drawing_cpu() {
+  drawing_procs | awk -F '\t' '{
+    kind = "browser"
+    if (match($2, /--type=[^ ]*/)) kind = substr($2, RSTART + 7, RLENGTH - 7)
+    else if (index($2, "crashpad")) kind = "other"
+    if (kind == "gpu-process") kind = "gpu"
+    else if (kind == "utility" && index($2, "NetworkService")) kind = "network"
+    else if (kind != "browser" && kind != "renderer" && kind != "utility") kind = "other"
+    n++; t += $1; by[kind] += $1 }
+    END { printf "%.2f %d", t, n; for (k in by) printf " %s=%.2f", k, by[k]; print "" }'
+}
+# rest_cpu: $rest, the CPU in seconds what draws takes in 4 s with the pointer still, below the
+# rows, $rest_procs the processes it counts, and $rest_kinds each kind's share, such as "browser
+# 0.02 s, GPU 0.01 s". Not in a subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
   sleep 1 # the hover's fade out, before the window measured
-  local from
-  from=$(cpu --extension-process)
+  local from to
+  from=$(drawing_cpu)
   sleep 4 # the window measured
-  set -- $from $(cpu --extension-process)
-  rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
+  to=$(drawing_cpu)
+  rest=$(printf '%s\n%s\n' "$from" "$to" | awk 'NR == 1 { from = $1 } NR == 2 { printf "%.2f", $1 - from }')
+  rest_procs=$(echo "$to" | cut -d' ' -f2)
+  rest_kinds=$(printf '%s\n%s\n' "$from" "$to" | awk '{
+    for (i = 3; i <= NF; i++) { split($i, kv, "="); if (NR == 1) from[kv[1]] = kv[2]; else to[kv[1]] = kv[2] } }
+    END {
+      n = split("browser gpu network renderer utility other", kinds, " ")
+      split("browser,GPU,network,renderers,other utilities,other", names, ",")
+      for (i = 1; i <= n; i++) if (kinds[i] in to)
+        printf "%s%s %.2f s", (said++ ? ", " : ""), names[i], to[kinds[i]] - from[kinds[i]] }')
 }
 rest_cpu
-docked_cpu=$rest
+docked_cpu=$rest docked_kinds=$rest_kinds
 send key s cmd
 toggle page hidden "⌘S from the page before the sidebar out is hovered"
 send move 400 300
@@ -1150,9 +1198,9 @@ hover_out "the sidebar out by the edge"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
 rest_cpu
 out_cpu=$rest
-echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked and ${out_cpu} s with it out"
+echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)"
 awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }' &&
-  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s, against ${docked_cpu} s docked"
+  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds), against ${docked_cpu} s docked ($docked_kinds)"
 send move 600 300
 expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
 send key s cmd

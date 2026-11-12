@@ -462,10 +462,13 @@ expect "^browser: menu shown $(cased 'Images (checked), Videos (checked), Other 
   "the Library button's menu didn't untick Other Files"
 choose_drawn "$(cased 'Other Files')"
 expect '^browser: hover kinds images, videos, other files, captures$' "Other Files didn't turn on"
-# A finished download's menu, with Chrome's word off the Mac for the file manager there.
+# A finished download's menu, with Chrome's word off the Mac for the file manager there, and on
+# Windows its name for the Trash.
 file_manager=Finder
 [ "$(uname)" = Darwin ] || file_manager=Folder
-finished_menu=$(cased "Open, Show in $file_manager, Move to Trash, Remove from List, Clear List")
+trash='Move to Trash'
+! windows || trash='Move to Recycle Bin'
+finished_menu=$(cased "Open, Show in $file_manager, $trash, Remove from List, Clear List")
 # Remove from List in the cancelled download's menu takes it off the list, and Clear List in the
 # finished one's takes off every download that isn't running and keeps their files.
 send key j cmd shift
@@ -541,7 +544,7 @@ expect '^browser: recent downloads shown 1$' \
 post rightclick 120 $((height - 78))
 expect "^browser: menu shown $finished_menu\$" \
   "a right-click on the recent download's row didn't show its menu"
-choose_drawn "$(cased 'Move to Trash')"
+choose_drawn "$(cased "$trash")"
 expect "^browser: download $t Trash via download menu\$" "Move to Trash didn't reach the download"
 expect '^browser: downloads 0$' "Move to Trash didn't take the download off the list"
 expect '^browser: recent downloads hidden$' "the recent downloads stayed with none left"

@@ -34,6 +34,7 @@
 #include <iterator>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1246,11 +1247,62 @@ struct Reveal {
   void (*pointer_moved)(void*, double) = nullptr;
 };
 std::map<void*, Reveal> g_reveals;
+
+// The browser windows whose sidebar is on the right, with the window's buttons and the reveal
+// there too (host_set_sidebar_right).
+std::set<HWND>& SidebarRight() {
+  static std::set<HWND> right;
+  return right;
+}
+
+// How far across |ui_view|'s content its reveal |width| wide starts: at the left edge, or against
+// the right one with the sidebar there.
+double RevealLeft(void* ui_view, double width) {
+  HWND root = Root(ui_view);
+  if (!SidebarRight().count(root)) {
+    return 0;
+  }
+  double content_width, content_height;
+  ContentSize(root, &content_width, &content_height);
+  return content_width - width;
+}
 Floating g_settings;
 bool g_settings_placed = false;
 
 // The UI's view of the browser window the toast shows over, while it shows.
 void* g_toast_over = nullptr;
+
+// The foot bar, the UI's view of the browser window it shows over while it shows, and where: its
+// size, centred between its insets from the content's left and right edges, its bottom over the
+// content's (host_show_foot_bar).
+Floating g_foot_bar;
+void* g_foot_bar_over = nullptr;
+double g_foot_bar_left = 0, g_foot_bar_right = 0, g_foot_bar_bottom = 0;
+double g_foot_bar_width = 0, g_foot_bar_height = 0;
+
+// Where the foot bar's window goes over its browser window, in points from its content's top left.
+std::pair<double, double> FootBarOrigin() {
+  double content_width, content_height;
+  ContentSize(Root(g_foot_bar_over), &content_width, &content_height);
+  const double across = content_width - g_foot_bar_left - g_foot_bar_right;
+  return {g_foot_bar_left + (across - g_foot_bar_width) / 2,
+          content_height - g_foot_bar_bottom - g_foot_bar_height};
+}
+
+// Keeps the foot bar there as its browser window resizes, without raising it.
+void PlaceFootBar() {
+  HWND root = g_foot_bar_over ? Root(g_foot_bar_over) : nullptr;
+  if (!root || !g_foot_bar.hwnd || !IsWindowVisible(g_foot_bar.hwnd)) {
+    return;
+  }
+  auto [left, top] = FootBarOrigin();
+  g_foot_bar.place = std::pair{left, top};
+  const double scale = Scale(root);
+  POINT origin{std::lround(left * scale), std::lround(top * scale)};
+  ClientToScreen(root, &origin);
+  SetWindowPos(g_foot_bar.hwnd, nullptr, origin.x, origin.y, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
 
 // Where the toast's window goes over |ui_view|'s browser window, in points from its content's top
 // left: at the focused page's top right corner, which in a split view is its pane's, and as wide as
@@ -1578,6 +1630,9 @@ void PlaceCorners(HWND root) {
   if (g_toast_over && Root(g_toast_over) == root) {
     PlaceToast();
   }
+  if (g_foot_bar_over && Root(g_foot_bar_over) == root) {
+    PlaceFootBar();
+  }
 }
 
 // |root| moved, or was resized or went to another display: the windows over it keep their place in
@@ -1588,6 +1643,14 @@ void Moved(HWND root) {
     PostMenuDismiss(true);
   }
   const double scale = Scale(root);
+  // A reveal on the right keeps to the right edge as the window's width changes.
+  for (auto& [ui_view, reveal] : g_reveals) {
+    if (Root(ui_view) == root && reveal.floating.place && SidebarRight().count(root)) {
+      double width, height;
+      WindowSize(reveal.floating.hwnd, &width, &height);
+      reveal.floating.place->first = RevealLeft(ui_view, width);
+    }
+  }
   for (auto& [hwnd, floating] : FloatingByHwnd()) {
     if (floating->place && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == root) {
       POINT origin{std::lround(floating->place->first * scale),
@@ -2397,11 +2460,14 @@ int FrameHit(HWND root, POINT at) {
   }
   // Maximize, the second of shell.rs's WINDOW_BUTTONS in Windows' order (windows_buttons), 43
   // from the left and window-button-y (24) down, its plate windows-button-plate (22) across
-  // (design/tokens.toml): kept in step with them.
+  // (design/tokens.toml): kept in step with them. With the sidebar on the right the group is
+  // there, close at the corner, and maximize 43 from the right.
   const double scale = Scale(root);
+  const double across = SidebarRight().count(root) ? client.right / scale - at.x / scale
+                                                   : at.x / scale;
   auto shown = WindowButtonsShown().find(root);
-  if (shown != WindowButtonsShown().end() && shown->second &&
-      std::abs(at.x / scale - 43) <= 11 && std::abs(at.y / scale - 24) <= 11) {
+  if (shown != WindowButtonsShown().end() && shown->second && std::abs(across - 43) <= 11 &&
+      std::abs(at.y / scale - 24) <= 11) {
     return HTMAXBUTTON;
   }
   return 0;
@@ -2630,6 +2696,7 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
         }
       }
       WindowButtonsShown().erase(hwnd);
+      SidebarRight().erase(hwnd);
       FrameUi().erase(hwnd);
       std::erase_if(LittleViews(), [hwnd](HWND view) {
         return !IsWindow(view) || GetAncestor(view, GA_ROOT) == hwnd;
@@ -3293,6 +3360,9 @@ void host_forget_window(void* ui_view) {
   if (auto it = g_reveals.find(ui_view); it != g_reveals.end()) {
     Forget(it->second.floating);
     g_reveals.erase(it);
+  }
+  if (g_foot_bar_over == ui_view) {
+    host_hide_foot_bar();
   }
   g_pane_corners.erase(ui_view);
   g_page_lefts.erase(ui_view);
@@ -3994,6 +4064,39 @@ void host_hide_toast(void) {
   Hide(g_toast);
 }
 
+void host_add_foot_bar(void* foot_bar_view) {
+  Adopt(g_foot_bar, foot_bar_view, false, nullptr);
+  // A click on its buttons leaves the keyboard where it was, with the browser window and the page,
+  // where the mode has its keys, as the hover card's does.
+  SetWindowLongPtrW(g_foot_bar.hwnd, GWL_EXSTYLE,
+                    GetWindowLongPtrW(g_foot_bar.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
+}
+
+void host_show_foot_bar(void* ui_view,
+                        double left,
+                        double right,
+                        double bottom,
+                        double width,
+                        double height) {
+  g_foot_bar_over = ui_view;
+  g_foot_bar_left = left;
+  g_foot_bar_right = right;
+  g_foot_bar_bottom = bottom;
+  g_foot_bar_width = width;
+  g_foot_bar_height = height;
+  const bool shown = IsWindowVisible(g_foot_bar.hwnd);
+  auto [x, y] = FootBarOrigin();
+  Show(g_foot_bar, ui_view, x, y, width, height, false);
+  if (!shown) {
+    LogShown(g_foot_bar, "foot bar");
+  }
+}
+
+void host_hide_foot_bar(void) {
+  g_foot_bar_over = nullptr;
+  Hide(g_foot_bar);
+}
+
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
   Adopt(g_tooltip, tooltip_view, true, nullptr);
   g_tooltip_away = away;
@@ -4353,6 +4456,18 @@ void host_show_window_buttons(void* ui_view, bool shown) {
   }
 }
 
+void host_set_sidebar_right(void* ui_view, bool right) {
+  HWND root = Root(ui_view);
+  if (!root) {
+    return;
+  }
+  if (right) {
+    SidebarRight().insert(root);
+  } else {
+    SidebarRight().erase(root);
+  }
+}
+
 void host_set_window_on_top(void* ui_view, bool on) {
   // The overlays are windows it owns, which Windows makes topmost and back with it.
   SetWindowPos(Root(ui_view), on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
@@ -4385,7 +4500,7 @@ void host_show_reveal(void* ui_view, double width) {
   ContentSize(Root(ui_view), &content_width, &content_height);
   // The UI shows it again as its width changes; check.sh reads the line once a showing.
   const bool was_shown = it->second.floating.hwnd && IsWindowVisible(it->second.floating.hwnd);
-  Show(it->second.floating, ui_view, 0, 0, width, content_height, false);
+  Show(it->second.floating, ui_view, RevealLeft(ui_view, width), 0, width, content_height, false);
   if (!was_shown) {
     LogShown(it->second.floating, "reveal");
   }
@@ -4965,9 +5080,20 @@ size_t host_paste(char* text, size_t capacity) {
 
 void host_open_full_disk_access(void) {}
 
-// There's no Safari: Windows plays protected video with Chromium's own PlayReady (decision 1).
-void host_open_in_safari(const char* url) {
-  fprintf(stderr, "browser: no system engine for %s\n", url);
+// The system's default browser, through the http handler the user chose, as a link from another
+// app reaches it. The card offers it only while that isn't ilo.
+void host_open_elsewhere(const char* url) {
+  // Only web pages go to another app.
+  const std::string page = url;
+  if (page.rfind("http://", 0) != 0 && page.rfind("https://", 0) != 0) {
+    return;
+  }
+  // A driven run only logs it, so checks never launch another browser.
+  fprintf(stderr, "browser: open in default browser %s\n", url);
+  if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
+    return;
+  }
+  ShellExecuteW(nullptr, L"open", Wide(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 void host_share(void* ui_view,
