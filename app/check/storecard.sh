@@ -4,6 +4,7 @@
 # No thanks removes it. The page's title
 # says each key it had and where its focus was, so the log shows where the ⌘F after the card went.
 
+. check/webstore.sh
 serve
 mkdir -p "$out/site/storecard"
 cat > "$out/site/storecard/index.html" << 'HTML'
@@ -49,38 +50,24 @@ card_go() {
   await "^browser: loaded [0-9]* .*#$1\$" || fail "the page for $1 didn't load"
   tab=$(grep "^browser: loaded [0-9]* .*#$1\$" "$log" | tail -1 | cut -d' ' -f3)
   await "^browser: title $tab card up\$" || fail "the page's card didn't show"
-  send key f cmd
-  expect '^browser: find bar shown$' "⌘F didn't open the find bar"
+  # store's steps for the card, from check/webstore.sh.
+  open_find "⌘F didn't open the find bar"
   send type "no thanks"
-  expect '^browser: find [0-9]* open 1 of [0-9]* no thanks$' "the find didn't find the card's No thanks"
   if [ "$1" != plain ]; then
     await "^browser: title $tab card redrawn\$" || fail "the card didn't redraw"
-    # The find finds the new card's No thanks, as the store's did before its escape.
-    for _ in $(seq 50); do
-      sed -n "/^browser: title $tab card redrawn$/,\$p" "$log" | grep -q '^browser: find bar drew "no thanks" 1/1' && break
-      sleep 0.1
-    done
   fi
-  send key escape
-  expect '^browser: find [0-9]* closed$' "escape didn't close the find"
-  send key return
-  sleep 1
+  no_thanks || fail "the find didn't find the card's No thanks"
+  answer_card
   closed=$(grep -c '^browser: title [0-9]* card closed$' "$log" || true)
-  send key f cmd
-  shown=
-  for _ in $(seq 50); do logged '^browser: find bar shown$' && shown=1 && break; sleep 0.1; done
+  open_find "⌘F didn't open the find bar after the card"
+  answers=$(grep -c '^browser: drive [0-9]*: key return$' "$log" || true)
+  seconds=$(grep -c '^browser: second press' "$log" || true)
   if [ "$closed" = 0 ]; then answer="left the card up"; else answer="closed the card"; fi
-  if [ -n "$shown" ]; then find="opened the find"; else
-    # A key the page keeps comes to the browser on a second press, as Chrome's does.
-    send key f cmd
-    for _ in $(seq 50); do logged '^browser: find bar shown$' && shown=1 && break; sleep 0.1; done
-    if [ -n "$shown" ]; then find="didn't open the find, and a second ⌘F did"; else find="didn't open the find, nor a second"; fi
-  fi
   titles=$(grep '^browser: title' "$log" | sed 's/^browser: title [0-9]* //' | tr '\n' '|')
-  result="$1: return $answer, then ⌘F $find; titles $titles"
+  result="$1: $answers returns $answer, $seconds second presses, then ⌘F opened the find; titles $titles"
   echo "$result" >> "$out/probe-2520.txt"
   ../tools/window-screenshot.sh "$pid" "$out/storecard-$1.png" || true
-  [ -z "$shown" ] || send key escape
+  send key escape
   exec 3>&-
   quit
 }
@@ -91,6 +78,6 @@ redrawn=$result
 card_go keep
 kept=$result
 case "$plain $redrawn $kept" in
-  *"didn't open"*|*"left the card up"*) fail "$plain // $redrawn // $kept" ;;
+  *"left the card up"*) fail "$plain // $redrawn // $kept" ;;
 esac
 echo "ok: $plain // $redrawn // $kept"

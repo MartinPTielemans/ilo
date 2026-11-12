@@ -21,52 +21,61 @@ store_shown() {
   # and while it's up, return on Add to Chrome does nothing, though a click works (#1297). No thanks
   # closes it, as a user would. Once it's been answered the store may not show it again, so the
   # run goes on without it.
-  send key f cmd
-  expect '^browser: find bar shown$' "⌘F didn't open the find bar"
+  open_find "⌘F didn't open the find bar"
   send type "no thanks"
-  card=
-  for _ in $(seq 50); do
-    sed -n "/^browser: drive $step: /,\$p" "$log" |
-      grep -q '^browser: find [0-9]* open [1-9][0-9]* of [0-9]* no thanks$' && { card=1; break; }
+  if no_thanks; then
+    answer_card
+  else
+    send key escape
+    expect '^browser: find [0-9]* closed$' "escape didn't close the find"
+  fi
+}
+# Opens the find with ⌘F, failing with $1. While the store's card is up it keeps the page's keys,
+# ⌘F too (#2520), and ilo runs a shortcut the page kept on a second press within a second of the
+# first (shell/keys.rs), so the run presses again, as a user who sees nothing open does.
+open_find() {
+  send key f cmd
+  first=$step
+  for _ in $(seq 5); do
+    logged '^browser: find bar shown$' "$first" && return 0
     sleep 0.1
   done
-  send key escape
-  expect '^browser: find [0-9]* closed$' "escape didn't close the find"
-  if [ -n "$card" ]; then
-    # [PROBE-2520] what the page shows and has focused around the return on No thanks.
-    echo "card found at drive $step" >> "$out/probe-2520.txt"
-    ../tools/window-screenshot.sh "$pid" "$out/store-card-before.png" || true
-    send state
+  send key f cmd
+  expect '^browser: find bar shown$' "$1" "$first"
+}
+# Whether the open find for "no thanks", typed last, finds it: the store's card is up. It waits
+# for the find's count, and then for the match it goes to, which closing the find focuses.
+no_thanks() {
+  typed=$step
+  counted='^browser: find [0-9]* open [0-9]* of [0-9][0-9]* no thanks$'
+  expect "$counted" "the find for no thanks gave no count" "$typed"
+  sed -n "/^browser: drive $typed: /,\$p" "$log" | grep "$counted" | tail -1 | grep -q ' of 0 no thanks$' &&
+    return 1
+  expect '^browser: find [0-9]* open [1-9][0-9]* of [0-9]* no thanks$' "the find didn't go to No thanks" "$typed"
+}
+# Answers the store's card with No thanks, from the open find that found it, until the find no
+# longer does. The card can redraw under the find, and the escape then focuses nothing, so the
+# return leaves it up and ⌘F with it (#2520).
+answer_card() {
+  for _ in 1 2 3; do
+    send key escape
+    expect '^browser: find [0-9]* closed$' "escape didn't close the find"
     send key return
-    sleep 2
-    ../tools/window-screenshot.sh "$pid" "$out/store-card-after.png" || true
-    send state
-    probe_card=1
-  fi
+    open_find "⌘F didn't open the find bar after No thanks on the store's Switch to Chrome? card"
+    send type "no thanks"
+    if ! no_thanks; then
+      send key escape
+      expect '^browser: find [0-9]* closed$' "escape didn't close the find"
+      return 0
+    fi
+  done
+  fail "No thanks didn't close the store's Switch to Chrome? card"
 }
 # Gives the keyboard to the store page's button with the text $1, lowercase, as the user who finds
 # it and closes the find does: Chrome focuses the button the match is in. Its place on the page
 # changes with the store's layout and language; its text doesn't.
 focus_button() {
-  send key f cmd
-  if [ -n "${probe_card:-}" ]; then
-    # [PROBE-2520] whether the ⌘F after the card is lost or kept by the page, which a second
-    # press hands on.
-    probe_card=
-    shown=
-    for _ in $(seq 100); do logged '^browser: find bar shown$' && shown=1 && break; sleep 0.1; done
-    echo "first ⌘F after the card: ${shown:-lost} (drive $step)" >> "$out/probe-2520.txt"
-    if [ -z "$shown" ]; then
-      ../tools/window-screenshot.sh "$pid" "$out/store-card-lost.png" || true
-      send state
-      send key f cmd
-      for _ in $(seq 100); do logged '^browser: find bar shown$' && shown=1 && break; sleep 0.1; done
-      echo "second ⌘F: ${shown:-lost} (drive $step)" >> "$out/probe-2520.txt"
-      [ -n "$shown" ] || { send click $page_point; send key f cmd; for _ in $(seq 100); do logged '^browser: find bar shown$' && shown=1 && break; sleep 0.1; done; echo "after a click in the page, ⌘F: ${shown:-lost} (drive $step)" >> "$out/probe-2520.txt"; }
-    fi
-    cat "$out/probe-2520.txt" >&2
-  fi
-  expect '^browser: find bar shown$' "⌘F didn't open the find bar"
+  open_find "⌘F didn't open the find bar"
   send type "$1"
   expect "^browser: find [0-9]* open 1 of [0-9]* $1\$" "the store's page has no \"$1\""
   # With "last", the last match, as a page whose text names its button before it has the button
