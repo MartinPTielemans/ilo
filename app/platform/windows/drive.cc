@@ -170,8 +170,6 @@ ULONG_PTR g_real_heard = 0;
 // information.
 UINT g_real_vk = 0;
 bool g_real_up = false;
-// The modifiers the real keyboard holds now.
-int g_real_held = 0;
 HHOOK g_real_mouse_hook = nullptr;
 HHOOK g_real_key_hook = nullptr;
 // The last press, a click's or a drag's: its window, place on screen, button and time.
@@ -480,16 +478,18 @@ void RealKey(UINT vk, bool up) {
   SendReal(input);
 }
 
-// The real keyboard's modifiers, from what it holds to |to|, a key each that changes.
+// The real keyboard's modifiers, from what it holds to |to|, a key each that changes, and the Windows
+// keys up. What it holds is the desktop's, not this driver's: a run that quit with ⌃ down left it
+// down for the next, whose escape was then ⌃esc, which opens Start.
 void RealModifiers(int to) {
-  static const std::pair<int, UINT> keys[] = {
-      {kCtrl, VK_CONTROL}, {kShift, VK_SHIFT}, {kAlt, VK_MENU}};
+  static const std::pair<int, UINT> keys[] = {{kCtrl, VK_CONTROL}, {kShift, VK_SHIFT},
+                                              {kAlt, VK_MENU},     {0, VK_LWIN},
+                                              {0, VK_RWIN}};
   for (const auto& [modifier, vk] : keys) {
-    if ((g_real_held & modifier) != (to & modifier)) {
+    if (((GetAsyncKeyState(vk) & 0x8000) != 0) != ((to & modifier) != 0)) {
       RealKey(vk, (to & modifier) == 0);
     }
   }
-  g_real_held = to & (kCtrl | kShift | kAlt);
 }
 
 // The real pointer moving to |at| on screen, unless it's there, as a hand's resting pointer sends
@@ -804,6 +804,8 @@ bool Extended(UINT vk) {
     case VK_DOWN:
     case VK_INSERT:
     case VK_DELETE:
+    case VK_LWIN:
+    case VK_RWIN:
       return true;
   }
   return false;
