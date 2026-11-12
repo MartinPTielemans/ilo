@@ -830,12 +830,8 @@ impl Browser for Recorder {
         self.record(format!("answer agent {question} {answer:?}"))
     }
 
-    fn can_open_in_safari(&self) -> bool {
-        true
-    }
-
-    fn open_in_safari(&self, url: &str, _: &mut App) {
-        self.record(format!("open in safari {url}"))
+    fn open_elsewhere(&self, url: &str, _: &mut App) {
+        self.record(format!("open elsewhere {url}"))
     }
 
     fn can_use_system_engine(&self) -> bool {

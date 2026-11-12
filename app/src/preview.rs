@@ -1042,8 +1042,15 @@ impl Browser for Fake {
         self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
     }
 
+    // Safari's engine is the Mac's alone, so elsewhere the note offers what each system's does.
     fn can_use_system_engine(&self) -> bool {
-        true
+        cfg!(target_os = "macos")
+    }
+
+    // PREVIEW_DRM=default draws the note as where ilo is the system's default browser.
+    fn elsewhere(&self) -> Option<browser::shell::Elsewhere> {
+        let default = || std::env::var("PREVIEW_DRM").is_ok_and(|drm| drm == "default");
+        browser::shell::Elsewhere::on(self.os(), default)
     }
 
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
@@ -2509,8 +2516,8 @@ fn main() {
                         };
                         shell.set_page(tab, page, cx);
                     }
-                    // PREVIEW_DRM=1 has the first tab's page ask for video ilo plays only in Apple's
-                    // engine, so its note shows.
+                    // PREVIEW_DRM=1 has the first tab's page ask for video ilo can't play, so its
+                    // note shows, offering what this system's does (#2468).
                     if std::env::var_os("PREVIEW_DRM").is_some() {
                         shell.set_media_unsupported(1, "com.widevine.alpha", cx);
                     }

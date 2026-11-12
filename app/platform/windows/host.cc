@@ -5080,9 +5080,20 @@ size_t host_paste(char* text, size_t capacity) {
 
 void host_open_full_disk_access(void) {}
 
-// There's no Safari: Windows plays protected video with Chromium's own PlayReady (decision 1).
-void host_open_in_safari(const char* url) {
-  fprintf(stderr, "browser: no system engine for %s\n", url);
+// The system's default browser, through the http handler the user chose, as a link from another
+// app reaches it. The card offers it only while that isn't ilo.
+void host_open_elsewhere(const char* url) {
+  // Only web pages go to another app.
+  const std::string page = url;
+  if (page.rfind("http://", 0) != 0 && page.rfind("https://", 0) != 0) {
+    return;
+  }
+  // A driven run only logs it, so checks never launch another browser.
+  fprintf(stderr, "browser: open in default browser %s\n", url);
+  if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
+    return;
+  }
+  ShellExecuteW(nullptr, L"open", Wide(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 void host_share(void* ui_view,
