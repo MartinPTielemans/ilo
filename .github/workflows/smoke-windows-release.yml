@@ -1,30 +1,23 @@
-# Smoke test of a release's Windows installer, as a new user meets it: downloads the release's
-# ilo-windows-x64-setup.exe, checks it against the release's SHA256SUMS, installs it silently for
-# the user, launches the installed ilo with its driver (BROWSER_DRIVE=1) and a new profile, goes
-# through the first run's onboarding with Esc at each step, and loads a page typed in the command
+# Smoke test of a published release's Windows installer, as a new user meets it (#2613): downloads
+# the release's ilo-windows-x64-setup.exe and MSIX, checks them against the release's SHA256SUMS and
+# the MSIX's identity against the Store's (branding/windows-store.ini at the tag), installs the setup
+# silently for the user, launches the installed ilo with its driver (BROWSER_DRIVE=1) and a new
+# profile, goes through the first run's onboarding with Esc at each step, turning on the agents'
+# switch at the opt-ins step and seeing their server start, and loads a page typed in the command
 # bar the onboarding ends with. It captures the window at each step and uploads the captures, the
-# app's log and the installer's. At the opt-ins step it turns on the agents' switch and sees their
-# server start. It checks the MSIX's identity against the Store's, branding/windows-store.ini at the
-# tag.
-# The installer is a release's, TAG below or the dispatch's tag, or a release.yml run's before its
-# draft exists, from the run's windows artifact: RELEASE_RUN below or the dispatch's release_run,
-# checked against TAG's SHA256SUMS once its draft has them. A draft's assets need a token with push
-# access, which is why it writes contents: drafts aren't listed to read-only tokens.
-# Its winget job checks RELEASE_RUN's winget manifests instead: the installer's URL is TAG's, its
-# hash is in TAG's SHA256SUMS, winget validates them and installs from them. A dispatch runs the job
-# it names; a push runs the job named below.
+# app's log and the installer's.
+# Its winget job writes winget's manifests for the release's installer with tools/winget.sh at the
+# tag, as release.yml does, checks that they name the release's URL and its SHA256SUMS hash, and has
+# winget validate them and install from them, on the runner alone: nothing goes to
+# microsoft/winget-pkgs, whose pull request is the owner's (#454).
+# By hand only, against the tag given or the latest release. It reads releases and never changes one.
 name: Smoke test of the Windows release
 
 on:
-  push:
-    branches: [smoke/windows-release]
   workflow_dispatch:
     inputs:
       tag:
-        description: The release's tag, a draft's too
-        required: false
-      release_run:
-        description: Or a release.yml run's id, whose windows artifact holds the installer
+        description: The release's tag, such as v0.1.16; the latest release if empty
         required: false
       job:
         description: What to check
@@ -33,18 +26,27 @@ on:
         default: smoke
 
 permissions:
-  contents: write
-
-env:
-  TAG: ${{ github.event_name == 'push' && 'v0.1.0' || inputs.tag }}
-  RELEASE_RUN: ${{ github.event_name == 'push' && '41335149554' || inputs.release_run }}
+  contents: read
 
 jobs:
   smoke:
-    if: ${{ (github.event_name == 'push' && 'winget' || inputs.job) == 'smoke' }}
+    if: ${{ inputs.job == 'smoke' }}
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
+      # The tag asked for, or the latest release's, as TAG for the steps after.
+      - id: tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASKED: ${{ inputs.tag }}
+        run: |
+          tag=${ASKED:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)}
+          [ -n "$tag" ] || { echo "::error::No tag given and no latest release"; exit 1; }
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "## $tag" >> "$GITHUB_STEP_SUMMARY"
+
       # The capture code alone; the app is the release's.
       - uses: actions/checkout@v4
         with:
@@ -56,24 +58,13 @@ jobs:
         run: |
           out=$RUNNER_TEMP/smoke
           mkdir -p "$out"
-          [ -n "$RELEASE_RUN$TAG" ] || { echo "::error::Neither a tag nor a release run"; exit 1; }
-          if [ -n "$RELEASE_RUN" ]; then
-            gh run download "$RELEASE_RUN" -R "$GITHUB_REPOSITORY" -n windows -D "$out"
-          else
-            gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" \
-              -p ilo-windows-x64-setup.exe -p ilo-windows-x64.msix
-          fi
-          if [ -n "$TAG" ]; then
-            gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" -p SHA256SUMS
-            (cd "$out" && grep -E ' \*?ilo-windows-x64(-setup\.exe|\.msix)$' SHA256SUMS | tee sums | sha256sum -c -)
-            [ "$(wc -l < "$out/sums")" = 2 ] || { echo "::error::$TAG's SHA256SUMS lacks the setup or the MSIX"; exit 1; }
-            echo "- The setup and the MSIX match $TAG's SHA256SUMS" >> "$GITHUB_STEP_SUMMARY"
-          else
-            sha256sum "$out"/ilo-windows-x64*
-            echo "- No tag, so no SHA256SUMS to check against" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" \
+            -p ilo-windows-x64-setup.exe -p ilo-windows-x64.msix -p SHA256SUMS
+          (cd "$out" && grep -E ' \*?ilo-windows-x64(-setup\.exe|\.msix)$' SHA256SUMS | tee sums | sha256sum -c -)
+          [ "$(wc -l < "$out/sums")" = 2 ] || { echo "::error::$TAG's SHA256SUMS lacks the setup or the MSIX"; exit 1; }
+          echo "- The setup and the MSIX match $TAG's SHA256SUMS" >> "$GITHUB_STEP_SUMMARY"
           gh api -H 'Accept: application/vnd.github.raw' \
-            "repos/$GITHUB_REPOSITORY/contents/app/branding/windows-store.ini?ref=${TAG:-main}" > "$out/windows-store.ini"
+            "repos/$GITHUB_REPOSITORY/contents/app/branding/windows-store.ini?ref=$TAG" > "$out/windows-store.ini"
 
       # The Store's identity, as Partner Center gives it, in the MSIX's manifest.
       - shell: pwsh
@@ -128,8 +119,7 @@ jobs:
       - shell: bash
         run: |
           out=$RUNNER_TEMP/smoke
-          what=${RELEASE_RUN:+release run $RELEASE_RUN}
-          what=${what:-$TAG}
+          what=$TAG
           app="$(cygpath -u "$LOCALAPPDATA")/Programs/ilo"
           log=$out/ilo.log
           summary() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
@@ -186,7 +176,6 @@ jobs:
           exec 3> "$out/drive"
           trap 'taskkill //PID "$(cat /proc/$pid/winpid 2>/dev/null)" //T //F > /dev/null 2>&1 || true' EXIT
 
-          echo "## $what" >> "$GITHUB_STEP_SUMMARY"
           await '^browser: onboarding started$' 900 || fail "a new profile's first launch didn't start the onboarding"
           steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
           summary "- The first launch started the onboarding: $steps"
@@ -249,19 +238,46 @@ jobs:
             ${{ runner.temp }}/smoke/*.log
 
   winget:
-    if: ${{ (github.event_name == 'push' && 'winget' || inputs.job) == 'winget' }}
+    if: ${{ inputs.job == 'winget' }}
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
+      # The tag asked for, or the latest release's, as TAG for the steps after.
+      - id: tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASKED: ${{ inputs.tag }}
+        run: |
+          tag=${ASKED:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)}
+          [ -n "$tag" ] || { echo "::error::No tag given and no latest release"; exit 1; }
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "## $tag" >> "$GITHUB_STEP_SUMMARY"
+
+      # tools/winget.sh and what it fills its manifests from, as the tag has them.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          sparse-checkout: |
+            tools
+            app/branding
+            app/platform/windows/package/winget
+
       - shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          [ -n "$RELEASE_RUN" ] && [ -n "$TAG" ] || { echo "::error::The winget check needs a release run and its tag"; exit 1; }
           out=$RUNNER_TEMP/winget
-          gh run download "$RELEASE_RUN" -R "$GITHUB_REPOSITORY" -n winget -D "$out"
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" -p SHA256SUMS
-          dir=$(dirname "$(find "$out/manifests" -name '*.installer.yaml')")
+          mkdir -p "$out"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$out" -p ilo-windows-x64-setup.exe -p SHA256SUMS
+          # The name package.sh gives it, which winget.sh asks for; the release renames it.
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' app/Cargo.toml | head -1)
+          setup=$out/$(cat app/branding/name)-$version-x64-setup.exe
+          cp "$out/ilo-windows-x64-setup.exe" "$setup"
+          dir=$(tools/winget.sh "$setup" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/ilo-windows-x64-setup.exe" \
+            "$out" | tail -1)
           echo "WINGET_MANIFESTS=$(cygpath -w "$dir")" >> "$GITHUB_ENV"
           installer=$dir/$(basename "$dir/"*.installer.yaml)
           cat "$dir"/*.yaml
