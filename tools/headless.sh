@@ -71,6 +71,8 @@ cleanup() {
   # A browser's helpers outlive it briefly; they're its children, in its process group.
   [ -z "$pid" ] || kill -- "-$pid" 2>/dev/null || true
   [ -z "$sway_pid" ] || kill "$sway_pid" 2>/dev/null || true
+  # [DEBUG-2365] sway's debug log, where HEADLESS_SWAY_LOG says.
+  [ -z "${HEADLESS_SWAY_LOG:-}" ] || cp "$dir/sway.log" "$HEADLESS_SWAY_LOG" 2>/dev/null || true
   rm -rf "$dir"
 }
 trap cleanup EXIT
@@ -101,7 +103,7 @@ gpu=(WLR_RENDER_DRM_DEVICE="$render")
 [ -n "$run" ] || mkdir -p "$(dirname "$out")"
 env -u WAYLAND_DISPLAY -u DISPLAY -u HYPRLAND_INSTANCE_SIGNATURE -u SWAYSOCK \
   WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 "${gpu[@]}" \
-  sway -c "$dir/config" >"$dir/sway.log" 2>&1 &
+  sway ${HEADLESS_SWAY_LOG:+-d} -c "$dir/config" >"$dir/sway.log" 2>&1 &
 sway_pid=$!
 for _ in $(seq 100); do
   [ -s "$dir/env" ] && break

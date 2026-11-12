@@ -106,6 +106,37 @@ if [ "${1:-}" = --steps ]; then
     ;;
   esac
 
+  # [DEBUG-2365] The leg's own step, the launch's first bar, once a launch: the page composes
+  # "abc", Enter commits it, it composes "de", and Ctrl+T opens the bar, which composes "xyz".
+  case $mode in
+    *-first-*)
+      at=$(mark); click 330 40
+      await "title [0-9]* clicked" "$at"
+      at=$(mark); compose abc
+      await "title [0-9]* composing abc$" "$at"
+      at=$(mark); key $'\n'
+      await "title [0-9]* value abc$" "$at"
+      at=$(mark); compose de
+      await "title [0-9]* composing abcde$" "$at"
+      at=$(mark); key '^t'
+      await "command bar shown" "$at"
+      compose xyz
+      result=neither
+      for _ in $(seq 50); do
+        if tail -n "+$((at + 1))" "$LOG" | grep -q 'command bar drew "xyz"'; then
+          result=kept; break
+        fi
+        if tail -n "+$((at + 1))" "$LOG" | grep -q 'command bar hidden'; then
+          result=closed; break
+        fi
+        sleep 0.1
+      done
+      echo "$mode $result $at" >> "$out/${mode%-*}.tries"
+      echo "$result" > "$out/$mode.result"
+      mv "$out/$mode.failed" "$out/$mode.passed"
+      exit 0
+      ;;
+  esac
   # [DEBUG-2365] The bar opened over the composing page, $PROBE_TRIES times: whether it keeps
   # what's composed in it, "kept", or closes first, "closed", with "xyz" going to the page.
   case $mode in
@@ -246,7 +277,7 @@ if [ "${1:-}" = --steps ]; then
   exit 0
 fi
 
-modes=${1:-"x11-count xvfb-count x11-probe xvfb-probe"}
+modes=${1:-"x11-first xvfb-first"}
 for tool in sway grim magick fcitx5 dbus-run-session xkbcli cargo xvfb-run openbox xdotool import; do
   command -v "$tool" >/dev/null || { echo "FAIL: needs $tool" >&2; exit 1; }
 done
@@ -346,9 +377,16 @@ kill \$wm 2>/dev/null || true
 EOF
 chmod +x "$home/xvfb.sh"
 failed=
+legs=
 for mode in $modes; do
+  case $mode in
+    *-first) for n in $(seq "${PROBE_LAUNCHES:-30}"); do legs="$legs $mode-$n"; done ;;
+    *) legs="$legs $mode" ;;
+  esac
+done
+for mode in $legs; do
   x11=; case $mode in x11*) x11=--x11 ;; esac
-  probe=; case $mode in *-probe) probe=1 ;; esac
+  probe=; case $mode in *-probe | *-first-*) probe=1 ;; esac
   case $mode in
     xvfb*)
       dbus-run-session --config-file="$home/bus.conf" -- \
@@ -360,9 +398,21 @@ for mode in $modes; do
     *)
   dbus-run-session --config-file="$home/bus.conf" -- \
     env BROWSER_PROFILE_DIR="$home/profile-$mode" BROWSER_URL="$url" ${probe:+BROWSER_FOCUS_PROBE=1} \
+    HEADLESS_SWAY_LOG="$out/$mode-sway.log" \
     ../tools/headless.sh $x11 --then "$PWD/check/ime.sh --steps $mode $out" \
     "$out/$mode.png" 'browser: loaded' "$home/run.sh" "$mode" build/Browser/chrome \
     > "$out/$mode-run.log" 2>&1 || true
+      ;;
+  esac
+  # [DEBUG-2365] A first-bar launch keeps its logs only if the bar didn't keep "xyz".
+  case $mode in
+    *-first-*)
+      r=$(cat "$out/$mode.result" 2>/dev/null || echo none)
+      echo "[DEBUG-2365] $mode: $r"
+      if [ "$r" = kept ]; then
+        rm -f "$out/$mode-sway.log" "$out/$mode.png" "$out/$mode-fcitx5.log"
+        rm -rf "$home/profile-$mode"
+      fi
       ;;
   esac
   [ ! -s "$out/$mode.tries" ] ||
@@ -384,5 +434,14 @@ for mode in $modes; do
   else
     echo "ok: $mode"
   fi
+done
+# [DEBUG-2365] The first-bar launches' count.
+for mode in $modes; do
+  case $mode in
+    *-first)
+      [ -s "$out/$mode.tries" ] || continue
+      echo "[DEBUG-2365] $mode: $(grep -c ' closed ' "$out/$mode.tries" || true) closed, $(grep -c ' kept ' "$out/$mode.tries" || true) kept, $(grep -c ' neither ' "$out/$mode.tries" || true) neither, of $(wc -l < "$out/$mode.tries") launches"
+      ;;
+  esac
 done
 [ -z "$failed" ]
