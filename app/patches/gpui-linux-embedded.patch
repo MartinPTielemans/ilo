@@ -1928,7 +1928,7 @@ index cbc962bcff..46c3b3e249 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..225e3364e8 100644
+index 2d40cf7fa9..3cf9336939 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -3232,7 +3232,7 @@ index 2d40cf7fa9..225e3364e8 100644
              }
              _ => {}
          }
-@@ -3479,3 +4081,702 @@ mod tests {
+@@ -3479,3 +4081,695 @@ mod tests {
          );
      }
  }
@@ -3281,35 +3281,28 @@ index 2d40cf7fa9..225e3364e8 100644
 +    let Some(keyboard) = crate::linux::platform::embedded_keyboard() else {
 +        return;
 +    };
-+    // Diagnostic for #2473: why no caret is reported.
-+    let mut why = "no active window has the keys";
 +    let caret = embedded_text_window(parent).and_then(|(window, origin)| {
-+        why = if window.input_handler_out() {
-+            "the window's input handler is checked out"
-+        } else {
-+            "the window's field takes no text or has no bounds"
-+        };
 +        let caret = window.text_caret()?;
-+        Some(Bounds::new(caret.origin + origin, caret.size))
++        Some(caret.map(|caret| Bounds::new(caret.origin + origin, caret.size)))
 +    });
-+    let changed = EMBEDDED_CARETS.with_borrow_mut(|all| {
-+        match all.iter_mut().find(|(each, _)| *each == parent as usize) {
-+            Some((_, last)) if *last == caret => false,
-+            Some((_, last)) => {
-+                *last = caret;
-+                true
-+            }
-+            None => {
-+                all.push((parent as usize, caret));
-+                true
-+            }
-+        }
++    let told = EMBEDDED_CARETS.with_borrow_mut(|all| {
++        let Some((_, last)) = all.iter_mut().find(|(each, _)| *each == parent as usize) else {
++            let caret = caret.flatten();
++            all.push((parent as usize, caret));
++            return Some(caret);
++        };
++        // A field that has the keys but no place yet keeps the caret it had: telling the embedder
++        // none would end its composition, committing a syllable the next key was to change.
++        let caret = match caret {
++            Some(None) => *last,
++            caret => caret.flatten(),
++        };
++        (*last != caret).then(|| {
++            *last = caret;
++            caret
++        })
 +    });
-+    if changed {
-+        match caret {
-+            None => eprintln!("browser: embedded caret none: {why}"),
-+            Some(_) => eprintln!("browser: embedded caret told"),
-+        }
++    if let Some(caret) = told {
 +        (keyboard.text_input)(parent, caret);
 +    }
 +}
@@ -4081,7 +4074,7 @@ index 2d66fed95c..89242e3f08 100644
          &mut self,
          wl_pointer: &WlPointer,
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234ef1..18c9c34495 100644
+index 8d92234ef1..2502ba83d8 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -11,12 +11,13 @@ use calloop::ping::Ping;
@@ -4605,22 +4598,17 @@ index 8d92234ef1..18c9c34495 100644
          let mut state = self.state.borrow_mut();
          if !state.active {
              return;
-@@ -1493,6 +1881,22 @@ impl WaylandWindowStatePtr {
+@@ -1493,6 +1881,17 @@ impl WaylandWindowStatePtr {
          }
      }
  
-+    /// Whether the input handler is out, during a frame or a call to it (diagnostic for #2473).
-+    pub fn input_handler_out(&self) -> bool {
-+        self.state.borrow().input_handler.is_none()
-+    }
-+
-+    /// Where the caret of the text field that has the keys is, if one has.
-+    pub fn text_caret(&self) -> Option<Bounds<Pixels>> {
++    /// Where the caret of the text field that has the keys is, if one has: `Some(None)` while
++    /// that isn't known, as when the field's text changed since it was last laid out.
++    pub fn text_caret(&self) -> Option<Option<Bounds<Pixels>>> {
 +        let mut input_handler = self.state.borrow_mut().input_handler.take()?;
 +        let caret = input_handler
 +            .query_accepts_text_input()
-+            .then(|| input_handler.ime_candidate_bounds())
-+            .flatten();
++            .then(|| input_handler.ime_candidate_bounds());
 +        self.state.borrow_mut().input_handler = Some(input_handler);
 +        caret
 +    }
@@ -4628,7 +4616,7 @@ index 8d92234ef1..18c9c34495 100644
      pub fn get_ime_area(&self) -> Option<Bounds<Pixels>> {
          let mut state = self.state.borrow_mut();
          let mut bounds: Option<Bounds<Pixels>> = None;
-@@ -1598,6 +2002,29 @@ impl WaylandWindowStatePtr {
+@@ -1598,6 +1997,29 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -4658,7 +4646,7 @@ index 8d92234ef1..18c9c34495 100644
      pub fn set_focused(&self, focus: bool) {
          self.state.borrow_mut().active = focus;
          let callback = self.callbacks.borrow_mut().active_status_change.take();
-@@ -1888,9 +2315,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -1888,9 +2310,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn set_title(&mut self, title: &str) {
@@ -4671,7 +4659,7 @@ index 8d92234ef1..18c9c34495 100644
      }
  
      fn set_app_id(&mut self, app_id: &str) {
-@@ -2011,6 +2440,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2011,6 +2435,13 @@ impl PlatformWindow for WaylandWindow {
      fn draw(&self, scene: &Scene) {
          let mut state = self.borrow_mut();
          let state = &mut *state;
@@ -4685,7 +4673,7 @@ index 8d92234ef1..18c9c34495 100644
          let Some(renderer) = &mut state.renderer else {
              return;
          };
-@@ -2046,6 +2482,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2046,6 +2477,11 @@ impl PlatformWindow for WaylandWindow {
          if renderer.draw(scene) {
              state.presentation = PresentationState::Presented;
              self.0.frame_loop.set(FrameLoop::AwaitingCallback);
@@ -4697,7 +4685,7 @@ index 8d92234ef1..18c9c34495 100644
          } else {
              state.presentation = state.presentation.failed();
              self.0.frame_loop.set(FrameLoop::PresentationFailed);
-@@ -2208,6 +2649,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2208,6 +2644,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -4709,7 +4697,7 @@ index 8d92234ef1..18c9c34495 100644
          let state = self.borrow();
          if !state.active {
              return;
-@@ -2215,6 +2661,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2215,6 +2656,13 @@ impl PlatformWindow for WaylandWindow {
          state.client.update_ime_position(bounds);
      }
  
