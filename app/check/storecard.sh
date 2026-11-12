@@ -12,7 +12,7 @@ cat > "$out/site/storecard/index.html" << 'HTML'
 <p>uBlock Origin Lite</p><button id=add>Add to Chrome</button>
 <script>
 const redraw = location.hash != '#plain';
-// With #keep the card keeps every key while it's up, as a modal can.
+// With #keep the card keeps the browser's shortcuts while it's up, as the store's kept ⌘F.
 const keep = location.hash == '#keep';
 function card() {
   const old = document.getElementById('card');
@@ -32,7 +32,8 @@ window.addEventListener('keydown', event => {
     ' on ' + (at ? at.id || at.tagName : 'none');
   // The page's first key is the find's ⌘F: the card redraws while the find is open.
   if (redraw && ++keys == 1) setTimeout(card, 1500);
-  if (keep && redrawn && document.getElementById('card')) event.preventDefault();
+  // A return on its No thanks still answers it, as the store's does (#1297).
+  if (keep && redrawn && document.getElementById('card') && (event.ctrlKey || event.metaKey)) event.preventDefault();
 }, true);
 </script>
 HTML
