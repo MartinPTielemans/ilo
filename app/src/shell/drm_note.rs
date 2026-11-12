@@ -35,7 +35,7 @@ use gpui::{
 
 use super::{
     KEY_CONTEXT, Shell, TITLE,
-    permission::{BESIDE_CLOSE, BUTTONS_TOP, card_button, card_close, card_listener},
+    permission::{BESIDE_CLOSE, BUTTONS_TOP, card_button_wrapping, card_close, card_listener},
 };
 use crate::default_browser::Os;
 use crate::tooltip::{Anchor, Tip};
@@ -391,7 +391,7 @@ impl Shell {
         }
         let (words, offer) = self.note_offer();
         let button = offer.map(|(offer, label)| {
-            card_button(&self.palette, offer.id(), label)
+            card_button_wrapping(&self.palette, offer.id(), label)
                 .on_click(cx.listener(move |shell, _, _, cx| offer.take(shell, cx)))
         });
         // Shown under the pointer, as a row's ×, and always to VoiceOver's cursor, which is no
