@@ -33,7 +33,15 @@ store_shown() {
   send key escape
   expect '^browser: find [0-9]* closed$' "escape didn't close the find"
   if [ -n "$card" ]; then
+    # [PROBE-2520] what the page shows and has focused around the return on No thanks.
+    echo "card found at drive $step" >> "$out/probe-2520.txt"
+    ../tools/window-screenshot.sh "$pid" "$out/store-card-before.png" || true
+    send state
     send key return
+    sleep 2
+    ../tools/window-screenshot.sh "$pid" "$out/store-card-after.png" || true
+    send state
+    probe_card=1
   fi
 }
 # Gives the keyboard to the store page's button with the text $1, lowercase, as the user who finds
@@ -41,6 +49,23 @@ store_shown() {
 # changes with the store's layout and language; its text doesn't.
 focus_button() {
   send key f cmd
+  if [ -n "${probe_card:-}" ]; then
+    # [PROBE-2520] whether the ⌘F after the card is lost or kept by the page, which a second
+    # press hands on.
+    probe_card=
+    shown=
+    for _ in $(seq 100); do logged '^browser: find bar shown$' && shown=1 && break; sleep 0.1; done
+    echo "first ⌘F after the card: ${shown:-lost} (drive $step)" >> "$out/probe-2520.txt"
+    if [ -z "$shown" ]; then
+      ../tools/window-screenshot.sh "$pid" "$out/store-card-lost.png" || true
+      send state
+      send key f cmd
+      for _ in $(seq 100); do logged '^browser: find bar shown$' && shown=1 && break; sleep 0.1; done
+      echo "second ⌘F: ${shown:-lost} (drive $step)" >> "$out/probe-2520.txt"
+      [ -n "$shown" ] || { send click $page_point; send key f cmd; for _ in $(seq 100); do logged '^browser: find bar shown$' && shown=1 && break; sleep 0.1; done; echo "after a click in the page, ⌘F: ${shown:-lost} (drive $step)" >> "$out/probe-2520.txt"; }
+    fi
+    cat "$out/probe-2520.txt" >&2
+  fi
   expect '^browser: find bar shown$' "⌘F didn't open the find bar"
   send type "$1"
   expect "^browser: find [0-9]* open 1 of [0-9]* $1\$" "the store's page has no \"$1\""
