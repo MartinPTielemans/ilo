@@ -298,7 +298,8 @@ if windows; then
     open_little_link "?msix" "$first"
     via_msix=
     msix=1
-    # The last window the app made, the MSIX's link's.
+    # The window the MSIX's link opened, the last the app made: the driver counts them in the order
+    # they opened, closed ones too, and the sign-ins' Little ilo windows came before it (#2603).
     send window "$(grep -c '^browser: window opened ' "$log")"
     send key w cmd
     await "^browser: window closed $little\$" || fail "⌘W didn't close the MSIX's link's Little ilo window"
