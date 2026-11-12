@@ -45,6 +45,11 @@ struct Event {
 /// AppKit's momentum at the speed they lifted at. A trackpad's own events come a little unevenly,
 /// and its fingers' deltas by a quarter either way, from `seed`; the momentum's are smooth.
 fn gesture(lift_ms: f64, seed: u64, speed: impl Fn(f64) -> f64) -> Vec<Event> {
+    gesture_falling(lift_ms, seed, MOMENTUM_TAU_MS, speed)
+}
+
+/// The same, with the momentum falling away as e^(−t/`tau_ms`).
+fn gesture_falling(lift_ms: f64, seed: u64, tau_ms: f64, speed: impl Fn(f64) -> f64) -> Vec<Event> {
     let mut random = seed
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
@@ -83,7 +88,7 @@ fn gesture(lift_ms: f64, seed: u64, speed: impl Fn(f64) -> f64) -> Vec<Event> {
     let mut t = 0.;
     loop {
         t += EVENT_MS;
-        let dx = lifted * EVENT_MS * (-t / MOMENTUM_TAU_MS).exp();
+        let dx = lifted * EVENT_MS * (-t / tau_ms).exp();
         if dx.abs() < 0.1 {
             break;
         }
@@ -287,6 +292,10 @@ type Send = Box<dyn Fn(&mut Shell, Instant, &mut gpui::Window, &mut gpui::Contex
 /// What a run gives: the page's place each step, and the Spaces the shell asked to show.
 struct Run {
     slides: Vec<f32>,
+    /// Each step, the pages drawn and where, as `pages` has them, in Spaces from the shown's place.
+    pages: Vec<Vec<(u64, f32)>>,
+    /// Each step, whether fingers are down on a swipe.
+    down: Vec<bool>,
     shown: Vec<u64>,
     /// When the shell first asked for another Space.
     first_shown_ms: Option<f64>,
@@ -318,6 +327,8 @@ fn run(cx: &mut TestAppContext, end_ms: f64, mut events: Vec<(f64, Send)>) -> Ru
     events.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut events = events.into_iter().peekable();
     let mut slides = Vec::new();
+    let mut pages = Vec::new();
+    let mut down = Vec::new();
     let mut first_shown_ms = None;
     // The core shows a Space as soon as the shell asks, whether an event or a timer asked.
     let show = |cx: &mut gpui::VisualTestContext, when: f64, first: &mut Option<f64>| {
@@ -343,11 +354,19 @@ fn run(cx: &mut TestAppContext, end_ms: f64, mut events: Vec<(f64, Send)>) -> Ru
         to(cx, ms);
         show(cx, ms, &mut first_shown_ms);
         slides.push(shell.read_with(cx, |shell, _| slide(shell)));
+        pages.push(shell.read_with(cx, |shell, _| {
+            let width = shell.width();
+            let pages = shell.pages().into_iter();
+            pages.map(|(space, x)| (space, x / width)).collect()
+        }));
+        down.push(shell.read_with(cx, |shell, _| shell.swipe.is_some()));
         ms += STEP_MS;
     }
     let shown = host.shown.borrow().clone();
     Run {
         slides,
+        pages,
+        down,
         shown,
         first_shown_ms,
     }
@@ -466,6 +485,123 @@ fn swipes_as_the_app_does(cx: &mut TestAppContext, name: &str, events: &[Event])
             step <= app_step + STEP_SLACK,
             "{way}: {step} of a Space in a frame, the app {app_step}"
         );
+    }
+}
+
+/// A hard flick toward the next Space, at `peak` points a millisecond as the fingers lift, with
+/// momentum falling as e^(−t/`tau_ms`), seconds long.
+fn hard_flick(peak: f64, tau_ms: f64, seed: u64) -> Vec<Event> {
+    let lift = 70. + 50. * draw(seed, 7);
+    gesture_falling(lift, seed, tau_ms, move |t| -ramp(t, 0., lift, 0., peak))
+}
+
+impl Run {
+    /// The step the fingers last lifted at, after which the page only settles.
+    fn released(&self) -> usize {
+        self.down
+            .iter()
+            .rposition(|&down| down)
+            .map_or(0, |step| step + 1)
+    }
+
+    /// How far the page went past the Space it ends on, toward the one after, in Spaces.
+    fn past(&self) -> f32 {
+        let end = self.slides.last().copied().unwrap_or(0.);
+        let start = self.slides.first().copied().unwrap_or(0.);
+        let ahead = (end - start).signum();
+        let most = self.slides.iter().map(|place| (place - end) * ahead);
+        most.fold(0., f32::max)
+    }
+
+    /// Once the fingers lifted, the first step the page went further from the place it ends at,
+    /// and from how far to how far, in Spaces: the settle heading on past its place.
+    fn heads_away(&self) -> Option<(f64, f32, f32)> {
+        const SLACK: f32 = 0.002;
+        let end = self.slides.last().copied().unwrap_or(0.);
+        let mut nearest = f32::MAX;
+        for (step, &place) in self.slides.iter().enumerate().skip(self.released()) {
+            let off = (place - end).abs();
+            if off > nearest + SLACK {
+                return Some((step as f64 * STEP_MS, nearest, off));
+            }
+            nearest = nearest.min(off);
+        }
+        None
+    }
+
+    /// The first step two pages were drawn closer than a width apart, over each other.
+    fn overlaps(&self) -> Option<(f64, f32)> {
+        self.pages.iter().enumerate().find_map(|(step, pages)| {
+            let pairs = pages.iter().zip(pages.iter().skip(1));
+            let gaps = pairs.map(|((_, x), (_, y))| (x - y).abs());
+            let gap = gaps.fold(f32::MAX, f32::min);
+            (gap < 0.998).then_some((step as f64 * STEP_MS, gap))
+        })
+    }
+}
+
+/// A hard flick lands on the next Space, as the app's does, and once the demo finds the fingers
+/// lifted, the page settles there without heading on toward the Space after, however long the
+/// momentum runs; the two pages drawn as it moves never overlap.
+#[gpui::test]
+fn a_hard_flick_settles_on_one_space(cx: &mut TestAppContext) {
+    for (peak, tau) in [(2., 400.), (4., 400.), (6., 400.), (4., 800.)] {
+        for (slope, wobble) in [(0., 0.), (0.5, 0.5)] {
+            for seed in 0..3 {
+                let events = drifting(hard_flick(peak, tau, seed), slope, wobble, seed);
+                let end = events.last().map_or(0., |event| event.at_ms) + 400.;
+                let app = in_app(cx, &events, end);
+                assert_eq!(app.shown, vec![4], "the app's");
+                for delivery in deliveries() {
+                    let demo = in_demo(cx, &events, delivery, end);
+                    let way = format!(
+                        "{peak} pt/ms, τ {tau} ms, drift {slope}/{wobble}, seed {seed}, {}",
+                        delivery.name()
+                    );
+                    assert_eq!(demo.shown, app.shown, "{way}: the Spaces shown");
+                    assert_eq!(demo.heads_away(), None, "{way}: after the lift");
+                    assert_eq!(demo.overlaps(), None, "{way}: pages over each other");
+                }
+            }
+        }
+    }
+}
+
+/// For hard flicks of each speed and momentum, drifting or not, in each way a browser hands them
+/// on: in how many the demo shows other Spaces than the app, the page heads away from its place
+/// after the lift, or goes further past it than the app's, and the most it went past in each.
+#[gpui::test]
+#[ignore]
+fn hard_flick_stats(cx: &mut TestAppContext) {
+    for (peak, tau) in [
+        (2., 400.),
+        (3., 400.),
+        (4., 400.),
+        (6., 400.),
+        (4., 800.),
+        (6., 800.),
+    ] {
+        for (slope, wobble) in [(0., 0.), (0.5, 0.5)] {
+            for delivery in deliveries() {
+                let (mut shown, mut away, mut further) = (0, 0, 0);
+                let (mut app_past, mut demo_past) = (0f32, 0f32);
+                for seed in 0..12 {
+                    let events = drifting(hard_flick(peak, tau, seed), slope, wobble, seed);
+                    let end = events.last().map_or(0., |event| event.at_ms) + 400.;
+                    let app = in_app(cx, &events, end);
+                    let demo = in_demo(cx, &events, delivery, end);
+                    shown += usize::from(demo.shown != app.shown);
+                    away += usize::from(demo.heads_away().is_some());
+                    further += usize::from(demo.past() > app.past() + 0.02);
+                    app_past = app_past.max(app.past());
+                    demo_past = demo_past.max(demo.past());
+                }
+                eprintln!(
+                    "{peak} pt/ms τ {tau:>3} drift {slope}/{wobble} {:>22}: other Spaces {shown:>2}/12, heads away after the lift {away:>2}/12, further past {further:>2}/12, most past app {app_past:.3} demo {demo_past:.3}",
+                    delivery.name()
+                );
+            }
+        }
     }
 }
 
