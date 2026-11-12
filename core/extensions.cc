@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -47,7 +48,9 @@
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/browser/extension_system.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/browser/management_policy.h"
 #include "extensions/browser/permissions/active_tab_permission_granter.h"
 #include "extensions/browser/process_map.h"
 #include "extensions/browser/ui_util.h"
@@ -56,6 +59,7 @@
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/command.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/manifest.h"
 #include "extensions/common/manifest_handlers/options_page_info.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -182,8 +186,12 @@ class CrashWatch : public content::RenderProcessHostCreationObserver,
 
 // Extension |id| if it's turned on in |profile| and runs there: in a private window's profile only
 // if the user allowed it in Incognito, as in Chrome, whose off-the-record registry is the
-// original's and lists every extension.
+// original's and lists every extension. Never the ad blocker, whose popup and commands are uBlock
+// Origin's own UI, which Settings › Ad blocking stands for.
 const extensions::Extension* RunsIn(Profile* profile, const std::string& id) {
+  if (IsAdBlocker(id)) {
+    return nullptr;
+  }
   const extensions::Extension* extension =
       extensions::ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(id);
   if (extension && profile->IsOffTheRecord() &&
@@ -412,7 +420,9 @@ class ProfileExtensions : public extensions::ExtensionRegistryObserver,
     std::vector<scoped_refptr<const extensions::Extension>> listed;
     for (const scoped_refptr<const extensions::Extension>& extension :
          registry->GenerateInstalledExtensionsSet()) {
-      if (extensions::ui_util::ShouldDisplayInExtensionSettings(*extension)) {
+      // The ad blocker is Settings › Ad blocking, not an extension of the user's.
+      if (extensions::ui_util::ShouldDisplayInExtensionSettings(*extension) &&
+          !IsAdBlocker(extension->id())) {
         listed.push_back(extension);
       }
     }
@@ -605,7 +615,8 @@ void WindowActions::Report() {
           extension ? extensions::ExtensionActionManager::Get(profile_)->GetExtensionAction(
                           *extension)
                     : nullptr;
-      if (!action) {
+      // Nor its action, pinned before it left the lists or not.
+      if (!action || IsAdBlocker(extension->id())) {
         return;
       }
       std::unique_ptr<Icon>& icon = icons_[extension->id()];
@@ -707,6 +718,32 @@ bool TurnOnExtension(Profile* profile, const std::string& id) {
   }
   extensions::ExtensionRegistrar::Get(profile)->EnableExtension(id);
   return registry->enabled_extensions().Contains(id);
+}
+
+void HoldExtensionsForSafeStart(Profile* profile) {
+  // The app's switch, given at every launch (app/src/safe_start.rs).
+  if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("safe-start") != "1") {
+    return;
+  }
+  // Terminated, as Chrome leaves an extension whose process crashed: not loaded, nothing kept in
+  // its prefs, and listed on Chrome's extensions page with its switch as the user left it and
+  // Remove. The browser's own, a theme and one policy keeps on stay.
+  extensions::ManagementPolicy* policy =
+      extensions::ExtensionSystem::Get(profile)->management_policy();
+  std::vector<extensions::ExtensionId> held;
+  for (const scoped_refptr<const extensions::Extension>& extension :
+       extensions::ExtensionRegistry::Get(profile)->enabled_extensions()) {
+    if (!extensions::Manifest::IsComponentLocation(extension->location()) &&
+        !extension->is_theme() && !policy->MustRemainEnabled(extension.get(), nullptr)) {
+      held.push_back(extension->id());
+    }
+  }
+  extensions::ExtensionRegistrar* registrar = extensions::ExtensionRegistrar::Get(profile);
+  for (const extensions::ExtensionId& id : held) {
+    registrar->TerminateExtension(id);
+  }
+  // check.sh reads this line.
+  LOG(ERROR) << "browser: safe start holds " << held.size() << " extensions";
 }
 
 bool RemoveExtension(Profile* profile, const std::string& id) {
