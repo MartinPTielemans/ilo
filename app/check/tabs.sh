@@ -1380,6 +1380,27 @@ if windows; then
   else
     echo "skip: a menu in a minimized window, as the app wasn't active once its window came back."
   fi
+  # Windows' own Win+D and back with the bar open: the bar closes with the window, and once the
+  # window is back the keyboard is the window's, not the hidden bar's, where what the user typed
+  # went unseen and Ctrl+T closed the bar again (#2545). Real keys, which need the desktop to be
+  # the check's own.
+  if [ -n "${CI:-}" ] && [ "$active" = 1 ]; then
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    send realkey d win
+    bar_gone "Win+D"
+    send realkey d win
+    expect '^browser: command bar hidden, its browser window takes the keyboard$' \
+      "the window back from Win+D left its hidden command bar with the keyboard"
+    send realkey t ctrl
+    expect '^browser: command bar shown$' "Ctrl+T after Win+D and back didn't open the command bar"
+    expect '^browser: command bar window shown$' "the command bar after Win+D isn't on screen"
+    ../tools/window-screenshot.sh "$pid" "$out/command-bar-after-win-d.png" || fail "no window to capture"
+    send key escape
+    bar_gone "Esc in the command bar after Win+D"
+  else
+    echo "skip: Win+D with the command bar open, as real keys need CI's desktop and the app active."
+  fi
   # Moved with the bar open, the window takes the bar along, over the same place, where it stayed
   # behind on the screen, and the window's menu closes, as the Mac's do (#1364).
   # Where each window over the page is, "x,y" in points, in the driver's order, once there's one.
