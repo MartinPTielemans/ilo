@@ -362,7 +362,7 @@ std::string Landed(HWND hwnd) {
 LRESULT CALLBACK HearRealPointer(int code, WPARAM wparam, LPARAM lparam) {
   const auto* hook = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam);
   if (code == HC_ACTION && (hook->dwExtraInfo & ~kRealNumber) == kRealTag) {
-    g_real_heard = std::max(g_real_heard, hook->dwExtraInfo & kRealNumber);
+    g_real_heard = (std::max)(g_real_heard, hook->dwExtraInfo & kRealNumber);
     switch (wparam) {
       case WM_LBUTTONDOWN:
       case WM_RBUTTONDOWN:
