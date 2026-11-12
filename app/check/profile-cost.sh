@@ -1,9 +1,11 @@
 # #2138, not for merge: does ilo load every profile at launch, and what does each cost? For 1, 2 and
-# 4 profiles, each with a Space, the last session's tab in the first profile's Space alone: three
-# launches each, measured 30 s after launch, with the page restored. Each says the profiles whose
+# 4 profiles, each with a Space, the last session's tab in the first profile's Space alone: two
+# launches each, measured 30 s and 60 s after launch, with the page restored (uBlock Origin's
+# process is still settling at 30 s). Each says the profiles whose
 # files the browser's processes hold open, the browser process's memory and the whole tree's, the
 # processes by kind, and launch to the window on screen. In the last, the second profile's Space is
-# shown once (⌃2), and 30 s on it's measured again. Then a fourth launch, traced with Chromium's
+# shown once (⌃2), and 30 s on it's measured again, then the first Space is shown again (⌃1) so the
+# next launch restores it. Then a fourth launch, traced with Chromium's
 # browser and startup categories, says each profile's loading spans. Results in
 # profile-cost/results.txt.
 
@@ -99,10 +101,10 @@ for n in 1 2 4; do
   python3 -I check/profile_cost.py spaces "$dir/Spaces.json" "$n" || fail "the Spaces didn't take more profiles"
   # Makes the new profiles, with what a new profile gets, as a user's are made before a launch.
   pc_launch "$dir" "warm-$n" ""
-  pc_until 30
+  pc_until 20
   say "$n profiles, warm launch: $(grep -c '^browser: added profile' "$log") added, Spaces $(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f3-)"
   pc_quit
-  for round in 1 2 3; do
+  for round in 1 2; do
     name="p$n-r$round"
     pc_launch "$dir" "$name" ""
     pc_painted "setup$n"
@@ -110,7 +112,9 @@ for n in 1 2 4; do
     on_screen=$(sed -n 's/^browser: window on screen at \([0-9.]*\) ms$/\1/p' "$log" | head -1)
     say "$name: window on screen at $on_screen ms, page painted $((fcp - launched)) ms after the launch"
     pc_measure "$name" "$dir"
-    if [ "$round" = 3 ] && [ "$n" -gt 1 ]; then
+    pc_until 60
+    pc_measure "$name-60s" "$dir"
+    if [ "$round" = 2 ] && [ "$n" -gt 1 ]; then
       before=$(grep -c '^browser: space [0-9]* in' "$log" || true)
       sent=$(date +%s%3N)
       send key 2 ctrl
@@ -122,12 +126,19 @@ for n in 1 2 4; do
       launched=$(date +%s%3N)
       pc_until 30
       pc_measure "$name-shown2" "$dir"
+      before=$(grep -c '^browser: space [0-9]* in' "$log" || true)
+      send key 1 ctrl
+      for _ in $(seq 100); do
+        [ "$(grep -c '^browser: space [0-9]* in' "$log" || true)" -gt "$before" ] && break
+        sleep 0.02
+      done
+      sleep 2
     fi
     pc_quit
   done
   pc_launch "$dir" "trace-$n" "--enable-tracing=browser,startup --enable-tracing-format=json --trace-startup-file=$PWD/$pc_dir/trace-$n.json"
-  pc_painted "setup$n"
-  pc_until 20
+  # Tracing slows the launch, so the paint isn't waited for: the profiles load long before 25 s.
+  pc_until 25
   pc_quit
   python3 -I check/profile_cost.py trace "$pc_dir/trace-$n.json" > "$pc_dir/trace-$n.txt" ||
     echo "profile-cost: trace $n didn't read"
