@@ -1224,6 +1224,9 @@ struct Settle {
     next_door: bool,
 }
 
+/// Told a kind of decision the demo's wheel made of a swipe, and what it decided.
+pub type WheelNotes = Rc<dyn Fn(&'static str, &str)>;
+
 /// A page's full screen resizing the window, while `Shell::full_screen_step` waits to time it.
 struct FullScreenTiming {
     entering: bool,
@@ -1393,6 +1396,9 @@ pub struct Shell {
     /// On the web, the way fingers that just landed have gone, held until it's enough to tell
     /// across from along.
     web_undecided: Option<Point<Pixels>>,
+    /// With the demo's `?trace`, told each thing the wheel's events decide of a swipe, as its kind
+    /// and what it decided.
+    web_notes: Option<WheelNotes>,
     /// Where the page of the Space beside drew its tiles, by tab, and its URL field, as 0.
     #[cfg(test)]
     beside_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -1981,6 +1987,7 @@ impl Shell {
             web_wheel: Default::default(),
             web_wheel_quiet: None,
             web_undecided: None,
+            web_notes: None,
             #[cfg(test)]
             beside_frames: Rc::default(),
             button_frames: Rc::default(),
