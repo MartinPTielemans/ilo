@@ -1,3 +1,6 @@
+# check.sh runs this at 790, only when named.
+# It builds a check copy of its own (build.sh updates), on the Mac and Windows, so it runs only
+# when named.
 # Settings › About's Get nightly builds (docs/ux-spec.md › Updates), on a nightly check build
 # (APP_TRACK=nightly, build.sh updates) whose updater reads one of two feeds the run serves, a
 # release feed and a nightly one, for updates signed with a key the run makes and deletes after.

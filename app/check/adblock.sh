@@ -1,3 +1,4 @@
+# check.sh runs this at 190.
 # The browser blocks ads and trackers from a new profile's first page, with nothing to install:
 # uBlock Origin, in the framework, loads into every profile, listed last in the Extensions menu. A
 # filter given for the check, through the same managed settings the browser gives it its own,

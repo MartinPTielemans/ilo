@@ -1,3 +1,4 @@
+# check.sh runs this at 320.
 # A page's own dialogs ask with the browser's dialog over the tab's card, in Chrome's words, each
 # captured while it's up: alert(), confirm() and prompt() from the served page's keys. ↩ answers
 # OK, with what was typed in a prompt, and Esc Cancel, and the page puts the answer in its title.

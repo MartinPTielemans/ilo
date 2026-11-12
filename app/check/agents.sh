@@ -1,3 +1,4 @@
+# check.sh runs this at 80.
 # A Space the driver makes for an agent, through the core as agent code will, is never the user's
 # to see (#1080): the window keeps it apart, as a task's, out of the switcher, the Spaces menu and
 # ⌃1 to ⌃9, and the agent's work shows on its card instead. With the Spaces menu open on the Mac,

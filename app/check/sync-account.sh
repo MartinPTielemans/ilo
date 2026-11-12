@@ -1,3 +1,4 @@
+# check.sh runs this at 440.
 # Settings › Sync signs the browser in to an ilo account, on an ilo-server of the run's own: SQLite,
 # DEV_MODE, which logs its sign-in codes, and a throwaway address, never the hosted server or a real
 # account. ILO_SERVER names the server's binary, built from its repo (check-linux.yml builds it);

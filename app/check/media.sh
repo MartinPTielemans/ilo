@@ -1,3 +1,4 @@
+# check.sh runs this at 260.
 # A tab in a call says so on its row, as Chrome's tab strip does: the camera while its page uses the
 # camera, the microphone alone, or the screen while it shares a screen, a window or a tab, and the
 # tab it shares shows the screen too. While it shares a tab, another tab's menu has Share This Tab

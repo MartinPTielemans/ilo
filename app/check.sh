@@ -1,29 +1,11 @@
 #!/bin/sh
 # Runs the app and checks what it does.
-# Each run's file in check/ says what it checks. ./check.sh tabs spaces does only those runs, in
-# that order, and ./check.sh all of them:
-#   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
-#   split favorites cards extensions adblock adblock-lists windows private blank little capture media
-#   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp rules
-#   ranking appearance about sync sync-account sync-devices switch-frames devices pair filled
-#   scripting notifications calls battery battery-os policies hosts idle peek-motion handback
-#   webrtc count translate pictures boosts sidebar-right foot-bar later-launch
-# The store run installs from Google's Web Store, as sync-extensions does on one device for the
-# account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
-# adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
-# the same with the browser's own, adblock-cost them with ad blocking on and off, and widevine,
-# Linux's alone, downloads Google's Widevine module, so they need the network and run only when
-# named: ./check.sh store.
-# Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
-# which build a check copy of their own (build.sh updates), on the Mac and Windows. So does
-# keychain, which uses the real Keychain, on the prod build and only in a check VM. Shots takes
-# the Store's pictures from pages on the internet, so it runs only when named too. Tab-drag drags a
-# tab's row between windows with the data device's own drag, which only Wayland's sessions can, so it
-# runs only when named, and skips elsewhere, where the windows run checks it.
-# Sync-versions syncs one account with the release ILO_OLD names, installed as ilo's Flatpak, on
-# Linux under Xvfb, so it runs only when named too.
-# Perf measures the browser against #456's targets, and Chrome beside it, which takes it 16 minutes,
-# so it runs only when named too.
+# Each run's file in check/ says what it checks, and its first line where it comes among the runs:
+# "# check.sh runs this at 120." for one of the runs ./check.sh does, or "# check.sh runs this at
+# 700, only when named." for one it does only when named, such as one that needs the network. They
+# go in their numbers' order, the named ones after the others, so a new run is a file of its own and
+# touches nothing shared (#2562). ./check.sh tabs spaces does only those runs, in that order.
+# ./check.sh --runs prints the runs, and --runs default or --runs named those of one kind.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys, scripting and sidebar-right are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -60,6 +42,18 @@ export BROWSER_SPACE_HEADER=shown
 # process prints its stack (#2496).
 export BROWSER_STACK_TRACES=off
 cd "$(dirname "$0")"
+# The runs of kind $1, default or named, or of both, from the first line of each run's file, the
+# default ones first, each kind in its numbers' order and a tie in its names'.
+runs_of() {
+  grep '^# check\.sh runs this at [0-9]*\(, only when named\)\{0,1\}\.$' check/*.sh |
+    sed -e 's|^check/\([^:]*\)\.sh:# check\.sh runs this at \([0-9]*\), only when named\.$|named \2 \1|' \
+      -e 's|^check/\([^:]*\)\.sh:# check\.sh runs this at \([0-9]*\)\.$|default \2 \1|' |
+    grep "^${1:-[a-z]*} " | sort -k1,1 -k2,2n -k3,3 | cut -d' ' -f3 | tr '\n' ' '
+}
+if [ "${1:-}" = --runs ]; then
+  echo $(runs_of "${2:-}")
+  exit 0
+fi
 if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   # Under Xvfb, as CI runs it (check-linux.yml): a 1280 by 800 screen, as the sway session's
   # output, captured whole. openbox manages its windows, as sway does Xwayland's: with none, the
@@ -107,13 +101,8 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   # browser window (#851), so Xvfb on CI is the reference for focus.
   exec ../tools/headless.sh --x11 --run ./check.sh "$@"
 fi
-runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
-runs="$runs split favorites cards extensions adblock adblock-lists windows private blank little capture media"
-runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp rules ranking"
-runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle peek-motion"
-runs="$runs everyday"
-runs="$runs handback webrtc count translate pictures boosts sidebar-right foot-bar later-launch"
-named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
+runs=$(runs_of default)
+named=$(runs_of named)
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;

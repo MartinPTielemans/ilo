@@ -1,3 +1,4 @@
+# check.sh runs this at 410.
 # View › Appearance, and Settings' Appearance, give a page its choice as prefers-color-scheme as it
 # changes, and Automatic gives back the system's: on the Mac through the app's appearance, which the host sets, and off it
 # through the core (bc_set_appearance). Each choice changes the scheme the one before gave, so the

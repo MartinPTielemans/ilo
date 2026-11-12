@@ -1,3 +1,5 @@
+# check.sh runs this at 750, only when named.
+# It needs the network and adblock-parity's sites, so it runs only when named.
 # adblock-parity's 50 sites with the browser's own ad blocker in place of uBlock Origin
 # (--ad-block-engine=native, #2111): the gate it has to pass. It fails where it does worse than
 # uBlock Origin did in the last adblock-parity run, whose table outlives the check in build/, as
