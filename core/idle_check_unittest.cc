@@ -162,5 +162,10 @@ TEST(IdleCheckTest, NothingIsUnloadedWhileOffAndAskingAgainChecksAgain) {
   EXPECT_EQ(host.checked, 2);
 }
 
+// #2392's proof, never merged: a test that fails on purpose, which Core tests must report red.
+TEST(CoreTestsProof, FailsOnPurpose) {
+  EXPECT_EQ(1 + 1, 3);
+}
+
 }  // namespace
 }  // namespace browser_core
