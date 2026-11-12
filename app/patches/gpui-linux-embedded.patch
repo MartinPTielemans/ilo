@@ -1928,7 +1928,7 @@ index cbc962bcff..46c3b3e249 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..0704a53fff 100644
+index 2d40cf7fa9..29273c8309 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -3241,7 +3241,7 @@ index 2d40cf7fa9..0704a53fff 100644
              }
              _ => {}
          }
-@@ -3479,3 +4083,691 @@ mod tests {
+@@ -3479,3 +4083,695 @@ mod tests {
          );
      }
  }
@@ -3292,22 +3292,26 @@ index 2d40cf7fa9..0704a53fff 100644
 +    };
 +    let caret = embedded_text_window(parent).and_then(|(window, origin)| {
 +        let caret = window.text_caret()?;
-+        Some(Bounds::new(caret.origin + origin, caret.size))
++        Some(caret.map(|caret| Bounds::new(caret.origin + origin, caret.size)))
 +    });
-+    let changed = EMBEDDED_CARETS.with_borrow_mut(|all| {
-+        match all.iter_mut().find(|(each, _)| *each == parent as usize) {
-+            Some((_, last)) if *last == caret => false,
-+            Some((_, last)) => {
-+                *last = caret;
-+                true
-+            }
-+            None => {
-+                all.push((parent as usize, caret));
-+                true
-+            }
-+        }
++    let told = EMBEDDED_CARETS.with_borrow_mut(|all| {
++        let Some((_, last)) = all.iter_mut().find(|(each, _)| *each == parent as usize) else {
++            let caret = caret.flatten();
++            all.push((parent as usize, caret));
++            return Some(caret);
++        };
++        // A field that has the keys but no place yet keeps the caret it had: telling the embedder
++        // none would end its composition, committing a syllable the next key was to change.
++        let caret = match caret {
++            Some(None) => *last,
++            caret => caret.flatten(),
++        };
++        (*last != caret).then(|| {
++            *last = caret;
++            caret
++        })
 +    });
-+    if changed {
++    if let Some(caret) = told {
 +        (keyboard.text_input)(parent, caret);
 +    }
 +}
@@ -4079,7 +4083,7 @@ index 2d66fed95c..89242e3f08 100644
          &mut self,
          wl_pointer: &WlPointer,
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234ef1..2ea3302106 100644
+index 8d92234ef1..2502ba83d8 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -11,12 +11,13 @@ use calloop::ping::Ping;
@@ -4607,13 +4611,13 @@ index 8d92234ef1..2ea3302106 100644
          }
      }
  
-+    /// Where the caret of the text field that has the keys is, if one has.
-+    pub fn text_caret(&self) -> Option<Bounds<Pixels>> {
++    /// Where the caret of the text field that has the keys is, if one has: `Some(None)` while
++    /// that isn't known, as when the field's text changed since it was last laid out.
++    pub fn text_caret(&self) -> Option<Option<Bounds<Pixels>>> {
 +        let mut input_handler = self.state.borrow_mut().input_handler.take()?;
 +        let caret = input_handler
 +            .query_accepts_text_input()
-+            .then(|| input_handler.ime_candidate_bounds())
-+            .flatten();
++            .then(|| input_handler.ime_candidate_bounds());
 +        self.state.borrow_mut().input_handler = Some(input_handler);
 +        caret
 +    }
