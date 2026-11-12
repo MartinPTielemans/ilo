@@ -1,7 +1,7 @@
 # Probe for #2502, never merged: what uBlock Origin's selfie write costs a user. Two legs, each on a
 # profile of its own: "new", a new profile's first launch, and "update", a launch whose lists were
 # compiled by one before that quit before the selfie, as after a list update. Each leg launches on
-# 3 tabs and from 30 s switches tabs by ⌘2/⌘3, with a new tab from ⌘T's bar each 10th, until 10 s
+# 3 tabs and from 30 s switches tabs by ⌘2/⌘3, with a new tab from ⌘T's bar each 3rd, until 10 s
 # after the selfie is in both stores, sampling every thread's CPU each 250 ms.
 serve
 cost_dir="$out/selfie-cost"
@@ -92,7 +92,7 @@ cost_leg() {
     fi
     [ -z "$end" ] || [ "$now" -lt "$end" ] || break
     i=$((i + 1))
-    if [ $((i % 10)) = 0 ]; then cost_open; else cost_switch; fi
+    if [ $((i % 3)) = 0 ]; then cost_open; else cost_switch; fi
     sleep 0.3
   done
   touch "$cost_dir/stop"
