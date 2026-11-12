@@ -10,8 +10,9 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, BackgroundExecutor, Bounds, BoxShadow, Context, DispatchPhase, Entity,
@@ -147,6 +148,7 @@ mod translate;
 mod trouble;
 mod undo;
 mod update_banner;
+mod wheel_gestures;
 
 pub use assets::Assets;
 pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
@@ -166,7 +168,7 @@ pub use commands::{
 };
 pub use display_face::display_text;
 pub use drag::{WindowDragEnd, dropped_urls};
-pub use drm_note::PlayReady;
+pub use drm_note::{Elsewhere, PlayReady};
 pub use extensions::{
     Extension, ExtensionAction, ExtensionCommand, menu_item as extension_menu_item,
     pin_menu_item as extension_pin_menu_item,
@@ -313,6 +315,9 @@ const REVEAL_OUT_DAMPING: f32 = 0.76;
 /// The panel's window at rest ends at its edge, and is this much wider while it moves, for the
 /// spring's overshoot.
 const REVEAL_OVERSHOOT: f32 = 8.;
+
+/// The site's demo, in a page's canvas, where wheel events carry no phase.
+const WEB: bool = cfg!(target_family = "wasm");
 
 // Rows make room and close it, a closed tab's row fades and new rows fade in on one spring, Arc's
 // (docs/ux-spec.md › Motion: Row motion). A row's hover fill comes and goes in one frame, and only
@@ -597,8 +602,12 @@ pub const WINDOW_BUTTONS: [(f32, u32); 3] = [
 ];
 // On Linux the browser window is Chromium's without a frame, and on Windows the host takes its
 // title bar away (platform/windows/host.cc), so nothing else draws its buttons: the UI draws them
-// where AppKit's show.
-const DRAWS_WINDOW_BUTTONS: bool = cfg!(any(target_os = "linux", target_os = "windows"));
+// where AppKit's show. The site's demo has no window of an OS's, so it draws them as the Mac's.
+const DRAWS_WINDOW_BUTTONS: bool = cfg!(any(
+    target_os = "linux",
+    target_os = "windows",
+    target_family = "wasm"
+));
 // The third button maximizes on Linux and Windows, as their title bars' does, where on the Mac it
 // goes full screen.
 const ZOOM_GLYPH: &str = match cfg!(any(target_os = "linux", target_os = "windows")) {
@@ -1242,6 +1251,13 @@ impl Settle {
         (offset.abs() > 0.25 || speed.abs() > 10.).then_some(offset)
     }
 
+    /// Keeps no more of the speed than lands the page without passing its place: from `from`, the
+    /// spring passes it going toward it faster than ω·|from|.
+    fn spend(&mut self) {
+        let most = std::f32::consts::TAU / SPACE_SETTLE * self.from.abs();
+        self.velocity = self.velocity.clamp(-most, most);
+    }
+
     fn elapsed(&self) -> f32 {
         self.clock
             .now()
@@ -1370,6 +1386,13 @@ pub struct Shell {
     /// How long each frame drawn while the Spaces' pages moved took the sidebar, in ms, for the
     /// settle's log.
     paging_frames: Rc<RefCell<Vec<f32>>>,
+    /// On the web, the wheel's events cut into fingers landing, moving and lifting, and the timer
+    /// that lifts them once the events stop.
+    web_wheel: wheel_gestures::WheelGestures,
+    web_wheel_quiet: Option<Task<()>>,
+    /// On the web, the way fingers that just landed have gone, held until it's enough to tell
+    /// across from along.
+    web_undecided: Option<Point<Pixels>>,
     /// Where the page of the Space beside drew its tiles, by tab, and its URL field, as 0.
     #[cfg(test)]
     beside_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -1955,6 +1978,9 @@ impl Shell {
             preview_row: None,
             pointer_at: Point::default(),
             paging_frames: Rc::default(),
+            web_wheel: Default::default(),
+            web_wheel_quiet: None,
+            web_undecided: None,
             #[cfg(test)]
             beside_frames: Rc::default(),
             button_frames: Rc::default(),
@@ -4519,7 +4545,7 @@ impl Render for Shell {
             .size_full()
             .relative()
             .font_family(crate::face::UI)
-            .bg(self.palette.tint)
+            .when(!WEB, |shell| shell.bg(self.palette.tint))
             .capture_any_mouse_down(cx.listener(|shell, _, _, cx| shell.leave_keys("press", cx)))
             // The rows, buttons and fields keep their presses. Everywhere else is the window's
             // background, which moves the window as a title bar does.
@@ -4553,13 +4579,14 @@ impl Render for Shell {
                     }
                 }),
             )
-            .child(self.window_background())
+            .children((!WEB).then(|| self.window_background()))
+            .children(WEB.then(|| self.web_backdrop()).into_iter().flatten())
             .child(self.leave_listener(cx))
             // The page views go over the cards, as native views. A task the page area shows takes
             // the card's place, the Space's page pushed out of the window (task_area.rs).
             .when(normal, |shell| {
                 shell
-                    .children(self.cards())
+                    .children((!WEB).then(|| self.cards()).into_iter().flatten())
                     .children(self.little_bar(cx))
                     .children(
                         self.little
@@ -4583,10 +4610,93 @@ impl Render for Shell {
             .child(self.scroll_listener(true, cx))
             .child(self.navigate_listener(cx))
             .children(self.onboarding_layer(window, cx))
+            // The site's demo has one window, the page's canvas, so the reveal's panel is in it.
+            .children(WEB.then(|| {
+                let panel = self.render_reveal(window, cx);
+                let span = div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(self.reveal_span()));
+                let span = if self.right {
+                    span.right_0()
+                } else {
+                    span.left_0()
+                };
+                span.child(panel)
+            }))
     }
 }
 
 impl Shell {
+    /// On the web, the window's ground, tint and colour everywhere but the page's frame, where
+    /// the site's frame shows through the canvas from under it, as Chromium's page view goes over
+    /// the window in the app. GPUI paints over, never through, so the ground goes around the frame
+    /// in four bands, and the frame's rounded corners are filled with the window's colour there.
+    fn web_backdrop(&self) -> Vec<gpui::Div> {
+        let (frame, radius) = self.page_frame(self.viewport);
+        let (width, height) = (self.viewport.width, self.viewport.height);
+        let ground = |left: Pixels, top: Pixels, w: Pixels, h: Pixels| {
+            let window = div()
+                .absolute()
+                .left(-left)
+                .top(-top)
+                .w(width)
+                .h(height)
+                .bg(self.palette.underlay)
+                .child(div().absolute().size_full().bg(self.palette.tint))
+                .child(self.window_background());
+            div()
+                .absolute()
+                .left(left)
+                .top(top)
+                .w(w)
+                .h(h)
+                .overflow_hidden()
+                .child(window)
+        };
+        let mut backdrop = vec![
+            ground(px(0.), px(0.), width, frame.top()),
+            ground(px(0.), frame.bottom(), width, height - frame.bottom()),
+            ground(px(0.), frame.top(), frame.left(), frame.size.height),
+            ground(
+                frame.right(),
+                frame.top(),
+                width - frame.right(),
+                frame.size.height,
+            ),
+        ];
+        if radius > 0. {
+            let radius = px(radius);
+            for top in [frame.top(), frame.bottom() - radius] {
+                let y = f32::from(top + radius / 2.) / f32::from(height).max(1.);
+                // A border's inner edge rounds by its outer radius less its width.
+                let ring = div()
+                    .absolute()
+                    .left(-radius)
+                    .top(frame.top() - radius - top)
+                    .w(frame.size.width + radius * 2.)
+                    .h(frame.size.height + radius * 2.)
+                    .rounded(radius * 2.)
+                    .border(radius)
+                    .border_color(self.window_fill_at(y));
+                let corners = div()
+                    .absolute()
+                    .left(frame.left())
+                    .top(top)
+                    .w(frame.size.width);
+                backdrop.push(corners.h(radius).overflow_hidden().child(ring));
+            }
+        }
+        backdrop
+    }
+
+    /// How wide the site's demo draws the reveal's panel in: as its window in the app, with room
+    /// for its spring past its place.
+    fn reveal_span(&self) -> f32 {
+        REVEAL_INSET + self.width() + REVEAL_OVERSHOOT
+    }
+
     /// The cards under the pages shown: a page's own in a split view, so the gaps between them
     /// show the window, with the focused page's glowing in its ring's colour. While a pane is
     /// being added, its card is there, empty.
@@ -5082,12 +5192,16 @@ impl Shell {
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // On the right, its window ends at the browser window's right edge, and the panel comes
         // out of that edge.
+        let span = match WEB {
+            true => self.reveal_span(),
+            false => f32::from(window.viewport_size().width),
+        };
         let left = match self.right {
-            true => f32::from(window.viewport_size().width) - left - self.width(),
+            true => span - left - self.width(),
             false => left,
         };
-        // Unless a field in the panel has it.
-        if !self.reveal_focus.contains_focused(window, cx) {
+        // Unless a field in the panel has it. On the web the panel is in the shell's own window.
+        if !WEB && !self.reveal_focus.contains_focused(window, cx) {
             window.focus(&self.reveal_focus, cx);
         }
         let panel = div()

@@ -1387,13 +1387,9 @@ impl Browser for Engine {
         }
     }
 
-    fn can_open_in_safari(&self) -> bool {
-        true
-    }
-
-    fn open_in_safari(&self, url: &str, _: &mut App) {
+    fn open_elsewhere(&self, url: &str, _: &mut App) {
         if let Ok(url) = CString::new(url) {
-            unsafe { platform::host_open_in_safari(url.as_ptr()) };
+            unsafe { platform::host_open_elsewhere(url.as_ptr()) };
         }
     }
 
@@ -1673,10 +1669,11 @@ impl Browser for Engine {
         place: site_controls::Place,
         window: gpui::Size<Pixels>,
         extensions: Vec<site_controls::Extension>,
+        profiles: Option<site_controls::Profiles>,
         cx: &mut App,
     ) {
         with_overlays(
-            move |cx| site_controls::show(tab, place, window, extensions, cx),
+            move |cx| site_controls::show(tab, place, window, extensions, profiles, cx),
             cx,
         );
     }

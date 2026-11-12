@@ -600,13 +600,12 @@ pub trait Browser {
     fn copy(&self, text: &str, cx: &mut App);
     /// The clipboard's text, from where `copy` puts it, or None if it holds none.
     fn pasted(&self, cx: &App) -> Option<String>;
-    /// Whether the platform can open a page in Safari, which plays the protected video ilo can't.
-    /// Where it can't, the UI offers no button for it.
-    fn can_open_in_safari(&self) -> bool {
-        false
+    /// The other browser the protected-playback note offers for video ilo can't play, if any.
+    fn elsewhere(&self) -> Option<super::drm_note::Elsewhere> {
+        super::drm_note::Elsewhere::on(self.os(), || self.is_default_browser())
     }
-    /// Opens `url` in Safari, leaving the tab as it is.
-    fn open_in_safari(&self, _url: &str, _cx: &mut App) {}
+    /// Opens `url` there, leaving the tab as it is.
+    fn open_elsewhere(&self, _url: &str, _cx: &mut App) {}
     /// Whether the platform has Safari's engine for a tab's page, which plays the protected video
     /// Chromium can't: macOS 14 or later. Where it hasn't, the note offers Safari instead.
     fn can_use_system_engine(&self) -> bool {
@@ -769,13 +768,15 @@ pub trait Browser {
     /// Opens the tab's find bar with the keyboard.
     fn find(&self, tab: u64, cx: &mut App);
     /// Opens the Site Controls for the site of the tab's page, or closes them if they show:
-    /// hanging from `place` in a window of `window`'s size, listing `extensions`.
+    /// hanging from `place` in a window of `window`'s size, listing `extensions`, with the tab's
+    /// profile and the others while there's more than one.
     fn site_controls(
         &self,
         tab: u64,
         place: crate::site_controls::Place,
         window: Size<Pixels>,
         extensions: Vec<crate::site_controls::Extension>,
+        profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,
     );
     /// The extensions the Site Controls list, if they show for the tab, as the core reported them.

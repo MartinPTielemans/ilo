@@ -112,6 +112,9 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // A drawing of the window, its corners and its page card's at the drawing's scale (#2407).
     "settings.side-radius",
     "settings.side-page-radius",
+    // Share favorites' Spaces and their tiles at the drawing's scale (#2430).
+    "settings.share-space-radius",
+    "settings.share-tile-radius",
 ];
 
 #[test]
@@ -150,11 +153,16 @@ fn every_corner_is_one_of_the_four_radii() {
 #[test]
 fn a_corner_inside_another_is_concentric() {
     use super::{
-        command_bar, hover_card, menu, radius, shell,
+        command_bar, foot_bar, hover_card, menu, radius, shell,
         shell::{extensions, recent_downloads},
         site_controls, toast,
     };
     // outer = inner + inset, where the inset is a token (or two).
+    assert_eq!(foot_bar::RADIUS, foot_bar::BUTTON_RADIUS + foot_bar::RIGHT);
+    assert_eq!(
+        foot_bar::TALL_RADIUS,
+        foot_bar::BUTTON_RADIUS + foot_bar::TALL_RIGHT
+    );
     assert_eq!(
         hover_card::RADIUS,
         hover_card::PICTURE_RADIUS + hover_card::PADDING

@@ -8,11 +8,21 @@
 /// each piece, so a line Chromium logs at the same time can't land inside it, where the checks
 /// wouldn't find it.
 #[macro_export]
+#[cfg(not(target_family = "wasm"))]
 macro_rules! log {
     ($($arg:tt)*) => {{
         use std::io::Write as _;
         _ = std::io::stderr().write_all(format!("{}\n", format_args!($($arg)*)).as_bytes());
     }};
+}
+
+/// The web has no stderr; the page's console is where its lines go.
+#[macro_export]
+#[cfg(target_family = "wasm")]
+macro_rules! log {
+    ($($arg:tt)*) => {
+        web_sys::console::log_1(&format!($($arg)*).into())
+    };
 }
 
 /// Milliseconds on macOS's uptime clock, the one Chromium's `TimeTicks` and the host's lines read,
@@ -60,6 +70,14 @@ pub fn uptime_ms() -> f64 {
     };
     unsafe { clock_gettime(CLOCK_MONOTONIC, &mut now) };
     now.tv_sec as f64 * 1e3 + now.tv_nsec as f64 / 1e6
+}
+
+/// Milliseconds on the page's clock, the site demo's, which has no engine to agree with.
+#[cfg(target_family = "wasm")]
+pub fn uptime_ms() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map_or(0., |clock| clock.now())
 }
 
 /// The core's API, generated from core/public/browser_core.h. Here, rather than in the browser's
@@ -110,6 +128,7 @@ pub mod face;
 #[cfg(target_os = "linux")]
 pub mod flatpak;
 pub mod folder_preview;
+pub mod foot_bar;
 pub mod hover_card;
 pub mod icon_picker;
 pub mod import;
@@ -131,9 +150,9 @@ pub mod palette;
 pub mod passwords;
 pub mod settings_card;
 pub mod settings_column;
+pub mod settings_pictures;
 pub mod settings_rows;
 pub mod settings_search;
-pub mod settings_side;
 pub mod settling;
 pub mod shell;
 pub mod site_controls;

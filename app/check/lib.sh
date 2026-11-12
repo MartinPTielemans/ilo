@@ -472,6 +472,15 @@ in_sight() {
   if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
   send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
   at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
+  # GPUI on Windows takes the driver's wheel messages for lines, about two thirds of the points
+  # asked, which can leave the row under the edge: scroll the rest. Where the card can't scroll
+  # further, nothing draws again and at stays where it was.
+  y=${at#* }
+  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+  rest=$(drawn_after "$1" "^browser: drive $step: ") && at=$rest
+  return 0
 }
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
 # checks it). Escape closes it, leaving the window with no page that the steps after expect. With
@@ -548,6 +557,14 @@ in_browser() {
 page_shortcut() {
   send key "$1" cmd
   expect "^browser: command $2 via page$" "⌘$(echo "$1" | tr a-z A-Z) with the page focused didn't reach the UI"
+}
+# Command $1 ran once since the last command was sent, which $2 names: under Wayland GPUI reads a
+# page's key after Chromium, and once the app's answer has given the UI the keyboard, as closing
+# the page that had it does, GPUI would run the key again (#2442). Read once the command's effect
+# is logged, which comes after a second run would.
+ran_once() {
+  ran=$(since | grep -c "^browser: command $1 via ")
+  [ "$ran" = 1 ] || fail "$2 ran $1 $ran times"
 }
 
 # What the sidebar last logged of $1, "sidebar hovered" or "sidebar tools": 1 or shown, 0 or hidden,

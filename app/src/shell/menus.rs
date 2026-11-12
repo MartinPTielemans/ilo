@@ -73,6 +73,8 @@ pub struct MenuEntry {
     pub favicon: Option<Arc<Image>>,
     /// Whether it heads the items after it, as Arc's Tab Options does, never to be chosen.
     pub header: bool,
+    /// Words after its title in the secondary ink, which say more of it, as Default's model.
+    pub detail: Option<SharedString>,
 }
 
 impl MenuEntry {
@@ -105,6 +107,7 @@ impl MenuEntry {
             page: false,
             favicon: None,
             header: false,
+            detail: None,
         }
     }
 
@@ -1900,6 +1903,15 @@ mod tests {
         ];
         for (title, sentence) in cases {
             assert_eq!(sentence_case(title), sentence);
+        }
+    }
+
+    /// Share favorites' captions under its drawings are its menu titles in sentence case, on
+    /// every OS, so the two can't drift apart.
+    #[test]
+    fn share_favorites_captions_are_its_titles_in_sentence_case() {
+        for scope in crate::shell::FavoritesScope::ALL {
+            assert_eq!(sentence_case(scope.title()), scope.caption());
         }
     }
 

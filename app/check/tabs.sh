@@ -613,6 +613,7 @@ fi
 send key w cmd
 expect "^browser: tab $n closed\$" "⌘W didn't close the right pane"
 expect "^browser: panes $b\$" "⌘W on the right pane didn't leave b's page alone"
+ran_once close-tab "one ⌘W on the right pane"
 switch "4 cmd" "$asks"
 send click $page_point
 send key u

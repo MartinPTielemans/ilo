@@ -146,6 +146,8 @@ pub(super) struct Recorder {
     pub(super) site_controls: RefCell<Vec<(u64, crate::site_controls::Place)>>,
     /// The ids of the extensions the Site Controls were given to list, each time.
     pub(super) site_controls_extensions: RefCell<Vec<Vec<SharedString>>>,
+    /// The profiles the Site Controls were last given for their chip.
+    pub(super) site_controls_profiles: RefCell<Option<crate::site_controls::Profiles>>,
     /// Each time the shell opened the command bar: the URL field's box it opened over, if any.
     pub(super) command_bars: RefCell<Vec<Option<Bounds<Pixels>>>>,
     /// And the tab whose URL it edits, if any.
@@ -828,12 +830,8 @@ impl Browser for Recorder {
         self.record(format!("answer agent {question} {answer:?}"))
     }
 
-    fn can_open_in_safari(&self) -> bool {
-        true
-    }
-
-    fn open_in_safari(&self, url: &str, _: &mut App) {
-        self.record(format!("open in safari {url}"))
+    fn open_elsewhere(&self, url: &str, _: &mut App) {
+        self.record(format!("open elsewhere {url}"))
     }
 
     fn can_use_system_engine(&self) -> bool {
@@ -1582,9 +1580,11 @@ impl Browser for Recorder {
         place: crate::site_controls::Place,
         _: Size<Pixels>,
         extensions: Vec<crate::site_controls::Extension>,
+        profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,
     ) {
         self.site_controls.borrow_mut().push((tab, place));
+        *self.site_controls_profiles.borrow_mut() = profiles;
         self.site_controls_extensions(tab, extensions, cx);
     }
 

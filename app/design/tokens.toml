@@ -371,6 +371,51 @@ not-found = 0xdb1929
 # The command bar's.
 placeholder = 0xffff_ff87
 
+[foot-bar]
+# The bar a mode of the page shows over its bottom centre, Arrange's (#2347) and pointing's (#2352):
+# ours, from their accepted mocks, in the find bar's material (find-bar.fill, the popover level's
+# rim and the system's shadow). Its bottom is this far over the page's.
+bottom = 16.0
+ink = 0xffffffeb
+quiet = 0xffffff8c
+# One line, such as Arrange's: its words, then the buttons. Its corners are a row's, concentric with
+# its last button's over the inset to its right.
+height = 40.0
+radius = 12.0
+left = 16.0
+right = 6.0
+gap = 6.0
+# More room after the words than between the buttons.
+line-gap = 10.0
+text = 13.0
+# Two lines, such as pointing's: who's asking, small and quiet, over its words, then a hint and the
+# buttons. Its words wrap to a second line past `words-width`, and end in an ellipsis after it, so
+# the bar never grows wider. Its corners are a floating card's, concentric with its last button's
+# too, where the mocks had 14 and 8.
+tall-height = 56.0
+tall-radius = 16.0
+tall-left = 16.0
+tall-right = 10.0
+tall-gap = 16.0
+lead = 11.0
+lead-glyph = 12.0
+lead-glyph-gap = 5.0
+lines-gap = 3.0
+hint = 12.0
+words-width = 300.0
+# The words' line, so a second one adds this much.
+words-line = 17.0
+# The buttons: a plate of white over the fill, the key after its label in the quiet ink, and the
+# main one in the accent, its key at `primary-key` of its label.
+button-height = 28.0
+button-pad = 10.0
+# A control's, where the mocks had 8.
+button-radius = 6.0
+button-plate = 0xffffff1a
+key-gap = 6.0
+disabled = 0.38
+primary-key = 0.65
+
 [icon-picker]
 # Arc's, measured at 2× (docs/ux-spec.md › Spaces › Icon). The card is square, and the window
 # holds the arrow over it too.
@@ -576,6 +621,9 @@ text = 13.0
 header-text = 11.0
 # Between the check, the title and what trails it.
 gap = 6.0
+# Between an item's title and its detail in the secondary ink, as Default's model follows
+# "Default": a word space at 13 pt.
+detail-gap = 4.0
 check = 12.0
 chevron = 12.0
 min-width = 200.0
@@ -867,8 +915,6 @@ control-hovered-light = 0.1
 control-pressed = 0.16
 control-pressed-light = 0.135
 popup-width = 155.0
-# Ours: the favorites' longest choice, "In Each Profile's Spaces", needs more than 155.
-favorites-popup-width = 195.0
 popup-end = 0.0
 # Buttons under the groups are 11 below them.
 buttons-top = 11.0
@@ -947,7 +993,9 @@ on-detail = 0.77
 # buttons, then the page's card 4 in from the other edges at radius 5, a heading's line and four
 # of text on it. The chosen one is ringed in the accent 2 off its edge, 2 wide, and the other has
 # a hairline. The buttons are 4 across, 2.5 apart, the Windows glyphs 4 at 3 apart, at a row 6
-# tall 5 down, 4 in.
+# tall 5 down, 4 in. Appearance (#2429) is three of them, the sidebar on the left: Automatic, Light
+# and Dark, Light's and Dark's in that look whatever Settings' own, and Automatic's Light's with
+# Dark's right half over it.
 side-width = 128.0
 side-height = 80.0
 side-radius = 8.0
@@ -982,6 +1030,39 @@ side-glyph = 0.8
 side-mac-close = 0xff5f57
 side-mac-minimize = 0xfebc2e
 side-mac-zoom = 0x28c840
+# Ours (#2430): Share favorites is three drawings at the side-* size, ring and window, each three
+# Spaces' sidebars, the first two on one profile's plate and the third on another's, 6 apart.
+# A sidebar is 32 by 60 at radius 4, tinted with its Space's colour, with four favorites' tiles
+# 13 by 10 at radius 3, 2 apart, over three tabs' bars. Spaces that share favorites show the same
+# four marks, in the same colours and the same shape, which is a list's alone: dots, squares or
+# rings 1.5 wide, so who shares reads without the colours.
+share-space-width = 32.0
+share-space-height = 60.0
+share-space-radius = 4.0
+share-space-padding = 3.0
+share-space-padding-x = 2.0
+share-space-gap = 4.0
+share-tint = 0.22
+share-tint-light = 0.16
+share-tile-width = 13.0
+share-tile-height = 10.0
+share-tile-radius = 3.0
+share-tile-gap = 2.0
+share-tile = 0.1
+share-tile-light = 0xffffff
+share-tile-rim = 0.07
+share-mark = 5.0
+share-mark-square = 1.0
+share-ring = 1.5
+share-tab-height = 3.0
+share-tab-gap = 3.0
+share-plate-radius = 6.0
+share-plate-padding = 3.0
+share-plate-gap = 3.0
+share-plate = 0.06
+share-profiles-gap = 6.0
+# The Spaces' colours: ilo's green, then two of Edit's marks' (capture.markup).
+share-spaces = [0x289054, 0x0a84ff, 0xff9500]
 
 [shell]
 # The docked sidebar's width at first, where the card starts.
@@ -1097,6 +1178,9 @@ pinned-caret-gap = 2.0
 # is this far in from the plate's (Arc 1.171). Rename Space… puts Done there (Arc 1.171).
 space-more = 24.0
 space-more-inset = 6.0
+# Ours (#2339): while there's more than one profile the Space's name is followed, this far after
+# it, by its profile's in the secondary ink, which gives way first.
+space-profile-gap = 6.0
 space-done-width = 32.0
 space-done-height = 26.0
 icon-placeholder = 24.0
@@ -2289,6 +2373,13 @@ lock-slot = 10.0
 lock-glyph = 15.0
 lock-text-gap = 6.0
 lock-right = 8.0
+# Ours (#2339): the profile's chip, against "…" while there's more than one profile: the Profiles
+# glyph, the name, and this chevron this far after it, in the secondary ink.
+profile-chevron = 12.0
+profile-chevron-gap = 4.0
+# Beside a lock in words the chip's name cuts at its end, and with less room than this it goes,
+# the glyph and chevron left, as a letter and an ellipsis say nothing.
+profile-name-min = 24.0
 # The lock's words' cap top in its plate.
 lock-cap = 11.5
 # Ours: the lock button with no certificate to show.
