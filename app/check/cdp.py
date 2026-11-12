@@ -37,7 +37,7 @@ takes a command a line on its standard input:
                   the browser's user ones, that the page's hidden elements match, each with the
                   elements it matches and those still shown; and with BASE, an earlier run's
                   FILE for the same site, the selectors it hid that match shown elements now.
-                  Logs "cdp: hidden SELECTORS ELEMENTS SHOWN missed SELECTORS ELEMENTS"
+                  Logs "cdp: hidden SELECTORS ELEMENTS SHOWN missed SELECTORS ELEMENTS in MS ms"
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, "failed"
@@ -422,22 +422,62 @@ def focus(prefix):
     return value or "none"
 
 
-# The elements the page has at display: none, but not under one, with their parent shown: where
-# an ad blocker's hiding would show. An extension's injected sheets and the browser's user ones
-# never come to DevTools as the page's style sheets do, but their rules do, as they match a node.
+# The elements the page has at display: none from a style sheet, where an ad blocker's hiding would
+# be, one of each tag, id and classes, as one rule mostly hides many alike: not those under one,
+# nor those the page hides itself with an inline style or the hidden attribute. An extension's
+# injected sheets and the browser's user ones never come to DevTools as the page's sheets do, but
+# their rules do, as they match a node, with the sheet's id, which gives its text.
 HIDDEN_NOW = """(() => {
   const kept = new Set(["SCRIPT", "STYLE", "TEMPLATE", "HEAD", "META", "LINK", "TITLE",
                         "NOSCRIPT", "BR", "PARAM", "SOURCE", "TRACK"]);
   const found = [];
+  const seen = new Set();
   for (const element of document.querySelectorAll("body *")) {
-    if (kept.has(element.tagName) || getComputedStyle(element).display !== "none") continue;
+    if (kept.has(element.tagName) || element.hidden || element.style.display === "none") continue;
+    if (getComputedStyle(element).display !== "none") continue;
     const parent = element.parentElement;
     if (parent && getComputedStyle(parent).display === "none") continue;
+    const alike = element.tagName + "#" + element.id + "." + element.getAttribute("class");
+    if (seen.has(alike)) continue;
+    seen.add(alike);
     found.push(element);
-    if (found.length === 1000) break;
+    if (found.length === 300) break;
   }
   return found;
 })()"""
+# The display: none rules' selectors in the sheets given, a selector at a time.
+SELECTORS = """((texts) => {
+  const split = (list) => {
+    const out = [];
+    let depth = 0, start = 0, quote = null;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (quote) {
+        if (c === "\\\\") i++;
+        else if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") quote = c;
+      else if (c === "(" || c === "[") depth++;
+      else if (c === ")" || c === "]") depth--;
+      else if (c === "," && depth === 0) {
+        out.push(list.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    out.push(list.slice(start).trim());
+    return out.filter(Boolean);
+  };
+  const selectors = new Set();
+  for (const text of texts) {
+    const sheet = new CSSStyleSheet();
+    try { sheet.replaceSync(text); } catch (e) { continue; }
+    for (const rule of sheet.cssRules) {
+      if (rule instanceof CSSStyleRule && rule.style.display === "none") {
+        for (const selector of split(rule.selectorText)) selectors.add(selector);
+      }
+    }
+  }
+  return [...selectors];
+})"""
 # Each selector's elements in the page and those of them shown, a box with an area; a selector the
 # page's own engine can't take, as an extended filter's, is skipped.
 COUNT = """((selectors) => {
@@ -445,6 +485,7 @@ COUNT = """((selectors) => {
   for (const selector of selectors) {
     let found;
     try { found = document.querySelectorAll(selector); } catch (e) { continue; }
+    if (!found.length) continue;
     let shown = 0;
     for (const element of found) {
       const box = element.getBoundingClientRect();
@@ -456,27 +497,28 @@ COUNT = """((selectors) => {
 })"""
 
 
-def count(selectors):
-    reply = call("Runtime.evaluate", {"expression": "%s(%s)" % (COUNT, json.dumps(selectors)),
+def evaluate(function, argument):
+    reply = call("Runtime.evaluate", {"expression": "%s(%s)" % (function, json.dumps(argument)),
                                       "returnByValue": True}, session)
-    return json.loads(reply.get("result", {}).get("value") or "{}")
+    return reply.get("result", {}).get("value")
 
 
 def hidden(path, base):
-    """What the ad blocker hides on the attached page: the selectors of the display: none rules,
-    from an extension's injected sheets or the browser's user ones, that the page's hidden
-    elements match. ORIGINS counts the display: none rules they match by where they come from."""
+    """What the ad blocker hides on the attached page: the selectors of the display: none rules
+    in the sheets, an extension's injected ones or the browser's user ones, whose rules the page's
+    hidden elements match, with the elements each matches and those still shown. ORIGINS counts
+    the display: none rules the elements asked match, by where they come from."""
+    began = time.monotonic()
     listed = call("Runtime.evaluate", {"expression": HIDDEN_NOW}, session)["result"]
-    items = call("Runtime.getProperties", {"objectId": listed["objectId"], "ownProperties": True},
-                 session)["result"]
+    items = [item for item in call("Runtime.getProperties", {"objectId": listed["objectId"],
+                                                             "ownProperties": True},
+                                   session)["result"] if item["name"].isdigit()]
     call("DOM.enable", {}, session)
     call("DOM.getDocument", {"depth": 0}, session)
     call("CSS.enable", {}, session)
     origins = {}
-    selectors = set()
+    sheets = {}
     for item in items:
-        if not item["name"].isdigit():
-            continue
         node = call("DOM.requestNode", {"objectId": item["value"]["objectId"]}, session)["nodeId"]
         styles = call("CSS.getMatchedStylesForNode", {"nodeId": node}, session)
         for match in styles.get("matchedCSSRules", []):
@@ -485,21 +527,34 @@ def hidden(path, base):
                        for prop in rule["style"]["cssProperties"]):
                 continue
             origins[rule["origin"]] = origins.get(rule["origin"], 0) + 1
-            if rule["origin"] in ("injected", "user"):
-                texts = rule["selectorList"]["selectors"]
-                selectors.update(texts[i]["text"] for i in match["matchingSelectors"])
+            if rule["origin"] not in ("injected", "user"):
+                continue
+            # A rule with no sheet DevTools can read gives its own selectors alone.
+            sheet = rule.get("styleSheetId") or rule["selectorList"]["text"]
+            if sheet not in sheets:
+                sheets[sheet] = (call("CSS.getStyleSheetText", {"styleSheetId": sheet},
+                                      session)["text"] if "styleSheetId" in rule
+                                 else sheet + " { display: none }")
     call("Runtime.releaseObject", {"objectId": listed["objectId"]}, session)
     call("CSS.disable", {}, session)
     call("DOM.disable", {}, session)
     before = list(json.load(open(base, encoding="utf-8"))["hidden"]) if base else []
-    found = {"hidden": count(sorted(selectors)), "elements": sum(item["name"].isdigit() for item in items), "origins": origins}
-    found["missed"] = {selector: shown for selector, (_, shown) in count(before).items() if shown}
+    found = {
+        "hidden": json.loads(evaluate(COUNT, evaluate(SELECTORS, list(sheets.values())) or [])
+                             or "{}"),
+        "asked": len(items),
+        "sheets": len(sheets),
+        "origins": origins,
+    }
+    found["missed"] = {selector: shown for selector, (_, shown)
+                       in json.loads(evaluate(COUNT, before) or "{}").items() if shown}
+    found["ms"] = int((time.monotonic() - began) * 1000)
     with open(path, "w", encoding="utf-8") as out:
         json.dump(found, out)
-    return "%d %d %d missed %d %d" % (
+    return "%d %d %d missed %d %d in %d ms" % (
         len(found["hidden"]), sum(n for n, _ in found["hidden"].values()),
         sum(shown for _, shown in found["hidden"].values()),
-        len(found["missed"]), sum(found["missed"].values()))
+        len(found["missed"]), sum(found["missed"].values()), found["ms"])
 
 
 for line in sys.stdin:

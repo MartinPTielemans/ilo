@@ -118,7 +118,8 @@ look_hidden() {
   [ ! -s "$before_hides/$name" ] || before=" $(app_path "$before_hides/$name")"
   asked=$(grep -c '^cdp: hidden ' "$cdp_log" || true)
   echo "hidden $(app_path "$PWD/$hides/$name")$before" >&5
-  for _ in $(seq 100); do
+  # It asks DevTools of up to 300 of the page's hidden elements, each.
+  for _ in $(seq 600); do
     [ "$(grep -c '^cdp: hidden ' "$cdp_log" || true)" -gt "$asked" ] && return
     sleep 0.1
   done
