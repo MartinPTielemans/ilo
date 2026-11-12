@@ -14,7 +14,9 @@
 #   - a site that loaded there and doesn't here;
 #   - a host blocked on a site there that this run let through on that site.
 # A host neither run requested counts for neither, as the ads a site serves change from load to
-# load. It needs the network and the sites, so it runs only when named: ./check.sh adblock-parity.
+# load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If the check
+# still stands in either run, the site isn't compared, and the result names it, as a bot check has
+# no ads to block. It needs the network and the sites, so it runs only when named: ./check.sh adblock-parity.
 # It leaves adblock-parity/sites.tsv, a capture a site, and the requests recorded.
 engine=${engine:-ublock}
 
@@ -103,32 +105,45 @@ done
 grep -q '^cdp: recording requests' "$cdp_log" ||
   fail "DevTools didn't record the requests: cdp.py said $(tail -1 "$cdp_log")"
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
-# loaded, or "none" for a load that didn't come within 45 s.
+# loaded, or "none" for a load that didn't come within 45 s, then "bot-check" where Cloudflare's
+# check stood in for the page.
 : > "$starts"
 n=0
 # The sites come on fd 4, as the steps' commands may read their standard input.
 while read -r url <&4; do
   case $url in '' | '#'*) continue ;; esac
   n=$((n + 1))
-  send key l cmd
-  expect '^browser: command bar shown$' "⌘L didn't open the command bar"
-  send type "$url"
-  started=$(ms)
-  send key return
-  loaded=none
-  for _ in $(seq 450); do
-    line=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 "^browser: loaded $tab ") && {
-      loaded="$(($(ms) - started)) ${line#browser: loaded $tab }"
-      break
-    }
-    kill -0 "$pid" 2> /dev/null || gone
-    sleep 0.1
+  first=
+  for go in 1 2; do
+    send key l cmd
+    expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+    send type "$url"
+    started=$(ms)
+    first=${first:-$started}
+    send key return
+    loaded=none
+    for _ in $(seq 450); do
+      line=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 "^browser: loaded $tab ") && {
+        loaded="$(($(ms) - started)) ${line#browser: loaded $tab }"
+        break
+      }
+      kill -0 "$pid" 2> /dev/null || gone
+      sleep 0.1
+    done
+    # Ads load after the page does, from its scripts. adblock-cost, whose two passes have to fit a
+    # run's 20 minutes on Windows' Check, needs no pictures, so it waits only after the last site,
+    # and gives a bot check no second go.
+    [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
+    title=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep "^browser: title $tab " | tail -1)
+    case ${title#browser: title $tab } in
+      'Just a moment'*) bot=" bot-check" ;;
+      *) bot= ;;
+    esac
+    [ -n "$bot" ] && [ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || break
   done
-  echo "$started $url $loaded" >> "$starts"
-  # Ads load after the page does, from its scripts. adblock-cost, whose two passes have to fit a
-  # run's 20 minutes on Windows' Check, needs no pictures, so it waits only after the last site.
+  # The requests of both goes are the site's, from the first's Return on.
+  echo "$first $url $loaded$bot" >> "$starts"
   [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] && continue
-  sleep 8
   ../tools/window-screenshot.sh "$pid" "$dir/$(printf %02d "$n").png" ||
     fail "no window to capture"
 done 4< check/adblock-sites.txt
@@ -188,10 +203,11 @@ for line in open(recorded, encoding="utf-8"):
 
 sites = []
 for line in open(starts, encoding="utf-8"):
-    started, url, rest = line.rstrip("\n").split(" ", 2)
-    load_ms, _, landed = rest.partition(" ")
+    started, url, load_ms, *rest = line.rstrip("\n").split(" ")
+    landed = rest[0] if rest and load_ms != "none" else ""
     ok = load_ms != "none" and not landed.startswith("chrome-error:")
-    sites.append({"at": int(started), "url": url, "loaded": ok, "load_ms": load_ms if ok else ""})
+    sites.append({"at": int(started), "url": url, "loaded": ok, "load_ms": load_ms if ok else "",
+                  "bot": "bot-check" in rest})
 for i, s in enumerate(sites):
     end = sites[i + 1]["at"] if i + 1 < len(sites) else float("inf")
     mine = [r for r in requests if s["at"] <= r["at"] < end]
@@ -203,19 +219,27 @@ for i, s in enumerate(sites):
     s["standin_n"] = sum(r["how"] == "stand-in" for r in mine)
 
 with open(table, "w", encoding="utf-8") as out:
-    out.write("site\tloaded\tload_ms\trequests\tblocked\tstand_ins\tblocked_hosts\tallowed_hosts\n")
+    out.write("site\tloaded\tload_ms\trequests\tblocked\tstand_ins\tblocked_hosts\tallowed_hosts"
+              "\tbot_check\n")
     for s in sites:
         out.write("\t".join([s["url"], "1" if s["loaded"] else "0", s["load_ms"], str(s["requests"]),
                              str(s["blocked_n"]), str(s["standin_n"]), ",".join(s["blocked"]),
-                             ",".join(s["allowed"])]) + "\n")
+                             ",".join(s["allowed"]), "1" if s["bot"] else "0"]) + "\n")
 
 worse = []
+# A site that was Cloudflare's bot check in this run or the baseline's, which an older table
+# doesn't say.
+unchecked = [s["url"] for s in sites if s["bot"]]
 if baseline:
     rows = [line.rstrip("\n").split("\t") for line in open(baseline, encoding="utf-8")][1:]
     before = {r[0]: r for r in rows}
     for s in sites:
         b = before.get(s["url"])
         if not b:
+            continue
+        if len(b) > 8 and b[8] == "1" and not s["bot"]:
+            unchecked.append(s["url"])
+        if s["url"] in unchecked:
             continue
         if b[1] == "1" and not s["loaded"]:
             worse.append(f"{s['url']} loaded with the baseline and doesn't now")
@@ -231,7 +255,8 @@ if worse:
     print("worse than the baseline: " + "; ".join(worse))
 print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median; "
       f"{sum(s['blocked_n'] for s in sites)} requests blocked and "
-      f"{sum(s['standin_n'] for s in sites)} given a stand-in, of {sum(s['requests'] for s in sites)}")
+      f"{sum(s['standin_n'] for s in sites)} given a stand-in, of {sum(s['requests'] for s in sites)}"
+      + (f"; not compared, as Cloudflare's bot check stood in: {', '.join(unchecked)}" if unchecked else ""))
 if worse:
     sys.exit(1)
 PY
