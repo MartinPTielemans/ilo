@@ -299,6 +299,19 @@ jobs:
           $languages.Add("ko-KR")
           Set-WinUserLanguageList $languages -Force
           Get-WinUserLanguageList | Format-List LanguageTag, InputMethodTips
+      # Control for #2474, on its handover branch only: does leaving the Japanese IME freeze a
+      # plain window too?
+      - if: ${{ steps.ime.outputs.need == '1' }}
+        shell: powershell
+        continue-on-error: true
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "ime-control.log"
+          $control = Start-Process powershell -PassThru -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "check\windows-ime-control.ps1", $log
+          if (-not $control.WaitForExit(60000)) {
+            "control: still running after 60 s"
+            Stop-Process -Id $control.Id -Force
+          }
+          Get-Content $log
 
       # The Store's MSIX of this build, for the runs that send something to it, as the links run
       # sends a link (#1427), packed as a release's is (platform/windows/package/msix.sh), when one
