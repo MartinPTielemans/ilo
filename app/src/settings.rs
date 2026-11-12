@@ -53,11 +53,12 @@ use browser::settings_search::{
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
-    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP,
-    FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP,
-    HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME,
-    PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK, SHORT_PADDING, SHORT_ROW, SIDE_ROOM,
-    SIDE_TOP, TEXT_X, TITLE, WIDTH,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
+    DETAIL_LINE, DETAIL_TOP, END_GAP, FAVORITES_POPUP_WIDTH, FIELD_PADDING, FIRST_GROUP,
+    FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM,
+    HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH,
+    ROW_X, SECTION_TEXT, SENT_TUCK, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE,
+    WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -457,7 +458,7 @@ pub struct Settings {
     /// An assistive app asks for the tree, so Settings names what it draws (#1381).
     a11y: bool,
     /// Which switch last changed, and when, for its knob's slide.
-    switched: Option<(&'static str, Instant)>,
+    switched: Option<(SharedString, Instant)>,
     /// The pop-up menu that is open, whose button shows pressed.
     choosing: Option<Popup>,
     /// The profile whose name is in a field for renaming.
@@ -471,6 +472,8 @@ pub struct Settings {
     /// The search at the column's top, whose rows found replace the section's page while it
     /// holds any words.
     search: Entity<TextInput>,
+    /// Ad Blocking's field that adds a filter to My filters.
+    filter: Entity<TextInput>,
     /// What the search last logged it found, for check.sh.
     searched: String,
     /// The row a click on a found section's name showed, which flashes once, and when.
@@ -1258,6 +1261,12 @@ fn view(cx: &mut App) -> Entity<Settings> {
                 .caret_color(look.ink)
         });
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
+        let filter = cx.new(|cx| {
+            TextInput::new("example.com##.banner", cx)
+                .placeholder_color(look.detail)
+                .caret_color(look.ink)
+                .spoken("New filter")
+        });
         // ⇥ stops at the field, after the sections.
         let _ = search.read(cx).focus_handle(cx).tab_stop(true);
         Settings {
@@ -1285,6 +1294,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             recording: None,
             refused: None,
             search,
+            filter,
             searched: String::new(),
             flash: None,
             focus_row: None,
@@ -1618,6 +1628,10 @@ impl Settings {
         let placeholder = self.base().opacity(DETAIL);
         self.search.update(cx, |search, cx| {
             search.set_colors(placeholder.into(), look.ink.into(), selection);
+            cx.notify();
+        });
+        self.filter.update(cx, |filter, cx| {
+            filter.set_colors(look.detail.into(), look.ink.into(), selection);
             cx.notify();
         });
         // check.sh waits for this line.
@@ -2511,33 +2525,12 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Privacy: ad blocking and the sites it's off on, whether copied links leave out trackers,
-    /// whether calls are only relayed, each
+    /// Privacy: whether copied links leave out trackers, whether sites may ask to send
+    /// notifications, whether calls are only relayed, each
     /// profile's browsing data, crash reports where the build names a collector, and the daily
     /// usage count where it names a server.
-    fn privacy(
-        &self,
-        profiles: &[Profile],
-        off_sites: &[OffSite],
-        accent: Rgba,
-        cx: &mut Context<Self>,
-    ) -> Page {
+    fn privacy(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
-        let ad_blocking = unsafe { bc::bc_ad_blocking() };
-        let ad_blocking = self.toggle(
-            "ad blocking",
-            "Block ads and trackers",
-            ad_blocking,
-            set_ad_blocking,
-            accent,
-            cx,
-        );
-        let ad_blocking = setting(
-            look,
-            "Block ads and trackers",
-            Some("uBlock Origin, built in. A site's Site Controls turn it off there.".into()),
-            vec![ad_blocking],
-        );
         let clean_links = self.toggle(
             "clean links",
             "Copy links without tracking",
@@ -2575,15 +2568,7 @@ impl Settings {
             Some(prompts_line.into()),
             vec![prompts_switch],
         );
-        let mut blocks = vec![
-            Block::Rows(vec![ad_blocking]),
-            Block::Rows(vec![clean_links]),
-            Block::Rows(vec![prompts]),
-        ];
-        if !off_sites.is_empty() {
-            blocks.push(Block::Heading("Ads are shown on".into()));
-            blocks.push(Block::Group(self.off_sites(off_sites, cx)));
-        }
+        let mut blocks = vec![Block::Rows(vec![clean_links]), Block::Rows(vec![prompts])];
         let relay = unsafe { bc::bc_relay_calls() };
         let relay = self.toggle(
             "relay calls",
@@ -2699,6 +2684,140 @@ impl Settings {
         )
     }
 
+    /// Ad Blocking: the switch for it everywhere, the sites it's off on, the user's own filters,
+    /// and its filter lists by group, each with its switch, or as an administrator's policy chose
+    /// them. The browser's model (bc_ad_block_lists), which the blocker applies.
+    fn ad_blocking(&self, off_sites: &[OffSite], accent: Rgba, cx: &mut Context<Self>) -> Page {
+        let look = &self.look;
+        let on = unsafe { bc::bc_ad_blocking() };
+        const NAME: &str = "Block ads and trackers";
+        let switch = self.toggle("ad blocking", NAME, on, set_ad_blocking, accent, cx);
+        let line = "A site's Site Controls turn it off there, and say how much it blocked.";
+        let mut blocks = vec![Block::Rows(vec![setting(
+            look,
+            NAME,
+            Some(line.into()),
+            vec![switch],
+        )])];
+        if !off_sites.is_empty() {
+            blocks.push(Block::Heading("Ads are shown on".into()));
+            blocks.push(Block::Group(self.off_sites(off_sites, cx)));
+        }
+        blocks.push(Block::Heading("My filters".into()));
+        blocks.push(Block::Group(self.my_filters(cx)));
+        let lists = ad_block_lists();
+        let locked = unsafe { bc::bc_ad_block_lists_locked() };
+        for (group, heading) in AD_BLOCK_GROUPS {
+            let rows: Vec<Row> = (lists.iter().filter(|list| list.group == group))
+                .map(|list| {
+                    let control = match locked {
+                        true => div()
+                            .text_color(look.detail)
+                            .child(if list.on { "On" } else { "Off" })
+                            .into_any_element(),
+                        false => {
+                            let key = list.key.clone();
+                            let name = format!("ad block list {}", list.key);
+                            let set = move |on, _: &mut App| set_ad_block_list(&key, on);
+                            self.toggle(name, list.title.clone(), list.on, set, accent, cx)
+                        }
+                    };
+                    setting(look, list.title.clone(), None, vec![control])
+                })
+                .collect();
+            if !rows.is_empty() {
+                blocks.push(Block::Heading(heading.into()));
+                blocks.push(Block::Rows(rows));
+            }
+        }
+        let lede = match locked {
+            true => "uBlock Origin, built in, with the filter lists your organization chose.",
+            false => "uBlock Origin, built in, with the filter lists you turn on.",
+        };
+        Page::new(Section::AdBlocking, lede, blocks)
+    }
+
+    /// My filters: the user's own, one a row with Remove, then the field that adds one; or an
+    /// administrator's, as their policy set them.
+    fn my_filters(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let look = &self.look;
+        let locked = unsafe { bc::bc_ad_block_filters_locked() };
+        let rows = ad_block_filters()
+            .into_iter()
+            .enumerate()
+            .map(|(index, filter)| {
+                let remove = (!locked).then(|| {
+                    let remove =
+                        self.button(("ad-block-filter-remove", index as u64), "Remove")
+                            .relative()
+                            .child(self.drawn(format!("remove filter {index}")))
+                            .on_click(cx.listener(move |settings, _, _, cx| {
+                                settings.remove_filter(index, cx)
+                            }));
+                    remove.into_any_element()
+                });
+                line_row(look, filter, None, remove.into_iter().collect())
+            });
+        let mut rows: Vec<gpui::Div> = rows.collect();
+        if locked {
+            rows.push(line_row(look, "Set by your organization", None, Vec::new()));
+            return group(look, rows);
+        }
+        let field = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h(px(CONTROL_HEIGHT))
+            .px(px(FIELD_PADDING))
+            .flex()
+            .items_center()
+            .rounded(px(CONTROL_RADIUS))
+            .bg(look.control)
+            .key_context("Naming")
+            .on_action(
+                cx.listener(|settings, _: &KeepName, window, cx| settings.add_filter(window, cx)),
+            )
+            .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                (settings.filter).update(cx, |field, cx| field.reset("".into(), window, cx));
+            }))
+            .child(self.drawn("filter field".into()))
+            .child(self.filter.clone());
+        let add = self
+            .button("ad-block-filter-add", "Add")
+            .relative()
+            .child(self.drawn("add filter".into()))
+            .on_click(cx.listener(|settings, _, window, cx| settings.add_filter(window, cx)));
+        rows.push(frame().gap(px(CONTROL_GAP)).child(field).child(add));
+        group(look, rows)
+    }
+
+    /// Adds the filter typed in My filters' field, after the others, and empties the field.
+    fn add_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typed = self.filter.read(cx).text().trim().to_string();
+        if typed.is_empty() {
+            return;
+        }
+        let mut filters = ad_block_filters();
+        filters.push(typed.clone());
+        set_ad_block_filters(&filters);
+        // check.sh waits for this line.
+        log!("browser: ad block filter added {typed}");
+        (self.filter).update(cx, |field, cx| field.reset("".into(), window, cx));
+        cx.notify();
+    }
+
+    /// My filters' Remove on the filter at `index`.
+    fn remove_filter(&mut self, index: usize, cx: &mut Context<Self>) {
+        let mut filters = ad_block_filters();
+        if index < filters.len() {
+            let removed = filters.remove(index);
+            set_ad_block_filters(&filters);
+            // check.sh waits for this line.
+            log!("browser: ad block filter removed {removed}");
+            cx.notify();
+        }
+    }
+
     /// The languages a page's translate card said to always translate, each with Remove, after
     /// which a page in it asks again (#671).
     fn always_translated(&self, languages: &[SharedString], cx: &mut Context<Self>) -> gpui::Div {
@@ -2761,7 +2880,7 @@ impl Settings {
         group(look, rows)
     }
 
-    /// Logs the sites Privacy lists with ad blocking off when they change, for check.sh: each
+    /// Logs the sites Ad Blocking lists with ad blocking off when they change, for check.sh: each
     /// site, and its profile when there are others.
     fn log_off_sites(&mut self, sites: &[OffSite]) {
         let listed: Vec<String> = (sites.iter())
@@ -2840,29 +2959,39 @@ impl Settings {
     /// The switch `name`, `on` now, that calls `set` with the other way when clicked.
     fn toggle(
         &self,
-        name: &'static str,
-        spoken: &'static str,
+        name: impl Into<SharedString>,
+        spoken: impl Into<SharedString>,
         on: bool,
         set: impl Fn(bool, &mut App) + 'static,
         accent: Rgba,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let slid = match self.switched {
-            Some((switched, at)) if switched == name => {
+        let name: SharedString = name.into();
+        let slid = match &self.switched {
+            Some((switched, at)) if *switched == name => {
                 (at.elapsed().as_secs_f32() / SLIDE).min(1.)
             }
             _ => 1.,
         };
-        stop_switch(&self.look, name, spoken, on, slid, accent, self.a11y)
-            .on_click(cx.listener(move |settings, _, _, cx| {
-                // check.sh waits for this line.
-                log!("browser: {name} {}", if on { "off" } else { "on" });
-                set(!on, cx);
-                settings.switched = Some((name, browser::motion::start(cx)));
-                cx.notify();
-            }))
-            .child(self.drawn(format!("switch {name}")))
-            .into_any_element()
+        let drawn = self.drawn(format!("switch {name}"));
+        stop_switch(
+            &self.look,
+            name.clone(),
+            spoken,
+            on,
+            slid,
+            accent,
+            self.a11y,
+        )
+        .on_click(cx.listener(move |settings, _, _, cx| {
+            // check.sh waits for this line.
+            log!("browser: {name} {}", if on { "off" } else { "on" });
+            set(!on, cx);
+            settings.switched = Some((name.clone(), browser::motion::start(cx)));
+            cx.notify();
+        }))
+        .child(drawn)
+        .into_any_element()
     }
 
     /// Opens a profile's archive pop-up menu over its button, with the time chosen now, `chosen`,
@@ -4730,6 +4859,75 @@ fn set_ad_blocking(on: bool, _: &mut App) {
     unsafe { bc::bc_set_ad_blocking(on) };
 }
 
+/// Ad Blocking's groups of filter lists, in its order, as the core names them and as the page
+/// heads them.
+const AD_BLOCK_GROUPS: [(&str, &str); 7] = [
+    ("default", "Built-in"),
+    ("ads", "Ads"),
+    ("privacy", "Privacy"),
+    ("malware", "Malware"),
+    ("multipurpose", "Multipurpose"),
+    ("annoyances", "Annoyances"),
+    ("regions", "Regional"),
+];
+
+/// One of the ad blocker's filter lists, as Ad Blocking lists it.
+struct AdBlockList {
+    key: SharedString,
+    group: SharedString,
+    title: SharedString,
+    on: bool,
+}
+
+/// The ad blocker's filter lists, by group and title, each on or off.
+fn ad_block_lists() -> Vec<AdBlockList> {
+    let lists = core_string(bc::bc_ad_block_lists);
+    (lists.lines())
+        .filter_map(|line| {
+            let mut parts = line.splitn(4, '\t');
+            let (key, group, on) = (parts.next()?, parts.next()?, parts.next()?);
+            Some(AdBlockList {
+                key: key.to_owned().into(),
+                group: group.to_owned().into(),
+                on: on == "1",
+                title: parts.next()?.to_owned().into(),
+            })
+        })
+        .collect()
+}
+
+fn set_ad_block_list(key: &str, on: bool) {
+    let Ok(key) = CString::new(key) else {
+        return;
+    };
+    unsafe { bc::bc_set_ad_block_list(key.as_ptr(), on) };
+}
+
+/// My filters, each line that holds one.
+fn ad_block_filters() -> Vec<String> {
+    let filters = core_string(bc::bc_ad_block_filters);
+    (filters.lines().map(str::trim))
+        .filter(|filter| !filter.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn set_ad_block_filters(filters: &[String]) {
+    let Ok(filters) = CString::new(filters.join("\n")) else {
+        return;
+    };
+    unsafe { bc::bc_set_ad_block_filters(filters.as_ptr()) };
+}
+
+/// A string the core's `copy` copies, as bc_crash_reports_collector does.
+fn core_string(copy: unsafe extern "C" fn(*mut std::ffi::c_char, usize) -> usize) -> String {
+    let length = unsafe { copy(std::ptr::null_mut(), 0) };
+    let mut text = vec![0u8; length + 1];
+    unsafe { copy(text.as_mut_ptr().cast(), text.len()) };
+    text.truncate(length);
+    String::from_utf8_lossy(&text).into_owned()
+}
+
 /// On, a page's WebRTC goes only through its TURN relays, as it does in a profile with a proxy.
 fn set_relay_calls(on: bool, _: &mut App) {
     unsafe { bc::bc_set_relay_calls(on) };
@@ -4761,11 +4959,7 @@ pub(crate) fn collector_name(host: &str) -> String {
 
 /// The host crash reports go to, or nothing in a build that names none.
 pub(crate) fn crash_reports_collector() -> String {
-    let length = unsafe { bc::bc_crash_reports_collector(std::ptr::null_mut(), 0) };
-    let mut host = vec![0u8; length + 1];
-    unsafe { bc::bc_crash_reports_collector(host.as_mut_ptr().cast(), host.len()) };
-    host.truncate(length);
-    String::from_utf8_lossy(&host).into_owned()
+    core_string(bc::bc_crash_reports_collector)
 }
 
 fn set_link_previews(previews: bool, _: &mut App) {
@@ -5242,6 +5436,7 @@ impl Render for Settings {
             );
         if self
             .switched
+            .as_ref()
             .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < SLIDE)
         {
             window.request_animation_frame();
@@ -5437,10 +5632,11 @@ impl Settings {
                 self.profiles(&profiles, cx)
             }
             Section::Passwords => self.passwords(&profiles(), accent, cx),
-            Section::Privacy => {
+            Section::Privacy => self.privacy(&profiles(), accent, cx),
+            Section::AdBlocking => {
                 let off_sites = off_sites();
                 self.log_off_sites(&off_sites);
-                self.privacy(&profiles(), &off_sites, accent, cx)
+                self.ad_blocking(&off_sites, accent, cx)
             }
             Section::Sync => Page::new(
                 Section::Sync,
@@ -5493,7 +5689,8 @@ impl Settings {
             pages.push(self.agents(&agents, accent, cx));
         }
         pages.push(self.shortcuts(accent, cx));
-        pages.push(self.privacy(&profiles, &off_sites(), accent, cx));
+        pages.push(self.privacy(&profiles, accent, cx));
+        pages.push(self.ad_blocking(&off_sites(), accent, cx));
         pages.push(self.import_export(cx));
         pages.push(self.about(accent, cx));
         // In the column's order, as the results run.

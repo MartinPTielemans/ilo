@@ -405,6 +405,9 @@ struct Overlay {
   HostBlurView* blur = nil;
   // The browser it shows over.
   Browser* over = nullptr;
+  // The window of Chromium's over the page that had the keyboard as it showed, such as a tab's
+  // dialog, which gets it back as the overlay hides.
+  __weak NSWindow* keyboard_from = nil;
   bool shown = false;
   void (*dismissed)(void) = nullptr;
   double radius = 0;
@@ -915,6 +918,17 @@ NSWindow* KeyWindowOver(Browser* browser) {
     return browser->offer;
   }
   return browser->window;
+}
+
+// The window that gets the keyboard back as |overlay| hides: the window of Chromium's that had it
+// as the overlay showed, while it's still over the page, else as KeyWindowOver. A tab's dialog,
+// such as Chrome's warning before http, blocks its page's input, which drops ilo's shortcuts too
+// before the core can ask about them, so with the page's view given the keyboard they'd be lost
+// (#2625).
+NSWindow* KeyWindowAfter(Overlay& overlay, Browser* browser) {
+  NSWindow* back = overlay.keyboard_from;
+  overlay.keyboard_from = nil;
+  return back.visible && back.parentWindow == browser->window ? back : KeyWindowOver(browser);
 }
 
 // The dialog's frame over |browser|'s window, by its insets.
@@ -3026,6 +3040,9 @@ void host_show_overlay(int index,
     host_hide_overlay(index);
     overlay->shown = true;
     overlay->over = browser;
+    NSWindow* key = NSApp.keyWindow;
+    const bool chromium = [key isKindOfClass:NSClassFromString(@"NativeWidgetMacNSWindow")];
+    overlay->keyboard_from = chromium && key.parentWindow == browser->window ? key : nil;
     HoldKeys(overlay->window);
   }
   // The window still holds what it drew when it last closed, such as the previous query. It goes
@@ -3143,7 +3160,7 @@ void host_hide_overlay(int index) {
     [overlay->window orderOut:nil];
     overlay->shadow.alphaValue = 0;
   }
-  [KeyWindowOver(browser) makeKeyWindow];
+  [KeyWindowAfter(*overlay, browser) makeKeyWindow];
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
   if (overlay->key_at_hide) {
     overlay->key_at_hide = false;
@@ -3310,7 +3327,7 @@ bool host_fold_overlay(int index,
         window.alphaValue = 1;
         window.ignoresMouseEvents = NO;
       }];
-  [KeyWindowOver(browser) makeKeyWindow];
+  [KeyWindowAfter(*overlay, browser) makeKeyWindow];
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
   return true;
 }

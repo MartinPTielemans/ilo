@@ -1,0 +1,19 @@
+# ilo's rebase for Chromium 157 (engine/tree.sh): 157 renames V8's v8_use_metagen_instance_types
+# to v8_use_metagen. Metagen reads V8's headers with the prebuilt libclang in
+# third_party/llvm-libclang, which ungoogled-chromium's pruning takes out, so it stays off.
+is_official_build=true
+symbol_level=0
+disable_fieldtrial_testing_config=true
+blink_enable_generated_code_formatting=false
+blink_symbol_level=0
+ffmpeg_branding="Chrome"
+proprietary_codecs=true
+fatal_linker_warnings=false
+rtc_use_pipewire=true
+is_clang=true
+is_debug=false
+use_kerberos=false
+use_sysroot=true
+use_vaapi=true
+use_system_libffi=false
+v8_use_metagen=false
