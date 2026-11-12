@@ -36,8 +36,13 @@ impl Host for Recorder {
     fn show(&self, window: u64) {
         self.push(format!("show {window}"));
     }
-    // A frame of the motion, which tells nothing of what the user did.
-    fn drew(&self, _: Bounds<Pixels>, _: f32, _: f32) {}
+    // A frame of the motion, which tells nothing of what the user did, but for the hole a page
+    // under the window shows through.
+    fn drew(&self, page: Bounds<Pixels>, _: f32, _: f32) {
+        if self.under.get() {
+            self.push(format!("hole {}", describe(page)));
+        }
+    }
     fn page_under(&self) -> bool {
         self.under.get()
     }
@@ -248,58 +253,72 @@ fn it_shows_the_site() {
     assert_eq!(site_of("http://[::1]:8080/"), "[::1]");
 }
 
-/// Where its page shows under the window, it's laid out in the card's frame from the first, at
-/// half its size around the link, to where it rests, and goes into the link as the card shrinks
-/// back, before the window's page has the keyboard back: its resting frame never shows outside the
-/// card (#2519).
+/// Where its page shows under the window, it's laid out at its size from the first and never
+/// resized by the motion: out of sight while the card grows with a plate in its place, under the
+/// plate as the card comes to rest, and through the hole from the next frame. As it closes, the
+/// plate fills the hole the frame before the hole closes and the page leaves, before the window's
+/// page has the keyboard back (#2519).
 #[gpui::test]
-fn a_page_under_the_window_moves_with_the_card(cx: &mut TestAppContext) {
+fn a_page_under_the_window_waits_for_the_card(cx: &mut TestAppContext) {
     let host = Recorder::default();
     host.under.set(true);
     let mut shown = Shown::on(host, cx);
-    assert_eq!(shown.calls()[..2], ["place 7 348 153 219 214 r8", "show 1"]);
-    // A frame once it has settled lays the page out where it rests. The motion's clock is the
-    // wall's, so its window came on screen as long ago as it opens.
-    shown.cx.cx.update(|cx| {
-        update(cx, |preview, _, _| {
-            let shown = preview.preview.as_mut().expect("no preview");
-            shown.shown = Some(Instant::now() - Duration::from_secs_f32(OPEN));
-        })
-    });
-    shown.cx.update(|window, _| window.refresh());
-    shown.cx.run_until_parked();
-    assert_eq!(shown.calls(), [PLACED]);
+    let calls = shown.calls();
+    assert_eq!(calls[..2], [OUT_OF_SIGHT, "show 1"]);
+    assert!(calls[2..].iter().all(|call| call == NO_HOLE), "{calls:?}");
+    rest(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.calls(), [PLACED, NO_HOLE]);
+    frame(&mut shown);
+    assert_eq!(shown.calls(), [HOLE]);
     shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    // The key's own frame, then the plate's in the open hole, then the hole closes and the page
+    // leaves, and only then does the window's page have the keyboard back.
+    let calls = shown.calls();
     assert_eq!(
-        shown.calls(),
-        [
-            "place 7 400 200 1 1 r0",
-            "release",
-            "hide",
-            "close 7",
-            CLOSED
-        ]
+        calls[..5],
+        [HOLE, HOLE, NO_HOLE, OUT_OF_SIGHT, "release"],
+        "{calls:?}"
     );
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
 }
 
-/// Under Reduce Motion the card fades in where it rests, and a page under the window, which can't
-/// fade, waits at the link until the card has.
+/// Under Reduce Motion the card fades in where it rests, and the page waits out of sight for it
+/// all the same.
 #[gpui::test]
 fn under_reduce_motion_a_page_under_the_window_waits_for_the_card(cx: &mut TestAppContext) {
     cx.update(|cx| cx.set_reduce_motion(true));
     let host = Recorder::default();
     host.under.set(true);
     let mut shown = Shown::on(host, cx);
-    assert_eq!(shown.calls(), ["place 7 400 200 1 1 r16", "show 1"]);
+    assert_eq!(shown.calls()[..2], [OUT_OF_SIGHT, "show 1"]);
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.calls(), [PLACED, NO_HOLE, HOLE]);
+}
+
+/// Where a page under the window waits: at its size, left of the window.
+const OUT_OF_SIGHT: &str = "place 7 -1438 106 438 428 r16";
+const NO_HOLE: &str = "hole 400 200 0 0";
+const HOLE: &str = "hole 296 106 438 428";
+
+/// Its motion's clock is the wall's, so its window came on screen as long ago as it opens.
+fn rest(shown: &mut Shown) {
     shown.cx.cx.update(|cx| {
         update(cx, |preview, _, _| {
             let shown = preview.preview.as_mut().expect("no preview");
             shown.shown = Some(Instant::now() - Duration::from_secs_f32(OPEN));
         })
     });
+}
+
+/// A frame of the preview's window.
+fn frame(shown: &mut Shown) {
     shown.cx.update(|window, _| window.refresh());
     shown.cx.run_until_parked();
-    assert_eq!(shown.calls(), [PLACED]);
 }
 
 /// Esc closes it back into the link, and its page once it has left.

@@ -172,10 +172,10 @@ fn page_in(card: Bounds<Pixels>) -> Bounds<Pixels> {
     )
 }
 
-/// Where a page under the window goes while it isn't to show: a point, at `about`, as the core
-/// lays a page out in a frame of some size.
-fn away(about: Point<Pixels>) -> Bounds<Pixels> {
-    Bounds::new(about, size(px(1.), px(1.)))
+/// Where a page under the window waits while it isn't to show, at its size where it rests, `rest`:
+/// left of the window's content, past any margin round it, where the window clips it.
+fn out_of_sight(rest: Bounds<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(point(-rest.size.width - px(1000.), rest.top()), rest.size)
 }
 
 /// The card with its page at `page`.
@@ -473,6 +473,11 @@ struct Preview {
     settled: bool,
     /// Where its page was laid out last.
     placed: Bounds<Pixels>,
+    /// Whether a page under the window shows through its hole.
+    cut: bool,
+    /// Whether the window's page is to have the keyboard back once a page under the window has
+    /// left, as it's closing.
+    releasing: bool,
     /// Once it's leaving: when, how, and where the motion was.
     leaving: Option<(Instant, Leave, Pose)>,
     _leave: Option<Task<()>>,
@@ -499,6 +504,14 @@ impl Preview {
             scale: crate::motion::scale(pose.scale, cx),
             kept,
             ..pose
+        }
+    }
+
+    /// Lays a page under the window out at `at`, unless it's there.
+    fn lay_out(&mut self, host: &dyn Host, at: Bounds<Pixels>) {
+        if self.placed != at {
+            self.placed = at;
+            host.place(self.tab, at, RADIUS);
         }
     }
 
@@ -649,23 +662,17 @@ pub fn show(
             shown: None,
             settled: false,
             placed: page_in(card(page)),
+            cut: false,
+            releasing: false,
             leaving: None,
             _leave: None,
         };
-        let (mut at, mut corners) = (shown.placed, RADIUS);
-        // A page under the window starts in the card's first frame, and each frame lays it out:
-        // under Reduce Motion, once the card has faded in.
+        // A page under the window is laid out at its size from the first, and waits out of sight
+        // while the card grows (render).
         if preview.host.page_under() {
-            let pose = shown.drawn(cx);
-            let (_, about, first) = frames(pose, page, link);
-            (at, corners) = (first.intersect(&shown.placed), RADIUS * pose.scale);
-            shown.placed = at;
-            if crate::motion::still(cx) {
-                shown.placed = Bounds::new(about, Size::default());
-                at = away(about);
-            }
+            shown.placed = out_of_sight(shown.placed);
         }
-        preview.host.place(tab, at, corners);
+        preview.host.place(tab, shown.placed, RADIUS);
         preview.host.show(window);
         preview.preview = Some(shown);
         // The page has the keyboard, and the preview's keys are there once a click gives it to the
@@ -689,9 +696,8 @@ pub fn page_moved(window: u64, (page, radius): (Bounds<Pixels>, f32), cx: &mut A
         shown.page = page;
         shown.radius = radius;
         // A page under the window is laid out by the frame it draws next.
-        match host.page_under() {
-            true => shown.placed = Bounds::default(),
-            false => host.place(shown.tab, page_in(card(page)), RADIUS),
+        if !host.page_under() {
+            host.place(shown.tab, page_in(card(page)), RADIUS);
         }
         cx.notify();
     });
@@ -788,7 +794,13 @@ impl LinkPreview {
     /// Closes the preview back into its link, giving the browser window the keyboard and the
     /// clicks at once, and its page once it has left. Whether it was showing.
     fn close(&mut self, why: &str, cx: &mut Context<Self>) -> bool {
-        self.leave(Leave::Close, why, CLOSE, cx)
+        // A page under the window can't leave once the user has left it, as laying it out would
+        // take the keyboard after them, so the preview goes at once rather than shrink over it.
+        let seconds = match why == "dismissed" && self.host.page_under() {
+            true => 0.,
+            false => CLOSE,
+        };
+        self.leave(Leave::Close, why, seconds, cx)
     }
 
     /// Grows the preview into the tab's place, then keeps its page there as a Today tab.
@@ -814,14 +826,12 @@ impl LinkPreview {
             "closing"
         };
         log!("browser: link preview {what} ({why})");
-        // A page under the window goes as the card starts to shrink, while it still has the
-        // keyboard, which release gives back. One dismissed was released already, as the user
-        // left, and laying it out would take the keyboard after them.
-        if how == Leave::Close && self.host.page_under() && why != "dismissed" {
-            let (_, about, _) = frames(shown.pose(), shown.page, shown.link);
-            self.host.place(shown.tab, away(about), 0.);
+        // A page under the window that shows leaves in the card's frames first (render), while it
+        // still has the keyboard, as laying it out takes it.
+        shown.releasing = how == Leave::Close && shown.cut && why != "dismissed";
+        if !shown.releasing {
+            self.host.release();
         }
-        self.host.release();
         let tab = shown.tab;
         shown._leave = Some(cx.spawn(async move |preview, cx| {
             cx.background_executor()
@@ -963,30 +973,56 @@ impl Render for LinkPreview {
         }
         let (card_frame, about, page) = frames(pose, shown.page, shown.link);
         let under = self.host.page_under();
-        // A page under the window shows only where it rests, and the host hears again as that
-        // moves. Nothing of the window's draws over it but the dim, which it shows through, so
-        // it's laid out in the card's frame as that grows, and goes as the card shrinks back
-        // (leave), or its resting frame would show from the first frame to the last (#2519).
-        // Under Reduce Motion the card fades in where it rests, and the page, which can't fade,
-        // waits for it.
-        let closing = matches!(shown.leaving, Some((_, Leave::Close, _)));
-        let held = closing || (pose.page < 1. && crate::motion::still(cx));
-        let page = match under {
-            true if held => Bounds::new(about, Size::default()),
-            true => page.intersect(&page_in(card(shown.page))),
-            false => page,
-        };
         let page_radius = shown.page_radius(pose.kept);
+        // A page under the window shows only through the window's hole, where nothing of the
+        // window's draws over it, and the host hears again as that moves. It can't scale or fade,
+        // and isn't resized for the motion, as a page reads its size as it loads (#2519): it waits
+        // out of sight while the card grows with a plate where it will show, comes in under the
+        // plate as the card comes to rest, and shows through the hole from the next frame. As it
+        // closes, the plate is in the hole the frame before the hole closes and the page leaves,
+        // and the card shrinks back with it.
+        let mut leave_to = None;
+        let (page, plate) = match under {
+            false => (page, false),
+            true => {
+                let rest = page_in(card(shown.page));
+                let none = Bounds::new(about, Size::default());
+                let how = shown.leaving.as_ref().map(|(_, how, _)| *how);
+                match (how, shown.cut) {
+                    (None, true) => {
+                        shown.lay_out(&*self.host, rest);
+                        (rest, false)
+                    }
+                    (None, false) if !moving => {
+                        shown.cut = shown.placed == rest;
+                        shown.lay_out(&*self.host, rest);
+                        window.request_animation_frame();
+                        (if shown.cut { rest } else { none }, false)
+                    }
+                    (Some(Leave::Close), true) => {
+                        shown.cut = false;
+                        window.request_animation_frame();
+                        (shown.placed, true)
+                    }
+                    (Some(Leave::Keep), true) => (page.intersect(&rest), false),
+                    _ => {
+                        if how.is_none() || shown.releasing {
+                            leave_to = Some(out_of_sight(rest));
+                        }
+                        (none, false)
+                    }
+                }
+            }
+        };
         if moving || settling || under {
             self.host.drew(page, page_radius * pose.scale, pose.page);
         }
-        if under && shown.leaving.is_none() && shown.placed != page {
-            shown.placed = page;
-            let at = match held {
-                true => away(about),
-                false => page,
-            };
-            self.host.place(shown.tab, at, page_radius * pose.scale);
+        // The page leaves once the hole has closed over it.
+        if let Some(at) = leave_to {
+            shown.lay_out(&*self.host, at);
+            if std::mem::take(&mut shown.releasing) {
+                self.host.release();
+            }
         }
         if settling {
             // check.sh reads these lines, the button's before it waits on the other, to rest on it.
@@ -1029,11 +1065,11 @@ impl Render for LinkPreview {
             true => {
                 let hole = (scaled_about(page, 1. / pose.scale, about), page_radius);
                 let color = Hsla::from(palette.overlay);
-                let colors = (
-                    color,
-                    color.opacity(1. - pose.page),
-                    Level::Modal.rim_in(&palette),
-                );
+                let coming = match plate {
+                    true => color,
+                    false => color.opacity(1. - pose.page),
+                };
+                let colors = (color, coming, Level::Modal.rim_in(&palette));
                 let frame = canvas(
                     |_, _, _| {},
                     move |_, _, window, _| {
