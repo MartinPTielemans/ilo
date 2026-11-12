@@ -53,6 +53,16 @@ impl FavoritesScope {
         }
     }
 
+    /// Its name under its drawing in Settings, a caption, so in sentence case on every OS as the
+    /// pane's other lines are. Space keeps its capital: it's ours.
+    pub fn caption(self) -> &'static str {
+        match self {
+            Self::Every => "In every Space",
+            Self::Profile => "In each profile's Spaces",
+            Self::Space => "In each Space",
+        }
+    }
+
     pub fn to_core(self) -> i32 {
         match self {
             Self::Every => 0,

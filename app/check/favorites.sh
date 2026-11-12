@@ -342,7 +342,7 @@ in_sight "share favorites In Each Profile's Spaces" ||
 # Picked in the dark look, and in the light one below, to capture the row in each.
 send menu "Appearance › Dark"
 expect '^browser: appearance dark$' "View › Appearance › Dark didn't change the appearance"
-in_sight "share favorites option In Each Space" || fail "Settings didn't draw In Each Space's drawing"
+in_sight "share favorites option In each Space" || fail "Settings didn't draw In Each Space's drawing"
 send clickkey $at
 expect "^browser: favorites scope In Each Space\$" "a click on In Each Space's drawing didn't set it"
 expect "^browser: settings share favorites In Each Space at " "Share favorites didn't show In Each Space"
@@ -752,7 +752,7 @@ expect '^browser: profile [0-9]* archive tabs after 12 hours (default)$' \
 in_sight "share favorites In Each Space" || fail "Settings didn't keep Each Space across the quit"
 send menu "Appearance › Light"
 expect '^browser: appearance light$' "View › Appearance › Light didn't change the appearance"
-in_sight "share favorites option In Each Profile's Spaces" ||
+in_sight "share favorites option In each profile's Spaces" ||
   fail "Settings didn't draw In Each Profile's Spaces' drawing"
 send clickkey $at
 expect "^browser: favorites scope In Each Profile's Spaces\$" \
