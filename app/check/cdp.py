@@ -32,12 +32,11 @@ takes a command a line on its standard input:
                   its text or its id, or none for no such page or nothing focused: a WebUI dialog
                   takes the keyboard a moment after its page loads
   hidden FILE [BASE]
-                  writes to FILE, as JSON, what the attached page's ad blocker hides: its
-                  elements at display: none that no rule DevTools gives says why of, as an
-                  extension's and the browser's own injected rules never come to it, each as the
-                  selector its tag, id and classes make, with the elements that selector takes in
-                  the page and those of them shown; and with BASE, an earlier run's FILE for the
-                  same site, its selectors that take more shown elements now than they did then.
+                  writes to FILE, as JSON, the attached page's elements at display: none from a
+                  style sheet, as the ad blocker's hiding would be, each as the selector its tag,
+                  id and classes make, with the elements that selector takes in the page and
+                  those of them shown; and with BASE, an earlier run's FILE for the same site, its
+                  selectors that take more shown elements now than they did then.
                   Logs "cdp: hidden SELECTORS ELEMENTS SHOWN missed SELECTORS ELEMENTS in MS ms"
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
@@ -423,29 +422,27 @@ def focus(prefix):
     return value or "none"
 
 
-# The elements the page has at display: none from a style sheet, where an ad blocker's hiding would
-# be, one of each kind, by the selector its tag, id and classes make: not those with neither id nor
-# class, as their selector would take in the page's every such element, nor those under one, nor
-# those the page hides itself with an inline style or the hidden attribute.
+# The selectors, of tag, id and classes, of the elements the page has at display: none from a
+# style sheet, where an ad blocker's hiding would be: not those with neither id nor class, as
+# their selector would take in the page's every such element, nor those under one, nor those the
+# page hides itself with an inline style or the hidden attribute. Which of them the ad blocker
+# hid can't be told here: an extension's injected sheets and the browser's user ones never come
+# to DevTools, not even as rules a node matches, so a run is held to another's on the same site.
 HIDDEN_NOW = """(() => {
   const kept = new Set(["SCRIPT", "STYLE", "TEMPLATE", "HEAD", "META", "LINK", "TITLE",
                         "NOSCRIPT", "BR", "PARAM", "SOURCE", "TRACK"]);
-  const found = [];
-  const seen = new Set();
+  const found = new Set();
   for (const element of document.querySelectorAll("body *")) {
     if (kept.has(element.tagName) || element.hidden || element.style.display === "none") continue;
     if (!element.id && !element.classList.length) continue;
     if (getComputedStyle(element).display !== "none") continue;
     const parent = element.parentElement;
     if (parent && getComputedStyle(parent).display === "none") continue;
-    const selector = element.localName + (element.id ? "#" + CSS.escape(element.id) : "") +
-      [...element.classList].map((name) => "." + CSS.escape(name)).join("");
-    if (seen.has(selector)) continue;
-    seen.add(selector);
-    found.push(selector, element);
-    if (found.length === 600) break;
+    found.add(element.localName + (element.id ? "#" + CSS.escape(element.id) : "") +
+              [...element.classList].map((name) => "." + CSS.escape(name)).join(""));
+    if (found.size === 2000) break;
   }
-  return found;
+  return [...found];
 })()"""
 # Each selector's elements in the page and those of them shown, a box with an area.
 COUNT = """((selectors) => {
@@ -464,39 +461,20 @@ COUNT = """((selectors) => {
 })"""
 
 
+def evaluate(expression):
+    return call("Runtime.evaluate", {"expression": expression, "returnByValue": True},
+                session).get("result", {}).get("value")
+
+
 def count(selectors):
-    reply = call("Runtime.evaluate", {"expression": "%s(%s)" % (COUNT, json.dumps(selectors)),
-                                      "returnByValue": True}, session)
-    return json.loads(reply.get("result", {}).get("value") or "{}")
+    return json.loads(evaluate("%s(%s)" % (COUNT, json.dumps(selectors))) or "{}")
 
 
 def hidden(path, base):
-    """What the ad blocker hides on the attached page. An extension's injected sheets and the
-    browser's user ones, where an ad blocker's hiding goes, never come to DevTools, nor do their
-    rules as a node matches them, so an element at display: none that no rule DevTools gives
-    says why of is the ad blocker's."""
     began = time.monotonic()
-    listed = call("Runtime.evaluate", {"expression": HIDDEN_NOW}, session)["result"]
-    items = {int(item["name"]): item["value"] for item in call(
-        "Runtime.getProperties", {"objectId": listed["objectId"], "ownProperties": True},
-        session)["result"] if item["name"].isdigit()}
-    call("DOM.enable", {}, session)
-    call("DOM.getDocument", {"depth": 0}, session)
-    call("CSS.enable", {}, session)
-    selectors = []
-    for at in range(0, len(items), 2):
-        node = call("DOM.requestNode", {"objectId": items[at + 1]["objectId"]}, session)["nodeId"]
-        rules = call("CSS.getMatchedStylesForNode", {"nodeId": node},
-                     session).get("matchedCSSRules", [])
-        if not any(prop["name"] == "display" and prop["value"].startswith("none")
-                   for match in rules for prop in match["rule"]["style"]["cssProperties"]):
-            selectors.append(items[at]["value"])
-    call("Runtime.releaseObject", {"objectId": listed["objectId"]}, session)
-    call("CSS.disable", {}, session)
-    call("DOM.disable", {}, session)
+    found = {"hidden": count(evaluate(HIDDEN_NOW) or [])}
     before = json.load(open(base, encoding="utf-8"))["hidden"] if base else {}
-    found = {"hidden": count(selectors), "asked": len(items) // 2}
-    # Shown now where fewer were then: what the earlier run's ad blocker hid and this one shows.
+    # Shown now where fewer were then: what the earlier run hid and this one shows.
     found["missed"] = {selector: shown for selector, (_, shown) in count(list(before)).items()
                        if shown > before[selector][1]}
     found["ms"] = int((time.monotonic() - began) * 1000)
