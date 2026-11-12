@@ -3248,6 +3248,9 @@ void host_show_window(void* ui_view) {
   HWND root = Root(ui_view);
   TakeTitleBar(ui_view);
   ShowWindow(root, SW_SHOW);
+  // In front of the app's other windows as well as key: shown as a tab's drag out of another ends,
+  // Windows made it active but left it behind the window the tab left, where a click went (#2607).
+  SetWindowPos(root, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   SetForegroundWindow(root);
   if (g_jump_list_wanted && !std::exchange(g_jump_list_set, true)) {
     SetJumpList();
