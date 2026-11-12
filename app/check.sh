@@ -198,6 +198,7 @@ trap cleanup EXIT
 # and cleanup puts back the appearance it had. The owner's Mac keeps its own.
 if [ "$(uname)" = Darwin ] && [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   dark_mode=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode') || {
+    failed=1
     echo "FAIL: System Events didn't say the Mac's appearance: allow the check to control it" >&2
     exit 1
   }
@@ -213,6 +214,9 @@ for run in ${*:-$runs}; do
     sleep 0.1
   done
   ! pgrep -f "$procs" > /dev/null || fail "the app from the run before $run is still running"
+  # And without the pipes a run before made for its servers and devices, such as sync-devices'
+  # drive-a, which mkfifo won't make again. The drivers' own pipe stays.
+  find "$out" -maxdepth 1 -type p ! -name drive -exec rm -f {} +
   profile_dir=$check_profile_dir
   rm -rf "$profile_dir"
   mkdir -p "$profile_dir/Default"
