@@ -6,8 +6,8 @@
 #   split favorites cards extensions adblock adblock-lists windows private blank little capture media
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp rules
 #   ranking appearance about sync sync-account sync-devices switch-frames devices pair filled
-#   scripting notifications calls battery battery-os policies hosts idle handback webrtc count
-#   translate pictures boosts sidebar-right foot-bar later-launch
+#   scripting notifications calls battery battery-os policies hosts idle peek-motion handback
+#   webrtc count translate pictures boosts sidebar-right foot-bar later-launch
 # The store run installs from Google's Web Store, as sync-extensions does on one device for the
 # account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
 # adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
@@ -55,6 +55,10 @@ export BROWSER_ONBOARDING=skip
 # The runs place their clicks under the Space's name row, which a lone unnamed Space hides unless
 # Show Space Header keeps it, so theirs is kept; spaces' checks it hiding (#1400).
 export BROWSER_SPACE_HEADER=shown
+# The browser's lines are whole, but a child process that crashes, as the crash steps make one,
+# prints its stack beside them a piece at a time, so a line could start mid-way through one. So no
+# process prints its stack (#2496).
+export BROWSER_STACK_TRACES=off
 cd "$(dirname "$0")"
 if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   # Under Xvfb, as CI runs it (check-linux.yml): a 1280 by 800 screen, as the sway session's
@@ -106,7 +110,7 @@ fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
 runs="$runs split favorites cards extensions adblock adblock-lists windows private blank little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp rules ranking"
-runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
+runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle peek-motion"
 runs="$runs everyday"
 runs="$runs handback webrtc count translate pictures boosts sidebar-right foot-bar later-launch"
 named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
