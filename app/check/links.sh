@@ -49,9 +49,9 @@ if windows; then
   grep -q '^Root: HKCU; Subkey: "Software\\Clients\\StartMenuInternet\\{#AppName}\\shell\\open\\command"; ValueType: string; ValueData: """{app}\\chrome\.exe"""$' \
     platform/windows/package/ilo.iss || fail "ilo.iss no longer starts the browser by chrome.exe alone"
   engines="$(cygpath -u "$LOCALAPPDATA")/ilo"
-  if [ -n "${BROWSER_PROFILE_DIR:-}" ] || [ -e "$engines/User Data" ]; then
+  if [ -e "$engines/User Data" ]; then
     echo "skip: links by chrome.exe's fast way, as Windows hands them over: the run keeps its" \
-      "profile, as BROWSER_PROFILE_DIR names one or $engines/User Data is an ilo's of the user's here."
+      "profile, as $engines/User Data is an ilo's of the user's here."
   else
     fast=1
     made="$engines/User Data"
@@ -770,7 +770,8 @@ fi
 if [ -n "$fast" ]; then
   rm -rf "$made"
   trap cleanup EXIT
-  unset BROWSER_PROFILE_DIR
+  profile_dir=$check_profile_dir
+  BROWSER_PROFILE_DIR=$(native_path "$profile_dir")
   saved=$check_saved
   launch_frame=$check_launch_frame
 fi
