@@ -53,7 +53,7 @@ rm -f "$saved" "$launch_frame"
 history_db="$(dirname "$saved")/Default/History"
 if command -v sqlite3 > /dev/null && [ -f "$history_db" ]; then
   sqlite3 "$history_db" "delete from downloads; delete from downloads_url_chains;
-    delete from downloads_slices;" || { echo "FAIL: the downloads wouldn't clear" >&2; exit 1; }
+    delete from downloads_slices;" || { failed=1; echo "FAIL: the downloads wouldn't clear" >&2; exit 1; }
 fi
 # With the motion GitHub's hosted Mac and Windows reduce, for the download's flight recorded below.
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
@@ -620,7 +620,8 @@ expect "^browser: selected $p\( in .*\)\{0,1\}\$" "the tab kept from the preview
 expect '^browser: archive 0 tabs$' "the tab kept from the preview in the second Space stayed in the archive"
 expect '^browser: library hidden$' "keeping the archived tab's preview didn't close the Library"
 ../tools/window-screenshot.sh "$pid" "$out/archive-kept-to-space.png" || fail "no window to capture"
-grep -q "^browser: loaded $p https://example.org/\$" "$log" ||
+# The preview may still be loading as it's kept, so this waits for its load.
+await "^browser: loaded $p https://example.org/\$" ||
   fail "the tab kept from the preview in the second Space isn't at its page"
 send key w cmd
 expect_tabs "$c $a" "$c" "after closing the tab kept in its Space"

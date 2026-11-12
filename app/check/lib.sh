@@ -57,6 +57,12 @@ sidebar_point="100 400"
 
 # After a failure, nothing the check started keeps running.
 cleanup() {
+  status=${1:-$?}
+  # A command that failed under set -e ends the check without fail's line, so a result would read
+  # as an exit with no failure, as sync-extensions' mkfifo on the pipe a run before left did (#2486).
+  if [ "$status" != 0 ] && [ -z "${failed:-}" ]; then
+    echo "FAIL: ${run:-the check} stopped at a command that failed, with status $status, before saying why; the lines above are its last" >&2
+  fi
   # The servers may be gone already, and under set -e a failed kill would end the trap here.
   [ -z "${server:-}" ] || kill "$server" 2>/dev/null || true
   [ -z "${collector:-}" ] || kill "$collector" 2>/dev/null || true
@@ -108,6 +114,7 @@ cleanup() {
   pkill -9 -f "$procs" || true
 }
 fail() {
+  failed=1
   echo "FAIL: $1" >&2
   grep -v '^$' "$log" | tail -5 >&2
   # What the window showed, for a failure the log doesn't explain, as on CI.
@@ -481,6 +488,15 @@ in_sight() {
   send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
   rest=$(drawn_after "$1" "^browser: drive $step: ") && at=$rest
   return 0
+}
+# Clicks Settings' control $1 in the card, where the card shows it whole, as in_sight scrolls it:
+# one at $(drawn …) under a short window's edge takes the click on nothing (#2503). $2 is the
+# driver's command, clickkey unless named. in_sight's variables are its own here, so a caller's at,
+# a mark it awaits from, keeps.
+click_in_sight() {
+  local at sight top bottom y by rest
+  in_sight "$1" || fail "Settings didn't draw $1"
+  send "${2:-clickkey}" $at
 }
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
 # checks it). Escape closes it, leaving the window with no page that the steps after expect. With

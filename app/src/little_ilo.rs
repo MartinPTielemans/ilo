@@ -286,6 +286,7 @@ pub(crate) fn open_links_in_little(front: bc::bc_id, urls: Vec<String>, cx: &mut
         let tab = open_tab_behind(opened, &url, false);
         if tab != 0 {
             unsafe { bc::bc_window_select(opened, tab) };
+            crate::sign_in_close::link_tab_opened(opened, tab);
         }
         // check.sh reads this line.
         log!(

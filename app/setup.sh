@@ -40,10 +40,11 @@ find .deps/zed \( -name AGENTS.md -o -name CLAUDE.md -o -name GEMINI.md -o -name
 # first time one draws with it, resizes a canvas under WebGL without waiting on the GPU, which
 # WebGL can't, and lets a browser's WebGPU canvas be see-through, and gpui_web's draws the site's
 # demo in the site's canvas, see-through where it draws nothing, leaving the page its keys and
-# scrolling.
+# scrolling. gpui_apple's, like the other renderers', starts a window's atlases small.
 git -C .deps/zed apply "$PWD/patches/gpui-macos-embedded.patch" "$PWD/patches/gpui-windows-embedded.patch" \
   "$PWD/patches/gpui-linux-embedded.patch" "$PWD/patches/gpui-scale.patch" \
-  "$PWD/patches/gpui-wgpu.patch" "$PWD/patches/gpui-web-page.patch"
+  "$PWD/patches/gpui-wgpu.patch" "$PWD/patches/gpui-web-page.patch" \
+  "$PWD/patches/gpui-apple-atlas.patch"
 
 # GPUI's accessibility adapters for the Mac and for AT-SPI, at the versions Cargo.lock has, with
 # what upstream lacks: VoiceOver's menu action and a folder's open state, and AT-SPI's expanded

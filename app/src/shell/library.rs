@@ -3645,7 +3645,7 @@ impl Shell {
             .child({
                 let (scale, alpha) = self.archive_glyph(web_time::Instant::now());
                 svg()
-                    .path("icons/archive.svg")
+                    .path("icons/library.svg")
                     .size(px(16.))
                     .text_color(self.palette.glyph(alpha))
                     .when(scale != 1., |glyph| {

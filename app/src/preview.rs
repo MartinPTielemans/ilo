@@ -2183,6 +2183,8 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ];
             ("clear", rows)
         }
+        // The bar adds Open Library… itself, whose glyph the sidebar foot's button shares.
+        "library" => ("library", vec![search("library")]),
         "sites" => (
             "wik",
             vec![
@@ -2233,7 +2235,8 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ],
         ),
     };
-    let rows_shown = rows.len();
+    // The command the bar adds for what's typed takes a row too.
+    let rows_shown = rows.len() + usize::from(mode == "library");
     let bounds = Bounds::new(
         at,
         size(px(command_bar::WIDTH), px(command_bar::height(rows_shown))),
@@ -2761,8 +2764,8 @@ fn main() {
                     cx.quit();
                 }
             }
-            // PREVIEW_BAR=tabs, sites or commands shows the command bar over the window, with made-up
-            // suggestions.
+            // PREVIEW_BAR=tabs, sites, commands or library shows the command bar over the window, with
+            // made-up suggestions.
             if let Ok(mode) = std::env::var("PREVIEW_BAR") {
                 let left = x + (width - command_bar::WIDTH as f64) / 2.;
                 let top = y as f32 + command_bar::centered_top(height as f32);
