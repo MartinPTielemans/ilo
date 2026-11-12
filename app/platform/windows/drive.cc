@@ -159,9 +159,10 @@ std::deque<std::pair<HWND, LPARAM>> g_posted_moves;
 // Real input (#2544): whether the pointer and the keys are sent with SendInput, as a hand's are.
 bool g_real = false;
 bool Extended(UINT vk);
-// Marks the driver's real events in their extra information, with each one's number below it.
-ULONG_PTR const kRealTag = static_cast<ULONG_PTR>(0x494C4F) << 40;
-ULONG_PTR const kRealNumber = (static_cast<ULONG_PTR>(1) << 40) - 1;
+// Marks the driver's real events in their extra information, with each one's number below it, in
+// its low 32 bits, which are all a mouse event keeps of it.
+ULONG_PTR const kRealTag = 0x49000000;
+ULONG_PTR const kRealNumber = 0x00FFFFFF;
 // The number of the last real event sent, and of the last the UI thread has taken off its queue.
 ULONG_PTR g_real_sent = 0;
 ULONG_PTR g_real_heard = 0;
@@ -361,6 +362,14 @@ std::string Landed(HWND hwnd) {
 // for the list of what real input reached (#2544).
 LRESULT CALLBACK HearRealPointer(int code, WPARAM wparam, LPARAM lparam) {
   const auto* hook = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam);
+  // PROBE (#2544): what a press's extra information is when it isn't the driver's tag.
+  static int unmatched = 0;
+  if (code == HC_ACTION && wparam == WM_LBUTTONDOWN &&
+      (hook->dwExtraInfo & ~kRealNumber) != kRealTag && unmatched++ < 5) {
+    fprintf(stderr, "browser: drive: a press's extra information %#llx, the thread's %#llx\n",
+            static_cast<unsigned long long>(hook->dwExtraInfo),
+            static_cast<unsigned long long>(GetMessageExtraInfo()));
+  }
   if (code == HC_ACTION && (hook->dwExtraInfo & ~kRealNumber) == kRealTag) {
     g_real_heard = (std::max)(g_real_heard, hook->dwExtraInfo & kRealNumber);
     switch (wparam) {
@@ -416,7 +425,7 @@ void SendReal(INPUT input) {
   }
   g_real_mouse_hook = SetWindowsHookExW(WH_MOUSE, HearRealPointer, nullptr, thread);
   g_real_key_hook = SetWindowsHookExW(WH_KEYBOARD, HearRealKey, nullptr, thread);
-  const ULONG_PTR number = ++g_real_sent;
+  const ULONG_PTR number = ++g_real_sent & kRealNumber;
   if (input.type == INPUT_KEYBOARD) {
     input.ki.dwExtraInfo = kRealTag | number;
     g_real_vk = input.ki.wVk;
