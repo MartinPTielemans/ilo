@@ -602,7 +602,6 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("option_reveals_sidebar", saved.settings.option_reveals_sidebar)
                            .Set("hover_kinds", saved.settings.hover_kinds)
                            .Set("crash_report_offered", saved.settings.crash_report_offered)
-                           .Set("last_crash_report", saved.settings.last_crash_report)
                            .Set("widevine", saved.settings.widevine)
                            .Set("ask_where_to_save", saved.settings.ask_where_to_save)
                            .Set("page_zoom", saved.settings.page_zoom)
@@ -883,9 +882,6 @@ std::optional<Saved> Read(const base::FilePath& path) {
     saved.settings.hover_kinds = settings->FindInt("hover_kinds").value_or(15);
     saved.settings.crash_report_offered =
         settings->FindDouble("crash_report_offered").value_or(0);
-    if (const std::string* last = settings->FindString("last_crash_report")) {
-      saved.settings.last_crash_report = *last;
-    }
     saved.settings.widevine = settings->FindBool("widevine").value_or(false);
     saved.settings.ask_where_to_save = settings->FindBool("ask_where_to_save").value_or(false);
     const double page_zoom = settings->FindDouble("page_zoom").value_or(1);

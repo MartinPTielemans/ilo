@@ -210,9 +210,6 @@ struct Settings {
   // When the newest crash report the user was offered was written, in seconds since 1970, so no
   // report is offered twice, nor one older.
   double crash_report_offered = 0;
-  // The id of the last crash report the collector took, as 32 hex digits, which Report a Problem
-  // lists (bc_last_crash_report). Empty before one was taken.
-  std::string last_crash_report;
   // Whether the user said yes to Google's Widevine module, which the component updater then keeps
   // up to date (widevine.h), until they remove it.
   bool widevine = false;

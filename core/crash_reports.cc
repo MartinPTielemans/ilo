@@ -23,6 +23,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
+#include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -126,6 +127,41 @@ scoped_refptr<base::SequencedTaskRunner> Reports() {
           {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
            base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}));
   return *reports;
+}
+
+// The id of the last report the collector took while Send Crash Reports was on, which Report a
+// Problem lists (bc_last_crash_report). Its file is beside the reports, not in the Spaces' file,
+// whose backups would keep it, and turning Send Crash Reports off deletes it.
+std::string& Last() {
+  static base::NoDestructor<std::string> last;
+  return *last;
+}
+
+std::optional<base::FilePath> LastFile() {
+  std::optional<base::FilePath> reports = ProfilesReports();
+  return reports ? std::optional(reports->Append(FILE_PATH_LITERAL("Last Sent"))) : std::nullopt;
+}
+
+std::string ReadLast() {
+  std::optional<base::FilePath> file = LastFile();
+  std::string id;
+  if (!file || !base::ReadFileToStringWithMaxSize(*file, &id, 32) || id.size() != 32 ||
+      !std::ranges::all_of(id, base::IsHexDigit<char>)) {
+    return std::string();
+  }
+  return id;
+}
+
+void WriteLast(const std::string& id) {
+  if (std::optional<base::FilePath> file = LastFile()) {
+    base::WriteFile(*file, id);
+  }
+}
+
+void DeleteLast() {
+  if (std::optional<base::FilePath> file = LastFile()) {
+    base::DeleteFile(*file);
+  }
 }
 
 // The Crashpad database the handler writes, if it's the profile's, as another reader of it, as
@@ -290,8 +326,11 @@ void Sent(int round,
   }
   // check.sh waits for this line.
   fprintf(stderr, "browser: crash report sent\n");
-  UserSettings().last_crash_report = Id(uuid);
-  SessionChanged();
+  // Kept only while Send Crash Reports is on, not for the one report the user said to send.
+  if (Sending()) {
+    Last() = Id(uuid);
+    Reports()->PostTask(FROM_HERE, base::BindOnce(&WriteLast, Last()));
+  }
   Reports()->PostTaskAndReply(FROM_HERE, base::BindOnce(&Delete, uuid), base::BindOnce(&SendNext));
 }
 
@@ -429,7 +468,7 @@ std::string CollectorHost() {
 }
 
 std::string LastReport() {
-  return UserSettings().last_crash_report;
+  return Last();
 }
 
 bool Sending() {
@@ -449,6 +488,8 @@ void SetSending(bool send) {
   ++g_round;
   g_busy = false;
   Loader().reset();
+  Last().clear();
+  Reports()->PostTask(FROM_HERE, base::BindOnce(&DeleteLast));
   Reports()->PostTask(FROM_HERE, base::BindOnce(&DeleteUnsent));
 }
 
@@ -460,11 +501,22 @@ void Started() {
     return;
   }
   if (Sending()) {
+    Reports()->PostTaskAndReplyWithResult(FROM_HERE, base::BindOnce(&ReadLast),
+                                          base::BindOnce([](std::string id) {
+                                            // Unless one was sent or the switch turned off since.
+                                            if (Sending() && Last().empty()) {
+                                              Last() = std::move(id);
+                                            }
+                                          }));
     AfterStartupTaskUtils::PostTask(FROM_HERE, base::SequencedTaskRunner::GetCurrentDefault(),
                                     base::BindOnce(&SendNext));
   } else if (Collector().is_valid() && LastSessionCrashed()) {
     AfterStartupTaskUtils::PostTask(FROM_HERE, base::SequencedTaskRunner::GetCurrentDefault(),
                                     base::BindOnce(&OfferNewest));
+  }
+  if (!Sending()) {
+    // Turned off as the browser quit, before its file was deleted.
+    Reports()->PostTask(FROM_HERE, base::BindOnce(&DeleteLast));
   }
 }
 
