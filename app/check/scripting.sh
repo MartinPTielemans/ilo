@@ -90,6 +90,10 @@ EOF
   dictionary="$app/Contents/Resources/ilo.sdef"
   xmllint --noout --nonet "$dictionary" 2> "$out/scripting-sdef.txt" ||
     fail "the app's dictionary, $dictionary, isn't XML that parses: $(head -3 "$out/scripting-sdef.txt")"
+  # An include, such as the standard suite's, would bring in terms this file doesn't show, and the
+  # check below would pass on a dictionary that has them.
+  ! grep -qE 'xi:include|XInclude' "$dictionary" ||
+    fail "the app's dictionary, $dictionary, includes another file, so the check for the terms it mustn't have needs the dictionary with its includes resolved, as sdef gives it"
   cp "$dictionary" "$out/scripting.sdef"
   for term in execute save print 'view source' 'copy selection' 'bookmark'; do
     grep -q "name=\"$term\"" "$out/scripting.sdef" && fail "the app's dictionary has $term"
