@@ -84,7 +84,13 @@ EOF
   [ "$(/usr/libexec/PlistBuddy -c 'Print :OSAScriptingDefinition' "$plist" 2>/dev/null)" = ilo.sdef ] ||
     fail "the app's Info.plist doesn't declare ilo's dictionary"
   [ ! -e "$app/Contents/Resources/scripting.sdef" ] || fail "the app has Chromium's scripting.sdef"
-  sdef "$app" > "$out/scripting.sdef" 2>&1 || fail "sdef couldn't read the app's dictionary"
+  # The bundle's own dictionary, as macOS reads it: ilo.sdef includes nothing, so sdef, which needs
+  # the developer tools a check VM hasn't (#2554), would print the same file. The scripts below
+  # compile its terms, which shows macOS loads it.
+  dictionary="$app/Contents/Resources/ilo.sdef"
+  xmllint --noout --nonet "$dictionary" 2> "$out/scripting-sdef.txt" ||
+    fail "the app's dictionary, $dictionary, isn't XML that parses: $(head -3 "$out/scripting-sdef.txt")"
+  cp "$dictionary" "$out/scripting.sdef"
   for term in execute save print 'view source' 'copy selection' 'bookmark'; do
     grep -q "name=\"$term\"" "$out/scripting.sdef" && fail "the app's dictionary has $term"
   done
