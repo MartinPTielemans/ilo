@@ -449,33 +449,23 @@ jobs:
           esac
           dir=$out/$where
           mkdir -p "$dir"
+          # #2486's proof, not to merge: the runs in one ./check.sh, as a check run by hand does.
+          start=$SECONDS
+          status=0
+          timeout 170m ./check.sh $RUNS > "$dir/all.log" 2>&1 || status=$?
+          [ ! -d build/check ] || mv build/check "$dir/all"
+          [ ! -d build/check-profile ] || mv build/check-profile "$dir/all-profile"
+          pkill -9 -f "$PWD/build/Browser/" || true
+          grep -E '^(ok|skip|FAIL)' "$dir/all.log" | cut -c1-300 || true
+          if [ "$status" = 0 ]; then
+            result="passed in one go in $((SECONDS - start)) s"
+          else
+            result="failed in one go ($status): $(grep -m1 '^FAIL' "$dir/all.log" | cut -c7- | tr '|\t' '/ ')"
+          fi
           for run in $RUNS; do
-            start=$SECONDS
-            status=0
-            # The updates run builds a Flatpak first, and perf measures Chrome beside the app.
-            limit=20m
-            [ "$run" != updates ] || limit=45m
-            [ "$run" != perf ] || limit=40m
-            timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
-            [ ! -d build/check ] || mv build/check "$dir/$run"
-            pkill -9 -f "$PWD/build/Browser/" || true
-            # A run that passes may have skipped steps, or all of itself, such as when the app
-            # wasn't the active one.
-            skipped=$(grep '^skip: ' "$dir/$run.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
-            # A run that skips all of itself, as one whose build lacks what it checks, says why on a
-            # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
-            whole=$(grep -m1 '^skip all: ' "$dir/$run.log" | cut -c11- | tr '|\t' '/ ') || true
-            if [ "$status" = 0 ] && [ -n "$whole" ]; then
-              result="skip: $whole"
-            elif [ "$status" = 0 ]; then
-              result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
-            else
-              result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run.log" | cut -c7- | tr '|\t' '/ ')"
-              echo "::warning::The $run run failed on $SESSION. Its log: $where$run.log in the artifact."
-            fi
             printf '%s\t%s\n' "$run" "$result" >> "$RESULTS"
-            echo "| $run | $result |"
           done
+          echo "| all | $result |"
 
       # Drags from other apps under Wayland, which check.sh's driver, X11's, can't make.
       - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && matrix.session == 'ime' && (inputs.runs == '' || inputs.runs == 'all' || contains(inputs.runs, 'drops')) }}
