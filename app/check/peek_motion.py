@@ -27,7 +27,7 @@ OPEN_CURVE, CLOSE_CURVE = (0.0, 0.0, 0.58, 1.0), (0.42, 0.0, 1.0, 1.0)
 RIM = 1.0
 # Inside the resting frame by this share of its size from the far corner, and the scale's margin
 # either side of where the card reaches it, against a frame read between two of the app's.
-IN, MARGIN = 0.08, 0.04
+IN, MARGIN = 0.05, 0.04
 
 
 def read_png(path, last=None):
@@ -112,7 +112,7 @@ def main():
             return "peek"
         return "other"
 
-    failed = unreadable = False
+    failed = unreadable = blended = False
     base = None
     caught_in = {"open": 0, "close": 0}
     filmed = sorted(
@@ -146,10 +146,11 @@ def main():
         g0 = base[1]
         dims = [max(0.0, min(1.0, (g0 - dd[1]) / ((g0 - DIM) * DIM_OPACITY))) for _, _, dd, _ in rows]
         if max(dims) < 0.8:
-            print("%s: the dim never reached its rest at D (%.2f at most), so it isn't drawn blended "
-                  "here and the frames can't say where the motion is" % (filming, max(dims)))
+            print("%s: the dim never reached its rest at D (%.2f at most), so this filming can't say "
+                  "where the motion is" % (filming, max(dims)))
             unreadable = True
             continue
+        blended = True
         caught = wrong = 0
         for (name, pp, dd, qq), dim in zip(rows, dims):
             if motion == "open":
@@ -184,6 +185,8 @@ def main():
         else:
             print("%s: %d frames mid-motion show the window's page at P, outside the card"
                   % (filming, caught))
+    if not blended:
+        print("the dim isn't drawn blended here: no filming saw it reach its rest at D")
     for motion, caught in caught_in.items():
         if not caught:
             print("%s: no frame caught the card moving short of P, so none says what's outside it"

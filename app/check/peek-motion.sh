@@ -135,10 +135,10 @@ round() {
 }
 
 # A screen copy can take longer than a motion (Windows' took 260 ms at a time on GitHub's runner),
-# so it opens and closes Peek again until a frame has caught each motion mid-way, five times at
+# so it opens and closes Peek again until a frame has caught each motion mid-way, eight times at
 # most, and fails at once on a frame that shows Peek's resting frame outside its card.
 resized=
-for n in 1 2 3 4 5; do
+for n in 1 2 3 4 5 6 7 8; do
   round $n
   # shellcheck disable=SC2086 # numbers: x y w h from x y
   python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
