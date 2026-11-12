@@ -161,10 +161,20 @@ bool LeftOutSwitch(const std::string& flag) {
          std::ranges::contains(kLeftOut, std::string_view(flag).substr(2, flag.find('=') - 2));
 }
 
-// For a Sentry collector, which takes the report's IP address from its connection and keeps it
-// with the report, with the place it gives: to take none. Other collectors leave the field.
-constexpr char kSentryFields[] =
-    R"({"sdk":{"name":"browser_core","version":"1","settings":{"infer_ip":"never"}}})";
+// The report's id as a Sentry event's: 32 hex digits, without the UUID's dashes.
+std::string Id(const crashpad::UUID& uuid) {
+  std::string id = uuid.ToString();
+  std::erase(id, '-');
+  return id;
+}
+
+// For a Sentry collector: the report's own id as the event's, so the id Report a Problem lists
+// finds it (bc_last_crash_report), and no IP address, which it would take from its connection and
+// keep with the report, with the place it gives. Other collectors leave the field.
+std::string SentryFields(const crashpad::UUID& uuid) {
+  return R"({"event_id":")" + Id(uuid) +
+         R"(","sdk":{"name":"browser_core","version":"1","settings":{"infer_ip":"never"}}})";
+}
 
 struct Unsent {
   crashpad::UUID uuid;
@@ -280,6 +290,8 @@ void Sent(int round,
   }
   // check.sh waits for this line.
   fprintf(stderr, "browser: crash report sent\n");
+  UserSettings().last_crash_report = Id(uuid);
+  SessionChanged();
   Reports()->PostTaskAndReply(FROM_HERE, base::BindOnce(&Delete, uuid), base::BindOnce(&SendNext));
 }
 
@@ -299,7 +311,7 @@ void Send(int round, bool asked, std::optional<Unsent> report) {
   net::AddMultipartValueForUploadWithFileName("upload_file_minidump",
                                               report->uuid.ToString() + ".dmp", report->minidump,
                                               boundary, "application/octet-stream", &body);
-  net::AddMultipartValueForUpload("sentry", kSentryFields, boundary, "", &body);
+  net::AddMultipartValueForUpload("sentry", SentryFields(report->uuid), boundary, "", &body);
   net::AddMultipartFinalDelimiterForUpload(boundary, &body);
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = Collector();
@@ -414,6 +426,10 @@ void LeaveOutFolders() {
 
 std::string CollectorHost() {
   return std::string(Collector().host());
+}
+
+std::string LastReport() {
+  return UserSettings().last_crash_report;
 }
 
 bool Sending() {
