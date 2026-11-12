@@ -1662,8 +1662,8 @@ impl Browser for Fake {
     // The preview leaves the clipboard alone, and shares nothing.
     fn copy(&self, _: &str, _: &mut App) {}
 
-    fn pasted(&self, _: &App) -> Option<String> {
-        None
+    fn pasted(&self, cx: &mut App, done: browser::clipboard::Done) {
+        cx.defer(move |cx| done(None, cx));
     }
 
     fn share_services(&self, _: &str) -> Vec<SharedString> {
