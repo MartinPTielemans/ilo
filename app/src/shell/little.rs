@@ -54,6 +54,8 @@ pub(super) struct Little {
     pub(super) sent: Vec<u64>,
     /// Where its bar's title went in its last draw, at whose end its extensions' buttons are.
     pub(super) title: Cell<Option<Bounds<Pixels>>>,
+    /// Whether it's about to close by itself, as a sign-in's page another app opened ends (#2327).
+    closing: bool,
 }
 
 /// One of the user's Spaces, as a Little ilo window knows it: enough to name and mark it in its
@@ -115,6 +117,7 @@ impl Shell {
             picker_at: Cell::new(None),
             sent: Vec::new(),
             title: Cell::new(None),
+            closing: false,
         });
         shell.spaces = vec![Space {
             id: space,
@@ -430,6 +433,45 @@ impl Shell {
         );
     }
 
+    /// Whether the window is about to close by itself, its sign-in done: its bar says so in place
+    /// of the page's title, with the key that brings it back, so the window going reads as meant.
+    pub fn set_little_closing(&mut self, closing: bool, cx: &mut Context<Self>) {
+        if let Some(little) = &mut self.little
+            && little.closing != closing
+        {
+            little.closing = closing;
+            // check.sh reads this line.
+            log!("browser: little bar closing {closing}");
+            cx.notify();
+        }
+    }
+
+    /// The bar's title after the page's host: the page's own, unless the window is about to close
+    /// by itself, when it says so and names the key that reopens it, as a message one can undo
+    /// names its undo's key.
+    pub(super) fn little_bar_title(
+        &self,
+        tab: u64,
+        site: &str,
+        url: &str,
+        cx: &App,
+    ) -> SharedString {
+        if self.little.as_ref().is_some_and(|little| little.closing) {
+            return match super::user_keys(cx).label(Command::ReopenClosedTab) {
+                Some(key) => format!("Signed in, closing · {key} reopens").into(),
+                None => "Signed in, closing".into(),
+            };
+        }
+        // A page with no title of its own is named by its host, which the bar shows already, as
+        // part of the whole URL in Developer Mode.
+        match tab {
+            0 => SharedString::default(),
+            _ => Some(self.title(tab))
+                .filter(|title| title.as_ref() != site && title.as_ref() != host(url))
+                .unwrap_or_default(),
+        }
+    }
+
     /// `tab`, which its page opened, went behind: while no window shows it, its question to open
     /// another app is asked here.
     pub fn little_sent(&mut self, tab: u64, cx: &mut Context<Self>) {
@@ -533,14 +575,7 @@ impl Shell {
         // the bar does, in the URL field's colours.
         let (site, site_color) = self.url_words(tab, &url, 1.);
         let icon = (tab != 0).then(|| self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()));
-        // A page with no title of its own is named by its host, which the bar shows already, as
-        // part of the whole URL in Developer Mode.
-        let title = match tab {
-            0 => SharedString::default(),
-            _ => Some(self.title(tab))
-                .filter(|title| *title != site && title.as_ref() != host(&url))
-                .unwrap_or_default(),
-        };
+        let title = self.little_bar_title(tab, &site, &url, cx);
         let title = div()
             .id("little-title")
             .when(self.a11y, |title| title.button_named(site.clone()))
