@@ -53,7 +53,7 @@ rm -f "$saved" "$launch_frame"
 history_db="$(dirname "$saved")/Default/History"
 if command -v sqlite3 > /dev/null && [ -f "$history_db" ]; then
   sqlite3 "$history_db" "delete from downloads; delete from downloads_url_chains;
-    delete from downloads_slices;" || { echo "FAIL: the downloads wouldn't clear" >&2; exit 1; }
+    delete from downloads_slices;" || { failed=1; echo "FAIL: the downloads wouldn't clear" >&2; exit 1; }
 fi
 # With the motion GitHub's hosted Mac and Windows reduce, for the download's flight recorded below.
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
