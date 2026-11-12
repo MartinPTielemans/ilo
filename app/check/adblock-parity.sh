@@ -64,7 +64,7 @@ if [ "$engine" = off ]; then
   send clickkey $(drawn "toolbar Privacy")
   expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
   settings_drew Privacy
-  send clickkey $(drawn "switch ad blocking")
+  click_in_sight "switch ad blocking"
   expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"

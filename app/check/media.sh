@@ -391,7 +391,7 @@ mini_player() {
     expect '^browser: settings tab Features$' "a click on Features didn't show its section"
     settings_drew Features
   fi
-  send clickkey $(drawn "switch mini player")
+  click_in_sight "switch mini player"
   expect "^browser: mini player $1\$" "a click on the Mini Player's switch didn't turn it $1"
   [ "$1" = on ] || ../tools/window-screenshot.sh "$pid" "$out/settings-mini-player.png" ||
     fail "no window to capture"

@@ -141,7 +141,7 @@ update_checks_check() {
   # Check for Updates…, from About, asks it once.
   update_checks_about
   # shellcheck disable=SC2046 # x and y
-  send clickkey $(drawn "update check")
+  click_in_sight "update check"
   expect '^browser: update check asked$' "About's Check for Updates didn't ask the updater"
   for _ in $(seq 300); do
     [ "$(update_checks_asked)" -ge $((before + 1)) ] && break
