@@ -240,8 +240,9 @@ expect '^browser: title [0-9]* value y$' "⌘A in the page didn't select all"
 
 # Korean composes in the page a syllable at a time, from a 2-set keyboard: one key can commit a
 # syllable and start the next, backspace takes a letter off the syllable composing, and return
-# commits and goes on to the page, which Japanese input keeps for itself (#2457). It's the Mac
-# driver's scripted Korean input method; check/ime.sh covers Linux with fcitx5's Hangul engine.
+# commits and goes on to the page, which Japanese input keeps for itself (#2457): the field starts
+# a line, which the page's title shows as a space. It's the Mac driver's scripted Korean input
+# method; check/ime.sh covers Linux with fcitx5's Hangul engine.
 if [ "$(uname)" = Linux ]; then
   echo "skip: Korean in a page: the Linux driver types plain keys there; check/ime.sh covers it with fcitx5's Hangul engine."
 elif windows; then
@@ -260,8 +261,8 @@ else
   send key return
   send ime off
   send type x
-  expect '^browser: title [0-9]* value y한글x$' \
-    "return didn't commit 한글 in the page: $(grep '^browser: title' "$log" | tail -1)"
+  expect '^browser: title [0-9]* value y한글 x$' \
+    "return didn't commit 한글 and go on to the page: $(grep '^browser: title' "$log" | tail -1)"
   send key a cmd
   send type y
   expect '^browser: title [0-9]* value y$' "⌘A in the page didn't select all"
