@@ -162,6 +162,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Every window stops showing, and stops remembering, a favorite its Space no longer shows, as
   // when the favorites' scope or a Space's profile changed. It shows that Space's own tab instead.
   static void HiddenFavoritesGone();
+  // |tabs| have their profile now (Tab::ProfileArrived): a window that was asked to show one while
+  // it waited, and still shows its Space, shows it.
+  static void TabsArrived(const std::vector<bc_id>& tabs);
   // Closes |tab| as the user does: its page gets its unload handlers, which may keep it open. With
   // |discard|, they don't run, so nothing asks, and it's gone before this returns.
   static void CloseTab(bc_id tab, bool discard = false);
@@ -503,6 +506,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   std::optional<uint32_t> page_color_;
   bc_id space_ = 0;
   bc_id selected_ = 0;
+  // The tab it was asked to show while that waited for its profile, which it shows nothing for
+  // until TabsArrived, else 0.
+  bc_id waiting_ = 0;
   // Once the tab shown closes, the one to show next, as its Space picked it.
   bc_id next_after_closing_ = 0;
   // The tab each Space the window showed had shown when it left that Space.

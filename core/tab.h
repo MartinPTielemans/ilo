@@ -104,14 +104,25 @@ class Tab : public content::WebContentsObserver,
   // icon, mute and when it was last seen. Tells the app its state, title and the favicon the
   // profile has for its URL. Returns its id, or 0 without history.
   static bc_id Restore(Profile* profile, const SavedTab& saved);
+  // The same in the profile in |dir|, ProfileFor's. While the core waits for that profile
+  // (ProfileExpected), the tab waits with it, without a profile until ProfileArrived: it has its
+  // place, title and history, and can't be woken. Returns 0 without history or a profile.
+  static bc_id Restore(const std::string& dir, const SavedTab& saved);
+  // Gives the tabs waiting for |dir|'s profile |profile|, as each would have had it from Restore:
+  // its page's sessionStorage and its favicon. Returns them.
+  static std::vector<bc_id> ProfileArrived(const std::string& dir, Profile* profile);
 
   Tab(const Tab&) = delete;
   Tab& operator=(const Tab&) = delete;
   ~Tab() override;
 
   bc_id id() const { return id_; }
-  // Its profile, or null once that's gone.
+  // Its profile, or null once that's gone or while the tab waits for it.
   Profile* profile() const { return profile_.get(); }
+  // The directory of its profile, or of the one it waits for.
+  std::string profile_dir() const;
+  // Whether it waits for its profile to load (Restore).
+  bool waiting_for_profile() const { return !waiting_for_.empty(); }
   // The URL of the page it's at, loaded or not, else of the one it's loading.
   GURL Url() const;
   // Its history, with its name, icon and mute, as the session keeps it.
@@ -249,6 +260,11 @@ class Tab : public content::WebContentsObserver,
 
  private:
   Tab(bc_id id, Profile* profile);
+  // Restore's tab, in |profile|, else waiting for |waiting_for|'s.
+  static bc_id Make(Profile* profile, const std::string& waiting_for, const SavedTab& saved);
+  // Gives it the last launch's sessionStorage |storage| in its profile, or keeps the id while it
+  // waits for that, unless another tab has it.
+  void TakeStorage(const std::string& storage);
 
   // Makes |contents| the tab's page.
   void Attach(content::WebContents* contents);
@@ -367,6 +383,10 @@ class Tab : public content::WebContentsObserver,
 
   const bc_id id_;
   base::WeakPtr<Profile> profile_;
+  // While it waits for its profile (Restore): that profile's directory, and the id of the
+  // sessionStorage the last launch saved it with, which the profile recreates once it's here.
+  std::string waiting_for_;
+  std::string waiting_storage_;
   // Without its page, its history and mute.
   std::optional<SavedTab> unloaded_;
   // Without its page, its page's sessionStorage, kept for its next page, where a site may keep its
