@@ -3139,8 +3139,20 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     assert_eq!(bar.chip_and_hint(), (None, false, false));
     bar.keys("tab");
     assert_eq!(bar.agent_rows(), [SET_UP]);
+    // ↩ on it ends the ask as the bar hides, so Today's slot closes with it, and the next ⌘T,
+    // which the Shell opens from inside its own update, has no ask to end (#2459).
     bar.keys("enter");
-    assert_eq!(bar.calls(), ["asking true", "hide", "set up agents"]);
+    assert_eq!(
+        bar.calls(),
+        ["asking true", "asking false", "hide", "set up agents"]
+    );
+    bar.cx
+        .update(|_, cx| show(None, Vec::new(), Vec::new(), None, cx));
+    bar.cx.run_until_parked();
+    assert!(
+        !bar.calls().iter().any(|call| call.starts_with("asking")),
+        "the bar opened again ended an ask"
+    );
 
     let mut bar = Bar::new(cx);
     bar.type_text("summarise this");

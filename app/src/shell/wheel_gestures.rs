@@ -31,11 +31,15 @@ const FALLS: usize = 4;
 const FALL: f32 = 0.75;
 const FALLING: Duration = Duration::from_millis(25);
 const STEADY: f32 = 0.02;
-/// Whole points round away the steady falls under this many, so the falls are taken over HOLD
-/// instead: the speed not rising once, falling, but no faster than e^(−t/GENTLE), as no momentum
-/// does and a hand stopping or turning does, and by now
-/// at most SLOWED of the gesture's fastest, over at least HELD events. A hand's wobble rises
-/// within that many.
+/// And they fall at least as fast as e^(−t/LINGER). A hand slowing can fall as steadily as
+/// momentum for a few events once a browser sums two of its events a frame, but more slowly than
+/// momentum twice as long as the swipe model's.
+const LINGER: Duration = Duration::from_millis(900);
+/// Whole points round away the steady falls under this many, so from a browser that gives whole
+/// points the falls are taken over HOLD instead: the speed not rising once, falling, but no faster
+/// than e^(−t/GENTLE), as no momentum does and a hand stopping or turning does, and by now at most
+/// SLOWED of the gesture's fastest, over at least HELD events. A hand's wobble rises within that
+/// many.
 const WHOLE: f32 = 8.;
 const HOLD: Duration = Duration::from_millis(50);
 const HELD: usize = 6;
@@ -172,7 +176,7 @@ impl WheelGestures {
                     ..Cut::default()
                 },
             ),
-            State::Fingers if self.falling() || self.slowing() => {
+            State::Fingers if self.falling() || self.whole() && self.slowing() => {
                 let why = if self.falling() { "falling" } else { "slowing" };
                 let state = State::Momentum {
                     sign: now.signum(),
@@ -278,8 +282,17 @@ impl WheelGestures {
         let (low, high) = ratios.fold((f32::MAX, f32::MIN), |(low, high), ratio| {
             (low.min(ratio), high.max(ratio))
         });
-        let fell = last[0].speed.abs() < last[FALLS].speed.abs();
+        let lingering = (-span.as_secs_f32() / LINGER.as_secs_f32()).exp();
+        let fell = last[0].speed.abs() < lingering * last[FALLS].speed.abs();
         span >= FALLING && low >= FALL && high <= 1. && high - low <= STEADY && fell
+    }
+
+    /// Whether the browser gives the last events in whole points, where falling() can't tell
+    /// momentum and slowing() takes over. Elsewhere a hand braking for a turn can fall as gently as
+    /// slowing() takes for momentum, where falling() tells the two apart.
+    fn whole(&self) -> bool {
+        let mut last = self.recent.iter().rev().take(FALLS + 1);
+        self.recent.len() > FALLS && last.all(|wheel| wheel.delta.fract() == 0.)
     }
 
     /// Whether the fingers' speed has fallen gently and evenly over HOLD, never rising from one
