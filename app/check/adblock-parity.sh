@@ -104,6 +104,26 @@ for _ in $(seq 100); do
 done
 grep -q '^cdp: recording requests' "$cdp_log" ||
   fail "DevTools didn't record the requests: cdp.py said $(tail -1 "$cdp_log")"
+# What the ad blocker hides on the page now, in $hides, a file a site, as cdp.py's hidden writes
+# it; and, where the baseline's run left its own beside its table, the selectors it hid that match
+# shown elements now.
+hides="$dir/hidden"
+mkdir -p "$hides"
+before_hides=
+[ -z "${ADBLOCK_PARITY_BASELINE:-}" ] || before_hides="${ADBLOCK_PARITY_BASELINE%sites.tsv}hidden"
+case $before_hides in '' | /*) ;; *) before_hides="$PWD/$before_hides" ;; esac
+look_hidden() {
+  name=$(printf %s "$1" | tr -c 'A-Za-z0-9' _).json
+  before=
+  [ ! -s "$before_hides/$name" ] || before=" $(app_path "$before_hides/$name")"
+  asked=$(grep -c '^cdp: hidden ' "$cdp_log" || true)
+  echo "hidden $(app_path "$PWD/$hides/$name")$before" >&5
+  for _ in $(seq 100); do
+    [ "$(grep -c '^cdp: hidden ' "$cdp_log" || true)" -gt "$asked" ] && return
+    sleep 0.1
+  done
+  fail "cdp.py didn't say what $1 hid: it said $(tail -1 "$cdp_log")"
+}
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
 # loaded, or "none" for a load that didn't come within 45 s, then "bot-check" where Cloudflare's
 # check stood in for the page.
@@ -146,6 +166,7 @@ while read -r url <&4; do
   # The requests of both goes are the site's, from the first's Return on.
   echo "$first $url $loaded$bot" >> "$starts"
   [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] && continue
+  look_hidden "$url"
   ../tools/window-screenshot.sh "$pid" "$dir/$(printf %02d "$n").png" ||
     fail "no window to capture"
 done 4< check/adblock-sites.txt
@@ -264,7 +285,11 @@ if worse:
 PY
 echo "$run: $(cat "$result")$memory. Per site: $dir/sites.tsv"
 # uBlock Origin's, for adblock-native's to compare with in a check of its own.
-[ "$engine" != ublock ] || cp "$dir/sites.tsv" build/adblock-parity-sites.tsv
+if [ "$engine" = ublock ]; then
+  cp "$dir/sites.tsv" build/adblock-parity-sites.tsv
+  rm -rf build/adblock-parity-hidden
+  cp -R "$hides" build/adblock-parity-hidden
+fi
 captured="with the window captured 8 s after each site loaded in $dir"
 [ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || captured="its sites in $dir"
 echo "ok: $run, ${ADBLOCK_PARITY_BASELINE:+no worse than $ADBLOCK_PARITY_BASELINE, }$captured"

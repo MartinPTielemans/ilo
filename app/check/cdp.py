@@ -31,6 +31,13 @@ takes a command a line on its standard input:
                   last at an address starting with PREFIX, through its shadow trees, its label,
                   its text or its id, or none for no such page or nothing focused: a WebUI dialog
                   takes the keyboard a moment after its page loads
+  hidden FILE [BASE]
+                  writes to FILE, as JSON, what the attached page's ad blocker hides: the
+                  selectors of its style sheets' display: none rules, an extension's injected
+                  ones or the browser's user ones, that match elements in the page, each with the
+                  elements it matches and those still shown; and with BASE, an earlier run's
+                  FILE for the same site, the selectors it hid that match shown elements now.
+                  Logs "cdp: hidden SELECTORS ELEMENTS SHOWN missed SELECTORS ELEMENTS"
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, "failed"
@@ -415,6 +422,97 @@ def focus(prefix):
     return value or "none"
 
 
+# The display: none rules of the sheets given, a selector at a time, with the elements in the page
+# each matches and those of them shown, a box with an area; and those of the earlier run's
+# selectors that match shown elements now. A selector the page's own engine can't take, as an
+# extended filter's, is skipped.
+HIDDEN = """((texts, before) => {
+  const split = (list) => {
+    const out = [];
+    let depth = 0, start = 0, quote = null;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (quote) {
+        if (c === "\\\\") i++;
+        else if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") quote = c;
+      else if (c === "(" || c === "[") depth++;
+      else if (c === ")" || c === "]") depth--;
+      else if (c === "," && depth === 0) {
+        out.push(list.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    out.push(list.slice(start).trim());
+    return out.filter(Boolean);
+  };
+  const count = (selector) => {
+    let found;
+    try { found = document.querySelectorAll(selector); } catch (e) { return null; }
+    let shown = 0;
+    for (const element of found) {
+      const box = element.getBoundingClientRect();
+      if (box.width > 0 && box.height > 0 && getComputedStyle(element).visibility !== "hidden") shown++;
+    }
+    return [found.length, shown];
+  };
+  const hidden = {};
+  for (const text of texts) {
+    const sheet = new CSSStyleSheet();
+    try { sheet.replaceSync(text); } catch (e) { continue; }
+    for (const rule of sheet.cssRules) {
+      if (!(rule instanceof CSSStyleRule) || rule.style.display !== "none") continue;
+      for (const selector of split(rule.selectorText)) {
+        if (selector in hidden) continue;
+        const counted = count(selector);
+        if (counted && counted[0]) hidden[selector] = counted;
+      }
+    }
+  }
+  const missed = {};
+  for (const selector of before) {
+    const counted = count(selector);
+    if (counted && counted[1]) missed[selector] = counted[1];
+  }
+  return JSON.stringify({hidden, missed});
+})"""
+
+
+def hidden(path, base):
+    with answered:
+        start = len(events)
+    call("DOM.enable", {}, session)
+    # Each sheet the page's documents have comes as an event before the reply does.
+    call("CSS.enable", {}, session)
+    with answered:
+        added = [event["params"]["header"] for event in events[start:]
+                 if event and event.get("sessionId") == session
+                 and event["method"] == "CSS.styleSheetAdded"]
+    main = call("Page.getFrameTree", {}, session)["frameTree"]["frame"]["id"]
+    origins = {}
+    texts = []
+    for header in added:
+        if header["frameId"] != main:
+            continue
+        origins[header["origin"]] = origins.get(header["origin"], 0) + 1
+        if header["origin"] in ("injected", "user"):
+            texts.append(call("CSS.getStyleSheetText", {"styleSheetId": header["styleSheetId"]},
+                              session)["text"])
+    call("CSS.disable", {}, session)
+    call("DOM.disable", {}, session)
+    before = list(json.load(open(base, encoding="utf-8"))["hidden"]) if base else []
+    expression = "%s(%s, %s)" % (HIDDEN, json.dumps(texts), json.dumps(before))
+    reply = call("Runtime.evaluate", {"expression": expression, "returnByValue": True}, session)
+    found = json.loads(reply.get("result", {}).get("value") or '{"hidden": {}, "missed": {}}')
+    found["origins"] = origins
+    with open(path, "w", encoding="utf-8") as out:
+        json.dump(found, out)
+    return "%d %d %d missed %d %d" % (
+        len(found["hidden"]), sum(n for n, _ in found["hidden"].values()),
+        sum(shown for _, shown in found["hidden"].values()),
+        len(found["missed"]), sum(found["missed"].values()))
+
+
 for line in sys.stdin:
     words = line.split()
     if words[:1] == ["attach"] and len(words) == 2:
@@ -445,6 +543,8 @@ for line in sys.stdin:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:
         log("focus " + focus(words[1]))
+    elif words[:1] == ["hidden"] and len(words) in (2, 3) and session:
+        log("hidden " + hidden(words[1], words[2] if len(words) == 3 else None))
     elif words[:1] == ["requests"] and len(words) == 2 and session and not recording:
         recording = open(words[1], "w", encoding="utf-8", buffering=1)
         call("Network.enable", {}, session)
