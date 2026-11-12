@@ -240,6 +240,26 @@ EOF
     scaled="it held as the display's scale went a step up and back with the preview hidden, and up with it open"
   fi
 fi
+# On Windows the preview's window may have heard another scale than its display's: made hidden on a
+# display at one scale, at the screen's top left, and moved to the browser window on one at another,
+# as the owner's was, drawing its card at 0.8 of the page's frame (#2541). The runner has one
+# display, so the driver tells the hidden window alone a scale a step from the display's, as
+# Windows tells a window that moved, and the preview opens: the card still holds the page.
+if windows; then
+  send dpis
+  expect '^browser: dpis ' "the driver named no DPIs before the preview's window heard another scale"
+  case "$(grep '^browser: dpis ' "$log" | tail -1)" in
+    *", window 96,"*) told=125 ;;
+    *) told=100 ;;
+  esac
+  send dpi "$told" link preview
+  none_since '^browser: dpi found no ' || fail "the driver found no preview window to tell $told %"
+  open_preview "its window told $told % while hidden"
+  peek_frame "its window told $told % while hidden"
+  send key escape
+  expect '^browser: link preview hidden$' "Esc didn't close the preview whose window was told $told %"
+  scaled="$scaled; and the preview's window, told $told % while hidden, drew it at the display's"
+fi
 
 # Its look in a light and a dark Space theme: the theme picker's first swatch, then the sun, and
 # later the moon, each 13 right of its appearance-x token, as cards.sh and little.sh pick them.

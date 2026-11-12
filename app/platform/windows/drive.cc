@@ -1782,14 +1782,30 @@ bool Run(const std::string& line) {
     return true;
   }
   // As Windows tells a window that moved to a display of another scale, |percent|, keeping its
-  // size in pixels: Chromium and the core take the scale the message carries (#1823).
+  // size in pixels: Chromium and the core take the scale the message carries (#1823). With a name
+  // after it, such as "link preview", the window the host floats by that name hears it instead, so
+  // GPUI draws it at that scale where Windows has another, as one made hidden on another display
+  // and moved to the browser window's does (#2541).
   if (action == "dpi") {
     int percent = 0;
     if (!(words >> percent) || percent < 100 || percent > 500) {
       return false;
     }
-    g_steps.push_back({[percent] {
+    std::string name;
+    std::getline(words >> std::ws, name);
+    g_steps.push_back({[percent, name] {
       HWND root = Driven();
+      if (!name.empty()) {
+        root = nullptr;
+        for (HWND top = GetTopWindow(nullptr); top && !root; top = GetWindow(top, GW_HWNDNEXT)) {
+          const char* floating = Ours(top) ? host_floating_name(top) : nullptr;
+          root = floating && name == floating ? top : nullptr;
+        }
+        if (!root) {
+          fprintf(stderr, "browser: dpi found no %s\n", name.c_str());
+          return;
+        }
+      }
       RECT rect{};
       GetWindowRect(root, &rect);
       const WORD dpi = static_cast<WORD>(MulDiv(USER_DEFAULT_SCREEN_DPI, percent, 100));
