@@ -549,7 +549,7 @@ expect '^browser: settings search cleared$' "Esc didn't empty the search"
 send key f cmd
 send type archive
 expect "^browser: settings search \"archive\" finds $found\$" "⌘F didn't search again"
-send clickkey $(drawn "found Features Archive windows left unused after")
+click_in_sight "found Features Archive windows left unused after"
 expect '^browser: settings found Features › Archive windows left unused after$' \
   "a click on Features' name didn't show its row"
 settings_drew Features
@@ -561,7 +561,7 @@ settings_drew Shortcuts
 # Agents go off again after.
 send clickkey $(drawn "toolbar Agents")
 settings_drew Agents
-send clickkey $(drawn "switch agents")
+click_in_sight "switch agents"
 expect '^browser: agents on$' "a click on Let agents use the browser didn't turn agents on"
 tasks_switch=$(drawn "switch agent tasks") || fail "Tasks from the command bar didn't show with agents on"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-on.png" || fail "no window to capture"
@@ -580,7 +580,7 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar"
 send menu Settings…
 expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
 settings_drew Agents
-send clickkey $(drawn "switch agent tasks")
+click_in_sight "switch agent tasks"
 expect '^browser: agent tasks on$' "a click on Tasks from the command bar didn't turn tasks on"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -595,11 +595,11 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar from
 send menu Settings…
 expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
 settings_drew Agents
-send clickkey $(drawn "switch agents")
+click_in_sight "switch agents"
 expect '^browser: agents off$' "a click on Let agents use the browser didn't turn agents off"
 send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
-send clickkey $(drawn "shortcut new-tab")
+click_in_sight "shortcut new-tab"
 expect '^browser: shortcut recording new-tab$' "a click on New Tab's keys didn't record them"
 send key t cmd ctrl
 # Off the Mac ⌃ presses Alt, as ⌥ does (docs/ux-spec.md › Keyboard).
@@ -694,7 +694,7 @@ send key a cmd
 send type focus sidebar
 expect '^browser: settings search "focus sidebar" finds Focus Sidebar$' \
   "the search didn't find Focus Sidebar"
-send clickkey $(drawn "shortcut focus-sidebar")
+click_in_sight "shortcut focus-sidebar"
 expect '^browser: shortcut recording focus-sidebar$' \
   "a click on Focus Sidebar's keys didn't record them"
 send key k cmd ctrl
@@ -720,7 +720,7 @@ expect '^browser: settings search "focus sidebar" finds Focus Sidebar$' \
   "the search didn't find Focus Sidebar again"
 # Restore Defaults, under the one row found, where ↺'s place follows its chip's width, which is
 # the key's name's off the Mac. New Tab has its default already.
-send clickkey $(drawn "restore shortcuts")
+click_in_sight "restore shortcuts"
 expect '^browser: shortcuts restored$' "a click on Restore Defaults didn't restore the keys"
 expect '^browser: shortcut focus-sidebar f6$' \
   "Restore Defaults didn't give Focus Sidebar F6 back"
@@ -935,7 +935,7 @@ send key a cmd
 send type go to space
 expect '^browser: settings search "go to space" finds Go to Space 1, Go to Space 2, ' \
   "the search didn't find Go to Space 1 first"
-send clickkey $(drawn "shortcut select-space-1")
+click_in_sight "shortcut select-space-1"
 expect '^browser: shortcut recording select-space-1$' \
   "a click on Go to Space 1's keys didn't record them"
 send key 1 cmd ctrl
@@ -1036,7 +1036,7 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey $(drawn "restore shortcuts")
+click_in_sight "restore shortcuts"
 expect '^browser: shortcuts restored$' "a click on Restore Defaults didn't restore the keys"
 expect "^browser: shortcut select-space-1 $first_key\$" \
   "Restore Defaults didn't give Go to Space 1 ⌃1"

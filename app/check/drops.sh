@@ -151,6 +151,7 @@ env BROWSER_PROFILE_DIR="$home/profile" BROWSER_URL='data:text/html,<title>drops
   BROWSER_ONBOARDING=skip \
   ../tools/headless.sh --run check/drops.sh --steps "$out" > "$out/run.log" 2>&1 || true
 if [ ! -f "$out/line.png" ] || [ -f "$out/failed" ]; then
+  failed=1
   cat "$out/failed" 2> /dev/null || echo "FAIL: see $out/run.log" >&2
   exit 1
 fi

@@ -310,9 +310,9 @@ else
       grep 'gpui dropped\|panicked\|already borrowed' | head -3 | tr '\n' ';')"
 fi
 none_since '^browser: remove login' || fail "Cancel removed the login"
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses off$' "a click on Save and fill addresses didn't switch it off"
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses on$' "a second click didn't switch addresses back on"
 # Manage Passwords…, under the box of the login's row, opens Chrome's password manager page in a
 # new tab, where a search for the username finds the login. Its device check guards only Show,
@@ -414,7 +414,7 @@ send choose "$(cased 'All Passwords…')"
 expect '^browser: site controls run passwords$' "All Passwords… didn't run again"
 expect '^browser: settings shown Passwords$' "All Passwords… didn't show Settings' Passwords tab again"
 settings_drew Passwords
-send clickkey $(drawn "switch offer to save passwords")
+click_in_sight "switch offer to save passwords"
 expect '^browser: offer to save passwords off$' "a click on Offer to save passwords didn't switch it off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-passwords-off.png" || fail "no window to capture"
 send key w cmd
@@ -626,9 +626,9 @@ done
 # Save and fill addresses and Save and fill payment methods, switched off for the profile, keep a
 # new address and the card just removed from bringing an offer. The pages they post to loading,
 # and the command bar opening and closing, take longer than the core reporting an offer.
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses off$' "a click on Save and fill addresses didn't switch it off"
-send clickkey $(drawn "switch save and fill payment methods")
+click_in_sight "switch save and fill payment methods"
 expect '^browser: save and fill payment methods off$' \
   "a click on Save and fill payment methods didn't switch it off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-autofill-off.png" || fail "no window to capture"

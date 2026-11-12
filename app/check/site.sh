@@ -236,10 +236,12 @@ onkeydown = e => {
 # requests use up: a HID, a USB device, a serial port and a Bluetooth device, in turn. It puts
 # each answer in its title: HID's empty list as "cancelled", the others' rejection by its error's
 # name and message, and an API the engine doesn't expose, as Linux's Bluetooth, as "unsupported".
-# The click after them says "still here".
+# The click after them says "still here". Each press puts "pressed N" in its title first, the Nth.
 printf '%s' '<title>loading</title>
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+let presses = 0;
+onmousedown = () => document.title = "pressed " + ++presses;
 const asks = [
   ["hid", () => navigator.hid.requestDevice({filters: []})
     .then(devices => devices.length ? "chosen" : "cancelled")],
