@@ -315,7 +315,7 @@ index 98a13f304c..6cfbd572ae 100644
  
  #[inline]
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..cb0838e0bb 100644
+index 08f91bd626..37c28be9ee 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -103,13 +103,14 @@ impl WindowsWindowInner {
@@ -497,7 +497,7 @@ index 08f91bd626..cb0838e0bb 100644
      fn handle_ime_composition(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          let ctx = ImeContext::get(handle)?;
          self.handle_ime_composition_inner(*ctx, lparam)
-@@ -933,7 +1052,30 @@ impl WindowsWindowInner {
+@@ -933,7 +1052,35 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -526,10 +526,15 @@ index 08f91bd626..cb0838e0bb 100644
 +    }
 +
 +    fn handle_display_change_msg(self: &Rc<Self>, handle: HWND) -> Option<isize> {
++        // What the window showed may be gone with the change: after the display adapter restarts
++        // it shows nothing until it presents again, which removes the device the restart left
++        // stale, and the device's removal has GPUI recover (#2536). So it draws all of it again.
++        self.state.force_render_pending.set(true);
++        self.state.frame_want.wake();
          let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
          if new_monitor.is_invalid() {
              log::error!("No monitor detected!");
-@@ -944,12 +1086,21 @@ impl WindowsWindowInner {
+@@ -944,12 +1091,21 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -556,7 +561,7 @@ index 08f91bd626..cb0838e0bb 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1021,6 +1172,12 @@ impl WindowsWindowInner {
+@@ -1021,6 +1177,12 @@ impl WindowsWindowInner {
      }
  
      fn handle_nc_mouse_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
@@ -569,7 +574,7 @@ index 08f91bd626..cb0838e0bb 100644
          self.start_tracking_mouse(handle, TME_LEAVE | TME_NONCLIENT);
          self.restore_cursor_after_hide();
  
-@@ -1335,6 +1492,8 @@ impl WindowsWindowInner {
+@@ -1335,6 +1497,8 @@ impl WindowsWindowInner {
  
      fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {
          self.state.direct_manipulation.on_pointer_hit_test(wparam);
@@ -578,7 +583,7 @@ index 08f91bd626..cb0838e0bb 100644
          None
      }
  
-@@ -1347,16 +1506,20 @@ impl WindowsWindowInner {
+@@ -1347,16 +1511,20 @@ impl WindowsWindowInner {
              }
              // Validate the region so a nested message pump doesn't keep
              // re-dispatching WM_PAINT for the still-invalid region in a busy
@@ -601,7 +606,7 @@ index 08f91bd626..cb0838e0bb 100644
  
          let events = self.state.direct_manipulation.drain_events();
          if !events.is_empty() {
-@@ -1823,3 +1986,70 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +1991,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -807,10 +812,34 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..b1932b27fb 100644
+index 095e009e23..41f2c0e850 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
-@@ -42,6 +42,7 @@ use gpui::*;
+@@ -20,7 +20,10 @@ use windows::{
+     UI::ViewManagement::UISettings,
+     Win32::{
+         Foundation::*,
+-        Graphics::{Direct3D11::ID3D11Device, Gdi::*},
++        Graphics::{
++            Direct3D11::{ID3D11Device, ID3D11Device4},
++            Gdi::*,
++        },
+         Security::Credentials::*,
+         System::{
+             Com::*,
+@@ -29,7 +32,10 @@ use windows::{
+             Power::*,
+             SystemInformation::*,
+             SystemServices::POWER_REQUEST_CONTEXT_VERSION,
+-            Threading::{POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0},
++            Threading::{
++                CreateEventW, INFINITE, POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT,
++                REASON_CONTEXT_0, RegisterWaitForSingleObject, UnregisterWaitEx, WT_EXECUTEDEFAULT,
++            },
+         },
+         UI::{Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
+     },
+@@ -42,6 +48,7 @@ use gpui::*;
  struct TrackedWindow {
      handle: SafeHwnd,
      frame_signal: Arc<PlatformFrameSignal>,
@@ -818,7 +847,7 @@ index 095e009e23..b1932b27fb 100644
  }
  
  impl TrackedWindow {
-@@ -372,10 +373,17 @@ impl WindowsPlatform {
+@@ -372,10 +379,17 @@ impl WindowsPlatform {
          if active_window_hwnd.is_invalid() {
              return None;
          }
@@ -838,7 +867,7 @@ index 095e009e23..b1932b27fb 100644
              .map(|hwnd| hwnd.as_raw())
      }
  
-@@ -422,7 +430,7 @@ impl WindowsPlatform {
+@@ -422,7 +436,7 @@ impl WindowsPlatform {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
              // Not joined: the thread can be sending this thread a message. It exits after its
              // next vsync, and drops its reference to the devices then.
@@ -847,7 +876,7 @@ index 095e009e23..b1932b27fb 100644
          }
          if let Some(text_system) = &self.direct_write_text_system {
              text_system.release_gpu();
-@@ -449,8 +457,25 @@ impl WindowsPlatform {
+@@ -449,10 +463,18 @@ impl WindowsPlatform {
          std::thread::Builder::new()
              .name("VSyncProvider".to_owned())
              .spawn(move || {
@@ -855,9 +884,26 @@ index 095e009e23..b1932b27fb 100644
 +                // either finds this to wake or is seen wanting one.
 +                *VSYNC_THREAD.lock().unwrap() = Some(std::thread::current());
                  let vsync_provider = VSyncProvider::new();
++                // Windows takes the device away as its adapter restarts or resets. While no
++                // window wants a frame this thread is parked, and the windows show nothing until
++                // the next input asks for one (#2536), so the removal wakes it to recover.
++                let mut device_removed = DeviceRemovedWake::new();
++                if let Some(wake) = &mut device_removed {
++                    wake.watch(&directx_device.device);
++                }
                  loop {
-+                    if stop.load(Ordering::Acquire) {
-+                        break;
+-                    let signal_source = vsync_provider.wait_for_vsync();
+-                    let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
+                     if stop.load(Ordering::Acquire) {
+                         break;
+                     }
+@@ -468,11 +490,33 @@ impl WindowsPlatform {
+                         ) {
+                             panic!("Device lost: {err}");
+                         }
++                        if let Some(wake) = &mut device_removed {
++                            wake.watch(&directx_device.device);
++                        }
 +                    }
 +                    let Some(windows) = all_windows.upgrade() else {
 +                        break;
@@ -870,10 +916,12 @@ index 095e009e23..b1932b27fb 100644
 +                        std::thread::park();
 +                        continue;
 +                    }
-                     let signal_source = vsync_provider.wait_for_vsync();
-                     let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
-                     if stop.load(Ordering::Acquire) {
-@@ -473,6 +498,9 @@ impl WindowsPlatform {
++                    let signal_source = vsync_provider.wait_for_vsync();
++                    let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
++                    if stop.load(Ordering::Acquire) {
++                        break;
+                     }
+                     let Some(all_windows) = all_windows.upgrade() else {
                          break;
                      };
                      for hwnd in all_windows.read().iter() {
@@ -883,10 +931,80 @@ index 095e009e23..b1932b27fb 100644
                          unsafe {
                              if let Some(signal_at) = signal_at {
                                  if IsWindowVisible(hwnd.as_raw()).as_bool()
-@@ -495,6 +523,14 @@ impl WindowsPlatform {
+@@ -495,6 +539,84 @@ impl WindowsPlatform {
      }
  }
  
++/// Wakes the vsync thread when Windows removes its D3D device, by the event Direct3D signals then,
++/// so a removal while the thread is parked is recovered from before the next input.
++struct DeviceRemovedWake {
++    event: HANDLE,
++    wait: HANDLE,
++    watched: Option<(ID3D11Device4, u32)>,
++}
++
++impl DeviceRemovedWake {
++    fn new() -> Option<Self> {
++        unsafe {
++            let event = CreateEventW(None, false, false, None).log_err()?;
++            let mut wait = HANDLE::default();
++            if RegisterWaitForSingleObject(
++                &mut wait,
++                event,
++                Some(wake_vsync_thread),
++                None,
++                INFINITE,
++                WT_EXECUTEDEFAULT,
++            )
++            .log_err()
++            .is_none()
++            {
++                CloseHandle(event).log_err();
++                return None;
++            }
++            Some(Self {
++                event,
++                wait,
++                watched: None,
++            })
++        }
++    }
++
++    /// Watches `device` in place of the one before, which a recovery replaced.
++    fn watch(&mut self, device: &ID3D11Device) {
++        self.unwatch();
++        let Some(device) = device.cast::<ID3D11Device4>().log_err() else {
++            return;
++        };
++        if let Some(cookie) = unsafe { device.RegisterDeviceRemovedEvent(self.event) }.log_err() {
++            self.watched = Some((device, cookie));
++        }
++    }
++
++    fn unwatch(&mut self) {
++        if let Some((device, cookie)) = self.watched.take() {
++            unsafe { device.UnregisterDeviceRemoved(cookie) };
++        }
++    }
++}
++
++impl Drop for DeviceRemovedWake {
++    fn drop(&mut self) {
++        self.unwatch();
++        unsafe {
++            // Waits for a callback that's running, so the event outlives it.
++            UnregisterWaitEx(self.wait, Some(INVALID_HANDLE_VALUE)).log_err();
++            CloseHandle(self.event).log_err();
++        }
++    }
++}
++
++unsafe extern "system" fn wake_vsync_thread(_: *mut std::ffi::c_void, _: bool) {
++    if let Some(thread) = VSYNC_THREAD.lock().unwrap().as_ref() {
++        thread.unpark();
++    }
++}
++
 +/// Stops the vsync thread, which may be parked waiting for a window to want a frame.
 +fn stop_vsync(stop: &AtomicBool) {
 +    stop.store(true, Ordering::Release);
@@ -898,7 +1016,7 @@ index 095e009e23..b1932b27fb 100644
  fn encode_restart_arguments(arguments: &[OsString]) -> OsString {
      // `Start-Process` accepts a single native command line, so quote each argument according to
      // the Windows argv parsing rules before passing the complete string through the environment.
-@@ -587,6 +623,11 @@ impl Platform for WindowsPlatform {
+@@ -587,6 +709,11 @@ impl Platform for WindowsPlatform {
          }
          on_finish_launching();
  
@@ -910,7 +1028,7 @@ index 095e009e23..b1932b27fb 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -748,6 +789,14 @@ impl Platform for WindowsPlatform {
+@@ -748,6 +875,14 @@ impl Platform for WindowsPlatform {
              .map(|inner| inner.handle)
      }
  
@@ -925,7 +1043,7 @@ index 095e009e23..b1932b27fb 100644
      fn open_window(
          &self,
          handle: AnyWindowHandle,
-@@ -761,6 +810,7 @@ impl Platform for WindowsPlatform {
+@@ -761,6 +896,7 @@ impl Platform for WindowsPlatform {
          self.raw_window_handles.write().push(TrackedWindow {
              handle: handle.into(),
              frame_signal: window.state.frame_signal.clone(),
@@ -933,7 +1051,7 @@ index 095e009e23..b1932b27fb 100644
          });
  
          Ok(Box::new(window))
-@@ -1409,7 +1459,7 @@ impl WindowsPlatformInner {
+@@ -1409,7 +1545,7 @@ impl WindowsPlatformInner {
  impl Drop for WindowsPlatform {
      fn drop(&mut self) {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
@@ -942,7 +1060,7 @@ index 095e009e23..b1932b27fb 100644
          }
          unsafe {
              if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
-@@ -1637,10 +1687,43 @@ fn file_save_dialog(
+@@ -1637,10 +1773,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -987,7 +1105,16 @@ index 095e009e23..b1932b27fb 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1980,3 +2063,12 @@ mod tests {
+@@ -1763,6 +1932,8 @@ fn handle_gpu_device_lost(
+             }
+         }
+     }
++    // check.sh reads this: each window has drawn on the new device, as the message is sent.
++    eprintln!("browser: gpui redrew its windows on a new device");
+     Ok(())
+ }
+ 
+@@ -1980,3 +2151,12 @@ mod tests {
          );
      }
  }
