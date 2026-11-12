@@ -15,6 +15,29 @@ mojom("drm_request") {
   generate_blink = true
 }
 
+# What the browser's own ad blocker (#2111) has a frame's next document hide and run, from the
+# browser to the frame's agent.
+mojom("ad_block_page") {
+  sources = [ "ad_block_page.mojom" ]
+}
+
+# The frame's side of it, which Chrome's renderer gives each frame
+# (engine/patches/ours/chromium-core-ad-block-page.patch), so it's apart from the browser's code.
+source_set("ad_block_page_agent") {
+  sources = [
+    "ad_block_page_agent.cc",
+    "ad_block_page_agent.h",
+  ]
+  deps = [
+    ":ad_block_page",
+    "//base",
+    "//content/public/renderer",
+    "//mojo/public/cpp/bindings",
+    "//third_party/blink/public:blink",
+    "//url",
+  ]
+}
+
 # The page a tab shows for a load that failed. Chrome's renderer calls it
 # (engine/patches/ours/chromium-core-error-page.patch), so it's apart from the browser's code.
 source_set("error_page") {
@@ -38,6 +61,17 @@ source_set("search_default") {
     "//components/prefs",
     "//components/search_engines",
   ]
+}
+
+# The profile prefs that keep the sites the user turned ad blocking off on, and their carry-over
+# from uBlock Origin's extension prefs, apart so browser_core_unittests tests it alone.
+source_set("ad_block_off_sites") {
+  sources = [
+    "ad_block_off_sites.cc",
+    "ad_block_off_sites.h",
+  ]
+  deps = [ "//components/prefs" ]
+  public_deps = [ "//base" ]
 }
 
 # The site searches a new profile has, and the one a word typed starts (#1397).
@@ -308,6 +342,10 @@ source_set("browser_core") {
     "main_delegate.h",
     "mini_player.cc",
     "mini_player.h",
+    "native_ad_block.cc",
+    "native_ad_block.h",
+    "native_ad_block_lists.cc",
+    "native_ad_block_lists.h",
     "notes.cc",
     "notes.h",
     "open_app_dialog.cc",
@@ -380,6 +418,8 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":ad_block_off_sites",
+    ":ad_block_page",
     ":archive_rule",
     ":drm_request",
     ":mini_player_place",
@@ -666,9 +706,14 @@ source_set("browser_core") {
 # engine's run runs them.
 test("browser_core_unittests") {
   sources = [
+    "ad_block_off_sites_unittest.cc",
     "archive_rule_unittest.cc",
     "agent_download_hold_unittest.cc",
     "mini_player_place_unittest.cc",
+
+    # The engine patch that gives a history match its last visit, which the core's suggestions
+    # read.
+    "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
     "search_default_unittest.cc",
     "sidebar_backups_unittest.cc",
@@ -686,6 +731,7 @@ test("browser_core_unittests") {
     "window_frames_unittest.cc",
   ]
   deps = [
+    ":ad_block_off_sites",
     ":archive_rule",
     ":agent_download_hold",
     ":mini_player_place",
@@ -702,6 +748,13 @@ test("browser_core_unittests") {
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//components/bookmarks/test",
+    "//components/history/core/browser",
+    "//components/history/core/test",
+    "//components/omnibox/browser",
+    "//components/omnibox/browser:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
     "//components/search_engines",
     "//components/sessions",
     "//components/download/public/common:test_support",
@@ -713,6 +766,7 @@ test("browser_core_unittests") {
     "//components/variations:test_support",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/metrics_proto",
     "//url",
   ]
   if (use_xkbcommon) {
