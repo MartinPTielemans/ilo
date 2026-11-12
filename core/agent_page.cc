@@ -20,6 +20,7 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -230,6 +231,33 @@ base::ListValue Tagged(base::ListValue nodes, const std::string& prefix, int slo
   return nodes;
 }
 
+// At most this many labels are asked for a hidden control, each a few DevTools round trips.
+constexpr size_t kLabelsAsked = 20;
+// The controls a label may hide, in the order they're looked for.
+constexpr std::string_view kChoiceKinds[] = {"radio", "checkbox"};
+
+// A selector for an input of the |kind|, with the |id| if one's given, quoted as CSS quotes it.
+std::string ChoiceSelector(std::string_view kind, const std::optional<std::string>& id) {
+  std::string selector = base::StrCat({"input[type=", kind, "]"});
+  if (!id) {
+    return selector;
+  }
+  selector += "[id=\"";
+  for (const char each : *id) {
+    if (each == '"' || each == '\\') {
+      selector += '\\';
+      selector += each;
+    } else if (static_cast<unsigned char>(each) < 0x20 || each == 0x7f) {
+      // A line break or other control character, which a CSS string can't hold as it is.
+      selector += base::StringPrintf("\\%x ", static_cast<unsigned char>(each));
+    } else {
+      selector += each;
+    }
+  }
+  selector += "\"]";
+  return selector;
+}
+
 void Report(bc_id tab, uint64_t request, std::string text, bool error) {
   if (Host().agent_page_done) {
     Host().agent_page_done(Host().context, tab, request, text.c_str(), error);
@@ -306,6 +334,45 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
     kept.Append(std::move(node));
   }
   return kept;
+}
+
+std::vector<int64_t> UnnamedLabels(const base::ListValue& nodes, size_t most) {
+  // The labels each node's name could come from, whether or not another source won.
+  std::set<int64_t> named;
+  for (const base::Value& node : nodes) {
+    const base::DictValue* dict = node.GetIfDict();
+    const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+    const base::ListValue* sources = element ? dict->FindListByDottedPath("name.sources") : nullptr;
+    if (!sources) {
+      continue;
+    }
+    for (const base::Value& source : *sources) {
+      const base::DictValue* each = source.GetIfDict();
+      const base::ListValue* related =
+          each ? each->FindListByDottedPath("nativeSourceValue.relatedNodes") : nullptr;
+      if (!related) {
+        continue;
+      }
+      for (const base::Value& label : *related) {
+        const base::DictValue* label_dict = label.GetIfDict();
+        // A frame's tree numbers its own DOM nodes, so the label is in the node's frame.
+        if (const std::optional<int> id =
+                label_dict ? label_dict->FindInt("backendDOMNodeId") : std::nullopt) {
+          named.insert(ElementId(SlotOfElement(*element), *id));
+        }
+      }
+    }
+  }
+  std::vector<int64_t> labels;
+  for (const base::Value& node : nodes) {
+    const base::DictValue* dict = node.GetIfDict();
+    const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+    if (element && IsRole(*dict, "LabelText") && !named.contains(*element) &&
+        labels.size() < most) {
+      labels.push_back(*element);
+    }
+  }
+  return labels;
 }
 
 // Whether a wheel moved anything, as the widgets of the page's frames answer it: a scroll it
@@ -1496,7 +1563,8 @@ void AgentPage::StitchTree(size_t next) {
         fields.push_back(*backend);
       }
     }
-    CheckPasswords(std::move(nodes), std::move(fields), {});
+    std::vector<int64_t> labels = UnnamedLabels(nodes, kLabelsAsked);
+    CheckLabels(std::move(nodes), std::move(fields), std::move(labels), {});
     return;
   }
   const Frame& frame = frames_[next];
@@ -1536,6 +1604,158 @@ void AgentPage::StitchTree(size_t next) {
            },
            weak_factory_.GetWeakPtr(), next),
        parent.slot);
+}
+
+void AgentPage::CheckLabels(base::ListValue nodes,
+                            std::vector<int64_t> fields,
+                            std::vector<int64_t> labels,
+                            std::map<int64_t, Choice> choices) {
+  if (labels.empty()) {
+    // Each label shows as its control, which an agent picks by clicking the label, as a person
+    // does; the app names it from the text inside.
+    for (base::Value& node : nodes) {
+      base::DictValue* dict = node.GetIfDict();
+      const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+      const auto choice = element ? choices.find(*element) : choices.end();
+      if (choice == choices.end()) {
+        continue;
+      }
+      dict->SetByDottedPath("role.value", choice->second.role);
+      dict->Set("label", true);
+      dict->EnsureList("properties")
+          ->Append(base::DictValue()
+                       .Set("name", "checked")
+                       .Set("value", base::DictValue()
+                                         .Set("type", "tristate")
+                                         .Set("value", choice->second.checked ? "true" : "false")));
+    }
+    CheckPasswords(std::move(nodes), std::move(fields), {});
+    return;
+  }
+  const int64_t label = labels.back();
+  labels.pop_back();
+  ChoiceOf(label, base::BindOnce(
+                      [](base::WeakPtr<AgentPage> page, base::ListValue nodes,
+                         std::vector<int64_t> fields, std::vector<int64_t> labels,
+                         std::map<int64_t, Choice> choices, int64_t label,
+                         std::optional<Choice> choice) {
+                        if (!page) {
+                          return;
+                        }
+                        if (choice) {
+                          choices[label] = std::move(*choice);
+                        }
+                        page->CheckLabels(std::move(nodes), std::move(fields), std::move(labels),
+                                          std::move(choices));
+                      },
+                      weak_factory_.GetWeakPtr(), std::move(nodes), std::move(fields),
+                      std::move(labels), std::move(choices), label));
+}
+
+void AgentPage::ChoiceOf(int64_t label, ChoiceThen then) {
+  const int slot = SlotOfElement(label);
+  // Node ids hold only after the session has asked for the document.
+  Send(
+      "DOM.getDocument", base::DictValue().Set("depth", 0),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, int slot, int64_t label, ChoiceThen then,
+             const base::DictValue* result) {
+            const base::DictValue* root = result ? result->FindDict("root") : nullptr;
+            const std::optional<int> document = root ? root->FindInt("nodeId") : std::nullopt;
+            if (!page || !document) {
+              std::move(then).Run(std::nullopt);
+              return;
+            }
+            page->Send(
+                "DOM.pushNodesByBackendIdsToFrontend",
+                base::DictValue().Set("backendNodeIds",
+                                      base::ListValue().Append(NodeOfElement(label))),
+                base::BindOnce(
+                    [](base::WeakPtr<AgentPage> page, int slot, int document, ChoiceThen then,
+                       const base::DictValue* result) {
+                      const base::ListValue* ids = result ? result->FindList("nodeIds") : nullptr;
+                      const std::optional<int> node =
+                          ids && !ids->empty() ? (*ids)[0].GetIfInt() : std::nullopt;
+                      if (!page || !node || *node == 0) {
+                        std::move(then).Run(std::nullopt);
+                        return;
+                      }
+                      page->Send(
+                          "DOM.getAttributes", base::DictValue().Set("nodeId", *node),
+                          base::BindOnce(
+                              [](base::WeakPtr<AgentPage> page, int slot, int document, int node,
+                                 ChoiceThen then, const base::DictValue* result) {
+                                if (!page) {
+                                  std::move(then).Run(std::nullopt);
+                                  return;
+                                }
+                                const base::ListValue* attributes =
+                                    result ? result->FindList("attributes") : nullptr;
+                                std::optional<std::string> id;
+                                // Name, value, name, value.
+                                for (size_t i = 0; attributes && i + 1 < attributes->size();
+                                     i += 2) {
+                                  const std::string* name = (*attributes)[i].GetIfString();
+                                  const std::string* value = (*attributes)[i + 1].GetIfString();
+                                  if (name && value && *name == "for") {
+                                    id = *value;
+                                  }
+                                }
+                                // A label with a "for" is for that element, wherever it is.
+                                const int scope = id ? document : node;
+                                page->FindChoice(slot, scope, std::move(id), 0, std::move(then));
+                              },
+                              page, slot, document, *node, std::move(then)),
+                          slot);
+                    },
+                    page, slot, *document, std::move(then)),
+                slot);
+          },
+          weak_factory_.GetWeakPtr(), slot, label, std::move(then)),
+      slot);
+}
+
+void AgentPage::FindChoice(int slot,
+                           int scope,
+                           std::optional<std::string> id,
+                           size_t kind,
+                           ChoiceThen then) {
+  if (kind >= std::size(kChoiceKinds)) {
+    std::move(then).Run(std::nullopt);
+    return;
+  }
+  std::string selector = ChoiceSelector(kChoiceKinds[kind], id);
+  Send(
+      "DOM.querySelectorAll", base::DictValue().Set("nodeId", scope).Set("selector", selector),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, int slot, int scope, std::optional<std::string> id,
+             size_t kind, std::string selector, ChoiceThen then, const base::DictValue* result) {
+            if (!page) {
+              std::move(then).Run(std::nullopt);
+              return;
+            }
+            const base::ListValue* found = result ? result->FindList("nodeIds") : nullptr;
+            if (!found || found->empty()) {
+              page->FindChoice(slot, scope, std::move(id), kind + 1, std::move(then));
+              return;
+            }
+            // Whether it's checked now, not as the page's HTML first had it.
+            page->Send(
+                "DOM.querySelectorAll",
+                base::DictValue().Set("nodeId", scope).Set("selector", selector + ":checked"),
+                base::BindOnce(
+                    [](size_t kind, ChoiceThen then, const base::DictValue* result) {
+                      const base::ListValue* checked =
+                          result ? result->FindList("nodeIds") : nullptr;
+                      std::move(then).Run(
+                          Choice{std::string(kChoiceKinds[kind]), checked && !checked->empty()});
+                    },
+                    kind, std::move(then)),
+                slot);
+          },
+          weak_factory_.GetWeakPtr(), slot, scope, std::move(id), kind, std::move(selector),
+          std::move(then)),
+      slot);
 }
 
 void AgentPage::CheckPasswords(base::ListValue nodes,
