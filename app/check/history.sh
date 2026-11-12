@@ -311,6 +311,13 @@ if [ "$major" -ge 157 ]; then
   fi
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened"
+  # And gives it back to the warning, as the page under it drops every key, ilo's shortcuts with
+  # them, while the warning's up (#2625). The second ⌘T, next, comes from there.
+  if [ "$(uname)" = Darwin ]; then
+    send state
+    [ "$key" = NativeWidgetMacNSWindow ] ||
+      fail "the command bar closing over Chrome's warning before http gave the keyboard to $key, on $focus, not back to the warning"
+  fi
   # The warning's in a second tab, so one ⌘W on it is seen to close that tab alone: under Wayland
   # the UI, which the closed tab gives the keyboard, read the press again and ran it twice (#2442).
   kept=$tab
