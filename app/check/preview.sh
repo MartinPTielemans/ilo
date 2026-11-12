@@ -253,7 +253,7 @@ if windows; then
     *) told=100 ;;
   esac
   send dpi "$told" link preview
-  none_since '^browser: dpi found no ' || fail "the driver found no preview window to tell $told %"
+  expect '^browser: dpi [0-9]* told link preview$' "the driver found no preview window to tell $told %"
   open_preview "its window told $told % while hidden"
   ../tools/window-screenshot.sh "$pid" "$out/preview-told.png" || fail "no window to capture"
   peek_frame "its window told $told % while hidden"

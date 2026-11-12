@@ -1810,6 +1810,9 @@ bool Run(const std::string& line) {
       GetWindowRect(root, &rect);
       const WORD dpi = static_cast<WORD>(MulDiv(USER_DEFAULT_SCREEN_DPI, percent, 100));
       SendMessageW(root, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&rect));
+      if (!name.empty()) {
+        fprintf(stderr, "browser: dpi %d told %s\n", dpi, name.c_str());
+      }
     }, 300});
     return true;
   }
