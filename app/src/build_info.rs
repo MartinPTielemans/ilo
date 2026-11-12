@@ -1,8 +1,13 @@
 //! What Help › Copy Build Info copies and Help › Report a Problem… fills a new issue with: the
-//! app's version and build, its engine's, the system's and the chip. Nothing leaves the computer
-//! until the user submits the issue GitHub shows them.
+//! app's version and build, its engine's, the system's and the chip, and on Linux and Windows how
+//! the app is installed, with Linux's session and desktop. Nothing leaves the computer until the
+//! user submits the issue GitHub shows them.
 
 use std::sync::LazyLock;
+
+use gpui::App;
+
+use crate::updates::{self, Updater};
 
 /// Where a new issue is filed: a default service URL, which a fork changes (branding/issues).
 pub const NEW_ISSUE: &str = env!("APP_ISSUES");
@@ -23,16 +28,21 @@ pub struct BuildInfo {
     pub system: String,
     /// The processor: "Apple M2 Pro", else the architecture.
     pub chip: String,
+    /// How this copy is installed and, on Linux, the session and desktop it runs in, as the bug
+    /// report form's Linux or Windows field asks: "Flatpak, Wayland, Hyprland". None on the Mac,
+    /// where the form asks for none.
+    pub setup: Option<String>,
 }
 
 impl BuildInfo {
     /// This copy's, read from the system when asked.
-    pub fn here() -> Self {
+    pub fn here(cx: &App) -> Self {
         BuildInfo {
             version: version(),
             engine: ENGINE_VERSION.clone(),
             system: system(),
             chip: chip(),
+            setup: here_setup(updates::updater(cx)),
         }
     }
 
@@ -46,21 +56,83 @@ impl BuildInfo {
         );
         lines.push(self.system.clone());
         lines.push(self.chip.clone());
+        lines.extend(self.setup.clone());
         lines.join("\n")
     }
 
-    /// A new issue at `new_issue` on the bug report form, its version, Chromium and system fields
-    /// filled with these (.github/ISSUE_TEMPLATE/bug_report.yml's ids).
+    /// A new issue at `new_issue` on the bug report form, its version, Chromium, operating system,
+    /// system and this system's install fields filled with these
+    /// (.github/ISSUE_TEMPLATE/bug_report.yml's ids).
     pub fn issue_url(&self, new_issue: &str) -> String {
         let mut fields = vec![("template", "bug_report.yml".to_owned())];
         fields.push(("version", self.version.clone()));
         fields.extend(self.engine.clone().map(|engine| ("chromium", engine)));
+        fields.push(("platform", PLATFORM.to_owned()));
         fields.push(("os", format!("{}, {}", self.system, self.chip)));
+        // The form's field for this system's install: one for Linux, one for Windows.
+        let field = if cfg!(windows) { "windows" } else { "linux" };
+        fields.extend(self.setup.clone().map(|setup| (field, setup)));
         let query: Vec<String> = fields
             .iter()
             .map(|(name, value)| format!("{name}={}", escape(value)))
             .collect();
         format!("{new_issue}?{}", query.join("&"))
+    }
+}
+
+/// The system's family, as the bug report form's Operating system offers it.
+const PLATFORM: &str = if cfg!(target_os = "macos") {
+    "macOS"
+} else if cfg!(windows) {
+    "Windows"
+} else {
+    "Linux"
+};
+
+/// How this copy is installed, and on Linux its session and desktop, read when asked.
+#[cfg(target_os = "linux")]
+fn here_setup(_: Updater) -> Option<String> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
+    Some(linux_setup(
+        crate::flatpak::in_flatpak(),
+        gpui::guess_compositor(),
+        desktop.as_deref(),
+    ))
+}
+
+#[cfg(windows)]
+fn here_setup(updater: Updater) -> Option<String> {
+    Some(windows_install(updater).to_owned())
+}
+
+/// The Mac's form asks for none, and the preview's web build has none to tell.
+#[cfg(not(any(target_os = "linux", windows)))]
+fn here_setup(_: Updater) -> Option<String> {
+    None
+}
+
+/// The Flatpak from ilo's releases or not, which the form takes as built from source, the session
+/// GPUI connects to, and the desktop, as the form's Linux field asks for them.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_setup(flatpak: bool, session: &str, desktop: Option<&str>) -> String {
+    let install = if flatpak {
+        "Flatpak"
+    } else {
+        "built from source"
+    };
+    let mut words = vec![install, session];
+    words.extend(desktop.filter(|desktop| !desktop.is_empty()));
+    words.join(", ")
+}
+
+/// What installed this copy, from what updates it: winget runs the same installer as a download
+/// does, so the two can't be told apart, and a build that updates itself not at all is a dev build.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_install(updater: Updater) -> &'static str {
+    match updater {
+        Updater::Store => "the Microsoft Store",
+        Updater::Own => "the installer or winget",
+        Updater::None => "built from source",
     }
 }
 
@@ -197,6 +269,7 @@ mod tests {
             engine: Some("156.0.7600.12".into()),
             system: "macOS 15.1".into(),
             chip: "Apple M2 Pro".into(),
+            setup: None,
         }
     }
 
@@ -227,9 +300,50 @@ mod tests {
         let url = made_up().issue_url("https://github.com/o/r/issues/new");
         assert_eq!(
             url,
-            "https://github.com/o/r/issues/new?template=bug_report.yml&version=0.1.0%20%284321%29\
-             &chromium=156.0.7600.12&os=macOS%2015.1%2C%20Apple%20M2%20Pro"
+            format!(
+                "https://github.com/o/r/issues/new?template=bug_report.yml&version=0.1.0%20%284321%29\
+                 &chromium=156.0.7600.12&platform={PLATFORM}&os=macOS%2015.1%2C%20Apple%20M2%20Pro"
+            )
         );
+    }
+
+    /// Linux's and Windows's install go in the form's field for that system, and Copy Build Info
+    /// copies them last (#2458).
+    #[test]
+    fn fills_the_install_field() {
+        let info = BuildInfo {
+            setup: Some("Flatpak, Wayland, Hyprland".into()),
+            ..made_up()
+        };
+        let field = if cfg!(windows) { "windows" } else { "linux" };
+        assert!(
+            info.issue_url(NEW_ISSUE)
+                .ends_with(&format!("&{field}=Flatpak%2C%20Wayland%2C%20Hyprland")),
+        );
+        assert!(
+            info.text()
+                .ends_with("\nApple M2 Pro\nFlatpak, Wayland, Hyprland")
+        );
+    }
+
+    #[test]
+    fn names_linuxs_install_session_and_desktop() {
+        assert_eq!(
+            linux_setup(true, "Wayland", Some("Hyprland")),
+            "Flatpak, Wayland, Hyprland"
+        );
+        assert_eq!(
+            linux_setup(false, "X11", Some("")),
+            "built from source, X11"
+        );
+        assert_eq!(linux_setup(false, "X11", None), "built from source, X11");
+    }
+
+    #[test]
+    fn names_what_installed_a_windows_copy() {
+        assert_eq!(windows_install(Updater::Store), "the Microsoft Store");
+        assert_eq!(windows_install(Updater::Own), "the installer or winget");
+        assert_eq!(windows_install(Updater::None), "built from source");
     }
 
     #[test]
@@ -261,9 +375,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn reads_this_computer() {
-        let info = BuildInfo::here();
+    #[gpui::test]
+    fn reads_this_computer(cx: &mut gpui::TestAppContext) {
+        let info = cx.update(|cx| BuildInfo::here(cx));
         assert!(info.version.starts_with(env!("CARGO_PKG_VERSION")));
         assert!(!info.system.is_empty());
         assert!(!info.chip.is_empty());
