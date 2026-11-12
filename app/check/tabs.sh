@@ -1325,13 +1325,18 @@ if windows; then
     expect '^browser: new tab plate 0$' "$1 left New Tab's plate selected"
     overlays_none "$1"
   }
-  # The toast from ⌘Z and the hover card under the pointer go by themselves.
-  away
-  for _ in $(seq 100); do
-    toast=$(grep '^browser: toast \(shown\|hidden\)' "$log" | tail -1)
-    card=$(grep '^browser: hover card \(shown\|hidden\)' "$log" | tail -1)
-    case "$toast $card" in *shown*) sleep 0.1 ;; *) break ;; esac
-  done
+  # The toast from ⌘Z and the hover card under the pointer go by themselves, once the pointer is
+  # over the page. The driver's pointer is real (#2544), so it rests where a menu was opened, on its
+  # row, which shows the row's hover card once the menu closes, as it does to a hand.
+  settle() {
+    away
+    for _ in $(seq 100); do
+      toast=$(grep '^browser: toast \(shown\|hidden\)' "$log" | tail -1)
+      card=$(grep '^browser: hover card \(shown\|hidden\)' "$log" | tail -1)
+      case "$toast $card" in *shown*) sleep 0.1 ;; *) break ;; esac
+    done
+  }
+  settle
   overlays_none "the steps before"
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
@@ -1356,6 +1361,7 @@ if windows; then
   send key escape
   expect '^browser: menu closed$' "escape didn't close the menu"
   expect '^browser: menu window hidden$' "escape left the menu's window up"
+  settle
   overlays_none "the menu, once closed,"
   send reshow
   expect '^browser: reshown [1-9][0-9]*$' "the driver found none of the UI's windows hidden to show again"
@@ -1376,6 +1382,7 @@ if windows; then
     expect '^browser: menu closed$' "minimizing the window left its menu open"
     expect '^browser: menu window hidden$' "minimizing the window left its menu's window up"
     send minimize
+    settle
     overlays_none "the window coming back from minimized after its menu closed"
   else
     echo "skip: a menu in a minimized window, as the app wasn't active once its window came back."
@@ -1422,6 +1429,7 @@ FRAME
   expect '^browser: menu closed$' "moving the window left its menu open"
   expect '^browser: menu window hidden$' "moving the window left its menu's window up"
   send place "$frame_x" "$frame_y" "$frame_width" "$frame_height"
+  settle
   overlays_none "the menu, closed as its window moved,"
   # The bar opened while a page loads in another site's renderer, so its view replaces the one
   # that had the keyboard as it commits: the bar stays open with the keyboard, as it closes only

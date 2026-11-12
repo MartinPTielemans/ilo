@@ -362,14 +362,6 @@ std::string Landed(HWND hwnd) {
 // for the list of what real input reached (#2544).
 LRESULT CALLBACK HearRealPointer(int code, WPARAM wparam, LPARAM lparam) {
   const auto* hook = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam);
-  // PROBE (#2544): what a press's extra information is when it isn't the driver's tag.
-  static int unmatched = 0;
-  if (code == HC_ACTION && wparam == WM_LBUTTONDOWN &&
-      (hook->dwExtraInfo & ~kRealNumber) != kRealTag && unmatched++ < 5) {
-    fprintf(stderr, "browser: drive: a press's extra information %#llx, the thread's %#llx\n",
-            static_cast<unsigned long long>(hook->dwExtraInfo),
-            static_cast<unsigned long long>(GetMessageExtraInfo()));
-  }
   if (code == HC_ACTION && (hook->dwExtraInfo & ~kRealNumber) == kRealTag) {
     g_real_heard = (std::max)(g_real_heard, hook->dwExtraInfo & kRealNumber);
     switch (wparam) {
@@ -405,9 +397,32 @@ bool OursInFront() {
   return process == GetCurrentProcessId();
 }
 
+// Brings the driven window in front when another app is, as a run that launches the app again
+// finds the runner's console there, which a process that isn't in front can't take the foreground
+// from. Windows lets it once input has come since, so an Alt pressed and let go goes first, to
+// the app in front, as automation tools do: Alt alone does nothing in a console.
+void BringInFront() {
+  const HWND front = GetForegroundWindow();
+  const HWND root = GetAncestor(Driven(), GA_ROOT);
+  if (!root) {
+    return;
+  }
+  INPUT alt[2]{};
+  alt[0].type = alt[1].type = INPUT_KEYBOARD;
+  alt[0].ki.wVk = alt[1].ki.wVk = VK_MENU;
+  alt[1].ki.dwFlags = KEYEVENTF_KEYUP;
+  SendInput(2, alt, sizeof alt[0]);
+  SetForegroundWindow(root);
+  fprintf(stderr, "browser: drive: brings the app in front of another app's %s: %s\n",
+          front ? Utf8(ClassOf(front)).c_str() : "nothing", OursInFront() ? "in front" : "not");
+}
+
 // Sends |input| as the driver's real event, once one of the app's windows is in front: it would
 // land in another app's otherwise, so it's withheld and logged, and the step it was for fails.
 void SendReal(INPUT input) {
+  if (!OursInFront()) {
+    BringInFront();
+  }
   if (!OursInFront()) {
     const HWND front = GetForegroundWindow();
     fprintf(stderr, "browser: drive: real input withheld, another app's %s is in front\n",
