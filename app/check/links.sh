@@ -7,7 +7,8 @@
 # and AppKit's ordered and key windows on the Mac. With the app
 # running, one opens in a Little ilo window of its own for the Space the window in front shows, and
 # loads there, as Settings › Links sends everything else there until the user picks another, and
-# the same link again brings that window back to the front. On Windows one sent to the Store's MSIX,
+# the same link again brings that window back to the front, and a sign-in's page there closes it
+# once done (#2327). On Windows one sent to the Store's MSIX,
 # which Windows activates for it, opens the same way, once (#1427). Sent
 # instead to the Space in front, one opens as a new tab in the Space the window in front shows. With
 # a private window in front, it goes in the regular window, which comes to the front. Settings › Links
@@ -222,6 +223,65 @@ send window 2
   fail "the same link again loaded in a tab of Chrome's own beside its Little ilo window"
 send key w cmd
 await "^browser: window closed $little\$" || fail "⌘W didn't close the link's Little ilo window"
+# A sign-in another app's link opened in Little ilo closes its window by itself once it's done
+# (#2327), on a signal that isn't the page's words: a load onto a loopback address carrying a code,
+# from another site. The provider here is localhost, another site than the callback's 127.0.0.1, as
+# a CLI's or an MCP client's login ends at its own server. The bar says it's closing, the window
+# closes 2 s on, and ⇧⌘T brings it back as any closed Little ilo window. One carrying an error
+# stays, and the same page in a tab the user opened stays.
+printf '%s' '<title>sign-in</title><script>
+addEventListener("load", () => setTimeout(() => location = "/bounce?to=" +
+  encodeURIComponent("http://127.0.0.1:" + location.port + "/signed-in.html" + location.search), 100));
+</script>' > "$out/site/signin.html"
+printf '%s' '<title>signed in</title>' > "$out/site/signed-in.html"
+callback="http://127.0.0.1:$port/signed-in.html"
+provider="http://localhost:$port"
+# Sends the link $1 as another app does, and waits for its tab, $tab, in Little ilo window $little.
+sign_in_link() {
+  sign_in_line="^browser: link from another app $1: tab [1-9][0-9]* in little window [0-9]* of space $first\$"
+  send_link "$1"
+  await "$sign_in_line" ||
+    fail "the link $1 didn't open in Little ilo: $(grep '^browser: link' "$log" | tail -1)"
+  tab=$(grep "$sign_in_line" "$log" | tail -1 | sed 's/.*: tab \([0-9]*\) .*/\1/')
+  little=$(grep "$sign_in_line" "$log" | tail -1 | sed 's/.* little window \([0-9]*\) .*/\1/')
+}
+sign_in_link "$provider/signin.html?code=abc"
+await "^browser: loaded $tab $callback?code=abc\$" || fail "the sign-in didn't come back to its callback"
+await "^browser: little window $little sign-in done at $callback?code=abc\$" ||
+  fail "the callback with a code didn't end the sign-in"
+await "^browser: little bar closing true\$" || fail "the sign-in's Little ilo bar didn't say it was closing"
+# The bar's words, for the PR: the window has the 2 s of its pause to be caught in.
+../tools/window-screenshot.sh "$pid" "$out/links-sign-in-closing.png" all ||
+  echo "note: the sign-in's Little ilo window closed before its capture"
+await "^browser: little window $little closed after its sign-in\$" ||
+  fail "the sign-in's Little ilo window didn't close after its pause"
+await "^browser: window closed $little\$" || fail "the sign-in's Little ilo window stayed open"
+send window 1
+send key t cmd shift
+expect "^browser: little window [0-9]* reopened [0-9]* as [0-9]*\$" \
+  "⇧⌘T didn't bring back the sign-in's Little ilo window: $(grep '^browser: little window' "$log" | tail -1)"
+send window "$(grep -c '^browser: window opened ' "$log")"
+send key w cmd
+expect "^browser: window closed [0-9]*\$" "⌘W didn't close the sign-in's reopened Little ilo window"
+sign_in_link "$provider/signin.html?error=denied"
+await "^browser: loaded $tab $callback?error=denied\$" || fail "the failed sign-in didn't come back to its callback"
+# The user's ⌘W closes it, and only then: the load decided it, before the key was sent.
+send window "$(grep -c '^browser: window opened ' "$log")"
+send key w cmd
+expect "^browser: window closed $little\$" "⌘W didn't close the failed sign-in's Little ilo window"
+grep -q "^browser: little window $little \(sign-in done\|closed\)" "$log" &&
+  fail "a failed sign-in's Little ilo window closed by itself: $(grep "^browser: little window $little " "$log" | tail -1)"
+# In a tab the user opened, it doesn't count.
+send window 1
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar for the user's sign-in"
+send type "$provider/signin.html?code=user"
+send key return
+await "^browser: loaded [0-9]* $callback?code=user\$" || fail "the user's sign-in page didn't reach its callback"
+user_sign_in=$(sed -n "s|^browser: loaded \([0-9]*\) $callback?code=user\$|\1|p" "$log" | tail -1)
+send key w cmd
+expect "^browser: tab $user_sign_in closed\$" "⌘W didn't close the user's sign-in tab"
+grep -q "sign-in done at $callback?code=user\$" "$log" && fail "a sign-in in a tab the user opened counted as done"
 # The Store's MSIX declares http and https in its manifest, not by ilo.iss's command, so Windows
 # activates the package for a link sent to it, and the package's chrome.exe, which names no
 # profile, hands the link to the browser running on the engine's folder (#1427). check-windows.yml
