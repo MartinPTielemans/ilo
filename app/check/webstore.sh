@@ -32,8 +32,10 @@ store_shown() {
   done
   send key escape
   expect '^browser: find [0-9]* closed$' "escape didn't close the find"
+  answered=
   if [ -n "$card" ]; then
     send key return
+    answered=" after No thanks closed the store's Switch to Chrome? card"
   fi
 }
 # Gives the keyboard to the store page's button with the text $1, lowercase, as the user who finds
@@ -41,7 +43,9 @@ store_shown() {
 # changes with the store's layout and language; its text doesn't.
 focus_button() {
   send key f cmd
-  expect '^browser: find bar shown$' "⌘F didn't open the find bar"
+  # Saying when it follows the card, as that ⌘F alone has failed so (#2520).
+  expect '^browser: find bar shown$' "⌘F didn't open the find bar${answered:-}"
+  answered=
   send type "$1"
   expect "^browser: find [0-9]* open 1 of [0-9]* $1\$" "the store's page has no \"$1\""
   # With "last", the last match, as a page whose text names its button before it has the button

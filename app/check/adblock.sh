@@ -186,7 +186,7 @@ reload_until "$blocked" "turned on again in Settings' list, the page didn't bloc
 send menu Settings…
 expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy again"
 settings_drew Privacy
-send clickkey $(drawn "switch ad blocking")
+click_in_sight "switch ad blocking"
 expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
 expect '^browser: extensions menu $' "turned off, uBlock Origin stayed in the Extensions menu"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-settings.png" all || fail "no window to capture"
@@ -204,7 +204,7 @@ expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
 expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy a third time"
 settings_drew Privacy
-send clickkey $(drawn "switch ad blocking")
+click_in_sight "switch ad blocking"
 expect '^browser: ad blocking on$' "a second click on the switch didn't turn it on"
 expect "^browser: extensions menu .*$ublock\$" "turned on, uBlock Origin didn't come back"
 send key w cmd

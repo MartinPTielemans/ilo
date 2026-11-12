@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::{App, Context, Hsla, Image, Pixels, Point, Rgba, SharedString, rgb};
 
 use super::{
-    Command, FavoritesScope, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys, clean_link,
+    Command, FavoritesScope, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys,
     commands::markdown_text,
     files,
     undo::{Prop, Value},
@@ -73,6 +73,8 @@ pub struct MenuEntry {
     pub favicon: Option<Arc<Image>>,
     /// Whether it heads the items after it, as Arc's Tab Options does, never to be chosen.
     pub header: bool,
+    /// Words after its title in the secondary ink, which say more of it, as Default's model.
+    pub detail: Option<SharedString>,
 }
 
 impl MenuEntry {
@@ -105,6 +107,7 @@ impl MenuEntry {
             page: false,
             favicon: None,
             header: false,
+            detail: None,
         }
     }
 
@@ -986,13 +989,18 @@ impl Shell {
     /// without their tracking parameters. Those with none are left out.
     fn folder_links(&self, folder: u64) -> Vec<(u64, String)> {
         let tabs = self.folder_tabs(folder).into_iter();
-        let links = tabs.map(|tab| (tab, clean_link(&self.url(tab))));
+        let links = tabs.map(|tab| (tab, self.copied_link(&self.url(tab))));
         links.filter(|(_, link)| !link.is_empty()).collect()
     }
 
     /// A folder's Copy All Links, as Arc's: each link on a line, or each a Markdown link, which
     /// Arc's menu offers with ⌥ held.
-    fn copy_folder_links(&mut self, folder: u64, markdown: bool, cx: &mut Context<Self>) {
+    pub(super) fn copy_folder_links(
+        &mut self,
+        folder: u64,
+        markdown: bool,
+        cx: &mut Context<Self>,
+    ) {
         let lines: Vec<String> = (self.folder_links(folder).into_iter())
             .map(|(tab, link)| match markdown {
                 false => link,
@@ -1130,7 +1138,9 @@ impl Shell {
                     placed(MenuEntry::new("Share…", !link.is_empty())),
                     "share",
                     Box::new(move |shell, cx| {
-                        shell.browser.show_share_sheet(tab, &link, &title, at, cx)
+                        // After this update, as finding the tab's window reads every Shell (#2459).
+                        let browser = shell.browser.clone();
+                        cx.defer(move |cx| browser.show_share_sheet(tab, &link, &title, at, cx));
                     }),
                 ));
             }
@@ -1166,7 +1176,7 @@ impl Shell {
     ) -> Vec<(MenuEntry, &'static str, MenuAction)> {
         let page = self.page(tab);
         let below = self.today().iter().skip_while(|&&id| id != tab).count() > 1;
-        let link = clean_link(&page.url);
+        let link = self.copied_link(&page.url);
         let markdown = MenuEntry::new("Copy Link as Markdown", !link.is_empty())
             .shortcut(Command::CopyMarkdownLink, keys)
             .alternate();
@@ -1426,7 +1436,7 @@ impl Shell {
         position: Point<Pixels>,
     ) {
         let page = self.page(pane);
-        let link = clean_link(&page.url);
+        let link = self.copied_link(&page.url);
         let focused = pane == self.selected;
         let key = |entry: MenuEntry, command: Command| match focused {
             true => entry.shortcut(command, keys),
@@ -1898,6 +1908,15 @@ mod tests {
         }
     }
 
+    /// Share favorites' captions under its drawings are its menu titles in sentence case, on
+    /// every OS, so the two can't drift apart.
+    #[test]
+    fn share_favorites_captions_are_its_titles_in_sentence_case() {
+        for scope in crate::shell::FavoritesScope::ALL {
+            assert_eq!(sentence_case(scope.title()), scope.caption());
+        }
+    }
+
     fn titles(has_icon: bool, has_theme: bool) -> Vec<String> {
         let items = space_menu_head(1, has_icon, has_theme);
         items
@@ -2283,11 +2302,13 @@ mod tests {
     }
 
     /// Where the system lists none but has a share sheet, as Windows does, Share… is one item that
-    /// opens the sheet for the page, rather than an empty submenu.
+    /// opens the sheet for the page, rather than an empty submenu. It opens once the Shell's update
+    /// is over, as finding the tab's window reads every Shell (#2459).
     #[gpui::test]
     fn share_opens_the_systems_sheet_when_it_lists_no_services(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[1], &[10, 11], Folders::default());
         host.share_sheet.set(true);
+        host.reads_shell(shell.downgrade());
         let link = page("https://example.com/", false, false);
         shell.update(cx, |shell, cx| shell.set_page(10, link, cx));
         let menu = tab_menu(&shell, &host, cx, 10);
@@ -2661,6 +2682,8 @@ mod tests {
         assert!(offered(cx));
         let title = shell.read_with(cx, |shell, _| shell.title(10));
         host.take();
+        // Its sheet opens once the Shell's update is over, as it reads every Shell (#2459).
+        host.reads_shell(shell.downgrade());
         shell.update(cx, |shell, cx| shell.run(Command::Share, "ui", cx));
         assert_eq!(
             host.take(),

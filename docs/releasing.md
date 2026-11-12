@@ -41,7 +41,8 @@ From that squash until the release's branch is cut at its version commit, main t
 2. **Make sure each OS has an engine for that commit.** Each OS's job stops without one, or packs an older core.
    - **On main:** Linux and Windows build nightly, so dispatch both on it: `gh workflow run engine-linux.yml --ref main` and `gh workflow run engine-windows-cross.yml --ref main`, with main at that commit. Then wait for their releases `engine-linux-<commit>` and `engine-windows-<commit>`. The Mac engine must exist for the commit too.
    - **On a release branch:** dispatch the same two with `--ref release/0.<minor>`. The Mac's is built on the owner's MacBook from the branch's commit, with `engine/build.sh`, then `tools/mac-engine-publish.sh`. `tools/mac-nightly.sh` builds main only.
-3. **Check the commit: the gate is green outside the quarantine list.** Check on macOS, Windows and Linux must pass on the release's commit.
+3. **Check the commit: the gate is green outside the quarantine list.** Check on Windows and Linux, and Check on macOS's default runs, must pass on the release's commit.
+   - **The Mac's other runs:** the ones Check on macOS leaves out of its default runs are `VM_RUNS` in `.github/workflows/check-mac.yml`, and they must pass on the owner's MacBook's check VM at that commit. The workflow's header gives each one's reason (#2205).
    - **The only reds allowed** are the runs, or steps of runs, in `app/check/quarantine.<os>`. They still run, but they don't fail a check, and each check's summary lists them under its runs.
    - **Any other red stops the release.** Fix it, or quarantine it under an open issue (`app/check/quarantine.sh` says how), before tagging. Never accept it at the gate.
    - **A quarantine line lasts 14 days.** Check scripts fails on a line older than that, or on one whose issue has closed.

@@ -173,7 +173,7 @@ impl Shell {
                 })
                 .ok();
         });
-        let anchor = point(self.width(), URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.);
+        let anchor = point(self.page_edge_x(), URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.);
         let height = f32::from(self.viewport.height);
         // The editor is a dark sheet over a dark or a light window, as the theme picker is.
         let theme = self.spaces.iter().find(|each| each.id == self.space);
@@ -197,6 +197,7 @@ impl Shell {
             style,
             on,
             At::Row(anchor),
+            self.right,
             height,
             palette,
             requested,
@@ -222,6 +223,7 @@ impl Shell {
             }
             Request::On(on) => self.set_boost_on(profile, site, on, cx),
             Request::EditCss => self.edit_boost_file(profile, site, cx),
+            Request::EditScript => self.edit_boost_script_file(profile, site, cx),
             Request::Zap => {
                 // Zap's own card says what to do and ends it.
                 self.boost_card = Some(self.field_tab());
@@ -319,6 +321,26 @@ impl Shell {
             return;
         };
         self.edit_boost_file(profile, &site, cx);
+    }
+
+    /// Edit Script…, from the editor's footer or the Library row: the site's script in the user's
+    /// editor, started if it has none. It runs only once the user turns it on in the browser
+    /// (#2297). The card has no button for it: a script is the rarest and riskiest of the tools,
+    /// so it's one step in, under Customize….
+    pub(super) fn edit_boost_script_file(
+        &mut self,
+        profile: u64,
+        site: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = boosts::with(|boosts| boosts.script_file(profile, site)) else {
+            return;
+        };
+        log!("browser: boost edit script {site}");
+        let changes = boosts::with(|boosts| boosts.reload(profile));
+        self.browser.show_boosts(changes, cx);
+        self.browser.edit_file(&path, cx);
+        cx.notify();
     }
 
     pub(super) fn edit_boost_file(&mut self, profile: u64, site: &str, cx: &mut Context<Self>) {
