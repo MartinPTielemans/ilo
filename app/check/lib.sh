@@ -191,7 +191,7 @@ exited() {
   exec 3>&-
   # #2439's probe, not to merge: a quit whose threads haven't stopped 1 s after stopping is dumped,
   # with its child processes.
-  if windows && kill -0 "$pid" 2>/dev/null; then
+  if [ -z "${probe_off:-}" ] && windows && kill -0 "$pid" 2>/dev/null; then
     probe_winpid=$(cat "/proc/$pid/winpid" 2>/dev/null || true)
     probe_out="${log%.log}"
     probe_log=$log
