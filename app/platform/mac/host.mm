@@ -442,6 +442,8 @@ struct Overlay {
   double grow_time = kOverlayGrow;
   double grow_fade = kOverlayGrowFade;
   double fade_out = 0;
+  // From the driver's makekey: its window is made key at its next hide, as its fade out starts.
+  bool key_at_hide = false;
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
@@ -2730,6 +2732,8 @@ void host_set_overlay_elevation(int index,
   [overlay->shadow setFrame:NSZeroRect display:NO];
 }
 
+static void KeyboardFromHidden(const Overlay& overlay);
+
 void host_add_overlay(int index, void* overlay_view, double radius, void (*dismissed)(void)) {
   if (index < 0 || index >= int(std::size(g_overlays))) {
     return;
@@ -2768,6 +2772,11 @@ void host_add_overlay(int index, void* overlay_view, double radius, void (*dismi
                     Browser* browser = BrowserOf(window);
                     if (each->shown && window == each->window) {
                       KeepFirstResponder(*each);
+                    } else if (window == each->window) {
+                      // Hidden, or fading out after the UI hid it, and AppKit made it key anyway:
+                      // its panel class can become key, and what the user types would go to it
+                      // unseen. Its browser window takes the keyboard back, as on Windows (#2594).
+                      KeyboardFromHidden(*each);
                     } else if (each->shown) {
                       // What took the keyboard, for the next time an overlay is shown and deaf
                       // (#1314): the release build's log is stderr alone.
@@ -2791,6 +2800,31 @@ void host_add_overlay(int index, void* overlay_view, double radius, void (*dismi
                       }
                     }
                   }];
+}
+
+// A hidden overlay made key gives the keyboard to the browser window it showed over, if that's still
+// open, as host_hide_overlay does.
+static void KeyboardFromHidden(const Overlay& overlay) {
+  Browser* over = overlay.over;
+  if (!over || std::none_of(g_browsers.begin(), g_browsers.end(),
+                            [over](const auto& browser) { return browser.get() == over; })) {
+    return;
+  }
+  fprintf(stderr, "browser: %s hidden, its browser window takes the keyboard\n", overlay.name);
+  [KeyWindowOver(over) makeKeyWindow];
+}
+
+// For the driver: overlay |name|'s window is made key at its next hide, in the turn its fade out
+// starts, as AppKit can make a fading one key. A fade can be 110 ms, too short for a driver command
+// to land in it every time. Says whether there is one.
+bool HostMakeOverlayKey(const char* name) {
+  for (Overlay& overlay : g_overlays) {
+    if (overlay.window && strcmp(overlay.name, name) == 0) {
+      overlay.key_at_hide = true;
+      return true;
+    }
+  }
+  return false;
 }
 
 void host_set_overlay_shape(int index, const double* corners, size_t count) {
@@ -3111,6 +3145,11 @@ void host_hide_overlay(int index) {
   }
   [KeyWindowOver(browser) makeKeyWindow];
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
+  if (overlay->key_at_hide) {
+    overlay->key_at_hide = false;
+    fprintf(stderr, "browser: made %s key\n", overlay->name);
+    [overlay->window makeKeyWindow];
+  }
 }
 
 void host_dismiss_overlay(int index) {
@@ -5421,6 +5460,12 @@ void host_day_starts(double starts[4]) {
 bool host_window_on_active_space(void* ui_view) {
   Browser* browser = BrowserWithView(ui_view);
   return !browser || !browser->window || browser->window.onActiveSpace;
+}
+
+bool host_window_full_screen(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  // AppKit sets the mask as the transition starts.
+  return browser && browser->window && (browser->window.styleMask & NSWindowStyleMaskFullScreen);
 }
 
 bool host_enter_full_screen(void* ui_view) {

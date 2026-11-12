@@ -176,9 +176,20 @@ expect "^browser: themed space $second $red\$" "the core didn't keep the Space's
 send clickkey 211.5 316.5
 expect "^browser: themed space $second $red_at colors=2 $rest\$" "+ didn't add a second colour"
 ../tools/window-screenshot.sh "$pid" "$out/theme-picker.png" || fail "no window to capture"
+# On the Mac, AppKit can make an overlay's panel key as it shrinks away after the UI hid it, and
+# what the user typed went to it unseen (#2594). The driver makes the picker key as its shrink
+# starts: the keyboard still comes back to the form, for the return below.
+if [ "$(uname)" = Darwin ]; then
+  send makekey theme picker
+fi
 send key escape
 expect '^browser: theme picker dismissed$' "escape didn't close the theme picker"
 expect '^browser: theme picker hidden$' "escape didn't hide the theme picker"
+if [ "$(uname)" = Darwin ]; then
+  expect '^browser: made theme picker key$' "the theme picker wasn't made key as its shrink started"
+  expect '^browser: theme picker hidden, its browser window takes the keyboard$' \
+    "the theme picker, made key as it shrank, kept the keyboard"
+fi
 send state
 in_browser AccessKitSubclassOfGPUIView "after the theme picker, in the new Space's form"
 send key return

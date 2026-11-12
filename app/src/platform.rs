@@ -208,6 +208,8 @@ unsafe extern "C" {
     #[cfg(target_os = "macos")]
     pub fn host_enter_full_screen(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
+    pub fn host_window_full_screen(ui_view: *mut c_void) -> bool;
+    #[cfg(target_os = "macos")]
     pub fn host_window_on_active_space(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_window_buttons(

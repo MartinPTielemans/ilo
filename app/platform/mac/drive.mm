@@ -174,6 +174,9 @@
 //                                         alert shown, Chrome's too
 //   dismiss                               closes the menu a right click or openmenu showed,
 //                                         choosing none
+//   makekey <overlay>                     makes the window of <overlay>, such as theme picker,
+//                                         key at its next hide, as its fade out starts, as
+//                                         AppKit can, logging "browser: made <overlay> key"
 //   ime on|ko|off                         the scripted input method, for keys to the UI or the
 //                                         page, Chromium's or Safari's engine's: on, letters add
 //                                         to a composition, space converts it to 日本語, return
@@ -320,6 +323,8 @@ NSStatusBarButton* HostLittleStatusButton();
 // host.mm's: where this driver's pointer last was, which host_pointer answers.
 extern NSPoint g_driven_pointer;
 extern bool g_driven_pointer_known;
+// host.mm's, for makekey.
+bool HostMakeOverlayKey(const char* name);
 
 namespace {
 
@@ -2211,6 +2216,14 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     // Once the menu or alert has closed, which GCD's main queue waits for.
     dispatch_async(dispatch_get_main_queue(), done);
+    return true;
+  }
+  if (action == "makekey") {
+    std::string name = line.substr(std::min(line.size(), action.size() + 1));
+    if (!HostMakeOverlayKey(name.c_str())) {
+      return false;
+    }
+    done();
     return true;
   }
   if (action == "dismiss") {

@@ -262,6 +262,47 @@ if windows; then
   expect '^browser: link preview hidden$' "Esc didn't close the preview whose window was told $told %"
   scaled="$scaled; and the preview's window, told $told % while hidden, drew it at the display's"
 fi
+# Under Wayland an overlay's surface hears its scale from the compositor only once it's on screen.
+# The output's scale goes a step up while the preview is hidden, and back, and at each the preview,
+# last shown at the other, draws its first frame at its browser window's scale (#2592). The output
+# goes back to its scale even if the run fails.
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  # Its mode grows with its scale, as headless.sh makes it, so the window keeps its size in points.
+  read -r output width height scale_at << EOF
+$(swaymsg -t get_outputs | jq -r '.[0] | "\(.name) \(.current_mode.width) \(.current_mode.height) \(.scale)"')
+EOF
+  scale_at=$(awk "BEGIN { print $scale_at + 0 }")
+  # Sway's command that gives the output the scale $1.
+  scale_output() { # <scale>
+    echo "swaymsg output $output resolution $(awk "BEGIN { printf \"%dx%d\", $width / $scale_at * $1, $height / $scale_at * $1 }") scale $1"
+  }
+  # The browser window's scale and its overlays' first frames', once the window's is $1, for up to
+  # 10 s, as the window hears the output's scale from the compositor.
+  window_scaled() { # <scale> <when>
+    for _ in $(seq 20); do
+      send scales
+      scales=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: scales ')
+      case "$scales" in "browser: scales window $1,"*) return 0 ;; esac
+      sleep 0.5
+    done
+    fail "$2: the browser window's scale didn't become $1: ${scales:-the driver named none}"
+  }
+  for to in $(awk "BEGIN { print $scale_at + 1 }") "$scale_at"; do
+    run_undo=$(scale_output "$scale_at")
+    $(scale_output "$to") > /dev/null || fail "sway didn't give $output the scale $to"
+    window_scaled "$to" "at the output's scale $to"
+    open_preview "at the output's scale $to"
+    window_scaled "$to" "with the preview open at the output's scale $to"
+    for drawn in ${scales#*, overlays }; do
+      [ "$drawn" = "$to" ] ||
+        fail "at the output's scale $to, an overlay drew its first frame at $drawn: $scales"
+    done
+    send key escape
+    expect '^browser: link preview hidden$' "Esc didn't close the preview at the output's scale $to"
+  done
+  run_undo=
+  scaled="its first frame was at its browser window's scale as the output's went a step up and back with it hidden"
+fi
 
 # Its look in a light and a dark Space theme: the theme picker's first swatch, then the sun, and
 # later the moon, each 13 right of its appearance-x token, as cards.sh and little.sh pick them.
@@ -518,4 +559,5 @@ quit
 echo "ok: ⇧-click on a Today tab's link and $in_peek in its menu open it in a preview, with no tab opened. A link to another site in a pinned tab or a favorite opens in a preview over the window, which Esc, a click on the dim and ⌘W close, with its page, leaving the tab and the page behind as they were, ⇧⌘C copies the address of, and ⌘↩ keeps as the top Today tab, shown, without loading it again. ⌘Z reopens a closed one over its tab, and so does ⇧⌘T. A Google Meet link opens as a tab of the Space shown instead. With the Settings switch off, the link goes in the pinned tab, ⇧-click opens it in a new tab and its menu has no $in_peek, and back on, a link rule to another Space sends it there as a tab instead. Resting on its keep button shows Open as Tab and its key in a tooltip over it. Windows: $out/preview-shift-click.png, $out/preview-menu.png, $out/preview-menu-chosen.png, $out/preview-open.png, $out/preview-light.png, $out/preview-dark.png, $out/preview-tooltip.png, $out/preview-kept.png, $out/preview-reopened.png, $out/preview-meeting.png, $out/preview-ruled.png"
 echo "  The first preview's first frame came $first_frame after the click reached the UI."
 ! windows || echo "  Its card held its page where the core showed it, and $scaled: $(tr '\n' ' ' < "$out/preview-frames.txt")"
+[ "$(uname)" != Linux ] || [ -z "${WAYLAND_DISPLAY:-}" ] || echo "  Under Wayland, $scaled."
 [ -z "$recording" ] || echo "  Its motion, opening and kept: $recording"
