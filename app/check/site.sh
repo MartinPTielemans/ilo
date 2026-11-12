@@ -463,6 +463,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path.startswith("/dict/"):
+            # The probe for #2439: a compression dictionary of its own for each path, which the
+            # network service registers and keeps in the store of the profile.
+            body = (("dictionary %s " % path) * 64).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "max-age=86400")
+            self.send_header("Use-As-Dictionary", "match=\"%s/*\"" % path)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/wait":
             time.sleep(3600)
             return
