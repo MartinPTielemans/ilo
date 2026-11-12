@@ -54,6 +54,8 @@ extern "C" void browser_fade_none(void*, double, double, double) {}
 #pragma comment(linker, "/alternatename:browser_fade=browser_fade_none")
 // What check.sh calls a window the host floats over a browser window (below).
 extern "C" const char* host_floating_name(void* hwnd);
+// drive.cc's: whether the driver sends real input (#2544).
+extern "C" bool drive_real_input(void);
 // The app's (src/logging.rs), in the browser and the preview: whether BROWSER_LOG turns on |area|.
 extern "C" bool browser_log_on(const char* area);
 
@@ -1338,10 +1340,11 @@ HHOOK g_mouse_hook = nullptr;
 
 // In a driven run only the driver's pointer reaches the app, as drive.cc keeps the desktop's out of
 // its windows. The thread's mouse hooks hear the desktop's before that, and Windows moves it over a
-// window as one shows, so a menu opening where it rests would hover its row (#1125).
+// window as one shows, so a menu opening where it rests would hover its row (#1125). Unless the
+// driver's input is the desktop's own, real as a hand's (#2544).
 bool DesktopPointerHeard() {
   static const bool driven = GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0;
-  return !driven;
+  return !driven || drive_real_input();
 }
 
 // The pointer at |point| on screen, for the link target and the reveals.

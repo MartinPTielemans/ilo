@@ -3,9 +3,18 @@
 // window messages to its own windows only: Chromium's browser windows and their pages, and GPUI's
 // UI and overlays in and over them. Each window's own procedure handles them as it would the
 // device's, so they go through the same hit testing, focus changes and shortcuts, without
-// touching the desktop's pointer or keyboard: nothing here calls SendInput or takes the
-// foreground. Modifiers are held in the UI thread's own keyboard state, which is what Chromium and
-// GPUI read, never the system's.
+// touching the desktop's pointer or keyboard. Modifiers are held in the UI thread's own keyboard
+// state, which is what Chromium and GPUI read, never the system's.
+//
+// With BROWSER_DRIVE_REAL=1 as well, on a desktop that is the check's own, the pointer and the keys
+// are real input instead, sent with SendInput as a hand's are, each once one of the app's windows
+// is in front (#2544). Windows then routes them itself, through the mouse capture, the foreground
+// window and its hit test, which posted messages skip: a drag in the theme picker moved the window
+// for a hand and not for the driver until a probe sent real input (#2516). It takes the desktop's
+// pointer and keyboard, so the driver refuses it outside CI unless BROWSER_DRIVE_OWN_DESKTOP=1 says
+// the desktop is the check's. What has no real input to send stays as it is: another app's drag
+// (dragover, dragdrop, dragleave), the emoji panel's text (insert), the scripted input method (ime
+// on), and two fingers over GPUI's view (swipe).
 //
 // The commands are drive.mm's, with what Windows has: click, doubleclick, rightclick, middleclick,
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
@@ -147,6 +156,22 @@ HWND g_hovered = nullptr;
 // The moves the driver has posted and its windows haven't taken yet, which DropRealPointer lets
 // through. Some are never taken, as by a window that closed, so only the latest are kept.
 std::deque<std::pair<HWND, LPARAM>> g_posted_moves;
+// Real input (#2544): whether the pointer and the keys are sent with SendInput, as a hand's are.
+bool g_real = false;
+bool Extended(UINT vk);
+// Marks the driver's real events in their extra information, with each one's number below it.
+ULONG_PTR const kRealTag = static_cast<ULONG_PTR>(0x494C4F) << 40;
+ULONG_PTR const kRealNumber = (static_cast<ULONG_PTR>(1) << 40) - 1;
+// The number of the last real event sent, and of the last the UI thread has taken off its queue.
+ULONG_PTR g_real_sent = 0;
+ULONG_PTR g_real_heard = 0;
+// The last real key sent, which the keyboard hook matches, as a key's hook has no extra information.
+UINT g_real_vk = 0;
+bool g_real_up = false;
+// The modifiers the real keyboard holds now.
+int g_real_held = 0;
+HHOOK g_real_mouse_hook = nullptr;
+HHOOK g_real_key_hook = nullptr;
 // The last press, a click's or a drag's: its window, place on screen, button and time.
 struct Click {
   HWND hwnd = nullptr;
@@ -317,8 +342,148 @@ bool TargetInKey(double x, double y, Target* target) {
   return true;
 }
 
+// The driver's real events as the UI thread takes them off its queue, before a hook of the host's
+// can take one and pass it no further, as the menu's do.
+LRESULT CALLBACK HearRealPointer(int code, WPARAM wparam, LPARAM lparam) {
+  if (code == HC_ACTION) {
+    const ULONG_PTR extra = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->dwExtraInfo;
+    if ((extra & ~kRealNumber) == kRealTag) {
+      g_real_heard = std::max(g_real_heard, extra & kRealNumber);
+    }
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+LRESULT CALLBACK HearRealKey(int code, WPARAM wparam, LPARAM lparam) {
+  const bool up = (static_cast<DWORD>(lparam) & 0x80000000u) != 0;
+  if (code == HC_ACTION && g_real_vk && wparam == g_real_vk && up == g_real_up) {
+    g_real_heard = g_real_sent;
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+// Whether one of the app's windows is in front, where real input goes.
+bool OursInFront() {
+  DWORD process = 0;
+  GetWindowThreadProcessId(GetForegroundWindow(), &process);
+  return process == GetCurrentProcessId();
+}
+
+// Sends |input| as the driver's real event, once one of the app's windows is in front: it would
+// land in another app's otherwise, so it's withheld and logged, and the step it was for fails.
+void SendReal(INPUT input) {
+  if (!OursInFront()) {
+    const HWND front = GetForegroundWindow();
+    fprintf(stderr, "browser: drive: real input withheld, another app's %s is in front\n",
+            front ? Utf8(ClassOf(front)).c_str() : "nothing");
+    return;
+  }
+  // Hooks set later are called first, as the menu's are once it shows: the driver's go in front
+  // again, so they hear each event before one of the host's takes it.
+  const DWORD thread = GetCurrentThreadId();
+  if (g_real_mouse_hook) {
+    UnhookWindowsHookEx(g_real_mouse_hook);
+  }
+  if (g_real_key_hook) {
+    UnhookWindowsHookEx(g_real_key_hook);
+  }
+  g_real_mouse_hook = SetWindowsHookExW(WH_MOUSE, HearRealPointer, nullptr, thread);
+  g_real_key_hook = SetWindowsHookExW(WH_KEYBOARD, HearRealKey, nullptr, thread);
+  const ULONG_PTR number = ++g_real_sent;
+  if (input.type == INPUT_KEYBOARD) {
+    input.ki.dwExtraInfo = kRealTag | number;
+    g_real_vk = input.ki.wVk;
+    g_real_up = (input.ki.dwFlags & KEYEVENTF_KEYUP) != 0;
+  } else {
+    input.mi.dwExtraInfo = kRealTag | number;
+    g_real_vk = 0;
+  }
+  if (SendInput(1, &input, sizeof input) != 1) {
+    fprintf(stderr, "browser: drive: SendInput failed, error %lu\n", GetLastError());
+    g_real_heard = number;
+  }
+}
+
+// Waits for the UI thread to take the last real event off its queue, up to a second. On a timer,
+// as Windows hands a thread its input before its timers, where a posted step would come first.
+void AwaitReal(ULONGLONG since) {
+  if (g_real_heard >= g_real_sent) {
+    return;
+  }
+  if (GetTickCount64() - since > 1000) {
+    fprintf(stderr, "browser: drive: real input %llu not heard in a second\n",
+            static_cast<unsigned long long>(g_real_sent));
+    g_real_heard = g_real_sent;
+    return;
+  }
+  g_steps.push_front({[since] { AwaitReal(since); }, 1});
+}
+
+// A real key's event, |vk| going down or, with |up|, up.
+void RealKey(UINT vk, bool up) {
+  INPUT input{};
+  input.type = INPUT_KEYBOARD;
+  input.ki.wVk = static_cast<WORD>(vk);
+  input.ki.wScan = static_cast<WORD>(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC));
+  input.ki.dwFlags = (up ? KEYEVENTF_KEYUP : 0) | (Extended(vk) ? KEYEVENTF_EXTENDEDKEY : 0);
+  SendReal(input);
+}
+
+// The real keyboard's modifiers, from what it holds to |to|, a key each that changes.
+void RealModifiers(int to) {
+  static const std::pair<int, UINT> keys[] = {
+      {kCtrl, VK_CONTROL}, {kShift, VK_SHIFT}, {kAlt, VK_MENU}};
+  for (const auto& [modifier, vk] : keys) {
+    if ((g_real_held & modifier) != (to & modifier)) {
+      RealKey(vk, (to & modifier) == 0);
+    }
+  }
+  g_real_held = to & (kCtrl | kShift | kAlt);
+}
+
+// The real pointer moving to |at| on screen, unless it's there, as a hand's resting pointer sends
+// nothing.
+void RealPointerTo(POINT at) {
+  POINT now{};
+  if (GetCursorPos(&now) && now.x == at.x && now.y == at.y) {
+    return;
+  }
+  INPUT input{};
+  input.type = INPUT_MOUSE;
+  input.mi.dx = static_cast<LONG>(std::lround((at.x - GetSystemMetrics(SM_XVIRTUALSCREEN)) *
+                                              65535.0 / (GetSystemMetrics(SM_CXVIRTUALSCREEN) - 1)));
+  input.mi.dy = static_cast<LONG>(std::lround((at.y - GetSystemMetrics(SM_YVIRTUALSCREEN)) *
+                                              65535.0 / (GetSystemMetrics(SM_CYVIRTUALSCREEN) - 1)));
+  input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+  SendReal(input);
+}
+
+// A real button's or wheel's event where the pointer is: |flags| as SendInput takes them.
+void RealPointer(DWORD flags, DWORD data = 0) {
+  INPUT input{};
+  input.type = INPUT_MOUSE;
+  input.mi.dwFlags = flags;
+  input.mi.mouseData = data;
+  SendReal(input);
+}
+
+DWORD RealFlags(UINT button, bool up) {
+  if (button == MK_RBUTTON) {
+    return up ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_RIGHTDOWN;
+  }
+  if (button == MK_MBUTTON) {
+    return up ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_MIDDLEDOWN;
+  }
+  return up ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_LEFTDOWN;
+}
+
 // The modifiers held, flags' and |modifiers|, in the UI thread's keyboard state, and the buttons.
+// With real input, the real keyboard's modifiers, and the buttons are the real pointer's own.
 void HoldKeys(int modifiers, UINT buttons = 0) {
+  if (g_real) {
+    RealModifiers(modifiers | g_flags | (g_key_ctrl ? kCtrl : 0));
+    return;
+  }
   BYTE state[256];
   GetKeyboardState(state);
   const int held = modifiers | g_flags | (g_key_ctrl ? kCtrl : 0);
@@ -346,6 +511,9 @@ LPARAM ClientParam(const Target& target) {
 
 // The pointer moves into |target|'s window: the one it was in hears it leave, as Windows tells it.
 void Enter(const Target& target) {
+  if (g_real) {
+    return;
+  }
   if (g_hovered && g_hovered != target.hwnd && IsWindow(g_hovered)) {
     PostMessageW(g_hovered, WM_MOUSELEAVE, 0, kDriverLeave);
   }
@@ -363,6 +531,10 @@ Target Captured(const Target& target) {
 // Posts the pointer moving to |to|, with |buttons| held.
 void Move(const Target& to, int modifiers, UINT buttons) {
   HoldKeys(modifiers, buttons);
+  if (g_real) {
+    RealPointerTo(to.screen);
+    return;
+  }
   if (host_drive_pointer(WM_MOUSEMOVE, to.screen.x, to.screen.y)) {
     return;
   }
@@ -402,6 +574,12 @@ UINT Up(UINT button) {
 // hear of it, which is how a click in the UI takes the keyboard from the page.
 void Press(const Target& at, UINT button, int modifiers, bool second) {
   HoldKeys(modifiers, button);
+  if (g_real) {
+    // Windows activates the window, tells its parents and makes a second press a double click.
+    RealPointerTo(at.screen);
+    RealPointer(RealFlags(button, false));
+    return;
+  }
   const UINT down = Down(button);
   if (host_drive_pointer(down, at.screen.x, at.screen.y)) {
     return;
@@ -446,6 +624,13 @@ void Press(const Target& at, UINT button, int modifiers, bool second) {
 
 void Release(const Target& at, UINT button, int modifiers) {
   HoldKeys(modifiers);
+  if (g_real) {
+    RealPointerTo(at.screen);
+    RealPointer(RealFlags(button, true));
+    // A click's or a drag's keys are let go with the button, as a hand lets go of them.
+    HoldKeys(0);
+    return;
+  }
   if (host_drive_pointer(Up(button), at.screen.x, at.screen.y)) {
     return;
   }
@@ -585,6 +770,10 @@ HWND KeyTarget() {
 // and without Ctrl, or F10, which Chromium and GPUI each handle.
 void PostKey(UINT vk, int modifiers, bool down, bool repeat = false) {
   HoldKeys(modifiers);
+  if (g_real) {
+    RealKey(vk, !down);
+    return;
+  }
   BYTE state[256];
   GetKeyboardState(state);
   state[vk] = down ? 0x80 : 0;
@@ -609,6 +798,10 @@ void PostKey(UINT vk, int modifiers, bool down, bool repeat = false) {
 // a key with it in between stops on a real keyboard, and a key's Alt is read from the state held,
 // as Chromium and GPUI read every modifier.
 void PostModifiers(int from, int to) {
+  if (g_real) {
+    RealModifiers(to);
+    return;
+  }
   static const std::pair<int, UINT> keys[] = {{kCtrl, VK_CONTROL}, {kShift, VK_SHIFT}};
   for (const auto& [modifier, vk] : keys) {
     if ((from & modifier) != (to & modifier)) {
@@ -1698,6 +1891,15 @@ bool Run(const std::string& line) {
       g_steps.push_back(
           {[=] {
              HoldKeys(0);
+             if (g_real) {
+               if (along) {
+                 RealPointer(MOUSEEVENTF_WHEEL, static_cast<DWORD>(along));
+               }
+               if (across) {
+                 RealPointer(MOUSEEVENTF_HWHEEL, static_cast<DWORD>(across));
+               }
+               return;
+             }
              const LPARAM at = MAKELPARAM(target.screen.x, target.screen.y);
              if (host_drive_pointer(WM_MOUSEWHEEL, target.screen.x, target.screen.y)) {
                return;
@@ -2088,7 +2290,12 @@ void Next() {
   }
   Step step = std::move(g_steps.front());
   g_steps.pop_front();
+  const ULONG_PTR sent = g_real_sent;
   step.run();
+  if (g_real_sent != sent) {
+    g_steps.push_front({[since = GetTickCount64()] { AwaitReal(since); }, step.wait});
+    step.wait = 1;
+  }
   if (step.wait) {
     SetTimer(g_driver, kStepTimer, step.wait, nullptr);
   } else {
@@ -2128,7 +2335,7 @@ LRESULT CALLBACK DriverProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 // own moves reach the app's windows.
 LRESULT CALLBACK DropRealPointer(int code, WPARAM wparam, LPARAM lparam) {
   auto* message = reinterpret_cast<MSG*>(lparam);
-  if (code != HC_ACTION || wparam != PM_REMOVE) {
+  if (code != HC_ACTION || wparam != PM_REMOVE || g_real) {
     return CallNextHookEx(nullptr, code, wparam, lparam);
   }
   if ((message->message == WM_MOUSELEAVE || message->message == WM_NCMOUSELEAVE) &&
@@ -2187,6 +2394,11 @@ LRESULT CALLBACK WatchZoom(int code, WPARAM wparam, LPARAM lparam) {
 
 extern "C" {
 
+// Whether the driver sends real input, which the host's hooks then hear as a hand's.
+bool drive_real_input(void) {
+  return g_real;
+}
+
 void drive_watch_menus(bool (*menus)(void* ui_view, const char* title, bool bar),
                        bool (*dialog)(const char* label)) {
   g_menus = menus;
@@ -2201,8 +2413,23 @@ void drive_start(void) {
   RegisterClassW(&window_class);
   g_driver = CreateWindowExW(0, window_class.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
                              nullptr, window_class.hInstance, nullptr);
+  // Real input takes the desktop's pointer and keyboard, so only on a desktop that's the check's own:
+  // a CI runner's, or one BROWSER_DRIVE_OWN_DESKTOP=1 says is. Never a developer's own.
+  const auto set = [](const wchar_t* name, const wchar_t* value) {
+    wchar_t got[16] = L"";
+    return GetEnvironmentVariableW(name, got, 16) > 0 && wcscmp(got, value) == 0;
+  };
+  if (set(L"BROWSER_DRIVE_REAL", L"1")) {
+    g_real = set(L"GITHUB_ACTIONS", L"true") || set(L"BROWSER_DRIVE_OWN_DESKTOP", L"1");
+    fprintf(stderr, g_real ? "browser: drive: real input\n"
+                           : "browser: drive: real input refused, this desktop isn't the check's "
+                             "own: BROWSER_DRIVE_OWN_DESKTOP=1 says one is\n");
+  }
   SetWindowsHookExW(WH_GETMESSAGE, DropRealPointer, nullptr, GetCurrentThreadId());
-  host_drive_drags(DriveDrag);
+  // Windows' own drag follows the real pointer, as it does a hand's (#1583).
+  if (!g_real) {
+    host_drive_drags(DriveDrag);
+  }
   SetWindowsHookExW(WH_CBT, WatchKeyboard, nullptr, GetCurrentThreadId());
   SetWindowsHookExW(WH_CALLWNDPROCRET, WatchZoom, nullptr, GetCurrentThreadId());
   HWND driver = g_driver;
