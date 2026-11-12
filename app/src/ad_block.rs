@@ -223,9 +223,9 @@ fn cache_name(setup: &Setup) -> String {
     format!("engine-{:016x}.dat", hasher.finish())
 }
 
-/// `setup`'s engine, from the cache in `cache` when it has one, in about 20 ms, else compiled and
-/// kept there, in place of the last, for the next launch.
-pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
+/// `setup`'s engine, from the cache in `cache` when it has one, in about 20 ms, else compiled, and
+/// whether it was compiled, for `keep` to write once it's in use.
+pub fn load(setup: &Setup, cache: Option<&Path>) -> (Engine, bool) {
     let start = Instant::now();
     let file = cache.map(|cache| cache.join(cache_name(setup)));
     if let Some(bytes) = file.as_ref().and_then(|file| fs::read(file).ok()) {
@@ -236,7 +236,7 @@ pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
                 "browser: ad block engine loaded in {} ms",
                 start.elapsed().as_millis()
             );
-            return engine;
+            return (engine, false);
         }
     }
     let engine = compile(setup);
@@ -244,37 +244,47 @@ pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
         "browser: ad block engine compiled in {} ms",
         start.elapsed().as_millis()
     );
-    if let (Some(cache), Some(file)) = (cache, file) {
-        // The last launch's goes, so the folder keeps one.
-        if let Ok(entries) = fs::read_dir(cache) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                if name.to_string_lossy().starts_with("engine-") {
-                    _ = fs::remove_file(entry.path());
-                }
+    (engine, true)
+}
+
+/// Keeps `engine`, compiled for `setup`, in `cache` for the next launch, in place of the last.
+pub fn keep(setup: &Setup, cache: &Path, engine: &Engine) {
+    // The last launch's goes, so the folder keeps one.
+    if let Ok(entries) = fs::read_dir(cache) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with("engine-") {
+                _ = fs::remove_file(entry.path());
             }
         }
-        if fs::create_dir_all(cache).is_ok() {
-            _ = fs::write(&file, engine.serialize());
-        }
     }
-    engine
+    if fs::create_dir_all(cache).is_ok() {
+        _ = fs::write(cache.join(cache_name(setup)), engine.serialize());
+    }
 }
 
 /// The engine the core asks, swapped whole as the setup changes, as a page's requests keep asking
-/// the one they have.
+/// the one they have. While a new setup loads, the last engine answers: a list change mustn't hold
+/// a page's requests, as uBlock Origin's rebuild holds them for 1 to 2.5 s (#2513).
 #[derive(Default)]
 pub struct Blocker {
     state: Mutex<State>,
     ready: Condvar,
+    /// Held while a compiled engine is written, so an older setup's load, done last, can't write
+    /// over the newer's.
+    keeping: Mutex<()>,
+    /// Held by a test to keep a loaded engine from coming in.
+    #[cfg(test)]
+    swap: Mutex<()>,
 }
 
 #[derive(Default)]
 struct State {
     /// The setup asked for last, which the engine is, or is loading.
     wanted: Option<Setup>,
+    /// The last setup's engine to load, which answers until the next is in.
     engine: Option<Arc<Engine>>,
-    /// Whether a request may wait for an engine: until the first has loaded, or the wait for it
+    /// Whether a request may wait for the first engine: until it has loaded, or the wait for it
     /// has once run out.
     waits: bool,
 }
@@ -290,11 +300,13 @@ impl Blocker {
                 ..Default::default()
             }),
             ready: Condvar::new(),
+            ..Default::default()
         }
     }
 
-    /// Blocks with `setup` from now, once it's loaded, on a thread of its own: the next request
-    /// waits for it. The same setup again changes nothing.
+    /// Blocks with `setup` once it's loaded, on a thread of its own, and until then with the engine
+    /// it has. A compiled engine is written to `cache` after it's in, off the requests' way. The
+    /// same setup again changes nothing.
     pub fn use_setup(self: &Arc<Self>, setup: Setup, cache: Option<PathBuf>) {
         {
             let mut state = self.state.lock().unwrap();
@@ -302,23 +314,39 @@ impl Blocker {
                 return;
             }
             state.wanted = Some(setup.clone());
-            state.engine = None;
         }
         let blocker = self.clone();
         std::thread::spawn(move || {
-            let engine = Arc::new(load(&setup, cache.as_deref()));
-            let mut state = blocker.state.lock().unwrap();
+            let (engine, compiled) = load(&setup, cache.as_deref());
+            let engine = Arc::new(engine);
+            #[cfg(test)]
+            drop(blocker.swap.lock().unwrap());
             // A later setup replaced this one while it loaded.
-            if state.wanted.as_ref() == Some(&setup) {
-                state.engine = Some(engine);
-                state.waits = true;
-                blocker.ready.notify_all();
+            if !blocker.swap_in(&setup, &engine) {
+                return;
+            }
+            if let (true, Some(cache)) = (compiled, cache) {
+                let _keeping = blocker.keeping.lock().unwrap();
+                if blocker.state.lock().unwrap().wanted.as_ref() == Some(&setup) {
+                    keep(&setup, &cache, &engine);
+                }
             }
         });
     }
 
-    /// The engine to ask now: the one loading waited for, for as long as it takes, or after launch,
-    /// for the first, up to FIRST_WAIT. None lets the request go.
+    /// Puts `engine` in for the requests from now, if `setup` is still the one wanted.
+    fn swap_in(&self, setup: &Setup, engine: &Arc<Engine>) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if state.wanted.as_ref() != Some(setup) {
+            return false;
+        }
+        state.engine = Some(engine.clone());
+        self.ready.notify_all();
+        true
+    }
+
+    /// The engine to ask now: the last to load, or after launch, the first, waited for up to
+    /// FIRST_WAIT. None lets the request go.
     pub fn engine(&self) -> Option<Arc<Engine>> {
         let mut state = self.state.lock().unwrap();
         let deadline = Instant::now() + FIRST_WAIT;

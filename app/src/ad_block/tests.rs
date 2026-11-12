@@ -128,10 +128,13 @@ fn the_next_launch_loads_the_cache_and_a_changed_list_compiles_again() {
     let folder = folder("cache");
     let cache = folder.join("cache");
     let first = setup(&folder, "");
-    let compiled = load(&first, Some(&cache));
+    let (compiled, fresh) = load(&first, Some(&cache));
+    assert!(fresh);
+    keep(&first, &cache, &compiled);
     let cached: Vec<_> = fs::read_dir(&cache).unwrap().flatten().collect();
     assert_eq!(cached.len(), 1);
-    let loaded = load(&first, Some(&cache));
+    let (loaded, fresh) = load(&first, Some(&cache));
+    assert!(!fresh);
     let page = "https://news.example/";
     for engine in [&compiled, &loaded] {
         assert_eq!(
@@ -149,32 +152,64 @@ fn the_next_launch_loads_the_cache_and_a_changed_list_compiles_again() {
         "||other.example^\n",
     )
     .unwrap();
-    let changed = load(&first, Some(&cache));
+    let (changed, fresh) = load(&first, Some(&cache));
+    assert!(fresh);
     assert_eq!(
         check(&changed, "https://ads.example/a.js", page, "script"),
         Verdict::Allow
     );
+    keep(&first, &cache, &changed);
     assert_eq!(fs::read_dir(&cache).unwrap().flatten().count(), 1);
 }
 
 #[test]
-fn a_request_waits_for_the_engine_asked_for() {
+fn a_request_waits_for_the_first_engine_and_the_last_answers_while_the_next_loads() {
     let folder = folder("blocker");
+    let cache = folder.join("cache");
     let blocker = Arc::new(Blocker::new());
-    blocker.use_setup(setup(&folder, ""), None);
-    let engine = blocker.engine().expect("the engine, once loaded");
+    blocker.use_setup(setup(&folder, ""), Some(cache.clone()));
+    let first = blocker.engine().expect("the first engine, waited for");
     let page = "https://news.example/";
     assert_eq!(
-        check(&engine, "https://ads.example/a.js", page, "script"),
+        check(&first, "https://ads.example/a.js", page, "script"),
         Verdict::Block
     );
-    // A setup with the user's filter: the next request waits for it.
-    blocker.use_setup(setup(&folder, "||mine.example^"), None);
-    let engine = blocker.engine().unwrap();
+    // A setup with the user's filter, held from coming in once loaded: a request has the last
+    // engine at once, and the new one isn't written before it's in (#2513).
+    let mine = setup(&folder, "||mine.example^");
+    let held = blocker.swap.lock().unwrap();
+    blocker.use_setup(mine.clone(), Some(cache.clone()));
+    let asked = Instant::now();
+    let engine = blocker
+        .engine()
+        .expect("the last engine, while the next loads");
+    assert!(asked.elapsed() < Duration::from_millis(500));
+    assert!(Arc::ptr_eq(&engine, &first));
+    assert_eq!(
+        check(&engine, "https://mine.example/x", page, "image"),
+        Verdict::Allow
+    );
+    assert!(!cache.join(cache_name(&mine)).exists());
+    drop(held);
+    // Once it's in, it answers, and it's kept in the first's place.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let engine = loop {
+        let engine = blocker.engine().unwrap();
+        if !Arc::ptr_eq(&engine, &first) || Instant::now() > deadline {
+            break engine;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     assert_eq!(
         check(&engine, "https://mine.example/x", page, "image"),
         Verdict::Block
     );
+    while !cache.join(cache_name(&mine)).exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(cache.join(cache_name(&mine)).exists());
+    let _keeping = blocker.keeping.lock().unwrap();
+    assert_eq!(fs::read_dir(&cache).unwrap().flatten().count(), 1);
 }
 
 #[test]
