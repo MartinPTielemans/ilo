@@ -12,7 +12,6 @@
 
 #include "base/base64.h"
 #include "base/callback_list.h"
-#include "base/containers/contains.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -1290,7 +1289,7 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
       }
       for (size_t at = 0; at < saved->spaces.size(); ++at) {
         const SavedSpace& space = saved->spaces[at];
-        const bool needed = space.agent || base::Contains(shown, at);
+        const bool needed = space.agent || std::ranges::contains(shown, at);
         (needed ? now : later).insert(space.profile);
         const int favorite = space.shown_favorite;
         if (needed && favorite >= 0 && static_cast<size_t>(favorite) < saved->favorites.size()) {
