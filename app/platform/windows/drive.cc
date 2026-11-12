@@ -2021,7 +2021,20 @@ bool Run(const std::string& line) {
         fprintf(stderr, "browser: drive: no Korean IME\n");
         return false;
       }
-      // Diagnostic for #2474: which step never returns.
+      // Diagnostic for #2474: which step never returns. ActivateKeyboardLayout from the Japanese
+      // IME to the Korean one never returned (run 43134495200); this goes through the US keyboard.
+      g_steps.push_back({[] {
+        HKL english = LanguageLayout(0x0409);
+        fprintf(stderr, "browser: drive: ko: activating US %p, the thread's %p\n", english,
+                GetKeyboardLayout(0));
+        fflush(stderr);
+        if (english) {
+          HKL was = ActivateKeyboardLayout(english, 0);
+          fprintf(stderr, "browser: drive: ko: activated US, was %p, now %p, error %lu\n", was,
+                  GetKeyboardLayout(0), GetLastError());
+          fflush(stderr);
+        }
+      }, 150});
       g_steps.push_back({[korean] {
         fprintf(stderr, "browser: drive: ko: activating %p, the thread's %p\n", korean,
                 GetKeyboardLayout(0));
