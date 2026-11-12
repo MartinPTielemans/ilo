@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -9,12 +10,14 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
 #include "browser_core/host.h"
+#include "browser_core/native_ad_block.h"
 #include "browser_core/passwords.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
@@ -36,6 +39,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/extension_action.h"
 #include "net/cert/x509_certificate.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -299,10 +303,15 @@ SiteControls::SiteControls(content::WebContents* contents)
     window_ = window->id();
     window->ShowEveryExtensionAction(true);
   }
+  // Its private windows' too, as the dispatcher is the profile's.
+  actions_.Observe(extensions::ExtensionActionDispatcher::Get(contents->GetBrowserContext()));
   Read();
 }
 
 SiteControls::~SiteControls() {
+  if (NativeAdBlock()) {
+    StopWatchingNativeAdBlocked();
+  }
   if (Window* window = Window::FromId(window_)) {
     window->ShowEveryExtensionAction(false);
   }
@@ -342,6 +351,12 @@ void SiteControls::Read() {
     // It lists the permissions and the connection now, and the cookies later, which the panel
     // doesn't show.
     page_info_->InitializeUiState(this, base::DoNothing());
+  }
+  // The browser's own ad blocker counts what it blocked on the page, which comes a moment later.
+  if (NativeAdBlock()) {
+    native_blocked_ = -1;
+    WatchNativeAdBlocked(web_contents(), base::BindRepeating(&SiteControls::NativeAdBlocked,
+                                                             weak_factory_.GetWeakPtr()));
   }
   Changed();
 }
@@ -391,6 +406,23 @@ void SiteControls::WebContentsDestroyed() {
   Close();
 }
 
+void SiteControls::OnExtensionActionUpdated(extensions::ExtensionAction* action,
+                                            content::WebContents* contents,
+                                            content::BrowserContext* context) {
+  if (contents == web_contents() && IsAdBlocker(action->extension_id())) {
+    Changed();
+  }
+}
+
+void SiteControls::NativeAdBlocked(int blocked) {
+  native_blocked_ = blocked;
+  Changed();
+}
+
+void SiteControls::OnShuttingDown() {
+  actions_.Reset();
+}
+
 void SiteControls::Changed() {
   if (reporting_) {
     return;
@@ -410,6 +442,13 @@ void SiteControls::Report() {
   Passwords* passwords =
       Passwords::Of(Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
   if (passwords && !passwords->ready()) {
+    return;
+  }
+  // uBlock Origin never sees the pages the system's engine shows.
+  const int ad_blocking =
+      SystemPageOf(web_contents()) ? BC_AD_BLOCKING_NONE : AdBlockingOf(web_contents());
+  // It waits for the browser's own ad blocker's count too, which reports again.
+  if (ad_blocking == BC_AD_BLOCKING_ON && NativeAdBlock() && native_blocked_ < 0) {
     return;
   }
   const std::vector<Passwords::Login> logins =
@@ -460,6 +499,12 @@ void SiteControls::Report() {
     devices[i].kind = device_kinds[i].c_str();
   }
   const std::string connection = base::UTF16ToUTF8(connection_summary_);
+  std::string ad_blocked;
+  if (ad_blocking == BC_AD_BLOCKING_ON) {
+    ad_blocked = !NativeAdBlock()      ? AdBlockedOn(web_contents())
+                 : native_blocked_ > 0 ? base::NumberToString(native_blocked_)
+                                       : std::string();
+  }
   // Chrome counts every row it lists in its button's words.
   const std::string reset =
       resettable ? base::UTF16ToUTF8(l10n_util::GetPluralStringFUTF16(
@@ -478,9 +523,8 @@ void SiteControls::Report() {
       .system_engine_offered = system_engine_offered_,
       .logins = c_logins.data(),
       .login_count = c_logins.size(),
-      // uBlock Origin never sees the pages the system's engine shows.
-      .ad_blocking = SystemPageOf(web_contents()) ? BC_AD_BLOCKING_NONE
-                                                  : AdBlockingOf(web_contents()),
+      .ad_blocking = ad_blocking,
+      .ad_blocked = ad_blocked.c_str(),
       .developer_mode = DeveloperModeOf(web_contents()),
       .devices = devices.data(),
       .device_count = devices.size(),

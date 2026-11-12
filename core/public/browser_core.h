@@ -1,5 +1,6 @@
 // The core's API: what the app calls in Chrome's framework. Plain C, so the app binds it without
-// sharing a C++ toolchain with Chromium. Everything runs on the main thread, callbacks included.
+// sharing a C++ toolchain with Chromium. Everything runs on the main thread, callbacks included,
+// but the three of bc_host's that ask the ad blocker about a page (ad_block_request).
 
 #ifndef BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
 #define BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
@@ -155,6 +156,9 @@ typedef struct bc_suggestion {
   const char* keyword;
   // That engine's name, such as "DuckDuckGo", or "".
   const char* site;
+  // When the profile's history last saw a visit to its page, in microseconds since 1970, which the
+  // row says as "Visited yesterday" (#2337). Else 0, as for a search or a page not in history.
+  int64_t last_visit;
 } bc_suggestion;
 
 // A page in a tab's history, which bc_tab_history lists, as Chrome's back and forward buttons'
@@ -476,6 +480,10 @@ typedef struct bc_site_controls {
   size_t login_count;
   // A BC_AD_BLOCKING_ value, which bc_tab_set_ad_blocking changes.
   int ad_blocking;
+  // How many requests the ad blocker blocked on the page, as it counts them, such as "12" or
+  // ">1k", or "" while it blocked none or ad_blocking isn't BC_AD_BLOCKING_ON. Each change reports
+  // again.
+  const char* ad_blocked;
   // A BC_DEVELOPER_MODE_ value, which bc_tab_set_developer_mode changes.
   int developer_mode;
   // The devices the site was given, |device_count| of them, as Chrome's page info lists them, which
@@ -777,6 +785,34 @@ typedef struct bc_sidebar_backup {
   const char* label;
 } bc_sidebar_backup;
 
+// A page of history: another browser's, for bc_profile_add_history, or the profile's, in
+// history_listed. Strings are UTF-8.
+typedef struct bc_history_page {
+  const char* url;
+  const char* title;
+  // When it was last visited, in microseconds since 1970.
+  int64_t last_visit;
+  int32_t visits;
+  // How many of the visits were typed into the address bar, which ranks it among suggestions.
+  int32_t typed;
+} bc_history_page;
+
+// What the ad blocker does with a request (bc_host's ad_block_request).
+// Lets it go ahead as it is.
+#define BC_AD_BLOCK_ALLOW 0
+// Fails it with net::ERR_BLOCKED_BY_CLIENT, as uBlock Origin's blocking does.
+#define BC_AD_BLOCK_BLOCK 1
+// Answers it in its place with a stand-in, a data: URL, as a filter's $redirect does: a script
+// that does nothing, say, for a page that breaks without the one blocked.
+#define BC_AD_BLOCK_REDIRECT 2
+// Sends it to another address instead: its own, with the tracking parameters a $removeparam
+// filter names taken out.
+#define BC_AD_BLOCK_REWRITE 3
+
+// Hands the core |size| bytes of UTF-8 a callback answers with, into |out|, which the callback
+// passes back as it was given. It may be called more than once, each adding to what came before.
+typedef void (*bc_writer)(void* out, const char* text, size_t size);
+
 typedef struct bc_host {
   // Passed back to every callback.
   void* context;
@@ -904,7 +940,8 @@ typedef struct bc_host {
   void (*window_show_downloads)(void* context, bc_id window);
   // The profile's extensions changed, or were first read: one was added, removed, turned on or
   // off, pinned or unpinned, a command's key changed, or bc_extensions_report asked. |extensions|
-  // is all of them that Chrome's extensions page lists, by name.
+  // is all of them that Chrome's extensions page lists, by name, but the ad blocker the browser
+  // comes with, which is Settings' Ad blocking (bc_ad_blocking).
   void (*extensions_changed)(void* context,
                              bc_id profile,
                              const bc_extension* extensions,
@@ -915,8 +952,8 @@ typedef struct bc_host {
   void (*window_extension_popup)(void* context, bc_id window, const char* extension);
   // The actions the window shows changed: those pinned in the profile of the tab it shows, in
   // their order, as they are for that tab, then, while the Site Controls show for the tab
-  // (bc_tab_site_controls), every other turned-on extension's of the profile, by name. Once the tab
-  // shown changes, if they're different for it.
+  // (bc_tab_site_controls), every other turned-on extension's of the profile, by name. Never the
+  // ad blocker's. Once the tab shown changes, if they're different for it.
   void (*window_extension_actions)(void* context,
                                    bc_id window,
                                    const bc_extension_action* actions,
@@ -1263,6 +1300,47 @@ typedef struct bc_host {
   // first launch, which comes before the app has a window: the app reads that one's command line.
   // The user's alone: agents get no windows.
   void (*app_new_window)(void* context, bool private_window);
+  // The pages bc_profile_list_history asked for as |request|, newest first, each once a day with
+  // |last_visit| its last visit that day, and |visits| and |typed| as history counts them for the
+  // page. |more| when history has pages older than the last. The strings last only for the call.
+  // The user's alone: agents get none.
+  void (*history_listed)(void* context, bc_id profile, uint64_t request,
+                         const bc_history_page* pages, size_t count, bool more);
+  // The browser's own ad blocker, which blocks in place of uBlock Origin with
+  // --ad-block-engine=native (#2111): the core finds the requests a page makes, and what it
+  // shows, and the app's engine says what to do with them. No call comes for a page that isn't
+  // http(s), on a site the user turned ad blocking off on, or with ad blocking off
+  // (bc_ad_blocking).
+  //
+  // On the main thread, before the first page and whenever Settings › Ad blocking changes:
+  // what to block with. |folder| is uBlock Origin's as the browser comes with it, whose
+  // web_accessible_resources and js/resources hold the stand-ins and scriptlets filters name.
+  // |lists| is the files of the filter lists turned on (bc_ad_block_lists), one a line, and
+  // |filters| the user's own (bc_ad_block_filters). The engine is ready for the next call to ask.
+  void (*ad_block_use)(void* context, const char* folder, const char* lists, const char* filters);
+  // The three that ask, alone of every callback, come on a sequence of the core's own, never the
+  // main thread, and at the same time as the main thread's: a page's requests never wait on the
+  // UI, nor the UI on matching. Each answers at once from the engine it has, never waiting for
+  // the main thread. The one ad_block_use asked for may still be loading, which the call waits
+  // for, as it then takes a moment.
+  //
+  // What to do with the request for |url|, of |type| as a filter's options name it ("document",
+  // "subdocument", "script", "stylesheet", "image", "font", "media", "object", "xmlhttprequest",
+  // "ping" or "other"), from the page at |source_url|: a BC_AD_BLOCK_ value. For
+  // BC_AD_BLOCK_REDIRECT it writes the stand-in's data: URL, for BC_AD_BLOCK_REWRITE the address
+  // the request goes to instead.
+  int (*ad_block_request)(void* context, const char* url, const char* source_url, const char* type,
+                          bc_writer write, void* out);
+  // What the page at |url| hides and runs from the start, written as a JSON object: "hide", the
+  // CSS selectors of what it hides; "procedural", the filters that hide or style by more than a
+  // selector, each a JSON string as adblock-rust gives it; "exceptions", the generic selectors it
+  // doesn't hide (for ad_block_hide); "script", the scriptlets' code, to run in the page's main
+  // world before its own scripts; and "generic", false where the page hides no generic selector.
+  void (*ad_block_page)(void* context, const char* url, bc_writer write, void* out);
+  // The generic selectors that hide the elements of a page with these classes and ids, JSON
+  // arrays of strings, but its |exceptions| (ad_block_page's), written as a JSON array.
+  void (*ad_block_hide)(void* context, const char* classes, const char* ids,
+                        const char* exceptions, bc_writer write, void* out);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1751,22 +1829,26 @@ BC_EXPORT bool bc_profile_set_archive_after(bc_id profile, double seconds);
 BC_EXPORT size_t bc_profile_notes_service(bc_id profile, char* service, size_t capacity);
 BC_EXPORT void bc_profile_set_notes_service(bc_id profile, const char* service);
 
-// A page of another browser's history, for bc_profile_add_history. Strings are UTF-8.
-typedef struct bc_history_page {
-  const char* url;
-  const char* title;
-  // When it was last visited, in microseconds since 1970.
-  int64_t last_visit;
-  int32_t visits;
-  // How many of the visits were typed into the address bar, which ranks it among suggestions.
-  int32_t typed;
-} bc_history_page;
-
 // Adds |count| pages from another browser's history to the loaded profile's, as Chrome's importer
 // does, and returns whether it will: not to a private profile or one that hasn't loaded. A page
 // already there with a visit as late is skipped, so importing the same history again adds
 // nothing. Then history_added, with how many it added. The core copies what it needs.
 BC_EXPORT bool bc_profile_add_history(bc_id profile, const bc_history_page* pages, size_t count);
+
+// Lists up to |max| pages of |profile|'s history visited before |before|, microseconds since 1970,
+// or now if 0, as the Library's History does a page of its list at a time (#2337): newest first,
+// each page once a day, whose title or URL has |text|'s words when it isn't empty. Then
+// history_listed with |request|. History reads them on its own thread, off the UI thread. Returns
+// whether it will: not for a private profile, whose history nothing keeps, or one that hasn't
+// loaded.
+BC_EXPORT bool bc_profile_list_history(bc_id profile, uint64_t request, int64_t before,
+                                       const char* text, size_t max);
+
+// Deletes |profile|'s visits to |url| from |begin| to |end|, microseconds since 1970, as the
+// Library's History removes one row, a page on one day. Chrome's observers hear it as any deletion,
+// and history_deleted follows. Returns whether it will, as bc_profile_list_history.
+BC_EXPORT bool bc_profile_remove_history(bc_id profile, const char* url, int64_t begin,
+                                         int64_t end);
 
 // A field of another browser's saved address, for bc_profile_add_addresses, as a Chromium-based
 // browser's Web Data keeps it: Chromium's FieldType and VerificationStatus numbers, and the value,
@@ -2279,8 +2361,8 @@ BC_EXPORT void bc_set_battery_saver_enabled(bool enabled);
 // |plugged| in or not, read at once. Does nothing without the switch.
 BC_EXPORT void bc_battery_for_testing(int percent, bool plugged);
 // Whether the browser blocks ads and trackers, in every profile and its private windows, with the
-// uBlock Origin it comes with: on unless the user turned it off. Off turns uBlock Origin off in
-// each profile, as its switch in Chrome's extensions page does. The core keeps it with the Spaces.
+// ad blocker it comes with, uBlock Origin, which no extension list shows: on unless the user
+// turned it off. The core keeps it with the Spaces.
 // The user's: agents get none, as it keeps trackers off the user's pages.
 BC_EXPORT bool bc_ad_blocking(void);
 BC_EXPORT void bc_set_ad_blocking(bool on);
@@ -2291,6 +2373,29 @@ BC_EXPORT void bc_set_ad_blocking(bool on);
 // two from their sites. The core keeps it with the Spaces. The user's, as bc_set_ad_blocking is.
 BC_EXPORT bool bc_cookie_notices_hidden(void);
 BC_EXPORT void bc_set_cookie_notices_hidden(bool on);
+// Settings › Ad blocking's filter lists and the user's own filters, browser-wide like
+// bc_ad_blocking: each change applies at once in every profile and its private windows, and the
+// core keeps them with the Spaces. The user's, as bc_set_ad_blocking is.
+//
+// Copies the filter lists the ad blocker can use into |lists| as bc_space_name does, each
+// "key\tgroup\ton\ttitle" on a line of its own, UTF-8: |group| one of default, ads, privacy,
+// malware, multipurpose, annoyances and regions, and |on| 1 or 0. The default group's lists and
+// most others' start on, the annoyance and regional lists off. Empty until the core has read them,
+// a moment after the first profile loads.
+BC_EXPORT size_t bc_ad_block_lists(char* lists, size_t capacity);
+// Whether an administrator's policy for the ad blocker chose its lists, which are then on as it
+// says, and which bc_set_ad_block_list doesn't change.
+BC_EXPORT bool bc_ad_block_lists_locked(void);
+// Turns the list of |key|, one of bc_ad_block_lists, on or off.
+BC_EXPORT void bc_set_ad_block_list(const char* key, bool on);
+// Copies the user's own filters, Settings' My filters, into |filters| as bc_space_name does, one
+// a line.
+BC_EXPORT size_t bc_ad_block_filters(char* filters, size_t capacity);
+// Whether an administrator's policy for the ad blocker set its filters in place of the user's,
+// which bc_set_ad_block_filters then doesn't change.
+BC_EXPORT bool bc_ad_block_filters_locked(void);
+// Makes |filters|, one a line, the user's own.
+BC_EXPORT void bc_set_ad_block_filters(const char* filters);
 
 // Chromium's everyday settings, as Settings shows them, browser-wide: the core writes each into
 // every profile, and into each as it loads, as Chrome's own settings page would (#1636). Each that
@@ -2392,6 +2497,13 @@ BC_EXPORT void bc_download_icon(bc_id download);
 // Asks for the favicon the profile's history has for the page at |url|, else for its host. Then
 // page_favicon.
 BC_EXPORT void bc_page_favicon(const char* url);
+
+// Copies the site of the page at |url| into |site| as bc_space_name does: its host's registrable
+// domain, the part the link target's plate emphasizes (docs.example.com and login.example.com are
+// example.com), or the host itself when it has none, as localhost and an IP address don't. Empty
+// for a page that isn't http(s). One meaning of a site for the app and agents: Sort Today Tabs by
+// Site gathers tabs by it.
+BC_EXPORT size_t bc_url_site(const char* url, char* site, size_t capacity);
 
 // Lists suggestions for |text| typed in the window's command bar, as Chrome's address bar does:
 // pages from the profile's history and bookmarks, open tabs among them, and a search for |text|.
