@@ -75,7 +75,13 @@ fn a_move_that_goes_nowhere_keeps_a_double_click(cx: &mut TestAppContext) {
     let at = point(px(HEADER.0), px(HEADER.1));
     press(cx, at, 1);
     press(cx, at, 2);
-    assert_eq!(asked(&host), ["window button zoom"]);
+    // On the Mac the title bar's double-click is AppKit's, which the core never hears of.
+    let zoom: &[&str] = if cfg!(target_os = "macos") {
+        &[]
+    } else {
+        &["window button zoom"]
+    };
+    assert_eq!(asked(&host), zoom);
 }
 
 #[test]
