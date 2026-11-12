@@ -36,10 +36,11 @@ takes a command a line on its standard input:
                   opened last at an address starting with PREFIX has played, whether it's paused,
                   whether its player shows an ad, and refused where Chrome kept it from starting,
                   as YouTube's player says
-  content         logs "cdp: content TEXT IMAGES covered|open|none": the attached page's shown
-                  text, in characters, its shown pictures at least 50 px a side, and covered where
-                  one element fixed in place covers the middle of the viewport and half its area,
-                  as a wall asking the user to turn their ad blocker off does, or none for no page
+  content         logs "cdp: content TEXT IMAGES COVER", or "cdp: content none" for no page: the
+                  attached page's shown text, in characters, its shown pictures at least 50 px a
+                  side, and the percent of the viewport the largest element fixed in place over
+                  its middle covers, as a wall asking the user to turn their ad blocker off does,
+                  or a site's own banner
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, "failed"
@@ -460,16 +461,16 @@ CONTENT = """(() => {
   };
   const images = [...document.querySelectorAll("img, picture, video, canvas, svg")]
     .filter((e) => (e.tagName !== "IMG" || e.naturalWidth > 0) && shown(e)).length;
-  let covered = false;
-  const area = innerWidth * innerHeight;
+  let cover = 0;
   for (let e = document.elementFromPoint(innerWidth / 2, innerHeight / 2); e; e = e.parentElement) {
+    if (getComputedStyle(e).position !== "fixed") continue;
     const box = e.getBoundingClientRect();
-    if (getComputedStyle(e).position === "fixed" && box.width * box.height >= area / 2) {
-      covered = true;
-      break;
-    }
+    const width = Math.min(box.right, innerWidth) - Math.max(box.left, 0);
+    const height = Math.min(box.bottom, innerHeight) - Math.max(box.top, 0);
+    cover = Math.max(cover, Math.round(100 * Math.max(width, 0) * Math.max(height, 0) /
+                                       (innerWidth * innerHeight)));
   }
-  return document.body.innerText.length + " " + images + (covered ? " covered" : " open");
+  return document.body.innerText.length + " " + images + " " + cover;
 })()"""
 
 

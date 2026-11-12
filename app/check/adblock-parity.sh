@@ -21,8 +21,14 @@
 # no ad and this run's showed one or didn't play. It needs the network and the sites, so it runs
 # only when named: ./check.sh adblock-parity.
 # For each site the table also says what its page shows 8 s after the load: its text's characters,
-# its pictures, and whether an element fixed in place covers it (cdp.py's content), the measure of a
-# site an engine breaks, which no rule holds a run to yet (#2111).
+# its pictures, and the percent of the viewport an element fixed in place covers (cdp.py's content).
+# A site this run breaks fails, as does a wall uBlock Origin kept away (#2111):
+#   - text under half the baseline's, where two loads of a page with the same engine differ by a
+#     tenth at most;
+#   - 90% of the viewport covered, by a wall or a modal, where the baseline's page had nothing as
+#     large. A site's own banner covers half, and changes size from load to load.
+# Pictures vary too much between loads to hold a run to, a site's count from 4 to 38, so they're
+# for reading.
 # It leaves adblock-parity/sites.tsv, a capture a site, and the requests recorded.
 engine=${engine:-ublock}
 
@@ -122,7 +128,8 @@ video() {
   grep '^cdp: video ' "$cdp_log" | tail -1 | cut -d' ' -f3-
 }
 # A site's line in $contents: the site, then what cdp.py's content says the page shows 8 s after its
-# load: its text's characters, its pictures, and covered or open.
+# load: its text's characters, its pictures, and the percent of the viewport something fixed in
+# place covers.
 contents="$dir/contents.txt"
 : > "$contents"
 look_content() {
@@ -288,7 +295,7 @@ contents = {}
 for line in open(shown, encoding="utf-8"):
     url, *said = line.split()
     if len(said) == 3:
-        contents[url] = {"text": int(said[0]), "images": int(said[1]), "covered": said[2] == "covered"}
+        contents[url] = {"text": int(said[0]), "images": int(said[1]), "cover": int(said[2])}
 
 
 def plays(video):
@@ -327,12 +334,12 @@ def video_of(cell):
 def content_cells(content):
     if not content:
         return ["", "", ""]
-    return [str(content["text"]), str(content["images"]), "1" if content["covered"] else "0"]
+    return [str(content["text"]), str(content["images"]), str(content["cover"])]
 
 
 with open(table, "w", encoding="utf-8") as out:
     out.write("site\tloaded\tload_ms\trequests\tblocked\tstand_ins\tblocked_hosts\tallowed_hosts"
-              "\tbot_check\tvideo\ttext\timages\tcovered\n")
+              "\tbot_check\tvideo\ttext\timages\tcover\n")
     for s in sites:
         out.write("\t".join([s["url"], "1" if s["loaded"] else "0", s["load_ms"], str(s["requests"]),
                              str(s["blocked_n"]), str(s["standin_n"]), ",".join(s["blocked"]),
@@ -368,6 +375,15 @@ if baseline:
             now = video_said(s["video"]) if s["video"] else "wasn't watched"
             worse.append(f"{s['url']}'s video {now}, where the baseline's {video_said(was)}")
         through = sorted(set(b[6].split(",")) & set(s["allowed"]) - set(s["blocked"]) - {""})
+        # What the page showed, against the baseline's, where both runs read it.
+        page_was, page = named[s["url"]], contents.get(s["url"])
+        if page and page_was.get("text"):
+            if page["text"] < int(page_was["text"]) / 2:
+                worse.append(f"{s['url']} showed {page['text']} characters of text, where the "
+                             f"baseline's showed {page_was['text']}")
+            if page["cover"] >= 90 > int(page_was["cover"]):
+                worse.append(f"{s['url']} was {page['cover']}% covered by something fixed in place, "
+                             f"where the baseline's was {page_was['cover']}%")
         if through:
             worse.append(f"{s['url']} let through what the baseline blocked: {', '.join(through)}")
 loaded = [s for s in sites if s["loaded"]]
