@@ -3805,11 +3805,8 @@ impl Settings {
         }
         let chosen = model.task_model(cli).to_string();
         let models = model.task_models(cli);
-        let label: SharedString = match models.iter().find(|(id, _)| *id == chosen) {
-            Some((_, name)) => name.clone().into(),
-            None if chosen.is_empty() => MenuEntry::label("Default"),
-            None => chosen.clone().into(),
-        };
+        let label: SharedString = (models.iter().find(|(id, _)| *id == chosen))
+            .map_or(MenuEntry::label("Default"), |(_, name)| name.clone().into());
         let agents = agents.clone();
         let popup = self.popup(
             Popup::TaskModel(cli),
@@ -3870,20 +3867,7 @@ impl Settings {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let model = agents.read(cx);
-        let chosen = model.task_model(cli).to_string();
-        let mut models = vec![(String::new(), MenuEntry::label("Default").to_string())];
-        models.extend(model.task_models(cli));
-        let items = (models.iter())
-            .map(|(id, name)| {
-                let on = *id == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::named(name.clone(), true)
-                }
-            })
-            .collect();
+        let (models, items) = agents.read(cx).task_model_menu(cli);
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some((id, _)) = picked.and_then(|index| models.get(index)) {
