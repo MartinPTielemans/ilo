@@ -33,7 +33,7 @@ class MainDelegate : public ChromeMainDelegate {
 #if BUILDFLAG(IS_LINUX)
   void ZygoteForked() override;
 #endif
-  std::optional<int> PreBrowserMain() override;
+  std::optional<int> PostEarlyInitialization(InvokedIn invoked_in) override;
   content::ContentClient* CreateContentClient() override;
   content::ContentBrowserClient* CreateContentBrowserClient() override;
 };
