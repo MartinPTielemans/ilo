@@ -88,11 +88,12 @@ enum State {
 }
 
 /// What a wheel event says of the fingers, ahead of its own delta, which moves them or, after
-/// they've lifted, is momentum.
+/// they've lifted, is momentum: whether they lifted and landed, each with the rule that said so,
+/// which the demo's `?trace` records.
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct Cut {
-    pub lifted: bool,
-    pub landed: bool,
+    pub lifted: Option<&'static str>,
+    pub landed: Option<&'static str>,
 }
 
 impl WheelGestures {
@@ -153,25 +154,26 @@ impl WheelGestures {
             State::Fingers if fresh => (
                 State::Fingers,
                 Cut {
-                    lifted: true,
-                    landed: true,
+                    lifted: Some("silence"),
+                    landed: Some("silence"),
                 },
             ),
             State::Idle | State::Momentum { .. } if fresh => (
                 State::Fingers,
                 Cut {
-                    landed: true,
+                    landed: Some("silence"),
                     ..Cut::default()
                 },
             ),
             State::Idle => (
                 State::Fingers,
                 Cut {
-                    landed: true,
+                    landed: Some("first"),
                     ..Cut::default()
                 },
             ),
             State::Fingers if self.falling() || self.slowing() => {
+                let why = if self.falling() { "falling" } else { "slowing" };
                 let state = State::Momentum {
                     sign: now.signum(),
                     slowest: now.abs(),
@@ -180,7 +182,7 @@ impl WheelGestures {
                 (
                     state,
                     Cut {
-                        lifted: true,
+                        lifted: Some(why),
                         ..Cut::default()
                     },
                 )
@@ -203,8 +205,8 @@ impl WheelGestures {
                     (
                         State::Fingers,
                         Cut {
-                            lifted: stopped,
-                            landed: true,
+                            lifted: stopped.then_some("stopped"),
+                            landed: Some(if turned { "turned" } else { "rose" }),
                         },
                     )
                 } else {
@@ -216,7 +218,7 @@ impl WheelGestures {
                             smallest,
                         },
                         Cut {
-                            lifted: stopped,
+                            lifted: stopped.then_some("stopped"),
                             ..Cut::default()
                         },
                     )
@@ -312,16 +314,18 @@ impl WheelGestures {
     }
 
     /// No event since the last, at `now`: whether that lifts fingers still down, after GAP if they
-    /// had slowed and LONG if not. What comes next is their momentum until it turns or rises.
-    pub(super) fn quiet(&mut self, now: Instant) -> bool {
-        let Some(last) = self.recent.back() else {
-            return false;
+    /// had slowed and LONG if not, as the rule that said so. What comes next is their momentum
+    /// until it turns or rises.
+    pub(super) fn quiet(&mut self, now: Instant) -> Option<&'static str> {
+        let last = self.recent.back()?;
+        let (wait, why) = match self.slowed() {
+            true => (GAP, "quiet"),
+            false => (LONG, "long quiet"),
         };
-        let wait = if self.slowed() { GAP } else { LONG };
         if now.duration_since(last.at) < wait || !matches!(self.state, State::Fingers) {
-            return false;
+            return None;
         }
         self.state = self.lifted();
-        true
+        Some(why)
     }
 }

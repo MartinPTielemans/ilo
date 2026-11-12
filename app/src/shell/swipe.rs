@@ -367,6 +367,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.note("wheel", "");
         let ScrollDelta::Pixels(delta) = event.delta else {
             return self.scroll_at(event, at, window, cx);
         };
@@ -386,11 +387,13 @@ impl Shell {
             ..event.clone()
         };
         let still = ScrollDelta::Pixels(Point::default());
-        if cut.lifted {
+        if let Some(why) = cut.lifted {
+            self.note("lift", why);
             self.web_undecided = None;
             self.web_lift(&phase(TouchPhase::Ended, still), at, window, cx);
         }
-        if cut.landed {
+        if let Some(why) = cut.landed {
+            self.note("land", why);
             self.web_undecided = Some(Point::default());
             self.scroll_at(&phase(TouchPhase::Started, still), at, window, cx);
         }
@@ -409,8 +412,15 @@ impl Shell {
             }
             None => Some(event.delta),
         };
+        let deciding = self
+            .swipe
+            .as_ref()
+            .is_none_or(|swipe| swipe.across.is_none());
         let took = moved
             .is_none_or(|delta| self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx));
+        if deciding && let Some(across) = self.swipe.as_ref().and_then(|swipe| swipe.across) {
+            self.note("axis", if across { "across" } else { "along" });
+        }
         let lift = phase(TouchPhase::Ended, still);
         self.web_wheel_quiet = Some(cx.spawn_in(window, async move |shell, cx| {
             // Slowed fingers lift after GAP, and others after LONG.
@@ -434,7 +444,8 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.web_wheel.quiet(now) {
+        if let Some(why) = self.web_wheel.quiet(now) {
+            self.note("lift", why);
             self.web_lift(lift, now, window, cx);
         }
     }
@@ -451,13 +462,36 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let before = self.settle.as_ref().map(|settle| settle.start);
+        let (from, library) = (
+            self.swipe.as_ref().map(|swipe| swipe.from),
+            self.library_open,
+        );
         self.scroll_at(lift, at, window, cx);
+        if self.library_open != library {
+            self.note("library", if self.library_open { "open" } else { "closed" });
+        }
         if let Some(settle) = self
             .settle
             .as_mut()
             .filter(|settle| Some(settle.start) != before)
         {
             settle.spend();
+            let space = settle.space;
+            let index = |id| self.spaces.iter().position(|space| space.id == id);
+            if let Some((to, from)) = index(space).zip(from.and_then(index)) {
+                self.note("space", &format!("{:+}", to as i64 - from as i64));
+            }
+        }
+    }
+
+    /// Has the demo's `?trace` told each thing the wheel's events decide of a swipe.
+    pub fn note_wheel(&mut self, notes: super::WheelNotes) {
+        self.web_notes = Some(notes);
+    }
+
+    fn note(&self, kind: &'static str, what: &str) {
+        if let Some(notes) = &self.web_notes {
+            notes(kind, what);
         }
     }
 
