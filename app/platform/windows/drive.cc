@@ -352,16 +352,25 @@ void Enter(const Target& target) {
   g_hovered = target.hwnd;
 }
 
-// Posts the pointer moving to |target|, with |buttons| held.
-void Move(const Target& target, int modifiers, UINT buttons) {
+// Windows sends all of the thread's mouse input to the window that has the mouse captured,
+// wherever the pointer is, as GPUI's has from a press until it hears the release: the driver's
+// goes there too, so a capture left behind shows in a check as it does to a hand (#2516).
+Target Captured(const Target& target) {
+  const HWND held = GetCapture();
+  return held && held != target.hwnd && Ours(held) ? At(held, target.screen) : target;
+}
+
+// Posts the pointer moving to |to|, with |buttons| held.
+void Move(const Target& to, int modifiers, UINT buttons) {
   HoldKeys(modifiers, buttons);
-  if (host_drive_pointer(WM_MOUSEMOVE, target.screen.x, target.screen.y)) {
+  if (host_drive_pointer(WM_MOUSEMOVE, to.screen.x, to.screen.y)) {
     return;
   }
+  const Target target = Captured(to);
   // Over the frame, as over the UI's maximize button (host.cc's FrameHit), Windows sends the
   // window a non-client move, with what's there and the point on the screen. Entered, so the leave
   // Windows sends it at once, for the desktop's pointer, is dropped.
-  if (Ours(target.hwnd)) {
+  if (target.hwnd == to.hwnd && Ours(target.hwnd)) {
     const LPARAM screen = MAKELPARAM(target.screen.x, target.screen.y);
     const LRESULT hit = SendMessageW(target.hwnd, WM_NCHITTEST, 0, screen);
     if (hit != HTCLIENT && hit != HTTRANSPARENT && hit != HTNOWHERE) {
@@ -391,12 +400,13 @@ UINT Up(UINT button) {
 // Posts |button| going down at |target|, as Windows sends a press: its window's root decides
 // whether it's activated (only on this thread, never brought to the front) and the window's parents
 // hear of it, which is how a click in the UI takes the keyboard from the page.
-void Press(const Target& target, UINT button, int modifiers, bool second) {
+void Press(const Target& at, UINT button, int modifiers, bool second) {
   HoldKeys(modifiers, button);
   const UINT down = Down(button);
-  if (host_drive_pointer(down, target.screen.x, target.screen.y)) {
+  if (host_drive_pointer(down, at.screen.x, at.screen.y)) {
     return;
   }
+  const Target target = Captured(at);
   Enter(target);
   HWND root = GetAncestor(target.hwnd, GA_ROOT);
   const LRESULT activate = SendMessageW(target.hwnd, WM_MOUSEACTIVATE,
@@ -434,11 +444,12 @@ void Press(const Target& target, UINT button, int modifiers, bool second) {
   }
 }
 
-void Release(const Target& target, UINT button, int modifiers) {
+void Release(const Target& at, UINT button, int modifiers) {
   HoldKeys(modifiers);
-  if (host_drive_pointer(Up(button), target.screen.x, target.screen.y)) {
+  if (host_drive_pointer(Up(button), at.screen.x, at.screen.y)) {
     return;
   }
+  const Target target = Captured(at);
   PostMessageW(target.hwnd, Up(button), MouseKeys(modifiers, 0), ClientParam(target));
 }
 
