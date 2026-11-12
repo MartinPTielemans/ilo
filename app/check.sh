@@ -220,6 +220,7 @@ for run in ${*:-$runs}; do
   export BROWSER_PROFILE_DIR
   saved="$profile_dir/Spaces.json"
   launch_frame="$profile_dir/launch-frame"
+  prefs="$profile_dir/Default/Preferences"
   # DevTools open docked on the right, as the find run expects, and downloads go in the check's own
   # folder, never the user's Downloads. In UTF-8, which Windows' Python doesn't write by default.
   python3 -I -c '
@@ -228,7 +229,7 @@ prefs = {"devtools": {"preferences": {"currentDockState": "\"right\""}},
          "download": {"default_directory": sys.argv[2]}}
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
-' "$profile_dir/Default/Preferences" "$(native_path "$PWD/$out/downloads")"
+' "$prefs" "$(native_path "$PWD/$out/downloads")"
   # Every run is sourced into this one shell, so a helper a run defines under a lib.sh name would
   # replace lib.sh's for the runs after it.
   . "check/$run.sh"
