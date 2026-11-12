@@ -4,8 +4,7 @@
 # from T3 Code (https://github.com/pingdotgg/t3code, MIT) at commit
 # 570d4b03eef879bd60be3d74444046858c94dacd.
 #
-# Every job here runs on GitHub's runners, except Core on Linux on a push here, which runs on the
-# self-hosted ilo-core runners (core-linux.yml). No self-hosted runner ever takes a pull request.
+# Every job here runs on GitHub's runners. The self-hosted engine runner never takes a pull request.
 name: CI
 
 on:
@@ -31,9 +30,11 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read
     outputs:
-      core_linux: ${{ steps.detect.outputs.core_linux }}
+      core_linux: ${{ steps.proven.outputs.core_linux }}
       app_linux: ${{ steps.detect.outputs.app_linux }}
+      app_mac: ${{ steps.proven.outputs.app_mac }}
       engine_windows: ${{ steps.detect.outputs.engine_windows }}
     steps:
       # History without file contents, for the merge base, and only the files the decision reads.
@@ -43,12 +44,39 @@ jobs:
           filter: blob:none
           persist-credentials: false
           sparse-checkout: |
+            .github/scripts/tree-proven.sh
             .github/scripts/ci-changes.cjs
             .github/actions/ci-changes/
+            tools/core-same.sh
+            tools/core-same-test.sh
+            core/public/browser_core.h
           sparse-checkout-cone-mode: false
+
+      # The comparison detect uses, and the engines use, proven on the core's header first.
+      - run: tools/core-same-test.sh
 
       - id: detect
         uses: ./.github/actions/ci-changes
+
+      # A push to main whose tree a branch's push already passed a job on skips that job, saying
+      # which run passed it (#2198). Check counts it as rightly skipped, as its output is false.
+      - id: proven
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAIN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          TREE: ${{ github.event.head_commit.tree_id }}
+          CORE_LINUX: ${{ steps.detect.outputs.core_linux }}
+          APP_MAC: ${{ steps.detect.outputs.app_mac }}
+        run: |
+          for job in core_linux app_mac; do
+            needed=$CORE_LINUX
+            [ "$job" = core_linux ] || needed=$APP_MAC
+            if [ "$MAIN" = true ] && [ "$needed" = true ] &&
+              [ -n "$(.github/scripts/tree-proven.sh "ci-$job" "$TREE")" ]; then
+              needed=false
+            fi
+            echo "$job=$needed" >> "$GITHUB_OUTPUT"
+          done
 
   core_linux:
     name: Core on Linux
@@ -58,6 +86,14 @@ jobs:
       contents: read
     uses: ./.github/workflows/core-linux.yml
 
+  app_mac:
+    name: UI on macOS
+    needs: changes
+    if: needs.changes.outputs.app_mac == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/app-mac.yml
+
   # To hook in app-linux.yml or engine-windows.yml: replace its push and pull_request triggers with
   # `on: workflow_call`, add a job like core_linux gated on needs.changes.outputs.app_linux (or
   # engine_windows), and add the job to Check's needs. The job's key must match its output's name.
@@ -65,7 +101,7 @@ jobs:
   check:
     name: Check
     if: always() && needs.changes.result != 'skipped'
-    needs: [changes, core_linux]
+    needs: [changes, core_linux, app_mac]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}

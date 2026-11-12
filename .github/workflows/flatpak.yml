@@ -62,17 +62,23 @@ jobs:
       # The UI's build as in app-linux.yml; Xvfb and ImageMagick to start the bundle and see it.
       - name: Install tools
         if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+            flatpak flatpak-builder xvfb imagemagick
+      - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq libclang-dev libfontconfig-dev libwayland-dev \
-            libx11-xcb-dev libxkbcommon-x11-dev flatpak flatpak-builder xvfb imagemagick
           rustup update stable --no-self-update
           # Ubuntu's AppArmor keeps bubblewrap, which flatpak builds and runs in, from making
           # user namespaces.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -83,6 +89,15 @@ jobs:
 
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: tools/flatpak.sh
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       # The engine's and the app's files as the bundle has them: its build strips nothing
       # (no-debuginfo), so chrome and libBrowser.so keep their symbol tables.
@@ -121,6 +136,78 @@ jobs:
             wait $pid || true'
           cat ilo.log
           grep -q "browser: UI shown" ilo.log
+
+      # The Flatpak signs in to sync as the build does, by check.sh's sync-account run, driven in its
+      # sandbox (BROWSER_FLATPAK), on an ilo-server of the run's own, on SQLite with a throwaway
+      # account, never the hosted one, at the commit check-linux.yml builds. Not in a release,
+      # which a check's flake would hold up.
+      - id: server
+        if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        uses: actions/checkout@v4
+        with:
+          repository: MartinPTielemans/ilo-server
+          ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
+          path: app/.deps/ilo-server
+
+      # Main alone saves, as for the build cache above (#1969).
+      - id: server-cache
+        if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
+
+      - if: ${{ steps.server.outcome == 'success' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: xdotool openbox xauth
+
+      - name: Sign in
+        if: ${{ steps.server.outcome == 'success' }}
+        working-directory: app
+        env:
+          # The runner's C.UTF-8 names no country, as check-linux.yml says.
+          LANG: en_US.UTF-8
+        run: |
+          (cd .deps/ilo-server && cargo build --release --locked)
+          XDG_RUNTIME_DIR=$(mktemp -d) ILO_SERVER=$PWD/.deps/ilo-server/target/release/ilo-server \
+            BROWSER_FLATPAK=1 BROWSER_XVFB=1 dbus-run-session -- ./check.sh sync-account
+
+      - if: ${{ steps.server-cache.outcome == 'success' && steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.server.outcome == 'success' }}
+        with:
+          name: ilo-flatpak-sign-in
+          path: app/build/check
+          if-no-files-found: ignore
+
+      # An administrator's policies reach the Flatpak through its extension point (docs/policies.md),
+      # as check.sh's policies run sets URLBlocklist in an unmanaged extension of the run's own.
+      - if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: xdotool openbox xauth
+      - name: Policies
+        id: policies
+        if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        working-directory: app
+        env:
+          LANG: en_US.UTF-8
+        run: |
+          XDG_RUNTIME_DIR=$(mktemp -d) BROWSER_FLATPAK=1 BROWSER_XVFB=1 \
+            dbus-run-session -- ./check.sh policies
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.policies.outcome != 'skipped' }}
+        with:
+          name: ilo-flatpak-policies
+          path: app/build/check
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         if: ${{ always() && steps.engine.outputs.found == 'true' }}

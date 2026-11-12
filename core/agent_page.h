@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -14,17 +15,22 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "browser_core/public/browser_core.h"
 #include "content/public/browser/devtools_agent_host_client.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "url/gurl.h"
 
 namespace content {
 class DevToolsAgentHost;
+class NavigationHandle;
 class RenderFrameHost;
+class ScopedAccessibilityMode;
 }  // namespace content
 
 namespace browser_core {
@@ -50,6 +56,14 @@ class AgentPage : public content::WebContentsObserver,
   // it go. What's still asked is answered as an error.
   static void SessionEnded(bc_id tab);
 
+  // |contents|' page went to |url|, which opens an app outside the browser, and the core stopped it
+  // where it was. The action running there, as a click on such a link, answers that, as an error.
+  static void AppRefused(content::WebContents* contents, const GURL& url);
+  // A download the page in |contents| started answers the action that started it, in place of
+  // the page: the request of the action running, or of one that answered while the download was
+  // about to start, which then never answers. Else 0.
+  static uint64_t TakeJob(content::WebContents* contents);
+
  private:
   friend class content::WebContentsUserData<AgentPage>;
 
@@ -58,6 +72,10 @@ class AgentPage : public content::WebContentsObserver,
     int action;
     int64_t element;
     std::string text;
+    // When waiting for its element, or for the page to settle, gives up.
+    base::TimeTicks deadline;
+    // Whether the page was still busy when it stopped waiting for it to settle.
+    bool busy = false;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
@@ -76,32 +94,81 @@ class AgentPage : public content::WebContentsObserver,
     std::string frame;
     std::string session;
   };
+  // How far a SELECT has got: reading the element's options, reading those clicking it showed, or
+  // reading the tree after choosing one.
+  enum class Choosing { kNo, kOptions, kOpened, kChosen };
+  class WheelWatch;
 
   explicit AgentPage(content::WebContents* contents);
 
   // Runs the next job once the one before has answered.
   void Next();
   void Run();
-  // Whether the tab's page is one agents may use.
+  // Whether the tab's page is one agents may use, and if not, why, for the agent.
   bool IsWebPage();
+  std::string NotWebPage();
   // Runs |then| once the page has stopped loading, or after a while.
   void AfterLoad(base::OnceClosure then);
-  // Waits a moment for what an input starts, such as a navigation, then for it to load, then
-  // answers with the tree.
+
+  // Waits until the job's element is on screen, has held still for two frames and, with
+  // |enabled|, isn't disabled, then gives its box; or at the deadline the box it has, if any. One
+  // that's gone, or still disabled at the deadline, fails the job.
+  void Ready(bool enabled, Then then);
+  void Look(bool enabled, std::optional<gfx::RectF> last, int still, Then then);
+  // Hears of the page's requests from now until the job answers, so an input's answer waits for
+  // what it starts, then runs |then|.
+  void Listen(base::OnceClosure then);
+  void Unlisten();
+  // A request started or ended in the session |session|, or "" for the main frame's.
+  void Heard(const std::string& session, const std::string& method, const base::DictValue& event);
+  // Waits for the page to settle after an input, then answers with the tree.
   void Settle();
+  // Waits until the page has stopped loading and has had no request for a while.
+  void Quiet();
+  // Reads the main frame's tree until it's the same twice, a frame apart, then the snapshot.
+  void Still(base::ListValue last);
 
   void Click();
-  void Mouse(const char* type, std::pair<double, double> at, base::OnceClosure then);
+  // Presses the job's element once it's ready. One outside the page's view, where scrolling
+  // didn't bring it, is focused first unless it has been (|focused|), as a skip link is.
+  void Press(bool focused);
+  // Presses the element where it is in its frame's view, with the agent's pointer over it.
+  void PressInView();
+  // As a user's click at |at|, in the viewport of the frame of the session at |slot|: the pointer
+  // comes, presses and lets go, from |step| on, each once the last is in, then the page settles.
+  void ClickAt(int slot, gfx::PointF at, size_t step);
+  void Mouse(const char* type, gfx::PointF at, int slot, base::OnceClosure then);
+  // Chooses the job's option among those in |nodes|, the whole tree, whose frames' DevTools ids
+  // |frames| has in order, or clicks the element to show them, or fails with the options there are.
+  void Choose(const base::ListValue& nodes, const std::vector<std::string>& frames);
+  // Chooses a select's |option|, the node in the frame |frames| has at |frame|, through its
+  // accessibility action, as a screen reader does.
+  void ChooseNative(const std::vector<std::string>& frames,
+                    size_t frame,
+                    const base::DictValue& option);
+  // Whether the field in |nodes| shows the option the job chose.
+  bool Shows(const base::ListValue& nodes);
+  void EndChoosing();
   void Type(bool submit);
   void Focus(int64_t element, bool submit);
   void PressKey(const std::string& key, base::OnceClosure then);
+  // Hears the page's requests, then turns the wheel, so the answer waits for what the scroll
+  // starts loading.
   void Scroll(bool down);
+  void TurnWheel(bool down);
+  // Turns the wheel at the middle of |area|, in the viewport's CSS pixels, by most of its height,
+  // then answers with the tree, or that nothing scrolled.
+  void Wheel(const gfx::RectF& area, bool down);
+  void Scrolled(bool down);
+  void ScrollTo();
   void History(bool forward);
   void Screenshot();
 
   // The tree, as bc_agent_page answers it: the main frame's, with each frame agents may see under
   // the element it's in.
   void Snapshot();
+  // The snapshot, from the main frame's tree in |nodes|.
+  void Read(base::ListValue nodes);
   // The frames whose trees a snapshot reads, each after the frame it's in, the main frame first.
   std::vector<Frame> Frames();
   // Reads the tree of each frame from |next| on, then puts each under its frame's element.
@@ -113,9 +180,14 @@ class AgentPage : public content::WebContentsObserver,
                       std::set<int64_t> passwords);
   void Answer(std::string text, bool error);
   void Fail(std::string why);
+  // Gives the answer kept while a download started, as none took its action.
+  void AnswerHeld();
 
-  // Scrolls the job's element into view and gives its box, in the viewport's CSS pixels.
+  // Scrolls the job's element into view and gives its box, in the main frame's viewport's CSS
+  // pixels.
   void Center(Then then);
+  // The same in the viewport of the frame whose session has the element.
+  void Locate(Then then);
   // Moves |box|, in the session at |slot|, into the main frame's viewport, through the elements
   // its frame is in.
   void Offset(int slot, gfx::RectF box, Then then);
@@ -147,12 +219,23 @@ class AgentPage : public content::WebContentsObserver,
 
   // content::WebContentsObserver:
   void DidStopLoading() override;
+  void DidFinishNavigation(content::NavigationHandle* navigation) override;
   void WebContentsDestroyed() override;
 
   const bc_id tab_;
   std::deque<Job> jobs_;
   // The job running, which has yet to answer.
   std::optional<Job> job_;
+  // Whether a download took the job running, so its answer goes nowhere.
+  bool taken_ = false;
+  // An answer kept while a navigation's download starts, as it may take the job (#1446).
+  struct Held {
+    uint64_t request;
+    std::string text;
+    bool error;
+  };
+  std::optional<Held> held_;
+  base::OneShotTimer download_starting_;
   base::OnceClosure loaded_;
   base::OneShotTimer wait_;
   base::OneShotTimer rest_;
@@ -163,8 +246,35 @@ class AgentPage : public content::WebContentsObserver,
   std::vector<Target> targets_;
   // The frames the snapshot running reads.
   std::vector<Frame> frames_;
+  // Whether the job hears of the page's requests, and waits for them to end.
+  bool listening_ = false;
+  bool settling_ = false;
+  // The requests under way that the job heard start, by session and id, and the streams, as an
+  // EventSource's, which never end, so the job doesn't wait for them.
+  std::set<std::string> requests_;
+  std::set<std::string> streams_;
+  // When a request last started or ended, or the job started listening.
+  base::TimeTicks last_request_;
+  Choosing choosing_ = Choosing::kNo;
+  // The options the page had before a SELECT clicked its element, so that those that show after
+  // are the element's, wherever the page puts them.
+  std::set<int64_t> shown_;
+  // The element a SELECT chooses in, and the option it chose, with its name.
+  int64_t field_ = 0;
+  int64_t chosen_ = 0;
+  std::string chosen_name_;
+  // Whether the field shows it, for the answer.
+  bool shows_ = false;
+  // The page's renderer takes accessibility actions only while it serves the accessibility tree,
+  // which a SELECT turns on for its tab until it answers.
+  std::unique_ptr<content::ScopedAccessibilityMode> accessibility_;
+  // Whether the wheel the scroll running turned moved anything.
+  std::unique_ptr<WheelWatch> wheel_;
   // Keeps the page drawing while it's hidden, for the agent's input and screenshots.
   base::ScopedClosureRunner drawing_;
+  // The app link the job running followed, and the app the system opens it in, once it's found.
+  std::optional<GURL> app_link_;
+  std::u16string app_name_;
   base::WeakPtrFactory<AgentPage> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();

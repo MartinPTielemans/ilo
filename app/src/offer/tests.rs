@@ -22,7 +22,9 @@ impl Host for Recorder {
     }
 
     fn answer(&self, tab: u64, answer: Answer, username: &str) {
-        self.0.borrow_mut().push(format!("{answer:?} {tab} {username}"));
+        self.0
+            .borrow_mut()
+            .push(format!("{answer:?} {tab} {username}"));
     }
 }
 
@@ -32,7 +34,10 @@ fn offer(kind: Kind, usernames: &[&str]) -> Offer {
         title: "Save password?".into(),
         site: "127.0.0.1".into(),
         username: usernames[0].to_string().into(),
-        usernames: usernames.iter().map(|username| username.to_string().into()).collect(),
+        usernames: usernames
+            .iter()
+            .map(|username| username.to_string().into())
+            .collect(),
         password_length: 13,
         accept: "Save".into(),
         decline: "No Thanks".into(),
@@ -71,7 +76,14 @@ fn open_over(
 ) -> (WindowHandle<OfferPrompt>, Rc<Recorder>) {
     let host = Rc::new(Recorder::default());
     let window = cx
-        .update(|cx| open(browser, host.clone(), |_| (hsla(0., 0., 0.2, 1.), Default::default()), cx))
+        .update(|cx| {
+            open(
+                browser,
+                host.clone(),
+                |_| (hsla(0., 0., 0.2, 1.), Default::default()),
+                cx,
+            )
+        })
         .expect("no window for the offer");
     cx.update(|cx| tab_shown(browser, tab, cx));
     (window, host)
@@ -114,7 +126,8 @@ impl Prompt {
     }
 
     fn click(&mut self, x: f32, y: f32) {
-        self.cx.simulate_click(point(px(x), px(y)), Modifiers::none());
+        self.cx
+            .simulate_click(point(px(x), px(y)), Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -148,7 +161,10 @@ fn return_saves_the_shown_tabs_offer(cx: &mut TestAppContext) {
 fn the_offer_takes_no_answer_for_good_for_its_first_moment(cx: &mut TestAppContext) {
     let mut prompt = Prompt::new(cx);
     prompt.calls();
-    prompt.cx.cx.update(|cx| changed(1, Some(offer(Kind::Save, &["check@example.test"])), cx));
+    prompt
+        .cx
+        .cx
+        .update(|cx| changed(1, Some(offer(Kind::Save, &["check@example.test"])), cx));
     prompt.cx.run_until_parked();
     assert_eq!(prompt.calls(), ["show"]);
     prompt.keys("enter");
@@ -158,7 +174,10 @@ fn the_offer_takes_no_answer_for_good_for_its_first_moment(cx: &mut TestAppConte
     prompt.click_never();
     assert_eq!(prompt.calls(), ["Never 1 check@example.test", "hide"]);
     // Shown again, as with its tab, it settles again, and escape needn't wait.
-    prompt.cx.cx.update(|cx| changed(1, Some(offer(Kind::Save, &["check@example.test"])), cx));
+    prompt
+        .cx
+        .cx
+        .update(|cx| changed(1, Some(offer(Kind::Save, &["check@example.test"])), cx));
     prompt.cx.run_until_parked();
     prompt.calls();
     prompt.keys("enter");
@@ -174,6 +193,24 @@ fn escape_is_not_now(cx: &mut TestAppContext) {
     prompt.calls();
     prompt.keys("escape");
     assert_eq!(prompt.calls(), ["NotNow 1 check@example.test", "hide"]);
+}
+
+/// Save and Not Now name their keys after their words, and each key named answers as its button
+/// does, so what the offer teaches works. Never has no key to name.
+#[gpui::test]
+fn the_key_each_button_names_answers_as_the_button_does(cx: &mut TestAppContext) {
+    let mut prompt = Prompt::new(cx);
+    assert_eq!(key(Answer::Never), None);
+    for answer in [Answer::Accept, Answer::NotNow] {
+        let named = key(answer).expect("Save and Not Now name their keys");
+        prompt.offered(1, Some(offer(Kind::Save, &["check@example.test"])));
+        prompt.calls();
+        prompt.keys(named);
+        assert_eq!(
+            prompt.calls(),
+            [format!("{answer:?} 1 check@example.test"), "hide".into()]
+        );
+    }
 }
 
 #[gpui::test]
@@ -218,7 +255,9 @@ fn the_picker_puts_the_username_chosen_in_the_field(cx: &mut TestAppContext) {
     prompt.click(WIDTH - INSET - ROW / 2., row_middle);
     let (titles, chosen) = shown.take().expect("the chevron showed no menu");
     assert_eq!(titles, ["check@example.test", "check"]);
-    prompt.cx.update(|window, cx| chosen(1, window, cx));
+    prompt
+        .cx
+        .update(|window, cx| chosen(crate::menu::Closed::Chose(1), window, cx));
     prompt.keys("enter");
     assert_eq!(prompt.calls(), ["Accept 1 check", "hide"]);
 }
@@ -320,13 +359,21 @@ fn the_page_coming_back_brings_its_offer(cx: &mut TestAppContext) {
 fn an_address_or_a_card_saves_with_return_and_declines_with_escape(cx: &mut TestAppContext) {
     let mut prompt = Prompt::new(cx);
     prompt.calls();
-    let address = ["Ada Lovelace", "1 Check Street", "Springfield, IL 62701", "United States"];
+    let address = [
+        "Ada Lovelace",
+        "1 Check Street",
+        "Springfield, IL 62701",
+        "United States",
+    ];
     prompt.offered(1, Some(saving(Kind::Address, &address)));
     assert_eq!(prompt.calls(), ["show"]);
     prompt.type_text("x");
     prompt.keys("enter");
     assert_eq!(prompt.calls(), ["Accept 1 ", "hide"]);
-    prompt.offered(1, Some(saving(Kind::Card, &["Visa ****1111", "Exp: 12/30"])));
+    prompt.offered(
+        1,
+        Some(saving(Kind::Card, &["Visa ****1111", "Exp: 12/30"])),
+    );
     prompt.calls();
     prompt.keys("escape");
     assert_eq!(prompt.calls(), ["NotNow 1 ", "hide"]);

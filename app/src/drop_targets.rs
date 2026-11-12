@@ -1,7 +1,7 @@
 //! The window over the page that draws Add Split View's targets while a tab dragged out of the
-//! sidebar is over it, and the agent's pointer (`Shell::over_page`). As the zoom HUD is, it's a window of its own that
-//! the host shows over the browser window, as its child, and the mouse goes through it, so the
-//! drag goes on in the browser window.
+//! sidebar is over it, the agent's pointer and a new download's flight (`Shell::over_page`). As
+//! the zoom HUD is, it's a window of its own that the host shows over the browser window, as its
+//! child, and the mouse goes through it, so the drag goes on in the browser window.
 
 use std::ffi::c_void;
 
@@ -47,7 +47,9 @@ pub fn open(cx: &mut App) {
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        cx.new(|_| DropTargets { shell: WeakEntity::new_invalid() })
+        cx.new(|_| DropTargets {
+            shell: WeakEntity::new_invalid(),
+        })
     });
     match window {
         Ok(window) => {
@@ -63,7 +65,10 @@ pub fn open(cx: &mut App) {
 /// Shows the targets' window over the browser window whose UI draws in `ui_view`, drawing it
 /// again for the drag's move, or hides it.
 pub fn show(shown: bool, ui_view: *mut c_void, cx: &mut App) {
-    let Some(window) = cx.try_global::<DropTargetsWindow>().map(|targets| targets.0) else {
+    let Some(window) = cx
+        .try_global::<DropTargetsWindow>()
+        .map(|targets| targets.0)
+    else {
         return;
     };
     if shown {

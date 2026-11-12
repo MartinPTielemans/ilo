@@ -5,62 +5,67 @@
 //! connection. GPUI can't draw over the page's native view, so it's a window of its own that the
 //! host shows over the browser window, as its child, with the keyboard, as the command bar is,
 //! over a blur in its shape with a shadow. What it asks of its window and the core goes through
-//! `Host`.
+//! `Host`. Tab and the arrows take a ring over its tiles, rows and footer buttons, and space or
+//! return does what a click on the ringed one does (#1382).
 
-use std::{
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, ClickEvent, Context, FocusHandle, Global, Image, KeyBinding, MouseButton,
     MouseDownEvent, PathBuilder, Pixels, Point, SharedString, Size, Task, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
-    canvas, div, img, linear_color_stop, linear_gradient, point, prelude::*, px, size, svg,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    accesskit::{HasPopup, Role, Toggled},
+    actions, canvas, div, img, linear_color_stop, linear_gradient, point,
+    prelude::*,
+    px, size, svg,
 };
 
 use crate::{
     icon_picker,
     palette::{self, Palette, STATE_HOVERED, STATE_PRESSED},
     passwords::{self, Login},
-    shell::{Command, MenuEntry, cubic_bezier, scaled::scaled},
+    shell::{Command, DeviceKind, MenuEntry, cubic_bezier, scaled::scaled},
+    tokens::shell::{KEYED, KEYED_RING},
     tooltip,
 };
 
-actions!(site_controls, [Close]);
+actions!(
+    site_controls,
+    [Close, NextStop, PreviousStop, StopDown, StopUp, Press]
+);
 
 // Arc 1.170.0 cap, in a dark Space, 1 pt a pixel, except where a comment says ours.
 /// The body's width: a row of four tiles inside the padding.
 pub const WIDTH: f32 = 4. * TILE_WIDTH + 3. * GAP + 2. * PADDING;
-use crate::tokens::site_controls::PADDING;
-use crate::tokens::site_controls::RADIUS;
-use crate::tokens::site_controls::GAP;
-use crate::tokens::site_controls::BEAK;
-use crate::tokens::site_controls::BEAK_TIP_RADIUS;
-use crate::tokens::site_controls::BEAK_FOOT_RADIUS;
-use crate::tokens::site_controls::BELOW_FIELD;
-use crate::tokens::site_controls::WINDOW_MARGIN;
 use crate::elevation::Level;
-use crate::tokens::site_controls::TEXT;
-use crate::tokens::site_controls::SECONDARY;
-use crate::tokens::site_controls::LINK;
-use crate::tokens::site_controls::TILE_WIDTH;
-use crate::tokens::site_controls::TILE_HEIGHT;
-use crate::tokens::site_controls::TILE_RADIUS;
-use crate::tokens::site_controls::TILE_TOP;
-use crate::tokens::site_controls::TILE_BOTTOM;
-use crate::tokens::site_controls::TILE_HIGHLIGHT;
-use crate::tokens::site_controls::PLATE;
-use crate::tokens::site_controls::EXTENSION_ICON;
 use crate::tokens::shell::extensions::ACTION_DIMMED;
-use crate::tokens::site_controls::PLUS_GLYPH;
+use crate::tokens::site_controls::BEAK;
+use crate::tokens::site_controls::BEAK_FOOT_RADIUS;
+use crate::tokens::site_controls::BEAK_TIP_RADIUS;
+use crate::tokens::site_controls::BELOW_FIELD;
+use crate::tokens::site_controls::CIRCLE;
+use crate::tokens::site_controls::EXTENSION_ICON;
+use crate::tokens::site_controls::GAP;
 use crate::tokens::site_controls::HEADING_SIZE;
+use crate::tokens::site_controls::LINK;
 use crate::tokens::site_controls::LINK_SIZE;
 use crate::tokens::site_controls::NAME_SIZE;
-use crate::tokens::site_controls::STATE_SIZE;
-use crate::tokens::site_controls::CIRCLE;
+use crate::tokens::site_controls::PADDING;
+use crate::tokens::site_controls::PLATE;
+use crate::tokens::site_controls::PLUS_GLYPH;
+use crate::tokens::site_controls::RADIUS;
 use crate::tokens::site_controls::ROW_PITCH;
+use crate::tokens::site_controls::SECONDARY;
+use crate::tokens::site_controls::STATE_SIZE;
+use crate::tokens::site_controls::TEXT;
+use crate::tokens::site_controls::TILE_BOTTOM;
+use crate::tokens::site_controls::TILE_HEIGHT;
+use crate::tokens::site_controls::TILE_HIGHLIGHT;
+use crate::tokens::site_controls::TILE_RADIUS;
+use crate::tokens::site_controls::TILE_TOP;
+use crate::tokens::site_controls::TILE_WIDTH;
+use crate::tokens::site_controls::WINDOW_MARGIN;
 /// The text's left edge, past the circle.
 const ROW_TEXT: f32 = PADDING + CIRCLE + 8.;
 use crate::tokens::site_controls::OFF;
@@ -80,20 +85,25 @@ const PASSWORDS: &str = "icons/key-round.svg";
 /// Ours: Developer Mode's row, as Arc's panel's isn't recorded, and its command's in the bar.
 const DEVELOPER_MODE: &str = "icons/square-code.svg";
 const DEVELOPER_MODE_NAME: &str = "Developer Mode";
+/// The site's Boost (#695), with the tile's glyph.
+const BOOST: &str = "icons/paintbrush.svg";
+const BOOST_NAME: &str = "Boost";
 const PASSWORDS_NAME: &str = "Passwords";
-use crate::tokens::site_controls::MANAGED_OPACITY;
+use crate::tokens::site_controls::DISABLED_OPACITY;
 use crate::tokens::site_controls::DIVIDER;
 use crate::tokens::site_controls::FOOTER;
-use crate::tokens::site_controls::LOCK_RADIUS;
-use crate::tokens::site_controls::LOCK_LEFT;
-use crate::tokens::site_controls::LOCK_SLOT;
-use crate::tokens::site_controls::LOCK_GLYPH;
-use crate::tokens::site_controls::LOCK_TEXT_GAP;
-use crate::tokens::site_controls::LOCK_RIGHT;
 use crate::tokens::site_controls::LOCK_CAP;
-use crate::tokens::site_controls::DISABLED_OPACITY;
+use crate::tokens::site_controls::LOCK_GLYPH;
+use crate::tokens::site_controls::LOCK_LEFT;
+use crate::tokens::site_controls::LOCK_RADIUS;
+use crate::tokens::site_controls::LOCK_RIGHT;
+use crate::tokens::site_controls::LOCK_SLOT;
+use crate::tokens::site_controls::LOCK_TEXT_GAP;
+use crate::tokens::site_controls::MANAGED_OPACITY;
 use crate::tokens::site_controls::MORE_FILL;
 use crate::tokens::site_controls::MORE_GLYPH;
+use crate::tokens::site_controls::{PROFILE_CHEVRON, PROFILE_CHEVRON_GAP, PROFILE_NAME_MIN};
+use crate::tooltip::text_width;
 // Down the body, each from the top of what's above it.
 const HEADING_CAP: f32 = TILE_HEIGHT + 14.;
 use crate::tokens::site_controls::HEADING_TO_TILES;
@@ -104,14 +114,16 @@ use crate::tokens::site_controls::DIVIDER_TO_FOOTER;
 /// Ours: the extensions' rows are as far apart as their tiles.
 const EXTENSIONS_PER_ROW: usize = 4;
 use crate::tokens::site_controls::ASCENT;
-use crate::tokens::site_controls::DESCENT;
 use crate::tokens::site_controls::CAP;
+use crate::tokens::site_controls::DESCENT;
 use crate::tokens::site_controls::LINE;
 /// Ours, as before: it opens in 0.15 s and closes in 0.1 s, growing from the beak's tip and
 /// shrinking back into it, from and to this much of its size, as it fades.
 const OPEN: f32 = 0.15;
 const CLOSE: f32 = 0.1;
 const FROM_SCALE: f32 = 0.9;
+/// The keyboard's ring is this far outside a row's circle, as round a theme's swatch.
+const RING_GAP: f32 = 1.;
 
 /// A value of a site's permission, in Chrome's page info's words.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -149,6 +161,19 @@ pub struct Permission {
     pub choices: Vec<Value>,
 }
 
+/// A device the site was given, as Chrome's page info lists it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Device {
+    /// Chrome's name for it, such as "Arduino Uno".
+    pub name: SharedString,
+    /// Chrome's words for what it is, such as "Serial port".
+    pub kind: SharedString,
+    /// What it is, for its glyph.
+    pub glyph: DeviceKind,
+    /// Its Remove takes it away; not for one a policy gave.
+    pub removable: bool,
+}
+
 /// What the connection to the page is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Connection {
@@ -178,6 +203,8 @@ pub struct Site {
     pub system_engine: Option<bool>,
     /// The logins the profile keeps for the site, and Never if it's set to it.
     pub logins: Vec<Login>,
+    /// The devices the site was given, after the permissions, each with Remove (#1649).
+    pub devices: Vec<Device>,
     /// Whether ads and trackers are blocked on the site, none where that isn't the user's to change
     /// there: a page that isn't http(s), one Safari's engine shows, a private window, or with
     /// blocking off in Settings.
@@ -185,6 +212,11 @@ pub struct Site {
     /// Whether the site's tabs show in Developer Mode, none where that isn't the user's to change:
     /// a page that isn't http(s), or a private window.
     pub developer_mode: Option<bool>,
+    /// The page can have a Boost (#695): an http(s) page in a regular window, outside an agent's
+    /// Space, with Settings' Boosts on. The Boost tile and the "…" menu's Boost items show then.
+    pub boostable: bool,
+    /// Whether the site's Boost is on, none where it has none.
+    pub boost: Option<bool>,
 }
 
 /// A turned-on extension, as its action is for the tab's page.
@@ -232,19 +264,22 @@ impl ExtensionItem {
 
     /// Whether the panel stays to show the grid it changes; the others close it for what they open.
     fn stays(self) -> bool {
-        matches!(self, ExtensionItem::MoveToTop | ExtensionItem::Pin | ExtensionItem::Unpin)
+        matches!(
+            self,
+            ExtensionItem::MoveToTop | ExtensionItem::Pin | ExtensionItem::Unpin
+        )
     }
 }
 
 /// The menu of the extension at `index` in the grid: Move to Top, which the first tile has done,
 /// then the pinned action's items, with Pin for an unpinned one.
-fn extension_items(
-    extension: &Extension,
-    index: usize,
-) -> Vec<(MenuEntry, Option<ExtensionItem>)> {
+fn extension_items(extension: &Extension, index: usize) -> Vec<(MenuEntry, Option<ExtensionItem>)> {
     let item = |title: &'static str, run: ExtensionItem| (MenuEntry::new(title, true), Some(run));
     let mut items = vec![
-        (MenuEntry::new("Move to Top", index > 0), Some(ExtensionItem::MoveToTop)),
+        (
+            MenuEntry::new("Move to Top", index > 0),
+            Some(ExtensionItem::MoveToTop),
+        ),
         (MenuEntry::line(), None),
         match extension.pinned {
             true => item("Unpin", ExtensionItem::Unpin),
@@ -255,7 +290,10 @@ fn extension_items(
         items.push(item("Options", ExtensionItem::Options));
     }
     if extension.removable {
-        items.push((MenuEntry::new("Remove", true).destructive(), Some(ExtensionItem::Remove)));
+        items.push((
+            MenuEntry::new("Remove", true).destructive(),
+            Some(ExtensionItem::Remove),
+        ));
     }
     items.push(item("Manage Extension", ExtensionItem::Manage));
     items
@@ -265,7 +303,10 @@ fn extension_items(
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Place {
     /// Its button in the URL field: the beak at the button's middle, the body under the field.
-    Button { field: Bounds<Pixels>, button: Bounds<Pixels> },
+    Button {
+        field: Bounds<Pixels>,
+        button: Bounds<Pixels>,
+    },
     /// With the sidebar hidden, the page's top left corner, without a beak.
     Corner(Point<Pixels>),
 }
@@ -290,10 +331,23 @@ pub enum Run {
     Passwords,
     /// An item of the extension's tile's menu.
     ExtensionItem(SharedString, ExtensionItem),
+    /// The page in a Space of the profile, as a link from another app lands (#2339).
+    OpenInProfile(u64),
+    /// New Space's form, its Space in the profile, for one none of the user's Spaces is in.
+    NewSpaceInProfile(u64),
 }
 
-/// An action tile. Arc's row is Share, Boost, Capture a portion and Capture the full page; the
-/// ones the browser doesn't have aren't here, and one is a line in TILES. Boost comes with Boosts.
+/// The tab's profile and the user's others, for the footer's chip, while there's more than one
+/// (#2339). A private window has none, as its session shares none of the profile's logins.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profiles {
+    pub name: SharedString,
+    /// Each other profile: its id, its name, and whether one of the user's Spaces is in it.
+    pub others: Vec<(u64, SharedString, bool)>,
+}
+
+/// An action tile. Arc's row is Share, Boost, Capture a portion and Capture the full page, each a
+/// line in TILES.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tile {
     /// For the logs.
@@ -312,8 +366,8 @@ pub enum TileRun {
     Command(Command),
 }
 
-/// Arc's order, without Boost. The captures' glyphs are Lucide's frame and page, *interim*: Arc's
-/// aren't recorded.
+/// Arc's order. The captures' glyphs are Lucide's frame and page and Boost's its paintbrush,
+/// *interim*: Arc's aren't recorded.
 pub const TILES: &[Tile] = &[
     Tile {
         name: "share",
@@ -321,6 +375,14 @@ pub const TILES: &[Tile] = &[
         glyph: "icons/share.svg",
         glyph_size: 19.5,
         run: TileRun::Share,
+    },
+    // New Boost or Edit Boost, as the site has one: either opens its card.
+    Tile {
+        name: "boost",
+        label: "Boost",
+        glyph: "icons/paintbrush.svg",
+        glyph_size: 19.5,
+        run: TileRun::Command(Command::NewBoost),
     },
     Tile {
         name: "capture",
@@ -389,7 +451,9 @@ pub fn site_settings_url(url: &str) -> Option<String> {
         return None;
     }
     let authority = rest.split(['/', '?', '#']).next()?;
-    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     if host.is_empty() {
         return None;
     }
@@ -428,6 +492,8 @@ pub trait Host {
     fn set_permission(&self, tab: u64, kind: i32, value: Value);
     /// Sets the site's permissions back to their defaults. The user's, as above.
     fn reset_permissions(&self, tab: u64);
+    /// Takes the site's device at `index` away from it.
+    fn remove_device(&self, tab: u64, index: usize);
     /// Has the profile keep the site for Safari's engine or not, and the tab show its page there or
     /// in Chromium. The user's, as above.
     fn set_system_engine(&self, tab: u64, on: bool);
@@ -439,6 +505,9 @@ pub trait Host {
     /// Turns Developer Mode on or off for the site, in the tab's profile. The user's view: agents
     /// get none.
     fn set_developer_mode(&self, tab: u64, on: bool);
+    /// Turns the site's Boost on or off there, in the tab's profile. The user's alone, as a Boost
+    /// is.
+    fn set_boost(&self, tab: u64, on: bool);
     fn run(&self, run: Run, tab: u64, cx: &mut App);
     /// Shows ilo's menu of `items` at `position` in the panel's window, and calls `chosen` once it
     /// closes, with the index of the one chosen, if any.
@@ -473,6 +542,7 @@ struct Open {
     /// The browser window's size, which tooltips stay inside.
     window: Size<Pixels>,
     extensions: Vec<Extension>,
+    profiles: Option<Profiles>,
     /// The grid's order as it last drew, by id.
     drawn: Vec<SharedString>,
     /// None until the core first reports, which is when it shows.
@@ -483,6 +553,8 @@ struct Open {
     tip: Option<SharedString>,
     /// When its window was first on screen, where the motion starts.
     shown: Option<Instant>,
+    /// What the keyboard's ring is on, from the first Tab or arrow until a press.
+    keyed: Option<Stop>,
     settled: bool,
     /// Once it's closing: when, and how far it had opened.
     closing: Option<(Instant, f32)>,
@@ -506,7 +578,9 @@ impl Open {
 
     fn moving(&self) -> bool {
         self.closing.is_some()
-            || self.shown.is_none_or(|shown| shown.elapsed().as_secs_f32() < OPEN)
+            || self
+                .shown
+                .is_none_or(|shown| shown.elapsed().as_secs_f32() < OPEN)
     }
 
     /// Where it grows from in its window: the beak's tip, else its top left.
@@ -518,6 +592,29 @@ impl Open {
     fn in_window(&self, frame: Bounds<Pixels>) -> Bounds<Pixels> {
         Bounds::new(self.at + frame.origin, frame.size)
     }
+}
+
+/// What the keyboard's ring can be on, down the panel: the tiles, the extensions' tiles and +, the
+/// Settings rows a click changes, the lock button while it shows a certificate, and "…". The
+/// headings' links, there only under the pointer, are the "…" menu's items too.
+#[derive(Clone, PartialEq, Debug)]
+enum Stop {
+    Tile(&'static str),
+    Extension(SharedString),
+    AddExtension,
+    Engine,
+    AdBlocking,
+    DeveloperMode,
+    Boost,
+    Passwords,
+    /// By Chrome's ContentSettingsType.
+    Permission(i32),
+    /// By its place among the site's devices.
+    Device(usize),
+    Reset,
+    Lock,
+    Profile,
+    More,
 }
 
 /// Where each part of the panel goes, down its window.
@@ -551,7 +648,11 @@ fn layout(site: &Site, extensions: usize, beak: bool) -> Layout {
         rows => {
             let cap = grid_bottom - TILE_HEIGHT + TILES_TO_HEADING;
             let first = cap + HEADING_TO_ROWS;
-            (Some(cap), first, first + (rows - 1) as f32 * ROW_PITCH + ROWS_TO_DIVIDER)
+            (
+                Some(cap),
+                first,
+                first + (rows - 1) as f32 * ROW_PITCH + ROWS_TO_DIVIDER,
+            )
         }
     };
     let footer = divider + DIVIDER_TO_FOOTER;
@@ -568,21 +669,27 @@ fn layout(site: &Site, extensions: usize, beak: bool) -> Layout {
     }
 }
 
-/// The Settings heading's rows: Safari's engine, ad blocking, Developer Mode, Passwords, the
-/// permissions, then Reset.
+/// The Settings heading's rows: Safari's engine, ad blocking, Developer Mode, the Boost,
+/// Passwords, the permissions, the devices, then Reset.
 fn rows(site: &Site) -> usize {
     let firsts = site.system_engine.is_some() as usize
         + site.ad_blocking.is_some() as usize
-        + site.developer_mode.is_some() as usize;
+        + site.developer_mode.is_some() as usize
+        + site.boost.is_some() as usize;
     let logins = passwords::state(&site.logins).is_some() as usize;
-    firsts + logins + site.permissions.len() + site.reset.is_some() as usize
+    firsts + logins + site.permissions.len() + site.devices.len() + site.reset.is_some() as usize
 }
 
 /// The panel's corners in its window, clockwise from the beak's tip, or its top left without one.
 fn corners(beak: Option<f32>, height: f32) -> Vec<(f32, f32, f32)> {
     let Some(tip) = beak else {
         let corner = |x: f32, y: f32| (x, y, RADIUS);
-        return vec![corner(0., 0.), corner(WIDTH, 0.), corner(WIDTH, height), corner(0., height)];
+        return vec![
+            corner(0., 0.),
+            corner(WIDTH, 0.),
+            corner(WIDTH, height),
+            corner(0., height),
+        ];
     };
     vec![
         (tip, 0., BEAK_TIP_RADIUS),
@@ -621,6 +728,8 @@ pub struct SiteControls {
     host: Rc<dyn Host>,
     focus: FocusHandle,
     open: Option<Open>,
+    /// An assistive app asks for the tree, so the panel names what it draws.
+    a11y: bool,
 }
 
 struct SiteControlsWindow(WindowHandle<SiteControls>);
@@ -641,7 +750,16 @@ pub fn open_at(
     show: bool,
     cx: &mut App,
 ) -> Option<WindowHandle<SiteControls>> {
-    cx.bind_keys([KeyBinding::new("escape", Close, Some("SiteControls"))]);
+    let context = Some("SiteControls");
+    cx.bind_keys([
+        KeyBinding::new("escape", Close, context),
+        KeyBinding::new("tab", NextStop, context),
+        KeyBinding::new("shift-tab", PreviousStop, context),
+        KeyBinding::new("down", StopDown, context),
+        KeyBinding::new("up", StopUp, context),
+        KeyBinding::new("space", Press, context),
+        KeyBinding::new("enter", Press, context),
+    ]);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -660,7 +778,12 @@ pub fn open_at(
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        cx.new(|cx| SiteControls { host, focus: cx.focus_handle(), open: None })
+        cx.new(|cx| SiteControls {
+            host,
+            focus: cx.focus_handle(),
+            open: None,
+            a11y: false,
+        })
     });
     match window {
         Ok(window) => {
@@ -691,10 +814,16 @@ pub fn show(
     place: Place,
     window: Size<Pixels>,
     extensions: Vec<Extension>,
+    profiles: Option<Profiles>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<SiteControls>(cx);
     update(cx, |panel, _, cx| {
-        if panel.open.as_ref().is_some_and(|open| open.closing.is_none()) {
+        if panel
+            .open
+            .as_ref()
+            .is_some_and(|open| open.closing.is_none())
+        {
             return panel.close("toggle", cx);
         }
         let (at, beak) = placed(place, window);
@@ -705,12 +834,14 @@ pub fn show(
             beak,
             window,
             extensions,
+            profiles,
             drawn: Vec::new(),
             site: None,
             height: 0.,
             hovered: None,
             tip: None,
             shown: None,
+            keyed: None,
             settled: false,
             closing: None,
             _leave: None,
@@ -736,7 +867,9 @@ pub fn changed(tab: u64, site: Site, cx: &mut App) {
         if first {
             open.height = height;
             window.focus(&panel.focus, cx);
-            panel.host.show(open.at, size(px(WIDTH), px(height)), &shape);
+            panel
+                .host
+                .show(open.at, size(px(WIDTH), px(height)), &shape);
         } else if height != open.height {
             open.height = height;
             panel.host.set_height(height, &shape);
@@ -754,7 +887,10 @@ pub fn set_extensions(tab: u64, extensions: Vec<Extension>, cx: &mut App) {
             return;
         };
         let ids = |extensions: &[Extension]| -> Vec<SharedString> {
-            extensions.iter().map(|extension| extension.id.clone()).collect()
+            extensions
+                .iter()
+                .map(|extension| extension.id.clone())
+                .collect()
         };
         if ids(&extensions) != ids(&open.extensions) {
             log_extensions(&extensions);
@@ -773,7 +909,10 @@ pub fn set_extensions(tab: u64, extensions: Vec<Extension>, cx: &mut App) {
 
 /// The extensions' grid for the log, by id.
 fn log_extensions(extensions: &[Extension]) {
-    let ids: Vec<&str> = extensions.iter().map(|extension| extension.id.as_ref()).collect();
+    let ids: Vec<&str> = extensions
+        .iter()
+        .map(|extension| extension.id.as_ref())
+        .collect();
     // check.sh reads this line.
     log!("browser: site controls extensions {}", ids.join(" "));
 }
@@ -808,10 +947,14 @@ fn describe(site: &Site) -> String {
         )
         .collect();
     format!(
-        "{}: {}; {}{}{}",
+        "{}: {}; {}{}{}{}",
         site.site,
         site.connection_summary,
-        if permissions.is_empty() { "no permissions".into() } else { permissions.join(", ") },
+        if permissions.is_empty() {
+            "no permissions".into()
+        } else {
+            permissions.join(", ")
+        },
         match site.system_engine {
             Some(on) => format!("; {ENGINE_NAME} {}", if on { "on" } else { "off" }),
             None => String::new(),
@@ -819,8 +962,30 @@ fn describe(site: &Site) -> String {
         match site.logins.is_empty() {
             true => String::new(),
             false => format!("; passwords {}", passwords::describe(&site.logins)),
+        },
+        match site.devices.is_empty() {
+            true => String::new(),
+            false => {
+                let devices: Vec<String> = (site.devices.iter())
+                    .map(|device| format!("{} ({})", device.name, device.kind))
+                    .collect();
+                format!("; devices {}", devices.join(", "))
+            }
         }
     )
+}
+
+/// The profile chip's right edge, a gap before "…" (#2339), where it stays whatever the lock says.
+const PROFILE_RIGHT: f32 = WIDTH - PADDING - FOOTER - GAP;
+/// The chip as its glyph and chevron alone.
+const PROFILE_ALONE: f32 =
+    LOCK_LEFT + LOCK_SLOT + PROFILE_CHEVRON_GAP + PROFILE_CHEVRON + LOCK_RIGHT;
+
+/// Whether the lock is its glyph alone, a square like "…": a secure connection's beside the
+/// profile's chip, so the name has the room. A page that isn't secure keeps its words, as that
+/// warning matters more than the profile, and the chip gives way to its glyph instead.
+fn lock_alone(site: &Site, profiles: Option<&Profiles>) -> bool {
+    profiles.is_some() && matches!(site.connection, Connection::Secure)
 }
 
 /// The lock button's words: Chrome's short ones for the connection, the page's own for a file or
@@ -833,19 +998,78 @@ fn lock_label(site: &Site) -> SharedString {
     }
 }
 
-/// The "…" menu: Arc's, without Boost's items.
-fn more_items() -> Vec<(MenuEntry, Option<Run>)> {
+/// The "…" menu: Arc's, its Boost items where the page can have one.
+fn more_items(site: &Site) -> Vec<(MenuEntry, Option<Run>)> {
     let item = |title: &'static str, run: Run| (MenuEntry::new(title, true), Some(run));
-    vec![
+    let mut items = vec![
         item("Clear Cache", Run::Command(Command::ClearCacheAndRefresh)),
-        item("Clear Cookies", Run::Command(Command::ClearCookiesAndRefresh)),
+        item(
+            "Clear Cookies",
+            Run::Command(Command::ClearCookiesAndRefresh),
+        ),
+    ];
+    if site.boostable {
+        let boost = match site.boost {
+            Some(_) => item("Edit Boost…", Run::Command(Command::EditBoost)),
+            None => item("New Boost…", Run::Command(Command::NewBoost)),
+        };
+        items.extend([
+            (MenuEntry::line(), None),
+            boost,
+            item("View Boosts…", Run::Command(Command::ViewBoosts)),
+        ]);
+    }
+    items.extend([
         (MenuEntry::line(), None),
-        item("Manage Extensions…", Run::Command(Command::ManageExtensions)),
+        item(
+            "Manage Extensions…",
+            Run::Command(Command::ManageExtensions),
+        ),
         // The browser has no add path of its own: Chrome's extensions page links its store.
         item("Add Extension…", Run::Command(Command::ManageExtensions)),
         (MenuEntry::line(), None),
         item("All Site Settings…", Run::SiteSettings),
-    ]
+    ]);
+    items
+}
+
+/// What an assistive app reads of a control: a button called `name`, which says it opens a menu
+/// with `menu` and is dimmed without `enabled`, and whose right-click menu it lists with
+/// `context_menu`.
+fn button_named<E: StatefulInteractiveElement>(
+    element: E,
+    name: impl Into<SharedString>,
+    (menu, enabled, context_menu): (bool, bool, bool),
+) -> E {
+    element
+        .role(Role::Button)
+        .aria_label(name)
+        .a11y_synthetic_children(move |builder| {
+            let node = builder.parent_node();
+            if menu {
+                node.set_has_popup(HasPopup::Menu);
+            }
+            if !enabled {
+                node.set_disabled();
+            }
+            if context_menu {
+                node.add_action(gpui::accesskit::Action::ShowContextMenu);
+            }
+        })
+}
+
+/// A Settings row that turns its setting on or off, read as a switch called `name`.
+fn switch_named<E: StatefulInteractiveElement>(element: E, name: &'static str, on: bool) -> E {
+    let toggled = if on { Toggled::True } else { Toggled::False };
+    element
+        .role(Role::Switch)
+        .aria_label(name)
+        .aria_toggled(toggled)
+}
+
+/// A row's name and its state, as VoiceOver reads a tab's row: "Location, Ask".
+fn said(name: &str, state: &str) -> String {
+    format!("{name}, {state}")
 }
 
 impl SiteControls {
@@ -862,11 +1086,17 @@ impl SiteControls {
         // check.sh reads this line.
         log!("browser: site controls closing ({why})");
         open._leave = Some(cx.spawn(async move |panel, cx| {
-            cx.background_executor().timer(Duration::from_secs_f32(CLOSE)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(CLOSE))
+                .await;
             panel
                 .update(cx, |panel, cx| {
                     // Unless it opened again meanwhile.
-                    if panel.open.as_ref().is_some_and(|open| open.closing.is_some()) {
+                    if panel
+                        .open
+                        .as_ref()
+                        .is_some_and(|open| open.closing.is_some())
+                    {
                         panel.open = None;
                         panel.host.hide();
                         cx.notify();
@@ -880,7 +1110,11 @@ impl SiteControls {
     /// Closes the panel, then has the host do `run`, so what it opens gets the keyboard from the
     /// browser window.
     fn run(&mut self, name: &str, run: Run, cx: &mut Context<Self>) {
-        let Some(tab) = self.open.as_ref().filter(|open| open.closing.is_none()).map(|o| o.tab)
+        let Some(tab) = self
+            .open
+            .as_ref()
+            .filter(|open| open.closing.is_none())
+            .map(|o| o.tab)
         else {
             return;
         };
@@ -890,12 +1124,19 @@ impl SiteControls {
         self.host.run(run, tab, cx);
     }
 
-    fn run_tile(&mut self, tile: Tile, frame: Bounds<Pixels>, cx: &mut Context<Self>) {
+    /// Runs `tile`. ⌥ on Capture Full Page captures in Portrait Mode on the background kept, as
+    /// Arc's ⌥-click on its Portrait Mode skips the panel.
+    fn run_tile(&mut self, tile: Tile, frame: Bounds<Pixels>, alt: bool, cx: &mut Context<Self>) {
         let Some(open) = self.open.as_ref() else {
             return;
         };
+        let boosted = open.site.as_ref().is_some_and(|site| site.boost.is_some());
         let run = match tile.run {
             TileRun::Share => Run::Share(open.in_window(frame)),
+            TileRun::Command(Command::NewBoost) if boosted => Run::Command(Command::EditBoost),
+            TileRun::Command(Command::CaptureFullPage) if alt => {
+                Run::Command(Command::CapturePortraitNow)
+            }
             TileRun::Command(command) => Run::Command(command),
         };
         self.run(tile.name, run, cx);
@@ -929,7 +1170,11 @@ impl SiteControls {
                     let still = open.is_some_and(|open| open.tab == tab && open.closing.is_none());
                     if still && value != permission.value {
                         // check.sh reads this line.
-                        log!("browser: site controls set {} {}", permission.name, value.label());
+                        log!(
+                            "browser: site controls set {} {}",
+                            permission.name,
+                            value.label()
+                        );
                         panel.host.set_permission(tab, permission.kind, value);
                     }
                 })
@@ -938,9 +1183,81 @@ impl SiteControls {
         self.host.menu(items, position, chosen, cx);
     }
 
+    /// Shows the device's menu at `position`: Remove, which takes it away from the site.
+    fn choose_device(
+        &mut self,
+        index: usize,
+        device: Device,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.open.as_ref().map(|open| open.tab) else {
+            return;
+        };
+        let panel = cx.weak_entity();
+        let chosen = Box::new(move |chosen: Option<usize>, cx: &mut App| {
+            if chosen != Some(0) {
+                return;
+            }
+            panel
+                .update(cx, |panel, _| {
+                    let open = panel.open.as_ref();
+                    let still = open.is_some_and(|open| {
+                        open.tab == tab
+                            && open.closing.is_none()
+                            && (open.site.as_ref())
+                                .is_some_and(|site| site.devices.get(index) == Some(&device))
+                    });
+                    if still {
+                        // check.sh reads this line.
+                        log!("browser: site controls remove device {}", device.name);
+                        panel.host.remove_device(tab, index);
+                    }
+                })
+                .ok();
+        });
+        self.host
+            .menu(vec![MenuEntry::new("Remove", true)], position, chosen, cx);
+    }
+
+    /// Shows the profile chip's menu at `position`: this page in each other profile, or New Space
+    /// in one none of the user's Spaces is in, and runs the item chosen.
+    fn profiles(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(profiles) = self.open.as_ref().and_then(|open| open.profiles.clone()) else {
+            return;
+        };
+        let (items, runs): (Vec<MenuEntry>, Vec<Run>) = (profiles.others.iter())
+            .map(|(id, name, has_space)| match has_space {
+                true => (
+                    MenuEntry::named(format!("Open in {name}"), true),
+                    Run::OpenInProfile(*id),
+                ),
+                false => (
+                    MenuEntry::named(format!("New Space in {name}…"), true),
+                    Run::NewSpaceInProfile(*id),
+                ),
+            })
+            .unzip();
+        let titles: Vec<SharedString> = items.iter().map(|item| item.title.clone()).collect();
+        let panel = cx.weak_entity();
+        let chosen = Box::new(move |index: Option<usize>, cx: &mut App| {
+            let Some((run, name)) =
+                index.and_then(|index| Some((runs.get(index)?.clone(), titles[index].to_string())))
+            else {
+                return;
+            };
+            panel.update(cx, |panel, cx| panel.run(&name, run, cx)).ok();
+        });
+        self.host.menu(items, position, chosen, cx);
+    }
+
     /// Shows the "…" menu at `position`, and runs the item chosen.
     fn more(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let (items, runs): (Vec<MenuEntry>, Vec<Option<Run>>) = more_items().into_iter().unzip();
+        let Some(site) = self.open.as_ref().and_then(|open| open.site.as_ref()) else {
+            return;
+        };
+        let (items, runs): (Vec<MenuEntry>, Vec<Option<Run>>) =
+            more_items(site).into_iter().unzip();
         let titles: Vec<SharedString> = items.iter().map(|item| item.title.clone()).collect();
         let panel = cx.weak_entity();
         let chosen = Box::new(move |index: Option<usize>, cx: &mut App| {
@@ -963,8 +1280,14 @@ impl SiteControls {
             return;
         };
         let items = [
-            MenuEntry { checked: on, ..MenuEntry::new("On", true) },
-            MenuEntry { checked: !on, ..MenuEntry::new("Off", true) },
+            MenuEntry {
+                checked: on,
+                ..MenuEntry::new("On", true)
+            },
+            MenuEntry {
+                checked: !on,
+                ..MenuEntry::new("Off", true)
+            },
         ];
         let panel = cx.weak_entity();
         let chosen = Box::new(move |chosen: Option<usize>, cx: &mut App| {
@@ -1074,7 +1397,10 @@ impl SiteControls {
     fn toggle_ad_blocking(&mut self, on: bool, cx: &mut Context<Self>) {
         if let Some(open) = self.open.as_ref().filter(|open| open.closing.is_none()) {
             // check.sh reads this line.
-            log!("browser: site controls set ad blocking {}", if on { "on" } else { "off" });
+            log!(
+                "browser: site controls set ad blocking {}",
+                if on { "on" } else { "off" }
+            );
             self.host.set_ad_blocking(open.tab, on);
             cx.notify();
         }
@@ -1085,10 +1411,31 @@ impl SiteControls {
     fn toggle_developer_mode(&mut self, on: bool, cx: &mut Context<Self>) {
         if let Some(open) = self.open.as_ref().filter(|open| open.closing.is_none()) {
             // check.sh reads this line.
-            log!("browser: site controls set developer mode {}", if on { "on" } else { "off" });
+            log!(
+                "browser: site controls set developer mode {}",
+                if on { "on" } else { "off" }
+            );
             self.host.set_developer_mode(open.tab, on);
             cx.notify();
         }
+    }
+
+    /// Turns the site's Boost the other way. The app keeps it, not the core, so the row shows it at
+    /// once.
+    fn toggle_boost(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(open) = self.open.as_mut().filter(|open| open.closing.is_none()) else {
+            return;
+        };
+        let Some(site) = open.site.as_mut().filter(|site| site.boost.is_some()) else {
+            return;
+        };
+        log!(
+            "browser: site controls set boost {}",
+            if on { "on" } else { "off" }
+        );
+        site.boost = Some(on);
+        self.host.set_boost(open.tab, on);
+        cx.notify();
     }
 
     fn reset(&mut self, cx: &mut Context<Self>) {
@@ -1125,6 +1472,245 @@ impl SiteControls {
         }
     }
 
+    /// The stops the keyboard goes over, in their order down the panel, each with its frame in the
+    /// panel's window, which a menu hangs from: the circle's for a row.
+    fn stops(&self) -> Vec<(Stop, Bounds<Pixels>)> {
+        let Some(open) = self.open.as_ref().filter(|open| open.closing.is_none()) else {
+            return Vec::new();
+        };
+        let Some(site) = open.site.as_ref() else {
+            return Vec::new();
+        };
+        let at = layout(site, open.extensions.len(), open.beak.is_some());
+        let tiles = self.tiles(site).into_iter().enumerate();
+        let mut stops: Vec<(Stop, Bounds<Pixels>)> = tiles
+            .map(|(index, tile)| {
+                let x = PADDING + index as f32 * (TILE_WIDTH + GAP);
+                (Stop::Tile(tile.name), Self::tile_frame(x, at.tiles))
+            })
+            .collect();
+        let extension = |index: usize| {
+            let (column, line) = (index % EXTENSIONS_PER_ROW, index / EXTENSIONS_PER_ROW);
+            let x = PADDING + column as f32 * (TILE_WIDTH + GAP);
+            Self::tile_frame(x, at.extensions + line as f32 * (TILE_HEIGHT + GAP))
+        };
+        for (index, each) in open.extensions.iter().enumerate() {
+            stops.push((Stop::Extension(each.id.clone()), extension(index)));
+        }
+        stops.push((Stop::AddExtension, extension(open.extensions.len())));
+        // The rows in render's order, a managed permission's taking its place without a stop.
+        let rows = [
+            site.system_engine.map(|_| Some(Stop::Engine)),
+            site.ad_blocking.map(|_| Some(Stop::AdBlocking)),
+            site.developer_mode.map(|_| Some(Stop::DeveloperMode)),
+            site.boost.map(|_| Some(Stop::Boost)),
+            passwords::state(&site.logins).map(|_| Some(Stop::Passwords)),
+        ];
+        let permissions = (site.permissions.iter())
+            .map(|each| Some((!each.choices.is_empty()).then_some(Stop::Permission(each.kind))));
+        let devices = (site.devices.iter().enumerate())
+            .map(|(index, each)| each.removable.then_some(Stop::Device(index)));
+        let reset = site.reset.as_ref().map(|_| Some(Stop::Reset));
+        let rows = rows
+            .into_iter()
+            .flatten()
+            .chain(permissions.flatten())
+            .chain(devices)
+            .chain(reset);
+        for (index, stop) in rows.enumerate() {
+            let y = at.rows + index as f32 * ROW_PITCH;
+            let circle = Bounds::new(point(px(PADDING), px(y)), size(px(CIRCLE), px(CIRCLE)));
+            stops.extend(stop.map(|stop| (stop, circle)));
+        }
+        let footer =
+            |x: f32| Bounds::new(point(px(x), px(at.footer)), size(px(FOOTER), px(FOOTER)));
+        if site.certificate {
+            stops.push((Stop::Lock, footer(PADDING)));
+        }
+        if open.profiles.is_some() {
+            stops.push((Stop::Profile, footer(PROFILE_RIGHT - FOOTER)));
+        }
+        stops.push((Stop::More, footer(WIDTH - PADDING - FOOTER)));
+        stops
+    }
+
+    /// Moves the ring to the next stop, or the one before, round from the last to the first if
+    /// `round`, else stopping at the ends. From none it goes to the first, or back from the last.
+    fn key_step(&mut self, forward: bool, round: bool, cx: &mut Context<Self>) {
+        let stops = self.stops();
+        let Some(open) = self.open.as_ref().filter(|_| !stops.is_empty()) else {
+            return;
+        };
+        let at = (open.keyed.as_ref())
+            .and_then(|keyed| stops.iter().position(|(stop, _)| stop == keyed));
+        let last = stops.len() - 1;
+        let next = match (at, forward) {
+            (None, true) => 0,
+            (None, false) => last,
+            (Some(at), true) if at == last => {
+                if round {
+                    0
+                } else {
+                    last
+                }
+            }
+            (Some(at), true) => at + 1,
+            (Some(0), false) => {
+                if round {
+                    last
+                } else {
+                    0
+                }
+            }
+            (Some(at), false) => at - 1,
+        };
+        let (stop, frame) = stops[next].clone();
+        self.key_to(stop, frame, cx);
+    }
+
+    /// Rings `stop`, naming a tile, which shows a glyph alone, with its tooltip.
+    fn key_to(&mut self, stop: Stop, frame: Bounds<Pixels>, cx: &mut Context<Self>) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: site controls keyed {stop:?}");
+        let tip = match &stop {
+            Stop::Tile(name) => TILES
+                .iter()
+                .find(|tile| tile.name == *name)
+                .map(|tile| tile.label.into()),
+            Stop::Extension(id) => open
+                .extensions
+                .iter()
+                .find(|each| &each.id == id)
+                .map(|each| each.title.clone()),
+            Stop::AddExtension => Some("Add Extension".into()),
+            // A lock or a chip that's a glyph alone names itself in its tooltip.
+            Stop::Lock => (open.site.as_ref())
+                .filter(|site| lock_alone(site, open.profiles.as_ref()))
+                .map(lock_label),
+            Stop::Profile => (open.profiles.as_ref())
+                .filter(|_| {
+                    !open
+                        .site
+                        .as_ref()
+                        .is_some_and(|site| lock_alone(site, open.profiles.as_ref()))
+                })
+                .map(|profiles| profiles.name.clone()),
+            _ => None,
+        };
+        open.keyed = Some(stop);
+        if open.tip.take().is_some() {
+            self.host.tooltip(None, cx);
+        }
+        if let Some(tip) = tip {
+            self.tooltip(tip, frame, true, cx);
+        }
+        cx.notify();
+    }
+
+    /// Space or return: what a click on the ringed stop does, a menu opening under it with its
+    /// first item highlighted, as a menu from the keyboard does.
+    fn key_press(&mut self, cx: &mut Context<Self>) {
+        let stops = self.stops();
+        let Some(open) = self.open.as_ref() else {
+            return;
+        };
+        let Some((stop, frame)) = (open.keyed.as_ref())
+            .and_then(|keyed| stops.into_iter().find(|(stop, _)| stop == keyed))
+        else {
+            return;
+        };
+        let Some(site) = open.site.clone() else {
+            return;
+        };
+        let under = point(frame.left(), frame.bottom());
+        let menu = matches!(
+            stop,
+            Stop::Engine
+                | Stop::Passwords
+                | Stop::Permission(_)
+                | Stop::Device(_)
+                | Stop::Profile
+                | Stop::More
+        );
+        match stop {
+            Stop::Tile(name) => {
+                if let Some(&tile) = TILES.iter().find(|tile| tile.name == name) {
+                    self.run_tile(tile, frame, false, cx);
+                }
+            }
+            Stop::Extension(id) => {
+                let tile = open.in_window(frame);
+                self.run("extension", Run::Extension(id, tile), cx)
+            }
+            Stop::AddExtension => {
+                self.run("add-extension", Run::Command(Command::ManageExtensions), cx)
+            }
+            Stop::Engine => self.choose_engine(site.system_engine == Some(true), under, cx),
+            Stop::AdBlocking => self.toggle_ad_blocking(site.ad_blocking != Some(true), cx),
+            Stop::DeveloperMode => {
+                self.toggle_developer_mode(site.developer_mode != Some(true), cx)
+            }
+            Stop::Boost => self.toggle_boost(site.boost != Some(true), cx),
+            Stop::Passwords => self.choose_login(site.logins.clone(), under, cx),
+            Stop::Permission(kind) => {
+                if let Some(permission) = site.permissions.iter().find(|each| each.kind == kind) {
+                    self.choose_value(permission.clone(), under, cx);
+                }
+            }
+            Stop::Device(index) => {
+                if let Some(device) = site.devices.get(index) {
+                    self.choose_device(index, device.clone(), under, cx);
+                }
+            }
+            Stop::Reset => self.reset(cx),
+            Stop::Lock => self.run("certificate", Run::Certificate, cx),
+            Stop::Profile => self.profiles(under, cx),
+            Stop::More => self.more(under, cx),
+        }
+        if menu {
+            // After the host's own show, which waits for the overlays to open for a shortcut.
+            cx.defer(crate::menu::highlight_first);
+        }
+    }
+
+    /// The keyboard's ring, Focus Sidebar's, if it's on `stop`: inside a plate with corners of
+    /// `radius`, or with none `RING_GAP` round a row's circle, as round a theme's swatch.
+    fn ring(&self, stop: &Stop, radius: Option<f32>, cx: &App) -> Option<gpui::Div> {
+        let keyed = self.open.as_ref().and_then(|open| open.keyed.as_ref());
+        if keyed != Some(stop) {
+            return None;
+        }
+        let ring = div()
+            .absolute()
+            .border(px(KEYED_RING))
+            .border_color(palette::current(cx).plate(KEYED));
+        Some(match radius {
+            Some(radius) => ring.inset_0().rounded(px(radius)),
+            None => {
+                let reach = RING_GAP + KEYED_RING;
+                ring.left(px(-reach))
+                    .top(px(-reach))
+                    .size(px(CIRCLE + 2. * reach))
+                    .rounded_full()
+            }
+        })
+    }
+
+    /// The tiles the panel shows for `site`, closed up from the left. Without a share sheet, as on
+    /// Linux, Share would do nothing, so it goes, and Boost goes where the page can have none,
+    /// leaving the row's right end empty, as it already is.
+    fn tiles(&self, site: &Site) -> Vec<Tile> {
+        let share = self.host.has_share_sheet();
+        (TILES.iter())
+            .filter(|tile| share || tile.run != TileRun::Share)
+            .filter(|tile| site.boostable || tile.run != TileRun::Command(Command::NewBoost))
+            .copied()
+            .collect()
+    }
+
     /// A tile `TILE_WIDTH` by `TILE_HEIGHT` at (`x`, `y`), named by its tooltip.
     fn tile_frame(x: f32, y: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(x), px(y)), size(px(TILE_WIDTH), px(TILE_HEIGHT)))
@@ -1135,10 +1721,14 @@ impl SiteControls {
         let palette = palette::current(cx);
         div()
             .id(tile.name)
+            .when(self.a11y, |plate| {
+                button_named(plate, tile.label, (false, true, false))
+            })
             .absolute()
             .left(frame.origin.x)
             .top(frame.origin.y)
-            .w(frame.size.width).h(frame.size.height)
+            .w(frame.size.width)
+            .h(frame.size.height)
             .rounded(px(TILE_RADIUS))
             .bg(linear_gradient(
                 180.,
@@ -1153,7 +1743,9 @@ impl SiteControls {
             .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                 panel.tooltip(tile.label.into(), frame, *hovered, cx)
             }))
-            .on_click(cx.listener(move |panel, _, _, cx| panel.run_tile(tile, frame, cx)))
+            .on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
+                panel.run_tile(tile, frame, event.modifiers().alt, cx)
+            }))
             .child(
                 div()
                     .id("state")
@@ -1164,8 +1756,12 @@ impl SiteControls {
                     .active(move |style| style.bg(palette.plate(STATE_PRESSED))),
             )
             .child(
-                svg().path(tile.glyph).size(px(tile.glyph_size)).text_color(palette.on_overlay_glyph(TEXT)),
+                svg()
+                    .path(tile.glyph)
+                    .size(px(tile.glyph_size))
+                    .text_color(palette.on_overlay_glyph(TEXT)),
             )
+            .children(self.ring(&Stop::Tile(tile.name), Some(TILE_RADIUS), cx))
             .into_any_element()
     }
 
@@ -1181,7 +1777,8 @@ impl SiteControls {
                 .absolute()
                 .left(frame.origin.x)
                 .top(frame.origin.y)
-                .w(frame.size.width).h(frame.size.height)
+                .w(frame.size.width)
+                .h(frame.size.height)
                 .rounded(px(TILE_RADIUS))
                 .bg(palette.plate(PLATE))
                 .hover(move |style| style.bg(palette.state(PLATE, STATE_HOVERED)))
@@ -1197,6 +1794,9 @@ impl SiteControls {
                 let (id, title) = (extension.id.clone(), extension.title.clone());
                 let tile = open.in_window(frame);
                 element
+                    .when(self.a11y, |plate| {
+                        button_named(plate, title.clone(), (false, true, true))
+                    })
                     .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                         panel.tooltip(title.clone(), frame, *hovered, cx)
                     }))
@@ -1214,20 +1814,32 @@ impl SiteControls {
                         let icon = img(icon).size(px(EXTENSION_ICON));
                         icon.when(!extension.enabled, |icon| icon.opacity(ACTION_DIMMED))
                     }))
+                    .children(self.ring(
+                        &Stop::Extension(extension.id.clone()),
+                        Some(TILE_RADIUS),
+                        cx,
+                    ))
                     .into_any_element()
             })
             .collect();
         let (plus, frame) = plate("add-extension".into(), open.extensions.len());
         tiles.push(
-            plus.on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
+            plus.when(self.a11y, |plus| {
+                button_named(plus, "Add Extension", (false, true, false))
+            })
+            .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                 panel.tooltip("Add Extension".into(), frame, *hovered, cx)
             }))
             .on_click(cx.listener(|panel, _, _, cx| {
                 panel.run("add-extension", Run::Command(Command::ManageExtensions), cx)
             }))
             .child(
-                svg().path("icons/plus.svg").size(px(PLUS_GLYPH)).text_color(palette.on_overlay_glyph(TEXT)),
+                svg()
+                    .path("icons/plus.svg")
+                    .size(px(PLUS_GLYPH))
+                    .text_color(palette.on_overlay_glyph(TEXT)),
             )
+            .children(self.ring(&Stop::AddExtension, Some(TILE_RADIUS), cx))
             .into_any_element(),
         );
         tiles
@@ -1242,9 +1854,11 @@ impl SiteControls {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let (title, link, run) = match heading {
-            Heading::Extensions => {
-                ("Extensions", "Manage", Run::Command(Command::ManageExtensions))
-            }
+            Heading::Extensions => (
+                "Extensions",
+                "Manage",
+                Run::Command(Command::ManageExtensions),
+            ),
             Heading::Settings => ("Settings", "More", Run::SiteSettings),
         };
         // The heading's line, from the gap above it to the gap below.
@@ -1261,7 +1875,11 @@ impl SiteControls {
         let name = link.to_lowercase();
         let palette = palette::current(cx);
         div()
-            .id(SharedString::from(format!("heading-{}", title.to_lowercase())))
+            .id(SharedString::from(format!(
+                "heading-{}",
+                title.to_lowercase()
+            )))
+            .when(self.a11y, |row| row.role(Role::Heading).aria_label(title))
             .absolute()
             .left_0()
             .top(px(top))
@@ -1281,12 +1899,15 @@ impl SiteControls {
                 row.child(
                     text(link_cap, LINK_SIZE)
                         .id(SharedString::from(format!("link-{name}")))
+                        .when(self.a11y, |text| {
+                            button_named(text, link, (false, true, false))
+                        })
                         .right(px(PADDING))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(palette.on_overlay(LINK))
-                        .on_click(cx.listener(move |panel, _, _, cx| {
-                            panel.run(&name, run.clone(), cx)
-                        }))
+                        .on_click(
+                            cx.listener(move |panel, _, _, cx| panel.run(&name, run.clone(), cx)),
+                        )
                         .child(link),
                 )
             })
@@ -1333,19 +1954,18 @@ impl SiteControls {
                     .absolute()
                     .size(px(CIRCLE))
                     .rounded_full()
-                    .bg(if on { palette.accent.into() } else { palette.plate(OFF) })
+                    .bg(if on {
+                        palette.accent.into()
+                    } else {
+                        palette.plate(OFF)
+                    })
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(
-                        svg()
-                            .path(glyph)
-                            .size(px(ROW_GLYPH))
-                            .text_color(match on {
-                                true => palette.accent_label.into(),
-                                false => palette.on_overlay_glyph(OFF_GLYPH),
-                            }),
-                    ),
+                    .child(svg().path(glyph).size(px(ROW_GLYPH)).text_color(match on {
+                        true => palette.accent_label.into(),
+                        false => palette.on_overlay_glyph(OFF_GLYPH),
+                    })),
             )
             .child(
                 text(name_cap, NAME_SIZE)
@@ -1376,9 +1996,16 @@ impl SiteControls {
             permission.name.clone(),
             Some(permission.state.clone()),
         );
-        match permission.choices.is_empty() {
+        // A row a policy sets takes no click, so it reads as dimmed.
+        let managed = permission.choices.is_empty();
+        let name = said(&permission.name, &permission.state);
+        let row = row.when(self.a11y, |row| {
+            button_named(row, name, (!managed, !managed, false))
+        });
+        match managed {
             true => row.opacity(MANAGED_OPACITY).into_any_element(),
             false => {
+                let row = row.children(self.ring(&Stop::Permission(permission.kind), None, cx));
                 let permission = permission.clone();
                 row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
                     panel.choose_value(permission.clone(), event.position(), cx)
@@ -1388,25 +2015,88 @@ impl SiteControls {
         }
     }
 
-    fn footer(&self, site: &Site, y: f32, cx: &mut Context<Self>) -> [gpui::AnyElement; 2] {
+    fn device(
+        &self,
+        index: usize,
+        device: &Device,
+        y: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let row = Self::row(
+            &palette::current(cx),
+            format!("site-device-{index}").into(),
+            y,
+            device.glyph.glyph(),
+            true,
+            device.name.clone(),
+            Some(device.kind.clone()),
+        );
+        match device.removable {
+            false => row.opacity(MANAGED_OPACITY).into_any_element(),
+            true => {
+                let row = row.children(self.ring(&Stop::Device(index), None, cx));
+                let device = device.clone();
+                row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
+                    panel.choose_device(index, device.clone(), event.position(), cx)
+                }))
+                .into_any_element()
+            }
+        }
+    }
+
+    fn footer(
+        &self,
+        site: &Site,
+        y: f32,
+        system: &gpui::WindowTextSystem,
+        cx: &mut Context<Self>,
+    ) -> [gpui::AnyElement; 3] {
         let lock = match site.connection {
             Connection::Secure => "icons/lock.svg",
             _ => "icons/lock-open.svg",
         };
         let palette = palette::current(cx);
+        let profiles = self.open.as_ref().and_then(|open| open.profiles.clone());
+        let alone = lock_alone(site, profiles.as_ref());
+        let room = match &profiles {
+            Some(_) => PROFILE_RIGHT - PROFILE_ALONE - GAP - PADDING,
+            None => WIDTH - 2. * PADDING - FOOTER - GAP,
+        };
+        let square = Bounds::new(point(px(PADDING), px(y)), size(px(FOOTER), px(FOOTER)));
+        let label = lock_label(site);
+        let medium = gpui::FontWeight::MEDIUM;
+        // Where the lock ends: its square alone, or its words, which a chip never cuts.
+        let lock_width = match alone {
+            true => FOOTER,
+            false => (LOCK_LEFT
+                + LOCK_SLOT
+                + LOCK_TEXT_GAP
+                + text_width(&label, NAME_SIZE, medium, system).ceil()
+                + LOCK_RIGHT)
+                .min(room),
+        };
         let button = div()
             .id("site-lock")
+            .when(self.a11y, |button| {
+                button_named(button, label.clone(), (false, site.certificate, false))
+            })
             .absolute()
             .left(px(PADDING))
             .top(px(y))
             .h(px(FOOTER))
-            .max_w(px(WIDTH - 2. * PADDING - FOOTER - GAP))
+            .max_w(px(room))
             .rounded(px(LOCK_RADIUS))
             .bg(palette.plate(PLATE))
             .flex()
             .items_start()
-            .pl(px(LOCK_LEFT))
-            .pr(px(LOCK_RIGHT))
+            .when(!alone, |button| button.pl(px(LOCK_LEFT)).pr(px(LOCK_RIGHT)))
+            .when(alone, |button| {
+                button.w(px(FOOTER)).justify_center().on_hover(cx.listener(
+                    move |panel, hovered: &bool, _, cx| {
+                        panel.tooltip(label.clone(), square, *hovered, cx)
+                    },
+                ))
+            })
             .child(
                 div()
                     .flex_none()
@@ -1415,21 +2105,28 @@ impl SiteControls {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(svg().path(lock).size(px(LOCK_GLYPH)).text_color(palette.on_overlay_glyph(TEXT))),
+                    .child(
+                        svg()
+                            .path(lock)
+                            .size(px(LOCK_GLYPH))
+                            .text_color(palette.on_overlay_glyph(TEXT)),
+                    ),
             )
-            .child(
-                div()
-                    .min_w_0()
-                    .ml(px(LOCK_TEXT_GAP))
-                    .mt(px(text_top(LOCK_CAP, NAME_SIZE)))
-                    .h(px(LINE))
-                    .line_height(px(LINE))
-                    .text_size(px(NAME_SIZE))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(palette.on_overlay(TEXT))
-                    .truncate()
-                    .child(lock_label(site)),
-            )
+            .when(!alone, |button| {
+                button.child(
+                    div()
+                        .min_w_0()
+                        .ml(px(LOCK_TEXT_GAP))
+                        .mt(px(text_top(LOCK_CAP, NAME_SIZE)))
+                        .h(px(LINE))
+                        .line_height(px(LINE))
+                        .text_size(px(NAME_SIZE))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(palette.on_overlay(TEXT))
+                        .truncate()
+                        .child(lock_label(site)),
+                )
+            })
             .map(|button| match site.certificate {
                 true => button
                     .hover(move |style| style.bg(palette.state(PLATE, STATE_HOVERED)))
@@ -1438,9 +2135,13 @@ impl SiteControls {
                         panel.run("certificate", Run::Certificate, cx)
                     })),
                 false => button.opacity(DISABLED_OPACITY),
-            });
+            })
+            .children(self.ring(&Stop::Lock, Some(LOCK_RADIUS), cx));
         let more = div()
             .id("site-more")
+            .when(self.a11y, |more| {
+                button_named(more, "More", (true, true, false))
+            })
             .absolute()
             .left(px(WIDTH - PADDING - FOOTER))
             .top(px(y))
@@ -1452,22 +2153,150 @@ impl SiteControls {
             .flex()
             .items_center()
             .justify_center()
-            .on_click(cx.listener(|panel, event: &ClickEvent, _, cx| {
-                panel.more(event.position(), cx)
-            }))
+            .on_click(
+                cx.listener(|panel, event: &ClickEvent, _, cx| panel.more(event.position(), cx)),
+            )
             .child(
-                svg().path("icons/ellipsis.svg").size(px(MORE_GLYPH)).text_color(palette.on_overlay_glyph(TEXT)),
-            );
-        [button.into_any_element(), more.into_any_element()]
+                svg()
+                    .path("icons/ellipsis.svg")
+                    .size(px(MORE_GLYPH))
+                    .text_color(palette.on_overlay_glyph(TEXT)),
+            )
+            .children(self.ring(&Stop::More, Some(FOOTER / 2.), cx));
+        let chip = profiles.map(|profiles| {
+            let name = text_width(&profiles.name, NAME_SIZE, medium, system).ceil();
+            self.profile_chip(&profiles, PADDING + lock_width + GAP, name, y, cx)
+        });
+        let chip = chip.map_or_else(|| div().into_any_element(), |chip| chip.into_any_element());
+        [button.into_any_element(), chip, more.into_any_element()]
+    }
+
+    /// The profile's chip, against "…" (#2339), in the room from `left`: the Profiles glyph, the
+    /// name `name` wide and a chevron. The name gives way first, cut at its end, and with too
+    /// little room it goes, the name then in its tooltip, as an ellipsis alone would read as a
+    /// second "…". Its menu opens the page in another profile.
+    fn profile_chip(
+        &self,
+        profiles: &Profiles,
+        left: f32,
+        name: f32,
+        y: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let palette = palette::current(cx);
+        let room = PROFILE_RIGHT - left - PROFILE_ALONE - LOCK_TEXT_GAP;
+        let alone = room < name.min(PROFILE_NAME_MIN);
+        let cut = room < name;
+        let square = Bounds::new(
+            point(px(PROFILE_RIGHT - FOOTER), px(y)),
+            size(px(FOOTER), px(FOOTER)),
+        );
+        let name = profiles.name.clone();
+        let chip =
+            div()
+                .id("site-profile")
+                .when(self.a11y, |chip| {
+                    button_named(chip, said("Profile", &name), (true, true, false))
+                })
+                .h(px(FOOTER))
+                .min_w_0()
+                .rounded(px(LOCK_RADIUS))
+                .bg(palette.plate(PLATE))
+                .hover(move |style| style.bg(palette.state(PLATE, STATE_HOVERED)))
+                .active(move |style| style.bg(palette.state(PLATE, STATE_PRESSED)))
+                .flex()
+                .items_start()
+                .pl(px(LOCK_LEFT))
+                .pr(px(LOCK_RIGHT))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(LOCK_SLOT))
+                        .h(px(FOOTER))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            svg()
+                                .path("icons/users.svg")
+                                .size(px(LOCK_GLYPH))
+                                .text_color(palette.on_overlay_glyph(TEXT)),
+                        ),
+                )
+                .when(!alone, |chip| {
+                    chip.child(
+                        div()
+                            .min_w_0()
+                            .ml(px(LOCK_TEXT_GAP))
+                            .mt(px(text_top(LOCK_CAP, NAME_SIZE)))
+                            .h(px(LINE))
+                            .line_height(px(LINE))
+                            .text_size(px(NAME_SIZE))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(palette.on_overlay(TEXT))
+                            .truncate()
+                            .child(name.clone()),
+                    )
+                })
+                .when(cut, |chip| {
+                    chip.on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
+                        panel.tooltip(name.clone(), square, *hovered, cx)
+                    }))
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .ml(px(PROFILE_CHEVRON_GAP))
+                        .h(px(FOOTER))
+                        .flex()
+                        .items_center()
+                        .child(
+                            svg()
+                                .path("icons/chevron-down.svg")
+                                .size(px(PROFILE_CHEVRON))
+                                .text_color(palette.on_overlay(SECONDARY)),
+                        ),
+                )
+                .on_click(cx.listener(|panel, event: &ClickEvent, _, cx| {
+                    panel.profiles(event.position(), cx)
+                }))
+                .children(self.ring(&Stop::Profile, Some(LOCK_RADIUS), cx));
+        // Against "…", the name giving way first.
+        div()
+            .absolute()
+            .left(px(left))
+            .top(px(y))
+            .w(px(PROFILE_RIGHT - left))
+            .flex()
+            .justify_end()
+            .child(chip)
     }
 }
 
 impl Render for SiteControls {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.a11y = window.is_a11y_active();
+        let a11y = self.a11y;
         let root = div()
             .key_context("SiteControls")
             .track_focus(&self.focus)
             .on_action(cx.listener(|panel, _: &Close, _, cx| panel.close("escape", cx)))
+            .on_action(cx.listener(|panel, _: &NextStop, _, cx| panel.key_step(true, true, cx)))
+            .on_action(
+                cx.listener(|panel, _: &PreviousStop, _, cx| panel.key_step(false, true, cx)),
+            )
+            .on_action(cx.listener(|panel, _: &StopDown, _, cx| panel.key_step(true, false, cx)))
+            .on_action(cx.listener(|panel, _: &StopUp, _, cx| panel.key_step(false, false, cx)))
+            .on_action(cx.listener(|panel, _: &Press, _, cx| panel.key_press(cx)))
+            // A press takes the ring away, as in the theme picker.
+            .on_any_mouse_down(cx.listener(|panel, _, _, cx| {
+                if let Some(open) = panel.open.as_mut().filter(|open| open.keyed.is_some()) {
+                    open.keyed = None;
+                    cx.notify();
+                }
+            }))
+            // A tooltip shows once the pointer rests (tooltip.rs).
+            .on_mouse_move(|_, _, cx| crate::tooltip::moved(cx))
             .size_full()
             .font_family(crate::face::UI);
         let Some(open) = self.open.as_mut() else {
@@ -1482,7 +2311,7 @@ impl Render for SiteControls {
             open.shown = Some(Instant::now());
         }
         let progress = open.progress();
-        let scale = FROM_SCALE + (1. - FROM_SCALE) * progress;
+        let scale = crate::motion::scale(FROM_SCALE + (1. - FROM_SCALE) * progress, cx);
         let origin = open.origin();
         let moving = open.moving();
         let settling = !moving && !open.settled;
@@ -1497,7 +2326,9 @@ impl Render for SiteControls {
             // check.sh reads this line.
             log!("browser: site controls settled");
         }
-        let ids: Vec<SharedString> = (open.extensions.iter()).map(|each| each.id.clone()).collect();
+        let ids: Vec<SharedString> = (open.extensions.iter())
+            .map(|each| each.id.clone())
+            .collect();
         if ids != open.drawn {
             // check.sh reads this line.
             log!("browser: site controls drew extensions {}", ids.join(" "));
@@ -1531,13 +2362,8 @@ impl Render for SiteControls {
         .top_0()
         .left_0()
         .size_full();
-        // Without a share sheet, as on Linux, Share would do nothing, so it goes and the rest
-        // close up from the left, leaving the row's right end empty, as it already is.
-        let share = self.host.has_share_sheet();
-        let tiles: Vec<_> = (TILES.iter())
-            .filter(|tile| share || tile.run != TileRun::Share)
-            .enumerate()
-            .map(|(index, &tile)| self.tile(index, tile, at.tiles, cx))
+        let tiles: Vec<_> = (self.tiles(&site).into_iter().enumerate())
+            .map(|(index, tile)| self.tile(index, tile, at.tiles, cx))
             .collect();
         let extensions = self.extensions(open, at.extensions, cx);
         let extensions_heading = self.heading(
@@ -1561,22 +2387,27 @@ impl Render for SiteControls {
                     ENGINE_NAME.into(),
                     Some(state.into()),
                 );
+                let name = said(ENGINE_NAME, state);
+                let row = row.when(a11y, |row| button_named(row, name, (true, true, false)));
                 let row = row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
                     panel.choose_engine(on, event.position(), cx)
                 }));
+                let row = row.children(self.ring(&Stop::Engine, None, cx));
                 rows.push(row.into_any_element());
                 y += ROW_PITCH;
             }
             // Before the permissions, as the row a page that doesn't work needs.
             if let Some(on) = site.ad_blocking {
                 let state = if on { "On" } else { "Off for this site" };
-                let name = "Block ads and trackers".into();
+                const NAME: &str = "Block ads and trackers";
                 let state = Some(state.into());
-                let row =
-                    Self::row(&palette, "site-ad-blocking".into(), y, AD_BLOCKING, on, name, state);
+                let id = "site-ad-blocking".into();
+                let row = Self::row(&palette, id, y, AD_BLOCKING, on, NAME.into(), state);
+                let row = row.when(a11y, |row| switch_named(row, NAME, on));
                 let row = row.on_click(
                     cx.listener(move |panel, _, _, cx| panel.toggle_ad_blocking(!on, cx)),
                 );
+                let row = row.children(self.ring(&Stop::AdBlocking, None, cx));
                 rows.push(row.into_any_element());
                 y += ROW_PITCH;
             }
@@ -1584,21 +2415,44 @@ impl Render for SiteControls {
                 let state = Some(if on { "On" } else { "Off" }.into());
                 let (id, name) = ("site-developer-mode".into(), DEVELOPER_MODE_NAME.into());
                 let row = Self::row(&palette, id, y, DEVELOPER_MODE, on, name, state);
+                let row = row.when(a11y, |row| switch_named(row, DEVELOPER_MODE_NAME, on));
                 let row = row.on_click(
                     cx.listener(move |panel, _, _, cx| panel.toggle_developer_mode(!on, cx)),
                 );
+                let row = row.children(self.ring(&Stop::DeveloperMode, None, cx));
+                rows.push(row.into_any_element());
+                y += ROW_PITCH;
+            }
+            if let Some(on) = site.boost {
+                let state = Some(if on { "On" } else { "Off for this site" }.into());
+                let (id, name) = ("site-boost".into(), BOOST_NAME.into());
+                let row = Self::row(&palette, id, y, BOOST, on, name, state);
+                let row = row.when(a11y, |row| switch_named(row, BOOST_NAME, on));
+                let row =
+                    row.on_click(cx.listener(move |panel, _, _, cx| panel.toggle_boost(!on, cx)));
+                let row = row.children(self.ring(&Stop::Boost, None, cx));
                 rows.push(row.into_any_element());
                 y += ROW_PITCH;
             }
             let logins = passwords::state(&site.logins);
             if let Some((state, on)) = logins {
                 let name = PASSWORDS_NAME.into();
-                let row =
-                    Self::row(&palette, "site-passwords".into(), y, PASSWORDS, on, name, Some(state));
+                let said = said(PASSWORDS_NAME, &state);
+                let row = Self::row(
+                    &palette,
+                    "site-passwords".into(),
+                    y,
+                    PASSWORDS,
+                    on,
+                    name,
+                    Some(state),
+                );
+                let row = row.when(a11y, |row| button_named(row, said, (true, true, false)));
                 let logins = site.logins.clone();
                 let row = row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
                     panel.choose_login(logins.clone(), event.position(), cx)
                 }));
+                let row = row.children(self.ring(&Stop::Passwords, None, cx));
                 rows.push(row.into_any_element());
                 y += ROW_PITCH;
             }
@@ -1606,10 +2460,16 @@ impl Render for SiteControls {
                 rows.push(self.permission(index, permission, y, cx));
                 y += ROW_PITCH;
             }
+            for (index, device) in site.devices.iter().enumerate() {
+                rows.push(self.device(index, device, y, cx));
+                y += ROW_PITCH;
+            }
             if let Some(label) = site.reset.clone() {
-                let row =
-                    Self::row(&palette, "site-permissions-reset".into(), y, RESET, false, label, None);
+                let id = "site-permissions-reset".into();
+                let row = Self::row(&palette, id, y, RESET, false, label.clone(), None);
+                let row = row.when(a11y, |row| button_named(row, label, (false, true, false)));
                 let row = row.on_click(cx.listener(|panel, _, _, cx| panel.reset(cx)));
+                let row = row.children(self.ring(&Stop::Reset, None, cx));
                 rows.push(row.into_any_element());
             }
             rows
@@ -1632,7 +2492,7 @@ impl Render for SiteControls {
             .children(extensions)
             .children(settings.into_iter().flatten())
             .child(divider)
-            .children(self.footer(&site, at.footer, cx));
+            .children(self.footer(&site, at.footer, &window.text_system().clone(), cx));
         root.child(scaled(card, scale, origin))
     }
 }

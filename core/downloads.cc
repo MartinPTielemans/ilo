@@ -15,8 +15,16 @@
 #include "base/task/cancelable_task_tracker.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
+#include "browser_core/agent_download_hold.h"
+#include "browser_core/agent_page.h"
+#include "browser_core/auto_archive.h"
 #include "browser_core/host.h"
+#include "browser_core/profiles.h"
+#include "browser_core/space.h"
+#include "browser_core/tab.h"
+#include "browser_core/window.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/icon_loader.h"
@@ -28,7 +36,10 @@
 #include "components/download/public/common/download_item.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
+#include "content/public/browser/web_contents.h"
+#include "net/base/filename_util.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
@@ -57,6 +68,11 @@ bc_id IdOf(download::DownloadItem* item) {
   return data->id;
 }
 
+// The profile a download is of, its private session's for a private one.
+Profile* ProfileOf(download::DownloadItem* item) {
+  return Profile::FromBrowserContext(content::DownloadItemUtils::GetBrowserContext(item));
+}
+
 int StateOf(const download::DownloadItem& item) {
   switch (item.GetState()) {
     case download::DownloadItem::IN_PROGRESS:
@@ -72,15 +88,22 @@ int StateOf(const download::DownloadItem& item) {
 
 class Downloads : public download::AllDownloadItemNotifier::Observer {
  public:
-  // Adds |profile|'s downloads to the list.
+  // Adds |profile|'s downloads to the list, or its private session's, once.
   void Observe(Profile* profile) {
+    content::DownloadManager* manager = profile->GetDownloadManager();
+    if (std::ranges::any_of(notifiers_,
+                            [manager](const auto& each) { return each->GetManager() == manager; })) {
+      return;
+    }
     // Made here, as it tells of a manager that has read the history at once.
     notifiers_.push_back(
-        std::make_unique<download::AllDownloadItemNotifier>(profile->GetDownloadManager(), this));
+        std::make_unique<download::AllDownloadItemNotifier>(manager, this));
     Changed();
+    ScheduleAutoArchive();
   }
 
-  // The ones Chrome's downloads page lists, of every profile the core uses, newest first.
+  // The ones Chrome's downloads page lists, of every profile the core uses and of their private
+  // sessions while they run, newest first.
   std::vector<download::DownloadItem*> Listed() {
     std::vector<download::DownloadItem*> listed;
     for (const auto& notifier : notifiers_) {
@@ -116,18 +139,145 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
     return nullptr;
   }
 
+  // Of every download, as one held for an agent may not be listed yet, before its file is named.
+  download::DownloadItem* FindAny(bc_id id) {
+    for (const auto& notifier : notifiers_) {
+      content::DownloadManager* manager = notifier->GetManager();
+      content::DownloadManager::DownloadVector all;
+      if (manager) {
+        manager->GetAllDownloads(&all);
+      }
+      for (download::DownloadItem* item : all) {
+        if (IdOf(item) == id) {
+          return item;
+        }
+      }
+    }
+    return nullptr;
+  }
+
  private:
   // download::AllDownloadItemNotifier::Observer:
-  void OnManagerInitialized(content::DownloadManager* manager) override { Changed(); }
+  // The history read, its ended downloads wait to leave the list.
+  void OnManagerInitialized(content::DownloadManager* manager) override {
+    Changed();
+    ScheduleAutoArchive();
+  }
   // A deleted profile's downloads leave the list.
   void OnManagerGoingDown(content::DownloadManager* manager) override { Changed(); }
   void OnDownloadCreated(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
+    HoldForAgent(item);
     Changed();
   }
   void OnDownloadUpdated(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
+    if (ResolvedToPause(item)) {
+      // After the update, as Chrome lets no observer change the download it's telling of.
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(
+                         [](base::WeakPtr<Downloads> downloads, bc_id id) {
+                           download::DownloadItem* item =
+                               downloads ? downloads->FindAny(id) : nullptr;
+                           if (item) {
+                             PauseHeld(item);
+                           }
+                         },
+                         weak_factory_.GetWeakPtr(), IdOf(item)));
+    }
+    std::string agent;
+    bc_id tab = 0;
+    const int state = StateOf(*item);
+    if (AgentDownloadOf(item, &agent, &tab) && state != BC_DOWNLOAD_RUNNING &&
+        state != BC_DOWNLOAD_PAUSED) {
+      ForgetAgentDownload(item);
+      const bool done = state == BC_DOWNLOAD_DONE;
+      ReportAgentDownload({.agent = std::move(agent),
+                           .tab = tab,
+                           .download = IdOf(item),
+                           .name = item->GetFileNameToReportUser().AsUTF8Unsafe(),
+                           .url = item->GetURL().spec(),
+                           .state = state,
+                           .bytes = done ? item->GetReceivedBytes() : 0,
+                           .path = done ? item->GetTargetFilePath().AsUTF8Unsafe() : ""});
+    }
+    // One that ended waits to leave the list.
+    if (state != BC_DOWNLOAD_RUNNING && state != BC_DOWNLOAD_PAUSED) {
+      ScheduleAutoArchive();
+    }
     Changed();
+  }
+
+  // What agent_download tells, kept until the posted call.
+  struct AgentReport {
+    std::string agent;
+    bc_id tab = 0;
+    uint64_t request = 0;
+    bc_id download = 0;
+    std::string name;
+    std::string url;
+    int state = BC_DOWNLOAD_PAUSED;
+    int64_t bytes = 0;
+    std::string path;
+    bool tab_empty = false;
+  };
+
+  // A download a page in an agent's Space starts puts a file on the user's disk, so it waits on
+  // them, paused, and the agent hears of it in place of the action it came from, which would
+  // otherwise answer that its tab has no web page (#1446). One the user starts there, in the tab
+  // they're looking at with no action of the agent's in it, is theirs.
+  void HoldForAgent(download::DownloadItem* item) {
+    content::WebContents* contents = content::DownloadItemUtils::GetWebContents(item);
+    const bc_id tab = contents ? Tab::IdOf(contents) : 0;
+    const Space* space = tab ? Space::Holding(tab) : nullptr;
+    if (!space || !space->agent() || item->GetState() != download::DownloadItem::IN_PROGRESS) {
+      return;
+    }
+    const uint64_t request = AgentPage::TakeJob(contents);
+    if (!request && Window::Showing(tab)) {
+      return;
+    }
+    // Paused once Chrome has resolved where it goes, it takes nothing more while it asks
+    // (ResolvedToPause, from OnDownloadUpdated), and a file that comes whole before then isn't
+    // put in place until the user says yes (HoldCompletion).
+    MarkAgentDownload(item, space->agent()->id, tab);
+    // Its file isn't named until Chrome picks where it goes: the name the server gives, as Chrome
+    // finds it.
+    const base::FilePath name = net::GenerateFileName(
+        item->GetURL(), item->GetContentDisposition(), std::string(),
+        item->GetSuggestedFilename(), item->GetMimeType(), "download");
+    ReportAgentDownload({.agent = space->agent()->id,
+                         .tab = tab,
+                         .request = request,
+                         .download = IdOf(item),
+                         .name = name.AsUTF8Unsafe(),
+                         .url = item->GetURL().spec(),
+                         .tab_empty = !contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()});
+  }
+
+  // Posted, so the app never hears inside its own bc_agent_download_answer.
+  void ReportAgentDownload(AgentReport report) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](const AgentReport& report) {
+                         if (!Host().agent_download) {
+                           return;
+                         }
+                         const bc_agent_download download = {
+                             .agent = report.agent.c_str(),
+                             .tab = report.tab,
+                             .request = report.request,
+                             .download = report.download,
+                             .name = report.name.c_str(),
+                             .url = report.url.c_str(),
+                             .state = report.state,
+                             .bytes = report.bytes,
+                             .path = report.path.c_str(),
+                             .tab_empty = report.tab_empty,
+                         };
+                         Host().agent_download(Host().context, &download);
+                       },
+                       std::move(report)));
   }
   void OnDownloadRemoved(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
@@ -157,6 +307,7 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
     std::vector<bc_download> downloads;
     downloads.reserve(items.size());
     for (download::DownloadItem* item : items) {
+      Profile* profile = ProfileOf(item);
       const std::string& name = text.emplace_back(item->GetFileNameToReportUser().AsUTF8Unsafe());
       const std::string& url = text.emplace_back(item->GetURL().spec());
       const std::string& path = text.emplace_back(item->GetTargetFilePath().AsUTF8Unsafe());
@@ -169,7 +320,9 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
                            .state = StateOf(*item),
                            .open_when_done = item->GetOpenWhenComplete(),
                            .held = item->IsDangerous() || item->IsInsecure(),
-                           .started = item->GetStartTime().InMillisecondsFSinceUnixEpoch()});
+                           .started = item->GetStartTime().InMillisecondsFSinceUnixEpoch(),
+                           .profile = profile ? ProfileId(DirOf(profile->GetOriginalProfile())) : 0,
+                           .off_the_record = profile && profile->IsOffTheRecord()});
     }
     Host().downloads_changed(Host().context, downloads.data(), downloads.size());
   }
@@ -230,6 +383,12 @@ void RegisterDownloadPrefs() {
 }
 
 void ObserveDownloads(Profile* profile) {
+  // Chrome asks before it puts a download's file in place, which an agent's waits on the user for.
+  static const bool held = [] {
+    ChromeDownloadManagerDelegate::SetCompletionHold(base::BindRepeating(&HoldCompletion));
+    return true;
+  }();
+  (void)held;
   TheDownloads().Observe(profile);
 }
 
@@ -268,11 +427,43 @@ void ActOnDownload(bc_id id, int action) {
   }
 }
 
-void ClearDownloads() {
+void ClearDownloads(bc_id profile, bool off_the_record) {
   for (download::DownloadItem* item : TheDownloads().Listed()) {
+    Profile* of = ProfileOf(item);
+    const bool session = of && of->IsOffTheRecord();
+    if (session != off_the_record ||
+        (off_the_record && ProfileId(DirOf(of->GetOriginalProfile())) != profile)) {
+      continue;
+    }
     if (item->GetState() != download::DownloadItem::IN_PROGRESS) {
       item->Remove();
     }
+  }
+}
+
+void ForEachEndedDownload(
+    base::FunctionRef<void(bc_id id, Profile* profile, base::Time ended)> each) {
+  for (download::DownloadItem* item : TheDownloads().Listed()) {
+    if (item->GetState() == download::DownloadItem::IN_PROGRESS) {
+      continue;
+    }
+    Profile* profile = ProfileOf(item);
+    // From its start where Chrome kept no end.
+    const base::Time ended =
+        item->GetEndTime().is_null() ? item->GetStartTime() : item->GetEndTime();
+    each(IdOf(item), profile ? profile->GetOriginalProfile() : nullptr, ended);
+  }
+}
+
+void AnswerAgentDownload(bc_id id, bool keep) {
+  download::DownloadItem* item = TheDownloads().FindAny(id);
+  if (!item) {
+    return;
+  }
+  if (keep) {
+    AllowAgentDownload(item);
+  } else {
+    RefuseAgentDownload(item);
   }
 }
 

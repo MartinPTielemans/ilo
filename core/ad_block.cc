@@ -1,5 +1,6 @@
 #include "browser_core/ad_block.h"
 
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <string>
@@ -21,6 +22,8 @@
 #include "base/scoped_observation.h"
 #include "base/strings/string_split.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/values.h"
 #include "browser_core/hooks.h"
 #include "browser_core/session.h"
@@ -33,10 +36,15 @@
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/core/common/policy_types.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/navigation_throttle.h"
+#include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/api/web_request/web_request_api_helpers.h"
 #include "extensions/browser/disable_reason.h"
+#include "extensions/browser/event_listener_map.h"
+#include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
@@ -80,6 +88,13 @@ constexpr char kFiltersSwitch[] = "ad-block-filters";
 constexpr char kListsSwitch[] = "ad-block-lists";
 
 constexpr int kSchemes = URLPattern::SCHEME_HTTP | URLPattern::SCHEME_HTTPS;
+
+// What it listens to once it's ready, with its lists loaded and its request listener set: an event
+// only ChromeOS's kiosk apps are sent, so the listener does nothing else (app/fetch-ublock.sh).
+constexpr char kReadyEvent[] = "runtime.onRestartRequired";
+
+// The longest a page waits for it, so one that never gets ready doesn't keep pages from loading.
+constexpr base::TimeDelta kLongestHold = base::Seconds(10);
 
 // Its settings, as uBlock Origin reads them from managed storage (its managed_storage.json).
 policy::PolicyBundle Settings() {
@@ -196,6 +211,78 @@ void KeepOffSites(Profile* profile, base::ListValue sites) {
   extension_web_request_api_helpers::ClearCacheOnNavigation();
 }
 
+// Whether it's ready to block in |context|, a profile or its private windows, each with a page of
+// its own: that page has said so since it last started. Its listeners go with the page.
+bool Ready(content::BrowserContext* context) {
+  for (const auto& listener :
+       extensions::EventRouter::Get(context)->listeners().GetEventListenersByName(kReadyEvent)) {
+    if (listener->extension_id() == kId && listener->browser_context() == context) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Holds a page's request until it's ready in the page's profile. Chromium sends a request only to
+// the listeners there are as it starts, and at launch its page starts with the first pages and is
+// ready only seconds later, so they would load their ads (#744).
+class Hold : public content::NavigationThrottle {
+ public:
+  using content::NavigationThrottle::NavigationThrottle;
+
+  // Lets go of each held page whose profile it's ready in.
+  static void ReleaseReady() {
+    std::vector<base::WeakPtr<Hold>> holds;
+    holds.swap(Held());
+    for (const base::WeakPtr<Hold>& hold : holds) {
+      if (!hold) {
+        continue;
+      }
+      if (Ready(hold->Context())) {
+        hold->Release();
+      } else {
+        Held().push_back(hold);
+      }
+    }
+  }
+
+  // content::NavigationThrottle:
+  ThrottleCheckResult WillStartRequest() override {
+    if (Ready(Context())) {
+      return PROCEED;
+    }
+    held_ = base::TimeTicks::Now();
+    Held().push_back(weak_factory_.GetWeakPtr());
+    timer_.Start(FROM_HERE, kLongestHold, this, &Hold::Release);
+    return DEFER;
+  }
+  const char* GetNameForLogging() override { return "browser_core::AdBlockHold"; }
+
+ private:
+  static std::vector<base::WeakPtr<Hold>>& Held() {
+    static base::NoDestructor<std::vector<base::WeakPtr<Hold>>> held;
+    return *held;
+  }
+
+  content::BrowserContext* Context() {
+    return navigation_handle()->GetWebContents()->GetBrowserContext();
+  }
+
+  // This may delete this.
+  void Release() {
+    timer_.Stop();
+    weak_factory_.InvalidateWeakPtrs();
+    fprintf(stderr, "browser: ad blocking held a page %d ms, %s\n",
+            static_cast<int>((base::TimeTicks::Now() - held_).InMilliseconds()),
+            Ready(Context()) ? "ready" : "not ready");
+    Resume();
+  }
+
+  base::TimeTicks held_;
+  base::OneShotTimer timer_;
+  base::WeakPtrFactory<Hold> weak_factory_{this};
+};
+
 // Loads it into |profile| from the framework's resources, as --load-extension would: synchronously,
 // and kept for this launch only, so the next one loads the version the browser comes with then.
 void Load(Profile* profile) {
@@ -220,12 +307,26 @@ void Load(Profile* profile) {
 }
 
 // Follows it in a profile: Chrome sets its permissions afresh each time it loads, a profile made
-// with ad blocking off everywhere has to turn it off, and it has to be loaded again when it reloads
-// itself.
-class Follower : public extensions::ExtensionRegistryObserver {
+// with ad blocking off everywhere has to turn it off, it has to be loaded again when it reloads
+// itself, and the pages held for it go once it's ready, there or in the profile's private windows,
+// which share the profile's event router.
+class Follower : public extensions::ExtensionRegistryObserver,
+                 public extensions::EventRouter::Observer {
  public:
-  explicit Follower(Profile* profile) : profile_(profile) {
+  explicit Follower(Profile* profile)
+      : profile_(profile), event_router_(extensions::EventRouter::Get(profile)) {
     observation_.Observe(extensions::ExtensionRegistry::Get(profile));
+    event_router_->RegisterObserver(this, kReadyEvent);
+  }
+  ~Follower() override { event_router_->UnregisterObserver(this); }
+
+  // extensions::EventRouter::Observer:
+  void OnListenerAdded(const extensions::EventListenerInfo& details) override {
+    if (details.extension_id == kId) {
+      // Not inside the router's notification, as a page let go may finish at once.
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&Hold::ReleaseReady));
+    }
   }
 
   // extensions::ExtensionRegistryObserver:
@@ -268,6 +369,7 @@ class Follower : public extensions::ExtensionRegistryObserver {
   void LoadAgain() { Load(profile_); }
 
   const raw_ptr<Profile> profile_;
+  const raw_ptr<extensions::EventRouter> event_router_;
   // Whether it reloaded itself and hasn't been loaded again since.
   bool reloaded_ = false;
   base::ScopedObservation<extensions::ExtensionRegistry, extensions::ExtensionRegistryObserver>
@@ -303,6 +405,22 @@ void SetUpAdBlock() {
 
 bool IsAdBlocker(const std::string& id) {
   return id == kId;
+}
+
+void AddAdBlockHold(content::NavigationThrottleRegistry& registry) {
+  content::NavigationHandle& navigation = registry.GetNavigationHandle();
+  const GURL& url = navigation.GetURL();
+  content::BrowserContext* context = navigation.GetWebContents()->GetBrowserContext();
+  Profile* profile = Profile::FromBrowserContext(context);
+  // Only where it filters and will get ready: http(s), in a profile it's loaded and on in, and not
+  // on a site the user turned it off on, whose requests it never sees.
+  if (!url.SchemeIsHTTPOrHTTPS() || !Followers().contains(profile->GetOriginalProfile()) ||
+      !extensions::ExtensionRegistry::Get(profile)->enabled_extensions().Contains(kId) ||
+      (profile->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(kId, profile)) ||
+      Ready(context) || OffSites(profile->GetOriginalProfile()).MatchesURL(url)) {
+    return;
+  }
+  registry.AddThrottle(std::make_unique<Hold>(registry));
 }
 
 void ApplyAdBlocking() {

@@ -13,9 +13,9 @@ pub enum Level {
     /// Sits on the window: favorite tiles, library cards, pictures of pages.
     Resting,
     /// Opens from something and closes on a click outside: menus, the Site Controls, the toast,
-    /// the zoom HUD, tooltips, the link target, the find bar.
+    /// the zoom HUD, tooltips, the link target, the find bar, the command bar over the URL field.
     Popover,
-    /// Takes the keyboard: the command bar, the dialog, the icon and theme pickers.
+    /// Takes the keyboard: the centred command bar, the dialog, the icon and theme pickers.
     Modal,
 }
 
@@ -87,8 +87,16 @@ impl Level {
     /// The drop shadow's colour, how far it falls and its blur.
     fn drop(self) -> (u32, f32, f32) {
         match self {
-            Level::Resting => (t::RESTING_SHADOW, t::RESTING_SHADOW_Y, t::RESTING_SHADOW_BLUR),
-            Level::Popover => (t::POPOVER_SHADOW, t::POPOVER_SHADOW_Y, t::POPOVER_SHADOW_BLUR),
+            Level::Resting => (
+                t::RESTING_SHADOW,
+                t::RESTING_SHADOW_Y,
+                t::RESTING_SHADOW_BLUR,
+            ),
+            Level::Popover => (
+                t::POPOVER_SHADOW,
+                t::POPOVER_SHADOW_Y,
+                t::POPOVER_SHADOW_BLUR,
+            ),
             Level::Modal => (t::MODAL_SHADOW, t::MODAL_SHADOW_Y, t::MODAL_SHADOW_BLUR),
         }
     }
@@ -104,7 +112,10 @@ impl Level {
             spread_radius: px(0.),
             inset: false,
         };
-        vec![shadow(color, y, blur), shadow(t::OUTLINE, 0., t::OUTLINE_BLUR)]
+        vec![
+            shadow(color, y, blur),
+            shadow(t::OUTLINE, 0., t::OUTLINE_BLUR),
+        ]
     }
 
     /// For a surface the host puts a shadow window under.
@@ -123,7 +134,11 @@ impl Level {
     pub fn reach(self) -> Reach {
         let (color, y, blur) = self.drop();
         let sides = invisible_past(color, blur);
-        Reach { above: (sides - y).max(0.), below: sides + y, sides }
+        Reach {
+            above: (sides - y).max(0.),
+            below: sides + y,
+            sides,
+        }
     }
 }
 

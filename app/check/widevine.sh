@@ -72,6 +72,17 @@ await_long 120 "^browser: widevine state (restart|failed)\$" || fail "the module
 grep -q "^browser: widevine state restart\$" "$log" || fail "the module didn't download"
 [ -n "$(ls "$profile_dir/WidevineCdm" 2>/dev/null)" ] || fail "no module in the profile"
 ../tools/window-screenshot.sh "$pid" "$out/widevine-restart.png" || fail "no window to capture"
+# Settings › Features offers the restart too, beside Remove (#1393). A click would start an app
+# outside the check, so the run reads that both are drawn and restarts as the note's run does.
+send key , cmd
+expect '^browser: settings shown ' "⌘, didn't show Settings"
+settings_drew
+send clickkey $(drawn "toolbar Features")
+expect '^browser: settings tab Features$' "a click on Features didn't show its section"
+settings_drew Features
+drawn "widevine remove" > /dev/null || fail "Settings' Widevine row offered no Remove"
+drawn "widevine restart" > /dev/null || fail "Settings' Widevine row offered no restart"
+../tools/window-screenshot.sh "$pid" "$out/widevine-settings.png" all || fail "no screen to capture"
 quit
 
 # Launched again, Chromium loads the module and the page plays, with no note. The Spaces saved at
@@ -87,4 +98,4 @@ grep -q "^browser: widevine state ready\$" "$log" || fail "the core didn't say t
 grep -qE "^browser: drm note [0-9]+ at " "$log" && fail "the note showed with the module loaded"
 ../tools/window-screenshot.sh "$pid" "$out/widevine-playing.png" || fail "no window to capture"
 quit
-echo "ok: the protected-media note downloads Google's Widevine module at its yes, and after a restart Shaka's Widevine stream plays with no note. Windows: $out/widevine-note.png, $out/widevine-restart.png, $out/widevine-playing.png"
+echo "ok: the protected-media note downloads Google's Widevine module at its yes, Settings' row then offers the restart beside Remove, and after a restart Shaka's Widevine stream plays with no note. Windows: $out/widevine-note.png, $out/widevine-restart.png, $out/widevine-settings.png, $out/widevine-playing.png"

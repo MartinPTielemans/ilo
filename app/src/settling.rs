@@ -4,7 +4,8 @@
 //! double-click the user already started, and the second click mustn't answer it. What only puts
 //! the question off, such as ×, escape or Not Now, works at once.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{App, Task};
 
@@ -34,6 +35,7 @@ impl Settling {
 
     /// Whether the card has been on screen long enough to take an answer.
     pub fn settled(&self, cx: &App) -> bool {
-        self.from.is_some_and(|from| cx.background_executor().now() >= from)
+        self.from
+            .is_some_and(|from| cx.background_executor().now() >= from)
     }
 }

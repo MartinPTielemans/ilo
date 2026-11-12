@@ -1,6 +1,7 @@
 #include "browser_core/window.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <iterator>
 #include <numeric>
@@ -29,6 +30,7 @@
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
+#include "browser_core/mini_player.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/profiles.h"
@@ -36,7 +38,9 @@
 #include "browser_core/side_panel.h"
 #include "browser_core/space.h"
 #include "browser_core/suggest.h"
+#include "browser_core/sync.h"
 #include "browser_core/tab.h"
+#include "browser_core/window_frames.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/devtools/devtools_contents_resizing_strategy.h"
@@ -98,6 +102,13 @@ namespace browser_core {
 
 namespace {
 
+// Whether |contents| is a tab in a Browser's tab strip. One Chrome is taking out isn't, from
+// within its change to the tabs, where Chrome tells its observers once the tab has left.
+bool InTabStrip(content::WebContents* contents) {
+  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
+  return tab && tab->GetBrowserWindowInterface();
+}
+
 std::map<bc_id, std::unique_ptr<Window>>& Windows() {
   static base::NoDestructor<std::map<bc_id, std::unique_ptr<Window>>> windows;
   return *windows;
@@ -128,10 +139,16 @@ struct ClosedTab {
   size_t index = 0;
   SavedTab saved;
   // A tab of the split view it was in, else 0, its place in the split, and whether the split was
-  // stacked.
+  // stacked, with its name and icon.
   bc_id split_with = 0;
   size_t split_index = 0;
   bool stacked = false;
+  std::string split_name;
+  std::string split_icon;
+  // Whether it closed in a Little ilo window, which ⇧⌘T reopens it in a new one of, in the profile
+  // in the directory |profile| (window_reopen_little).
+  bool little = false;
+  std::string profile;
 };
 
 // As many as Chrome keeps.
@@ -156,6 +173,34 @@ std::vector<double> ExpandedShares(size_t count, size_t focused, int length) {
   std::vector<double> shares(count, other);
   shares[focused] = 1 - other * (count - 1);
   return shares;
+}
+
+// What shows with |tab|, in its order: its split's tabs, a Space's or a favorite's, else |tab|.
+std::vector<bc_id> PanesWith(bc_id tab) {
+  if (const Space* space = Space::Holding(tab)) {
+    return space->Panes(tab);
+  }
+  if (std::vector<bc_id> panes = Favorites::Panes(tab); !panes.empty()) {
+    return panes;
+  }
+  return {tab};
+}
+
+// How |tab|'s split shows its pages: stacked, each page's share, and the page that took its card.
+struct SplitLook {
+  bool stacked = false;
+  std::vector<double> shares;
+  bc_id expanded = 0;
+};
+
+SplitLook LookOf(bc_id tab) {
+  if (const Space* space = Space::Holding(tab)) {
+    return {space->Stacked(tab), space->Shares(tab), space->Expanded(tab)};
+  }
+  if (const SplitView* split = Favorites::SplitOf(tab)) {
+    return {split->stacked, split->shares, split->expanded};
+  }
+  return {};
 }
 
 // The Spaces going once their last tab closes.
@@ -193,15 +238,25 @@ void KeepClosed(bc_id id) {
   Tab* tab = Tab::Get(id);
   Space* space = Space::Holding(id);
   // One not in a Space never showed, a pinned tab closes only when its page closes itself, and a
-  // private window's leaves nothing behind.
-  if (!tab || !space || space->IsPinned(id) || space->off_the_record()) {
+  // private window's leaves nothing behind. An agent's pages aren't the user's to find again
+  // (#1408). A Little ilo window's goes in the archive, as Arc's Little Arc's do, and ⇧⌘T reopens
+  // it in another.
+  if (!tab || !space || space->IsPinned(id) || space->off_the_record() || space->agent()) {
     return;
   }
   SavedTab saved = tab->Save();
   if (saved.history.empty()) {
     return;
   }
-  Archive(id, saved.history[saved.current].virtual_url(), tab->Title());
+  // A Blank Window's goes in the archive, so nothing closed is lost, but not in the closed tabs
+  // ⇧⌘T reopens, whose Space went with its window.
+  if (space->blank()) {
+    Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->node().id,
+            /*little=*/false);
+    return;
+  }
+  Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->node().id,
+          space->little());
   const size_t index = std::ranges::find(space->today(), id) - space->today().begin();
   const std::vector<bc_id> panes = space->Panes(id);
   const size_t split_index = std::ranges::find(panes, id) - panes.begin();
@@ -211,7 +266,11 @@ void KeepClosed(bc_id id) {
                           .saved = std::move(saved),
                           .split_with = panes.size() < 2 ? 0 : panes[split_index == 0 ? 1 : 0],
                           .split_index = split_index,
-                          .stacked = space->Stacked(id)});
+                          .stacked = space->Stacked(id),
+                          .split_name = space->SplitName(id),
+                          .split_icon = space->SplitIcon(id),
+                          .little = space->little(),
+                          .profile = space->profile()});
   if (ClosedTabs().size() > kMaxClosedTabs) {
     ClosedTabs().erase(ClosedTabs().begin());
   }
@@ -227,6 +286,19 @@ std::optional<ClosedTab> TakeClosed(bc_id id) {
   ClosedTabs().erase(closed);
   Unarchive(id);
   return tab;
+}
+
+// Gives the split |tab| is back in what it had when |closed| closed: stacked, a name, an icon.
+void RemakeSplit(Space& space, bc_id tab, const ClosedTab& closed) {
+  if (closed.stacked) {
+    space.SetStacked(tab, true);
+  }
+  if (!closed.split_name.empty()) {
+    space.SetSplitName(tab, closed.split_name);
+  }
+  if (!closed.split_icon.empty()) {
+    space.SetSplitIcon(tab, closed.split_icon);
+  }
 }
 
 // A new tab in |dir|'s profile with |tab|'s history, name and mute, in no Space and without its
@@ -349,15 +421,18 @@ Window* Window::Open(const gfx::Rect& bounds, void* ui_view, bool behind) {
 }
 
 // static
-Window* Window::OpenPrivate(const gfx::Rect& bounds, void* ui_view, Profile* profile) {
+Window* Window::OpenOwn(const gfx::Rect& bounds, void* ui_view, Profile* profile, Space::Own own) {
   Window* window = Open(bounds, ui_view);
   if (!window) {
     return nullptr;
   }
-  window->off_the_record_ = true;
-  // Its Browser now, which holds the private session for as long as the window is open.
-  window->BrowserFor(StartPrivateSession(profile));
-  window->ShowSpace(Space::CreateOffTheRecord(DirOf(profile))->id(), /*page=*/false);
+  window->own_space_ = true;
+  if (own == Space::Own::kPrivate) {
+    window->off_the_record_ = true;
+    // Its Browser now, which holds the private session for as long as the window is open.
+    window->BrowserFor(StartPrivateSession(profile));
+  }
+  window->ShowSpace(Space::CreateOwn(DirOf(profile), own)->id(), /*page=*/false);
   return window;
 }
 
@@ -408,6 +483,13 @@ Window* Window::Showing(bc_id tab) {
 }
 
 // static
+void Window::MiniPlayerTookKeyboard() {
+  for (auto& [id, window] : Windows()) {
+    window->left_ = false;
+  }
+}
+
+// static
 void Window::PageViewChanged(bc_id tab) {
   for (Window* window : All()) {
     if (std::ranges::contains(window->panes_, tab)) {
@@ -426,9 +508,7 @@ Window* Window::Picturing(bc_id tab) {
       continue;
     }
     // A split view's pages move together, so the picture of one stands for them all.
-    Space* space = Space::Holding(window->selected_);
-    if (space ? std::ranges::contains(space->Panes(window->selected_), tab)
-              : window->selected_ == tab) {
+    if (std::ranges::contains(PanesWith(window->selected_), tab)) {
       return window;
     }
   }
@@ -471,10 +551,11 @@ Window* Window::Holding(bc_id tab) {
   }
   const Space* space = Space::Holding(tab);
   for (Window* window : All()) {
-    if (window->closing_ || window->off_the_record_ != OffTheRecord(held)) {
+    if (window->closing_ || window->off_the_record_ != OffTheRecord(held) ||
+        window->own_space_ != (space && space->own())) {
       continue;
     }
-    if (!window->off_the_record_ || (space && space->id() == window->space_)) {
+    if (!window->own_space_ || space->id() == window->space_) {
       return window;
     }
   }
@@ -500,14 +581,14 @@ void Window::PanesChanged() {
       continue;
     }
     const bc_id selected = window->selected_;
-    // A favorite is in no split.
-    Space* space = Space::Holding(selected);
-    if (selected && (space ? space->Panes(selected) : std::vector<bc_id>{selected}) !=
-                        window->panes_) {
+    if (!selected) {
+      continue;
+    }
+    const SplitLook look = LookOf(selected);
+    if (PanesWith(selected) != window->panes_) {
       window->Select(selected);
-    } else if (space && (space->Stacked(selected) != window->stacked_ ||
-                         space->Expanded(selected) != window->expanded_ ||
-                         (!window->expanded_ && space->Shares(selected) != window->shares_))) {
+    } else if (look.stacked != window->stacked_ || look.expanded != window->expanded_ ||
+               (!window->expanded_ && look.shares != window->shares_)) {
       window->LayOutPage();
     }
   }
@@ -517,8 +598,7 @@ void Window::PanesChanged() {
 bool Window::SplitTogether(content::WebContents* contents, content::WebContents* other) {
   const Tab* tab = Tab::FromWebContents(contents);
   const Tab* with = Tab::FromWebContents(other);
-  const Space* space = tab && with ? Space::Holding(tab->id()) : nullptr;
-  return space && tab != with && std::ranges::contains(space->Panes(tab->id()), with->id());
+  return tab && with && tab != with && std::ranges::contains(PanesWith(tab->id()), with->id());
 }
 
 // static
@@ -551,7 +631,9 @@ void Window::OnPageClicked(bc_id tab) {
 // static
 void Window::ActivateContents(content::WebContents* contents) {
   const bc_id tab = Tab::IdOf(contents);
-  if (Window* window = tab ? Holding(tab) : nullptr) {
+  // A tab the window shows already stays as it is: a notification's click brings its tab forward,
+  // and the page's own window.focus() in its click handler then asks again (#685).
+  if (Window* window = tab ? Holding(tab) : nullptr; window && window->selected_ != tab) {
     window->Select(tab);
   }
 }
@@ -591,7 +673,8 @@ void Window::TrimPageMenu(BrowserWindowInterface* browser, ui::SimpleMenuModel& 
   }
   // Arc's menu is Chrome's without Lens, Reading Mode, Listen, QR Code, Send to Your Devices, Copy
   // Link Text and the items whose UI is Chrome's side panel or Gemini's (ux-spec.md › Page menu).
-  // Translate waits for the browser to have it. Cast… opens the app's card (CastDialog).
+  // Translate is the URL field's (#671): Chrome's needs Google's servers. Cast… opens the app's card
+  // (CastDialog).
   static constexpr int kTrimmed[] = {
       IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE,
       IDC_CONTENT_CONTEXT_SEARCHLENSFORVIDEOFRAME,
@@ -630,11 +713,59 @@ void Window::TrimPageMenu(BrowserWindowInterface* browser, ui::SimpleMenuModel& 
 }
 
 // static
+Window* Window::ForUnplaced(const NavigateParams& params) {
+  // A page's own new tab or window comes with its Browser, and so does whatever a window does.
+  if (params.browser || params.source_contents || params.contents_to_insert) {
+    return nullptr;
+  }
+  // Only what makes a tab: a navigation in "the current tab" of no Browser would take whichever
+  // tab a window's Browser has active, which isn't the one it shows.
+  switch (params.disposition) {
+    case WindowOpenDisposition::NEW_FOREGROUND_TAB:
+    case WindowOpenDisposition::NEW_BACKGROUND_TAB:
+    case WindowOpenDisposition::NEW_WINDOW:
+    case WindowOpenDisposition::NEW_POPUP:
+      break;
+    default:
+      return nullptr;
+  }
+  Profile* profile = params.initiating_profile;
+  if (!profile || profile->IsOffTheRecord()) {
+    return nullptr;
+  }
+  // The user's own window active last whose Space is one of the user's in the navigation's
+  // profile, so its tab goes into a Space of that profile, as the tab opened then goes to the Space
+  // shown: not an agent's, which a window shows while a task's page is watched.
+  const std::string dir = DirOf(profile);
+  for (Window* window : All()) {
+    const Space* shown = Space::FromId(window->space_);
+    if (!window->closing_ && !window->off_the_record_ && !window->own_space_ && shown &&
+        !shown->agent() && shown->profile() == dir) {
+      return window;
+    }
+  }
+  return nullptr;
+}
+
+// static
 void Window::AdjustNavigate(NavigateParams& params) {
+  // A navigation with no Browser, such as DevTools' PUT /json/new (#1831), Chrome opens in the
+  // profile's tabbed Browser it activated last, else in a window of its own with a tab strip. A
+  // window makes its profile's Browser only once one of its tabs gets a page there, and a launch
+  // puts tabs back without one, so a window showing no page has none for Chrome to find. The
+  // user's window takes it instead, in the Space it shows, as ⌘T's tab would go there.
+  if (Window* front = ForUnplaced(params)) {
+    if (BrowserWindowInterface* browser = front->BrowserFor(params.initiating_profile)) {
+      params.browser = browser;
+    }
+  }
   Window* window = params.browser ? ForBrowser(params.browser) : nullptr;
   if (!window) {
     return;
   }
+  // What a pop-up asked is this navigation's alone, so none is left from one that opened nothing.
+  window->popup_.reset();
+  window->popup_placed_ = false;
   // The page menu's Open Link in New Window and in Incognito Window: the app opens its windows, as
   // for ⌘N and ⇧⌘N. A private window's link stays private either way, as Chrome's does.
   if (params.started_from_context_menu &&
@@ -659,11 +790,78 @@ void Window::AdjustNavigate(NavigateParams& params) {
             ProfileId(DirOf(profile->GetOriginalProfile())), private_window));
     return;
   }
-  // ⌥-click on a link opens it beside its page in a split view, as Arc's does, and so does
-  // ⌥⌘-click, as Chrome's does (chromium-core-alt-click-split.patch).
   Tab* source = params.source_contents ? Tab::FromWebContents(params.source_contents) : nullptr;
+  // A page in an agent's Space the user isn't looking at opens its tabs and windows there, behind,
+  // loading at once, as the agent's own: it works in its own tabs and never changes what the user
+  // sees (#1470). Chrome gives a tab opened from a link the tab it shows as its opener, so the
+  // window keeps which. One the user is looking at opens them as any page does.
+  const bc_id source_id = source ? Tab::IdOf(params.source_contents) : 0;
+  const Space* source_space = source ? Space::Holding(source_id) : nullptr;
+  const bool for_agent = source_space && source_space->agent() && !Showing(source_id);
+  window->agent_opener_ = 0;
+  if (for_agent && (params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
+                    params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
+                    params.disposition == WindowOpenDisposition::NEW_POPUP ||
+                    params.disposition == WindowOpenDisposition::NEW_WINDOW ||
+                    params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW)) {
+    params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+    window->agent_opener_ = source_id;
+  }
+  // ⌥⌘-click on a link opens it in a Little ilo window, as Arc's does in Little Arc (the owner's
+  // call over Chrome's split, 2026-10-29). The page asks for a split view, as for ⌥-click, so the
+  // press it came from tells them apart. A private window's opens beside its page, as its links
+  // stay private, and the link menu's Open Link in Split View splits.
+  Profile* clicked_in = params.browser->GetProfile();
+  const bool little_click = source &&
+                            params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&
+                            source->last_press_held_command() &&
+                            !params.started_from_context_menu && !clicked_in->IsOffTheRecord();
+  // With Little ilo off (bc_little_windows) it opens as ⌘-click does, in a tab behind.
+  if (little_click && !UserSettings().little_windows) {
+    params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  } else if (little_click && Host().window_open_little) {
+    params.disposition = WindowOpenDisposition::IGNORE_ACTION;
+    // Posted, as for Open Link in New Window above.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<Window> window, const std::string& url, bc_id profile_id) {
+                         if (window && Host().window_open_little) {
+                           Host().window_open_little(Host().context, window->id(), url.c_str(),
+                                                     profile_id);
+                         }
+                       },
+                       window->weak_factory_.GetWeakPtr(), params.url.spec(),
+                       ProfileId(DirOf(clicked_in))));
+    return;
+  }
+  // ⇧-click on a web link, which Chrome opens in a new window: the app may open it in a link
+  // preview instead (the owner, 2026-11-02, #1370). Not a page's window.open(), which holds the
+  // page it made, or a form sent.
+  if (source && params.disposition == WindowOpenDisposition::NEW_WINDOW &&
+      !params.started_from_context_menu && params.user_gesture && !params.contents_to_insert &&
+      !params.post_data && params.url.SchemeIsHTTPOrHTTPS() && Host().tab_link_to_preview) {
+    const gfx::PointF click = source->last_click();
+    // The app only answers here: it opens the preview after this call, outside the navigation.
+    if (Host().tab_link_to_preview(Host().context, Tab::IdOf(params.source_contents),
+                                   params.url.spec().c_str(), click.x(), click.y())) {
+      params.disposition = WindowOpenDisposition::IGNORE_ACTION;
+      return;
+    }
+  }
+  // ⌥-click on a link opens it beside its page in a split view, as Arc's does
+  // (chromium-core-alt-click-split.patch).
   const bool split = source && params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW;
   window->split_with_ = split ? Tab::IdOf(params.source_contents) : 0;
+  // A page's pop-up, as a sign-in's: the app hears what it asked for with its tab (tab_popup).
+  if (source && params.disposition == WindowOpenDisposition::NEW_POPUP) {
+    const blink::mojom::WindowFeatures& features = params.window_features;
+    const gfx::Rect& asked = features.bounds;
+    window->popup_ = bc_rect{
+        static_cast<double>(asked.x()), static_cast<double>(asked.y()),
+        features.has_width ? static_cast<double>(asked.width()) : 0.,
+        features.has_height ? static_cast<double>(asked.height()) : 0.};
+    window->popup_placed_ = features.has_x && features.has_y;
+  }
   // Popups become tabs (decision 3). So do new windows: the app opens its own.
   if (split || params.disposition == WindowOpenDisposition::NEW_POPUP ||
       params.disposition == WindowOpenDisposition::NEW_WINDOW) {
@@ -672,14 +870,15 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // A link a page opens behind, as by ⌘-click, loads only once its tab is first shown (Dia). A
   // form sent to a tab behind goes at once, when the user sent it, and a window the page made
   // itself already has its page and the page's hold on it.
-  if (source && params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB &&
+  if (source && !for_agent && params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB &&
       params.url.SchemeIsHTTPOrHTTPS() && !params.post_data && !params.contents_to_insert) {
     content::WebContents* contents = window->OpenBehind(params);
     // Posted, as for the tabs Chrome opens.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Window::ReportTabOpened, window->weak_factory_.GetWeakPtr(),
                                   Tab::IdOf(contents), Tab::IdOf(params.source_contents),
-                                  /*foreground=*/false, /*split_with=*/0));
+                                  /*foreground=*/false, /*split_with=*/0,
+                                  /*popup=*/std::nullopt, /*popup_placed=*/false));
     params.disposition = WindowOpenDisposition::IGNORE_ACTION;
   }
   // Chrome's downloads page, which it opens after the user stopped a quit to let downloads finish,
@@ -705,15 +904,24 @@ void Window::OnTabClosing(bc_id tab) {
     return;
   }
   // One closing with the last regular window, or as the browser quits, comes back at the next
-  // launch. A private window's never does.
+  // launch. A window's own Space's never does.
   const auto regular_closing = [](const auto& entry) {
-    return entry.second->closing_ && !entry.second->off_the_record_;
+    return entry.second->closing_ && !entry.second->own_space_;
   };
-  if (!(space && space->off_the_record()) &&
+  if (!(space && space->own()) &&
       (browser_shutdown::IsTryingToQuit() || std::ranges::any_of(Windows(), regular_closing))) {
     KeepSession();
   }
   const bc_id next = space ? space->NextAfterLeaving(tab, &Tab::Loaded) : 0;
+  // A favorite split's page closing leaves the rest of it to show, the one on its right first.
+  bc_id beside = 0;
+  if (!space) {
+    const std::vector<bc_id> panes = Favorites::Panes(tab);
+    const auto at = std::ranges::find(panes, tab);
+    auto right = std::find_if(at == panes.end() ? at : at + 1, panes.end(), &Tab::Loaded);
+    auto left = std::find_if(std::make_reverse_iterator(at), panes.rend(), &Tab::Loaded);
+    beside = right != panes.end() ? *right : left != panes.rend() ? *left : 0;
+  }
   if (space) {
     space->Remove(tab);
   } else {
@@ -723,8 +931,10 @@ void Window::OnTabClosing(bc_id tab) {
   for (Window* window : All()) {
     if (window->selected_ == tab) {
       window->selected_ = 0;
-      Space* shown = space ? nullptr : Space::FromId(window->space_);
-      window->next_after_closing_ = shown ? shown->NextAfterLeaving(tab, &Tab::Loaded) : next;
+      Space* shown = space || beside ? nullptr : Space::FromId(window->space_);
+      window->next_after_closing_ = beside ? beside
+                                    : shown ? shown->NextAfterLeaving(tab, &Tab::Loaded)
+                                            : next;
 #if BUILDFLAG(IS_LINUX)
       // Until the next page shows, keys in nothing reach no shortcut, as ⌘T straight after ⌘W
       // would, where the Mac's menu bar takes them: the UI holds them for it, as with no page
@@ -758,7 +968,7 @@ void Window::Unload(bc_id tab, bool split) {
   if ((space ? !space->IsPinned(tab) : !Favorites::Has(tab)) || !Tab::Get(tab)) {
     return;
   }
-  const std::vector<bc_id> going = space && split ? space->Panes(tab) : std::vector<bc_id>{tab};
+  const std::vector<bc_id> going = split ? PanesWith(tab) : std::vector<bc_id>{tab};
   const auto staying = [&going](bc_id other) {
     return !std::ranges::contains(going, other) && Tab::Loaded(other);
   };
@@ -766,6 +976,8 @@ void Window::Unload(bc_id tab, bool split) {
   // Out of its split, so showing the rest of it doesn't load it again.
   if (space && !split) {
     space->Separate(tab);
+  } else if (!split) {
+    Favorites::Separate(tab);
   }
   // Another tab first, so the pages unload out of sight.
   for (Window* window : All()) {
@@ -799,7 +1011,7 @@ void Window::MoveToFavorites(bc_id tab, size_t index) {
   Tab* moving = Tab::Get(tab);
   Space* space = Space::Holding(tab);
   // A private window's tabs are never saved, as the favorites are.
-  if (!moving || !space || space->off_the_record()) {
+  if (!moving || !space || space->own()) {
     return;
   }
   // Under Each Space the favorites are the user's Spaces' own, and an agent's has none.
@@ -818,31 +1030,100 @@ void Window::MoveToFavorites(bc_id tab, size_t index) {
 }
 
 // static
+void Window::MoveSplitToFavorites(bc_id tab, size_t index) {
+  if (Favorites::Has(tab)) {
+    Favorites::Move(tab, index);
+    return;
+  }
+  Space* space = Space::Holding(tab);
+  const std::vector<bc_id> panes = space ? space->Panes(tab) : std::vector<bc_id>();
+  if (panes.size() < 2) {
+    MoveToFavorites(tab, index);
+    return;
+  }
+  // As MoveToFavorites: never a private window's, nor an agent's under Each Space.
+  if (space->own() || (space->agent() && Favorites::scope() == BC_FAVORITES_SPACE) ||
+      std::ranges::any_of(panes, [](bc_id pane) { return !Tab::Get(pane); })) {
+    return;
+  }
+  SplitView split{.tabs = panes,
+                  .stacked = space->Stacked(tab),
+                  .shares = space->Shares(tab),
+                  .expanded = space->Expanded(tab),
+                  .name = space->SplitName(tab),
+                  .icon = space->SplitIcon(tab),
+                  .focused = tab};
+  // Focused where a window shows it focused.
+  for (Window* window : All()) {
+    if (std::ranges::contains(panes, window->selected_)) {
+      split.focused = window->selected_;
+      break;
+    }
+  }
+  std::vector<GURL> urls;
+  for (bc_id pane : panes) {
+    urls.push_back(space->IsPinned(pane) ? space->PinnedUrl(pane) : Tab::Get(pane)->Url());
+  }
+  // In the favorites before they leave their Space, as MoveToFavorites.
+  Favorites::AddSplit(std::move(split), urls, index, space->id());
+  for (bc_id pane : panes) {
+    space->Remove(pane);
+  }
+  PanesChanged();
+  for (bc_id pane : panes) {
+    Tab::Get(pane)->StateChanged();
+  }
+}
+
+// static
 void Window::Unfavorite(bc_id tab, bool pinned, bc_id folder, size_t index) {
-  Tab* moving = Tab::Get(tab);
   Window* window = Holding(tab);
   Space* shown = window ? Space::FromId(window->space_) : nullptr;
   // A favorite is the user's, so it doesn't move into an agent's Space.
-  if (!shown || shown->agent() || shown->off_the_record() || !Favorites::ShownIn(tab, *shown)) {
+  if (!shown || shown->agent() || shown->own() || !Favorites::ShownIn(tab, *shown)) {
     return;
   }
+  // A split goes whole, a split there too, as it looked.
+  const std::vector<bc_id> panes = Favorites::Panes(tab);
+  const SplitView* split = Favorites::SplitOf(tab);
+  const SplitView look = split ? *split : SplitView();
   // In the Space before it leaves the favorites, as above.
-  if (pinned) {
-    shown->AddPinned(tab, folder, index, Favorites::Url(tab));
-  } else {
-    shown->AddAt(tab, index);
+  for (size_t i = 0; i < panes.size(); ++i) {
+    const bc_id pane = panes[i];
+    if (pinned) {
+      shown->AddPinned(pane, folder, index, Favorites::Url(pane));
+    } else {
+      shown->AddAt(pane, index);
+    }
+    if (i > 0) {
+      shown->Split(pane, panes[i - 1], Favorites::Url(pane), /*left=*/false);
+    }
   }
-  // Under Every Space, the site's tabs in the other profiles close.
-  Favorites::Unfavorite(tab);
-  // So it isn't archived at once.
-  moving->set_last_seen(base::Time::Now());
-  moving->StateChanged();
+  if (panes.size() > 1) {
+    shown->SetStacked(tab, look.stacked);
+    shown->SetShares(tab, look.shares);
+    if (look.expanded) {
+      shown->SetExpanded(look.expanded, true);
+    }
+    shown->SetSplitName(tab, look.name);
+    shown->SetSplitIcon(tab, look.icon);
+  }
+  for (bc_id pane : panes) {
+    // Under Every Space, the site's tabs in the other profiles close.
+    Favorites::Unfavorite(pane);
+    if (Tab* moving = Tab::Get(pane)) {
+      // So it isn't archived at once.
+      moving->set_last_seen(base::Time::Now());
+      moving->StateChanged();
+    }
+  }
+  PanesChanged();
 }
 
 // static
 void Window::SetSpaceProfile(bc_id space, const std::string& profile) {
   Space* in = Space::FromId(space);
-  if (!in || in->off_the_record() || !in->pinned_rows().empty() || !in->today().empty() ||
+  if (!in || in->own() || !in->pinned_rows().empty() || !in->today().empty() ||
       in->profile() == profile) {
     return;
   }
@@ -880,7 +1161,7 @@ void Window::HiddenFavoritesGone() {
 }
 
 // static
-void Window::CloseTab(bc_id tab) {
+void Window::CloseTab(bc_id tab, bool discard) {
   // One without its page has no unload handlers to keep it.
   if (Tab* closing = Tab::Get(tab); closing && !closing->web_contents()) {
     KeepClosed(tab);
@@ -893,6 +1174,10 @@ void Window::CloseTab(bc_id tab) {
     return;
   }
   TabStripModel* tabs = in->GetBrowserWindowInterface()->GetTabStripModel();
+  if (discard) {
+    tabs->DetachAndDeleteWebContentsAt(tabs->GetIndexOfWebContents(contents));
+    return;
+  }
   tabs->CloseWebContentsAt(tabs->GetIndexOfWebContents(contents),
                            TabCloseTypes::CLOSE_USER_GESTURE);
 }
@@ -917,15 +1202,52 @@ void Window::CloseBelow(bc_id tab) {
   }
 }
 
+bc_id Window::TakeTab(bc_id tab) {
+  Space* from = Space::Holding(tab);
+  Space* to = Space::FromId(space_);
+  // Only a Little ilo window's empty Space takes one, of the user's own Today tabs in its profile:
+  // a pinned tab or a favorite keeps its place, an agent's stays out of the user's window, and a
+  // page can't take its cookies to another profile or out of incognito.
+  if (!own_space_ || off_the_record_ || !from || !to || from == to || !to->today().empty() ||
+      from->own() || from->off_the_record() || from->agent().has_value() ||
+      from->profile() != to->profile() || from->IsPinned(tab) || Favorites::Has(tab) ||
+      from->Panes(tab).size() > 1 || DeletingSpaces().contains(from->id())) {
+    return 0;
+  }
+  const bc_id next = from->NextAfterLeaving(tab, &Tab::Loaded);
+  // In its new Space before it leaves the old, as MoveToSpace does.
+  to->AddAt(tab, 0);
+  from->Remove(tab);
+  // Its page comes here, which lets go of it in the window that showed it.
+  Select(tab);
+  for (auto& [id, window] : Windows()) {
+    if (id == id_) {
+      continue;
+    }
+    if (window->selected_ == tab) {
+      window->selected_ = next;
+      if (next) {
+        window->Pick(next);
+      } else {
+        window->ShowNothing();
+      }
+    } else if (window->SelectedIn(from->id()) == tab) {
+      window->SetSelectedIn(from->id(), next);
+    }
+  }
+  PanesChanged();
+  return tab;
+}
+
 // static
 void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   Space* from = Space::Holding(tab);
   Space* to = Space::FromId(space);
   // No tab moves into an agent's Space, which would put it in the agent's reach, unless the user
-  // gives it, and Chrome never moves a page between incognito and regular windows.
+  // gives it, and Chrome never moves a page between incognito and regular windows. A tab leaves a
+  // Little ilo window's Space for the user's, as ⌘O moves it, and none goes into one.
   if (!from || !to || from == to || to->agent().has_value() != to_agent ||
-      from->off_the_record() || to->off_the_record() ||
-      DeletingSpaces().contains(space)) {
+      from->off_the_record() || to->own() || DeletingSpaces().contains(space)) {
     return;
   }
   // A page can't take its cookies and logins to another profile, so it opens there again.
@@ -936,6 +1258,10 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   const bool pinned = from->IsPinned(tab);
   const GURL url = from->PinnedUrl(tab);
   const bc_id next = from->NextAfterLeaving(tab, &Tab::Loaded);
+  // A Today tab keeps its node's id, so sync moves it on the account's other devices rather than
+  // closing it into their archives and opening it again there.
+  const Space::Node* node = pinned ? nullptr : from->NodeOf(tab);
+  const base::Uuid kept = node ? node->id : base::Uuid();
   // In its new Space before it leaves the old, so the UI never hears of it in neither and forgets
   // its title.
   if (pinned) {
@@ -944,24 +1270,83 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
     to->AddAt(moved, 0);
   }
   from->Remove(tab);
-  for (auto& [id, window] : Windows()) {
-    if (window->selected_ == tab && window->let_go_) {
-      // Its page went to another window, which takes it along.
-      window->Pick(next);
-    } else if (window->selected_ == tab) {
-      // ShowSpace keeps |next| as the tab the old Space shows.
-      window->selected_ = next;
-      window->SetSelectedIn(space, moved);
-      window->ShowSpace(space);
-    } else if (window->SelectedIn(from->id()) == tab) {
-      window->SetSelectedIn(from->id(), next);
-    }
+  if (kept.is_valid()) {
+    // Its place was among the old Space's tabs, so it gets one at the top of the new one's.
+    to->RestoreNodes(to->node(), {{moved, Space::Node{kept, syncer::UniquePosition()}}});
   }
+  FollowMove(tab, moved, from->id(), space, next);
   // Out of its Space, it isn't kept for ReopenClosedTab or archived.
   if (moved != tab) {
     CloseTab(tab);
   }
   PanesChanged();
+}
+
+// static
+void Window::MoveFolderToSpace(bc_id folder, bc_id space) {
+  Space* from = Space::HoldingFolder(folder);
+  Space* to = Space::FromId(space);
+  // Where MoveToSpace takes a pinned tab the user doesn't give to an agent.
+  if (!from || !to || from == to || to->agent() || to->own() || DeletingSpaces().contains(space)) {
+    return;
+  }
+  std::vector<bc_id> tabs;
+  for (bc_id row : from->pinned_rows()) {
+    if (!from->IsFolder(row) && from->Within(row, folder)) {
+      tabs.push_back(row);
+    }
+  }
+  std::map<bc_id, bc_id> copies;
+  if (from->profile() != to->profile()) {
+    for (bc_id tab : tabs) {
+      const bc_id copy = CopyToProfile(tab, to->profile());
+      if (!copy) {
+        // The folder goes whole or not at all.
+        for (const auto& [tab_copied, made] : copies) {
+          CloseTab(made);
+        }
+        return;
+      }
+      copies[tab] = copy;
+    }
+  }
+  to->TakeFolder(*from, folder, copies);
+  // What the old Space shows next is none of the folder's.
+  const bc_id next = from->NextAfterLeaving(folder, &Tab::Loaded);
+  for (bc_id tab : tabs) {
+    auto copy = copies.find(tab);
+    FollowMove(tab, copy == copies.end() ? tab : copy->second, from->id(), space, next);
+  }
+  for (const auto& [tab, made] : copies) {
+    CloseTab(tab);
+  }
+  PanesChanged();
+}
+
+// static
+void Window::FollowMove(bc_id tab, bc_id moved, bc_id from, bc_id space, bc_id next) {
+  for (auto& [id, window] : Windows()) {
+    if (window->selected_ == tab && window->let_go_) {
+      // Its page went to another window, which takes it along.
+      window->Pick(next);
+    } else if (window->selected_ == tab && window->own_space_) {
+      // Only its own window shows a window's own Space, so the page waits for the window the app
+      // shows it in next (bc_window_select), as ⌘O does.
+      window->selected_ = next;
+      if (next) {
+        window->Pick(next);
+      } else {
+        window->ShowNothing();
+      }
+    } else if (window->selected_ == tab) {
+      // ShowSpace keeps |next| as the tab the old Space shows.
+      window->selected_ = next;
+      window->SetSelectedIn(space, moved);
+      window->ShowSpace(space);
+    } else if (window->SelectedIn(from) == tab) {
+      window->SetSelectedIn(from, next);
+    }
+  }
 }
 
 // static
@@ -978,7 +1363,9 @@ bool Window::DeleteSpace(bc_id space) {
   deleted.id = space;
   const std::vector<Space*> all = Space::All();
   deleted.at = static_cast<size_t>(std::ranges::find(all, space, &Space::id) - all.begin());
-  deleted.shown = Order().empty() ? 0 : FromId(Order().front())->SelectedIn(space);
+  // With no window left, as at quit once the last has closed, it shows nothing (#1687).
+  const std::vector<Window*> windows = All();
+  deleted.shown = windows.empty() ? 0 : windows.front()->SelectedIn(space);
   deleted.saved = SaveSpace(**it, deleted.shown, &deleted.today);
   if (DeletedSpaces().size() > kMaxClosedTabs) {
     // |deleted| is the last, which stays.
@@ -1033,6 +1420,10 @@ Window::Window(bc_id id, const gfx::Rect& bounds, void* ui_view, bool behind)
 #endif
   widget_->Init(std::move(params));
   widget_observation_.Observe(widget_.get());
+#if BUILDFLAG(IS_LINUX)
+  // Where it opens, for a window manager that maximizes it before it ever moves.
+  KeepNormalFrame(normal_frames_, widget_->GetWindowBoundsInScreen());
+#endif
   platform::AddWindowViews(widget_.get(), ui_view);
   if (behind) {
     widget_->ShowInactive();
@@ -1085,7 +1476,8 @@ BrowserWindowInterface* Window::BrowserFor(Profile* profile) {
 content::WebContents* Window::RestoreTab(
     Profile* profile,
     base::span<const sessions::SerializedNavigationEntry> history,
-    int current) {
+    int current,
+    content::SessionStorageNamespaceHandle* storage) {
   BrowserWindowInterface* browser = BrowserFor(profile);
   if (!browser) {
     return nullptr;
@@ -1094,7 +1486,7 @@ content::WebContents* Window::RestoreTab(
   return chrome::AddRestoredTab(
       browser, history, browser->GetTabStripModel()->count(), current, /*extension_app_id=*/"",
       /*group=*/std::nullopt, /*select=*/false, /*pin=*/false, base::TimeTicks(), base::Time(),
-      /*storage_namespace=*/nullptr, sessions::SerializedUserAgentOverride(),
+      /*storage_namespace=*/storage, sessions::SerializedUserAgentOverride(),
       /*extra_data=*/{}, /*from_session_restore=*/true, /*is_active_browser=*/std::nullopt);
 }
 
@@ -1121,10 +1513,16 @@ void Window::LetProfileGo(Profile* profile) {
   }
 }
 
-void Window::RemoveSuggestion(const GURL& url) {
-  if (suggestions_) {
-    suggestions_->Remove(url);
-  }
+bc_id Window::RemoveSuggestion(const GURL& url) {
+  return suggestions_ ? suggestions_->Remove(url) : 0;
+}
+
+bool Window::UndoRemoveSuggestion(bc_id removal) {
+  return suggestions_ && suggestions_->Restore(removal);
+}
+
+bool Window::RedoRemoveSuggestion(bc_id removal) {
+  return suggestions_ && suggestions_->RemoveAgain(removal);
 }
 
 content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool when_shown) {
@@ -1149,7 +1547,8 @@ content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url) {
   content::WebContents* contents =
       from && from->profile() ? OpenTab(from->profile(), url, /*when_shown=*/false) : nullptr;
   if (contents) {
-    ReportTabOpened(Tab::IdOf(contents), pinned, /*foreground=*/true, /*split_with=*/0);
+    ReportTabOpened(Tab::IdOf(contents), pinned, /*foreground=*/true, /*split_with=*/0,
+                    /*popup=*/std::nullopt, /*popup_placed=*/false);
   }
   return contents;
 }
@@ -1172,6 +1571,11 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener, const GU
 }
 
 void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
+  // A tab that has left its Browser has no strip to be active in, nor a window to be shown in.
+  if (!InTabStrip(contents)) {
+    page_frame_ = frame;
+    return;
+  }
   // The Browser's active tab is the one Chrome's keyboard shortcuts, find and fullscreen act on.
   TabStripModel* tabs =
       tabs::TabInterface::GetFromContents(contents)->GetBrowserWindowInterface()->GetTabStripModel();
@@ -1182,11 +1586,16 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
   const bc_id freed = left && Picturing(left) ? left : 0;
   PasswordOffer::Moving moving(freed);
   HoldPictured();
-  // A full-screen page's tab leaving takes the window out with it, within ActivateTabAt.
-  tabs->ActivateTabAt(tabs->GetIndexOfWebContents(contents));
+  // A full-screen page's tab leaving takes the window out with it, within ActivateTabAt. The tab
+  // active already isn't activated again: off the Mac the window leaves a page's full screen as
+  // Chrome asks, so the app's frame for the new size comes within Chrome's change to the tabs that
+  // ended the page's full screen, as closing them all does, where activating one fails a CHECK
+  // (#1991).
+  if (leaving != contents) {
+    tabs->ActivateTabAt(tabs->GetIndexOfWebContents(contents));
+  }
   const bc_id tab = Tab::IdOf(contents);
-  Space* space = Space::Holding(tab);
-  std::vector<bc_id> panes = space ? space->Panes(tab) : std::vector<bc_id>{tab};
+  std::vector<bc_id> panes = PanesWith(tab);
   for (bc_id pane : panes_) {
     if (!std::ranges::contains(panes, pane)) {
       Seen(pane);
@@ -1223,6 +1632,11 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
 }
 
 void Window::LayOutPage() {
+  // As the browser quits, Chromium closes every native window itself (Widget::CloseAllWidgets)
+  // before the core's Window goes, and the app, still drawing, may set its colours then (#1478).
+  if (widget_->IsClosed()) {
+    return;
+  }
   std::vector<content::WebContents*> shown;
   for (bc_id pane : panes_) {
     if (content::WebContents* contents = Tab::FromId(pane)) {
@@ -1233,9 +1647,9 @@ void Window::LayOutPage() {
   if (shown_ && shown_->IsFullscreen()) {
     shown = {shown_.get()};
   }
-  Space* space = panes_.empty() ? nullptr : Space::Holding(panes_.front());
-  stacked_ = space && space->Stacked(panes_.front());
-  shares_ = space ? space->Shares(panes_.front()) : std::vector<double>();
+  const SplitLook look = panes_.empty() ? SplitLook() : LookOf(panes_.front());
+  stacked_ = look.stacked;
+  shares_ = look.shares;
   std::vector<platform::Pane> panes;
   size_t focused = 0;
   std::optional<gfx::Rect> focused_frame;
@@ -1245,7 +1659,7 @@ void Window::LayOutPage() {
   const int start = stacked_ ? page_frame_.y() : page_frame_.x();
   const int span = (stacked_ ? page_frame_.height() : page_frame_.width()) + kSplitGap;
   // An expanded split keeps the others at 220 pt whatever the frame, so its shares come from it.
-  expanded_ = space ? space->Expanded(panes_.front()) : 0;
+  expanded_ = look.expanded;
   if (const auto at = std::ranges::find(panes_, expanded_);
       expanded_ && at != panes_.end() && shown.size() == panes_.size()) {
     shares_ = ExpandedShares(shown.size(), at - panes_.begin(), span - kSplitGap);
@@ -1284,6 +1698,9 @@ void Window::LayOutPage() {
     StretchOnResize(contents, page_moving_ || MovingPages().contains(Tab::IdOf(contents)));
     platform::Pane& pane = panes.emplace_back(Tab::PageViewOf(contents), frame);
     pane.color = page_color_;
+    if (!tab || !tab->system_page()) {
+      pane.widget = contents->GetRenderWidgetHostView();
+    }
     DevToolsContentsResizingStrategy strategy;
     if (content::WebContents* devtools = DevToolsWindow::GetInTabWebContents(contents, &strategy)) {
       // As Chrome's window does: DevTools fill the frame, and the page goes where they leave it.
@@ -1335,9 +1752,8 @@ void Window::LayOutPage() {
 
 void Window::ShowSpace(bc_id space, bool page) {
   const Space* in = Space::FromId(space);
-  // A private window shows its own Space alone, and no other window shows it.
-  if (!in || space == space_ || in->off_the_record() != off_the_record_ ||
-      (off_the_record_ && space_)) {
+  // A window with a Space of its own shows it alone, and no other window shows it.
+  if (!in || space == space_ || in->own() != own_space_ || (own_space_ && space_)) {
     return;
   }
   const bc_id tab = page ? TabToShowIn(space) : 0;
@@ -1369,9 +1785,12 @@ bc_id Window::TabToShowIn(bc_id space) const {
   // Never a page another window shows, which would leave that window.
   const auto free = [this](bc_id tab) { return !ShownElsewhere(tab); };
   auto last = selected_in_space_.find(space);
-  if (last != selected_in_space_.end() && free(last->second) &&
-      (in->Has(last->second) || Favorites::ShownIn(last->second, *in))) {
-    return last->second;
+  // A favorite split it showed shows focused where it was focused last, here or in another Space.
+  const bc_id was = last == selected_in_space_.end() ? 0
+                    : Favorites::Has(last->second)   ? Favorites::Focused(last->second)
+                                                     : last->second;
+  if (was && free(was) && (in->Has(was) || Favorites::ShownIn(was, *in))) {
+    return was;
   }
   if (auto today = std::ranges::find_if(in->today(), free); today != in->today().end()) {
     return *today;
@@ -1419,6 +1838,22 @@ void Window::SetPageFrame(const gfx::Rect& frame, double corner_radius) {
   // The app's frame at the window's size, so pages held for its resize are laid out here, which
   // lets them go, though a tab switch's Show leaves them waiting for it.
   const bool held = platform::PagesHeldForResize(widget_.get());
+  // Off the Mac, a full-screen page's tab leaving the window, as closing it or all the window's
+  // tabs does, takes the window out of full screen at once, so this frame comes from within
+  // Chrome's change to the tabs, after the tab has left them (#2068). The window shows what's left
+  // of the split, if anything, and the app shows the next tab: the frame never comes again for it,
+  // so the pages held for the resize go now.
+  if (!InTabStrip(shown_.get())) {
+    std::erase_if(panes_, [](bc_id pane) {
+      content::WebContents* contents = Tab::FromId(pane);
+      return !contents || !InTabStrip(contents);
+    });
+    shown_ = nullptr;
+    if (held) {
+      LayOutPage();
+    }
+    return;
+  }
   Show(shown_.get(), frame);
   if (held) {
     LayOutPage();
@@ -1451,17 +1886,22 @@ void Window::SetPageMoving(bool moving) {
   }
 }
 
+void Window::SetPageScale(double scale) {
+  platform::ScalePages(widget_.get(), std::isnan(scale) ? 1.0 : std::clamp(scale, 0.5, 1.0));
+}
+
 void Window::Select(bc_id tab) {
   const Tab* selecting = Tab::Get(tab);
-  // A private window shows its own tabs alone, and a regular one never shows them: Chrome never
-  // moves a page between incognito and regular windows.
+  // A window with a Space of its own shows its tabs alone, and a regular one never shows them:
+  // Chrome never moves a page between incognito and regular windows.
   const Space* holding = Space::Holding(tab);
   if (!selecting ||
-      (off_the_record_ ? !holding || holding->id() != space_ : OffTheRecord(selecting))) {
+      (own_space_ ? !holding || holding->id() != space_
+                  : (holding && holding->own()) || OffTheRecord(selecting))) {
     return;
   }
   // A tab without its page, and each of its split's, gets it back here, as it's shown.
-  for (bc_id pane : holding ? holding->Panes(tab) : std::vector<bc_id>{tab}) {
+  for (bc_id pane : PanesWith(tab)) {
     if (Tab* waking = Tab::Get(pane); waking && !waking->web_contents()) {
       waking->Wake(*this);
     }
@@ -1488,6 +1928,8 @@ void Window::Select(bc_id tab) {
   }
   // Here before ShowSpace looks for a tab no other window shows.
   Adopt(tab);
+  // A favorite split shows focused on the tab focused last, in whichever Space it shows next.
+  Favorites::SetFocused(tab);
   if (other_space) {
     // As the tab its Space shows, so the one it showed before doesn't load on the way.
     SetSelectedIn(other_space, tab);
@@ -1501,8 +1943,7 @@ void Window::Select(bc_id tab) {
 }
 
 void Window::Adopt(bc_id tab) {
-  Space* space = Space::Holding(tab);
-  for (bc_id pane : space ? space->Panes(tab) : std::vector<bc_id>{tab}) {
+  for (bc_id pane : PanesWith(tab)) {
     content::WebContents* contents = Tab::FromId(pane);
     tabs::TabInterface* in =
         contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
@@ -1567,7 +2008,7 @@ void Window::SetLetGo(bool let_go) {
                      weak_factory_.GetWeakPtr(), let_go ? selected_ : 0));
 }
 
-void Window::HandOver(Window& to) {
+void Window::HandOver(Window& to, bool others_only) {
   std::vector<BrowserWindowInterface*> browsers;
   for (auto& [profile, held] : browsers_) {
     browsers.push_back(held.browser);
@@ -1580,6 +2021,10 @@ void Window::HandOver(Window& to) {
     }
     // Last first: the Browser closes as its last tab leaves, and isn't touched after.
     for (int index = tabs->count() - 1; index >= 0; --index) {
+      const Space* holding = Space::Holding(Tab::IdOf(tabs->GetWebContentsAt(index)));
+      if (others_only && (!holding || holding->id() == space_)) {
+        continue;
+      }
       std::unique_ptr<tabs::TabModel> moved = tabs->DetachTabAtForInsertion(index);
       base::AutoReset<bool> opening(&to.opening_tab_, true);
       into->GetTabStripModel()->InsertDetachedTabAt(into->GetTabStripModel()->count(),
@@ -1661,8 +2106,8 @@ size_t Window::UndoClear(bc_id clear) {
       ++reopened;
       // Back in its split, if the tab beside it came back too.
       if (Space* space = Space::Holding(id);
-          space && cleared.split && above && space->Split(id, above, GURL()) && tab->stacked) {
-        space->SetStacked(id, true);
+          space && cleared.split && above && space->Split(id, above, GURL())) {
+        RemakeSplit(*space, id, *tab);
       }
       if (cleared.selected) {
         shown = id;
@@ -1678,8 +2123,8 @@ size_t Window::UndoClear(bc_id clear) {
 }
 
 bc_id Window::UndoDeleteSpace(bc_id id) {
-  // The regular windows' Spaces, which a private window never shows.
-  if (off_the_record_) {
+  // The regular windows' Spaces, which a window of its own never shows.
+  if (own_space_) {
     return 0;
   }
   std::vector<DeletedSpace>& deleted = DeletedSpaces();
@@ -1727,20 +2172,50 @@ bc_id Window::UndoDeleteSpace(bc_id id) {
 }
 
 bc_id Window::ReopenClosedTab() {
-  // The closed tabs are the regular windows', as a private window's leave nothing behind.
+  // A private window keeps none of its own and reopens none of the others'.
   if (ClosedTabs().empty() || off_the_record_) {
     return 0;
   }
-  return ReopenClosed(ClosedTabs().back().id, /*show=*/true);
+  const ClosedTab& last = ClosedTabs().back();
+  // A Little ilo window's comes back in a new one, which the app opens, as Arc's ⇧⌘T reopens it in
+  // Little Arc. Posted, so the app hears of it once its own call has returned. With Little ilo off
+  // it comes back as a Today tab, as a regular window's does.
+  if (last.little && UserSettings().little_windows) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<Window> window, bc_id closed, bc_id profile) {
+                         if (window && profile && Host().window_reopen_little) {
+                           Host().window_reopen_little(Host().context, window->id(), closed,
+                                                       profile);
+                         }
+                       },
+                       weak_factory_.GetWeakPtr(), last.id, ProfileId(last.profile)));
+    return 0;
+  }
+  // The rest are the regular windows', which a window of its own never shows.
+  if (own_space_) {
+    return 0;
+  }
+  return ReopenClosed(last.id, /*show=*/true);
 }
 
 bc_id Window::ReopenClosed(bc_id id, bool show) {
-  std::optional<ClosedTab> taken = off_the_record_ ? std::nullopt : TakeClosed(id);
+  // A Little ilo window's tab comes back only in a Little ilo window with no tab yet, and a regular
+  // window's only in a regular one.
+  auto found = std::ranges::find(ClosedTabs(), id, &ClosedTab::id);
+  const Space* own = own_space_ ? Space::FromId(space_) : nullptr;
+  const bool fits =
+      found != ClosedTabs().end() &&
+      (own_space_ ? own && own->little() && found->little && own->today().empty()
+                  : !found->little);
+  std::optional<ClosedTab> taken = fits ? TakeClosed(id) : std::nullopt;
   if (!taken) {
     return 0;
   }
   const ClosedTab closed = std::move(*taken);
-  const bc_id tab = Reopen(closed.space, closed.index, closed.saved);
+  // In this Little ilo window's Space, not the one it closed in, which may still be open.
+  const bc_id tab = own_space_ ? Reopen(space_, 0, closed.saved)
+                               : Reopen(closed.space, closed.index, closed.saved);
   if (!tab) {
     return 0;
   }
@@ -1758,12 +2233,13 @@ bc_id Window::ReopenClosed(bc_id id, bool show) {
       space->Split(tab, closed.split_with, Tab::Get(tab)->Url(), /*left=*/false)) {
     space->MoveInSplit(tab, closed.split_index);
     // A split it remakes is as it was. One still open keeps how it's shown now.
-    if (remade && closed.stacked) {
-      space->SetStacked(tab, true);
+    if (remade) {
+      RemakeSplit(*space, tab, closed);
     }
     PanesChanged();
   }
-  if (show) {
+  // A Little ilo window shows its one tab, as it has nothing else to show.
+  if (show || own_space_) {
     Select(tab);
   }
   return tab;
@@ -1934,7 +2410,7 @@ bool Window::RunExtensionCommand(const std::string& id, const std::string& name)
 
 bc_id Window::RestoreArchived(bc_id id) {
   // The archive is the regular windows'.
-  if (off_the_record_) {
+  if (own_space_) {
     return 0;
   }
   std::optional<ArchivedTab> archived = TakeArchived(id);
@@ -1952,7 +2428,10 @@ bc_id Window::RestoreArchived(bc_id id) {
     page.set_original_request_url(archived->url);
     page.set_title(base::UTF8ToUTF16(archived->title));
   }
-  const bc_id tab = Reopen(space_, 0, saved);
+  // Back in the Space it closed in, as Arc's, while that's still one of the user's, which Select
+  // then shows. Else in the one shown.
+  const Space* closed_in = Space::WithNode(archived->space);
+  const bc_id tab = Reopen(closed_in ? closed_in->id() : space_, 0, saved);
   Select(tab);
   return tab;
 }
@@ -2053,7 +2532,9 @@ void Window::SelectAfterClosing() {
   if (next && Tab::Get(next)) {
     Pick(next);
   } else {
-    ReportSelected();
+    // Laid out with no page, as after an unload or in an empty Space, so no pane keeps the closed
+    // tab's: on Windows one is a window of its own, which went on drawing over the Space (#1343).
+    ShowNothing();
   }
 }
 
@@ -2090,15 +2571,20 @@ void Window::Close() {
   }
   // Its tabs are in Spaces every regular window shows, so with another one open they go there,
   // live, and no page closes. A window with a picture of a page this one showed shows it again. A
-  // private window's tabs close with it.
+  // window of its own's tabs close with it.
   Window* to = nullptr;
   for (Window* window : All()) {
-    if (window != this && !window->closing_ && !window->off_the_record_) {
+    if (window != this && !window->closing_ && !window->own_space_) {
       to = window;
       break;
     }
   }
-  const bool hand_over = to && !off_the_record_ && !browser_shutdown::IsTryingToQuit();
+  const bool hand_over = to && !own_space_ && !browser_shutdown::IsTryingToQuit();
+  // A Little ilo window's page opens its tabs behind, in its home Space (the app moves them there),
+  // so they stay in its Browser until a window shows them, and outlive it.
+  if (to && own_space_ && !off_the_record_ && !browser_shutdown::IsTryingToQuit()) {
+    HandOver(*to, /*others_only=*/true);
+  }
   if (hand_over) {
     for (bc_id pane : panes_) {
       HoldWhileMoving(Tab::FromId(pane));
@@ -2196,18 +2682,23 @@ void Window::Destroy() {
   // next window to open there. One that had tabs was kept as they closed (OnTabClosing).
   const bool last_regular = std::ranges::none_of(Windows(), [this](const auto& entry) {
     const Window* other = entry.second.get();
-    return other != this && !other->off_the_record_ && !other->closing_;
+    return other != this && !other->own_space_ && !other->closing_;
   });
-  if (!off_the_record_ && last_regular) {
+  if (!own_space_ && last_regular) {
     KeepSession();
   }
-  // Its tabs without pages close as its pages did: a private window's, and with the last regular
+  // Its tabs without pages close as its pages did: a window of its own's, and with the last regular
   // window every regular one. Quitting, they stay for the next launch.
-  if ((off_the_record_ || last_regular) && !browser_shutdown::IsTryingToQuit()) {
+  if ((own_space_ || last_regular) && !browser_shutdown::IsTryingToQuit()) {
     for (Tab* tab : Tab::All()) {
       const Space* space = Space::Holding(tab->id());
-      const bool its = off_the_record_ ? space && space->id() == space_ : !OffTheRecord(tab);
+      const bool its = own_space_ ? space && space->id() == space_
+                                  : !(space && space->own()) && !OffTheRecord(tab);
       if (!tab->web_contents() && its) {
+        // A Little ilo window's and a Blank Window's go in the archive, as one with its page does.
+        if (space && (space->little() || space->blank())) {
+          KeepClosed(tab->id());
+        }
         tab->Close();
       }
     }
@@ -2217,25 +2708,29 @@ void Window::Destroy() {
   auto it = Windows().find(id_);
   std::unique_ptr<Window> self = std::move(it->second);
   Windows().erase(it);
+  // Its widget can report itself active as it closes, as on Windows when an owned window goes
+  // first, which would put the closed window back in Order (#1687).
+  widget_observation_.Reset();
   // What it built on its profiles, before the Space goes and ends a private session: not left to
   // the order of its members.
   suggestions_.reset();
   widget_->CloseNow();
-  // A private window's Space goes with it, its tabs closed, and the last one's session ends. A
-  // regular one leaves the session while another stays open; the last stays in it, for the next
-  // launch to open again.
-  if (off_the_record_) {
+  // A window's own Space goes with it, its tabs closed, and the last private window's session
+  // ends. A regular one leaves the session while another stays open; the last stays in it, for
+  // the next launch to open again.
+  if (own_space_) {
     const Space* space = Space::FromId(space_);
     const std::string profile = space ? space->profile() : std::string();
     Space::Delete(space_);
-    if (!profile.empty()) {
+    // A Little ilo window has no session of its own to end.
+    if (off_the_record_ && !profile.empty()) {
       EndPrivateSession(ProfileFor(profile));
-    } else {
+    } else if (off_the_record_) {
       LOG(ERROR) << "browser: private window " << id_
                  << " closed with no Space to end its session";
     }
   } else if (std::ranges::any_of(Windows(), [](const auto& entry) {
-               return !entry.second->off_the_record_;
+               return !entry.second->own_space_;
              })) {
     SessionChanged();
   }
@@ -2277,7 +2772,11 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
                                     const TabStripSelectionChange& selection) {
   if (change.type() == TabStripModelChange::kRemoved) {
     // Tabs closing with the window, or as the browser quits, come back at the next launch instead.
-    if (closing_ || browser_shutdown::IsTryingToQuit()) {
+    // A Little ilo window's and a Blank Window's, which never come back with a launch, go in the
+    // archive as they close with their window (KeepClosed).
+    const Space* own = own_space_ ? Space::FromId(space_) : nullptr;
+    if ((closing_ && !(own && (own->little() || own->blank()))) ||
+        browser_shutdown::IsTryingToQuit()) {
       return;
     }
     for (const TabStripModelChange::RemovedTab& removed : change.GetRemove()->contents) {
@@ -2293,14 +2792,22 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
     return;
   }
   const bc_id split_with = std::exchange(split_with_, 0);
+  const bc_id agent_opener = std::exchange(agent_opener_, 0);
+  const std::optional<bc_rect> popup = std::exchange(popup_, std::nullopt);
+  const bool popup_placed = std::exchange(popup_placed_, false);
   for (const TabStripModelChange::ContentsWithIndex& inserted : change.GetInsert()->contents) {
     tabs::TabInterface* opener = tab_strip_model->GetOpenerOfTabAt(inserted.index);
+    bc_id opened_by = agent_opener;
+    if (!opened_by && opener) {
+      opened_by = Tab::IdOf(opener->GetContents());
+    }
     // Posted: the app shows the tab, and a tab strip can't change while it reports a change.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&Window::ReportTabOpened, weak_factory_.GetWeakPtr(),
-                                  Tab::IdOf(inserted.contents),
-                                  opener ? Tab::IdOf(opener->GetContents()) : 0,
-                                  tab_strip_model->active_index() == inserted.index, split_with));
+        FROM_HERE,
+        base::BindOnce(&Window::ReportTabOpened, weak_factory_.GetWeakPtr(),
+                       Tab::IdOf(inserted.contents), opened_by,
+                       !agent_opener && tab_strip_model->active_index() == inserted.index,
+                       split_with, popup, popup_placed));
   }
 }
 
@@ -2309,7 +2816,16 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
   // core shows pages outside views. Without this, a page that commits while the window isn't key
   // leaves the keyboard with nothing: Chromium gives none to its new view, and the old one is gone.
   if (active) {
-    FocusPageSoon();
+    if (std::exchange(left_, false)) {
+      CameBackTo(*this);
+    }
+    // At once where the window's focus has settled by now, so a key read right after the
+    // activation, as one typed as a dialog over the window closes, reaches the page (#1711).
+    if (platform::FocusSettledOnActivation()) {
+      FocusPage();
+    } else {
+      FocusPageSoon();
+    }
     // The session keeps the Space of the window active last.
     if (ToFront(id_)) {
       SessionChanged();
@@ -2318,20 +2834,77 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
     if (Host().window_activated) {
       Host().window_activated(Host().context, id_);
     }
+    sync::WindowActivated();
+  } else {
+    // A Little ilo window's auto-archive counts from here.
+    inactive_since_ = base::Time::Now();
+    if (little()) {
+      ScheduleAutoArchive();
+    }
+    // Posted: on the Mac, an overlay's window is key only once the window has let go.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&Window::CheckLeft, weak_factory_.GetWeakPtr()));
   }
   ReportActiveBrowser();
+}
+
+void Window::CheckLeft() {
+  if (active()) {
+    return;
+  }
+  // A menu open as the user goes to another app or window lets the keyboard go there after.
+  if (platform::OverlayHasKeyboard(widget_.get())) {
+    platform::WhenOverlayLetsGo(widget_.get(),
+                                base::BindOnce(&Window::CheckLeft, weak_factory_.GetWeakPtr()));
+    return;
+  }
+  if (!MiniPlayerHasKeyboard()) {
+    left_ = true;
+  }
+}
+
+bool Window::little() const {
+  const Space* own = own_space_ ? Space::FromId(space_) : nullptr;
+  return own && own->little();
+}
+
+bool Window::active() const {
+  return widget_ && widget_->IsActive();
 }
 
 void Window::ReportActiveBrowser() {
   // Chrome orders its Browsers by these reports, and picks the window by that order for what has
   // no tab of its own, such as an extension popup's install question or a page's alert.
   const bool key = widget_ && widget_->IsActive();
-  // A key window showing no page, as for an empty Space, keeps the Browser it had active.
   if (key && !shown_) {
+    // A key window showing no page, as for an empty Space, may hold no Browser of its Space's
+    // profile, as a launch puts tabs back without their pages: it makes one, from a task of its
+    // own, as this can come while a Browser closes.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&Window::ActivateSpaceBrowser, weak_factory_.GetWeakPtr()));
     return;
   }
   tabs::TabInterface* tab = key ? tabs::TabInterface::MaybeGetFromContents(shown_.get()) : nullptr;
-  BrowserWindowInterface* shown = tab ? tab->GetBrowserWindowInterface() : nullptr;
+  MarkActive(tab ? tab->GetBrowserWindowInterface() : nullptr);
+}
+
+void Window::ActivateSpaceBrowser() {
+  if (closing_ || shown_ || !widget_ || !widget_->IsActive()) {
+    return;
+  }
+  // Its Space's profile's Browser is the active one, so what Chrome places in the window active
+  // last, such as an extension's chrome.tabs.create with no window, finds this window rather than
+  // none, or opens one of Chrome's own (#1831). A private or Little ilo window, or one whose
+  // Space's profile isn't loaded, keeps the Browser it had active.
+  const Space* space = own_space_ ? nullptr : Space::FromId(space_);
+  Profile* profile = space && !space->agent() ? ProfileFor(space->profile()) : nullptr;
+  if (BrowserWindowInterface* browser =
+          profile && DirOf(profile) == space->profile() ? BrowserFor(profile) : nullptr) {
+    MarkActive(browser);
+  }
+}
+
+void Window::MarkActive(BrowserWindowInterface* shown) {
   BrowserWindowInterface* active = nullptr;
   for (auto& [profile, held] : browsers_) {
     if (held.browser->IsDeleteScheduled()) {
@@ -2419,6 +2992,22 @@ void Window::LeaveFullScreen() {
   }
 }
 
+gfx::Rect Window::RestoredFrame() const {
+  if (!widget_) {
+    return gfx::Rect();
+  }
+  const gfx::Rect restored = widget_->GetRestoredBounds();
+#if BUILDFLAG(IS_LINUX)
+  // Chromium knows the frame only when it asked for the maximize itself; for the window manager's,
+  // the bounds it gives are the maximized frame.
+  if (widget_->IsMaximized() && !widget_->IsFullscreen() &&
+      restored == widget_->GetWindowBoundsInScreen()) {
+    return FrameBeforeMaximized(normal_frames_, restored);
+  }
+#endif
+  return restored;
+}
+
 bool Window::FullScreenForPage() const {
   for (const auto& [profile, held] : browsers_) {
     ExclusiveAccessManager* manager = ExclusiveAccessManager::From(held.browser);
@@ -2431,9 +3020,14 @@ bool Window::FullScreenForPage() const {
 }
 
 void Window::OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& new_bounds) {
+#if BUILDFLAG(IS_LINUX)
+  if (!widget->IsMaximized() && !widget->IsFullscreen() && !widget->IsMinimized()) {
+    KeepNormalFrame(normal_frames_, widget->GetWindowBoundsInScreen());
+  }
+#endif
   // The session keeps each regular window's frame, saved a while after it moves, so a crash
   // keeps it too.
-  if (!off_the_record_) {
+  if (!own_space_) {
     SessionChanged();
   }
 }
@@ -2469,7 +3063,7 @@ void Window::OverlayTakesKeyboard(bool takes) {
 void Window::FocusPageSoon() {
   // Posted: AppKit can be part way through moving the keyboard, as when a committing page hides the
   // view that had it and Chromium makes the window key. A page view focused inside that move
-  // believes it has the keyboard after AppKit has given it elsewhere.
+  // believes it has the keyboard after AppKit has given it elsewhere (FocusSettledOnActivation).
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&Window::FocusPage, weak_factory_.GetWeakPtr()));
 }
@@ -2530,7 +3124,12 @@ Space* Window::SpaceForOpened(bc_id opener) const {
   return space ? space : Space::FromId(space_);
 }
 
-void Window::ReportTabOpened(bc_id tab, bc_id opener, bool foreground, bc_id split_with) {
+void Window::ReportTabOpened(bc_id tab,
+                             bc_id opener,
+                             bool foreground,
+                             bc_id split_with,
+                             std::optional<bc_rect> popup,
+                             bool popup_placed) {
   // A popup can close itself at once.
   if (!Tab::FromId(tab)) {
     return;
@@ -2547,6 +3146,9 @@ void Window::ReportTabOpened(bc_id tab, bc_id opener, bool foreground, bc_id spl
     if (split) {
       PanesChanged();
     }
+  }
+  if (popup && Host().tab_popup) {
+    Host().tab_popup(Host().context, id_, tab, opener, *popup, popup_placed);
   }
   if (Host().tab_opened) {
     Host().tab_opened(Host().context, id_, tab, opener, foreground);

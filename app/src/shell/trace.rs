@@ -7,7 +7,7 @@ use std::{path::PathBuf, rc::Rc, time::Duration};
 
 use gpui::{App, Global};
 
-use super::{Browser, commands::ShellHandle};
+use super::Browser;
 
 pub(super) const RECORD: &str = "Record a Trace";
 pub(super) const STOP_RECORDING: &str = "Stop Recording Trace";
@@ -38,7 +38,6 @@ pub(super) fn toggle(browser: Rc<dyn Browser>, cx: &mut App) {
         return stop(&*browser, cx);
     }
     if !browser.start_trace() {
-        // check.sh reads this line.
         log!("browser: trace not started");
         return browser.toast(NOT_STARTED, None, NOTE_TIME, cx);
     }
@@ -49,7 +48,7 @@ pub(super) fn toggle(browser: Rc<dyn Browser>, cx: &mut App) {
     let stop = Rc::new(move |cx: &mut App| {
         stop(&*stopping, cx);
         // The menu bar's item is the key window's to name.
-        if let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) {
+        if let Some(shell) = super::commands::key_shell(cx) {
             shell.update(cx, |shell, cx| shell.update_menus(cx)).ok();
         }
     });
@@ -70,14 +69,16 @@ fn stop(browser: &dyn Browser, cx: &mut App) {
 /// The trace the core recorded, as Chromium's JSON, which the user saves where they pick, or drops
 /// with the panel's Cancel.
 pub fn recorded(json: Option<Vec<u8>>, cx: &mut App) {
-    let shell = cx.try_global::<ShellHandle>().and_then(|handle| handle.0.upgrade());
+    let shell = super::commands::key_shell(cx).and_then(|shell| shell.upgrade());
     let Some(browser) = shell.map(|shell| shell.read(cx).browser.clone()) else {
         return;
     };
     let Some(json) = json.filter(|json| !json.is_empty()) else {
         return browser.toast(NOT_SAVED, None, NOTE_TIME, cx);
     };
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     let downloads = home.join("Downloads");
     let folder = if downloads.is_dir() { downloads } else { home };
     let chosen = cx.prompt_for_new_path(&folder, Some(concat!(env!("APP_NAME"), " Trace.json")));

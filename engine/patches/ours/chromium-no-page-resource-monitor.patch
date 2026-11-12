@@ -1,0 +1,20 @@
+Leaves out Chrome's PageResourceMonitor (#1773). Its resource attribution query woke the browser
+every 2 minutes, idle or not, to record UKM of each tab's CPU and memory, which nothing in ilo's
+build reads and ungoogled-chromium's never sends (enable_reporting=false). ProcessMetricsDecorator,
+the one query that also takes other queries' results, makes its own measurements while something
+asks for them, so it doesn't need these.
+
+--- a/chrome/browser/performance_manager/chrome_browser_main_extra_parts_performance_manager.cc
++++ b/chrome/browser/performance_manager/chrome_browser_main_extra_parts_performance_manager.cc
+@@ -267,8 +267,9 @@
+             performance_manager::policies::BestEffortTaskInhibitingPolicy>());
+   }
+ 
+-  graph->PassToGraph(
+-      std::make_unique<performance_manager::metrics::PageResourceMonitor>());
++  // browser_core: no PageResourceMonitor. It only records UKM of each tab's CPU
++  // and memory, which nothing in this build reads or sends, on a query that
++  // woke the browser every 2 minutes (#1773).
+ 
+   if (base::FeatureList::IsEnabled(
+           performance_manager::features::kThrottleUnimportantFrameRate)) {

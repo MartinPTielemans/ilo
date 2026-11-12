@@ -46,7 +46,7 @@ pin() {
 # A picture of the window, once the page's entrance motion has played: the wait is for the
 # picture, not for anything checked.
 shot() {
-  sleep 2
+  sleep 2 # the page's entrance motion
   ../tools/window-screenshot.sh "$pid" "$out/shots-$1.png" all || fail "no window to capture"
   # A PNG's width and height are the big-endian words at bytes 16 and 20.
   size=$(od -An -tu1 -j16 -N8 "$out/shots-$1.png" |
@@ -68,7 +68,7 @@ pin
 open_tab en.wikipedia.org/wiki/Web_browser
 wiki=$tab
 pin
-open_tab github.com/MartinPTielemans/browser
+open_tab github.com/MartinPTielemans/ilo
 pin
 open_tab "en.wikipedia.org/wiki/Chromium_(web_browser)"
 open_tab ilobrowser.com/ilo

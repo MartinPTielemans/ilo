@@ -1,14 +1,17 @@
 # A new profile's first launch plays the onboarding over the window, captured at each step in a
 # light and a dark appearance: the intro draws ilo's wordmark and its line and goes on by itself, or
 # at any key; the import step lists the made-up Arc in src/import/fixture (a made-up Chrome on
-# Linux), never the Mac's own browsers; Esc or Skip goes on from a step, the colour step's Return
+# Linux), never the Mac's own browsers, and ↩ there shows its choices, with Import and Back, which
+# Esc goes back from to the list; Esc or Skip goes on from a step, the colour step's Return
 # gives the first Space the swatch picked, and the last step leaves the flow for the first Space's
 # welcome with the command bar up and a line under it. The default browser's step shows only while
 # ilo isn't the default, and is skipped everywhere but a Linux CI VM, where its button makes ilo
 # the default for a moment, so the run never changes a desk's. The opt-ins' shows always, with
 # the agents' switch, as every build has their server, and the dark pass turns it on in its new
-# profile and sees the server start. Help › Welcome to ilo
-# plays it again, in the window while it shows no page and in a new window while it shows one. A
+# profile and sees the server start. The account's comes between the colour and the opt-ins while
+# the build names a sync server (branding/sync-server), and Esc leaves it signed out: the run never
+# signs in to the hosted server, as sync-account signs in on a server of its own. Help › Welcome to
+# ilo plays it again, in the window while it shows no page and in a new window while it shows one. A
 # launch that brings Spaces back never starts it. Every other run sets BROWSER_ONBOARDING=skip
 # (check.sh); this one sets the appearance instead.
 
@@ -40,12 +43,30 @@ fi
 capture_step() {
   ../tools/window-screenshot.sh "$pid" "$out/onboarding-$1.png" || fail "no window to capture"
 }
-# Launches a new profile, whose saved Spaces are gone, in appearance $1, and reads the steps it
-# shows into $steps.
+# ↩ at the import's list shows the choices of the browser used last, as "What comes from …", with
+# Import as the step's button and Back in its corner; Esc goes back to the list, keeping the step.
+# The choices are captured as onboarding-$1-import-choose.png once their counts are in.
+import_choices() {
+  send key return
+  expect "^browser: import pick $found\$" "$1: ↩ at the import didn't show $found's choices"
+  expect "^browser: import read $found: " "$1: picking $found didn't read it"
+  # Once its counts have drawn, which the driver waits for.
+  send state
+  capture_step "$1-import-choose"
+  send key escape
+  expect '^browser: import escape$' "$1: Esc in $found's choices didn't reach the import"
+  expect '^browser: import drawn list$' "$1: Esc didn't go back from $found's choices to the list"
+  none_since '^browser: onboarding left import' || fail "$1: Esc in the choices left the import step"
+}
+# The account's step, while the build names a server to sign in to.
+account=
+[ ! -s branding/sync-server ] || account="account "
+# Launches a new profile, whose saved Spaces are gone and which isn't signed in, in appearance $1,
+# and reads the steps it shows into $steps.
 launch_new() {
   log="$out/onboarding-$1.log"
   step=0
-  rm -f "$saved"
+  rm -f "$saved" "$profile_dir/Account"
   BROWSER_IMPORT_HOME="$import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=$1 \
     "$browser" < "$out/drive" > "$log" 2>&1 &
   pid=$!
@@ -53,8 +74,8 @@ launch_new() {
   await '^browser: onboarding step intro settled$' || fail "$1: the intro didn't draw"
   steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
   case "$steps" in
-    "intro import "*"color opt-ins") ;;
-    *) fail "$1: the steps were '$steps', not the intro, the import, the rest, the opt-ins" ;;
+    "intro import "*"color ${account}opt-ins") ;;
+    *) fail "$1: the steps were '$steps', not the intro, the import, the rest, ${account}the opt-ins" ;;
   esac
 }
 
@@ -72,6 +93,7 @@ for each in $steps; do
   [ "$each" = import ] ||
     expect "^browser: onboarding step $each settled\$" "light: the $each step didn't come"
   capture_step "light-$each"
+  [ "$each" != import ] || import_choices light
   send key escape
   expect "^browser: onboarding left $each via escape\$" "light: Esc didn't leave the $each step"
 done
@@ -144,6 +166,7 @@ if [ "$reduced" = windows ]; then
 fi
 expect '^browser: onboarding step import settled$' "dark: the import step didn't come"
 capture_step dark-import
+import_choices dark
 # Its words and chip end 24 in from the window's right and bottom, 20 tall.
 # Only the Mac's window frame is its content, so elsewhere the driver's layout gives its size: Linux
 # logs no frame (host_window_frame), and Windows' takes in the title bar and borders.
@@ -181,7 +204,11 @@ case " $steps " in
       done
       entry="$apps/$(cat branding/id).desktop"
       mkdir -p "$apps"
-      printf '[Desktop Entry]\nType=Application\nName=%s\nExec=%s %%U\n' "$app_name" "$browser" \
+      # With the types xdg-settings sets already listed: it adds each one missing to the entry and
+      # sleeps 4 s after, which put http's past the wait below on a quick runner.
+      printf '[Desktop Entry]\nType=Application\nName=%s\nExec=%s %%U\nMimeType=%s\n' \
+        "$app_name" "$browser" \
+        'text/html;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/about;x-scheme-handler/unknown;' \
         > "$entry"
       send key return
       expect '^browser: onboarding left default-browser via return$' \
@@ -218,12 +245,19 @@ capture_step dark-color
 send key return
 expect '^browser: onboarding picked color f0eae5$' "dark: → and Return didn't pick the first swatch"
 expect '^browser: onboarding left color via return$' "dark: Return didn't leave the colour step"
+if [ -n "$account" ]; then
+  expect '^browser: onboarding step account settled$' "dark: the account step didn't come"
+  capture_step dark-account
+  send key escape
+  expect '^browser: onboarding left account via escape$' "dark: Esc didn't leave the account step"
+  ! grep -q '^browser: onboarding sign in via ' "$log" || fail "dark: Esc at the account step signed in"
+fi
 expect '^browser: onboarding step opt-ins settled$' "dark: the opt-ins step didn't come"
 capture_step dark-opt-ins
-# The agents' row, the one switch a build without a crash collector offers, is a click anywhere
-# along it. The column is centred, so the row's middle is (title + line - 24) / 2 under the
-# window's, 18, whatever its sentence wraps to.
-send click $((width / 2)) $((height / 2 + 18))
+# The agents' row takes a click on its switch, where the app says it's drawn once the step has
+# come, the second row of two with a crash collector and the only one without (#1286).
+expect '^browser: onboarding agents at ' "dark: the opt-ins step didn't draw the agents' switch"
+send click $(grep '^browser: onboarding agents at ' "$log" | tail -1 | cut -d' ' -f5-6)
 expect '^browser: onboarding agents on$' "dark: a click on the agents' row didn't turn them on"
 expect '^browser: agents server on ' "dark: the agents' switch didn't start their server"
 send key escape
@@ -277,4 +311,86 @@ expect '^browser: command bar shown$' "the replay in its own window didn't end w
 exec 3>&-
 quit
 
-echo "ok: a new profile's first launch plays the intro, which goes on by itself or at a key, then the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour and the opt-ins, each left by Esc or Skip and the colour kept by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again, in a new window over a page; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"
+# Suggested favorites: a first launch on a made-up Chrome with tabs open, whose history visits two
+# sites three times and more, brings them in with ↩ at the browser and ↩ at its choices, and the
+# step after the import is Your favorites, offering those two, ticked.
+fav_home="$PWD/$out/onboarding-favorites-home"
+rm -rf "$fav_home"
+if [ "$(uname)" = Darwin ]; then
+  fav_chrome="$fav_home/Library/Application Support/Google/Chrome"
+elif windows; then
+  fav_chrome="$fav_home/AppData/Local/Google/Chrome/User Data"
+else
+  fav_chrome="$fav_home/.config/google-chrome"
+fi
+mkdir -p "$fav_chrome/Default"
+printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Me"}}}}' > "$fav_chrome/Local State"
+printf '%s' '{}' > "$fav_chrome/Default/Preferences"
+# Three bookmarks on its bar, which come in as pinned tabs, and 55 tabs open in its last session,
+# which come in as Today tabs: placing those reads the first window's Shell, and the import step
+# is pressed inside that Shell's update, which aborted the launch (#2428).
+printf '%s' '{"roots":{"bookmark_bar":{"type":"folder","name":"Bookmarks bar","children":[
+  {"type":"url","name":"Docs","url":"https://docs.example.org/"},
+  {"type":"url","name":"Wiki","url":"https://wiki.example.org/"},
+  {"type":"url","name":"Calendar","url":"https://calendar.example.org/"}]}},"version":1}' \
+  > "$fav_chrome/Default/Bookmarks"
+mkdir -p "$fav_chrome/Default/Sessions"
+perl -e '
+sub cmd { my ($id, $body) = @_; pack("S<C", length($body) + 1, $id) . $body }
+sub nav { my ($tab, $index, $url) = @_;
+  my $pickle = pack("l<3", $tab, $index, length $url) . $url;
+  $pickle .= "\0" x (-length($pickle) % 4);
+  $pickle .= pack("l<", 0);
+  pack("l<", length $pickle) . $pickle }
+print "SNSS", pack("l<", 3), cmd(9, pack("l<2", 1, 0));
+for my $tab (2 .. 56) {
+  print cmd(0, pack("l<2", 1, $tab)), cmd(2, pack("l<2", $tab, $tab - 2)),
+    cmd(6, nav($tab, 0, "https://open.example.org/" . ($tab - 1)));
+}
+print cmd(255, "")' > "$fav_chrome/Default/Sessions/Session_13400000000000000" ||
+  fail "couldn't write the made-up Chrome's session"
+# Chromium counts microseconds from 1601: an hour ago.
+python3 -I -c '
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1])
+now = int((time.time() + 11644473600) * 1000000)
+db.executescript("""CREATE TABLE urls(id INTEGER PRIMARY KEY AUTOINCREMENT, url LONGVARCHAR,
+  title LONGVARCHAR, visit_count INTEGER DEFAULT 0 NOT NULL, typed_count INTEGER DEFAULT 0 NOT NULL,
+  last_visit_time INTEGER NOT NULL, hidden INTEGER DEFAULT 0 NOT NULL);""")
+db.executemany("INSERT INTO urls(url, title, visit_count, typed_count, last_visit_time) "
+               "VALUES (?, ?, ?, 1, ?)",
+               [("https://news.example.org/", "News", 5, now - 3600000000),
+                ("https://mail.example.org/", "Mail", 4, now - 3600000000)])
+db.commit()
+' "$fav_chrome/Default/History" || fail "couldn't write the made-up Chrome's history"
+fav_import_home=$fav_home
+! windows || fav_import_home=$(cygpath -w "$fav_home")
+log="$out/onboarding-favorites.log"
+step=0
+rm -f "$saved" "$profile_dir/Account"
+BROWSER_IMPORT_HOME="$fav_import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=dark \
+  "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: onboarding step intro settled$' || fail "favorites: the intro didn't draw"
+send key escape
+expect '^browser: onboarding left intro via key$' "favorites: a key didn't skip the intro"
+expect '^browser: onboarding step import settled$' "favorites: the import step didn't come"
+send key return
+expect '^browser: import pick Chrome$' "favorites: ↩ didn't bring the made-up Chrome"
+expect '^browser: import read Chrome: ' "favorites: picking Chrome didn't read it"
+send key return
+expect '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' \
+  "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
+expect '^browser: import from Chrome: [0-9]* Spaces, 3 pinned tabs, 55 open tabs, ' \
+  "favorites: the import didn't plan Chrome's bookmarks and open tabs: $(grep 'import from Chrome' "$log")"
+expect '^browser: import done: ' "favorites: the import with open tabs didn't finish"
+await '^browser: onboarding step favorites settled$' ||
+  fail "favorites: the step after the import wasn't Your favorites"
+capture_step favorites
+send key escape
+expect '^browser: onboarding left favorites via escape$' "favorites: Esc didn't leave the step"
+exec 3>&-
+quit
+
+echo "ok: a new profile's first launch plays the intro, which goes on by itself or at a key, then the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour, the account while the build names a sync server and the opt-ins, each left by Esc or Skip and the colour kept by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again, in a new window over a page; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"

@@ -129,6 +129,8 @@ void CheckAppActive() {
       return;
     }
     g_app_active = active;
+    // check.sh reads this line.
+    fprintf(stderr, "browser: app active %d\n", active ? 1 : 0);
     // Once the app has stopped being active, where the Mac's comes just before.
     void (*changed)(void) = active ? g_became_active : g_resigning_active;
     if (changed) {
@@ -262,7 +264,9 @@ void host_centered(double width, double height, double* x, double* y) {
 // gives no client a say in (host_centered), and a tiling compositor such as Hyprland would lay the
 // screen out twice, for it and then for the browser window. Chromium's window goes on screen as the
 // core opens it instead.
-void host_show_launch_window(const char* profile_dir, double x, double y, double width, double height) {}
+void host_show_launch_window(const char* profile_dir, double x, double y, double width, double height,
+                             bool maximized, double picture_width, double picture_height,
+                             double foot_top) {}
 
 void host_close_launch_window(void) {}
 
@@ -328,6 +332,11 @@ void host_capture_name(char* name, size_t capacity) {
 
 // host_screens and host_window_frame are frames.rs's, which reads them from the X server.
 
+// The window manager places a new window, Little ilo's too, wherever the pointer is.
+bool host_pointer(double*, double*) {
+  return false;
+}
+
 // shortcut: links a launch carries come in on the command line, so there's nothing to wait for.
 void host_watch_finished_launching(void (*finished)(void)) {
   finished();
@@ -364,6 +373,22 @@ void host_activate(void* ui_view) {
   }
 }
 
+// The window manager places windows, on the workspace it picks.
+void host_set_window_little(void* ui_view, bool grows) {}
+void host_grow_little_window(void* ui_view) {}
+
+// Little ilo's Dock items alone hide windows, and there's no Dock.
+void host_set_window_shown(void* ui_view, bool shown) {}
+bool host_window_shown(void* ui_view) {
+  return true;
+}
+void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {}
+
+void host_set_little_status_item(void (*clicked)(void)) {}
+
+// The launcher's action is the .desktop file's, which the package writes.
+void host_set_little_task(const char* title, const char* arguments) {}
+
 // The app reports each browser window GPUI's window in it hears become active (host_window_active).
 void host_watch_key_window(void (*changed)(void* ui_view)) {
   g_key_window_changed = changed;
@@ -386,6 +411,10 @@ void host_watch_resigning_active(void (*resigning)(void)) {
 
 void host_watch_active(void (*became_active)(void)) {
   g_became_active = became_active;
+}
+
+bool host_app_active(void) {
+  return g_app_active;
 }
 
 // Read as xdg-settings reads it on most desktops. A Flatpak sees its own config rather than the
@@ -449,6 +478,11 @@ size_t host_paste(char* text, size_t capacity) {
 
 void host_copy_png(const uint8_t* png, size_t size) {}
 
+bool host_desktop_picture(void* context,
+                          void (*png)(void* context, const uint8_t* data, size_t size)) {
+  return false;
+}
+
 void host_save_png(void* ui_view, const uint8_t* png, size_t size) {}
 
 // No system share menu on Linux: capture copies instead, and says so (capture.rs).
@@ -494,7 +528,8 @@ void host_focus(void* view) {}
 
 // Nothing asks: Chromium's loop can't wait here for an answer, so Settings asks in a dialog of its
 // own (settings.rs).
-int host_ask(const char* message, const char* detail, const char* const* buttons, size_t count) {
+int host_ask(const char* message, const char* detail, const char* const* buttons, size_t count,
+             bool returns) {
   return -1;
 }
 
@@ -542,7 +577,17 @@ bool host_video_frame(void*, uint8_t*) {
 
 void host_video_close(void*) {}
 
-void host_open_in_safari(const char* url) {}
+// Linux's clipboard is GPUI's, so the app copies a secret through GPUI, with KDE's password manager
+// hint (account.rs, copy_for).
+bool host_copy_secret(const char* text, uint32_t seconds) {
+  return false;
+}
+
+// The app's copy leaves with it: X11's selection and Wayland's go as their owner quits, and GPUI
+// hands a secret to no clipboard manager.
+void host_forget_secret(void) {}
+
+void host_open_elsewhere(const char* url) {}
 
 void host_open_full_disk_access(void) {}
 

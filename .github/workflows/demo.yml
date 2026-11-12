@@ -39,18 +39,27 @@ jobs:
           fi
 
       # bindgen reads the core's header with libclang in build.rs, which runs on the runner. The
-      # wasm-bindgen that writes the JS has to be the version Cargo.lock builds against.
+      # list is UI on Linux's, whose .debs main keeps, so a release installs them without the mirror,
+      # which can stall or fail to resolve (#1969).
+      - name: Install Ubuntu packages
+        if: ${{ steps.check.outputs.built == 'true' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+
+      # The wasm-bindgen that writes the JS has to be the version Cargo.lock builds against.
       - name: Install tools
         if: ${{ steps.check.outputs.built == 'true' }}
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq libclang-dev
           rustup update stable --no-self-update
           rustup target add wasm32-unknown-unknown
           version=$(awk '$0 == "name = \"wasm-bindgen\"" { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
           cargo install wasm-bindgen-cli --version "$version" --locked
 
-      - uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        uses: actions/cache/restore@v4
         if: ${{ steps.check.outputs.built == 'true' }}
         with:
           path: |
@@ -71,6 +80,15 @@ jobs:
           cp ../LICENSE assets/fonts/OFL.txt assets/fonts/Inter-OFL.txt "$demo/"
           tar czf "$RUNNER_TEMP/ilo-demo.tar.gz" -C "$demo" .
           echo "The site's demo: $(du -h "$demo/ilo_demo_bg.wasm" | cut -f1) of wasm." >> "$GITHUB_STEP_SUMMARY"
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v4
         if: ${{ steps.check.outputs.built == 'true' }}

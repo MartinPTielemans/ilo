@@ -14,7 +14,8 @@
 # source in a tab under it. Help › Troubleshooting's Open Task Manager opens Chrome's, with the
 # keyboard, and ⌘W there closes it, not the tab. Its Record a Trace records until the toast's Stop,
 # which shows while it records, and the command bar offers to stop it meanwhile; Stop saves
-# Chromium's trace where the save panel picks.
+# Chromium's trace where the save panel picks. On Windows that's a Save As of the browser window's,
+# which closing the window cancels as it quits.
 # Undocked, after a relaunch, ⌥⌘J opens DevTools in a window of Chrome's, where ⌘C copies
 # the console's text to the run's own pasteboard and ⌘V pastes it, and ⌥⌘I from the page brings
 # them to the front.
@@ -57,220 +58,260 @@ in_find_bar() {
 expect_find() {
   expect "^browser: find $1 $2\$" "$3: $(grep "^browser: find $1 " "$log" | tail -1)"
 }
-# The find bar is 300 points wide and 32 high, 20 from the window's top right corner. Sets $content
-# to the window's width.
+# The find bar is 300 points wide and 32 high, 20 from the window's top right corner, one of the
+# windows over the page, which in full screen can also be its toast. Sets $content to the window's
+# width.
 check_find_bar() {
   send layout
-  child=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout child' |
-    sed 's/^browser: layout child //')
+  children=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+    sed -n 's/^browser: layout child //p' | tr '\n' ';')
   content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
     sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
-  [ "$child" = "$((content - 320)),20 300x32" ] ||
-    fail "$1: the find bar is at ${child:-nowhere} in a window $content wide"
+  case ";$children" in
+  *";$((content - 320)),20 300x32;"*) ;;
+  *) fail "$1: no find bar among the windows over the page (${children:-none}), $content wide" ;;
+  esac
 }
 
-# What's typed right after ⌘F, with no wait, lands in the bar, though the page has ⌘F first: the
-# app holds the keys that come before the bar has the keyboard, and the bar can have it before the
-# first one comes, when there are none to hold (#905). All of it in the bar, which finds it, is
-# none of it in the page. On the Mac nothing that forks, such as uname, comes between ⌘F and the
-# keys, as the driver starts a command as its line comes.
-post key f cmd
-# The app can handle ⌘F before the driver reads the next line, so its lines are looked for from
-# ⌘F's step.
-shortcut=$step
-send type apple
-expect '^browser: command find via page$' "⌘F with the page focused didn't reach the UI" "$shortcut"
-expect '^browser: find bar shown$' "⌘F didn't open the find bar" "$shortcut"
-expect_find "$first" "open 1 of 3 apple" "typing right after ⌘F didn't find in the page"
-send state
-in_find_bar "after ⌘F"
-send key return
-expect_find "$first" "open 2 of 3 apple" "return didn't go to the next match"
-send key return shift
-expect_find "$first" "open 1 of 3 apple" "shift-return didn't go back a match"
-send key g cmd shift
-expect_find "$first" "open 3 of 3 apple" "⇧⌘G in the find bar didn't go back, round to the last"
-send key g cmd
-expect_find "$first" "open 1 of 3 apple" "⌘G in the find bar didn't go on, round to the first"
-check_find_bar "after ⌘F"
-../tools/window-screenshot.sh "$pid" "$out/find.png" || fail "no window to capture"
+# On X11 through sway's Xwayland the find bar can't keep the X focus, which wlroots' window
+# manager sends back to the browser window (#1646), so its steps, and the zoom HUD's under it, are
+# skipped there, and the tabs they leave are made from the command bar: the second tab at
+# example.com, and the first gone to example.org.
+if sway_xwayland; then
+  echo "skip: the find bar's keys, its matches and the zoom HUD under it: sway's Xwayland" \
+    "sends child windows' X focus back (#1646)"
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type example.com
+  send key return
+  expect '^browser: loaded [0-9]* https://example.com/$' "the new tab didn't load"
+  second=$(today | cut -d' ' -f1)
+  send key 2 cmd
+  expect "^browser: selected $first" "⌘2 didn't show the first tab"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+  send type example.org
+  send key return
+  expect '^browser: loaded [0-9]* https://example.org/$' "the first tab didn't load example.org"
+else
+  # What's typed right after ⌘F, with no wait, lands in the bar, though the page has ⌘F first: the
+  # app holds the keys that come before the bar has the keyboard, and the bar can have it before the
+  # first one comes, when there are none to hold (#905). All of it in the bar, which finds it, is
+  # none of it in the page. On the Mac nothing that forks, such as uname, comes between ⌘F and the
+  # keys, as the driver starts a command as its line comes.
+  post key f cmd
+  # The app can handle ⌘F before the driver reads the next line, so its lines are looked for from
+  # ⌘F's step.
+  shortcut=$step
+  send type apple
+  expect '^browser: command find via page$' "⌘F with the page focused didn't reach the UI" "$shortcut"
+  expect '^browser: find bar shown$' "⌘F didn't open the find bar" "$shortcut"
+  expect_find "$first" "open 1 of 3 apple" "typing right after ⌘F didn't find in the page"
+  send state
+  in_find_bar "after ⌘F"
+  send key return
+  expect_find "$first" "open 2 of 3 apple" "return didn't go to the next match"
+  send key return shift
+  expect_find "$first" "open 1 of 3 apple" "shift-return didn't go back a match"
+  send key g cmd shift
+  expect_find "$first" "open 3 of 3 apple" "⇧⌘G in the find bar didn't go back, round to the last"
+  send key g cmd
+  expect_find "$first" "open 1 of 3 apple" "⌘G in the find bar didn't go on, round to the first"
+  check_find_bar "after ⌘F"
+  ../tools/window-screenshot.sh "$pid" "$out/find.png" || fail "no window to capture"
 
-# The bar's next and previous go through the matches. Arc's are 28 pt at 212 and 238 in the bar.
-send click $((content - 320 + 252)) 36
-expect_find "$first" "open 2 of 3 apple" \
-  "a click on the find bar's next didn't go to the next match"
-send click $((content - 320 + 226)) 36
-expect_find "$first" "open 1 of 3 apple" "a click on the find bar's previous didn't go back a match"
-# A text the page doesn't have shows NOT FOUND in place of the count and the arrows.
-send type z
-expect '^browser: find bar drew "applez" NOT FOUND$' \
-  "a text the page doesn't have didn't show NOT FOUND"
-../tools/window-screenshot.sh "$pid" "$out/find-not-found.png" || fail "no window to capture"
-send key backspace
-expect_find "$first" "open [1-3] of 3 apple" "the find didn't find the text again"
+  # The pointer resting on next names it and its key in the tooltip, hung off its glyph as the
+  # header's buttons' are, and the click on it ends the tooltip. The bar is 20 in from the page's
+  # corner, and the button 2 under its top and 28 tall, so its middle is at 36 and the tooltip's
+  # top 7 under that, at 43.
+  send move $((content - 320 + 252)) 36
+  next_keys=⌘G
+  [ "$(uname)" = Darwin ] || next_keys=Ctrl+G
+  expect "^browser: tooltip shown Next $next_keys\$" \
+    "resting on the find bar's next didn't show Next and $next_keys"
+  expect '^browser: tooltip at [0-9.]* 43 ' "the find bar's tooltip didn't hang off its next's glyph"
+  expect '^browser: tooltip window shown$' "the find bar's next's tooltip didn't fade in"
+  ../tools/window-screenshot.sh "$pid" "$out/find-tooltip.png" || fail "no window to capture"
 
-# A click on the page takes the keyboard and leaves the bar open, and ⌘G from the page goes on.
-send click $page_point
-in_browser RenderWidgetHostViewCocoa "after a click on the page under the find bar"
-send key g cmd
-expect '^browser: command find-next via page$' "⌘G with the page focused didn't reach the UI"
-expect_find "$first" "open [1-3] of 3 apple" "⌘G with the page focused didn't find"
-grep -q '^browser: find bar hidden$' "$log" && fail "a click on the page closed the find bar"
+  # The bar's next and previous go through the matches. Arc's are 28 pt at 212 and 238 in the bar.
+  send click $((content - 320 + 252)) 36
+  expect '^browser: tooltip hidden$' "a click on the find bar's next didn't end its tooltip"
+  expect_find "$first" "open 2 of 3 apple" \
+    "a click on the find bar's next didn't go to the next match"
+  send click $((content - 320 + 226)) 36
+  expect_find "$first" "open 1 of 3 apple" "a click on the find bar's previous didn't go back a match"
+  # A text the page doesn't have shows NOT FOUND in place of the count and the arrows.
+  send type z
+  expect '^browser: find bar drew "applez" NOT FOUND$' \
+    "a text the page doesn't have didn't show NOT FOUND"
+  ../tools/window-screenshot.sh "$pid" "$out/find-not-found.png" || fail "no window to capture"
+  send key backspace
+  expect_find "$first" "open [1-3] of 3 apple" "the find didn't find the text again"
 
-# ⌘F gives the open bar the keyboard. Japanese input composes in it, and it finds once committed.
-send key f cmd
-expect '^browser: find bar drew "apple" ' "⌘F with the bar open didn't keep its text"
-send state
-in_find_bar "after ⌘F with the find bar open"
-send ime on
-send type nihongo
-[ "$marked" = 0,7 ] || fail "the find bar didn't take the composition: marked $marked"
-send key space
-[ "$marked" = 0,3 ] || fail "the find bar didn't take the conversion: marked $marked"
-send key return
-[ "$marked" = none ] || fail "return didn't commit the composition: marked $marked"
-send ime off
-expect_find "$first" "open 1 of 1 日本語" "the find bar didn't find the committed text"
-grep -q '^browser: find [0-9]* open [0-9-]* of [0-9-]* n' "$log" &&
-  fail "the find bar searched for the composition"
+  # A click on the page takes the keyboard and leaves the bar open, and ⌘G from the page goes on.
+  send click $page_point
+  in_browser RenderWidgetHostViewCocoa "after a click on the page under the find bar"
+  send key g cmd
+  expect '^browser: command find-next via page$' "⌘G with the page focused didn't reach the UI"
+  expect_find "$first" "open [1-3] of 3 apple" "⌘G with the page focused didn't find"
+  grep -q '^browser: find bar hidden$' "$log" && fail "a click on the page closed the find bar"
 
-# A resize and full screen keep the bar by the window's top right corner.
-send resize 1000 700
-check_find_bar "after a resize"
-send fullscreen
-expect '^browser: window entered full screen$' "the window didn't go full screen"
-# Captured first, so a bar out of place shows where it went.
-../tools/window-screenshot.sh "$pid" "$out/find-fullscreen.png" || fail "no window to capture"
-check_find_bar "in full screen"
-send fullscreen
-expect '^browser: window left full screen$' "the window didn't leave full screen"
+  # ⌘F gives the open bar the keyboard. Japanese input composes in it, and it finds once committed.
+  send key f cmd
+  expect '^browser: find bar drew "apple" ' "⌘F with the bar open didn't keep its text"
+  send state
+  in_find_bar "after ⌘F with the find bar open"
+  send ime on
+  send type nihongo
+  [ "$marked" = 0,7 ] || fail "the find bar didn't take the composition: marked $marked"
+  send key space
+  [ "$marked" = 0,3 ] || fail "the find bar didn't take the conversion: marked $marked"
+  send key return
+  [ "$marked" = none ] || fail "return didn't commit the composition: marked $marked"
+  send ime off
+  expect_find "$first" "open 1 of 1 日本語" "the find bar didn't find the committed text"
+  grep -q '^browser: find [0-9]* open [0-9-]* of [0-9-]* n' "$log" &&
+    fail "the find bar searched for the composition"
 
-# Each tab has its own find. A new tab's starts from the text found last, and switching tabs shows
-# each one's in the bar, or none.
-send key t cmd
-expect '^browser: command bar shown$' "⌘T in the find bar didn't open the command bar"
-send type example.com
-send key return
-expect '^browser: find bar hidden$' "the find bar stayed over a new tab"
-expect '^browser: loaded [0-9]* https://example.com/$' "the new tab didn't load"
-second=$(today | cut -d' ' -f1)
-send key f cmd
-expect_find "$second" "open 0 of 0 日本語" "a new tab's find didn't start from the text found last"
-send type example
-expect_find "$second" "open 1 of [1-9][0-9]* example" "the new tab's find didn't find"
-send key 2 cmd
-expect "^browser: selected $first" "⌘2 in the find bar didn't show the first tab"
-expect '^browser: find bar drew "日本語" 1/1$' "the first tab didn't show its own find"
-# Escape closes the tab's find and gives the keyboard back to its page.
-send key escape
-expect_find "$first" "closed" "escape didn't close the find"
-expect '^browser: find bar hidden$' "escape didn't hide the find bar"
-send state
-in_browser RenderWidgetHostViewCocoa "after escape closed the find bar"
-send key 1 cmd
-expect '^browser: find bar shown$' "the second tab didn't show its find"
-expect '^browser: find bar drew "example" 1/' "the second tab didn't show its own find"
-send state
-[ "$key" = BrowserCoreNSWindow ] || fail "switching to a tab with its find open moved the keyboard to $key"
-send key 2 cmd
-expect '^browser: find bar hidden$' "the first tab, its find closed, showed the find bar"
-# ⌘F opens it again with the tab's last text, highlighting its match without selecting it.
-send key f cmd
-expect '^browser: find bar drew "日本語" 0/1$' "⌘F didn't open the find with the tab's last text"
-# The bar's close button closes it too, and gives the page the keyboard.
-check_find_bar "before its close button"
-send click $((content - 320 + 284)) 36
-expect_find "$first" "closed" "a click on the find bar's close button didn't close the find"
-expect '^browser: find bar hidden$' "a click on the find bar's close button didn't hide it"
-send state
-in_browser RenderWidgetHostViewCocoa "after a click on the find bar's close button"
-send key f cmd
-expect '^browser: find bar shown$' "⌘F after the close button didn't open the find bar again"
+  # A resize and full screen keep the bar by the window's top right corner.
+  send resize 1000 700
+  check_find_bar "after a resize"
+  send fullscreen
+  expect '^browser: window entered full screen$' "the window didn't go full screen"
+  # Captured first, so a bar out of place shows where it went.
+  ../tools/window-screenshot.sh "$pid" "$out/find-fullscreen.png" || fail "no window to capture"
+  check_find_bar "in full screen"
+  send fullscreen
+  expect '^browser: window left full screen$' "the window didn't leave full screen"
 
-# ⌘J from the page and Edit › Find › Jump to Selection scroll the page back to the match a find
-# left selected. ⌘↑ is the page's own, to its top, and off the Mac that's Home. It ends there, where
-# zooming doesn't scroll it.
-top="key up cmd"
-[ "$(uname)" = Linux ] && top="key home"
-for _ in 1 2 3; do send key backspace; done
-send type far
-expect_find "$first" "open 1 of 1 far" "the find didn't find the text below the fold"
-expect '^browser: title [0-9]* scrolled [1-9][0-9]*$' "the find didn't scroll the page to the match"
-send key escape
-expect_find "$first" "closed" "escape didn't close the find"
-for jump in "key j cmd" "menu Jump to Selection"; do
+  # Each tab has its own find. A new tab's starts from the text found last, and switching tabs shows
+  # each one's in the bar, or none.
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T in the find bar didn't open the command bar"
+  send type example.com
+  send key return
+  expect '^browser: find bar hidden$' "the find bar stayed over a new tab"
+  expect '^browser: loaded [0-9]* https://example.com/$' "the new tab didn't load"
+  second=$(today | cut -d' ' -f1)
+  send key f cmd
+  expect_find "$second" "open 0 of 0 日本語" "a new tab's find didn't start from the text found last"
+  send type example
+  expect_find "$second" "open 1 of [1-9][0-9]* example" "the new tab's find didn't find"
+  send key 2 cmd
+  expect "^browser: selected $first" "⌘2 in the find bar didn't show the first tab"
+  expect '^browser: find bar drew "日本語" 1/1$' "the first tab didn't show its own find"
+  # Escape closes the tab's find and gives the keyboard back to its page.
+  send key escape
+  expect_find "$first" "closed" "escape didn't close the find"
+  expect '^browser: find bar hidden$' "escape didn't hide the find bar"
+  send state
+  in_browser RenderWidgetHostViewCocoa "after escape closed the find bar"
+  send key 1 cmd
+  expect '^browser: find bar shown$' "the second tab didn't show its find"
+  expect '^browser: find bar drew "example" 1/' "the second tab didn't show its own find"
+  send state
+  [ "$key" = BrowserCoreNSWindow ] || fail "switching to a tab with its find open moved the keyboard to $key"
+  send key 2 cmd
+  expect '^browser: find bar hidden$' "the first tab, its find closed, showed the find bar"
+  # ⌘F opens it again with the tab's last text, highlighting its match without selecting it.
+  send key f cmd
+  expect '^browser: find bar drew "日本語" 0/1$' "⌘F didn't open the find with the tab's last text"
+  # The bar's close button closes it too, and gives the page the keyboard.
+  check_find_bar "before its close button"
+  send click $((content - 320 + 284)) 36
+  expect_find "$first" "closed" "a click on the find bar's close button didn't close the find"
+  expect '^browser: find bar hidden$' "a click on the find bar's close button didn't hide it"
+  send state
+  in_browser RenderWidgetHostViewCocoa "after a click on the find bar's close button"
+  send key f cmd
+  expect '^browser: find bar shown$' "⌘F after the close button didn't open the find bar again"
+
+  # ⌘J from the page and Edit › Find › Jump to Selection scroll the page back to the match a find
+  # left selected. ⌘↑ is the page's own, to its top, and off the Mac that's Home. It ends there, where
+  # zooming doesn't scroll it.
+  top="key up cmd"
+  [ "$(uname)" = Darwin ] || top="key home"
+  for _ in 1 2 3; do send key backspace; done
+  send type far
+  expect_find "$first" "open 1 of 1 far" "the find didn't find the text below the fold"
+  expect '^browser: title [0-9]* scrolled [1-9][0-9]*$' "the find didn't scroll the page to the match"
+  send key escape
+  expect_find "$first" "closed" "escape didn't close the find"
+  for jump in "key j cmd" "menu Jump to Selection"; do
+    send $top
+    expect '^browser: title [0-9]* scrolled 0$' "$top didn't scroll the page to its top"
+    send $jump
+    expect '^browser: command jump-to-selection via \(page\|ui\)$' "$jump didn't reach the UI"
+    expect '^browser: title [0-9]* scrolled [1-9][0-9]*$' \
+      "$jump didn't scroll the page to its selection"
+  done
   send $top
   expect '^browser: title [0-9]* scrolled 0$' "$top didn't scroll the page to its top"
-  send $jump
-  expect '^browser: command jump-to-selection via \(page\|ui\)$' "$jump didn't reach the UI"
-  expect '^browser: title [0-9]* scrolled [1-9][0-9]*$' \
-    "$jump didn't scroll the page to its selection"
-done
-send $top
-expect '^browser: title [0-9]* scrolled 0$' "$top didn't scroll the page to its top"
-send key f cmd
-expect '^browser: find bar shown$' "⌘F didn't open the find bar again"
+  send key f cmd
+  expect '^browser: find bar shown$' "⌘F didn't open the find bar again"
 
-# ⌘0 and ⌘- from the page and the View menu's Zoom In zoom it, for its site, which the profile
-# keeps, so ⌘0 first. The HUD shows the zoom over the card's top right, 8 points under the find
-# bar, its pill 16 inside its window, which leaves room for the shadow. A tab shown in its place
-# takes it at once.
-send click $page_point
-send key 0 cmd
-expect '^browser: command actual-size via page$' "⌘0 with the page focused didn't reach the UI"
-expect "^browser: zoom $first 100%\$" "⌘0 didn't zoom the page to 100 %"
-# The page may have loaded zoomed, by a failed run, so it takes its baseline from a click at 100 %.
-send click $page_point
-send key - cmd
-expect '^browser: command zoom-out via page$' "⌘- with the page focused didn't reach the UI"
-expect "^browser: zoom $first 90%\$" "⌘- didn't zoom the page out to 90 %"
-expect '^browser: title [0-9]* zoom 90$' "⌘- didn't zoom the page out"
-expect '^browser: zoom hud shown$' "⌘- didn't show the zoom HUD"
-send layout
-# The HUD's window reaches 40 past its pill on every side, for the popover level's shadow, so the
-# pill sits 116 in from the content's right and 60 down.
-hud=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout child .* 178x122$' |
-  sed 's/^browser: layout child //')
-[ "$hud" = "$((content - 156)),20 178x122" ] ||
-  fail "the zoom HUD is at ${hud:-nowhere} in a window $content wide, under the find bar"
-../tools/window-screenshot.sh "$pid" "$out/zoom.png" || fail "no window to capture"
-send menu "Zoom In"
-expect '^browser: command zoom-in via ui$' "the View menu's Zoom In didn't reach the UI"
-expect "^browser: zoom $first 100%\$" "the View menu's Zoom In didn't zoom the page in to 100 %"
-send menu "Zoom In"
-expect '^browser: title [0-9]* zoom 110$' "the View menu's Zoom In didn't zoom the page in"
-send key 1 cmd
-expect "^browser: selected $second" "⌘1 didn't show the second tab"
-# It shrinks out over 70 ms, as Arc's does on a tab switch, so it's gone well before its 5 s are up,
-# which would take it anyway.
-gone() { sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: zoom hud hidden$'; }
-for _ in $(seq 20); do gone && break; sleep 0.1; done
-gone || fail "the zoom HUD stayed over the tab shown in place of the one zoomed"
-send key 2 cmd
-expect "^browser: selected $first" "⌘2 didn't show the first tab again"
-send key 0 cmd
-expect '^browser: title [0-9]* zoom 100$' "⌘0 didn't zoom the page back to 100 %"
-expect '^browser: zoom hud hidden$' "the zoom HUD didn't go after a moment"
+  # ⌘0 and ⌘- from the page and the View menu's Zoom In zoom it, for its site, which the profile
+  # keeps, so ⌘0 first. The HUD shows the zoom over the card's top right, 8 points under the find
+  # bar, its pill 16 inside its window, which leaves room for the shadow. A tab shown in its place
+  # takes it at once.
+  send click $page_point
+  send key 0 cmd
+  expect '^browser: command actual-size via page$' "⌘0 with the page focused didn't reach the UI"
+  expect "^browser: zoom $first 100%\$" "⌘0 didn't zoom the page to 100 %"
+  # The page may have loaded zoomed, by a failed run, so it takes its baseline from a click at 100 %.
+  send click $page_point
+  send key - cmd
+  expect '^browser: command zoom-out via page$' "⌘- with the page focused didn't reach the UI"
+  expect "^browser: zoom $first 90%\$" "⌘- didn't zoom the page out to 90 %"
+  expect '^browser: title [0-9]* zoom 90$' "⌘- didn't zoom the page out"
+  expect '^browser: zoom hud shown$' "⌘- didn't show the zoom HUD"
+  send layout
+  # The HUD's window reaches 40 past its pill on every side, for the popover level's shadow, so the
+  # pill sits 116 in from the content's right and 60 down.
+  hud=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout child .* 178x122$' |
+    sed 's/^browser: layout child //')
+  [ "$hud" = "$((content - 156)),20 178x122" ] ||
+    fail "the zoom HUD is at ${hud:-nowhere} in a window $content wide, under the find bar"
+  ../tools/window-screenshot.sh "$pid" "$out/zoom.png" || fail "no window to capture"
+  send menu "Zoom In"
+  expect '^browser: command zoom-in via ui$' "the View menu's Zoom In didn't reach the UI"
+  expect "^browser: zoom $first 100%\$" "the View menu's Zoom In didn't zoom the page in to 100 %"
+  send menu "Zoom In"
+  expect '^browser: title [0-9]* zoom 110$' "the View menu's Zoom In didn't zoom the page in"
+  send key 1 cmd
+  expect "^browser: selected $second" "⌘1 didn't show the second tab"
+  # It shrinks out over 70 ms, as Arc's does on a tab switch, so it's gone well before its 5 s are up,
+  # which would take it anyway.
+  hud_gone() { sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: zoom hud hidden$'; }
+  for _ in $(seq 20); do hud_gone && break; sleep 0.1; done
+  hud_gone || fail "the zoom HUD stayed over the tab shown in place of the one zoomed"
+  send key 2 cmd
+  expect "^browser: selected $first" "⌘2 didn't show the first tab again"
+  send key 0 cmd
+  expect '^browser: title [0-9]* zoom 100$' "⌘0 didn't zoom the page back to 100 %"
+  expect '^browser: zoom hud hidden$' "the zoom HUD didn't go after a moment"
 
-# Another page closes it.
-send key l cmd
-expect '^browser: command bar shown$' "⌘L in the find bar didn't open the command bar"
-send type example.org
-send key return
-expect_find "$first" "closed" "going to another page didn't close the find"
-expect '^browser: find bar hidden$' "going to another page didn't hide the find bar"
-expect '^browser: loaded [0-9]* https://example.org/$' "the first tab didn't load example.org"
+  # Another page closes it.
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L in the find bar didn't open the command bar"
+  send type example.org
+  send key return
+  expect_find "$first" "closed" "going to another page didn't close the find"
+  expect '^browser: find bar hidden$' "going to another page didn't hide the find bar"
+  expect '^browser: loaded [0-9]* https://example.org/$' "the first tab didn't load example.org"
+fi
 
 # DevTools dock in the card on the right. They fill the page's frame, and the page keeps the rest
 # of it, from the frame's left, through a resize. Each tab has its own. Sets $views to the frames
 # of the views shown, DevTools' first, once there are $1 of them. DevTools fill the frame at once,
 # and the page moves aside once they've loaded, as in Arc, so with two it waits for that too.
-# Linux's driver lists the pages the UI lays out, and DevTools are an aura window in Chromium's,
-# which the X server doesn't see (drive.rs), so there neither checks the views.
+# Windows' driver lists the pages the UI lays out, and DevTools are an aura window in the same
+# Chromium window as the page, which Windows doesn't see, so there it doesn't check the views;
+# devtools.png shows them. Linux's driver lists docked DevTools too (drive.rs).
 sees_devtools=1
-if [ "$(uname)" = Linux ]; then
+if [ "$(uname)" != Darwin ] && [ "$(uname)" != Linux ]; then
   sees_devtools=
-  echo "skip: where DevTools dock beside the page: Linux's driver can't see aura windows."
+  echo "skip: where DevTools dock beside the page: Windows' driver can't see aura windows."
 fi
 await_views() {
   [ -n "$sees_devtools" ] || return 0
@@ -326,17 +367,15 @@ await_views 2 "after JavaScript Console"
 # off already, ↩ runs those words as a script that fails, and the paste reads the same. $1 says
 # where DevTools are, docked or undocked.
 console_keys() {
-  local word=$1-copy
+  local word=$1-copy copied= pasted=
   for _ in $(seq 50); do
     send key a cmd
     send type "$word"
     send key a cmd
     send key c cmd
-    send pasteboard
-    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "^browser: pasteboard text $word\$" &&
-      break
+    holds "$word" && copied=1 && break
   done
-  expect "^browser: pasteboard text $word\$" "⌘C in $1 DevTools didn't copy the console's text"
+  [ -n "$copied" ] || fail "⌘C in $1 DevTools didn't copy the console's text"
   send key v cmd
   send key a cmd
   send type "allow pasting"
@@ -349,13 +388,23 @@ console_keys() {
   for _ in $(seq 50); do
     send key a cmd
     send key c cmd
-    send pasteboard
-    logged "^browser: pasteboard text pasted-$word\$" && break
+    holds "pasted-$word" && pasted=1 && break
   done
-  logged "^browser: pasteboard text pasted-$word\$" || {
+  [ -n "$pasted" ] || {
     ../tools/window-screenshot.sh "$pid" "$out/devtools-$1-paste.png" all || true
     fail "⌘V in $1 DevTools didn't paste in the console, see $out/devtools-$1-paste.png"
   }
+}
+# The run's pasteboard holds $1, as the driver reads GPUI's. On Wayland a client hears of the
+# selection only while it has the keyboard, which DevTools' page has here. So there GPUI's reads
+# nothing, and the session's clipboard is read instead (#1575).
+holds() {
+  if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    clipboard_holds "$1"
+  else
+    send pasteboard
+    logged "^browser: pasteboard text $1\$"
+  fi
 }
 keys=$((step + 1))
 console_keys docked
@@ -409,7 +458,7 @@ fi
 if [ -n "$shown" ]; then
   expect "$managed" "Open Task Manager didn't show Chrome's"
   send key w cmd
-  if [ "$(uname)" = Linux ]; then
+  if [ "$(uname)" != Darwin ]; then
     # Off the Mac the Task Manager is Chromium's own window, which takes Ctrl+W itself, as
     # Chrome's, and the window manager gives the keyboard back once it's gone.
     for _ in $(seq 100); do
@@ -463,17 +512,36 @@ if [ "$(uname)" = Darwin ]; then
   expect "^browser: trace saved $trace\$" "the trace wasn't saved where it was picked"
   python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     trace = json.load(f)
 assert trace["traceEvents"], "no events"
 ' "$out/trace.json" || fail "the saved trace isn't Chromium's"
+elif windows; then
+  # Windows' Save As is the browser window's, which it disables while the dialog shows, as Chrome's
+  # is. Without an owner it left the window usable and kept ilo from quitting (#1647).
+  for _ in $(seq 50); do
+    python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" > "$out/trace-dialog.txt"
+    grep -q '#32770 "Save As" visible' "$out/trace-dialog.txt" && break
+    sleep 0.1
+  done
+  grep -q '#32770 "Save As" visible owned' "$out/trace-dialog.txt" ||
+    fail "the trace's Save As isn't owned by a window: $(grep -v hidden "$out/trace-dialog.txt" | tr '\n' ';')"
+  grep -q ' browser visible disabled' "$out/trace-dialog.txt" ||
+    fail "the browser window takes input under the trace's Save As: $(grep -v hidden "$out/trace-dialog.txt" | tr '\n' ';')"
+  echo "skip: saving the trace: the driver answers only the host's own Save As, not GPUI's."
 else
   echo "skip: saving the trace: the headless session has no file chooser portal for the driver to answer."
 fi
 none_since '^browser: toast shown Recording a trace' || fail "the trace's toast came back after Stop"
-quit_by_key
-await '^browser: command quit via ' || fail "⌘Q didn't quit"
-exited
+if windows; then
+  # The keyboard is the dialog's, so the browser window closes, as the taskbar's Close window
+  # closes it, and the dialog goes with it as Cancel would.
+  quit
+else
+  quit_by_key
+  await '^browser: command quit via ' || fail "⌘Q didn't quit"
+  exited
+fi
 
 # Undocked, as DevTools' Dock side menu leaves them for the next time, DevTools are a window of
 # Chrome's, where ⌘C and ⌘V are the console's, and ⌥⌘I from the page raises them, as Chrome's and
@@ -481,10 +549,10 @@ exited
 dock() {
   python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     prefs = json.load(f)
 prefs.setdefault("devtools", {}).setdefault("preferences", {})["currentDockState"] = sys.argv[2]
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" "\"$1\""
 }
@@ -521,4 +589,4 @@ quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't quit"
 exited
 dock right
-echo "ok: ⌘F opens the find bar from the page with the keyboard, what's typed right after it lands there, typing finds with \"n/m\", return, shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and the page, a text the page doesn't have shows NOT FOUND, Japanese input finds once committed, the bar keeps its place through a resize and full screen, each tab keeps its own find, escape and the close button close it and another page closes it. ⌘J and Jump to Selection scroll the page back to the match a find left selected. ⌘0, ⌘- and the View menu zoom the page, and the HUD shows the zoom for a moment, under the find bar, and goes when another tab shows. ⌥⌘I and the View menu dock DevTools in the card beside the page, through a resize and per tab, where ⌘A, ⌘C and ⌘V are the console's, F12 closes them and the page gets the keyboard back, and View Source opens a tab under the page. Open Task Manager shows Chrome's, which ⌘W closes, keeping the tab. Record a Trace records until the toast's Stop, and saves Chromium's trace where the save panel picks. Undocked DevTools open in a window of their own, where ⌘C copies and ⌘V pastes, and ⌥⌘I from the page brings them to the front. Windows: $out/find.png, $out/find-not-found.png, $out/find-fullscreen.png, $out/zoom.png, $out/devtools.png, $out/task-manager.png, $out/trace.png, $out/devtools-undocked.png"
+echo "ok: ⌘F opens the find bar from the page with the keyboard, what's typed right after it lands there, typing finds with \"n/m\", return, shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and the page, a text the page doesn't have shows NOT FOUND, Japanese input finds once committed, the bar keeps its place through a resize and full screen, each tab keeps its own find, escape and the close button close it and another page closes it. The pointer resting on next names it and its key in a tooltip hung off its glyph, which the click ends. ⌘J and Jump to Selection scroll the page back to the match a find left selected. ⌘0, ⌘- and the View menu zoom the page, and the HUD shows the zoom for a moment, under the find bar, and goes when another tab shows. ⌥⌘I and the View menu dock DevTools in the card beside the page, through a resize and per tab, where ⌘A, ⌘C and ⌘V are the console's, F12 closes them and the page gets the keyboard back, and View Source opens a tab under the page. Open Task Manager shows Chrome's, which ⌘W closes, keeping the tab. Record a Trace records until the toast's Stop, and saves Chromium's trace where the save panel picks. Undocked DevTools open in a window of their own, where ⌘C copies and ⌘V pastes, and ⌥⌘I from the page brings them to the front. Windows: $out/find.png, $out/find-tooltip.png, $out/find-not-found.png, $out/find-fullscreen.png, $out/zoom.png, $out/devtools.png, $out/task-manager.png, $out/trace.png, $out/devtools-undocked.png"

@@ -5,22 +5,22 @@
 //! The Site Controls cast their shadow from a window under them (shadows.rs), which scales and
 //! fades with the frames they draw of their motion.
 //!
-//! The pointer over Capture is the crosshair while it would be the camera on the Mac.
+//! The pointer over Capture is ilo's camera, as on the Mac, which GPUI shows in the crosshair's
+//! place over its window (`gpui_linux::set_overlay_cursor`); the crosshair where it can't.
 //!
-//! shortcut: no blur under the Site Controls, and no camera: a crosshair is a cursor both X11's
-//! cursor themes and Wayland's cursor shapes name, as a picture would need one of each.
+//! shortcut: no blur under the Site Controls.
 
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
 };
 
-use gpui::{Bounds, CursorStyle, Pixels, point, px, size};
+use gpui::{App, Bounds, CursorStyle, DevicePixels, Pixels, SvgSize, point, px, size};
 
 use crate::{bc, overlays, shadows};
 
 /// The Site Controls' slot in the host's overlays, for their elevation (platform/host.h).
-const SITE_CONTROLS: std::ffi::c_int = 4;
+const SITE_CONTROLS: std::ffi::c_int = 5;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -56,7 +56,12 @@ thread_local! {
 fn add(kind: Kind, view: *mut c_void, dismissed: extern "C" fn()) {
     POPOVERS.with_borrow_mut(|all| {
         all.retain(|each| each.kind != kind);
-        all.push(Popover { kind, view, dismissed, shown: None });
+        all.push(Popover {
+            kind,
+            view,
+            dismissed,
+            shown: None,
+        });
     });
 }
 
@@ -74,7 +79,10 @@ fn name(kind: Kind) -> &'static str {
 /// Shows `kind` over `ui_view`'s window at `left`, `top`, `width` by `height` in its content, with
 /// the keyboard.
 fn show(kind: Kind, ui_view: *mut c_void, left: f64, top: f64, width: f64, height: f64) -> bool {
-    if with(kind, |p| p.shown.is_some_and(|shown| shown.ui_view != ui_view)) == Some(true) {
+    if with(kind, |p| {
+        p.shown.is_some_and(|shown| shown.ui_view != ui_view)
+    }) == Some(true)
+    {
         hide(kind);
     }
     let Some(content) = gpui_linux::embedder_size(ui_view) else {
@@ -87,7 +95,13 @@ fn show(kind: Kind, ui_view: *mut c_void, left: f64, top: f64, width: f64, heigh
     let window = crate::window_with_view(ui_view);
     let Some((view, had)) = with(kind, |p| {
         let had = p.shown.is_some_and(|shown| !shown.released);
-        p.shown = Some(Shown { ui_view, window, content, bounds, released: false });
+        p.shown = Some(Shown {
+            ui_view,
+            window,
+            content,
+            bounds,
+            released: false,
+        });
         (p.view, had)
     }) else {
         return false;
@@ -103,7 +117,7 @@ fn show(kind: Kind, ui_view: *mut c_void, left: f64, top: f64, width: f64, heigh
         }
         shadows::show(SITE_CONTROLS, ui_view, bounds, 0.);
     }
-    gpui_linux::show_overlay(view, ui_view, bounds, px(0.), true, left_popover);
+    crate::overlays::show_over(view, ui_view, bounds, px(0.), true, left_popover);
     true
 }
 
@@ -137,7 +151,7 @@ fn hide(kind: Kind) -> bool {
         shadows::hide(SITE_CONTROLS);
     }
     // check.sh reads this line.
-    eprintln!("browser: {} hidden", name(kind));
+    browser::log!("browser: {} hidden", name(kind));
     true
 }
 
@@ -206,7 +220,10 @@ pub(crate) fn placed(view: *mut c_void) -> Option<(*mut c_void, Bounds<Pixels>)>
 /// `ui_view`'s window is closing: what shows over it goes.
 pub(crate) fn forget_window(ui_view: *mut c_void) {
     for kind in [Kind::SiteControls, Kind::Capture] {
-        if with(kind, |p| p.shown.is_some_and(|shown| shown.ui_view == ui_view)) == Some(true) {
+        if with(kind, |p| {
+            p.shown.is_some_and(|shown| shown.ui_view == ui_view)
+        }) == Some(true)
+        {
             hide(kind);
         }
     }
@@ -220,7 +237,9 @@ pub extern "C" fn host_add_site_controls(view: *mut c_void, dismissed: extern "C
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_set_site_controls_shape(corners: *const f64, count: usize) {
-    let Some(view) = with(Kind::SiteControls, |p| p.view) else { return };
+    let Some(view) = with(Kind::SiteControls, |p| p.view) else {
+        return;
+    };
     if corners.is_null() {
         return;
     }
@@ -243,8 +262,8 @@ pub extern "C" fn host_show_site_controls(
 ) {
     if show(Kind::SiteControls, ui_view, left, top, width, height) {
         // check.sh reads these lines.
-        eprintln!("browser: site controls at {left} {top} {width} {height}");
-        eprintln!("browser: site controls shown");
+        browser::log!("browser: site controls at {left} {top} {width} {height}");
+        browser::log!("browser: site controls shown");
     }
 }
 
@@ -258,7 +277,7 @@ pub extern "C" fn host_set_site_controls_height(height: f64) {
     if let Some(Some((view, bounds))) = moved {
         gpui_linux::move_overlay(view, bounds, px(0.));
         shadows::moved(SITE_CONTROLS, bounds, 0.);
-        eprintln!("browser: site controls height {height}");
+        browser::log!("browser: site controls height {height}");
     }
 }
 
@@ -273,7 +292,7 @@ pub extern "C" fn host_site_controls_drew(scale: f64, opacity: f64, x: f64, y: f
 #[unsafe(no_mangle)]
 pub extern "C" fn host_release_site_controls() {
     if release(Kind::SiteControls) {
-        eprintln!("browser: site controls released");
+        browser::log!("browser: site controls released");
     }
 }
 
@@ -298,7 +317,7 @@ pub extern "C" fn host_show_capture(
     if show(Kind::Capture, ui_view, left, top, width, height) {
         camera();
         // check.sh reads this line.
-        eprintln!("browser: capture shown at {left} {top} {width} {height}");
+        browser::log!("browser: capture shown at {left} {top} {width} {height}");
     }
 }
 
@@ -310,11 +329,55 @@ pub extern "C" fn host_capture_camera(camera: bool) {
 
 /// Capture's window shows the pointer as the camera, or the arrow, as `CAMERA` says.
 fn camera() {
-    let Some(view) = with(Kind::Capture, |p| p.view) else { return };
+    let Some(view) = with(Kind::Capture, |p| p.view) else {
+        return;
+    };
     let style = CAMERA.get().then_some(CursorStyle::Crosshair);
     crate::update_app_later(move |cx| {
-        overlays::update_window(view, cx, |window, cx| window.set_cursor_override(style, cx));
+        overlays::update_window(view, cx, |window, cx| {
+            let picture = camera_picture(window.scale_factor(), cx);
+            gpui_linux::set_overlay_cursor(view, CursorStyle::Crosshair, picture);
+            window.set_cursor_override(style, cx);
+        });
     });
+}
+
+// Lucide's camera (https://github.com/lucide-icons/lucide, commit
+// 7faf87628a1ad6175975bc595344337ce14a7db4), ISC License; see NOTICE. Drawn as the Mac's is
+// (mac/host.mm): a light line a point wide, over a dark fill, with a dark edge either side so it
+// shows on any page.
+const CAMERA_BODY: &str = "M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9\
+    a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904\
+    A2 2 0 0 1 10.004 4z";
+
+/// The camera pointer, 24 points square at `scale`, with its hot spot in the middle as the Mac's.
+fn camera_picture(scale: f32, cx: &App) -> Option<gpui_linux::CursorPicture> {
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" \
+         viewBox=\"0 0 24 24\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\
+         <path d=\"{CAMERA_BODY}\" fill=\"rgb(30,41,48)\" stroke=\"rgba(0,0,0,0.6)\" \
+         stroke-width=\"3\"/>\
+         <circle cx=\"12\" cy=\"13\" r=\"3\" fill=\"none\" stroke=\"rgba(0,0,0,0.6)\" \
+         stroke-width=\"3.5\"/>\
+         <path d=\"{CAMERA_BODY}\" fill=\"none\" stroke=\"rgb(215,215,215)\" stroke-width=\"1\"/>\
+         <circle cx=\"12\" cy=\"13\" r=\"3\" fill=\"none\" stroke=\"white\" \
+         stroke-width=\"1.5\"/></svg>"
+    );
+    let renderer = cx.svg_renderer();
+    let parsed = renderer.parse_svg(svg.as_bytes()).ok()?;
+    let side = (24. * scale).round().max(1.) as u32;
+    let pixels = DevicePixels(side as i32);
+    let drawn = (renderer.render_parsed(&parsed, SvgSize::ExactSize(size(pixels, pixels)))).ok()?;
+    let mut rgba = drawn.as_bytes(0)?.to_vec();
+    // GPUI's are BGRA.
+    rgba.chunks_exact_mut(4).for_each(|pixel| pixel.swap(0, 2));
+    Some(gpui_linux::CursorPicture {
+        width: side,
+        height: side,
+        rgba,
+        hot: (side / 2, side / 2),
+        scale,
+    })
 }
 
 #[unsafe(no_mangle)]

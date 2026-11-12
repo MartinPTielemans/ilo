@@ -3,9 +3,11 @@
 //! (overlays.rs), with the keyboard, and the menu's own window takes its pointer events. A press
 //! outside, the keyboard going elsewhere or the window resizing is the user leaving it.
 //!
+//! A right-click elsewhere in the UI opens that menu in its place, as the press reaches the UI
+//! before GPUI tells the menu it was left, and a leaving is told only to the showing it left.
+//!
 //! shortcut: the pointer isn't the menu's first, so a press outside closes it and lands where it
-//! was pressed too, and a right-click elsewhere doesn't open that menu in its place. It stays
-//! inside its window, which it can't go past under Wayland.
+//! was pressed too. It stays inside its window, which it can't go past under Wayland.
 //!
 //! From the Linux driver's branch (feat/linux-drive, a566b45), which shows it the same way.
 
@@ -49,10 +51,23 @@ pub extern "C" fn host_add_menu_window(
 }
 
 /// The menu's window takes the pointer on its `panels`, from its top left, and lets it through to
-/// the browser window in their shadows' room round them, where a press is outside the menu.
-pub(crate) fn take_pointer_on(panels: &[Bounds<Pixels>]) {
-    if let Some(menu) = MENU.get() {
-        gpui_linux::set_overlay_pointer(menu.view, Some(panels));
+/// the browser window in their shadows' room round them, where a press is outside the menu. Where
+/// overlays can't blend, it's also cut to them, as the room round them would show black (#1479).
+pub(crate) fn set_panels(panels: &[Bounds<Pixels>]) {
+    let Some(menu) = MENU.get() else { return };
+    gpui_linux::set_overlay_pointer(menu.view, Some(panels));
+    if !gpui_linux::overlays_blend() {
+        let square = |panel: &Bounds<Pixels>| {
+            let (left, top) = (f32::from(panel.left()), f32::from(panel.top()));
+            let (right, bottom) = (f32::from(panel.right()), f32::from(panel.bottom()));
+            vec![
+                (left, top, 0.),
+                (right, top, 0.),
+                (right, bottom, 0.),
+                (left, bottom, 0.),
+            ]
+        };
+        gpui_linux::set_overlay_outlines(menu.view, &panels.iter().map(square).collect::<Vec<_>>());
     }
 }
 
@@ -91,9 +106,9 @@ pub extern "C" fn host_show_menu_window(
         size(px(width as f32), px(height as f32)),
     );
     // The menu draws its panels' corners and shadows inside its window.
-    gpui_linux::show_overlay(menu.view, ui_view, bounds, px(0.), true, left_menu);
+    crate::overlays::show_over(menu.view, ui_view, bounds, px(0.), true, left_menu);
     // check.sh reads it.
-    eprintln!("browser: menu window at {left:.0},{top:.0} {width:.0}x{height:.0}");
+    browser::log!("browser: menu window at {left:.0},{top:.0} {width:.0}x{height:.0}");
 }
 
 #[unsafe(no_mangle)]
@@ -104,11 +119,13 @@ pub extern "C" fn host_hide_menu_window() {
     OVER.take();
     let view = menu.view;
     gpui_linux::hide_overlay(view, move || {
-        if window != 0 {
+        // A menu that opened again in the window before this hide ran keeps the keyboard it took.
+        let again = SHOWN.get().is_some_and(|(_, shown, _)| shown == window);
+        if window != 0 && !again {
             overlays::lend_keyboard(window, view, false);
         }
     });
-    eprintln!("browser: menu window hidden");
+    browser::log!("browser: menu window hidden");
 }
 
 /// The window's content, in the points of `ui_view`, its own or an overlay's over it: the menu
@@ -116,10 +133,17 @@ pub extern "C" fn host_hide_menu_window() {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_menu_area(ui_view: *mut c_void, _in_reveal: bool, area: *mut f64) {
     let (ui_view, origin) = overlays::placed(ui_view)
-        .map_or((ui_view, point(px(0.), px(0.))), |(browser, bounds)| (browser, bounds.origin));
+        .map_or((ui_view, point(px(0.), px(0.))), |(browser, bounds)| {
+            (browser, bounds.origin)
+        });
     let content = gpui_linux::embedder_size(ui_view).unwrap_or_default();
     let (x, y) = (f64::from(origin.x), f64::from(origin.y));
-    let edges = [-x, -y, f64::from(content.width) - x, f64::from(content.height) - y];
+    let edges = [
+        -x,
+        -y,
+        f64::from(content.width) - x,
+        f64::from(content.height) - y,
+    ];
     // SAFETY: the caller passes four.
     unsafe { std::slice::from_raw_parts_mut(area, 4) }.copy_from_slice(&edges);
 }

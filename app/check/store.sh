@@ -5,15 +5,12 @@
 # it. With no store extension left, the next launch's update check asks no one. It needs the
 # network and Google's store, so it runs only when named: ./check.sh store.
 
-# uBlock Origin Lite: well known, open source, it opens no page when added and sends nothing home.
-# English, whatever the Mac's language, as the check finds the store's buttons by their text. It
-# installs in a profile of the run's own, as the extensions run's .crx does.
-store_id=ddkjiahejlhfcafbddmgiahcphecmpfh
-store="https://chromewebstore.google.com/detail/$store_id?hl=en"
+. check/webstore.sh
+# It installs in a profile of the run's own, as the extensions run's .crx does.
 profile_dir="$PWD/$out/store/profile"
 mkdir -p "$profile_dir/Default"
 printf '{"download": {"default_directory": "%s", "prompt_for_download": false}}' \
-  "$(app_path "$PWD/$out/downloads")" > "$profile_dir/Default/Preferences"
+  "$(native_path "$PWD/$out/downloads" | sed 's/\\/\\\\/g')" > "$profile_dir/Default/Preferences"
 # Chromium's log of the update checks, which an official build writes only when asked.
 updates="--enable-logging=stderr --vmodule=extension_downloader=2,extension_updater=2"
 # Launches the app on the store's page for the extension, with the log $1.
@@ -33,40 +30,8 @@ open_store() {
     echo "skip: the Web Store. Browser wasn't the active app, so the page didn't get its keys."
     exit 0
   fi
-  # In the EU Google asks a new profile for consent before it shows the store. Reject all goes on
-  # to the store's page, as for a user there.
-  if grep -q '^browser: loaded [0-9]* https://consent\.google\.com/' "$log"; then
-    focus_button "reject all" last
-    send key return
-  fi
-  await "^browser: loaded [0-9]* https://chromewebstore.google.com/detail/.*$store_id" ||
-    fail "the store's page for the extension didn't load: $(grep '^browser: loaded' "$log")"
-  await '^browser: title [0-9]* uBlock Origin Lite' || fail "the store's page didn't show"
+  store_shown
 }
-# Gives the keyboard to the store page's button with the text $1, lowercase, as the user who finds
-# it and closes the find does: Chrome focuses the button the match is in. Its place on the page
-# changes with the store's layout and language; its text doesn't.
-focus_button() {
-  send key f cmd
-  expect '^browser: find bar shown$' "⌘F didn't open the find bar"
-  send type "$1"
-  expect "^browser: find [0-9]* open 1 of [0-9]* $1\$" "the store's page has no \"$1\""
-  # With "last", the last match, as a page whose text names its button before it has the button
-  # there.
-  if [ "${2:-}" = last ]; then
-    send key return shift
-    expect "^browser: find [0-9]* open \([0-9]*\) of \1 $1\$" "shift-return didn't go to the last \"$1\""
-  fi
-  send key escape
-  expect '^browser: find [0-9]* closed$' "escape didn't close the find"
-  send state
-  in_browser RenderWidgetHostViewCocoa "after the find for \"$1\""
-}
-# Whether the last Extensions menu lists the extension.
-listed() {
-  grep '^browser: extensions menu' "$log" | tail -1 | grep -q " $store_id"
-}
-
 open_store store-install
 listed && fail "the extension was there before the store added it"
 focus_button "add to chrome"

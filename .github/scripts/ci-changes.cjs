@@ -9,6 +9,9 @@ const fs = require("node:fs");
 const JOBS = {
   core_linux: [/^core\//, /^engine\//, /^\.github\/workflows\/core-linux\.yml$/],
   app_linux: [/^app\//, /^core\/public\//, /^\.github\/workflows\/app-linux\.yml$/],
+  // The app's Rust, its patches and the core's header bindgen reads, but not check.sh's runs, which
+  // need the engine.
+  app_mac: [/^app\/(?!check\/)/, /^core\/public\//, /^\.github\/workflows\/app-mac\.yml$/],
   engine_windows: [
     /^core\//,
     /^engine\//,
@@ -17,19 +20,22 @@ const JOBS = {
   ],
 };
 
-// The gate itself: a change to it could hide what it skips.
+// The gate itself: a change to it could hide what it skips. core-same.sh takes out the core's
+// changes to comments alone before this reads the paths.
 const RUNS_EVERYTHING = [
   /^\.github\/workflows\/ci\.yml$/,
+  /^\.github\/scripts\/tree-proven\.sh$/,
+  /^\.github\/actions\/tree-proof\//,
   /^\.github\/scripts\/ci-changes\.cjs$/,
   /^\.github\/actions\/ci-changes\//,
+  /^tools\/core-same\.sh$/,
 ];
 
-// Nothing a job builds reads these, nor Markdown anywhere. Spikes and the prototype stand alone
-// (AGENTS.md), and tools/ holds scripts for working on the repo.
+// Nothing a job builds reads these, nor Markdown anywhere. Spikes stand alone (AGENTS.md), and
+// tools/ holds scripts for working on the repo.
 const INERT = [
   /^docs\//,
   /^(LICENSE|NOTICE|\.gitignore)$/,
-  /^prototypes\//,
   /^spikes\//,
   /^tools\//,
   /^\.github\/(ISSUE_TEMPLATE|triage)\//,

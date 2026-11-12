@@ -1,9 +1,11 @@
 //! A tab dragged to the sidebar's edge, paging to the Space beside and dropped there (Arc).
 
+use std::collections::HashMap;
+
 use gpui::{AppContext, TestAppContext};
 
-use super::{EDGE_WAIT, SPLIT_REST};
 use super::detents::{X, drag_to, press, row_y};
+use super::{EDGE_WAIT, SPLIT_REST};
 use crate::shell::{Folders, Place, Shell, Slot, recorder::Recorder};
 
 /// The Spaces One, Two and an agent's, One shown with Today 3 and 4, Two with 5 pinned and 6.
@@ -14,10 +16,21 @@ fn shell(cx: &mut TestAppContext) -> (gpui::Entity<Shell>, std::rc::Rc<Recorder>
         let space = |id, name: &str, agent: &str| {
             (id, name.into(), None, 0, "".into(), agent.into(), "".into())
         };
-        let spaces = vec![space(1, "One", ""), space(2, "Two", ""), space(9, "Agent", "claude")];
+        let spaces = vec![
+            space(1, "One", ""),
+            space(2, "Two", ""),
+            space(9, "Agent", "claude"),
+        ];
         shell.set_spaces(spaces, cx);
         shell.set_space(1, cx);
-        shell.set_tabs(1, Vec::new(), vec![3, 4], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![3, 4],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_tabs(2, vec![5], vec![6], Vec::new(), Folders::default(), cx);
     });
     (shell, host)
@@ -66,7 +79,9 @@ fn a_row_held_at_the_edge_over_another_rests_on_no_split(cx: &mut TestAppContext
     let width = shell.read_with(cx, |shell, _| shell.width());
     let three = shell.read_with(cx, |shell, _| row_y(shell, 3));
     let onto = |cx: &mut TestAppContext| {
-        shell.read_with(cx, |shell, _| shell.drag.as_ref().and_then(|drag| drag.onto))
+        shell.read_with(cx, |shell, _| {
+            shell.drag.as_ref().and_then(|drag| drag.onto)
+        })
     };
     drag_to(&shell, cx, X, y + 10.);
     // Resting on 3's middle for part of the split's wait, then on to the edge, still on it.
@@ -112,4 +127,125 @@ fn the_edge_pages_either_way_but_not_into_an_agents_space(cx: &mut TestAppContex
     let edits = host.take_edits();
     assert!(edits.contains(&"space 3 2".to_string()), "{edits:?}");
     assert!(edits.contains(&"pinned 3 true".to_string()), "{edits:?}");
+}
+
+/// A folder held at the edge pages too, and in the next Space it goes whole under the pinned tabs,
+/// where Move to Space puts it, never into Today (#1353).
+#[gpui::test]
+fn a_folder_held_at_the_edge_goes_under_the_next_spaces_pinned_tabs(cx: &mut TestAppContext) {
+    let (shell, host) = shell(cx);
+    let folders = Folders {
+        folders: HashMap::from([(7, ("Docs".into(), true))]),
+        parents: HashMap::from([(8, 7)]),
+        ..Default::default()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, vec![7, 8], vec![3, 4], Vec::new(), folders, cx)
+    });
+    let y = press(&shell, cx, 7);
+    let width = shell.read_with(cx, |shell, _| shell.width());
+    drag_to(&shell, cx, X, y + 10.);
+    drag_to(&shell, cx, width - 10., y + 10.);
+    wait(cx);
+    assert_eq!(host.shown.take(), [2]);
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    assert!(shell.read_with(cx, |shell, _| shell.dragging() == Some(Slot::Tab(7))));
+    // Over Two's Today it would still go under its pinned tab.
+    let today = shell.read_with(cx, |shell, _| row_y(shell, 6));
+    drag_to(&shell, cx, X, today);
+    let to = shell.read_with(cx, |shell, _| shell.drag.as_ref().map(|drag| drag.to));
+    assert!(
+        to == Some(Place::List(true, 1)),
+        "not under the pinned tabs"
+    );
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.drop_row(cx));
+    assert_eq!(host.take_edits(), ["space folder 7 2"]);
+}
+
+/// Carried out over the page across the right edge, a row is no longer held at the edge and pages
+/// nowhere however long it stays there, with the page's drop targets under it or none; back at
+/// the edge it pages again (#1466).
+#[gpui::test]
+fn a_row_dragged_over_the_page_pages_nowhere(cx: &mut TestAppContext) {
+    let (shell, host) = shell(cx);
+    let width = shell.read_with(cx, |shell, _| shell.width());
+    let over_page = |cx: &mut TestAppContext| {
+        shell.read_with(cx, |shell, _| {
+            shell.drag.as_ref().map(|drag| drag.over_page.is_some())
+        })
+    };
+    // With no tab shown there's no page to join, so no targets.
+    let y = press(&shell, cx, 4);
+    drag_to(&shell, cx, X, y + 10.);
+    drag_to(&shell, cx, width - 10., y + 10.);
+    drag_to(&shell, cx, width + 300., y + 10.);
+    assert_eq!(over_page(cx), Some(false));
+    wait(cx);
+    wait(cx);
+    assert!(host.shown.take().is_empty(), "paged from over the page");
+    drag_to(&shell, cx, width - 10., y + 10.);
+    wait(cx);
+    assert_eq!(host.shown.take(), [2]);
+    shell.update(cx, |shell, cx| {
+        shell.cancel_drag(cx);
+        shell.set_space(1, cx);
+        // 3 shown, so 4 over the page has 3's targets, which take the drag.
+        shell.set_selected(3, cx);
+        shell.viewport = gpui::size(gpui::px(1200.), gpui::px(800.));
+    });
+    cx.run_until_parked();
+    host.take();
+    let y = press(&shell, cx, 4);
+    drag_to(&shell, cx, X, y + 10.);
+    drag_to(&shell, cx, width - 10., y + 10.);
+    drag_to(&shell, cx, width + 300., y + 10.);
+    assert_eq!(over_page(cx), Some(true));
+    wait(cx);
+    wait(cx);
+    assert!(host.shown.take().is_empty(), "paged from the targets");
+    drag_to(&shell, cx, width - 10., y + 10.);
+    assert_eq!(over_page(cx), Some(false));
+    wait(cx);
+    assert_eq!(host.shown.take(), [2]);
+}
+
+/// The core says it shows the next Space only once its page is handed over, which can take a
+/// second and more, so the pointer can be off the edge by then: the drag still goes on over that
+/// Space, and let go there it moves (#1840).
+#[gpui::test]
+fn a_row_off_the_edge_before_its_page_comes_still_drops_there(cx: &mut TestAppContext) {
+    let (shell, host) = shell(cx);
+    let y = press(&shell, cx, 4);
+    let width = shell.read_with(cx, |shell, _| shell.width());
+    drag_to(&shell, cx, X, y + 10.);
+    drag_to(&shell, cx, width - 10., y + 10.);
+    wait(cx);
+    assert_eq!(host.shown.take(), [2]);
+    drag_to(&shell, cx, X, y);
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    assert!(shell.read_with(cx, |shell, _| shell.dragging() == Some(Slot::Tab(4))));
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.drop_row(cx));
+    assert_eq!(host.take_edits(), ["space 4 2"]);
+}
+
+/// A drag the Space changes under, without its paging there, goes back where it came from, as its
+/// release would put it back: it never just stops (#1840).
+#[gpui::test]
+fn a_drag_another_space_ends_is_put_back(cx: &mut TestAppContext) {
+    let (shell, host) = shell(cx);
+    let y = press(&shell, cx, 4);
+    drag_to(&shell, cx, X, y + 10.);
+    drag_to(&shell, cx, X, y + 40.);
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    let (dragging, putting_back) =
+        shell.read_with(cx, |shell, _| (shell.drag.is_some(), shell.putting_back));
+    assert!(
+        !dragging && putting_back,
+        "the drag stopped without going back"
+    );
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.drop_row(cx));
+    assert!(host.take_edits().is_empty());
 }

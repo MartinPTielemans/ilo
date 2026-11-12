@@ -1,0 +1,401 @@
+# The Mac's Release engine on GitHub's hosted Macs, for when the owner's MacBook isn't on (#2205).
+# A job has 6 hours and a cold build takes several, so it runs in up to 8 stages. Each stage builds
+# for about 5 hours, then hands the whole tree on as the artifact engine-mac-tree-<Chromium version>.
+# A finished build keeps that tree for 90 days, so the next build of the same Chromium major starts
+# from it and recompiles only what changed. A tree of an earlier point release, such as a security
+# release's, is brought to pins.ini's in place by engine/setup.sh update, as the MacBook's is; another
+# major's is never built on. Without a kept tree it starts cold, from engine/setup.sh. A major keeps
+# one tree, the newest: the prune job deletes the older ones once a build has kept its own.
+# The stages run Chromium's build scripts and hold no secret. The publish job alone holds
+# ENGINE_RELEASE_TOKEN: it checks the packed engine's checksum, then releases it as
+# engine-mac-<commit> in ilo-engine, as tools/mac-engine-publish.sh does from the MacBook. The first
+# engine uploaded for a commit is its engine, whichever of the two built it: neither replaces one a
+# check may already have run.
+# By hand only, and one at a time: it holds a Mac runner for as long as it builds.
+name: Engine on macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      tree:
+        description: >-
+          The run whose kept tree to start from, such as one that ran out of stages; empty for the
+          newest kept tree of the Chromium major pins.ini names, or a cold build when there's none
+        default: ''
+      find-only:
+        description: Only say which tree a build would start from, and build nothing
+        type: boolean
+        default: false
+
+# A find-only run waits for no build, and for no other find-only run.
+concurrency:
+  group: ${{ inputs.find-only && format('engine-mac-find-{0}', github.run_id) || 'engine-mac' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Which tree stage 1 starts from, found on a runner that isn't a Mac: the run the tree input names,
+  # or the newest kept tree of pins.ini's Chromium major among this workflow's runs, or none.
+  tree:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run: ${{ steps.find.outputs.run }}
+      name: ${{ steps.find.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: engine
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TREE: ${{ inputs.tree }}
+        run: |
+          version=$(git config -f engine/pins.ini chromium.version)
+          major=${version%%.*}
+          # A run's unexpired trees, oldest first, as "<created> <name>".
+          trees() {
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$1/artifacts?per_page=100" --jq \
+              '.artifacts[] | select((.expired | not) and (.name | startswith("engine-mac-tree-"))) | "\(.created_at) \(.name)"' |
+              sort
+          }
+          # The newest of those of pins.ini's major.
+          of_major() { awk -v p="engine-mac-tree-$major." 'index($2, p) == 1 { n = $2 } END { print n }'; }
+          run= name=
+          if [ -n "$TREE" ]; then
+            found=$(trees "$TREE")
+            [ -n "$found" ] ||
+              { echo "::error::Run $TREE has no tree: it has expired, or the run kept none."; exit 1; }
+            name=$(echo "$found" | of_major)
+            [ -n "$name" ] ||
+              { echo "::error::Run $TREE's tree is Chromium ${found##*engine-mac-tree-}, and pins.ini names $version: a tree of another major isn't built on."; exit 1; }
+            run=$TREE
+          else
+            # Newest run first, so the first with a tree of the major has the newest.
+            for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/engine-mac.yml/runs?per_page=100" --jq '.workflow_runs[].id'); do
+              [ "$id" != "$GITHUB_RUN_ID" ] || continue
+              name=$(trees "$id" | of_major)
+              [ -z "$name" ] || { run=$id; break; }
+            done
+          fi
+          if [ -z "$run" ]; then
+            echo "Stage 1 starts cold, from engine/setup.sh: no run has a kept tree of Chromium $major." | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$name" = "engine-mac-tree-$version" ]; then
+            echo "Stage 1 starts from run $run's $name." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Stage 1 starts from run $run's $name, which engine/setup.sh update brings to $version in place." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          printf 'run=%s\nname=%s\n' "$run" "$name" >> "$GITHUB_OUTPUT"
+
+  build-1:
+    needs: tree
+    if: ${{ !inputs.find-only }}
+    # macos-15 has Xcode up to 26.3, and Chromium 156 builds with the 26.5 SDK (mac_sdk.gni).
+    runs-on: macos-26
+    timeout-minutes: 358
+    permissions:
+      contents: read
+      # The kept tree, from another run.
+      actions: read
+    env:
+      STAGE: 1
+      # Only stage 1 has the tree job's answer.
+      FROM_RUN: ${{ needs.tree.outputs.run }}
+      FROM_NAME: ${{ needs.tree.outputs.name }}
+    outputs: &outputs
+      finished: ${{ steps.stage.outputs.finished || join(needs.*.outputs.finished) }}
+    defaults: &defaults
+      run:
+        shell: bash
+    steps: &steps
+      - if: join(needs.*.outputs.finished) != 'true'
+        run: echo "start=$(date +%s)" >> "$GITHUB_ENV"
+      # No token left in .git for the build's scripts to read.
+      - if: join(needs.*.outputs.finished) != 'true'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # What ungoogled-chromium-macos's CI removes: the Android SDK, every Xcode but the one, the
+      # simulators. Spotlight off, as it would index the tree. 97 GiB free becomes 138.
+      - name: Free disk
+        if: join(needs.*.outputs.finished) != 'true'
+        run: |
+          sudo rm -rf "$ANDROID_HOME"
+          for x in /Applications/Xcode_*.app; do
+            [ "$(readlink -f "$x")" = "$(readlink -f /Applications/Xcode_26.5.app)" ] || sudo rm -rf "$x"
+          done
+          sudo xcode-select --switch /Applications/Xcode_26.5.app
+          xcrun simctl delete all || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches || true
+          sudo mdutil -a -i off || true
+
+      - name: Tools
+        if: join(needs.*.outputs.finished) != 'true'
+        run: |
+          brew install -q ninja go esbuild typescript coreutils uv node >/dev/null
+          xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+
+      # The tree to build on: the stage before's, or the one the tree job found for stage 1. None
+      # makes a cold build. Each stage hands its tree on under pins.ini's version.
+      - id: tree
+        name: Find the tree
+        if: join(needs.*.outputs.finished) != 'true'
+        run: |
+          version=$(git config -f engine/pins.ini chromium.version)
+          echo "name=engine-mac-tree-$version" >> "$GITHUB_OUTPUT"
+          if [ "$STAGE" != 1 ]; then
+            printf 'run=%s\nfrom=%s\n' "$GITHUB_RUN_ID" "engine-mac-tree-$version" | tee -a "$GITHUB_OUTPUT"
+          else
+            printf 'run=%s\nfrom=%s\n' "$FROM_RUN" "$FROM_NAME" | tee -a "$GITHUB_OUTPUT"
+          fi
+      - if: ${{ join(needs.*.outputs.finished) != 'true' && steps.tree.outputs.run != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.tree.outputs.from }}
+          path: ${{ runner.temp }}/tree
+          run-id: ${{ steps.tree.outputs.run }}
+          github-token: ${{ github.token }}
+      # A tree of another major would build neither, so it's refused, whatever its name says. One of
+      # another point release of the major is updated in place by setup.sh update, in Build.
+      - if: ${{ join(needs.*.outputs.finished) != 'true' && steps.tree.outputs.run != '' }}
+        run: |
+          zstd -dc "$RUNNER_TEMP/tree/tree.tar.zst" | tar -xf - -C engine
+          rm -rf "$RUNNER_TEMP/tree"
+          version=$(git config -f engine/pins.ini chromium.version)
+          built=$(sed -n 's/^[A-Z]*=//p' engine/.deps/src/chrome/VERSION | paste -sd. -)
+          [ "${built%%.*}" = "${version%%.*}" ] ||
+            { echo "::error::The tree has Chromium $built and pins.ini names $version, of another major."; exit 1; }
+          [ "$built" = "$version" ] ||
+            echo "::notice::The tree has Chromium $built, which engine/setup.sh update brings to $version in place."
+          cat engine/.deps/tree.txt
+          # setup.sh links the PGO profile from the downloads into the tree, so it finds the
+          # tree's own there rather than download one, whose new time ninja would read as a change.
+          pgo=$(cat engine/.deps/src/chrome/build/mac-arm.pgo.txt)
+          mkdir -p engine/.deps/downloads
+          ln -f "engine/.deps/src/chrome/build/pgo_profiles/$pgo" "engine/.deps/downloads/$pgo"
+
+      # setup.sh makes a cold tree, or on a kept one only links this runner's Python, SDK and core,
+      # applies the series and regenerates the build files. On a kept tree of another point release,
+      # update first stages pins.ini's beside it in .deps/next, about 25 GB, and copies over only the
+      # files that differ, so ninja rebuilds what the release changed. Then the build, to 45
+      # minutes before the job's 6 hours, for the hand-over. ninja's progress goes in the summary
+      # every 10 minutes, so a Check on macOS waiting for a Mac can see what holds one. 4 jobs on
+      # the 3 cores and 7 GiB left two thirds of the memory free in the measuring run (42715149523).
+      - id: stage
+        name: Build
+        if: join(needs.*.outputs.finished) != 'true'
+        env:
+          NINJA_STATUS: '[%f/%t] '
+          BUILD_JOBS: '4'
+        run: |
+          engine/setup.sh update
+          log=$RUNNER_TEMP/ninja.log
+          (
+            while sleep 600; do
+              echo "$(date -u +%H:%MZ) stage $STAGE: $(grep -ao '^\[[0-9]*/[0-9]*\]' "$log" | tail -1)" |
+                tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          ) &
+          sampler=$!
+          status=0
+          gtimeout -k 5m -s INT $(( start + 315 * 60 - $(date +%s) )) engine/build.sh >"$log" 2>&1 || status=$?
+          kill "$sampler" || true
+          steps=$(grep -ao '^\[[0-9]*/[0-9]*\]' "$log" | tail -1)
+          case $status in
+          0) finished=true ;;
+          124) finished=false ;;
+          *)
+            grep -a -B2 -A20 -m3 '^FAILED' "$log" || tail -50 "$log"
+            exit "$status"
+            ;;
+          esac
+          echo "Stage $STAGE: $steps, finished: $finished" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "finished=$finished" >> "$GITHUB_OUTPUT"
+          printf 'commit=%s\nchromium=%s\nstage=%s of run %s\nfinished=%s\n' "$GITHUB_SHA" \
+            "$(git config -f engine/pins.ini chromium.version)" "$STAGE" "$GITHUB_RUN_ID" "$finished" \
+            >engine/.deps/tree.txt
+
+      # The engine, packed as tools/mac-engine-publish.sh packs it, for the publish job.
+      - if: steps.stage.outputs.finished == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/engine"
+          archive=$RUNNER_TEMP/engine/Chromium-mac-arm64.tar.xz
+          tar -cJf "$archive" --no-mac-metadata --options xz:threads=0 -C engine/.deps/src/out/Release Chromium.app
+          shasum -a 256 "$archive" | cut -d' ' -f1 >"$archive.sha256"
+      - if: steps.stage.outputs.finished == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-mac
+          path: ${{ runner.temp }}/engine
+          retention-days: 7
+          compression-level: 0
+
+      # The tree, with its times, which ninja reads: for the next stage for a day, or as the kept
+      # tree for 90 days once it's finished. The downloads only the cold setup reads stay out.
+      - if: steps.stage.outcome == 'success'
+        run: |
+          tar -C engine -cf - --exclude .deps/downloads .deps | zstd -3 -T0 -q -o "$RUNNER_TEMP/tree.tar.zst"
+          ls -l "$RUNNER_TEMP/tree.tar.zst"
+      - if: steps.stage.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.tree.outputs.name }}
+          path: ${{ runner.temp }}/tree.tar.zst
+          retention-days: ${{ steps.stage.outputs.finished == 'true' && 90 || 1 }}
+          compression-level: 0
+          overwrite: true
+
+  build-2:
+    needs: build-1
+    runs-on: macos-26
+    timeout-minutes: 358
+    permissions: { contents: read, actions: read }
+    env: { STAGE: 2 }
+    outputs: *outputs
+    defaults: *defaults
+    steps: *steps
+  build-3:
+    needs: build-2
+    runs-on: macos-26
+    timeout-minutes: 358
+    permissions: { contents: read, actions: read }
+    env: { STAGE: 3 }
+    outputs: *outputs
+    defaults: *defaults
+    steps: *steps
+  build-4:
+    needs: build-3
+    runs-on: macos-26
+    timeout-minutes: 358
+    permissions: { contents: read, actions: read }
+    env: { STAGE: 4 }
+    outputs: *outputs
+    defaults: *defaults
+    steps: *steps
+  build-5:
+    needs: build-4
+    runs-on: macos-26
+    timeout-minutes: 358
+    permissions: { contents: read, actions: read }
+    env: { STAGE: 5 }
+    outputs: *outputs
+    defaults: *defaults
+    steps: *steps
+  build-6:
+    needs: build-5
+    runs-on: macos-26
+    timeout-minutes: 358
+    permissions: { contents: read, actions: read }
+    env: { STAGE: 6 }
+    outputs: *outputs
+    defaults: *defaults
+    steps: *steps
+  build-7:
+    needs: build-6
+    runs-on: macos-26
+    timeout-minutes: 358
+    permissions: { contents: read, actions: read }
+    env: { STAGE: 7 }
+    outputs: *outputs
+    defaults: *defaults
+    steps: *steps
+  build-8:
+    needs: build-7
+    runs-on: macos-26
+    timeout-minutes: 358
+    permissions: { contents: read, actions: read }
+    env: { STAGE: 8 }
+    outputs: *outputs
+    defaults: *defaults
+    steps: *steps
+
+  # On a machine that ran none of the build: the release in prebuilt.ini's repository, named for the
+  # commit, which holds the engine's source. fetch.sh on a Mac takes the newest one in a checkout's
+  # history whose core API matches.
+  publish:
+    needs: build-8
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - if: needs.build-8.outputs.finished != 'true'
+        run: |
+          echo "::error::The build didn't finish in 8 stages. Dispatch Engine on macOS again with tree $GITHUB_RUN_ID, within a day, to carry on from its tree."
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: engine
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-mac
+          path: ${{ runner.temp }}/engine
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.ENGINE_RELEASE_TOKEN }}
+        run: |
+          cd "$RUNNER_TEMP/engine"
+          echo "$(cat Chromium-mac-arm64.tar.xz.sha256)  Chromium-mac-arm64.tar.xz" | sha256sum -c
+          cd "$GITHUB_WORKSPACE"
+          repo=$(git config -f engine/prebuilt.ini prebuilt.repository)
+          repo=${repo#https://github.com/}
+          version=$(git config -f engine/pins.ini chromium.version)
+          tag=engine-mac-${GITHUB_SHA::12}
+          # The first engine of a commit stays: a check may have run on it, and the MacBook may
+          # have built this commit too. Its label says which built it.
+          there=$(gh api "repos/$repo/releases/tags/$tag" --jq \
+            '.assets[] | select(.name == "Chromium-mac-arm64.tar.xz") | "\(if (.label // "") == "" then .name else .label end) uploaded \(.created_at)"' 2>/dev/null) ||
+            there=
+          if [ -n "$there" ]; then
+            echo "::notice::$tag already has its engine, $there, so this run's isn't uploaded." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Never GitHub's Latest, which releases/latest/download/<name> links mean as a release of
+          # its repository's own (#804). The tag is on that repository's main, which hasn't this
+          # commit: the name carries it.
+          gh release view "$tag" -R "$repo" >/dev/null 2>&1 ||
+            gh release create "$tag" -R "$repo" --target main --title "Mac engine ${GITHUB_SHA::12}" --latest=false \
+              --notes "The Mac engine (Chromium $version, Apple silicon) built from $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA, which holds its source."
+          gh release upload "$tag" -R "$repo" \
+            "$RUNNER_TEMP/engine/Chromium-mac-arm64.tar.xz#Chromium-mac-arm64.tar.xz, from Engine on macOS run $GITHUB_RUN_ID" \
+            "$RUNNER_TEMP/engine/Chromium-mac-arm64.tar.xz.sha256"
+
+  # One kept tree of a major, the newest, so nightly builds don't hold 8 GB each for 90 days. Only
+  # once this run kept its finished tree, and only trees of pins.ini's major, from other runs. The
+  # job holds GITHUB_TOKEN alone, with the one permission deleting an artifact needs.
+  prune:
+    needs: build-8
+    if: needs.build-8.outputs.finished == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: engine
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(git config -f engine/pins.ini chromium.version)
+          major=${version%%.*}
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq \
+            '.artifacts[].name' | grep -qx "engine-mac-tree-$version" ||
+            { echo "::error::This run kept no engine-mac-tree-$version, so no older tree is deleted."; exit 1; }
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/engine-mac.yml/runs?per_page=100" --jq '.workflow_runs[].id'); do
+            [ "$id" != "$GITHUB_RUN_ID" ] || continue
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" --jq \
+              ".artifacts[] | select((.expired | not) and (.name | startswith(\"engine-mac-tree-$major.\"))) | \"\\(.id) \\(.name)\"" |
+              while read -r artifact name; do
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact"
+                echo "Deleted run $id's $name, older than this run's." | tee -a "$GITHUB_STEP_SUMMARY"
+              done
+          done

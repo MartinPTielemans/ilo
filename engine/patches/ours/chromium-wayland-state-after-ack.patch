@@ -1,0 +1,189 @@
+On Wayland a window asks the compositor for a new state (full screen, maximized, normal) only
+once the compositor has answered its last request and Chromium has acked that answer; one asked
+meanwhile changes the window's own state at once, as before, and waits, the latest one only.
+sway 1.9 configures a window that leaves full screen before acking its entry at the size it
+entered at, and one that enters before acking its exit at the size it left at, as its
+should_configure compares with the state the unacked configure never applied; it then keeps the
+size its floating window commits, so a page's full screen left quickly brought the window back
+at the output's size, swinging between the two first (#1714). The fix relies on the hold: a
+state goes out only once Chromium has acked every configure it has received. The sync after
+each request only makes sure the compositor has handled it first; it orders no configure, as
+wlroots answers a sync once it has handled the requests before it and sends the configures they
+bring after, from an idle callback, so a state held until the answer can still go out before
+the configure that answer came with is dispatched. Waiting past the answer for that configure
+instead let sway's answer to the last commit, with the state before, reach a held state. A
+configure that comes while a state is held, or before that answer, was sent before the
+compositor heard the request, so the window keeps the state it has asked for over it: applied,
+sway's answer took a page out of full screen as the window's state went back.
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
+@@ -219,6 +219,13 @@
+   // Try to announce the appmenu associated with this toplevel, if there's any.
+   void TryAnnounceAppmenu();
+ 
++  // browser_core: sends the window state `held_state_` holds once the
++  // compositor has answered the last state request and its answer is acked.
++  bool StateRequestsSettled() const;
++  void StartStateSync();
++  void MaybeSendHeldState();
++  static void OnStateSync(void* data, wl_callback* callback, uint32_t time);
++
+   std::unique_ptr<XdgToplevel> xdg_toplevel_;
+ 
+   // True if it's maximized before requesting the window state change from the
+@@ -232,6 +239,20 @@
+ 
+   bool pending_minimize_ = false;
+ 
++  // browser_core: a state change asked while the compositor's answer to the
++  // last one isn't acked yet waits here, the latest one only. sway configures a
++  // window leaving full screen before acking its entry at the size it entered
++  // at, and the other way round, and keeps the size its floating window then
++  // commits, so the window came back from full screen at the output's size.
++  struct HeldState {
++    PlatformWindowState window_state;
++    int64_t display_id;
++  };
++  std::optional<HeldState> held_state_;
++  // The sync after a state request, answered once the compositor has handled
++  // it; the configures it brings may come after the answer, in the same read.
++  wl::Object<wl_callback> state_sync_;
++
+   bool is_active_ = false;
+   bool is_xdg_active_ = false;
+   bool is_suspended_ = false;
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
+@@ -6,12 +6,14 @@
+ 
+ #include <string>
+ 
++#include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "base/nix/xdg_util.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/run_loop.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "base/unguessable_token.h"
+ #include "third_party/skia/include/core/SkPath.h"
+ #include "ui/base/hit_test.h"
+@@ -585,6 +587,19 @@
+   }
+ 
+   pending_configure_state_.tiled_edges = window_states.tiled_edges;
++  // browser_core: one that comes while a state waits to be asked for, or
++  // before the answer to the sync after the last one asked, was sent before
++  // the compositor heard it, as wlroots sends a request's configures after that
++  // answer, so the window keeps the state it has asked for rather than going
++  // back to the one before. Its bounds still apply.
++  const PlatformWindowState asked = applied_state().window_state;
++  if ((held_state_ || state_sync_) &&
++      window_state != PlatformWindowState::kMinimized &&
++      (asked == PlatformWindowState::kNormal ||
++       asked == PlatformWindowState::kMaximized ||
++       asked == PlatformWindowState::kFullScreen)) {
++    window_state = asked;
++  }
+   pending_configure_state_.window_state = window_state;
+ 
+   // Width or height set to 0 means that we should decide on width and height by
+@@ -662,6 +677,65 @@
+ 
+   ProcessSequencePoint(seq);
+   MaybeApplyLatestStateRequest(/*force=*/false);
++  // browser_core: after this frame's commit, which carries the ack.
++  if (held_state_) {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&WaylandToplevelWindow::MaybeSendHeldState,
++                                  weak_ptr_factory_.GetWeakPtr()));
++  }
++}
++
++bool WaylandToplevelWindow::StateRequestsSettled() const {
++  return !state_sync_ && !HasInFlightRequestsForStateForTesting();
++}
++
++void WaylandToplevelWindow::StartStateSync() {
++  static constexpr wl_callback_listener kStateSyncListener = {
++      .done = &OnStateSync};
++  state_sync_.reset(connection()->GetSyncCallback());
++  wl_callback_add_listener(state_sync_.get(), &kStateSyncListener, this);
++}
++
++// static
++void WaylandToplevelWindow::OnStateSync(void* data,
++                                        wl_callback* callback,
++                                        uint32_t time) {
++  auto* window = static_cast<WaylandToplevelWindow*>(data);
++  window->state_sync_.reset();
++  // The compositor has handled the request, though wlroots sends the
++  // configures it brings after this answer; the held state waits for those
++  // Chromium has received to be acked.
++  window->MaybeSendHeldState();
++}
++
++void WaylandToplevelWindow::MaybeSendHeldState() {
++  if (!held_state_ || !xdg_toplevel_ || !StateRequestsSettled()) {
++    return;
++  }
++  const HeldState held = *held_state_;
++  held_state_.reset();
++  // Settled, the last configure says the state the compositor has.
++  const PlatformWindowState from = last_configured_window_state_;
++  if (held.window_state == from) {
++    return;
++  }
++  if (held.window_state == PlatformWindowState::kFullScreen) {
++    xdg_toplevel_->SetFullscreen(
++        GetWaylandOutputForDisplayId(held.display_id));
++  } else if (held.window_state == PlatformWindowState::kMaximized) {
++    if (from == PlatformWindowState::kFullScreen) {
++      xdg_toplevel_->UnSetFullscreen();
++    }
++    xdg_toplevel_->SetMaximized();
++  } else if (held.window_state == PlatformWindowState::kNormal) {
++    if (from == PlatformWindowState::kFullScreen) {
++      xdg_toplevel_->UnSetFullscreen();
++    } else if (from == PlatformWindowState::kMaximized) {
++      xdg_toplevel_->UnSetMaximized();
++    }
++  }
++  StartStateSync();
++  connection()->Flush();
+ }
+ 
+ bool WaylandToplevelWindow::OnInitialize(
+@@ -907,6 +981,8 @@
+       return applied_state().window_state == state ||
+              GetLatestRequestedState().window_state == state;
+     };
++    const bool held = window_state != PlatformWindowState::kMinimized &&
++                      !StateRequestsSettled();
+     // Call UnSetMaximized only if current state is normal. Otherwise, if the
+     // current state is fullscreen and the previous is maximized, calling
+     // UnSetMaximized may result in wrong restored window position that clients
+@@ -914,6 +990,10 @@
+     if (window_state == PlatformWindowState::kMinimized) {
+       xdg_toplevel_->SetMinimized();
+       pending_minimize_ = true;
++    } else if (held) {
++      // browser_core: the window's own state changes now; the compositor is
++      // asked once it has answered the last request (MaybeSendHeldState).
++      held_state_ = HeldState{window_state, fullscreen_display_id};
+     } else if (window_state == PlatformWindowState::kFullScreen) {
+       xdg_toplevel_->SetFullscreen(
+           GetWaylandOutputForDisplayId(fullscreen_display_id));
+@@ -929,6 +1009,11 @@
+         xdg_toplevel_->UnSetMaximized();
+       }
+     }
++    if (window_state != PlatformWindowState::kMinimized && !held) {
++      // browser_core: this request supersedes one held before it.
++      held_state_.reset();
++      StartStateSync();
++    }
+   }
+ 
+   auto previous_state = applied_state().window_state;

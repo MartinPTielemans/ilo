@@ -8,31 +8,32 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Bounds, Context, Div, FontWeight, Pixels, SharedString, Stateful, canvas, div,
-    prelude::*, px, rgba, svg,
+    Bounds, Context, Div, FontWeight, Pixels, SharedString, Stateful, canvas, div, prelude::*, px,
+    svg,
 };
 
+use super::{
+    CARD_INSET, NAV, NAV_RADIUS, PLATE_INSET, Shell, TITLE, URL_FIELD, URL_FIELD_HEIGHT,
+    URL_FIELD_TOP,
+};
+use crate::tokens::shell::LITTLE_BAR;
 use crate::{
     palette::{Palette, STATE_HOVERED, STATE_PRESSED},
     settling::Settling,
 };
-use super::{
-    NAV, NAV_RADIUS, PLATE_INSET, Shell, TITLE, URL_FIELD, URL_FIELD_HEIGHT,
-    URL_FIELD_TOP,
-};
 
-use crate::tokens::shell::permission::GAP;
-use crate::tokens::shell::permission::PADDING;
-use crate::tokens::shell::permission::RADIUS;
-use crate::tokens::shell::permission::LINE;
-use crate::tokens::shell::permission::DETAIL;
-use crate::tokens::shell::permission::BUTTON_HEIGHT;
+use crate::elevation::Level;
 use crate::tokens::shell::permission::BUTTON_GAP;
+use crate::tokens::shell::permission::BUTTON_HEIGHT;
 pub(super) use crate::tokens::shell::permission::BUTTONS_TOP;
 use crate::tokens::shell::permission::CLOSE;
-use crate::tokens::shell::permission::CLOSE_INSET;
 use crate::tokens::shell::permission::CLOSE_GLYPH;
-use crate::elevation::Level;
+use crate::tokens::shell::permission::CLOSE_INSET;
+use crate::tokens::shell::permission::DETAIL;
+use crate::tokens::shell::permission::GAP;
+use crate::tokens::shell::permission::LINE;
+use crate::tokens::shell::permission::PADDING;
+use crate::tokens::shell::permission::RADIUS;
 use crate::tokens::text;
 /// The room a card's first line leaves for its ×.
 pub(super) const BESIDE_CLOSE: f32 = CLOSE + CLOSE_INSET - PADDING;
@@ -103,7 +104,10 @@ impl Shell {
             return None;
         };
         let mut settling = self.question_settling.borrow_mut();
-        if settling.as_ref().is_none_or(|(shown, _)| *shown != self.selected) {
+        if settling
+            .as_ref()
+            .is_none_or(|(shown, _)| *shown != self.selected)
+        {
             let mut started = Settling::default();
             started.start(format!("question {}", self.selected), cx);
             *settling = Some((self.selected, started));
@@ -128,7 +132,9 @@ impl Shell {
                         .child(format!("{} wants\u{a0}to", question.site)),
                 )
                 .children(question.permissions.iter().map(|permission| {
-                    div().text_color(rgba(DETAIL)).child(permission.clone())
+                    div()
+                        .text_color(self.palette.on_overlay(DETAIL))
+                        .child(permission.clone())
                 }))
                 .child(
                     div()
@@ -157,13 +163,57 @@ pub(super) fn card_close(palette: &Palette, id: &'static str) -> Stateful<Div> {
         .rounded(px(NAV_RADIUS))
         .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
         .active(|style| style.bg(palette.plate(STATE_PRESSED)))
-        .child(svg().path("icons/x.svg").size(px(CLOSE_GLYPH)).text_color(palette.glyph(NAV)))
+        .child(
+            svg()
+                .path("icons/x.svg")
+                .size(px(CLOSE_GLYPH))
+                .text_color(palette.glyph(NAV)),
+        )
 }
 
 /// A button on a card, as wide as its share of the row, as tall as a line of text and a half, and
 /// taller if its words wrap.
-pub(super) fn card_button(palette: &Palette, id: &'static str, label: &'static str) -> Stateful<Div> {
-    div()
+pub(super) fn card_button(
+    palette: &Palette,
+    id: impl Into<gpui::ElementId>,
+    label: impl IntoElement,
+) -> Stateful<Div> {
+    card_button_as(palette, id, label, Look::Quiet)
+}
+
+/// A card's lone button whose words wrap inside the card, for a label wider than the narrowest
+/// sidebar's card, as the protected-playback card's Open in Default Browser (#2468). GPUI's text
+/// measures its narrowest as one line, so without a min width of 0 on the button and its words they
+/// run past the card.
+pub(super) fn card_button_wrapping(
+    palette: &Palette,
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+) -> Stateful<Div> {
+    card_button(palette, id, div().min_w_0().child(label.into())).min_w_0()
+}
+
+/// How a card's or a strip's button looks, by what its press does (#1080): the one answer the
+/// agent waits on in the Space's accent, the one that leaves things as they are on the quiet plate,
+/// and one that reaches further than it looks, such as Always Allow, as its words alone until the
+/// pointer is on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Look {
+    Primary,
+    Quiet,
+    Text,
+}
+
+/// A card's button in `look`: the URL field's plate for Quiet; the accent with its label, darker
+/// under the pointer and pressed as every filled button goes, for Primary; no plate at rest for
+/// Text, and the state ladder's under the pointer.
+pub(super) fn card_button_as(
+    palette: &Palette,
+    id: impl Into<gpui::ElementId>,
+    label: impl IntoElement,
+    look: Look,
+) -> Stateful<Div> {
+    let button = div()
         .id(id)
         .flex_1()
         .min_h(px(BUTTON_HEIGHT))
@@ -174,23 +224,42 @@ pub(super) fn card_button(palette: &Palette, id: &'static str, label: &'static s
         .justify_center()
         .text_center()
         .rounded(px(NAV_RADIUS))
-        .bg(palette.plate(URL_FIELD))
-        .hover(|style| style.bg(palette.state(URL_FIELD, STATE_HOVERED)))
-        .active(|style| style.bg(palette.state(URL_FIELD, STATE_PRESSED)))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(palette.text(TITLE))
-        .child(label)
+        .font_weight(FontWeight::MEDIUM);
+    let (hovered, pressed) = (palette.accent_hovered(), palette.accent_pressed());
+    match look {
+        Look::Quiet => button
+            .bg(palette.plate(URL_FIELD))
+            .hover(|style| style.bg(palette.state(URL_FIELD, STATE_HOVERED)))
+            .active(|style| style.bg(palette.state(URL_FIELD, STATE_PRESSED)))
+            .text_color(palette.text(TITLE)),
+        Look::Primary => button
+            .bg(palette.accent)
+            .hover(move |style| style.bg(hovered))
+            .active(move |style| style.bg(pressed))
+            .text_color(palette.accent_label),
+        Look::Text => button
+            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
+            .active(|style| style.bg(palette.plate(STATE_PRESSED)))
+            .text_color(palette.text(TITLE)),
+    }
+    .child(label)
 }
 
 impl Shell {
     /// The card the page's question and the DRM note are: under the URL field, as wide as it, in
     /// the window's fill with a line inside its edge.
     pub(super) fn plate(&self, id: &'static str) -> Stateful<Div> {
+        // A Little ilo window has no URL field: its bar is where the page's site shows, and a
+        // card hangs under it, where the page makes room for it (little_card).
+        let (top, left) = match self.little.is_some() {
+            true => (LITTLE_BAR, CARD_INSET),
+            false => (URL_FIELD_TOP + URL_FIELD_HEIGHT + GAP, PLATE_INSET),
+        };
         div()
             .id(id)
             .absolute()
-            .top(px(URL_FIELD_TOP + URL_FIELD_HEIGHT + GAP))
-            .left(px(PLATE_INSET))
+            .top(px(top))
+            .left(px(left))
             .w(px(self.width() - 2. * PLATE_INSET))
             .p(px(PADDING))
             .rounded(px(RADIUS))
@@ -202,7 +271,6 @@ impl Shell {
             .text_size(px(text::BODY))
             .line_height(px(LINE))
     }
-
 }
 
 /// Logs where a card is in its window, as `what` ("question") for `tab`, when that changes.
@@ -214,22 +282,51 @@ pub(super) fn card_listener(
     tab: u64,
 ) -> impl IntoElement + use<> {
     let drawn = drawn.clone();
-    canvas(move |bounds, _, _| logged_at(what, &drawn, tab, bounds), |_, _, _, _| {})
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
+    canvas(
+        move |bounds, window, _| {
+            // A Little ilo window's page makes room for the card where it's drawn, so a card
+            // that moved is laid out again: at the next frame, as a refresh while the window draws
+            // does nothing, and the page would cover a question until something else drew (#1930).
+            if logged_at(what, &drawn, tab, bounds) {
+                window.on_next_frame(|window, _| window.refresh());
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
 }
 
-/// Logs where a card is in its window when that changes.
+/// As card_listener, for a part of a card a check clicks, such as a chooser's row.
+pub(super) fn part_listener(
+    what: String,
+    drawn: &Rc<Cell<Option<Bounds<Pixels>>>>,
+    tab: u64,
+) -> impl IntoElement + use<> {
+    let drawn = drawn.clone();
+    canvas(
+        move |bounds, _, _| {
+            logged_at(&what, &drawn, tab, bounds);
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// Logs where a card is in its window when that changes, and says whether it did.
 fn logged_at(
     what: &str,
     drawn: &Rc<Cell<Option<Bounds<Pixels>>>>,
     tab: u64,
     bounds: Bounds<Pixels>,
-) {
+) -> bool {
     if drawn.get() == Some(bounds) {
-        return;
+        return false;
     }
     drawn.set(Some(bounds));
     // check.sh reads this line.
@@ -240,15 +337,21 @@ fn logged_at(
         f32::from(bounds.size.width),
         f32::from(bounds.size.height)
     );
+    true
 }
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::{cell::Cell, rc::Rc};
 
-    use gpui::{Modifiers, Point, Pixels, TestAppContext, point, px};
+    use gpui::{
+        Bounds, Context, IntoElement, Modifiers, ParentElement, Pixels, Point, Render, Styled,
+        TestAppContext, Window, canvas, div, point, px,
+    };
 
+    use super::{BUTTON_HEIGHT, LINE, card_button_wrapping};
     use crate::{
+        palette::Palette,
         settling::SETTLING,
         shell::{Folders, Question, Shell, recorder::Recorder},
     };
@@ -262,7 +365,14 @@ mod tests {
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         let ask = |shell: &mut Shell, cx: &mut gpui::Context<Shell>| {
             let permissions = vec!["Use your camera".into()];
-            shell.set_question(10, Some(Question { site: "example.com".into(), permissions }), cx);
+            shell.set_question(
+                10,
+                Some(Question {
+                    site: "example.com".into(),
+                    permissions,
+                }),
+                cx,
+            );
         };
         shell.update(cx, |shell, cx| {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
@@ -275,8 +385,14 @@ mod tests {
         cx.run_until_parked();
         // Allow is at the right of the buttons along the card's bottom, × in its top corner.
         let at = |shell: &Shell| -> (Point<Pixels>, Point<Pixels>) {
-            let card = shell.question_drawn.get().expect("the question wasn't drawn");
-            let (right, bottom) = (card.origin.x + card.size.width, card.origin.y + card.size.height);
+            let card = shell
+                .question_drawn
+                .get()
+                .expect("the question wasn't drawn");
+            let (right, bottom) = (
+                card.origin.x + card.size.width,
+                card.origin.y + card.size.height,
+            );
             let allow = point(card.origin.x + card.size.width * 0.75, bottom - px(26.));
             (allow, point(right - px(18.), card.origin.y + px(18.)))
         };
@@ -298,5 +414,40 @@ mod tests {
         cx.simulate_click(close, Modifiers::none());
         cx.run_until_parked();
         assert_eq!(host.take(), ["answer 10 Dismiss"]);
+    }
+
+    /// A wrapping button whose words are wider than the card wraps them, growing as tall as they
+    /// need, rather than running past the card, as Open in Default Browser would in the narrowest
+    /// sidebar's protected-playback card (#2468).
+    #[gpui::test]
+    fn a_buttons_long_label_wraps_inside_its_row(cx: &mut TestAppContext) {
+        const ROW: f32 = 120.;
+        struct Row(Rc<Cell<Option<Bounds<Pixels>>>>);
+        impl Render for Row {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let drawn = self.0.clone();
+                let probe = canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {});
+                let label = "Open in Default Browser, not private";
+                let button = card_button_wrapping(&Palette::default(), "button", label);
+                div()
+                    .w(px(ROW))
+                    .flex()
+                    .items_start()
+                    .child(button.child(probe.absolute().size_full()))
+            }
+        }
+        let drawn = Rc::new(Cell::new(None));
+        let (_, cx) = cx.add_window_view(|_, _| Row(drawn.clone()));
+        cx.run_until_parked();
+        let button = drawn.get().expect("the button wasn't drawn");
+        assert!(
+            button.size.width <= px(ROW),
+            "the button ran past its row: {button:?}"
+        );
+        // Its words take two lines or more, where without wrapping they'd take one.
+        assert!(
+            button.size.height >= px(BUTTON_HEIGHT + LINE),
+            "the long label didn't wrap: {button:?}"
+        );
     }
 }

@@ -1,0 +1,137 @@
+# On the Mac, app/check.sh and the runs it sources run under /bin/sh, which is bash 3.2.57 in POSIX
+# mode, and a file that starts #!/bin/bash under bash 3.2. On Linux /bin/sh is dash, which parses
+# no bashisms, such as a here-string, <<<, that bash 3.2 takes (#2074). Bash 5 takes what 3.2
+# can't, so the scripts may hold none of:
+# - bash 4 features: declare -A, ${var,,}, mapfile, |&, ;& and so on;
+# - a process substitution, <( ), outside a #!/bin/bash file;
+# - an apostrophe in a comment inside $( ), or inside a single-quoted string.
+# On 2026-10-28 such a comment stopped the Mac's whole run for #415 after it passed sh -n on Linux,
+# and a parse error in a sourced run ends the check (#1267). This job builds bash 3.2 from GNU's
+# source once, caches it, and parses each script as the Mac would. A parse misses the bash 4
+# features that fail only when they run, so a grep finds those.
+# tools/check-lints.py checks the runs and the app's log lines they read: a "check.sh reads this
+# line" marker over a line no run reads, a bare sleep that says no window it waits out, and a
+# none_since straight after the input it's about (#2196).
+# The workflow lints the quarantine lists too (app/check/quarantine.sh), each night as well as on each change,
+# as a line goes stale with no change: one over 14 days old, or whose issue closed, fails it, and so
+# does an issue of a run red on main twice running that no line names a day on (#2197).
+name: Check scripts
+
+on:
+  # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here.
+  push:
+    branches: ['**']
+    paths: [app/check.sh, 'app/check/*.sh', 'app/check/quarantine.*', 'app/src/**',
+      'app/platform/**', 'core/**', 'tools/**', '.github/workflows/**']
+  pull_request:
+    paths: [app/check.sh, 'app/check/*.sh', 'app/check/quarantine.*', 'app/src/**',
+      'app/platform/**', 'core/**', 'tools/**', '.github/workflows/**']
+  # 04:53 UTC, before the Check workflows' nights read the lists.
+  schedule:
+    - cron: '53 4 * * *'
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  bash32:
+    name: bash 3.2
+    # Every pull request too: a push runs this only when its own diff touched a script, so a branch's
+    # head can have no push run at all (#1834).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Every ref reads main's, and main alone saves it (#1969).
+      - id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/bash32
+          key: bash-3.2.57-ubuntu-24.04
+
+      - name: Build bash 3.2.57
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLO https://ftp.gnu.org/gnu/bash/bash-3.2.57.tar.gz
+          echo '3fa9daf85ebf35068f090ce51283ddeeb3c75eb5bc70b1a4a7cb05868bfe06a4  bash-3.2.57.tar.gz' | sha256sum -c
+          tar xzf bash-3.2.57.tar.gz
+          cd bash-3.2.57
+          ./configure --without-bash-malloc --disable-nls -q
+          make -j"$(nproc)" -s
+          mkdir -p ~/bash32 && cp bash ~/bash32/
+
+      - if: ${{ steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/bash32
+          key: bash-3.2.57-ubuntu-24.04
+
+      - name: Parse each script as the Mac would
+        run: |
+          status=0
+          for file in app/check.sh app/check/*.sh; do
+            # Sourced on Windows alone, by Git Bash's bash 5.
+            [ "$file" = app/check/git-bash.sh ] && continue
+            if [ "$(head -n 1 "$file")" = '#!/bin/bash' ]; then mode=; else mode=--posix; fi
+            ~/bash32/bash $mode -n "$file" || { echo "::error file=$file::bash 3.2 can't parse it"; status=1; }
+            # check.sh parses what it sources with sh -n first, dash on Linux.
+            if [ -n "$mode" ]; then
+              dash -n "$file" || { echo "::error file=$file::Linux's sh, dash, can't parse it"; status=1; }
+            fi
+          done
+          # bash 4 features a parse takes but 3.2 fails on when it runs, outside comments.
+          if grep -nE '^[^#]*(declare -A|local -A|typeset -A|\<mapfile\>|\<readarray\>|\<coproc\>|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(,|\^))' app/check.sh app/check/*.sh; then
+            echo "::error::bash 4 features above, which the Mac's bash 3.2 lacks"
+            status=1
+          fi
+          exit $status
+
+  lints:
+    name: lints
+    # The lints change only with a change, unlike the quarantine lists, which go stale.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -I tools/check-lints.py
+
+  quarantine:
+    name: quarantine
+    if: github.event_name != 'schedule' || github.repository == 'MartinPTielemans/ilo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            app/check.sh
+            app/check
+          sparse-checkout-cone-mode: false
+
+      - name: Lint the quarantine lists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sh app/check/quarantine.sh lint
+          for os in mac windows linux; do
+            sh app/check/quarantine.sh list "$os"
+            echo
+          done >> "$GITHUB_STEP_SUMMARY"

@@ -3,7 +3,8 @@
 //! the chrome's face (`crate::face`). It's registered the first time one of them draws, never at
 //! launch, since registering a font makes GPUI shape every line again once.
 
-use std::{borrow::Cow, time::Instant};
+use std::borrow::Cow;
+use web_time::Instant;
 
 use gpui::{App, FontWeight, Global, ParentElement, SharedString, Styled, div, px};
 
@@ -22,15 +23,21 @@ fn register(cx: &mut App) {
     }
     cx.set_global(Registered);
     let start = Instant::now();
-    match cx.text_system().add_fonts(vec![Cow::Borrowed(OUTFIT_MEDIUM)]) {
+    match cx
+        .text_system()
+        .add_fonts(vec![Cow::Borrowed(OUTFIT_MEDIUM)])
+    {
         // check.sh reads this line, for what the face costs the screen that first shows it.
-        Ok(()) => log!("browser: display face in {:.1} ms", start.elapsed().as_secs_f64() * 1000.),
+        Ok(()) => log!(
+            "browser: display face in {:.1} ms",
+            start.elapsed().as_secs_f64() * 1000.
+        ),
         Err(error) => log!("couldn't register the display face: {error}"),
     }
 }
 
 /// `text` set in the display face at `size`, a line of its own `line` tall.
-pub(super) fn display_text(
+pub fn display_text(
     text: impl Into<SharedString>,
     size: f32,
     line: f32,
@@ -52,4 +59,3 @@ pub(super) fn cap_top(size: f32, line: f32) -> f32 {
     let (ascent, descent, cap) = (size, 0.26 * size, 0.7 * size);
     (line - ascent - descent) / 2. + ascent - cap
 }
-

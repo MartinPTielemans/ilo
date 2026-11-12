@@ -29,6 +29,10 @@ thread_local! {
     static X: RefCell<Option<Rc<(RustConnection, xproto::Window)>>> = const { RefCell::new(None) };
     /// Whether the browser windows are X11's, once one has said.
     static ON_X11: Cell<Option<bool>> = const { Cell::new(None) };
+    /// Under Wayland, each browser window's size as last seen, by its UI's view. The core has
+    /// closed a window by the time the app hears so (window_closed), and the app then keeps its
+    /// size for the next launch's window or the next Little ilo window.
+    static SIZES: RefCell<Vec<(*mut c_void, [f64; 2])>> = const { RefCell::new(Vec::new()) };
 }
 
 fn server() -> Option<Rc<(RustConnection, xproto::Window)>> {
@@ -59,9 +63,35 @@ fn wayland_size(id: bc::bc_id) -> Option<[f64; 2]> {
     (!surface.is_null()).then_some([width, height])
 }
 
+/// Keeps `size` as the size of the window of `ui_view` under Wayland, as frame finds it or the
+/// core resizes the window (window_resized).
+pub(crate) fn sized(ui_view: *mut c_void, size: [f64; 2]) {
+    SIZES.with_borrow_mut(
+        |sizes| match sizes.iter_mut().find(|(each, _)| *each == ui_view) {
+            Some((_, kept)) => *kept = size,
+            None => sizes.push((ui_view, size)),
+        },
+    );
+}
+
+/// The size kept for the window of `ui_view` (`sized`).
+pub(crate) fn size_of(ui_view: *mut c_void) -> Option<[f64; 2]> {
+    SIZES.with_borrow(|sizes| {
+        sizes
+            .iter()
+            .find(|(each, _)| *each == ui_view)
+            .map(|(_, size)| *size)
+    })
+}
+
+/// Forgets the window of `ui_view`, closed (host_forget_window).
+pub(crate) fn forget_window(ui_view: *mut c_void) {
+    SIZES.with_borrow_mut(|sizes| sizes.retain(|(each, _)| *each != ui_view));
+}
+
 /// Whether the browser windows are X11's: None before the first window, when nothing has said
 /// which Chromium went to, and a connection could start a compositor's Xwayland.
-fn on_x11() -> Option<bool> {
+pub(crate) fn on_x11() -> Option<bool> {
     if ON_X11.get().is_none() {
         if let Some(first) = WINDOWS.with(|w| w.try_borrow().ok()?.first().map(|w| w.id)) {
             wayland_size(first);
@@ -71,21 +101,45 @@ fn on_x11() -> Option<bool> {
 }
 
 /// The browser window's frame in points from the screen's top left, as the core keeps it. Under
-/// Wayland its size alone, at 0, 0. On X11 a window closing, the last of them, still has its own.
+/// Wayland its size alone, at 0, 0, and closing, the size it had last. On X11 a window closing, the
+/// last of them, still has its own.
 fn frame(ui_view: *mut c_void) -> Option<[f64; 4]> {
     if let Some([width, height]) = window_of(ui_view).and_then(wayland_size) {
+        sized(ui_view, [width, height]);
         return Some([0., 0., width, height]);
+    }
+    if on_x11() == Some(false) {
+        let size = SIZES.with_borrow(|sizes| {
+            sizes
+                .iter()
+                .find(|(each, _)| *each == ui_view)
+                .map(|&(_, size)| size)
+        });
+        return size.map(|[width, height]| [0., 0., width, height]);
     }
     // Under Wayland the view is a surface, which as an X id could name another client's window.
     (on_x11() == Some(true)).then_some(())?;
     let x = server()?;
     let (connection, root) = &*x;
     // GPUI's window is in Chromium's, the browser window.
-    let window = connection.query_tree(ui_view as usize as u32).ok()?.reply().ok()?.parent;
+    let window = connection
+        .query_tree(ui_view as usize as u32)
+        .ok()?
+        .reply()
+        .ok()?
+        .parent;
     let geometry = connection.get_geometry(window).ok()?.reply().ok()?;
-    let at = (connection.translate_coordinates(window, *root, 0, 0)).ok()?.reply().ok()?;
+    let at = (connection.translate_coordinates(window, *root, 0, 0))
+        .ok()?
+        .reply()
+        .ok()?;
     let scale = unsafe { bc::bc_display_scale() };
-    let frame = [at.dst_x.into(), at.dst_y.into(), geometry.width.into(), geometry.height.into()];
+    let frame = [
+        at.dst_x.into(),
+        at.dst_y.into(),
+        geometry.width.into(),
+        geometry.height.into(),
+    ];
     Some(frame.map(|n: f64| n / scale))
 }
 
@@ -180,14 +234,65 @@ fn put_under(ui_view: *mut c_void, above_ui_view: *mut c_void) -> Option<()> {
     let (connection, root) = &*x;
     // GPUI's window is in Chromium's, the browser window.
     let window = |view: *mut c_void| {
-        Some(connection.query_tree(view as usize as u32).ok()?.reply().ok()?.parent)
+        Some(
+            connection
+                .query_tree(view as usize as u32)
+                .ok()?
+                .reply()
+                .ok()?
+                .parent,
+        )
     };
     let (window, above) = (window(ui_view)?, window(above_ui_view)?);
-    let restack = connection.intern_atom(false, b"_NET_RESTACK_WINDOW").ok()?.reply().ok()?.atom;
+    let restack = connection
+        .intern_atom(false, b"_NET_RESTACK_WINDOW")
+        .ok()?
+        .reply()
+        .ok()?
+        .atom;
     // From a pager, source 2, which is the one Openbox takes it from.
     let below = u32::from(xproto::StackMode::BELOW);
     let message = xproto::ClientMessageEvent::new(32, window, restack, [2, above, below, 0, 0]);
     let mask = xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY;
     connection.send_event(false, *root, mask, message).ok()?;
     connection.flush().ok()
+}
+
+/// Whether a window can stay on top (Window › Stay On Top): on X11, where the window manager takes
+/// _NET_WM_STATE_ABOVE; Wayland gives a client no way.
+pub(crate) fn stays_on_top() -> bool {
+    on_x11() == Some(true)
+}
+
+/// host.h's host_set_window_on_top: asks the window manager to keep the browser window, Chromium's,
+/// which holds GPUI's, in its layer over the others, as the EWMH has a client ask.
+#[unsafe(no_mangle)]
+pub extern "C" fn host_set_window_on_top(ui_view: *mut c_void, on: bool) {
+    if !stays_on_top() {
+        return;
+    }
+    let Some(x) = server() else {
+        return;
+    };
+    let (connection, root) = &*x;
+    let Some(window) = (connection.query_tree(ui_view as usize as u32).ok())
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|tree| tree.parent)
+    else {
+        return;
+    };
+    let atom = |name: &str| {
+        (connection.intern_atom(false, name.as_bytes()).ok())
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| reply.atom)
+    };
+    let (Some(state), Some(above)) = (atom("_NET_WM_STATE"), atom("_NET_WM_STATE_ABOVE")) else {
+        return;
+    };
+    // 1 adds the state and 0 removes it; 1 at the end says a normal application asks.
+    let event = xproto::ClientMessageEvent::new(32, window, state, [on as u32, above, 0, 1, 0]);
+    let mask = xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY;
+    if connection.send_event(false, *root, mask, event).is_ok() {
+        let _ = connection.flush();
+    }
 }

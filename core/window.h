@@ -14,6 +14,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/session.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
@@ -28,6 +29,7 @@ class Profile;
 struct NavigateParams;
 
 namespace content {
+class SessionStorageNamespaceHandle;
 class WebContents;
 }
 
@@ -66,9 +68,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Returns null once Chromium is quitting. With |behind|, it opens behind the windows open and
   // isn't key, as the windows a relaunch brings back after the first do.
   static Window* Open(const gfx::Rect& bounds, void* ui_view, bool behind = false);
-  // A private window for |profile|'s off-the-record profile, showing a Space of its own
-  // (Space::CreateOffTheRecord). See bc_window_open_private. Null once Chromium is quitting.
-  static Window* OpenPrivate(const gfx::Rect& bounds, void* ui_view, Profile* profile);
+  // A window showing a Space of its own (Space::CreateOwn) for |profile|: a private window, in its
+  // off-the-record profile (bc_window_open_private), or a Little ilo window
+  // (bc_window_open_little). Null once Chromium is quitting.
+  static Window* OpenOwn(const gfx::Rect& bounds, void* ui_view, Profile* profile, Space::Own own);
   static Window* FromId(bc_id id);
   // Every window, the most recently active first.
   static std::vector<Window*> All();
@@ -83,6 +86,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // The window that shows |tab|'s page, focused or beside the tab it shows in a split view, else
   // null. A window whose page another window took doesn't show it.
   static Window* Showing(bc_id tab);
+  // A video's Mini Player took the keyboard, so the window that let it go wasn't left for another
+  // app or window. On Linux it can take it after that window asked (OnWidgetActivationChanged).
+  static void MiniPlayerTookKeyboard();
   // The window |tab|'s page goes back to once no window shows it: of those that show a picture of
   // it in its place, as another window took it, the one the user was in last. Else null.
   static Window* Picturing(bc_id tab);
@@ -117,6 +123,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   static void PageCommittedInNewView(bc_id tab);
   // Chrome's navigator calls this before it picks the Browser for a navigation.
   static void AdjustNavigate(NavigateParams& params);
+  // The window that takes a navigation Chrome would place itself, with no Browser, page or
+  // contents of its own, that makes a tab of the regular profile: the window active last that
+  // shows a Space of that profile. Null to leave it to Chrome.
+  static Window* ForUnplaced(const NavigateParams& params);
   // From Chrome's DevTools: whether |browser|'s window docks them, as the core's windows do, and
   // that the docked DevTools of |inspected|, a tab of |browser|, opened, laid out again or closed.
   static bool CanDockDevTools(BrowserWindowInterface* browser);
@@ -137,6 +147,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Makes |tab| the favorite at |index|, out of its Space, or moves it there among the favorites.
   // See bc_tab_move_to_favorites.
   static void MoveToFavorites(bc_id tab, size_t index);
+  // See bc_tab_move_split_to_favorites.
+  static void MoveSplitToFavorites(bc_id tab, size_t index);
   // Takes the favorite |tab| to |index| in the pinned tabs or |folder| or the Today tabs of the
   // Space its window shows. See bc_tab_move.
   static void Unfavorite(bc_id tab, bool pinned, bc_id folder, size_t index);
@@ -150,8 +162,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Every window stops showing, and stops remembering, a favorite its Space no longer shows, as
   // when the favorites' scope or a Space's profile changed. It shows that Space's own tab instead.
   static void HiddenFavoritesGone();
-  // Closes |tab| as the user does: its page gets its unload handlers, which may keep it open.
-  static void CloseTab(bc_id tab);
+  // Closes |tab| as the user does: its page gets its unload handlers, which may keep it open. With
+  // |discard|, they don't run, so nothing asks, and it's gone before this returns.
+  static void CloseTab(bc_id tab, bool discard = false);
   // Closes the Today tabs below |tab| as the user does, bottom up, so ⇧⌘T reopens each at its
   // place. A window showing one shows |tab| first, so none shows or loads on the way out.
   static void CloseBelow(bc_id tab);
@@ -162,6 +175,14 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Into an agent's Space only |to_agent|, as the user gives the agent the tab
   // (bc_tab_give_to_agent), and then nowhere else.
   static void MoveToSpace(bc_id tab, bc_id space, bool to_agent = false);
+  // Moves |folder|, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
+  // as bc_folder_move_to_space says: a window showing one of its tabs goes with it, as with
+  // MoveToSpace, and into another profile's Space each tab goes as a new one. Never into an agent's
+  // Space or a window's own.
+  static void MoveFolderToSpace(bc_id folder, bc_id space);
+  // A Little ilo window takes |tab|, a Today tab of one of the user's Spaces, into its own Space
+  // while that's empty, and shows its page live (bc_window_take_tab). Returns |tab|, or 0.
+  bc_id TakeTab(bc_id tab);
 
   Window(const Window&) = delete;
   Window& operator=(const Window&) = delete;
@@ -173,8 +194,21 @@ class Window : public web_modal::WebContentsModalDialogHost,
   bc_id space() const { return space_; }
   // The tab the window shows, or 0. In a split view, the one focused.
   bc_id selected() const { return selected_; }
-  // Whether it's a private window, which shows its own Space alone and is never saved.
+  // Whether it's a private window, whose pages are in its profile's off-the-record session.
   bool off_the_record() const { return off_the_record_; }
+  // Whether it shows a Space of its own alone, which no other window shows and is never saved: a
+  // private window's or a Little ilo window's.
+  bool own_space() const { return own_space_; }
+  // Whether it's a Little ilo window.
+  bool little() const;
+  // Whether it's the active window, which has the keyboard.
+  bool active() const;
+  // Whether it's closing, its pages asked to leave.
+  bool closing() const { return closing_; }
+  // When it last stopped being the active window, or opened, which a Little ilo window's
+  // auto-archive counts from. Auto-archive sets it again for one whose page plays sound.
+  base::Time inactive_since() const { return inactive_since_; }
+  void set_inactive_since(base::Time since) { inactive_since_ = since; }
   // Whether its Browsers stay with no tabs left: a private window's does while the window is
   // open, as it holds the private session, which ends once the profile's last Browser has gone.
   bool KeepsBrowsers() const;
@@ -201,6 +235,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // The docked sidebar's width the UI last gave the window, kept with the Spaces, or 0 for none. A
   // window opens with the one the last launch saved.
   double sidebar_width() const { return sidebar_width_; }
+  // The frame the window had out of full screen and maximized, which it goes back to from them,
+  // and the session keeps. On X11 that of a window the window manager maximized too, which
+  // Chromium's restored bounds don't know (#1454).
+  gfx::Rect RestoredFrame() const;
   void SetSidebarWidth(double width);
   // Where the selected tab's page goes, in the window, and the radius of its corners. A split view
   // shares it out between its pages.
@@ -212,6 +250,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Whether the app is moving the page frame on its own. The pages shown stretch the frame they
   // last drew to fill their views as the frame resizes them, until they draw at the new size.
   void SetPageMoving(bool moving);
+  // Draws the pages shown at |scale| of their size about the page frame's centre, for the app's
+  // motion (bc_window_set_page_scale).
+  void SetPageScale(double scale);
   // Shows |tab| at the page frame, and its Space if the window shows another. In a split view, it
   // shows the split with |tab| focused. A page another window shows moves here (Adopt).
   void Select(bc_id tab);
@@ -282,7 +323,11 @@ class Window : public web_modal::WebContentsModalDialogHost,
                bool complete);
 
   // Takes a suggestion out of the profile's history. See bc_window_remove_suggestion.
-  void RemoveSuggestion(const GURL& url);
+  bc_id RemoveSuggestion(const GURL& url);
+  // Puts back what RemoveSuggestion took out, or takes it out again. See
+  // bc_window_undo_remove_suggestion and bc_window_redo_remove_suggestion.
+  bool UndoRemoveSuggestion(bc_id removal);
+  bool RedoRemoveSuggestion(bc_id removal);
   // Lets go of what each window built on |profile|, which is about to go.
   static void LetProfileGo(Profile* profile);
 
@@ -298,11 +343,13 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // page would, not shown: a link preview, which the app shows in a view of its own. Null while
   // the window is closing or Chromium is quitting.
   content::WebContents* OpenPreview(content::WebContents& opener, const GURL& url);
-  // Opens a tab for |profile| with |history|, at its |current| page, not shown. It loads once it's
-  // shown. Null while the window is closing or Chromium is quitting.
+  // Opens a tab for |profile| with |history|, at its |current| page, not shown, with |storage| for
+  // its sessionStorage if it isn't null, else a new one. It loads once it's shown. Null while the
+  // window is closing or Chromium is quitting.
   content::WebContents* RestoreTab(Profile* profile,
                                    base::span<const sessions::SerializedNavigationEntry> history,
-                                   int current);
+                                   int current,
+                                   content::SessionStorageNamespaceHandle* storage = nullptr);
 
   // Shows |contents|, a tab in one of this window's Browsers, at |frame| in place of the page shown
   // before, taking the keyboard if that page had it. In a split view, it shows the split with
@@ -374,7 +421,12 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // mute. Returns its id.
   bc_id CloneInto(BrowserWindowInterface& browser, content::WebContents& contents);
   // |split_with| is the tab whose page opened it to show beside it, or 0.
-  void ReportTabOpened(bc_id tab, bc_id opener, bool foreground, bc_id split_with);
+  void ReportTabOpened(bc_id tab,
+                       bc_id opener,
+                       bool foreground,
+                       bc_id split_with,
+                       std::optional<bc_rect> popup,
+                       bool popup_placed);
   // The Space a tab opened by |opener|, or by nothing for 0, goes to: its opener's, else the one
   // the window shows.
   Space* SpaceForOpened(bc_id opener) const;
@@ -391,13 +443,17 @@ class Window : public web_modal::WebContentsModalDialogHost,
   void HoldPictured();
   // Sets let_go_, and tells the app when it changes.
   void SetLetGo(bool let_go);
-  // Moves every tab of this window's Browsers into |to|'s, unshown, which empties them.
-  void HandOver(Window& to);
+  // Moves every tab of this window's Browsers into |to|'s, unshown, which empties them, or with
+  // |others_only| those not in its own Space, as a Little ilo window's page opens behind.
+  void HandOver(Window& to, bool others_only = false);
   // Whether another window shows |tab|'s page, which an implicit pick passes over.
   bool ShownElsewhere(bc_id tab) const;
   // Shows |tab|, or if another window shows it the first tab of the Space shown no window shows,
   // else no page: for the window's own picks, which never take another window's page.
   void Pick(bc_id tab);
+  // |tab| went from |from| to |space|, as |moved|: each window showing it goes with it, and each
+  // that would show it in |from| shows |next| there instead.
+  static void FollowMove(bc_id tab, bc_id moved, bc_id from, bc_id space, bc_id next);
   // Shows next_after_closing_, as the tab shown has closed.
   void SelectAfterClosing();
   // Chrome stopped a close or a quit (|closing| false): the window stays if its Browsers did.
@@ -414,6 +470,14 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Tells Chrome the shown page's Browser is active while the window is key, and the others
   // aren't, as Chrome's browser view does for its one Browser.
   void ReportActiveBrowser();
+  // Once the window has let the keyboard go: marks it left unless an overlay of the app's or the
+  // Mini Player has it, and asks again once an overlay that has it lets it go, as to another app.
+  void CheckLeft();
+  // While the window is key and shows no page: its Space's profile's Browser is the active one,
+  // made if it had none.
+  void ActivateSpaceBrowser();
+  // |shown| is the active Browser of the window's, if it's one, and the others aren't.
+  void MarkActive(BrowserWindowInterface* shown);
 
   // Gives the page shown the keyboard if the window is key and its keyboard is the page's, or
   // gives it to DevTools that have just shown.
@@ -450,15 +514,23 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Whether the app is moving the page frame on its own (SetPageMoving).
   bool page_moving_ = false;
   double sidebar_width_;
+  // On Linux, the last frames the window had out of maximized and full screen, newest last
+  // (KeepNormalFrame), for RestoredFrame.
+  std::vector<gfx::Rect> normal_frames_;
   std::map<Profile*, Held> browsers_;
   // What each Clear closed, top to bottom, the last at the back, for UndoClear.
   std::vector<ClearedTabs> cleared_;
   // Made when the command bar first asks for suggestions.
   std::unique_ptr<Suggestions> suggestions_;
   bool closing_ = false;
+  base::Time inactive_since_ = base::Time::Now();
+  // Whether the user left the window for another app or window since it was last key, rather than
+  // for an overlay of the app's or the Mini Player, so coming back takes the Mini Player back.
+  bool left_ = false;
   // While closing, for a page's Stay or the downloads question, which keeps the window open.
   base::CallbackListSubscription close_stopped_;
   bool off_the_record_ = false;
+  bool own_space_ = false;
   // Another window took the page shown. The tab stays selected, and the window shows no page.
   bool let_go_ = false;
   bool opening_tab_ = false;
@@ -476,6 +548,11 @@ class Window : public web_modal::WebContentsModalDialogHost,
   base::OnceCallback<void(bool)> downloads_answer_;
   // The tab whose page the navigation being made opens a tab beside, until that tab is inserted.
   bc_id split_with_ = 0;
+  // The agent's tab whose page opens the tab the tab strip adds next (AdjustNavigate), or 0.
+  bc_id agent_opener_ = 0;
+  // What the page asked of the pop-up the navigation being made opens, until its tab is inserted.
+  std::optional<bc_rect> popup_;
+  bool popup_placed_ = false;
   base::ObserverList<web_modal::ModalDialogHostObserver> dialog_observers_;
   // Where the app last asked an extension's popup to hang from.
   views::ViewTracker popup_anchor_;

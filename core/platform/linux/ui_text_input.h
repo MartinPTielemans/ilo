@@ -33,6 +33,8 @@ class UITextInput : public ui::TextInputClient {
   void SetCaret(std::optional<gfx::Rect> caret);
   // Whether the keys are the UI's or an overlay's of it, rather than a page's.
   void SetKeyboard(bool ui);
+  // Whether the input method's client is the UI's field.
+  bool attached() const { return attached_; }
 
   // ui::TextInputClient:
   base::WeakPtr<ui::TextInputClient> AsWeakPtr() override;

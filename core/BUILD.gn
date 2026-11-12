@@ -5,6 +5,7 @@
 import("//build/config/sanitizers/sanitizers.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 import("//testing/test.gni")
+import("//third_party/protobuf/proto_library.gni")
 import("//ui/base/ui_features.gni")
 
 # What a page tells the core about the key system it asks for. Blink's encrypted media module calls
@@ -39,6 +40,31 @@ source_set("search_default") {
   ]
 }
 
+# The site searches a new profile has, and the one a word typed starts (#1397).
+source_set("site_searches") {
+  sources = [
+    "site_searches.cc",
+    "site_searches.h",
+  ]
+  deps = [
+    "//base",
+    "//base:i18n",
+    "//components/pref_registry",
+    "//components/prefs",
+    "//components/search_engines",
+  ]
+}
+
+# What the Spaces sync type's entities hold (sync_spaces.cc).
+proto_library("sync_spaces_proto") {
+  sources = [ "sync_spaces.proto" ]
+}
+
+# What the settings sync type's entities hold (sync_settings.cc).
+proto_library("sync_settings_proto") {
+  sources = [ "sync_settings.proto" ]
+}
+
 config("exports") {
   # The framework exports only what chrome/app/framework.exports lists. This adds the C API.
   ldflags = [ "-Wl,-exported_symbols_list," + rebase_path("exports.txt", root_build_dir) ]
@@ -65,15 +91,154 @@ config("app_calls") {
   }
 }
 
+# The account secret's words and pairing's cryptography and rules, which need no browser, so
+# browser_core_unittests tests them alone.
+source_set("sync_keys") {
+  sources = [
+    "sync_pairing.cc",
+    "sync_pairing.h",
+    "sync_words.cc",
+    "sync_words.h",
+    "sync_words_list.cc",
+  ]
+  deps = [
+    "//base",
+    "//crypto",
+    "//third_party/boringssl",
+  ]
+}
+
+# The tabs open on the account's other computers as the app hears of them, apart so
+# browser_core_unittests tests the list alone.
+source_set("other_tabs") {
+  sources = [
+    "other_tabs.cc",
+    "other_tabs.h",
+  ]
+  deps = [
+    "//base",
+    "//components/sessions",
+    "//url",
+  ]
+}
+
+# What the account's sync lets go to its server, on sync's own sequences, apart so
+# browser_core_unittests tests it alone.
+source_set("sync_guard") {
+  sources = [
+    "sync_guard.cc",
+    "sync_guard.h",
+  ]
+  deps = [
+    ":sync_keys",
+    "//base",
+    "//components/sync",
+    "//components/sync/protocol",
+    "//crypto",
+  ]
+}
+
+# Whether a device's first Space gives way to the account's, apart so browser_core_unittests
+# tests the rule alone.
+source_set("space_default") {
+  sources = [
+    "space_default.cc",
+    "space_default.h",
+  ]
+}
+
+# Whether a newer ilo wrote one of the account's Spaces, apart so browser_core_unittests tests the
+# rule alone.
+source_set("sync_spaces_newer") {
+  sources = [
+    "sync_spaces_newer.cc",
+    "sync_spaces_newer.h",
+  ]
+  public_deps = [ ":sync_spaces_proto" ]
+}
+
+# When auto-archive takes a Today tab, Never too, apart so browser_core_unittests tests the rule
+# alone.
+source_set("archive_rule") {
+  sources = [
+    "archive_rule.cc",
+    "archive_rule.h",
+  ]
+  deps = [ "//base" ]
+}
+
+# Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.
+source_set("mini_player_place") {
+  sources = [
+    "mini_player_place.cc",
+    "mini_player_place.h",
+  ]
+
+  # Its header's geometry is its callers' too, and the geometry's headers need base's.
+  public_deps = [
+    "//base",
+    "//ui/gfx/geometry",
+  ]
+}
+
+# Which sidebar backups Arc's schedule keeps, apart so browser_core_unittests tests the rule
+# alone.
+source_set("sidebar_backups") {
+  sources = [
+    "sidebar_backups.cc",
+    "sidebar_backups.h",
+  ]
+  deps = [ "//base" ]
+}
+
+# The splits' rules a Space and the favorites share, and how the favorites' scopes match a split
+# across their lists, apart so browser_core_unittests tests them alone.
+source_set("split_view") {
+  sources = [
+    "split_view.cc",
+    "split_view.h",
+  ]
+}
+
+# An agent's download, held until the user answers, apart so browser_core_unittests tests the hold
+# alone.
+source_set("agent_download_hold") {
+  sources = [
+    "agent_download_hold.cc",
+    "agent_download_hold.h",
+  ]
+  deps = [
+    "//base",
+    "//components/download/public/common:public",
+  ]
+}
+
+# The frame a window the window manager maximized un-maximizes to, apart so browser_core_unittests
+# tests the rule alone.
+source_set("window_frames") {
+  sources = [
+    "window_frames.cc",
+    "window_frames.h",
+  ]
+  deps = [
+    "//base",
+    "//ui/gfx/geometry",
+  ]
+}
+
 source_set("browser_core") {
   configs += [ ":app_calls" ]
   sources = [
     "ad_block.cc",
     "ad_block.h",
+    "address_import.cc",
+    "address_import.h",
     "agent_autofill.cc",
     "agent_autofill.h",
     "agent_page.cc",
     "agent_page.h",
+    "agent_request.cc",
+    "agent_request.h",
     "agent_session.cc",
     "agent_session.h",
     "api.cc",
@@ -83,8 +248,16 @@ source_set("browser_core") {
     "auto_archive.h",
     "autofill_data.cc",
     "autofill_data.h",
+    "autofill_menu.cc",
+    "autofill_menu.h",
     "autofill_offer.cc",
     "autofill_offer.h",
+    "battery_saver.cc",
+    "battery_saver.h",
+    "bluetooth_pair.cc",
+    "bluetooth_pair.h",
+    "boosts.cc",
+    "boosts.h",
     "browser_window_stand_in.cc",
     "browser_window_stand_in.h",
     "capture.cc",
@@ -95,8 +268,12 @@ source_set("browser_core") {
     "clear_site.h",
     "crash_reports.cc",
     "crash_reports.h",
+    "daily_count.cc",
+    "daily_count.h",
     "developer_mode.cc",
     "developer_mode.h",
+    "device_chooser.cc",
+    "device_chooser.h",
     "downloads.cc",
     "downloads.h",
     "drm_request.cc",
@@ -112,6 +289,8 @@ source_set("browser_core") {
     "held_keys.cc",
     "held_keys.h",
     "hooks.h",
+    "history_deletions.cc",
+    "history_deletions.h",
     "history_import.cc",
     "history_import.h",
     "idle_unload.cc",
@@ -135,8 +314,12 @@ source_set("browser_core") {
     "open_app_dialog.h",
     "page_menu.cc",
     "page_menu.h",
+    "page_press.cc",
+    "page_press.h",
     "page_text.cc",
     "page_text.h",
+    "page_translate.cc",
+    "page_translate.h",
     "password_offer.cc",
     "password_offer.h",
     "passwords.cc",
@@ -145,6 +328,7 @@ source_set("browser_core") {
     "page_dialog.h",
     "permission_question.cc",
     "permission_question.h",
+    "platform/battery.h",
     "platform/keyboard.h",
     "platform/keychain.h",
     "platform/native_hosts.h",
@@ -172,11 +356,23 @@ source_set("browser_core") {
     "space.h",
     "suggest.cc",
     "suggest.h",
+    "sync.cc",
+    "sync.h",
+    "sync_other_tabs.cc",
+    "sync_other_tabs.h",
+    "sync_relay.cc",
+    "sync_relay.h",
+    "sync_settings.cc",
+    "sync_settings.h",
+    "sync_spaces.cc",
+    "sync_spaces.h",
     "system_engine.cc",
     "system_engine.h",
     "tab.cc",
     "tab.h",
     "trace.cc",
+    "webrtc.cc",
+    "webrtc.h",
     "widevine.cc",
     "widevine.h",
     "window.cc",
@@ -184,9 +380,22 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":archive_rule",
     ":drm_request",
+    ":mini_player_place",
+    ":other_tabs",
     ":search_default",
+    ":agent_download_hold",
+    ":sidebar_backups",
+    ":site_searches",
+    ":space_default",
+    ":split_view",
+    ":sync_guard",
+    ":sync_keys",
+    ":sync_spaces_newer",
+    ":window_frames",
     "//base",
+    "//base:i18n",
     "//chrome/app:command_ids",
     "//chrome/app:generated_resources",
     "//chrome/browser",
@@ -208,6 +417,7 @@ source_set("browser_core") {
     "//chrome/browser/media/router",
     "//chrome/browser/media/router:media_router_feature",
     "//chrome/browser/media/webrtc",
+    "//chrome/browser/net",
     "//chrome/browser/password_manager/factories",
     "//chrome/browser/performance_manager",
     "//chrome/browser/picture_in_picture",
@@ -258,6 +468,7 @@ source_set("browser_core") {
     "//components/content_settings/core/common",
     "//components/download/content/public",
     "//components/download/public/common:public",
+    "//components/enterprise/buildflags",
     "//components/error_page/content/browser",
     "//components/favicon/content",
     "//components/favicon/core",
@@ -269,6 +480,8 @@ source_set("browser_core") {
     "//components/keyed_service/core",
     "//components/media_router/browser",
     "//components/media_router/common",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/common",
     "//components/find_in_page",
     "//components/input",
     "//components/keep_alive_registry",
@@ -286,6 +499,9 @@ source_set("browser_core") {
     "//components/policy/core/common",
     "//components/pref_registry",
     "//components/prefs",
+    "//components/proxy_config",
+    "//components/translate/core/browser",
+    "//components/translate/core/common",
     "//components/renderer_context_menu",
     "//components/search_engines",
     "//components/services/storage/public/mojom",
@@ -293,6 +509,14 @@ source_set("browser_core") {
     "//components/sync/base",
     "//components/strings:components_branded_strings_grit",
     "//components/strings:components_strings_grit",
+    "//components/signin/public/identity_manager",
+    "//components/sync",
+    "//components/sync/invalidations",
+    "//components/sync/protocol",
+    ":sync_settings_proto",
+    ":sync_spaces_proto",
+    "//components/sync_device_info",
+    "//components/sync_sessions",
     "//components/tabs:public",
     "//components/update_client",
     "//components/url_formatter",
@@ -301,9 +525,12 @@ source_set("browser_core") {
     "//components/zoom",
     "//content/public/browser",
     "//content/public/common",
+    "//crypto",
     "//extensions/browser",
     "//extensions/common",
+    "//google_apis",
     "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/system",
     "//net",
     "//services/media_session/public/mojom",
     "//services/network/public/cpp",
@@ -311,6 +538,7 @@ source_set("browser_core") {
     "//skia",
     "//third_party/blink/public/common",
     "//third_party/blink/public/mojom:mojom_core",
+    "//third_party/boringssl",
     "//third_party/crashpad/crashpad/client",
     "//third_party/widevine/cdm:buildflags",
     "//ui/accessibility",
@@ -360,6 +588,9 @@ source_set("browser_core") {
       sources += [ "platform/keyboard_none.cc" ]
     }
   }
+  if (!is_win && !is_linux) {
+    sources += [ "platform/battery_none.cc" ]
+  }
   if (is_win || is_linux) {
     sources += [
       "platform/app_library.h",
@@ -378,6 +609,7 @@ source_set("browser_core") {
     sources += [
       "platform/native_hosts_win.cc",
       "platform/win/app_library.cc",
+      "platform/win/battery.cc",
       "platform/win/keyboard.cc",
       "platform/win/playready.cc",
       "platform/win/window_views.cc",
@@ -387,6 +619,8 @@ source_set("browser_core") {
       "//components/cdm/common:buildflags",
       "//ui/base/ime",
     ]
+    # PowerSettingRegisterNotification, for platform/win/battery.cc.
+    libs = [ "powrprof.lib" ]
   } else {
     sources += [
       "platform/native_hosts_posix.cc",
@@ -399,12 +633,17 @@ source_set("browser_core") {
       "platform/linux/keyboard.cc",
       "platform/linux/ui_text_input.cc",
       "platform/linux/ui_text_input.h",
+      "platform/linux/upower.cc",
       "platform/linux/wayland.cc",
       "platform/linux/wayland.h",
       "platform/linux/window_views.cc",
     ]
     deps += [
+      "//chrome/browser/ui/views:native_widget_factory",
+      "//components/dbus",
+      "//dbus",
       "//third_party/wayland:wayland_client",
+      "//third_party/wayland-protocols:xdg_activation",
       "//ui/aura",
       "//ui/base/ime",
       "//ui/compositor",
@@ -426,17 +665,55 @@ source_set("browser_core") {
 # The core's tests that run without the browser. engine/linux/build.sh builds them, and the Linux
 # engine's run runs them.
 test("browser_core_unittests") {
-  sources = [ "search_default_unittest.cc" ]
+  sources = [
+    "archive_rule_unittest.cc",
+    "agent_download_hold_unittest.cc",
+    "mini_player_place_unittest.cc",
+    "other_tabs_unittest.cc",
+    "search_default_unittest.cc",
+    "sidebar_backups_unittest.cc",
+    "site_searches_unittest.cc",
+
+    # Space alone, with what it asks of the rest of the core stubbed in its test.
+    "space.cc",
+    "space_default_unittest.cc",
+    "space_unittest.cc",
+    "split_view_unittest.cc",
+    "sync_guard_unittest.cc",
+    "sync_pairing_unittest.cc",
+    "sync_spaces_newer_unittest.cc",
+    "sync_updates_unittest.cc",
+    "window_frames_unittest.cc",
+  ]
   deps = [
+    ":archive_rule",
+    ":agent_download_hold",
+    ":mini_player_place",
+    ":other_tabs",
     ":search_default",
+    ":sidebar_backups",
+    ":site_searches",
+    ":space_default",
+    ":split_view",
+    ":sync_guard",
+    ":sync_keys",
+    ":sync_spaces_newer",
+    ":window_frames",
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
     "//components/search_engines",
+    "//components/sessions",
+    "//components/download/public/common:test_support",
     "//components/search_engines:test_support",
+    "//components/sync",
+    "//components/sync/protocol",
+    "//components/sync:test_support",
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
+    "//testing/gmock",
     "//testing/gtest",
+    "//url",
   ]
   if (use_xkbcommon) {
     sources += [ "xkb_no_keymap_unittest.cc" ]

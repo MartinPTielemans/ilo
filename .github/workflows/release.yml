@@ -6,20 +6,31 @@
 #   ilo-linux-x86_64.flatpak     flatpak.yml's bundle, naming ilo's Flatpak repository, which it
 #   ilo.flatpakref               updates from, and the repository's entry (tools/flatpak-repo.sh)
 #   SHA256SUMS, and appcast.xml  the updates feed's next state (tools/appcast.sh)
+#   ilo-mac-arm64-<a>-to-<b>.delta  Sparkle's deltas to the DMG's app from the three builds before
 #   ilo-demo.tar.gz              the site's live demo, when the commit has one (demo.yml)
 # and, in the run rather than the release, winget's manifests for the Windows installer.
 # On a pushed v* tag, or by hand with the tag's name. The tag must be app/Cargo.toml's version, and
 # its message is the release's notes. By hand before the tag exists, it's a try: it skips, and says so
 # in the run, what needs the owner (the Store's identity, the Developer ID, notarization, the appcast)
 # and makes no release, leaving its packages as the run's artifact release-try. Each job builds on
-# its OS's prebuilt engine for the commit, which engine/fetch.sh finds or fails on; a release never builds an engine. The Windows engine is
-# built nightly, not for each core change, so before pushing the tag, dispatch Engine on Windows
-# (cross-compiled) on its commit (gh workflow run engine-windows-cross.yml --ref main, with main at
-# that commit) and wait for its release engine-windows-<commit>; otherwise the Windows job stops at
-# "No Windows engine release for this commit", or packs an older core. The owner publishes
+# its OS's prebuilt engine for the commit, which engine/fetch.sh finds or fails on; a release never
+# builds an engine. The Linux and Windows engines are built nightly, not for each core change, so
+# before pushing the tag, dispatch Engine on Linux and Engine on Windows (cross-compiled) on its
+# commit (gh workflow run engine-linux.yml --ref main, and engine-windows-cross.yml, with main at
+# that commit) and wait for their releases engine-linux-<commit> and engine-windows-<commit>;
+# otherwise the Windows job stops at "No Windows engine release for this commit", or either packs an
+# older core. The owner publishes
 # the draft, which puts its Linux build in the Flatpak repository (the publish job) and the release
-# on ilobrowser.com (the site job). README.md › Releases names the secrets it needs. GitHub's
-# hosted runners only.
+# on ilobrowser.com (the site job), and tells the bot that announces releases (the announce job).
+# docs/releasing.md names the secrets it needs. GitHub's hosted runners only.
+# Each night it's main's nightly build instead (#871), with the release's own jobs, so each night
+# rehearses a release: the DMG signed and notarized, the Windows installer, and the Flatpak bundle,
+# built only to check it. tools/nightly-commit.sh picks the commit, the newest whose core the Mac
+# engine has, and tools/appcast.sh --nightly the feed's next state, which goes to the release
+# `nightly` with its packages, named by their build. The night publishes only once that commit's
+# app/branding/update-feed-nightly names that feed: until then main's builds offer no nightly
+# track, and the run says so. By hand, `-f tag=nightly-<name>` publishes the same to a release of
+# that name, to try it. A nightly that fails keeps one issue open (.github/scripts/main-check.sh).
 name: Release
 
 on:
@@ -27,16 +38,21 @@ on:
     tags: ['v*']
   release:
     types: [published]
+  # After the night's engines and checks.
+  schedule:
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       tag:
-        description: The release's tag, v<version>
+        description: The release's tag, v<version>, or nightly, or nightly-<name> to try the nightly
         required: true
 
 permissions:
   contents: read
 
-concurrency: release
+# A nightly is apart from the releases, so it never replaces a release's pending run.
+concurrency:
+  group: ${{ (github.event_name == 'schedule' || startsWith(inputs.tag, 'nightly')) && format('release-{0}', inputs.tag || 'nightly') || 'release' }}
 
 jobs:
   version:
@@ -46,6 +62,13 @@ jobs:
       tag: ${{ steps.check.outputs.tag }}
       version: ${{ steps.check.outputs.version }}
       trial: ${{ steps.check.outputs.trial }}
+      nightly: ${{ steps.check.outputs.nightly }}
+      # The commit the jobs build, which is a nightly's own, its build number, whether they build
+      # at all, and whether Windows does.
+      commit: ${{ steps.check.outputs.commit }}
+      build: ${{ steps.check.outputs.build }}
+      go: ${{ steps.check.outputs.go }}
+      windows: ${{ steps.check.outputs.windows }}
     steps:
       # With the tags, for the tag's message.
       - uses: actions/checkout@v4
@@ -54,15 +77,55 @@ jobs:
 
       - id: check
         env:
-          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag || 'nightly' }}
         run: |
+          mkdir -p "$RUNNER_TEMP/notes"
+          notes=$RUNNER_TEMP/notes/notes.md
+          case $TAG in nightly | nightly-*)
+            if ! [[ $TAG =~ ^nightly(-[a-z0-9][a-z0-9.-]*)?$ ]]; then
+              echo "::error::$TAG isn't nightly or nightly-<name>."
+              exit 1
+            fi
+            if [ "$TAG" = nightly ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+              echo "::error::The nightly is main's. Try another branch's with -f tag=nightly-<name>."
+              exit 1
+            fi
+            tools/nightly-commit.sh > "$RUNNER_TEMP/night"
+            commit=$(sed -n 's/^commit=//p' "$RUNNER_TEMP/night")
+            version=$(git show "$commit:app/Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+            build=$(git rev-list --count "$commit")
+            feed=$(cat app/branding/update-feed)
+            url=${feed%%/releases/*}/releases/download/$TAG/appcast.xml
+            go=true
+            # The track is on once the commit's builds name its feed. A try's needn't.
+            if [ "$TAG" = nightly ] && [ "$(git show "$commit:app/branding/update-feed-nightly" 2>/dev/null)" != "$url" ]; then
+              echo "::notice::${commit:0:12}'s app/branding/update-feed-nightly doesn't name $url, so the nightly track is off and nothing was built (docs/releasing.md)."
+              go=false
+            fi
+            case $(curl -sSL -o "$RUNNER_TEMP/feed.xml" -w '%{http_code}' "$url") in
+              200)
+                if grep -q "<sparkle:version>$build</sparkle:version>" "$RUNNER_TEMP/feed.xml"; then
+                  echo "::notice::$TAG's feed has build $build (${commit:0:12}) already, so nothing was built."
+                  go=false
+                fi
+                ;;
+              404) ;;
+              *) echo "::error::Couldn't fetch $url." && exit 1 ;;
+            esac
+            printf '%s\n' "ilo $version, nightly build $build, from $GITHUB_REF_NAME at ${commit:0:12}." > "$notes"
+            {
+              cat "$RUNNER_TEMP/night"
+              printf '%s\n' nightly=true trial=false "tag=$TAG" "version=$version" "build=$build" "go=$go"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+            ;;
+          esac
+          printf '%s\n' nightly=false "commit=$GITHUB_SHA" go=true windows=true >> "$GITHUB_OUTPUT"
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' app/Cargo.toml | head -1)
           if [ "$TAG" != "v$version" ]; then
             echo "::error::The tag is $TAG, but app/Cargo.toml's version is $version. Tag v$version, or change the version first."
             exit 1
           fi
-          mkdir -p "$RUNNER_TEMP/notes"
-          notes=$RUNNER_TEMP/notes/notes.md
           # On a tag push, checkout writes the tag it ran for as a lightweight one on the commit
           # (actions/checkout#290), so the annotated tag, and its message, comes again from the
           # remote. A run by hand before the tag exists finds none, and stays a trial.
@@ -103,6 +166,7 @@ jobs:
 
   windows:
     needs: version
+    if: ${{ needs.version.outputs.go == 'true' && needs.version.outputs.windows == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 120
     defaults:
@@ -115,6 +179,7 @@ jobs:
         working-directory: .
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.commit }}
           fetch-depth: 0
 
       # Without one, package.sh would pack Browser.dll alone, which doesn't run; a release stops.
@@ -131,18 +196,20 @@ jobs:
           ./setup.sh
           [ -x "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ] || choco install innosetup -y --no-progress
 
-      # The installer's ilo updates itself with WinSparkle, from updates signed with the key whose
-      # public half is app/branding/update-key, or the UPDATE_PUBLIC_KEY secret when it's set.
+      # The installer's ilo updates itself (platform/windows/updates.cc), from updates signed with
+      # the key whose public half is app/branding/update-key, or the UPDATE_PUBLIC_KEY secret.
       # With Cargo's release profile, which strips debuginfo, MSVC's linker writes no PDB, and
       # Browser.pdb's public symbols are what name Browser.dll's functions in a crash report.
+      # A nightly is marked as one (APP_TRACK), so it says so and follows the nightly feed.
       - name: Browser.dll
         working-directory: app/windows
         env:
           UPDATE_PUBLIC_KEY: ${{ secrets.UPDATE_PUBLIC_KEY }}
           CARGO_PROFILE_RELEASE_STRIP: none
+          APP_TRACK: ${{ needs.version.outputs.nightly == 'true' && 'nightly' || '' }}
         run: |
           if [ -z "$UPDATE_PUBLIC_KEY" ] && [ -z "$(tr -d '[:space:]' < ../branding/update-key)" ]; then
-            echo "::error::app/branding/update-key is empty, so ilo couldn't update itself (README.md › Releases)."
+            echo "::error::app/branding/update-key is empty, so ilo couldn't update itself (docs/releasing.md)."
             exit 1
           fi
           cargo build --release --features prod
@@ -153,12 +220,20 @@ jobs:
       # on a missing engine and on windows-store.ini's placeholder identity, and only its release
       # names are taken, never an -app-only or -placeholder-identity package. A trial packs a test
       # MSIX while the identity is a placeholder, so the rest of the job can be tried before
-      # Partner Center gives one; the Engine step has already stopped one without an engine.
+      # Partner Center gives one; the Engine step has already stopped one without an engine. A
+      # nightly is the installer alone: the Store's MSIX is release-only.
       - name: Package
         env:
           version: ${{ needs.version.outputs.version }}
           TRIAL: ${{ needs.version.outputs.trial }}
+          NIGHTLY: ${{ needs.version.outputs.nightly }}
         run: |
+          if [ "$NIGHTLY" = true ]; then
+            platform/windows/package/package.sh "$RUNNER_TEMP/packages"
+            mkdir "$RUNNER_TEMP/windows"
+            cp "$RUNNER_TEMP/packages/ilo-$version-x64-setup.exe" "$RUNNER_TEMP/windows/ilo-windows-x64-setup.exe"
+            exit 0
+          fi
           if [ "$TRIAL" = true ]; then
             platform/windows/package/package.sh "$RUNNER_TEMP/packages"
             msix=$(ls "$RUNNER_TEMP/packages/ilo-$version-x64"*.msix)
@@ -175,8 +250,9 @@ jobs:
 
       # winget's manifests for the installer at the URL this release publishes it at, which the
       # owner puts in a pull request to microsoft/winget-pkgs once the draft is published
-      # (README.md › Releases). They're the run's, not the release's: users never need them.
+      # (docs/releasing.md). They're the run's, not the release's: users never need them.
       - name: winget manifests
+        if: ${{ needs.version.outputs.nightly != 'true' }}
         env:
           version: ${{ needs.version.outputs.version }}
           TAG: ${{ needs.version.outputs.tag }}
@@ -186,6 +262,7 @@ jobs:
             "$RUNNER_TEMP/winget"
 
       - uses: actions/upload-artifact@v4
+        if: ${{ needs.version.outputs.nightly != 'true' }}
         with:
           name: winget
           path: ${{ runner.temp }}/winget
@@ -207,16 +284,21 @@ jobs:
           path: ${{ runner.temp }}/windows
           if-no-files-found: error
 
+  # A nightly builds the bundle of the workflow's own commit only to check it, and skips it without
+  # an engine, as the Flatpak follows the branch it's installed from.
   linux:
     needs: version
+    if: ${{ needs.version.outputs.go == 'true' }}
     uses: ./.github/workflows/flatpak.yml
     with:
-      symbols: true
+      release: ${{ needs.version.outputs.nightly != 'true' }}
+      symbols: ${{ needs.version.outputs.nightly != 'true' }}
     secrets:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   demo:
     needs: version
+    if: ${{ needs.version.outputs.nightly != 'true' }}
     uses: ./.github/workflows/demo.yml
 
   # The Linux build in ilo's Flatpak repository, which installs from GitHub update from, and the
@@ -227,6 +309,7 @@ jobs:
   # keeps the repository in the run, to try it.
   flatpak-repo:
     needs: [version, linux]
+    if: ${{ needs.version.outputs.nightly != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -257,13 +340,14 @@ jobs:
             echo "::notice::No$missing: this try signs the Flatpak repository with a key of its own and keeps it in the run."
             echo "sync=false" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::The Linux release needs$missing (README.md › Releases). Without them nothing goes to the Flatpak repository and the draft isn't made."
+            echo "::error::The Linux release needs$missing (docs/releasing.md). Without them nothing goes to the Flatpak repository and the draft isn't made."
             exit 1
           fi
 
-      - run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq flatpak ostree
+      # From the Actions cache, and from the mirror only on a miss (#1969).
+      - uses: ./.github/actions/apt-install
+        with:
+          packages: flatpak ostree
 
       - uses: actions/download-artifact@v4
         with:
@@ -336,11 +420,10 @@ jobs:
           path: ${{ runner.temp }}/linux
           if-no-files-found: error
 
-  # After Windows, as the appcast that tools/appcast.sh makes here holds the Windows installer too.
   mac:
-    needs: [version, windows]
-    if: ${{ !cancelled() && needs.version.result == 'success' }}
-    runs-on: macos-15
+    needs: version
+    if: ${{ needs.version.outputs.go == 'true' }}
+    runs-on: macos-26
     timeout-minutes: 180
     defaults:
       run:
@@ -373,12 +456,13 @@ jobs:
             echo "::notice title=Skipped: Developer ID signing and notarization::No$missing, which the owner holds: this try signs ad hoc and makes no DMG, appcast or Mac upload."
             echo "signed=false" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::The Mac's DMG needs the repository secrets$missing (README.md › Releases). Without them it isn't built, and no unsigned DMG is uploaded."
+            echo "::error::The Mac's DMG needs the repository secrets$missing (docs/releasing.md). Without them it isn't built, and no unsigned DMG is uploaded."
             exit 1
           fi
 
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.commit }}
           fetch-depth: 0
 
       # The engine, from engine/fetch.sh, and Sparkle.
@@ -421,15 +505,33 @@ jobs:
             --key-id "$MAC_NOTARY_KEY_ID" --issuer "$MAC_NOTARY_ISSUER_ID"
           rm "$RUNNER_TEMP/notary.p8"
 
-      # It uploads the crash reports' symbols too (tools/symbols.sh).
+      # It uploads the crash reports' symbols too (tools/symbols.sh). A nightly is marked as one.
       - name: Build
         env:
+          APP_TRACK: ${{ needs.version.outputs.nightly == 'true' && 'nightly' || '' }}
           UPDATE_PUBLIC_KEY: ${{ secrets.UPDATE_PUBLIC_KEY }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_URL: ${{ vars.SENTRY_URL }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
         run: ./build.sh prod
+
+      # AppKit gives an app the look of the SDK it linked on macOS 26 and later: the window
+      # buttons' size, the corners, the title bar. The checks run builds with the current SDK, so a
+      # release on an older one would ship a window nobody verified (#1319). minos is rustc's default
+      # for the target, which the runner's Xcode doesn't change.
+      - name: SDK
+        run: |
+          built=$(vtool -show-build build/Browser.app/Contents/MacOS/Browser)
+          echo "$built"
+          sdk=$(echo "$built" | awk '$1 == "sdk" { print $2; exit }')
+          minos=$(echo "$built" | awk '$1 == "minos" { print $2; exit }')
+          xcode=$(xcodebuild -version | tr '\n' ' ')
+          echo "The app links the macOS $sdk SDK (${xcode}); its binary's minimum is macOS $minos, and Info.plist's 15.0." | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "${sdk%%.*}" -lt 26 ]; then
+            echo "::error::The app links the macOS $sdk SDK, so on macOS 26 and later it keeps the old look the checks don't verify. Build with Xcode 26 or later."
+            exit 1
+          fi
 
       - name: Sign and notarize
         if: ${{ steps.secrets.outputs.signed == 'true' }}
@@ -442,41 +544,10 @@ jobs:
           SIGN_IDENTITY: '-'
         run: ../tools/release.sh
 
-      - uses: actions/download-artifact@v4
-        if: ${{ needs.windows.result == 'success' && steps.secrets.outputs.signed == 'true' }}
-        with:
-          name: windows
-          path: ${{ runner.temp }}/windows
-
-      - uses: actions/download-artifact@v4
+      - name: DMG
         if: ${{ steps.secrets.outputs.signed == 'true' }}
-        with:
-          name: notes
-          path: ${{ runner.temp }}/notes
-
-      # Signed with UPDATE_PRIVATE_KEY, which appcast.sh hands Sparkle's tools on their standard
-      # input, never through the Keychain. appcast.sh names the DMG ilo.dmg in the appcast; the
-      # release's is ilo-mac-arm64.dmg.
-      - name: Appcast
-        if: ${{ steps.secrets.outputs.signed == 'true' }}
-        env:
-          UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
-          version: ${{ needs.version.outputs.version }}
         run: |
-          installer=$RUNNER_TEMP/windows/ilo-windows-x64-setup.exe
-          if [ -f "$installer" ]; then
-            ../tools/appcast.sh "$RUNNER_TEMP/notes/notes.md" --windows "$installer"
-          else
-            ../tools/appcast.sh "$RUNNER_TEMP/notes/notes.md"
-          fi
-          appcast=build/release/appcast/appcast.xml
-          url=/releases/download/v$version
-          if [ "$(grep -cF "$url/ilo.dmg\"" "$appcast")" != 1 ]; then
-            echo "::error::The appcast doesn't name $url/ilo.dmg once, which the release renames."
-            exit 1
-          fi
           mkdir "$RUNNER_TEMP/mac"
-          sed "s#$url/ilo\.dmg\"#$url/ilo-mac-arm64.dmg\"#" "$appcast" > "$RUNNER_TEMP/mac/appcast.xml"
           mv build/release/ilo.dmg "$RUNNER_TEMP/mac/ilo-mac-arm64.dmg"
 
       - uses: actions/upload-artifact@v4
@@ -486,12 +557,108 @@ jobs:
           path: ${{ runner.temp }}/mac
           if-no-files-found: error
 
-  # The draft, once the Mac's and Linux's packages are built. Windows's join it when they built;
-  # 0.1.0's Windows packages wait on a Windows engine and the Store's identity. The site's demo
-  # joins it when it built, and a release without one leaves the site's demo as it was.
+  # The updates feed's next state, with the Mac's DMG and, when Windows's job built it, its
+  # installer. Sparkle's tools, which sign both, run on macOS alone, so this is a job of its own
+  # after both: the Mac's build runs beside Windows's rather than after it.
+  appcast:
+    needs: [version, windows, mac]
+    if: ${{ !cancelled() && needs.mac.result == 'success' && needs.mac.outputs.signed == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      # Sparkle's tools come from setup.sh, which links the engine too, found in the history. The
+      # appcast's tools are the workflow's own, which a nightly's commit can be older than.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          fetch-depth: 0
+
+      - name: Setup
+        run: |
+          ./setup.sh
+          git -C .. checkout "$GITHUB_SHA" -- tools/appcast.sh tools/appcast.py
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac
+          path: ${{ runner.temp }}/mac
+
+      - uses: actions/download-artifact@v4
+        if: ${{ needs.windows.result == 'success' }}
+        with:
+          name: windows
+          path: ${{ runner.temp }}/windows
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: notes
+          path: ${{ runner.temp }}/notes
+
+      # appcast.sh finds the DMG, and the app in it, where tools/release.sh left them in the Mac's
+      # job. Signed with UPDATE_PRIVATE_KEY, which appcast.sh hands Sparkle's tools on their
+      # standard input, never through the Keychain. appcast.sh names the DMG ilo.dmg in the
+      # appcast; the release's is ilo-mac-arm64.dmg.
+      # A nightly's appcast is the nightly feed's next state, beside its packages under the names
+      # it gives them (tools/appcast.sh --nightly). Either's Mac deltas, from the three builds
+      # before it, are assets beside the appcast: appcast.sh downloads those builds' DMGs.
+      - name: Appcast
+        env:
+          UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
+          version: ${{ needs.version.outputs.version }}
+          NIGHTLY: ${{ needs.version.outputs.nightly }}
+          TAG: ${{ needs.version.outputs.tag }}
+          BUILD: ${{ needs.version.outputs.build }}
+        run: |
+          mkdir -p build/release
+          mv "$RUNNER_TEMP/mac/ilo-mac-arm64.dmg" build/release/ilo.dmg
+          volume=$RUNNER_TEMP/volume
+          hdiutil attach -quiet -nobrowse -readonly -mountpoint "$volume" build/release/ilo.dmg
+          ditto "$volume/ilo.app" build/release/ilo.app
+          hdiutil detach -quiet "$volume"
+          installer=$RUNNER_TEMP/windows/ilo-windows-x64-setup.exe
+          args=()
+          [ ! -f "$installer" ] || args+=(--windows "$installer")
+          [ "$NIGHTLY" != true ] || args+=(--nightly "$TAG")
+          ../tools/appcast.sh "$RUNNER_TEMP/notes/notes.md" "${args[@]}"
+          appcast=build/release/appcast/appcast.xml
+          if [ "$NIGHTLY" = true ]; then
+            dmg=/releases/download/$TAG/ilo-mac-arm64-$BUILD.dmg
+            if [ "$(grep -cF "$dmg\"" "$appcast")" != 1 ]; then
+              echo "::error::The appcast doesn't name $dmg once."
+              exit 1
+            fi
+            mkdir "$RUNNER_TEMP/appcast"
+            mv "$appcast" build/release/appcast/ilo-* "$RUNNER_TEMP/appcast/"
+            exit 0
+          fi
+          url=/releases/download/v$version
+          if [ "$(grep -cF "$url/ilo.dmg\"" "$appcast")" != 1 ]; then
+            echo "::error::The appcast doesn't name $url/ilo.dmg once, which the release renames."
+            exit 1
+          fi
+          mkdir "$RUNNER_TEMP/appcast"
+          sed "s#$url/ilo\.dmg\"#$url/ilo-mac-arm64.dmg\"#" "$appcast" > "$RUNNER_TEMP/appcast/appcast.xml"
+          find build/release/appcast -name 'ilo-*.delta' -exec mv {} "$RUNNER_TEMP/appcast/" \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appcast
+          path: ${{ runner.temp }}/appcast
+          if-no-files-found: error
+
+  # The draft, once the Mac's and Linux's packages and, with a signed DMG, the appcast are built.
+  # Windows's join it when they built; 0.1.0's Windows packages wait on a Windows engine and the
+  # Store's identity. The site's demo joins it when it built, and a release without one leaves the
+  # site's demo as it was.
   release:
-    needs: [version, windows, flatpak-repo, mac, demo]
-    if: ${{ !cancelled() && needs.mac.result == 'success' && needs.flatpak-repo.result == 'success' }}
+    needs: [version, windows, flatpak-repo, mac, appcast, demo]
+    if: >-
+      ${{ !cancelled() && needs.version.outputs.nightly != 'true' && needs.mac.result == 'success' &&
+      needs.flatpak-repo.result == 'success' &&
+      (needs.appcast.result == 'success' || needs.mac.outputs.signed != 'true') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -505,6 +672,11 @@ jobs:
         if: ${{ needs.mac.outputs.signed == 'true' }}
         with:
           name: mac
+          path: assets
+      - uses: actions/download-artifact@v4
+        if: ${{ needs.mac.outputs.signed == 'true' }}
+        with:
+          name: appcast
           path: assets
       - uses: actions/download-artifact@v4
         if: ${{ needs.windows.result == 'success' }}
@@ -524,6 +696,32 @@ jobs:
         with:
           name: notes
           path: notes
+
+      # A release never takes a quarantined check as passed silently (#2197): the summary lists the
+      # quarantine at its commit, for each OS. Only a summary, so it can't cost the release: the
+      # checkout and the step continue on an error.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true
+        with:
+          path: source
+          persist-credentials: false
+          sparse-checkout: |
+            app/check.sh
+            app/check
+          sparse-checkout-cone-mode: false
+      - name: Quarantine
+        continue-on-error: true
+        run: |
+          {
+            echo "## Quarantined checks"
+            echo
+            echo "These Check runs fail at times at this commit and don't fail it."
+            echo
+            for os in mac windows linux; do
+              sh source/app/check/quarantine.sh list "$os"
+              echo
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - run: |
           (cd assets && sha256sum -- ilo-* > SHA256SUMS)
@@ -557,6 +755,77 @@ jobs:
           path: |
             assets
             notes
+
+  # The night's packages, then the appcast that sends every copy to them, in the release the feed
+  # is served from, a prerelease that's never latest, so the site's downloads, which follow the
+  # latest release, never offer a nightly. Packages the appcast no longer names go.
+  nightly:
+    needs: [version, appcast]
+    if: ${{ !cancelled() && needs.version.outputs.nightly == 'true' && needs.appcast.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.version.outputs.tag }}
+      COMMIT: ${{ needs.version.outputs.commit }}
+      BUILD: ${{ needs.version.outputs.build }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: appcast
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: notes
+          path: notes
+
+      - run: |
+          r=(--repo "$GITHUB_REPOSITORY")
+          {
+            echo "Each night's build of ilo's main branch, ahead of the next release. A copy with Get nightly builds on, in Settings › About, updates from this release's appcast.xml, which keeps each OS's newest three builds."
+            echo
+            echo "Newest: $(cat notes/notes.md)"
+          } > "$RUNNER_TEMP/body.md"
+          gh release view "$TAG" "${r[@]}" > /dev/null 2>&1 ||
+            gh release create "$TAG" "${r[@]}" --prerelease --latest=false --target "$COMMIT" \
+              --title "$TAG" --notes-file "$RUNNER_TEMP/body.md"
+          packages=(assets/ilo-*)
+          gh release upload "$TAG" "${r[@]}" --clobber "${packages[@]}"
+          gh release upload "$TAG" "${r[@]}" --clobber assets/appcast.xml
+          for name in $(gh release view "$TAG" "${r[@]}" --json assets -q '.assets[].name'); do
+            [ "$name" = appcast.xml ] || grep -qF "/$TAG/$name\"" assets/appcast.xml ||
+              gh release delete-asset "$TAG" "$name" "${r[@]}" -y
+          done
+          gh release edit "$TAG" "${r[@]}" --notes-file "$RUNNER_TEMP/body.md"
+          feed=https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/appcast.xml
+          curl -fsSL "$feed" | grep -q "<sparkle:version>$BUILD</sparkle:version>" ||
+            { echo "::error::$feed doesn't serve build $BUILD."; exit 1; }
+          echo "Build $BUILD is in $feed: $(gh release view "$TAG" "${r[@]}" --json url -q .url)" >> "$GITHUB_STEP_SUMMARY"
+
+  # A scheduled nightly that fails opens or comments on one issue, "Release fails on main", and the
+  # next that publishes closes it, as the night's checks do. A night with nothing new leaves it.
+  report:
+    needs: [version, windows, linux, mac, appcast, nightly]
+    if: >-
+      ${{ always() && (github.event_name == 'schedule' || inputs.tag == 'nightly') &&
+      github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}
+          FOUND: ${{ needs.nightly.result == 'success' }}
+        run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"
 
   # The owner published a draft: its Linux build goes live in the Flatpak repository. The summary
   # and refs staged in pending/<tag>/ replace the live ones, then what no staged build's repository
@@ -592,7 +861,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           if [ -z "$R2_BUCKET" ] || [ -z "$R2_ENDPOINT" ] || [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
-            echo "::error::No R2 secrets (README.md › Releases), so $TAG's Linux build isn't in the Flatpak repository."
+            echo "::error::No R2 secrets (docs/releasing.md), so $TAG's Linux build isn't in the Flatpak repository."
             exit 1
           fi
           bucket=s3://$R2_BUCKET
@@ -612,7 +881,7 @@ jobs:
   # The owner published a draft: ilobrowser.com's release workflow puts its demo on the site and
   # deploys it now, rather than at its next half-hourly check. GitHub's own token can't start
   # another repository's workflow, so SITE_DISPATCH_TOKEN is a fine-grained token with Contents
-  # read and write on MartinPTielemans/ilo-site alone (README.md › Releases).
+  # read and write on MartinPTielemans/ilo-site alone (docs/releasing.md).
   site:
     if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-24.04
@@ -622,8 +891,37 @@ jobs:
           GH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::notice::No SITE_DISPATCH_TOKEN (README.md › Releases), so the site takes $TAG at its next half-hourly check."
+            echo "::notice::No SITE_DISPATCH_TOKEN (docs/releasing.md), so the site takes $TAG at its next half-hourly check."
             exit 0
           fi
           gh api repos/MartinPTielemans/ilo-site/dispatches -f event_type=ilo-release -f "client_payload[tag]=$TAG"
           echo "ilobrowser.com is updating to $TAG: https://github.com/MartinPTielemans/ilo-site/actions" >> "$GITHUB_STEP_SUMMARY"
+
+  # The owner published a draft: the bot that announces releases hears of it now, rather than at its
+  # next check-in, and its answer never fails or holds up the release (docs/releasing.md).
+  announce:
+    if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    continue-on-error: true
+    steps:
+      - env:
+          TAG: ${{ github.event.release.tag_name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_WEBHOOK_URL: ${{ secrets.RELEASE_WEBHOOK_URL }}
+          RELEASE_WEBHOOK_KEY: ${{ secrets.RELEASE_WEBHOOK_KEY }}
+        run: |
+          if [ -z "$RELEASE_WEBHOOK_URL" ] || [ -z "$RELEASE_WEBHOOK_KEY" ]; then
+            echo "::notice::No RELEASE_WEBHOOK_URL or RELEASE_WEBHOOK_KEY (docs/releasing.md), so the announcement bot finds $TAG at its next check-in."
+            exit 0
+          fi
+          # A body in a variable, not on stdin, so curl's retry can send it again. curl's own errors
+          # name the host, so they go nowhere: the status alone is printed.
+          body=$(jq -n --arg tag "$TAG" --arg url "$RELEASE_URL" '{tag: $tag, url: $url}')
+          status=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 --retry 1 \
+            -H "Authorization: Bearer $RELEASE_WEBHOOK_KEY" -H 'Content-Type: application/json' \
+            --data-binary "$body" "$RELEASE_WEBHOOK_URL" 2> /dev/null) || true
+          case $status in
+            2??) echo "The announcement bot heard of $TAG (HTTP $status)." >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::warning::The announcement bot wasn't told of $TAG (HTTP ${status:-000}), so it finds it at its next check-in." ;;
+          esac

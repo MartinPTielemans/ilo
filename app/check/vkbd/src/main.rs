@@ -2,7 +2,8 @@
 //! sway seat has neither until a client makes one.
 //! - `vkbd <text>` types the text into the focused window through a virtual keyboard with the US
 //!   keymap xkbcli makes: lowercase and capital letters, digits, `- ; . / , = : @`, spaces,
-//!   newlines as Enter, tabs as Tab, ESC as Escape, and `^` for Ctrl with the next key.
+//!   newlines as Enter, tabs as Tab, ESC as Escape, BS as Backspace, and `^` for Ctrl with the next
+//!   key.
 //! - `vkbd --hold <seconds>` keeps a keyboard on the seat that long, as a desktop's is there all
 //!   along: with none left the compositor sends the app a keyboard leave.
 //! - `vkbd --click <x> <y>` clicks at that point of the 1280 by 800 output with a virtual pointer.
@@ -51,7 +52,9 @@ const CTRL: (u32, u32) = (29, 4);
 const SHIFT: (u32, u32) = (42, 1);
 
 fn settle() -> Duration {
-    let ms = std::env::var("VKBD_SETTLE").ok().and_then(|v| v.parse().ok());
+    let ms = std::env::var("VKBD_SETTLE")
+        .ok()
+        .and_then(|v| v.parse().ok());
     Duration::from_millis(ms.unwrap_or(500))
 }
 
@@ -177,12 +180,14 @@ fn code(c: char) -> Option<u32> {
         '\n' => return Some(28),
         '\u{1b}' => return Some(1),
         '\t' => return Some(15),
+        '\u{8}' => return Some(14),
         _ => {}
     }
     if let Some(i) = "-;./,=".find(c) {
         return Some([12, 39, 52, 53, 51, 13][i]);
     }
-    ROWS.iter().find_map(|(row, first)| row.find(c).map(|i| first + i as u32))
+    ROWS.iter()
+        .find_map(|(row, first)| row.find(c).map(|i| first + i as u32))
 }
 
 fn memfd() -> std::fs::File {

@@ -2,18 +2,16 @@
 //! it's made; and opening the pickers for a Space's or a tab's icon and a Space's theme.
 
 use crate::tokens::text;
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{App, Context, Focusable, Point, SharedString, Window, div, point, prelude::*, px};
 
 use super::{
-    undo::{Prop, Value},
     CancelName, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_PLACEHOLDER, FORM_TEXT, KeepName,
     NEW_FOLDER, Naming, PLATE_INSET, Pending, Renaming, SPACE_ICON_SLOT, SPACE_ICON_X, Shell,
-    ShellHandle,
+    field_opens,
+    undo::{Prop, Value},
 };
 use crate::{
     icon_picker::{self, Picked, Subject},
@@ -29,10 +27,14 @@ impl Shell {
     /// Shows the Space with its name in a field, all selected, to type a new one over.
     pub(super) fn rename_space(&mut self, space: u64, cx: &mut Context<Self>) {
         // A private window's Space is named for what it is.
-        if self.private {
+        if self.one_space() {
             return;
         }
-        let Some(name) = self.spaces.iter().find(|each| each.id == space).map(|each| &each.name)
+        let Some(name) = self
+            .spaces
+            .iter()
+            .find(|each| each.id == space)
+            .map(|each| &each.name)
         else {
             return;
         };
@@ -51,10 +53,11 @@ impl Shell {
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming: Naming::Space(space),
             name,
             in_library: false,
-            _blur: None,
+            _watches: Vec::new(),
         });
         // As for the form.
         self.dock(cx);
@@ -79,7 +82,11 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(name) = self.spaces.iter().find(|each| each.id == space).map(|each| &each.name)
+        let Some(name) = self
+            .spaces
+            .iter()
+            .find(|each| each.id == space)
+            .map(|each| &each.name)
         else {
             return;
         };
@@ -93,30 +100,40 @@ impl Shell {
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming: Naming::Space(space),
             name,
             in_library: true,
-            _blur: None,
+            _watches: Vec::new(),
         });
         self.browser.focus_ui(cx);
         self.focus_renaming = true;
         cx.notify();
     }
 
-    /// Shows the tab's title in a field, all selected, to type a name over.
+    /// Shows the tab's title in a field, all selected, to type a name over. A split view's tab
+    /// names its split instead, as Arc's split menu's Rename… does, in a field holding the split's
+    /// name, else empty.
     pub(super) fn rename_tab(&mut self, tab: u64, cx: &mut Context<Self>) {
-        log!("browser: rename tab {tab}");
-        let title = self.title(tab);
+        let (naming, placeholder, text) = match self.split_of(tab) {
+            Some((tabs, look)) => (Naming::Split(tabs[0]), "Split View", look.name),
+            None => (Naming::Tab(tab), "Tab name", self.title(tab)),
+        };
+        match naming {
+            Naming::Split(first) => log!("browser: rename split {first}"),
+            _ => log!("browser: rename tab {tab}"),
+        }
         let name = cx.new(|cx| {
-            TextInput::new("Tab name", cx)
+            TextInput::new(placeholder, cx)
                 .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
-                .with_text(title)
+                .with_text(text)
         });
         self.renaming = Some(Renaming {
-            naming: Naming::Tab(tab),
+            opened: field_opens(),
+            naming,
             name,
             in_library: false,
-            _blur: None,
+            _watches: Vec::new(),
         });
         // As for a Space's name.
         self.dock(cx);
@@ -136,10 +153,11 @@ impl Shell {
                 .with_text(url.into())
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming: Naming::PinnedUrl(tab),
             name: field,
             in_library: false,
-            _blur: None,
+            _watches: Vec::new(),
         });
         self.dock(cx);
         self.browser.focus_ui(cx);
@@ -148,8 +166,10 @@ impl Shell {
     }
 
     /// Shows the icon picker under the tab's favicon, once its row has stopped moving, with the
-    /// sidebar docked.
+    /// sidebar docked. A split view's tab gives its split the icon, as Arc's split menu's Change
+    /// Icon… does, from the split's first tab, where its row has its one icon.
     pub(super) fn change_icon(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let tab = self.split_of(tab).map_or(tab, |(tabs, _)| tabs[0]);
         self.pick_icon_from_row(Subject::Tab(tab), cx);
     }
 
@@ -174,8 +194,8 @@ impl Shell {
         self.open_picker(space, Pending::Icon(Subject::Space(space)), cx);
     }
 
-    /// Shows the Space, and the theme picker beside its name row once the row has stopped
-    /// moving: Arc's Edit Theme Color…, whose picker opened from there isn't recorded.
+    /// Shows the Space, and once its name row has stopped moving the theme picker against the
+    /// sidebar's edge at the window's top: Arc 1.171's Edit Theme Color….
     pub(super) fn edit_space_theme(&mut self, space: u64, cx: &mut Context<Self>) {
         self.open_picker(space, Pending::Theme(space), cx);
     }
@@ -189,13 +209,15 @@ impl Shell {
         if let Some(other) = showing.filter(|&other| other != Subject::Space(space)) {
             let picker = icon_picker::entity(cx);
             self.card_move = picker.map(|picker| {
-                cx.observe(&picker, move |shell, _, cx| match icon_picker::open_for(cx) {
-                    Some(now) if now == other => {}
-                    None => {
-                        shell.card_move = None;
-                        shell.change_space_icon_in_card(space, cx);
+                cx.observe(&picker, move |shell, _, cx| {
+                    match icon_picker::open_for(cx) {
+                        Some(now) if now == other => {}
+                        None => {
+                            shell.card_move = None;
+                            shell.change_space_icon_in_card(space, cx);
+                        }
+                        Some(_) => shell.card_move = None,
                     }
-                    Some(_) => shell.card_move = None,
                 })
             });
             return;
@@ -215,13 +237,15 @@ impl Shell {
         if let Some(other) = theme_picker::open_for(cx).filter(|&other| other != space) {
             let picker = theme_picker::entity(cx);
             self.card_move = picker.map(|picker| {
-                cx.observe(&picker, move |shell, _, cx| match theme_picker::open_for(cx) {
-                    Some(now) if now == other => {}
-                    None => {
-                        shell.card_move = None;
-                        shell.edit_space_theme_in_card(space, cx);
+                cx.observe(&picker, move |shell, _, cx| {
+                    match theme_picker::open_for(cx) {
+                        Some(now) if now == other => {}
+                        None => {
+                            shell.card_move = None;
+                            shell.edit_space_theme_in_card(space, cx);
+                        }
+                        Some(_) => shell.card_move = None,
                     }
-                    Some(_) => shell.card_move = None,
                 })
             });
             return;
@@ -230,7 +254,8 @@ impl Shell {
             return;
         };
         let anchor = point(f32::from(brush.right()), f32::from(brush.center().y));
-        self.show_theme_picker(space, anchor, cx);
+        // The Library stays as it is on either side until it moves with the sidebar.
+        self.show_theme_picker(space, theme_picker::At::Row(anchor), false, cx);
         self.light_card_while_picking(space, cx);
     }
 
@@ -263,7 +288,9 @@ impl Shell {
 
     /// Whether `space`'s card's field is held lit for a picker shown from it.
     pub(super) fn card_picking(&self, space: u64) -> bool {
-        self.card_picker.as_ref().is_some_and(|(picking, _)| *picking == space)
+        self.card_picker
+            .as_ref()
+            .is_some_and(|(picking, _)| *picking == space)
     }
 
     fn open_picker(&mut self, space: u64, picker: Pending, cx: &mut Context<Self>) {
@@ -289,8 +316,9 @@ impl Shell {
     /// Opens the picker asked for once the row it points at has drawn where it drew the frame
     /// before, and the Library has gone, as the sidebar, the Library or a Space's slide may be
     /// moving it. A Space's icon picker points at where its icon goes in the name row, a tab's at
-    /// its favicon, and the theme picker at the name row's end. It gives up if the row doesn't
-    /// settle in two seconds, such as in a full-screen page, which has no sidebar.
+    /// its favicon, and the theme picker waits for the row too, for the sidebar's edge it opens
+    /// against to have settled. It gives up if the row doesn't settle in two seconds, such as in a
+    /// full-screen page, which has no sidebar.
     pub(super) fn open_picker_when_settled(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((picker, asked)) = self.picker_pending else {
             return;
@@ -299,9 +327,7 @@ impl Shell {
             Pending::Icon(Subject::Space(space)) | Pending::Theme(space) => {
                 (self.name_row_drawn.get(), space == self.space)
             }
-            Pending::Icon(Subject::Tab(_) | Subject::Folder(_)) => {
-                (self.tab_row_drawn.get(), true)
-            }
+            Pending::Icon(Subject::Tab(_) | Subject::Folder(_)) => (self.tab_row_drawn.get(), true),
         };
         // Not before the Library has gone and the sidebar has come in, as a frame of either can
         // leave the row where it was.
@@ -318,7 +344,7 @@ impl Shell {
         }
         self.picker_pending = None;
         // The picker shows over the key window, which may have changed while the row moved.
-        let key = cx.try_global::<ShellHandle>().is_some_and(|key| key.0 == cx.weak_entity());
+        let key = super::commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity());
         if !key {
             return;
         }
@@ -331,8 +357,10 @@ impl Shell {
                     f32::from(row.left()) + SPACE_ICON_X + SPACE_ICON_SLOT / 2.,
                     f32::from(row.center().y),
                 );
-                let iconless =
-                    self.spaces.iter().any(|each| each.id == space && !has_icon(&each.icon));
+                let iconless = self
+                    .spaces
+                    .iter()
+                    .any(|each| each.id == space && !has_icon(&each.icon));
                 self.show_space_icon_picker(space, anchor, cx);
                 if iconless {
                     self.hold_icon_place(space, cx);
@@ -341,8 +369,8 @@ impl Shell {
             }
             Pending::Icon(subject) => subject,
             Pending::Theme(space) => {
-                let anchor = point(f32::from(row.right()), f32::from(row.center().y));
-                return self.show_theme_picker(space, anchor, cx);
+                let edge = theme_picker::At::Edge(self.page_edge_x());
+                return self.show_theme_picker(space, edge, self.right, cx);
             }
         };
         let shell = cx.weak_entity();
@@ -357,19 +385,25 @@ impl Shell {
                     false => {
                         f32::from(row.left())
                             + FAVICON_X
-                            + self.depth(tab) as f32 * FOLDER_INDENT
+                            + self.listed_depth(tab) as f32 * FOLDER_INDENT
                             + FAVICON_SIZE / 2.
                     }
                 };
                 let anchor = point(x, f32::from(row.center().y));
+                let split = self.split_of(tab).map(|(_, look)| look.icon);
+                let prop = if split.is_some() {
+                    Prop::SplitIcon(tab)
+                } else {
+                    Prop::TabIcon(tab)
+                };
                 let picked: Picked = Rc::new(move |icon, cx| {
                     shell
                         .update(cx, |shell, cx| {
-                            shell.change(Prop::TabIcon(tab), Value::Text(icon.to_string()), cx)
+                            shell.change(prop, Value::Text(icon.to_string()), cx)
                         })
                         .ok();
                 });
-                (self.page(tab).icon, anchor, picked)
+                (split.unwrap_or_else(|| self.page(tab).icon), anchor, picked)
             }
             Subject::Folder(folder) => {
                 // The folder's middle, in from the row by the folders it's in.
@@ -391,13 +425,17 @@ impl Shell {
         };
         // A card showing would stay under the picker, as rows' cards wait while it shows.
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
-        icon_picker::show(subject, icon, anchor, picked, cx);
+        icon_picker::show(self.browser.window(), subject, icon, anchor, picked, cx);
     }
 
     /// Shows the icon picker for `space`, its arrow at `anchor` in the window, giving the Space
     /// the icon picked.
     fn show_space_icon_picker(&mut self, space: u64, anchor: Point<f32>, cx: &mut Context<Self>) {
-        let Some(icon) = self.spaces.iter().find(|each| each.id == space).map(|each| &each.icon)
+        let Some(icon) = self
+            .spaces
+            .iter()
+            .find(|each| each.id == space)
+            .map(|each| &each.icon)
         else {
             return;
         };
@@ -411,7 +449,15 @@ impl Shell {
         });
         // As for a tab's or a folder's.
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
-        icon_picker::show(Subject::Space(space), icon.clone(), anchor, picked, cx);
+        let window = self.browser.window();
+        icon_picker::show(
+            window,
+            Subject::Space(space),
+            icon.clone(),
+            anchor,
+            picked,
+            cx,
+        );
     }
 
     /// Holds the icon's place in `space`'s name row, which has no icon, with the placeholder, the
@@ -435,8 +481,12 @@ impl Shell {
     /// Whether the shown Space's name row holds the icon's place with the placeholder: while the
     /// icon picker shows for it, until it has an icon.
     pub(super) fn holds_icon_place(&self) -> bool {
-        self.icon_placeholder.as_ref().is_some_and(|(space, _)| *space == self.space)
-            && self.shown_space().is_some_and(|space| !has_icon(&space.icon))
+        self.icon_placeholder
+            .as_ref()
+            .is_some_and(|(space, _)| *space == self.space)
+            && self
+                .shown_space()
+                .is_some_and(|space| !has_icon(&space.icon))
     }
 
     /// Shows the folder's name in a field, all selected, to type a new one over.
@@ -452,10 +502,11 @@ impl Shell {
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming: Naming::Folder(folder),
             name,
             in_library: false,
-            _blur: None,
+            _watches: Vec::new(),
         });
         // As for a Space's name.
         self.dock(cx);
@@ -468,7 +519,9 @@ impl Shell {
     /// to type over.
     pub(super) fn new_folder(&mut self, cx: &mut Context<Self>) {
         let name = SharedString::from(NEW_FOLDER);
-        let folder = self.browser.create_folder(self.space, &name, 0, usize::MAX, cx);
+        let folder = self
+            .browser
+            .create_folder(self.space, &name, 0, usize::MAX, cx);
         if folder != 0 {
             self.name_folder(folder, name, cx);
         }
@@ -488,10 +541,11 @@ impl Shell {
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming: Naming::Profile(profile),
             name,
             in_library: false,
-            _blur: None,
+            _watches: Vec::new(),
         });
         self.browser.focus_ui(cx);
         self.focus_renaming = true;
@@ -502,12 +556,15 @@ impl Shell {
     /// The emoji the user gave `folder`, else empty.
     pub(super) fn folder_icon(&self, folder: u64) -> SharedString {
         let space = self.spaces.iter().find(|space| space.is_folder(folder));
-        space.and_then(|space| space.folders.icons.get(&folder).cloned()).unwrap_or_default()
+        space
+            .and_then(|space| space.folders.icons.get(&folder).cloned())
+            .unwrap_or_default()
     }
 
     pub(super) fn folder_name(&self, folder: u64) -> SharedString {
-        let space = self.shown_space();
-        let folder = space.and_then(|space| space.folders.folders.get(&folder));
+        // Its own Space's, which isn't the one shown while it's dragged to another.
+        let mut folders = self.spaces.iter().map(|space| &space.folders.folders);
+        let folder = folders.find_map(|folders| folders.get(&folder));
         folder.map(|(name, _)| name.clone()).unwrap_or_default()
     }
 
@@ -527,6 +584,8 @@ impl Shell {
             // Left as it was, the title stays the page's, which changes with it.
             Naming::Tab(tab) if *name == *self.title(tab) => {}
             Naming::Tab(tab) => self.change(Prop::TabName(tab), Value::Text(name), cx),
+            // Kept empty, it shows its pages' titles again.
+            Naming::Split(tab) => self.change(Prop::SplitName(tab), Value::Text(name), cx),
             // Kept empty, it stays where it went back to.
             Naming::PinnedUrl(tab) => {
                 if let Some(url) = self.browser.typed_url(&name).filter(|_| !name.is_empty()) {
@@ -538,8 +597,10 @@ impl Shell {
             }
             Naming::Folder(_) => {}
             Naming::Profile(profile) => {
-                let listed =
-                    self.profiles.iter().any(|(id, listed)| *id == profile && **listed == name);
+                let listed = self
+                    .profiles
+                    .iter()
+                    .any(|(id, listed)| *id == profile && **listed == name);
                 if !name.is_empty() && !listed {
                     // check.sh waits for this line.
                     log!("browser: name profile {profile} {name}");
@@ -548,6 +609,42 @@ impl Shell {
             }
         }
         self.leave_name(&renaming, window, cx);
+    }
+
+    /// The field lost the keyboard, to a press outside it, its page, an overlay, another window or
+    /// another app: what's typed is kept, as ↩ keeps it, but an empty field changes nothing, even a
+    /// tab's, whose ↩ gives the page's title back, and a pinned URL is undone, as both are only
+    /// meant on purpose (owner, 2026-11-02, #1414).
+    pub(super) fn name_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(renaming) = &self.renaming else {
+            return;
+        };
+        let empty = renaming.name.read(cx).text().trim().is_empty();
+        // check.sh waits for this line.
+        log!("browser: name field left");
+        match renaming.naming {
+            Naming::PinnedUrl(_) => self.cancel_name(window, cx),
+            _ if empty => self.cancel_name(window, cx),
+            _ => self.keep_name(window, cx),
+        }
+    }
+
+    /// The window's keyboard went from its UI, to its page or elsewhere, which GPUI's focus doesn't
+    /// see. The field's own menu takes it only for a moment, and gives it back to the field.
+    /// `opened` is how many fields had opened as the press that gave the page the keyboard came.
+    pub fn keyboard_left(&mut self, opened: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let renaming = self.renaming.as_ref();
+        if renaming.is_some_and(|renaming| renaming.opened > opened) {
+            // For a run's log, where the field would otherwise have closed at once.
+            log!("browser: field opened after the page's press stays");
+            return;
+        }
+        if !renaming.is_some_and(|renaming| renaming.name.read(cx).menu_shown()) {
+            if renaming.is_some() {
+                log!("browser: field lost the keyboard to the page");
+            }
+            self.name_left(window, cx)
+        }
     }
 
     pub(super) fn cancel_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -590,6 +687,12 @@ impl Shell {
 }
 
 #[cfg(test)]
+mod leave_tests;
+
+#[cfg(test)]
+mod split_tests;
+
+#[cfg(test)]
 mod tests {
     use std::rc::Rc;
 
@@ -608,7 +711,10 @@ mod tests {
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         cx.update(|window, _| window.activate_window());
         shell.update(cx, |shell, cx| {
-            shell.set_spaces(vec![(1, "Home".into(), None, 1, "".into(), "".into(), "".into())], cx);
+            shell.set_spaces(
+                vec![(1, "Home".into(), None, 1, "".into(), "".into(), "".into())],
+                cx,
+            );
             shell.set_space(1, cx);
             shell.rename_space(1, cx);
         });
@@ -616,31 +722,19 @@ mod tests {
         (shell, cx, host)
     }
 
-    /// Another window taking the keyboard a moment, as ilo's menu does for the field's own menu,
-    /// leaves the name a field with the keyboard, so escape still cancels once it's back.
-    #[gpui::test]
-    fn the_name_stays_a_field_while_another_window_has_the_keyboard(cx: &mut TestAppContext) {
-        let (shell, cx, host) = renaming(cx);
-        cx.simulate_input("gone");
-        cx.deactivate_window();
-        cx.update(|window, _| window.refresh());
-        cx.run_until_parked();
-        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_some()), "the field closed");
-        cx.update(|window, _| window.activate_window());
-        cx.run_until_parked();
-        cx.simulate_keystrokes("escape");
-        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_none()), "escape didn't cancel");
-        assert!(host.take_edits().is_empty(), "the Space was renamed");
-    }
-
     /// Leaving the field for something else in its window keeps the name typed.
     #[gpui::test]
     fn leaving_the_name_for_the_sidebar_keeps_it(cx: &mut TestAppContext) {
         let (shell, cx, host) = renaming(cx);
         cx.simulate_input("Work");
-        shell.update_in(cx, |shell, window, cx| window.focus(&shell.focus_handle, cx));
+        shell.update_in(cx, |shell, window, cx| {
+            window.focus(&shell.focus_handle, cx)
+        });
         cx.run_until_parked();
-        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_none()), "the field stayed");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.renaming.is_none()),
+            "the field stayed"
+        );
         assert_eq!(host.take_edits(), ["rename space 1 Work"]);
     }
 
@@ -652,7 +746,9 @@ mod tests {
 
         let (shell, cx, host) = renaming(cx);
         cx.simulate_keystrokes("escape");
-        host.pinned_urls.borrow_mut().insert(2, "https://old.test/".into());
+        host.pinned_urls
+            .borrow_mut()
+            .insert(2, "https://old.test/".into());
         let edit = |cx: &mut VisualTestContext| {
             shell.update(cx, |shell, cx| shell.edit_pinned_url(2, cx));
             cx.run_until_parked();
@@ -664,12 +760,18 @@ mod tests {
         edit(cx);
         cx.simulate_input("new.test");
         cx.simulate_keystrokes("enter");
-        assert!(shell.read_with(cx, |shell, _| shell.renaming.is_none()), "the field stayed");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.renaming.is_none()),
+            "the field stayed"
+        );
         assert_eq!(host.take_edits(), ["pinned url 2 https://new.test/"]);
         shell.update(cx, |shell, cx| shell.run(Command::Undo, "ui", cx));
         assert_eq!(host.take_edits(), ["pinned url 2 https://old.test/"]);
         edit(cx);
         cx.simulate_keystrokes("backspace enter");
-        assert!(host.take_edits().is_empty(), "an empty field changed the pinned URL");
+        assert!(
+            host.take_edits().is_empty(),
+            "an empty field changed the pinned URL"
+        );
     }
 }

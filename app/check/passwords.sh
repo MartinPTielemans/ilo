@@ -15,8 +15,12 @@
 # to the user and Use Strong Password fills it and saves it, with no offer. Last, Settings' Offer
 # to save passwords, switched off, keeps the next login from bringing the offer, and Save and fill
 # addresses switches off and on. A form's address brings Chrome's offer to save it, which return
-# saves, and a card's, which escape declines. Each run has a profile of its own, which no other run
-# or the owner's copy reaches.
+# saves, and a card's, which escape declines. Settings' Passwords tab lists the address, then a card
+# return saves, and each Remove asks first and removes it. Save and fill addresses and payment
+# methods, switched off, keep a new address and the card from bringing an offer. On the Mac, Edit ›
+# AutoFill, in place of the system's, opens Chrome's dropdown at the field with the focus, and with
+# none, Settings › Passwords. Each run has a profile of its own, which no other run or the owner's
+# copy reaches.
 
 # The login page, in a new profile, whose passwords start empty, with a DevTools client that sees
 # the eye in its password field (check/cdp.py).
@@ -26,17 +30,7 @@ cdp_log="$out/passwords-cdp.log"
 step=0
 passwords_profile="$PWD/$out/passwords-profile"
 scratch=$(mktemp -d)
-mkfifo "$scratch/to-browser" "$scratch/from-browser" "$scratch/cdp"
-# Each end of a pipe waits for the other to open, in this order: the driver's, the browser's
-# DevTools pipe, then cdp.py's input.
-BROWSER_DRIVE=1 BROWSER_URL="${site}login.html" BROWSER_PROFILE_DIR="$passwords_profile" \
-  "$browser" --remote-debugging-pipe < "$out/drive" 3< "$scratch/to-browser" \
-  4> "$scratch/from-browser" > "$log" 2>&1 &
-pid=$!
-python3 -I -u check/cdp.py "$scratch/to-browser" "$scratch/from-browser" /login.html \
-  < "$scratch/cdp" > "$cdp_log" 2>&1 &
-exec 3> "$out/drive"
-exec 5> "$scratch/cdp"
+start_with_cdp "${site}login.html" "$passwords_profile" /login.html
 await_load
 await '^browser: title [0-9]* login$' || fail "the login page didn't draw"
 tab=$(today)
@@ -59,7 +53,6 @@ send click 600 60
 if [ "$active" != 1 ]; then
   exec 3>&- 5>&-
   quit
-  kill "$server"
   echo "skip: passwords. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
@@ -143,9 +136,16 @@ grep -q "^browser: key $tab offer\$" "$log" || fail "the offer gave its tab no k
 key_at() { grep '^browser: key drawn at ' "$log" | tail -1 | cut -d' ' -f5-6; }
 [ -n "$(key_at)" ] || fail "the key wasn't drawn"
 ../tools/window-screenshot.sh "$pid" "$out/password-key.png" || fail "no window to capture"
+# The pointer on the key hovers the sidebar, whose tools come out in the URL field and move the
+# key: it's clicked where it is with them out, or the press can land on what took its place.
+if [ "$(grep '^browser: sidebar tools ' "$log" | tail -1)" != "browser: sidebar tools shown" ]; then
+  send move $(key_at)
+  expect '^browser: sidebar tools shown$' "the pointer on the key didn't bring the sidebar's tools out"
+fi
 send click $(key_at)
 expect "^browser: key $tab clicked\$" "a click on the key didn't reach it"
 offered save
+skip_on_sway_xwayland "the offer's keys and the steps after them"
 send click $(offer_field)
 send key escape
 expect "^browser: offer $tab answered NotNow check@example.test\$" \
@@ -166,16 +166,18 @@ send type nihongo
 [ "$marked" = 0,7 ] || fail "the offer's field didn't take the composition: marked $marked"
 send key space
 [ "$marked" = 0,3 ] || fail "the offer's field didn't take the conversion: marked $marked"
+committed=$((step + 1))
 send key return
 [ "$marked" = none ] || fail "return didn't commit the composition: marked $marked"
 send ime off
-none_since "^browser: offer $tab answered" || fail "return committing the composition answered"
 ../tools/window-screenshot.sh "$pid" "$out/password-offer-ime.png" || fail "no window to capture"
 # Return saves the username as the field has it.
 send key a cmd
 send type check@example.test
 send key return
 expect "^browser: offer $tab answered Accept check@example.test\$" "return didn't save"
+[ "$(since "$committed" | grep -c "^browser: offer $tab answered")" = 1 ] ||
+  fail "return committing the composition answered"
 expect '^browser: offer hidden$' "saving didn't hide the offer"
 expect "^browser: offer $tab gone\$" "saving didn't close Chrome's offer"
 
@@ -287,10 +289,10 @@ expect "^browser: passwords [0-9]*: 127.0.0.1:$port check@example.test\$" \
   "Settings didn't list the saved login alone: $(grep '^browser: passwords ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/settings-passwords.png" || fail "no window to capture"
 post clickkey $(drawn "remove login 0")
-# Settings asks in an alert, and off the Mac, which has none, in its dialog, where escape cancels.
-# The dialog covers Settings, taking its keys, until it has gone.
+# Settings asks in an alert, the Mac's or Windows' task dialog, and on Linux, which has none, in its
+# dialog, where escape cancels. The dialog covers Settings, taking its keys, until it has gone.
 asks=alert
-[ "$(uname)" = Darwin ] || asks=dialog
+[ "$(uname)" = Linux ] && asks=dialog
 expect "^browser: $asks shown Remove the password for “check@example.test” on 127.0.0.1:$port?\$" \
   "Remove in Settings didn't ask first"
 if [ "$asks" = dialog ]; then
@@ -298,12 +300,19 @@ if [ "$asks" = dialog ]; then
   send key escape
   expect '^browser: dialog hidden$' "escape didn't cancel Settings' dialog"
 else
+  # The alert runs a loop of its own, where the UI's tasks and timers go on: held open a while, none
+  # may find the UI in an update, which GPUI would drop or panic on (#1358).
+  asked=$(wc -l < "$log")
+  sleep 2 # the alert held open, its loop running the UI's timers
   send choose Cancel
+  ! tail -n "+$((asked + 1))" "$log" | grep -q 'gpui dropped\|panicked\|already borrowed' ||
+    fail "the UI's work in the alert's loop found it in an update: $(tail -n "+$((asked + 1))" "$log" |
+      grep 'gpui dropped\|panicked\|already borrowed' | head -3 | tr '\n' ';')"
 fi
 none_since '^browser: remove login' || fail "Cancel removed the login"
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses off$' "a click on Save and fill addresses didn't switch it off"
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses on$' "a second click didn't switch addresses back on"
 # Manage Passwords…, under the box of the login's row, opens Chrome's password manager page in a
 # new tab, where a search for the username finds the login. Its device check guards only Show,
@@ -405,7 +414,7 @@ send choose "$(cased 'All Passwords…')"
 expect '^browser: site controls run passwords$' "All Passwords… didn't run again"
 expect '^browser: settings shown Passwords$' "All Passwords… didn't show Settings' Passwords tab again"
 settings_drew Passwords
-send clickkey $(drawn "switch offer to save passwords")
+click_in_sight "switch offer to save passwords"
 expect '^browser: offer to save passwords off$' "a click on Offer to save passwords didn't switch it off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-passwords-off.png" || fail "no window to capture"
 send key w cmd
@@ -476,7 +485,172 @@ offered_to_save card
 send key escape
 expect "^browser: offer $tab answered NotNow \$" "escape didn't decline the card"
 expect "^browser: offer $tab gone\$" "declining the card left Chrome's offer open"
+
+# Edit › AutoFill, in the Mac's menu bar, the only one: ilo's group after Find, in place of the
+# system's, opens Chrome's dropdown at the field the page's focus is in, as a click in it does, and
+# Passwords… one with every login. With the page's focus off its fields, Settings › Passwords.
+if [ "$(uname)" = Darwin ]; then
+  send menubar Edit
+  edit='^browser: menu bar Edit: '
+  expect "$edit.*, Find › [^,]*, AutoFill › Contact…, AutoFill › Passwords…, AutoFill › Credit Card…" \
+    "Edit lacks ilo's AutoFill after Find: $(grep "$edit" "$log" | tail -1)"
+  [ "$(grep "$edit" "$log" | tail -1 | grep -o 'AutoFill ›' | wc -l)" -eq 3 ] ||
+    fail "Edit has the system's AutoFill too: $(grep "$edit" "$log" | tail -1)"
+  # Sets children to how many child windows the browser window has, Chrome's dropdown among them.
+  # In this shell, never in $(…), where send's count of the driver's steps would be lost.
+  count_children() {
+    send layout
+    children=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+      grep -c '^browser: layout child' || true)
+  }
+  # Waits for the browser window to have more child windows than $shown, or fails with $1.
+  dropdown_shown() {
+    for _ in $(seq 30); do
+      count_children
+      [ "$children" -gt "$shown" ] && return
+    done
+    fail "$1"
+  }
+  # Waits for Chrome's dropdown to close, after escape, or fails with $1.
+  dropdown_gone() {
+    send key escape
+    for _ in $(seq 30); do
+      count_children
+      [ "$children" = "$shown" ] && return
+    done
+    fail "$1"
+  }
+  go_from_bar "${site#http://}address.html"
+  expect "^browser: title $tab address\$" "the address page didn't load for Edit › AutoFill"
+  count_children
+  shown=$children
+  send click 600 60
+  dropdown_shown "a click in the address field showed no dropdown"
+  dropdown_gone "escape didn't close the dropdown the click showed"
+  send menu "AutoFill › Contact…"
+  expect "^browser: autofill $tab dropdown\$" "Edit › AutoFill › Contact… didn't find the focused field"
+  dropdown_shown "Edit › AutoFill › Contact… showed no dropdown at the focused field"
+  ../tools/window-screenshot.sh "$pid" "$out/autofill-menu.png" || fail "no window to capture"
+  send key down
+  expect "^browser: title $tab filled\$" "the dropdown Edit › AutoFill showed didn't offer the address"
+  dropdown_gone "escape didn't close the dropdown Edit › AutoFill showed"
+  send menu "AutoFill › Passwords…"
+  expect "^browser: autofill $tab dropdown\$" "Edit › AutoFill › Passwords… didn't find the field"
+  dropdown_shown "Edit › AutoFill › Passwords… showed no dropdown at the focused field"
+  dropdown_gone "escape didn't close the dropdown of logins"
+  # A click below the form takes the page's focus off its fields, which the core hears from the
+  # page after the click's done. On the page: the window's content is 700 tall and the page ends
+  # 10 above that, so a click at 700 lands on the window's edge, which leaves the field focused.
+  send click 600 600
+  expect "^browser: title $tab unfocused\$" "a click below the form left a field with the page's focus"
+  send menu "AutoFill › Credit Card…"
+  expect "^browser: autofill $tab no field\$" "Edit › AutoFill found a field after a click off them"
+  expect '^browser: settings [a-z]* Passwords$' \
+    "Edit › AutoFill with no field focused didn't show Settings' Passwords tab"
+  settings_drew Passwords
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings after Edit › AutoFill"
+fi
+# Settings' Passwords tab, which ⌘, shows again, lists the saved address under the logins, and its
+# Remove asks first, as a login's does, and removes it, which Settings hears. The card declined
+# isn't listed.
+# Settings says "autofill <profile>: …"; the core's "autofill <tab> no field" isn't its count.
+saved_autofill() { grep '^browser: autofill [0-9]*: ' "$log" | tail -1 | sed 's/^browser: autofill [0-9]*: //'; }
+send key , cmd
+expect '^browser: settings shown Passwords$' "⌘, didn't show Settings' Passwords tab again"
+settings_drew Passwords
+for _ in $(seq 100); do
+  [ "$(saved_autofill)" = "1 addresses, 0 cards" ] && break
+  sleep 0.1
+done
+[ "$(saved_autofill)" = "1 addresses, 0 cards" ] ||
+  fail "Settings didn't hear of the saved address alone: $(saved_autofill)"
+remove_at=$(drawn "remove autofill 0") || fail "Settings didn't list the saved address"
+../tools/window-screenshot.sh "$pid" "$out/settings-address.png" || fail "no window to capture"
+post clickkey $remove_at
+expect "^browser: $asks shown Remove the address for “.*”?\$" "Remove on the address didn't ask first"
+if [ "$asks" = dialog ]; then
+  expect '^browser: dialog settled$' "Settings' dialog didn't settle"
+  send key return
+else
+  send choose Remove
+fi
+expect '^browser: remove address [0-9]*$' "Remove in the dialog didn't remove the address"
+for _ in $(seq 100); do
+  [ "$(saved_autofill)" = "0 addresses, 0 cards" ] && break
+  sleep 0.1
+done
+[ "$(saved_autofill)" = "0 addresses, 0 cards" ] ||
+  fail "Settings didn't hear the address was removed: $(saved_autofill)"
+
+# A card return saves is listed too, its network and expiry over its name and never a digit of its
+# number, and its Remove asks first and removes it.
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings after removing the address"
+send click $page_point
+go_from_bar "${site#http://}card.html"
+expect "^browser: title $tab card\$" "the card page didn't load again"
+submit_form 'Grace Hopper' 5555555555554444 11 2031
+offered_to_save card
+send key return
+expect "^browser: offer $tab answered Accept \$" "return didn't save the card"
+expect "^browser: offer $tab gone\$" "saving the card left Chrome's offer open"
+send click $page_point
+send key , cmd
+expect '^browser: settings shown Passwords$' "⌘, didn't show Settings' Passwords tab with the card"
+settings_drew Passwords
+for _ in $(seq 100); do
+  [ "$(saved_autofill)" = "0 addresses, 1 cards" ] && break
+  sleep 0.1
+done
+[ "$(saved_autofill)" = "0 addresses, 1 cards" ] ||
+  fail "Settings didn't hear of the saved card: $(saved_autofill)"
+remove_at=$(drawn "remove autofill 0") || fail "Settings didn't list the saved card"
+../tools/window-screenshot.sh "$pid" "$out/settings-autofill.png" || fail "no window to capture"
+post clickkey $remove_at
+expect "^browser: $asks shown Remove the card “Grace Hopper”?\$" "Remove on the card didn't ask first"
+if [ "$asks" = dialog ]; then
+  expect '^browser: dialog settled$' "Settings' dialog didn't settle"
+  send key return
+else
+  send choose Remove
+fi
+expect '^browser: remove card [0-9]*$' "Remove didn't remove the card"
+for _ in $(seq 100); do
+  [ "$(saved_autofill)" = "0 addresses, 0 cards" ] && break
+  sleep 0.1
+done
+[ "$(saved_autofill)" = "0 addresses, 0 cards" ] ||
+  fail "Settings didn't hear the card was removed: $(saved_autofill)"
+
+# Save and fill addresses and Save and fill payment methods, switched off for the profile, keep a
+# new address and the card just removed from bringing an offer. The pages they post to loading,
+# and the command bar opening and closing, take longer than the core reporting an offer.
+click_in_sight "switch save and fill addresses"
+expect '^browser: save and fill addresses off$' "a click on Save and fill addresses didn't switch it off"
+click_in_sight "switch save and fill payment methods"
+expect '^browser: save and fill payment methods off$' \
+  "a click on Save and fill payment methods didn't switch it off"
+../tools/window-screenshot.sh "$pid" "$out/settings-autofill-off.png" || fail "no window to capture"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings after switching autofill off"
+send click $page_point
+go_from_bar "${site#http://}address.html"
+expect "^browser: title $tab address\$" "the address page didn't load with addresses off"
+off=$step
+submit_form 'Grace Hopper' '2 Check Street' Arlington VA 22201 'United States' grace@example.test
+expect "^browser: title $tab welcome\$" "the address didn't post with addresses off"
+go_from_bar "${site#http://}card.html"
+expect "^browser: title $tab card\$" "the card page didn't load with payment methods off"
+submit_form 'Grace Hopper' 5555555555554444 11 2031
+expect "^browser: title $tab welcome\$" "the card didn't post with payment methods off"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar"
+sed -n "/^browser: drive $off: /,\$p" "$log" | grep -q "^browser: offer $tab " &&
+  fail "an address or card brought an offer with Save and fill switched off"
 exec 3>&- 5>&-
 quit
 rm -rf "$scratch"
-echo "ok: a submitted login offers to save its password in a card 18 from the page's top right, through a resize; another tab closes it, and the key after the host brings it back; Japanese input composes in its username field and return commits it without saving; return saves the username as left, and the login page fills the saved password in, with a key that opens the Site Controls, and Chrome's dropdown fills it in again; the eye shows in the password field once one is typed, never for the one filled in, and goes with the field's focus; a changed password offers to update it, which escape declines; and Never answers on another site, whose Site Controls take it off Never; the first site's Site Controls name its login, All Passwords… lists it in Settings, where Remove asks and Cancel keeps it and Manage Passwords… opens Chrome's password manager page listing it, and the row's Remove asks in the dialog and removes it, which Settings hears; a sign-up form offers Chrome's strong password, which Choose Your Own leaves to the user and Use Strong Password fills in and saves, with no offer; and Settings' Offer to save passwords switched off keeps the next login from bringing an offer, and Save and fill addresses switches off and on; a form's address offers to save it in the card, return saves it and Chrome's dropdown then offers it, and a card's offer declines with escape. Windows: $out/password-offer.png, $out/password-key.png, $out/password-fill.png, $out/password-reveal.png, $out/password-offer-ime.png, $out/password-update.png, $out/site-controls-never.png, $out/site-controls-passwords.png, $out/settings-passwords.png, $out/password-manager.png, $out/password-remove.png, $out/password-generation.png, $out/settings-passwords-off.png, $out/address-offer.png, $out/address-fill.png, $out/card-offer.png"
+echo "ok: a submitted login offers to save its password in a card 18 from the page's top right, through a resize; another tab closes it, and the key after the host brings it back; Japanese input composes in its username field and return commits it without saving; return saves the username as left, and the login page fills the saved password in, with a key that opens the Site Controls, and Chrome's dropdown fills it in again; the eye shows in the password field once one is typed, never for the one filled in, and goes with the field's focus; a changed password offers to update it, which escape declines; and Never answers on another site, whose Site Controls take it off Never; the first site's Site Controls name its login, All Passwords… lists it in Settings, where Remove asks and Cancel keeps it and Manage Passwords… opens Chrome's password manager page listing it, and the row's Remove asks in the dialog and removes it, which Settings hears; a sign-up form offers Chrome's strong password, which Choose Your Own leaves to the user and Use Strong Password fills in and saves, with no offer; and Settings' Offer to save passwords switched off keeps the next login from bringing an offer, and Save and fill addresses switches off and on; a form's address offers to save it in the card, return saves it and Chrome's dropdown then offers it, and a card's offer declines with escape; on the Mac, Edit › AutoFill has ilo's items alone, after Find, whose Contact… and Passwords… open Chrome's dropdown at the focused field, and Credit Card… with none focused opens Settings › Passwords; Settings lists the address, and then a card return saved, and Remove asks first and removes each; and Save and fill addresses and payment methods switched off keep a new address and the card from bringing an offer. Windows: $out/password-offer.png, $out/password-key.png, $out/password-fill.png, $out/password-reveal.png, $out/password-offer-ime.png, $out/password-update.png, $out/site-controls-never.png, $out/site-controls-passwords.png, $out/settings-passwords.png, $out/password-manager.png, $out/password-remove.png, $out/password-generation.png, $out/settings-passwords-off.png, $out/address-offer.png, $out/address-fill.png, $out/card-offer.png, $out/settings-address.png, $out/settings-autofill.png, $out/settings-autofill-off.png, $out/autofill-menu.png (Mac)"

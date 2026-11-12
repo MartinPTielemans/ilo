@@ -16,7 +16,10 @@ const DOCTYPE: &str = "<!doctype netscape-bookmark-file-1>";
 /// folder are the bar. Pages that can't open here and folders left empty stay out.
 pub fn bookmarks(html: &str) -> Result<Vec<Node>, String> {
     let start = html.trim_start_matches('\u{feff}').trim_start();
-    if !start.get(..DOCTYPE.len()).is_some_and(|head| head.eq_ignore_ascii_case(DOCTYPE)) {
+    if !start
+        .get(..DOCTYPE.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(DOCTYPE))
+    {
         return Err("it isn't a bookmarks file a browser exported".into());
     }
     let mut heading = String::new();
@@ -55,7 +58,11 @@ pub fn bookmarks(html: &str) -> Result<Vec<Node>, String> {
             }
             "dl" => {
                 let (name, bar) = named.take().unwrap_or_default();
-                open.push(Folder { name, bar, children: Vec::new() });
+                open.push(Folder {
+                    name,
+                    bar,
+                    children: Vec::new(),
+                });
             }
             "/dl" => close(&mut open, &mut bar, &mut top),
             _ => {}
@@ -70,12 +77,13 @@ pub fn bookmarks(html: &str) -> Result<Vec<Node>, String> {
         "" => "Bookmarks".to_string(),
         heading => heading.to_string(),
     };
-    let (loose, folders): (Vec<Node>, Vec<Node>) =
-        top.into_iter().partition(|node| matches!(node, Node::Tab(_)));
+    let (loose, folders): (Vec<Node>, Vec<Node>) = top
+        .into_iter()
+        .partition(|node| matches!(node, Node::Tab(_)));
     let mut folders: Vec<(String, Vec<Node>)> = (folders.into_iter())
         .filter_map(|node| match node {
             Node::Folder { name, children } => Some((name, children)),
-            Node::Tab(_) => None,
+            Node::Tab(_) | Node::Split(_) => None,
         })
         .collect();
     let bar = match bar {
@@ -108,11 +116,12 @@ fn close(
     let in_top = open.len() == 1;
     match open.last_mut() {
         None => *top = Some(folder.children),
-        Some(_) if folder.bar && in_top && bar.is_none() => {
-            *bar = Some((name, folder.children))
-        }
+        Some(_) if folder.bar && in_top && bar.is_none() => *bar = Some((name, folder.children)),
         Some(_) if folder.children.is_empty() => {}
-        Some(parent) => parent.children.push(Node::Folder { name, children: folder.children }),
+        Some(parent) => parent.children.push(Node::Folder {
+            name,
+            children: folder.children,
+        }),
     }
 }
 
@@ -131,8 +140,14 @@ fn tag(rest: &str) -> Option<(String, &str, &str)> {
         false
     })?;
     let body = &inner[..end];
-    let split = body.find(|c: char| c.is_ascii_whitespace()).unwrap_or(body.len());
-    Some((body[..split].to_ascii_lowercase(), &body[split..], &inner[end + 1..]))
+    let split = body
+        .find(|c: char| c.is_ascii_whitespace())
+        .unwrap_or(body.len());
+    Some((
+        body[..split].to_ascii_lowercase(),
+        &body[split..],
+        &inner[end + 1..],
+    ))
 }
 
 /// The value of the attribute `name` among `attributes`, any case, quoted or not.
@@ -143,7 +158,9 @@ fn attribute(attributes: &str, name: &str) -> Option<String> {
         if rest.is_empty() {
             return None;
         }
-        let end = rest.find(|c: char| c == '=' || c.is_ascii_whitespace()).unwrap_or(rest.len());
+        let end = rest
+            .find(|c: char| c == '=' || c.is_ascii_whitespace())
+            .unwrap_or(rest.len());
         let key = &rest[..end];
         rest = rest[end..].trim_start();
         let Some(value) = rest.strip_prefix('=') else {
@@ -158,7 +175,9 @@ fn attribute(attributes: &str, name: &str) -> Option<String> {
                 (&inner[..end], inner.get(end + 1..).unwrap_or(""))
             }
             _ => {
-                let end = value.find(|c: char| c.is_ascii_whitespace()).unwrap_or(value.len());
+                let end = value
+                    .find(|c: char| c.is_ascii_whitespace())
+                    .unwrap_or(value.len());
                 (&value[..end], &value[end..])
             }
         };
@@ -187,7 +206,10 @@ fn unescape(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         rest = &rest[at..];
-        let reference = rest[1..].find(';').filter(|end| *end <= 10).map(|end| &rest[1..end + 1]);
+        let reference = rest[1..]
+            .find(';')
+            .filter(|end| *end <= 10)
+            .map(|end| &rest[1..end + 1]);
         let read = reference.and_then(|reference| match reference {
             "amp" => Some('&'),
             "lt" => Some('<'),

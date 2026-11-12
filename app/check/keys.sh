@@ -13,9 +13,12 @@
 # from the page or the UI, wait for the bar it opens, however late the page answers ⌘L, and land in
 # its field, a composition too, and a page that keeps ⌘F gets them after it. Japanese input composes
 # and commits in the page and in the command bar, where return and escape go to the input method
-# while it composes. The Edit menu's Undo, Redo and Select All reach the focused page. ⌘Y opens the
-# history page from the page and the UI. A page whose renderer crashes leaves the browser running,
-# and ⌘R loads it again. Settings › Shortcuts lists every command the user can give keys, and
+# while it composes. Korean composes a syllable at a time in the page, where backspace takes a
+# letter off and return commits and goes on, on the Mac and on Windows, and on the Mac in the bar,
+# where escape commits and closes it (#2457). The Edit menu's Undo, Redo and Select All reach the
+# focused page. ⌘Y opens the history page from the page and the UI. A page whose renderer crashes
+# leaves the browser running, and ⌘R loads it again. Settings › Shortcuts lists every command the
+# user can give keys, and
 # gives New Tab ⌃⌘T, which stays reserved and reaches
 # the UI from both sides, while ⌘T no longer runs it, and its ↺ gives ⌘T back. About ilo shows
 # Settings' About tab, with Settings key and with About already showing. The Shortcuts tab lists
@@ -127,10 +130,11 @@ sed -n "/^browser: drive $held: /,\$p" "$log" | grep -q '^browser: title [0-9]* 
   fail "a held escape's repeats went on to the page after it closed the command bar"
 send key f cmd
 expect '^browser: title [0-9]* page saw cmd-f$' "⌘F with the page focused didn't reach the page"
-# ⌘N from the page opens a window with no page, so its UI has the keyboard, and ⇧⌘W there closes
-# it.
+# ⌘N from the page opens a window with no page and its command bar, which escape closes, leaving
+# its UI the keyboard, and ⇧⌘W there closes it.
 page_shortcut n new-window
 expect '^browser: window opened [0-9]' "⌘N with the page focused didn't open a window"
+new_window_bar
 send state
 in_browser AccessKitSubclassOfGPUIView "in the window ⌘N opened"
 send key w cmd shift
@@ -142,6 +146,7 @@ send click $page_point
 in_browser RenderWidgetHostViewCocoa "before ⌘N opened a window for ⌘W"
 page_shortcut n new-window
 expect '^browser: window opened [0-9]' "⌘N with the page focused didn't open a window"
+new_window_bar
 send key w cmd
 expect '^browser: command close-tab via ui$' "⌘W with the UI focused didn't reach the UI"
 expect '^browser: window closed [0-9]' "⌘W in a window with no page didn't close it"
@@ -172,6 +177,7 @@ expect '^browser: command new-window via ui$' "⌘N with the UI focused didn't r
 expect '^browser: window opened [0-9]' "⌘N with the UI focused didn't open a window"
 first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
 # The driver counts windows in the order they opened, closed ones too.
 send window "$(grep -c '^browser: window opened ' "$log")"
 send click $(row 0)
@@ -184,6 +190,7 @@ expect '^browser: command close-window via page$' "⇧⌘W with the page focused
 expect "^browser: window closed $second\$" \
   "⇧⌘W with the page focused didn't close the window"
 expect "^browser: window $first shows $tab\$" "the first window didn't get its page back"
+ran_once close-window "one ⇧⌘W with the page focused"
 [ "$(grep -c "^browser: loaded $tab " "$log")" = 1 ] ||
   fail "the page loaded again as it moved"
 send window 1
@@ -194,15 +201,66 @@ grep -q '^browser: title [0-9]* page saw cmd-l$' "$log" || fail "⌘L with the p
 grep -q '^browser: command find via page$' "$log" && fail "the page kept ⌘F, but the UI ran it too"
 grep -q '^browser: command \(back\|forward\) via page$' "$log" && fail "⌘← or ⌘→ in the page's text field went back or forward"
 
-# The driver's scripted input method stands in for Japanese input, which is system-wide.
+# Korean composes in the page a syllable at a time, from a 2-set keyboard: one key can commit a
+# syllable and start the next, backspace takes a letter off the syllable composing, and return
+# commits and goes on to the page, which Japanese input keeps for itself (#2457): the field starts
+# a line, which the page's title shows as a space. On the Mac it's the driver's scripted Korean
+# input method, and on Windows Microsoft's Korean IME, where the runner has it (check-windows.yml
+# installs it for this run). It goes before Japanese: on the runner, a thread switching away from
+# Microsoft's Japanese IME never returns, a plain window's too (#2474).
+korean=
+if [ "$(uname)" = Linux ]; then
+  echo "skip: Korean in a page: the Linux driver types plain keys there; check/ime.sh covers it with fcitx5's Hangul engine."
+elif windows; then
+  powershell.exe -NoProfile -NonInteractive -Command "(Get-WinUserLanguageList).InputMethodTips" \
+    2> /dev/null | grep -qi '0412:' && korean=1
+  [ -n "$korean" ] || echo "skip: Korean in a page: the runner has no Korean IME."
+else
+  korean=1
+fi
+if [ -n "$korean" ]; then
+  send ime ko
+  send type gksr
+  expect '^browser: title [0-9]* value abcd한ㄱ$' \
+    "the page didn't commit 한 and compose ㄱ: $(grep '^browser: title' "$log" | tail -1)"
+  send type mf
+  expect '^browser: title [0-9]* value abcd한글$' \
+    "the page didn't compose 한글: $(grep '^browser: title' "$log" | tail -1)"
+  send key backspace
+  expect '^browser: title [0-9]* value abcd한그$' "backspace didn't take ㄹ off the syllable composing"
+  send type f
+  send key return
+  send ime off
+  send type x
+  expect '^browser: title [0-9]* value abcd한글 x$' \
+    "return didn't commit 한글 and go on to the page: $(grep '^browser: title' "$log" | tail -1)"
+  send key a cmd
+  send type abcd
+  expect '^browser: title [0-9]* value abcd$' "⌘A in the page didn't select all"
+fi
+
+# The driver's scripted input method stands in for Japanese input, which is system-wide. On Windows
+# it's Microsoft's Japanese IME itself, where the runner has it (check-windows.yml installs it for
+# this run): the driver's ime ja sends the keys through Windows' input queue, and "nihongo"
+# composes にほんご, as a user's typing does.
 composed=日本語
+ime="ime on" preedit=nihongo preedit_marked=0,7
+japanese=
+if windows; then
+  powershell.exe -NoProfile -NonInteractive -Command "(Get-WinUserLanguageList).InputMethodTips" \
+    2> /dev/null | grep -qi 03B5835F-F03C-411B-9CE2-AA23E1171E36 && japanese=1
+  [ -z "$japanese" ] || { ime="ime ja"; preedit=にほんご; preedit_marked=0,4; }
+fi
 if [ "$(uname)" = Linux ]; then
   echo "skip: composing in a page: the Linux driver types plain keys there; check/ime.sh covers it with a real input method."
   composed=
+elif windows && [ -z "$japanese" ]; then
+  echo "skip: composing in a page: the runner has no Japanese IME, and the Windows driver's own input method composes in the UI's fields alone."
+  composed=
 else
-  send ime on
+  send $ime
   send type nihongo
-  expect '^browser: title [0-9]* value abcdnihongo$' "the page didn't show the composition"
+  expect "^browser: title [0-9]* value abcd$preedit\$" "the page didn't show the composition"
   send key space
   expect '^browser: title [0-9]* value abcd日本語$' "the page didn't show the conversion"
   send key return
@@ -251,16 +309,39 @@ for shortcut in t l; do
 done
 if [ "$(uname)" = Linux ]; then
   echo "skip: composing right after ⌘L: the Linux driver types plain keys in a page."
+elif windows && [ -z "$japanese" ]; then
+  echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
+elif windows; then
+  # The host holds the keys typed until the bar has the keyboard (host.cc's HoldKeys), but
+  # Microsoft's IME composes them in the page before the hold sees them, and a repost of a key
+  # passes the IME by. TSF's keystroke manager doesn't hand held keys to it in the bar either
+  # (#1784).
+  echo "skip: composing right after Ctrl+L: Microsoft's Japanese IME composes in the page the keys the host holds for the bar (#1784)."
 else
-  send ime on
+  send $ime
   typed_after l nihongo
-  expect '^browser: command bar drew "nihongo"$' \
+  expect "^browser: command bar drew \"$preedit\"\$" \
     "a composition typed right after ⌘L didn't go to the command bar: $(drew 'command bar')"
   send state
-  [ "$marked" = 0,7 ] || fail "the command bar didn't take all of the composition: marked $marked"
+  [ "$marked" = "$preedit_marked" ] || fail "the command bar didn't take all of the composition: marked $marked"
   send key escape
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar"
+  send ime off
+  in_browser RenderWidgetHostViewCocoa "after the command bar closed"
+fi
+# Korean right after ⌘L: the bar composes 안녕하세요, its 요 still composing, and one escape
+# commits it and closes the bar, as a Korean input method passes the key on. Not on Windows, where
+# the IME composes in the page the keys the host holds for the bar (#1784).
+if [ "$(uname)" != Linux ] && ! windows; then
+  send ime ko
+  typed_after l dkssudgktpdy
+  expect '^browser: command bar drew "안녕하세요"$' \
+    "Korean typed right after ⌘L didn't compose in the command bar: $(drew 'command bar')"
+  send state
+  [ "$marked" = 4,1 ] || fail "the command bar wasn't composing 요 alone: marked $marked"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't commit the Korean and close the command bar"
   send ime off
   in_browser RenderWidgetHostViewCocoa "after the command bar closed"
 fi
@@ -324,6 +405,9 @@ expect "^browser: loaded $tab chrome://history/\$" \
   "⌘Y with the page focused didn't open the history page"
 send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the history tab"
+# The click waits for the tab ⌘W leaves in front to show, as no hand clicks in the moment before
+# it does: a page shown after a click in the UI would take the keyboard from it (#1209).
+expect '^browser: window [0-9]* shows [0-9]*$' "⌘W didn't show the tab before the history tab"
 send click $sidebar_point
 send key y cmd
 expect '^browser: command view-history via ui$' "⌘Y with the UI focused didn't reach the UI"
@@ -337,29 +421,29 @@ expect "^browser: today $before\$" "⌘W didn't close the history tab"
 send click $page_point
 in_browser RenderWidgetHostViewCocoa "after the history tab closed"
 
-# Settings › Shortcuts' search, over its boxes, finds a command by the words of its name or by
-# its keys (#682). Under it, New Tab comes first, its keys in a chip at the row's right, 56 wide
+# Settings' search, at the column's top, finds a command by the words of its name or by its keys
+# (#682, #1636). Under it, New Tab comes first, its keys in a chip at the row's right, 56 wide
 # and 10 in from the box, and ↺, once it has other keys, 6 before the chip. A click on the chip
 # records the next keys pressed.
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-send clickkey 401 60
+send clickkey $(drawn "toolbar Shortcuts")
 expect '^browser: settings tab Shortcuts$' "a click on Shortcuts didn't show its tab"
 settings_drew Shortcuts
-send clickkey 300 120
+send clickkey $(drawn "search")
 send type new tab
 # Paste URL as New Tab has the words too, under it.
-expect '^browser: shortcuts search "new tab" finds New Tab, Paste URL as New Tab$' \
+expect '^browser: settings search "new tab" finds New Tab, Paste URL as New Tab$' \
   "the search didn't find New Tab by name"
 send key a cmd
 send type cmd t
-expect '^browser: shortcuts search "cmd t" finds New Tab, Restore Last Closed Tab$' \
+expect '^browser: settings search "cmd t" finds New Tab, Restore Last Closed Tab$' \
   "the search didn't find ⌘T and ⇧⌘T by their keys"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-search.png" || fail "no window to capture"
 send key a cmd
 send type copy
-expect '^browser: shortcuts search "copy" finds ' "the search for copy didn't end"
+expect '^browser: settings search "copy" finds ' "the search for copy didn't end"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-rows.png" || fail "no window to capture"
 # Every command the user can give keys has a row (#1062), these among them.
 for name in "Duplicate Current Tab" "Favorite Tab" "Rename Current Tab" Share "Capture Full Page" \
@@ -370,22 +454,157 @@ for name in "Duplicate Current Tab" "Favorite Tab" "Rename Current Tab" Share "C
   query=$(printf '%s' "$name" | tr 'A-Z' 'a-z' | sed "s/[^a-z. ].*//; s/ *\$//")
   send key a cmd
   send type $query
-  expect "^browser: shortcuts search \"$query\" finds " "the search for $name didn't end"
-  grep "^browser: shortcuts search \"$query\" finds " "$log" | tail -1 |
+  expect "^browser: settings search \"$query\" finds " "the search for $name didn't end"
+  grep "^browser: settings search \"$query\" finds " "$log" | tail -1 |
     grep -q -e "finds $name\$" -e "finds $name, " -e ", $name\$" -e ", $name, " ||
     fail "Settings › Shortcuts has no row $name"
 done
 send key a cmd
 send key backspace
-expect '^browser: shortcuts search cleared$' "⌫ didn't clear the search"
-send clickkey 581 203
+expect '^browser: settings search cleared$' "⌫ didn't clear the search"
+# Settings from the keyboard alone (#1526). ⌘, with the page focused opens it holding the keyboard,
+# where typing starts the search; ⇥ goes from there to the switch found, and Space flips it and back. ⌘, with
+# the UI focused, then ⇥ to a pop-up found: Return opens its menu, ⎋ closes the menu and nothing
+# else, and Return, ↓ and Return choose from it, then the way back.
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send click $page_point
+in_browser RenderWidgetHostViewCocoa "before ⌘, from the page"
+send key , cmd
+expect '^browser: settings shown ' "⌘, with the page focused didn't show Settings"
+settings_drew
+send type peek
+expect '^browser: settings search "peek" finds Peek$' "typing once ⌘, opened Settings didn't search"
+send key tab
+../tools/window-screenshot.sh "$pid" "$out/settings-focus-ring.png" || fail "no window to capture"
+send key space
+expect '^browser: link previews off$' "Space on Peek's switch, reached by ⇥, didn't turn it off"
+send key space
+expect '^browser: link previews on$' "Space on Peek's switch didn't turn it on again"
+send key escape
+expect '^browser: settings search cleared$' "⎋ didn't empty the search"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send click $sidebar_point
+in_browser AccessKitSubclassOfGPUIView "before ⌘, from the UI"
+send key , cmd
+expect '^browser: settings shown ' "⌘, with the UI focused didn't show Settings"
+settings_drew
+send type page zoom
+expect '^browser: settings search "page zoom" finds Page zoom$' \
+  "typing once ⌘, opened Settings didn't find Page zoom"
+send key tab
+send key return
+expect '^browser: menu shown ' "Return on Page zoom's pop-up, reached by ⇥, didn't open its menu"
+../tools/window-screenshot.sh "$pid" "$out/settings-focus-popup.png" || fail "no window to capture"
+send key escape
+expect '^browser: menu closed$' "⎋ didn't close the pop-up's menu"
+none_since '^browser: settings \(hidden\|search cleared\)$' || fail "⎋ in the pop-up's menu went on to Settings"
+send key return
+expect '^browser: menu shown ' "Return didn't open the pop-up's menu again"
+send key down
+send key return
+expect '^browser: page zoom 110%$' "↓ and Return in the pop-up's menu didn't choose 110%"
+send key return
+expect '^browser: menu shown ' "Return didn't open the pop-up's menu a third time"
+send key up
+send key return
+expect '^browser: page zoom 100% (default)$' "↑ and Return didn't choose the default back"
+send key escape
+expect '^browser: settings search cleared$' "⎋ didn't empty the search"
+# The command bar finds settings too (#1636), by what Settings' search reads: "peek" in ⌘T lists
+# Peek — Settings, and ↩ on it opens Settings › Features at the row, which flashes once.
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type peek
+expect '^browser: command bar settings "peek": Peek — Settings$' "⌘T didn't list Peek — Settings"
+for _ in 1 2 3 4 5; do
+  send key down
+  logged '^browser: command bar selected Peek — Settings$' && break
+done
+logged '^browser: command bar selected Peek — Settings$' || fail "↓ didn't reach Peek — Settings"
+../tools/window-screenshot.sh "$pid" "$out/command-bar-setting.png" || fail "no window to capture"
+send key return
+expect '^browser: command bar shows setting Features › Peek$' "↩ on Peek — Settings didn't open it"
+expect '^browser: settings found Features › Peek$' "Settings didn't show Features at Peek"
+settings_drew Features
+../tools/window-screenshot.sh "$pid" "$out/settings-from-bar.png" || fail "no window to capture"
+grep -q '^browser: settings index [0-9]* rows in ' "$log" || fail "the bar didn't read Settings' index"
+send clickkey $(drawn "toolbar Shortcuts")
+settings_drew Shortcuts
+send clickkey $(drawn "search")
+# It reads every section's rows: "archive" finds five in three sections, live under their names,
+# and the column dims the rest. Esc empties the field, ⌘F takes the keyboard back to it, and a
+# click on Features' name shows Features at its row.
+send key a cmd
+send type archive
+found='Archive Today tabs after, Archive windows left unused after, Archive Tab, View Archive, Clear Archive'
+expect "^browser: settings search \"archive\" finds $found\$" \
+  "the search for archive didn't find its five rows: $(grep '"archive" finds' "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/settings-search.png" || fail "no window to capture"
+send key escape
+expect '^browser: settings search cleared$' "Esc didn't empty the search"
+send key f cmd
+send type archive
+expect "^browser: settings search \"archive\" finds $found\$" "⌘F didn't search again"
+click_in_sight "found Features Archive windows left unused after"
+expect '^browser: settings found Features › Archive windows left unused after$' \
+  "a click on Features' name didn't show its row"
+settings_drew Features
+../tools/window-screenshot.sh "$pid" "$out/settings-found.png" || fail "no window to capture"
+send clickkey $(drawn "toolbar Shortcuts")
+settings_drew Shortcuts
+# Settings › Agents' Tasks from the command bar (#1636), under Let agents use the browser while
+# agents are on: on, ⇥ in ⌘T makes what's typed a task; off, it doesn't, and agents stay on.
+# Agents go off again after.
+send clickkey $(drawn "toolbar Agents")
+settings_drew Agents
+click_in_sight "switch agents"
+expect '^browser: agents on$' "a click on Let agents use the browser didn't turn agents on"
+tasks_switch=$(drawn "switch agent tasks") || fail "Tasks from the command bar didn't show with agents on"
+../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-on.png" || fail "no window to capture"
+send clickkey $tasks_switch
+expect '^browser: agent tasks off$' "a click on Tasks from the command bar didn't turn tasks off"
+../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-off.png" || fail "no window to capture"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type summarise this
+send key tab
+none_while '^browser: command bar asks an agent$' || fail "⇥ made a task with tasks off"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar"
+send menu Settings…
+expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
+settings_drew Agents
+click_in_sight "switch agent tasks"
+expect '^browser: agent tasks on$' "a click on Tasks from the command bar didn't turn tasks on"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type summarise this
+send key tab
+expect '^browser: command bar asks an agent$' "⇥ didn't make a task with tasks on"
+send key escape
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar from the ask"
+send menu Settings…
+expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
+settings_drew Agents
+click_in_sight "switch agents"
+expect '^browser: agents off$' "a click on Let agents use the browser didn't turn agents off"
+send clickkey $(drawn "toolbar Shortcuts")
+settings_drew Shortcuts
+click_in_sight "shortcut new-tab"
 expect '^browser: shortcut recording new-tab$' "a click on New Tab's keys didn't record them"
 send key t cmd ctrl
 # Off the Mac ⌃ presses Alt, as ⌥ does (docs/ux-spec.md › Keyboard).
 new_tab_key=ctrl-cmd-t
-if [ "$(uname)" = Linux ]; then
-  new_tab_key=alt-cmd-t
-fi
+[ "$(uname)" = Darwin ] || new_tab_key=alt-cmd-t
 expect "^browser: shortcut new-tab $new_tab_key\$" "⌃⌘T didn't become New Tab's key"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts.png" || fail "no window to capture"
 send key w cmd
@@ -408,10 +627,12 @@ expect '^browser: title [0-9]* page saw cmd-t$' "⌘T with the page focused didn
 none_since '^browser: command new-tab' || fail "⌘T with the page focused still ran New Tab"
 send click $sidebar_point
 in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"
+cmd_t=$((step + 1))
 send key t cmd
-none_since '^browser: command new-tab' || fail "⌘T with the UI focused still ran New Tab"
 send key t cmd ctrl
 expect '^browser: command new-tab via ui$' "⌃⌘T with the UI focused didn't reach the UI"
+[ "$(since "$cmd_t" | grep -c '^browser: command new-tab')" = 1 ] ||
+  fail "⌘T with the UI focused still ran New Tab"
 expect '^browser: command bar shown$' "⌃⌘T with the UI focused didn't open the command bar"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
@@ -420,7 +641,10 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey 537 203
+# Where the app drew it: its place depends on how wide the keys' chip beside it is, ⌃⌘T on the Mac
+# and Ctrl+Alt+T elsewhere.
+restore=$(drawn "restore new-tab") || fail "Settings didn't draw New Tab's ↺"
+send clickkey $restore
 expect '^browser: shortcut new-tab cmd-t$' "↺ didn't give New Tab ⌘T back"
 # The app menu's About opens Settings on its About tab: the version, the engine's and the credits.
 # Settings has the keyboard from the click on ↺, so the menu's command runs inside its window's
@@ -451,32 +675,31 @@ in_browser RenderWidgetHostViewCocoa "after the command bar closed"
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-send clickkey 401 60
+send clickkey $(drawn "toolbar Shortcuts")
 expect '^browser: settings tab Shortcuts$' "a click on Shortcuts didn't show its tab"
 settings_drew Shortcuts
-send clickkey 300 120
+send clickkey $(drawn "search")
 send type sidebar
-expect '^browser: shortcuts search "sidebar" finds ' "the search for sidebar didn't end"
+expect '^browser: settings search "sidebar" finds ' "the search for sidebar didn't end"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-sidebar.png" || fail "no window to capture"
-found='Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar'
-grep -q "^browser: shortcuts search \"sidebar\" finds $found\$" "$log" ||
+found='Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar, Restore Earlier Sidebar'
+# Tabs & Sidebar's hidden sidebar row comes first, before the commands.
+grep -q "^browser: settings search \"sidebar\" finds \(.*, \)\{0,1\}$found\$" "$log" ||
   fail "the search didn't find the sidebar's commands: $(grep '"sidebar" finds' "$log" | tail -1)"
 send key a cmd
 send type pinned tabs
-expect '^browser: shortcuts search "pinned tabs" finds Collapse Pinned Tabs, Expand Pinned Tabs$' \
+expect '^browser: settings search "pinned tabs" finds Collapse Pinned Tabs, Expand Pinned Tabs$' \
   "the search didn't find Collapse and Expand Pinned Tabs"
 send key a cmd
 send type focus sidebar
-expect '^browser: shortcuts search "focus sidebar" finds Focus Sidebar$' \
+expect '^browser: settings search "focus sidebar" finds Focus Sidebar$' \
   "the search didn't find Focus Sidebar"
-send clickkey 581 203
+click_in_sight "shortcut focus-sidebar"
 expect '^browser: shortcut recording focus-sidebar$' \
   "a click on Focus Sidebar's keys didn't record them"
 send key k cmd ctrl
 sidebar_key=ctrl-cmd-k
-if [ "$(uname)" = Linux ]; then
-  sidebar_key=alt-cmd-k
-fi
+[ "$(uname)" = Darwin ] || sidebar_key=alt-cmd-k
 expect "^browser: shortcut focus-sidebar $sidebar_key\$" "⌃⌘K didn't become Focus Sidebar's key"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -490,14 +713,14 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey 300 120
+send clickkey $(drawn "search")
 send key a cmd
 send type focus sidebar
-expect '^browser: shortcuts search "focus sidebar" finds Focus Sidebar$' \
+expect '^browser: settings search "focus sidebar" finds Focus Sidebar$' \
   "the search didn't find Focus Sidebar again"
 # Restore Defaults, under the one row found, where ↺'s place follows its chip's width, which is
 # the key's name's off the Mac. New Tab has its default already.
-send clickkey 126 246
+click_in_sight "restore shortcuts"
 expect '^browser: shortcuts restored$' "a click on Restore Defaults didn't restore the keys"
 expect '^browser: shortcut focus-sidebar f6$' \
   "Restore Defaults didn't give Focus Sidebar F6 back"
@@ -529,10 +752,10 @@ prefer() {
   send menu Settings…
   expect '^browser: settings shown Shortcuts$' \
     "Settings… didn't show the Shortcuts tab it showed last"
-  send clickkey 300 120
+  send clickkey $(drawn "search")
   send key a cmd
   send type find
-  expect '^browser: shortcuts search "find" finds \(.*, \)\{0,1\}Find\(, .*\)\{0,1\}$' \
+  expect '^browser: settings search "find" finds \(.*, \)\{0,1\}Find\(, .*\)\{0,1\}$' \
     "the search didn't find Find"
   at=$(drawn "shortcut find") || fail "Find's keys weren't drawn"
   post rightclickkey $at
@@ -566,28 +789,48 @@ expect '^browser: title [0-9]* page saw cmd-f$' "the page didn't get ⌘F first 
 
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar"
-send ime on
+send $ime
 send type nihongo
-[ "$marked" = 0,7 ] || fail "the command bar didn't take the composition: marked $marked"
+[ "$marked" = "$preedit_marked" ] || fail "the command bar didn't take the composition: marked $marked"
+[ -z "$japanese" ] || ../tools/window-screenshot.sh "$pid" "$out/ime-composing.png" ||
+  fail "no window to capture"
 send key escape
+# Microsoft's IME shows its predictions as it composes, and its first escape closes them, the
+# second the composition.
+[ "$marked" = none ] || [ -z "$japanese" ] || send key escape
 none_since '^browser: command bar hidden$' || fail "escape while composing closed the command bar"
 [ "$marked" = none ] || fail "escape didn't cancel the composition: marked $marked"
 send type nihongo
 send key space
 [ "$marked" = 0,3 ] || fail "the command bar didn't take the conversion: marked $marked"
 ../tools/window-screenshot.sh "$pid" "$out/ime.png" || fail "no window to capture"
+committed=$((step + 1))
 send key return
-none_since '^browser: command bar typed' || fail "return while composing went somewhere"
 [ "$marked" = none ] || fail "return didn't commit the composition: marked $marked"
 send ime off
 send type .invalid
 send key return
 expect '^browser: command bar typed 日本語.invalid$' "the command bar didn't keep the committed text: $(grep '^browser: command bar typed' "$log" | tail -1)"
-# ⌘L goes to the page first, and a key the page being replaced hasn't answered leaves with it.
-expect '^browser: loaded [0-9]* https://duckduckgo.com/' "the search for the committed text didn't load"
+searching '%E6%97%A5%E6%9C%AC%E8%AA%9E\.invalid' \
+  "the committed text didn't start a search for it: $(grep '^browser: page ' "$log" | tail -1)"
+[ "$(since "$committed" | grep -c '^browser: command bar typed')" = 1 ] ||
+  fail "return while composing went somewhere"
 
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+# ⌘L from the page the search $searched started in. ⌘L goes to the page first, and a key the page
+# being replaced hasn't answered leaves with it: DuckDuckGo's page replaces it once DuckDuckGo
+# answers, if it does (#1875). So a ⌘L that opened nothing while that page came, its title logged,
+# is pressed again, and one that opened nothing with no page coming fails.
+edit_url_over_search() {
+  send key l cmd
+  for _ in $(seq 100); do
+    logged '^browser: command bar shown$' && return 0
+    sleep 0.1
+  done
+  logged "^browser: title $searched " || fail "⌘L didn't open the command bar"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar, again once the search's page came"
+}
+edit_url_over_search
 send type example.com
 ../tools/window-screenshot.sh "$pid" "$out/command-bar.png" || fail "no window to capture"
 send key return
@@ -596,14 +839,19 @@ expect '^browser: command bar hidden$' "going somewhere didn't close the command
 expect '^browser: loaded [0-9]* https://example.com/$' "the page didn't load what was typed in the command bar"
 send state
 in_browser RenderWidgetHostViewCocoa "after the command bar loaded a page"
-# Words that name no page are a search, with DuckDuckGo until the user picks an engine.
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+# Words that name no page are a search, with DuckDuckGo until the user picks an engine. In a tab of
+# its own, which ⌘W closes: the steps below click the page the first tab shows, which DuckDuckGo's
+# results would put a link of theirs under (#1875).
+searched_from=$(today)
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type arc browser
 send key return
 expect '^browser: command bar go https://duckduckgo.com/?q=arc+browser$' "words in the command bar didn't search: $(grep '^browser: command bar go' "$log" | tail -1)"
-expect '^browser: loaded [0-9]* https://duckduckgo.com/?q=arc+browser' "the search didn't load"
+searching 'arc+browser' "the search didn't start: $(grep '^browser: page ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/search.png" || fail "no window to capture"
+send key w cmd
+expect "^browser: today $searched_from\$" "⌘W didn't close the search's tab"
 # A .new address typed names what it makes, first, and ↩ opens it in a new tab though ⌘L's bar
 # edits the tab shown (#698). docs.new sends a browser that isn't signed in to Google's sign-in.
 before=$(today)
@@ -682,12 +930,12 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey 300 120
+send clickkey $(drawn "search")
 send key a cmd
 send type go to space
-expect '^browser: shortcuts search "go to space" finds Go to Space 1, Go to Space 2, ' \
+expect '^browser: settings search "go to space" finds Go to Space 1, Go to Space 2, ' \
   "the search didn't find Go to Space 1 first"
-send clickkey 581 203
+click_in_sight "shortcut select-space-1"
 expect '^browser: shortcut recording select-space-1$' \
   "a click on Go to Space 1's keys didn't record them"
 send key 1 cmd ctrl
@@ -695,9 +943,7 @@ send key 1 cmd ctrl
 # keymap gives back is named as the Mac's on each.
 space_key=ctrl-cmd-1
 first_key=ctrl-1
-if [ "$(uname)" = Linux ]; then
-  space_key=alt-cmd-1
-fi
+[ "$(uname)" = Darwin ] || space_key=alt-cmd-1
 expect "^browser: shortcut select-space-1 $space_key\$" "⌃⌘1 didn't become Go to Space 1's key"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -745,13 +991,13 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey 300 120
+send clickkey $(drawn "search")
 send key a cmd
 send type include favorites
 # The row names the keys as its OS does, Ctrl+1–Ctrl+8 off the Mac.
 numbered='⌘1–⌘8'
 [ "$(uname)" = Darwin ] || numbered='Ctrl+1–Ctrl+8'
-expect "^browser: shortcuts search \"include favorites\" finds Include Favorites in $numbered\$" \
+expect "^browser: settings search \"include favorites\" finds Include Favorites in $numbered\$" \
   "the search didn't find Include Favorites in $numbered"
 at=$(drawn "switch favorites numbered") || fail "Include Favorites has no switch"
 send clickkey $at
@@ -759,10 +1005,10 @@ expect '^browser: favorites numbered off$' "a click on Include Favorites didn't 
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-favorites.png" || fail "no window to capture"
 # Last Tab Goes to the Ninth Tab makes ⌘9 the ninth tab, counted as ⌘1–⌘8 count (#682). The
 # switch took the keyboard from the search field.
-send clickkey 300 120
+send clickkey $(drawn "search")
 send key a cmd
 send type ninth
-expect '^browser: shortcuts search "ninth" finds Last Tab Goes to the Ninth Tab$' \
+expect '^browser: settings search "ninth" finds Last Tab Goes to the Ninth Tab$' \
   "the search didn't find Last Tab Goes to the Ninth Tab"
 at=$(drawn "switch last tab ninth") || fail "Last Tab Goes to the Ninth Tab has no switch"
 send clickkey $at
@@ -790,7 +1036,7 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey 126 246
+click_in_sight "restore shortcuts"
 expect '^browser: shortcuts restored$' "a click on Restore Defaults didn't restore the keys"
 expect "^browser: shortcut select-space-1 $first_key\$" \
   "Restore Defaults didn't give Go to Space 1 ⌃1"
@@ -833,5 +1079,5 @@ exec 3>&-
 await '^browser: warn before quitting off$' ||
   fail "Quit, and don't ask again didn't turn the warning off"
 exited
-echo "ok: focus follows clicks, typing reaches the focused side, reserved shortcuts skip the page and the others reach it first, ⌘Q asks first in the dialog, and escape keeps the browser and Quit, and don't ask again quits, the command bar takes the keyboard and gives it back, a held escape that closes it doesn't repeat into the page, keys typed right after ⌘T, ⌘L and ⌘F land in the bar they open from both sides, a composition too, and reach a page that keeps ⌘F after it, with New Tab's plate while ⌘T's is open, goes to a host over https and searches for words, names docs.new typed and opens it in a new tab, and a page it opens in a new tab has the keyboard, its autofocused field and the browser's shortcuts too, Japanese input composes in both, and the Edit menu undoes, redoes and selects in the page, ⌘Y opens the history page from both sides, Settings › Shortcuts' search finds New Tab by name and ⌘T's rows by their keys, and the rows of the commands it lacked, and New Tab rebound to ⌃⌘T there stays reserved from both sides while ⌘T runs nothing, until ↺ gives it back, About ilo shows Settings' About tab with Settings key and again with About showing, Shortcuts lists the sidebar's commands and Focus Sidebar given ⌃⌘K there gives the sidebar the keyboard from the page until escape, Go to Space 1 given ⌃⌘1 there shows the first Space while ⌃1 runs nothing, Include Favorites in ⌘1–⌘8 off has ⌘1 show the first tab that isn't a favorite, Last Tab Goes to the Ninth Tab has ⌘9 count the ninth tab and Restore Defaults has it show the last again, a second ⌘F at once runs Find after the page kept the first, Prefer ilo on Find from a right-click on its keys has ⌘F run it before the page sees it and Prefer Websites gives the page it first again, and a killed page's renderer leaves the browser running and ⌘R loads the page again. Windows: $out/quit.png, $out/command-bar.png, $out/search.png, $out/new-document.png, $out/ime.png, $out/shortcuts-search.png, $out/shortcuts-rows.png, $out/shortcuts.png, $out/about.png, $out/shortcuts-sidebar.png, $out/shortcuts-favorites.png, $out/shortcuts-prefer.png"
+echo "ok: focus follows clicks, typing reaches the focused side, reserved shortcuts skip the page and the others reach it first, ⌘Q asks first in the dialog, and escape keeps the browser and Quit, and don't ask again quits, the command bar takes the keyboard and gives it back, a held escape that closes it doesn't repeat into the page, keys typed right after ⌘T, ⌘L and ⌘F land in the bar they open from both sides, a composition too, and reach a page that keeps ⌘F after it, with New Tab's plate while ⌘T's is open, goes to a host over https and searches for words, names docs.new typed and opens it in a new tab, and a page it opens in a new tab has the keyboard, its autofocused field and the browser's shortcuts too, Japanese input composes in both, on the Mac Korean composes a syllable at a time in both, and on Windows in the page, and the Edit menu undoes, redoes and selects in the page, ⌘Y opens the history page from both sides, Settings › Shortcuts' search finds New Tab by name and ⌘T's rows by their keys, and the rows of the commands it lacked, and New Tab rebound to ⌃⌘T there stays reserved from both sides while ⌘T runs nothing, until ↺ gives it back, About ilo shows Settings' About tab with Settings key and again with About showing, Shortcuts lists the sidebar's commands and Focus Sidebar given ⌃⌘K there gives the sidebar the keyboard from the page until escape, Go to Space 1 given ⌃⌘1 there shows the first Space while ⌃1 runs nothing, Include Favorites in ⌘1–⌘8 off has ⌘1 show the first tab that isn't a favorite, Last Tab Goes to the Ninth Tab has ⌘9 count the ninth tab and Restore Defaults has it show the last again, a second ⌘F at once runs Find after the page kept the first, Prefer ilo on Find from a right-click on its keys has ⌘F run it before the page sees it and Prefer Websites gives the page it first again, and a killed page's renderer leaves the browser running and ⌘R loads the page again. Windows: $out/quit.png, $out/command-bar.png, $out/search.png, $out/new-document.png, $out/ime.png, $out/shortcuts-search.png, $out/shortcuts-rows.png, $out/shortcuts.png, $out/about.png, $out/shortcuts-sidebar.png, $out/shortcuts-favorites.png, $out/shortcuts-prefer.png"
 echo "$launch_bar"

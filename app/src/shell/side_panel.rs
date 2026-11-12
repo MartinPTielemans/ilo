@@ -10,14 +10,14 @@ use gpui::{
 };
 
 use super::{
-    CARD_INSET, MenuAction, MenuEntry, NAV, NAV_RADIUS, Shell, TITLE,
-    URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, card, panes::page_frame,
+    CARD_INSET, MenuAction, MenuEntry, NAV, NAV_RADIUS, Shell, TITLE, URL_BUTTON_GLYPH,
+    URL_BUTTON_INSET, URL_BUTTON_SIZE, card, panes::page_frame,
 };
 
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
-use crate::tokens::shell::side_panel::PANEL_WIDTH;
-use crate::tokens::shell::side_panel::PANEL_MIN;
 use crate::tokens::shell::side_panel::PANEL_MAX;
+use crate::tokens::shell::side_panel::PANEL_MIN;
+use crate::tokens::shell::side_panel::PANEL_WIDTH;
 /// The header over the panel's page, holding a button's height.
 const HEADER: f32 = URL_BUTTON_SIZE + 2. * URL_BUTTON_INSET;
 use crate::tokens::shell::side_panel::HEADER_ICON;
@@ -57,7 +57,9 @@ impl Shell {
 
     /// Whether extension `id`'s side panel is the one shown.
     pub(super) fn side_panel_shown(&self, id: &str) -> bool {
-        self.side_panel.as_ref().is_some_and(|panel| panel.extension == id)
+        self.side_panel
+            .as_ref()
+            .is_some_and(|panel| panel.extension == id)
     }
 
     /// The card in a window whose content is `viewport`, and its panel's card if one shows. A page
@@ -68,6 +70,9 @@ impl Shell {
     ) -> (Bounds<Pixels>, Option<Bounds<Pixels>>) {
         let card_left = self.card_left();
         let card = page_frame(viewport, card_left, self.card_push());
+        // On the right, the card and its panel are today's mirrored, so the panel stays between
+        // the page and the sidebar.
+        let card = self.little_card(super::sidebar::mirrored(self.right, viewport.width, card));
         match self.side_panel.is_some() && card_left != 0. {
             true => {
                 let (page, panel) = split_card(card, panel_width(self.side_panel_width));
@@ -87,7 +92,8 @@ impl Shell {
         let frame = self.side_panel_page(self.viewport);
         if self.side_panel_laid != Some(frame) {
             self.side_panel_laid = Some(frame);
-            self.browser.lay_out_side_panel(frame.unwrap_or_default(), cx);
+            self.browser
+                .lay_out_side_panel(frame.unwrap_or_default(), cx);
             if let (_, Some(panel)) = self.card_frames(self.viewport) {
                 // check.sh reads this line, to find the header's buttons and the edge.
                 log!(
@@ -118,7 +124,12 @@ impl Shell {
                 .rounded(px(NAV_RADIUS))
                 .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
                 .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
-                .child(svg().path(icon).size(px(URL_BUTTON_GLYPH)).text_color(self.palette.glyph(NAV)))
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(URL_BUTTON_GLYPH))
+                        .text_color(self.palette.glyph(NAV)),
+                )
         };
         let header = div()
             .h(px(HEADER))
@@ -128,7 +139,10 @@ impl Shell {
             .pl(px(CARD_INSET))
             .pr(px(URL_BUTTON_INSET))
             .children(panel.icon.clone().map(|icon| {
-                img(icon).flex_none().size(px(HEADER_ICON)).mr(px(CARD_INSET - URL_BUTTON_INSET))
+                img(icon)
+                    .flex_none()
+                    .size(px(HEADER_ICON))
+                    .mr(px(CARD_INSET - URL_BUTTON_INSET))
             }))
             .child(
                 div()
@@ -139,15 +153,17 @@ impl Shell {
                     .text_color(self.palette.text(TITLE))
                     .child(panel.name.clone()),
             )
-            .child(button("side-panel-menu", "icons/ellipsis.svg").on_click(cx.listener(
-                move |shell, _, _, cx| {
-                    let at = point(
-                        bounds.right() - px(2. * URL_BUTTON_SIZE + URL_BUTTON_INSET),
-                        bounds.top() + px(HEADER),
-                    );
-                    shell.side_panel_menu(at, cx)
-                },
-            )))
+            .child(
+                button("side-panel-menu", "icons/ellipsis.svg").on_click(cx.listener(
+                    move |shell, _, _, cx| {
+                        let at = point(
+                            bounds.right() - px(2. * URL_BUTTON_SIZE + URL_BUTTON_INSET),
+                            bounds.top() + px(HEADER),
+                        );
+                        shell.side_panel_menu(at, cx)
+                    },
+                )),
+            )
             .child(
                 button("side-panel-close", "icons/x.svg")
                     .on_click(cx.listener(|shell, _, _, cx| shell.browser.close_side_panel(cx))),
@@ -189,18 +205,24 @@ impl Shell {
                         && event.pressed_button == Some(MouseButton::Left)
                     {
                         let at = f32::from(event.position.x);
-                        moved.update(cx, |shell, cx| shell.drag_side_panel(at, right, cx)).ok();
+                        moved
+                            .update(cx, |shell, cx| shell.drag_side_panel(at, right, cx))
+                            .ok();
                     }
                 });
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
-                        shell.update(cx, |shell, cx| shell.release_side_panel(cx)).ok();
+                        shell
+                            .update(cx, |shell, cx| shell.release_side_panel(cx))
+                            .ok();
                     }
                 });
             },
         );
         vec![
-            card(bounds, self.palette.page).child(header).into_any_element(),
+            card(bounds, self.card_radius(), self.palette.page)
+                .child(header)
+                .into_any_element(),
             edge.into_any_element(),
             listener.absolute().size_0().into_any_element(),
         ]
@@ -304,7 +326,10 @@ fn widest(card: f32) -> f32 {
 fn panel_page(panel: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(
         point(panel.left(), panel.top() + px(HEADER)),
-        size(panel.size.width, (panel.size.height - px(HEADER)).max(px(0.))),
+        size(
+            panel.size.width,
+            (panel.size.height - px(HEADER)).max(px(0.)),
+        ),
     )
 }
 
@@ -312,8 +337,8 @@ fn panel_page(panel: Bounds<Pixels>) -> Bounds<Pixels> {
 mod tests {
     use gpui::{Bounds, point, px, size};
 
-    use super::{CARD_INSET, HEADER, PANEL_MAX, PANEL_MIN, PANEL_WIDTH, panel_page, panel_width};
     use super::split_card;
+    use super::{CARD_INSET, HEADER, PANEL_MAX, PANEL_MIN, PANEL_WIDTH, panel_page, panel_width};
 
     /// The panel opens at Chrome's width until the user gives it one, and keeps theirs within
     /// 320 to 600.

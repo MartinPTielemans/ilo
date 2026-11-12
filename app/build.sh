@@ -3,7 +3,8 @@
 # Chrome's framework with the core in it, and Chromium's helper apps. `build.sh prod` builds the
 # copy for daily use instead, which tools/install.sh installs: the user's profile, the real
 # Keychain and the product's bundle id, on the Release engine. `build.sh updates` makes the updates
-# run's copy of a built app, with Sparkle and a feed on this Mac (below).
+# and nightly runs' copy of a built app, with an updater and a feed on this computer (below).
+# APP_TRACK=nightly builds a nightly, which About names so and whose switch starts on.
 set -e
 cd "$(dirname "$0")"
 # On Linux, build/Browser: a copy of the engine, chrome and what it runs with, and libBrowser.so
@@ -37,6 +38,32 @@ case "$(uname -s)" in
     [ -e .deps/engine/chrome.exe ] || { echo "No Windows engine in .deps/engine." >&2; exit 1; }
     features=
     [ "${1:-}" != prod ] || features="--features prod"
+    # The nightly run's copy of build/Browser, build/Updates beside it, whose updater checks
+    # UPDATE_FEED, and UPDATE_FEED_NIGHTLY while it takes nightly builds, feeds on this computer,
+    # for updates signed with UPDATE_PUBLIC_KEY, all the run's own (check/nightly.sh). build.rs
+    # gives a build an updater only for such a feed, or for the product's in a prod build.
+    if [ "${1:-}" = updates ]; then
+      case ${UPDATE_FEED:-} in
+        http://127.0.0.1:*/*) ;;
+        *)
+          echo "build.sh updates takes UPDATE_FEED here: http://127.0.0.1:<port>/…" >&2
+          exit 1
+          ;;
+      esac
+      [ -n "${UPDATE_PUBLIC_KEY:-}" ] || {
+        echo "build.sh updates takes UPDATE_PUBLIC_KEY" >&2
+        exit 1
+      }
+      [ -d build/Browser ] || { echo "No build/Browser. Build it with ./build.sh" >&2; exit 1; }
+      cargo build --release --manifest-path windows/Cargo.toml --target-dir target
+      rm -rf build/Updates
+      cp -al build/Browser build/Updates
+      # Its own, not a link to build/Browser's.
+      rm build/Updates/Browser.dll
+      cp target/release/Browser.dll build/Updates/
+      echo build/Updates
+      exit 0
+    fi
     # shellcheck disable=SC2086 # no features, or one flag and its value
     cargo build --release --manifest-path windows/Cargo.toml --target-dir target $features
     # The bridge an agent's MCP client runs, which finds the browser's pipe (src/agents/bridge.rs).
@@ -59,7 +86,8 @@ esac
   exit 1
 }
 # Sparkle in the app at $1, checking the feed $2 every 8 hours for updates signed with the key $3,
-# and installing what it downloads when the app quits (docs/ux-spec.md › Updates). Its helpers for
+# or the nightly feed $4, if there's one, while the user takes nightly builds (src/updates.rs), and
+# installing what it downloads when the app quits (docs/ux-spec.md › Updates). Its helpers for
 # sandboxed apps stay out, as this one isn't.
 add_sparkle() {
   ditto .deps/Sparkle/Sparkle.framework "$1/Contents/Frameworks/Sparkle.framework"
@@ -70,6 +98,11 @@ add_sparkle() {
   plutil -replace SUEnableAutomaticChecks -bool YES "$1/Contents/Info.plist"
   plutil -replace SUAutomaticallyUpdate -bool YES "$1/Contents/Info.plist"
   plutil -replace SUScheduledCheckInterval -integer 28800 "$1/Contents/Info.plist"
+  [ -z "${4:-}" ] || plutil -replace NightlyFeedURL -string "$4" "$1/Contents/Info.plist"
+}
+# A nightly's Info.plist says so, for About.
+mark_nightly() {
+  [ "${APP_TRACK:-}" != nightly ] || plutil -replace NightlyBuild -bool YES "$1/Contents/Info.plist"
 }
 # Fails unless there's Sparkle to add and UPDATE_PUBLIC_KEY is an EdDSA public key.
 check_update_key() {
@@ -82,22 +115,26 @@ check_update_key() {
 }
 # The updates run's copy of build/Browser.app, build/Updates.app beside it, where the dev engine's
 # libraries are: Sparkle checks UPDATE_FEED, a feed on this Mac, for updates signed with
-# UPDATE_PUBLIC_KEY, both the run's own (check/updates.sh). Only the prod build carries the
-# product's feed and key, and only it reaches users. Its own id keeps Sparkle's settings apart
-# from every other build's, and a quit sent to it from launching another.
+# UPDATE_PUBLIC_KEY, both the run's own (check/updates.sh), and UPDATE_FEED_NIGHTLY, if it's set,
+# while it takes nightly builds (check/nightly.sh). Only the prod build carries the product's feeds
+# and key, and only it reaches users. Its own id keeps Sparkle's settings apart from every other
+# build's, and a quit sent to it from launching another.
 if [ "${1:-}" = updates ]; then
-  case ${UPDATE_FEED:-} in
-    http://127.0.0.1:*/*) ;;
-    *)
-      echo "build.sh updates takes UPDATE_FEED on this Mac: http://127.0.0.1:<port>/…" >&2
-      exit 1
-      ;;
-  esac
+  for feed in "${UPDATE_FEED:-}" "${UPDATE_FEED_NIGHTLY-http://127.0.0.1:0/}"; do
+    case $feed in
+      http://127.0.0.1:*/*) ;;
+      *)
+        echo "build.sh updates takes feeds on this Mac: http://127.0.0.1:<port>/…" >&2
+        exit 1
+        ;;
+    esac
+  done
   [ -d build/Browser.app ] || { echo "No build/Browser.app. Build it with ./build.sh" >&2; exit 1; }
   check_update_key
   rm -rf build/Updates.app
   cp -cR build/Browser.app build/Updates.app
-  add_sparkle build/Updates.app "$UPDATE_FEED" "$UPDATE_PUBLIC_KEY"
+  add_sparkle build/Updates.app "$UPDATE_FEED" "$UPDATE_PUBLIC_KEY" "${UPDATE_FEED_NIGHTLY:-}"
+  mark_nightly build/Updates.app
   plutil -replace CFBundleIdentifier -string dev.browser.app.updates \
     build/Updates.app/Contents/Info.plist
   echo build/Updates.app
@@ -163,6 +200,15 @@ plutil -replace CFBundleVersion -string "$build" "$plist"
 # macOS 15 (Sequoia) or later, the owner's call (#678). Below it macOS won't open the app, and
 # Sparkle's generate_appcast copies it into the feed's entry, so an older Mac is offered no update.
 plutil -replace LSMinimumSystemVersion -string 15.0 "$plist"
+# No script reaches Chromium's AppleScript dictionary, which its code answers outside the core: a
+# script could read every window's tabs and their URLs, and save a page, view its source or run
+# JavaScript in it (#704). Quit and open-location Apple Events have handlers of their own. ilo's
+# own takes its place (platform/mac/ilo.sdef), which answers only once Settings › Agents lets
+# scripts in, through the UI's own paths.
+rm -f "$app/Contents/Resources/scripting.sdef"
+cp platform/mac/ilo.sdef "$app/Contents/Resources/"
+plutil -replace NSAppleScriptEnabled -bool YES "$plist"
+plutil -replace OSAScriptingDefinition -string ilo.sdef "$plist"
 rm "$app/Contents/Resources/app.icns"
 cp branding/Assets.car "branding/$name.icns" "$app/Contents/Resources/"
 plutil -replace CFBundleIconFile -string "$name" "$plist"
@@ -175,6 +221,34 @@ plutil -replace CFBundleIconName -string "$name" "$plist"
 for strings in "$app"/Contents/Resources/*.lproj/InfoPlist.strings; do
   plutil -create binary1 "$strings"
 done
+# The framework's alert helpers post a site's alert-style notifications, so macOS names them when it
+# asks whether the app may notify, and in System Settings › Notifications and on each alert: as the
+# engine builds them they're "Chromium", with Chromium's icon and ungoogled-chromium's bundle id,
+# which a Chromium on the same Mac shares (#2126). They're the app's, by its name, icon and id, as
+# Chrome's are Chrome's; nothing in Chromium looks for the id, which its signing names the same way.
+for helper in "$framework"/Helpers/*" Helper ("*"Alerts).app"; do
+  [ -d "$helper" ] || continue
+  helper_plist=$helper/Contents/Info.plist
+  plutil -replace CFBundleIdentifier -string "$id.framework.AlertNotificationService" "$helper_plist"
+  plutil -replace CFBundleName -string "$name" "$helper_plist"
+  plutil -replace CFBundleDisplayName -string "$name" "$helper_plist"
+  for strings in "$helper"/Contents/Resources/*.lproj/InfoPlist.strings; do
+    plutil -create binary1 "$strings"
+  done
+  rm -f "$helper/Contents/Resources/app.icns"
+  cp branding/Assets.car "branding/$name.icns" "$helper/Contents/Resources/"
+  plutil -replace CFBundleIconFile -string "$name" "$helper_plist"
+  plutil -replace CFBundleIconName -string "$name" "$helper_plist"
+done
+# Each helper is signed again, ad hoc, keeping the entitlements, flags and runtime the engine gave
+# it: an alert helper's signature seals the Info.plist rewritten above, and the engine's leaves the
+# GPU's Aperitif helper sealed with resources it hasn't got. Then the framework, whose signature
+# seals its helpers and its resources, uBlock Origin's among them. tools/install.sh and
+# tools/release.sh sign them all again with the app's identity.
+for helper in "$framework"/Helpers/*.app; do
+  codesign --force --sign - --preserve-metadata=entitlements,flags,runtime "$helper"
+done
+codesign --force --sign - --preserve-metadata=entitlements,flags,runtime "$framework"
 # The prod build opens web links and files, so it can be the default browser: http, https and file
 # URLs, and the documents Chrome views, such as .html. Not what's Chromium's own, which the core
 # doesn't open: its chromium:// scheme, its extension and shortcut files and the types it exports
@@ -202,9 +276,15 @@ if [ -z "$features" ]; then
   plutil -remove CFBundleURLTypes "$plist"
   plutil -remove CFBundleDocumentTypes "$plist"
 fi
+# The nightly feed is branding/update-feed-nightly's, where a fork has one.
 if [ -n "$features" ] && [ -n "${UPDATE_PUBLIC_KEY:-}" ]; then
-  add_sparkle "$app" "$(cat branding/update-feed)" "$UPDATE_PUBLIC_KEY"
+  nightly_feed=
+  if [ -f branding/update-feed-nightly ]; then
+    nightly_feed=$(tr -d '[:space:]' < branding/update-feed-nightly)
+  fi
+  add_sparkle "$app" "$(cat branding/update-feed)" "$UPDATE_PUBLIC_KEY" "$nightly_feed"
 fi
+mark_nightly "$app"
 # Chromium touches Bluetooth, the camera, the microphone, location and the local network for
 # pages and for its own metrics. Without a usage description, macOS kills the app the first time
 # it does, instead of asking.
@@ -217,7 +297,7 @@ plutil -replace NSLocalNetworkUsageDescription -string "Websites and casting can
 # A prod build's crash reports name its functions only once the collector has its symbols: the
 # framework's and helpers' dSYMs, which the Release engine writes beside Chromium.app, and the app's
 # executable, which keeps its symbol table. tools/symbols.sh uploads them with SENTRY_AUTH_TOKEN
-# and the rest set (README.md › Releases). The app is built either way.
+# and the rest set (docs/releasing.md). The app is built either way.
 if [ -n "$features" ]; then
   set -- "$app/Contents/MacOS/Browser"
   for dsym in "$engine_out"/*.dSYM; do

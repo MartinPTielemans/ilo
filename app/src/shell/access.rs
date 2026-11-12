@@ -50,7 +50,6 @@ impl Shell {
             (page.microphone, "using the microphone"),
             (page.sharing, "sharing"),
             (page.shared, "being shared"),
-            (self.agent_at_work(tab), "agent working"),
             (page.loading, "loading"),
             (page.unloaded, "unloaded"),
         ];
@@ -81,7 +80,9 @@ pub(super) fn group_rows(builder: &mut A11ySubtreeBuilder) {
     let mut groups: [(&str, Vec<NodeId>); 2] = [("Pinned", Vec::new()), ("Today", Vec::new())];
     let mut after_new_tab = false;
     for child in children {
-        let id = builder.built_node(child).and_then(|node| node.author_id().map(str::to_owned));
+        let id = builder
+            .built_node(child)
+            .and_then(|node| node.author_id().map(str::to_owned));
         let id = id.unwrap_or_default();
         if id == NEW_TAB {
             after_new_tab = true;
@@ -104,7 +105,11 @@ pub(super) fn group_rows(builder: &mut A11ySubtreeBuilder) {
         let tabs: Vec<_> = members
             .iter()
             .copied()
-            .filter(|&member| builder.built_node(member).is_some_and(|n| n.role() == Role::Tab))
+            .filter(|&member| {
+                builder
+                    .built_node(member)
+                    .is_some_and(|n| n.role() == Role::Tab)
+            })
             .collect();
         for (index, &tab) in tabs.iter().enumerate() {
             let node = builder.built_node(tab).expect("listed above");
@@ -168,16 +173,24 @@ mod tests {
         }
 
         fn named(&self, role: Role, label: &str) -> (NodeId, &Node) {
-            let found = self.0.nodes.iter().find(|(_, node)| {
-                node.role() == role && node.label() == Some(label)
-            });
+            let found = self
+                .0
+                .nodes
+                .iter()
+                .find(|(_, node)| node.role() == role && node.label() == Some(label));
             let (id, node) = found.unwrap_or_else(|| panic!("no {role:?} called {label}"));
             (*id, node)
         }
 
         fn children(&self, id: NodeId) -> Vec<(Role, String)> {
-            let children = self.node(id).children().iter().map(|&child| self.node(child));
-            children.map(|node| (node.role(), node.label().unwrap_or("").to_owned())).collect()
+            let children = self
+                .node(id)
+                .children()
+                .iter()
+                .map(|&child| self.node(child));
+            children
+                .map(|node| (node.role(), node.label().unwrap_or("").to_owned()))
+                .collect()
         }
 
         /// The labels of the nodes under `id` and the groups among them, in order, as VoiceOver
@@ -217,14 +230,30 @@ mod tests {
             let space = (1, "Home".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, vec![1, 2, 3, 9, 10], vec![4, 5, 6], Vec::new(), folders, cx);
-            for (tab, title) in
-                [(1, "Docs"), (2, "Mail"), (3, "Notes"), (10, "Wiki"), (4, "News"), (5, "Video")]
-            {
+            shell.set_tabs(
+                1,
+                vec![1, 2, 3, 9, 10],
+                vec![4, 5, 6],
+                Vec::new(),
+                folders,
+                cx,
+            );
+            for (tab, title) in [
+                (1, "Docs"),
+                (2, "Mail"),
+                (3, "Notes"),
+                (10, "Wiki"),
+                (4, "News"),
+                (5, "Video"),
+            ] {
                 shell.set_title(tab, title.into(), cx);
             }
             shell.set_title(6, "Search".into(), cx);
-            let playing = Page { audible: true, loading: true, ..Page::default() };
+            let playing = Page {
+                audible: true,
+                loading: true,
+                ..Page::default()
+            };
             shell.set_page(5, playing, cx);
             shell.set_selected(shown, cx);
         });
@@ -242,6 +271,32 @@ mod tests {
         cx.simulate_a11y_activation();
         assert!(shell.read_with(cx, |shell, _| shell.a11y));
         assert!(cx.a11y_tree().is_some());
+    }
+
+    /// With a second profile the name row shows the Space's profile after its name, and VoiceOver
+    /// reads it there (#2339): not with one profile, not where the names are the same, and not in
+    /// a private window, whose session has none of the profile's logins.
+    #[gpui::test]
+    fn the_name_row_says_the_spaces_profile_once_there_are_two(cx: &mut TestAppContext) {
+        let (shell, cx, _) = shell(cx, 2);
+        cx.simulate_a11y_activation();
+        let heading = |shell: &Entity<Shell>, cx: &mut VisualTestContext, profiles: &[&str]| {
+            shell.update(cx, |shell, cx| {
+                let profiles = (1..).zip(profiles).map(|(id, name)| (id, (*name).into()));
+                shell.set_profiles(profiles.collect(), cx);
+            });
+            cx.run_until_parked();
+            let tree = Tree::read(cx);
+            let found = (tree.0.nodes.iter())
+                .find(|(_, node)| node.role() == Role::Heading)
+                .and_then(|(_, node)| node.label().map(str::to_owned));
+            found.expect("the name row")
+        };
+        assert_eq!(heading(&shell, cx, &["Personal"]), "Home");
+        assert_eq!(heading(&shell, cx, &["Personal", "Work"]), "Home, Personal");
+        assert_eq!(heading(&shell, cx, &["Home", "Work"]), "Home");
+        shell.update(cx, |shell, _| shell.private = true);
+        assert_eq!(heading(&shell, cx, &["Personal", "Work"]), "Home");
     }
 
     /// VoiceOver reads the list as the user sees it: the Space's name, Pinned, New Tab and Today,
@@ -277,18 +332,29 @@ mod tests {
 
         let (_, mail) = tree.named(Role::Tab, "Mail");
         assert_eq!(mail.is_selected(), Some(true));
-        assert_eq!((mail.position_in_set(), mail.size_of_set()), (Some(2), Some(3)));
+        assert_eq!(
+            (mail.position_in_set(), mail.size_of_set()),
+            (Some(2), Some(3))
+        );
         assert!(mail.supports_action(Action::Click));
         assert!(mail.supports_action(Action::ShowContextMenu));
         let (_, news) = tree.named(Role::Tab, "News");
         assert_eq!(news.is_selected(), Some(false));
-        assert_eq!((news.position_in_set(), news.size_of_set()), (Some(1), Some(3)));
+        assert_eq!(
+            (news.position_in_set(), news.size_of_set()),
+            (Some(1), Some(3))
+        );
 
         let (_, work) = tree.named(Role::Button, "Work");
         assert_eq!(work.is_expanded(), Some(false));
         assert_eq!(work.role_description(), Some("folder"));
 
-        let root = tree.0.tree.as_ref().expect("a first update has the root").root;
+        let root = tree
+            .0
+            .tree
+            .as_ref()
+            .expect("a first update has the root")
+            .root;
         let order = tree.walk(root);
         let at = |label: &str| order.iter().position(|each| each == label).unwrap();
         assert!(at("Home") < at("Pinned") && at("Pinned") < at("New Tab"));
@@ -300,7 +366,11 @@ mod tests {
     #[gpui::test]
     fn a_tab_in_a_call_says_what_it_captures(cx: &mut TestAppContext) {
         let (shell, cx, _) = shell(cx, 2);
-        let call = Page { camera: true, microphone: true, ..Page::default() };
+        let call = Page {
+            camera: true,
+            microphone: true,
+            ..Page::default()
+        };
         shell.update(cx, |shell, cx| shell.set_page(6, call.clone(), cx));
         cx.run_until_parked();
         cx.simulate_a11y_activation();
@@ -309,9 +379,18 @@ mod tests {
 
         let glyph = |page: Page| super::super::rows::capture_glyph(&page);
         assert_eq!(glyph(Page::default()), None);
-        assert_eq!(glyph(Page { microphone: true, ..Page::default() }), Some("icons/mic.svg"));
+        assert_eq!(
+            glyph(Page {
+                microphone: true,
+                ..Page::default()
+            }),
+            Some("icons/mic.svg")
+        );
         assert_eq!(glyph(call.clone()), Some("icons/video.svg"));
-        let sharing = Page { sharing: true, ..call };
+        let sharing = Page {
+            sharing: true,
+            ..call
+        };
         assert_eq!(glyph(sharing), Some("icons/screen-share.svg"));
     }
 
@@ -332,8 +411,16 @@ mod tests {
 
         cx.simulate_a11y_action(tree.named(Role::Tab, "Mail").0, Action::ShowContextMenu);
         let menus = host.menus.borrow();
-        let titles: Vec<_> = menus.last().expect("a menu").iter().map(|(t, _)| t).collect();
-        assert!(titles.iter().any(|title| title.contains("Unpin")), "{titles:?}");
+        let titles: Vec<_> = menus
+            .last()
+            .expect("a menu")
+            .iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert!(
+            titles.iter().any(|title| title.contains("Unpin")),
+            "{titles:?}"
+        );
     }
 
     /// The header's buttons say what they do, and back says it can't while there's no page to

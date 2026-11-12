@@ -2,16 +2,18 @@
 //! a tab comes in by opening behind in the front window, unloaded, and moving to its Space and
 //! its place there, so it loads only once it's first shown.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use browser::import::{Exported, Passwords};
-use browser::import::found::{Page, Tab};
+use browser::import::found::{Address, Page, Split, Tab};
 use browser::import::plan::{Existing, ExistingSpace, Row};
 use browser::import::sources::{Os, Roots};
+use browser::import::{Exported, Passwords};
 use browser::link_rules::{Host as _, Rule};
+use browser::log;
 use browser::theme::Theme;
 use gpui::{App, PathPromptOptions};
 
@@ -24,11 +26,46 @@ thread_local! {
     /// answers in.
     static HISTORY: RefCell<VecDeque<Box<dyn FnOnce(usize, &mut App)>>> =
         const { RefCell::new(VecDeque::new()) };
+    /// What waits for addresses_added, as HISTORY waits for history_added.
+    static ADDRESSES: RefCell<VecDeque<Box<dyn FnOnce(usize, &mut App)>>> =
+        const { RefCell::new(VecDeque::new()) };
     /// What waits for the app to come back to the front, such as an import for Full Disk Access.
     static ACTIVE: RefCell<Vec<Box<dyn FnOnce(&mut App)>>> = const { RefCell::new(Vec::new()) };
     /// What waits for passwords_imported, with the profile the passwords went to.
     static PASSWORDS: RefCell<Vec<(u64, Box<dyn FnOnce(Passwords, &mut App)>)>> =
         const { RefCell::new(Vec::new()) };
+    /// The profile a check run holds back, with the Spaces that wait to go in it.
+    static HELD: RefCell<Option<(u64, Vec<u64>)>> = const { RefCell::new(None) };
+    /// Whether the check run's profile was held, which it is once.
+    static HOLDS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The new profile a check run holds back from its Spaces until it releases them, so its capture
+/// shows them arriving and stalled however fast the profile loads. A prod build holds none.
+fn held_name() -> Option<String> {
+    if cfg!(feature = "prod") {
+        return None;
+    }
+    std::env::var("BROWSER_IMPORT_HOLD").ok()
+}
+
+/// Whether this run holds a profile back, so it has a key to release it.
+pub fn holding() -> bool {
+    held_name().is_some()
+}
+
+/// Puts the held profile's Spaces in it, as the import asked before it was held.
+pub fn release_held() {
+    let Some((profile, spaces)) = HELD.take() else {
+        return;
+    };
+    log!(
+        "browser: import releases {} Spaces to profile {profile}",
+        spaces.len()
+    );
+    for space in spaces {
+        unsafe { bc::bc_space_set_profile(space, profile) };
+    }
 }
 
 /// Runs what waited for the app to become the active one.
@@ -48,6 +85,13 @@ pub fn spaces_changed(cx: &mut App) {
 /// Tells what waited for the history it added that it's in, with how many pages were new.
 pub fn history_added(added: usize, cx: &mut App) {
     if let Some(then) = HISTORY.with_borrow_mut(VecDeque::pop_front) {
+        then(added, cx);
+    }
+}
+
+/// Tells what waited for the addresses it added that they're in, with how many were new.
+pub fn addresses_added(added: usize, cx: &mut App) {
+    if let Some(then) = ADDRESSES.with_borrow_mut(VecDeque::pop_front) {
         then(added, cx);
     }
 }
@@ -136,7 +180,81 @@ fn keep(id: u64, tab: &Tab) {
     }
 }
 
+/// The icon the host draws for `app`, `pixels` square: on the Mac a bundle id, on Windows an exe,
+/// by its path or, for one the user installed, its name in the registry's App Paths. The host
+/// draws it premultiplied, and the image is straight RGBA.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn host_icon(app: &str, pixels: u32) -> Option<image::RgbaImage> {
+    let app = CString::new(app).ok()?;
+    let size = pixels as usize;
+    let mut rgba = vec![0u8; size * size * 4];
+    if !unsafe { platform::host_app_icon(app.as_ptr(), size, rgba.as_mut_ptr()) } {
+        return None;
+    }
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = u16::from(pixel[3]);
+        if alpha > 0 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u16::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    image::RgbaImage::from_raw(pixels, pixels, rgba)
+}
+
+/// The browser's app icon on the Mac, from its bundle.
+#[cfg(target_os = "macos")]
+fn app_icon_pixels(
+    source: &browser::import::sources::Source,
+    pixels: u32,
+) -> Option<image::RgbaImage> {
+    let id = source.app_ids(Os::Mac).into_iter().next()?;
+    host_icon(&id, pixels)
+}
+
+/// The browser's app icon on Linux, from its desktop entry, under the check's made-up home alone
+/// when it gives one, so a run shows the icon it put there.
+#[cfg(target_os = "linux")]
+fn app_icon_pixels(
+    source: &browser::import::sources::Source,
+    pixels: u32,
+) -> Option<image::RgbaImage> {
+    use browser::import::app_icons;
+    let made_up = std::env::var_os("BROWSER_IMPORT_HOME");
+    let home = made_up.clone().or_else(|| std::env::var_os("HOME"))?;
+    let dirs = app_icons::data_dirs(Path::new(&home), made_up.is_some());
+    app_icons::find(&dirs, &source.app_ids(Os::Linux), pixels)
+}
+
+/// The browser's app icon on Windows, the shell's for its exe: the one beside its profiles where
+/// it's installed for the user, else the one the registry names. A check run's made-up home has
+/// its own exe and no registry, so the run shows the icon it put there.
+#[cfg(target_os = "windows")]
+fn app_icon_pixels(
+    source: &browser::import::sources::Source,
+    pixels: u32,
+) -> Option<image::RgbaImage> {
+    let made_up = std::env::var_os("BROWSER_IMPORT_HOME").is_some();
+    (source.app_ids(Os::Windows).iter())
+        .filter(|app| !made_up || app.contains(['/', '\\']))
+        .find_map(|app| host_icon(app, pixels))
+}
+
 impl browser::import::Host for CoreImport {
+    fn app_icon(
+        &self,
+        source: &browser::import::sources::Source,
+        pixels: u32,
+    ) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        let mut icon = app_icon_pixels(source, pixels)?;
+        // GPUI draws BGRA.
+        for pixel in icon.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        let frame = image::Frame::new(icon);
+        Some(std::sync::Arc::new(gpui::RenderImage::new(vec![frame])))
+    }
+
     fn roots(&self) -> Roots {
         // A check run gives a made-up home folder, so it never reads the user's browsers.
         match std::env::var_os("BROWSER_IMPORT_HOME") {
@@ -145,7 +263,14 @@ impl browser::import::Host for CoreImport {
         }
     }
 
-    fn existing(&self) -> Existing {
+    fn existing(&self, cx: &App) -> Existing {
+        // Every window's shell has every tab's page, as the core tells them all.
+        let shell = crate::shell_with_view(front().1).upgrade();
+        let url = |tab: u64| {
+            shell
+                .as_ref()
+                .map(|shell| shell.read(cx).page(tab).url.to_string())
+        };
         let profiles = ids(bc::bc_profiles)
             .into_iter()
             .map(|profile| (profile, name(bc::bc_profile_name, profile).to_string()))
@@ -164,6 +289,10 @@ impl browser::import::Host for CoreImport {
                     name: name(bc::bc_space_name, space).to_string(),
                     profile: unsafe { bc::bc_space_profile(space) },
                     pinned: rows(&pinned, 0),
+                    today: of_space(bc::bc_space_today, space)
+                        .into_iter()
+                        .filter_map(&url)
+                        .collect(),
                 }
             })
             .collect();
@@ -176,17 +305,25 @@ impl browser::import::Host for CoreImport {
                 )
             })
             .collect();
+        let rules = crate::link_rules_host::CoreLinkRules.rules();
         Existing {
             profiles,
             spaces,
             favorites,
-            link_rules: crate::link_rules_host::CoreLinkRules.rules().rules,
+            link_rules: rules.rules,
+            link_otherwise: rules.otherwise,
         }
     }
 
     fn create_profile(&self, name: &str) -> u64 {
+        let held = !HOLDS.get() && held_name().as_deref() == Some(name);
         let name = CString::new(name).unwrap_or_default();
-        unsafe { bc::bc_profile_create(name.as_ptr()) }
+        let profile = unsafe { bc::bc_profile_create(name.as_ptr()) };
+        if held {
+            HOLDS.set(true);
+            HELD.set(Some((profile, Vec::new())));
+        }
+        profile
     }
 
     fn create_space(&self, name: &str, icon: &str, theme: Option<&Theme>) -> u64 {
@@ -204,6 +341,17 @@ impl browser::import::Host for CoreImport {
     }
 
     fn set_space_profile(&self, space: u64, profile: u64) {
+        let held = HELD.with_borrow_mut(|held| match held {
+            Some((each, spaces)) if *each == profile => {
+                spaces.push(space);
+                true
+            }
+            _ => false,
+        });
+        if held {
+            log!("browser: import holds space {space} from profile {profile}");
+            return;
+        }
         unsafe { bc::bc_space_set_profile(space, profile) };
     }
 
@@ -224,6 +372,38 @@ impl browser::import::Host for CoreImport {
         }
     }
 
+    fn add_split(&self, space: u64, folder: u64, split: &Split) {
+        let mut first = 0;
+        for tab in &split.tabs {
+            let id = open_in(space, &tab.url);
+            if id == 0 {
+                continue;
+            }
+            if first == 0 {
+                unsafe { bc::bc_tab_move(id, true, folder, usize::MAX) };
+                first = id;
+            } else {
+                // Joining a pinned tab pins this one in the split's place.
+                unsafe { bc::bc_tab_split_with(id, first, false) };
+            }
+            keep(id, tab);
+        }
+        if first == 0 {
+            return;
+        }
+        if !split.name.is_empty() {
+            let name = CString::new(split.name.as_str()).unwrap_or_default();
+            unsafe { bc::bc_tab_set_split_name(first, name.as_ptr()) };
+        }
+        if !split.icon.is_empty() {
+            let icon = CString::new(split.icon.as_str()).unwrap_or_default();
+            unsafe { bc::bc_tab_set_split_icon(first, icon.as_ptr()) };
+        }
+        if split.stacked {
+            unsafe { bc::bc_tab_set_split_stacked(first, true) };
+        }
+    }
+
     fn add_favorite(&self, space: u64, tab: &Tab) {
         let id = open_in(space, &tab.url);
         if id != 0 {
@@ -232,10 +412,17 @@ impl browser::import::Host for CoreImport {
         }
     }
 
-    fn add_link_rules(&self, rules: &[Rule]) {
+    fn add_today(&self, space: u64, tab: &Tab) {
+        open_in(space, &tab.url);
+    }
+
+    fn add_link_rules(&self, rules: &[Rule], otherwise: Option<u64>) {
         let host = crate::link_rules_host::CoreLinkRules;
         let mut all = host.rules();
         all.rules.extend_from_slice(rules);
+        if let Some(otherwise) = otherwise {
+            all.otherwise = otherwise;
+        }
         host.set_rules(&all);
     }
 
@@ -271,6 +458,47 @@ impl browser::import::Host for CoreImport {
         let started = unsafe { bc::bc_profile_add_history(profile, rows.as_ptr(), rows.len()) };
         if started {
             HISTORY.with_borrow_mut(|waiting| waiting.push_back(then));
+        }
+        started
+    }
+
+    fn add_addresses(
+        &self,
+        profile: u64,
+        addresses: &[Address],
+        then: Box<dyn FnOnce(usize, &mut App)>,
+    ) -> bool {
+        // A value holding a nul can't cross; that field is dropped rather than cut short.
+        let values: Vec<Vec<(i32, CString, i32)>> = (addresses.iter())
+            .map(|address| {
+                (address.fields.iter())
+                    .filter_map(|field| {
+                        let value = CString::new(field.value.as_str()).ok()?;
+                        Some((field.kind, value, field.status))
+                    })
+                    .collect()
+            })
+            .collect();
+        let fields: Vec<Vec<bc::bc_address_field>> = (values.iter())
+            .map(|address| {
+                (address.iter())
+                    .map(|(kind, value, status)| bc::bc_address_field {
+                        type_: *kind,
+                        value: value.as_ptr(),
+                        status: *status,
+                    })
+                    .collect()
+            })
+            .collect();
+        let rows: Vec<bc::bc_address> = (fields.iter())
+            .map(|fields| bc::bc_address {
+                fields: fields.as_ptr(),
+                count: fields.len(),
+            })
+            .collect();
+        let started = unsafe { bc::bc_profile_add_addresses(profile, rows.as_ptr(), rows.len()) };
+        if started {
+            ADDRESSES.with_borrow_mut(|waiting| waiting.push_back(then));
         }
         started
     }
@@ -335,4 +563,26 @@ impl browser::import::Host for CoreImport {
     fn open_store_page(&self, url: &str) {
         open_tab_behind(front().0, url, false);
     }
+
+    fn last_import(&self, browser: &str) -> Option<SystemTime> {
+        IMPORTS.with_borrow(|imports| {
+            (imports.iter())
+                .find(|(each, _)| each == browser)
+                .map(|(_, at)| *at)
+        })
+    }
+
+    fn imported(&self, browser: &str, at: SystemTime) {
+        IMPORTS.with_borrow_mut(|imports| {
+            imports.retain(|(each, _)| each != browser);
+            imports.push((browser.into(), at));
+        });
+    }
+}
+
+thread_local! {
+    /// Each browser's last import this run, by its name: in memory alone, as the Archive's tasks
+    /// are, as nothing that records the user's use is stored without the owner's yes. After a
+    /// relaunch a browser's row is Import… again, and a rerun still adds nothing twice.
+    static IMPORTS: RefCell<Vec<(String, SystemTime)>> = const { RefCell::new(Vec::new()) };
 }

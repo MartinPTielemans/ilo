@@ -6,7 +6,10 @@
 
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "base/functional/callback_forward.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -25,8 +28,24 @@ bool OnWayland();
 // (bc_wayland_display). Null off Wayland.
 void* JoinWaylandDisplay(void (*dispatched)());
 
+// Runs |done|, posted, once |widget|'s window has acked a configure of the compositor's with the
+// state the window has now, such as the one a full screen it asked for brings, whose bounds are
+// then in. Soon off Wayland.
+void AfterStateConfigured(views::Widget* widget, base::OnceClosure done);
 // |widget|'s wl_surface, and its content's size in DIPs. Null off Wayland.
 void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size);
+
+// Asks the compositor to give |widget|'s window the keyboard back from the window of this client's
+// that has it, with an activation token from the keyboard's focus. Chromium's Activate takes its
+// token from the latest input Chromium heard, and after a click names the window under the
+// pointer, which the compositor can turn down, as sway did after a click in the app's menu
+// (#2060). Whether it asked; never off Wayland.
+bool TakeKeyboardBack(views::Widget* widget);
+
+// Gives |widget|'s surface |region|, in pixels at |scale|, at once, which Chromium's
+// SetInputRegion leaves for its next frame: a region with no rects is the whole surface, one empty
+// rect none of it. Nothing off Wayland.
+void SetInputRegionNow(views::Widget* widget, const std::vector<gfx::Rect>& region, float scale);
 
 // Makes the browser window frameless, under Wayland and X11, as the app draws the window's buttons,
 // and under Wayland see-through, for the app's UI under it to show and take the clicks the pages
@@ -61,6 +80,10 @@ std::optional<gfx::Rect> KeyboardPageFrame(views::Widget* widget);
 // a tab's dialog, or an empty one. In window_views.cc.
 std::u16string ChildTitle(views::Widget* widget);
 
+// The frames of Chromium's own popups that show over |widget|'s window, such as autofill's
+// dropdown, in its content and from the bottom up (bc_window_popups). In window_views.cc.
+std::vector<gfx::Rect> PopupFrames(views::Widget* widget);
+
 // Lends the keyboard in |widget|'s window to an overlay of the app's, or takes it back
 // (bc_window_overlay_takes_keyboard).
 void OverlayTakesKeyboard(views::Widget* widget, bool takes);
@@ -69,13 +92,19 @@ void OverlayTakesKeyboard(views::Widget* widget, bool takes);
 // caret at |caret|, in DIPs from the window's top left, or none is (bc_window_ui_text_input).
 void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret);
 
-// The frame of a tab's dialog, such as print preview, shown in |widget|'s window, from its content's
-// top-left, if one shows (bc_window_dialog). In window_views.cc.
-std::optional<gfx::Rect> DialogFrame(views::Widget* widget);
-
 // Answers on X11 the clipboard requests in Chromium's queue, and nothing else in it
 // (bc_answer_clipboard_requests). In window_views.cc.
 void AnswerClipboardRequests();
+
+// From now on, on X11, a bubble of Chrome's on a page's Picture in Picture window, such as its
+// automatic picture-in-picture prompt, is a window of its own, as it is on Wayland, not a child
+// clipped to the Picture in Picture window, which Chrome would then grow to hold it (#1161). In
+// window_views.cc.
+void FloatPictureInPictureBubbles();
+
+// Where DevTools docked in a page of |widget|'s window show, the first pane's with them, and the
+// page beside them, from its content's top-left (bc_window_devtools). In window_views.cc.
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget);
 
 }  // namespace browser_core::platform
 

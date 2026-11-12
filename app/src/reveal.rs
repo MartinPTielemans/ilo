@@ -22,7 +22,9 @@ struct Reveal {
 
 impl Render for Reveal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let panel = self.shell.update(cx, |shell, cx| shell.render_reveal(window, cx));
+        let panel = self
+            .shell
+            .update(cx, |shell, cx| shell.render_reveal(window, cx));
         // On Linux the page is Chromium's, whose pointer the host doesn't hear, so this window
         // says where the pointer is over it, and as it leaves, that it's past the panel.
         #[cfg(target_os = "linux")]
@@ -30,9 +32,12 @@ impl Render for Reveal {
             let (moved, left) = (self.shell.clone(), self.shell.clone());
             gpui::div()
                 .size_full()
-                .on_mouse_move(move |event, _, cx| {
-                    let x = event.position.x.into();
-                    moved.update(cx, |shell, cx| shell.pointer_at(x, cx));
+                .on_mouse_move(move |event, window, cx| {
+                    let (x, width) = (event.position.x.into(), window.viewport_size().width);
+                    moved.update(cx, |shell, cx| {
+                        let x = shell.from_reveal(x, width.into());
+                        shell.pointer_at(x, cx)
+                    });
                 })
                 // The window's own leave rather than the div's hover, which GPUI counts only after
                 // a move over it: a press with none before it, on a panel that came out under a
@@ -88,8 +93,6 @@ pub fn open(shell: Entity<Shell>, ui_view: *mut c_void, cx: &mut App) -> Option<
         }),
         // A panel that doesn't take the keyboard when clicked.
         kind: WindowKind::PopUp,
-        // GPUI holds a window that isn't the key one to 30 fps, and this one never is.
-        inactive_frame_interval: None,
         show: false,
         focus: false,
         is_movable: false,
@@ -125,5 +128,7 @@ pub fn open(shell: Entity<Shell>, ui_view: *mut c_void, cx: &mut App) -> Option<
 }
 
 extern "C" fn pointer_moved(ui_view: *mut c_void, x: f64) {
-    update_window(window_with_view(ui_view), |shell, cx| shell.pointer_at(x as f32, cx));
+    update_window(window_with_view(ui_view), |shell, cx| {
+        shell.pointer_at(x as f32, cx)
+    });
 }

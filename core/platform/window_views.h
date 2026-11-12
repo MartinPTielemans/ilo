@@ -10,6 +10,7 @@
 #include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
 
@@ -44,11 +45,14 @@ struct DockedDevTools {
 
 // A page to show, at |frame| from the top-left of the window's content, with its DevTools if
 // they're docked, and |color|, 0xRRGGBB, under it where it hasn't drawn, as the app's card is.
+// |widget| is the view of its main frame, whose first frame on screen ends a switch to it, or null
+// for a page in the system's engine.
 struct Pane {
   gfx::NativeView page;
   gfx::Rect frame;
   std::optional<DockedDevTools> devtools;
   std::optional<uint32_t> color;
+  content::RenderWidgetHostView* widget = nullptr;
 };
 
 // An extension's side panel page, at |frame| like a pane's. The app draws its header above it, so
@@ -61,13 +65,25 @@ struct SidePanelPage {
 // Shows |panes| in place of the pages shown, with corners of |corner_radius|, and |side_panel| in
 // place of the side panel shown. With more than one pane, as in a split view, the one at |focused|
 // has a ring of |ring_color|, 0xRRGGBB, inside its edge. No panes shows no page. While |widget|
-// isn't visible, the pages stay hidden.
+// isn't visible, the pages stay hidden. On the Mac, the pages a switch replaces stay over the ones
+// it shows until those have drawn, as a page shown again shows nothing until then.
 void ShowPages(views::Widget* widget,
                base::span<const Pane> panes,
                double corner_radius,
                size_t focused,
                uint32_t ring_color,
                std::optional<SidePanelPage> side_panel);
+
+// Draws the panes shown in |widget|'s window, with their DevTools and ring, at |scale| of their
+// size about the centre of their frames, without laying them out again, and keeps doing so as
+// ShowPages lays them out, until it's 1 again. Clicks go to the UI around them on Linux, and to
+// their frames on the Mac. On Windows it does nothing yet.
+void ScalePages(views::Widget* widget, double scale);
+
+// |point|, from the top-left of |page|, a page's view, as Chromium gives it, from where that
+// top-left is laid out: as the app put it, whatever ScalePages draws. On Linux, where the scale is
+// the view's own, Chromium gives it in the page drawn smaller; elsewhere it's unchanged.
+gfx::PointF LaidOutPagePoint(gfx::NativeView page, const gfx::PointF& point);
 
 // Keeps the pages shown in |widget|'s window where they are as it resizes, until ShowPages lays
 // them out again: for a page going full screen, or back, which the app lays out once, at the
@@ -97,6 +113,11 @@ void ShowPageIn(views::Widget* widget,
 // show over the pages, rather than being drawn in the window's own.
 bool PageDialogsInOwnWindow();
 
+// Whether a window's focus has settled by the time the window hears it's active, so the page can
+// take the keyboard then, before the next key the window reads. Where it hasn't, the page takes it
+// from a task posted then.
+bool FocusSettledOnActivation();
+
 // Whether the keyboard in |widget|'s window is the page's: in a page shown, or in nothing, as when
 // the window opens or the page view that had it left the window. Not in DevTools or the side
 // panel.
@@ -105,6 +126,16 @@ bool KeyboardForPage(views::Widget* widget);
 // Gives the keyboard in |widget|'s window to the window itself, which KeyboardForPage counts as
 // the page's.
 void ReleaseKeyboard(views::Widget* widget);
+
+// Whether an overlay of the app's over |widget|'s window, such as the command bar or a menu, has
+// the keyboard, which takes it from the window on every platform: on the Mac a child window, key;
+// on Windows an owned window, in front; on Linux lent (bc_window_overlay_takes_keyboard).
+bool OverlayHasKeyboard(views::Widget* widget);
+
+// Runs |let_go|, posted, once the overlay that has the keyboard of |widget|'s window lets it go: on
+// the Mac as the overlay's window stops being key, on Windows as another window comes in front, on
+// Linux as the app takes it back, unless X11's focus came back into the window.
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go);
 
 // On Linux and Windows: the app's UI takes the keyboard in |widget|'s window, to keep
 // (bc_window_ui_takes_keyboard) or until a page shows (bc_window_ui_holds_keyboard), which
@@ -126,6 +157,14 @@ base::ScopedClosureRunner DrawUnseen(views::Widget* widget, gfx::NativeView page
 // the page draws at the new size, rather than shows that frame at its old size in the top-left
 // corner. Null for a page with no view yet.
 void StretchOnResize(content::RenderWidgetHostView* view, bool stretch);
+
+// On Linux and Windows: the frame of a tab's dialog, such as print preview, shown in |widget|'s
+// window, from its content's top-left, if one shows (bc_window_dialog).
+std::optional<gfx::Rect> DialogFrame(views::Widget* widget);
+
+// On Windows: the widget of a tab's dialog, such as print preview, shown over |widget|'s window in
+// a window of its own (PageDialogsInOwnWindow), or null.
+views::Widget* PageDialog(views::Widget* widget);
 
 }  // namespace browser_core::platform
 

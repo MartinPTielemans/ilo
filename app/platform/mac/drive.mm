@@ -10,6 +10,7 @@
 //   doubleclick <x> <y>                   two left clicks, the second with a click count of 2
 //   rightclick <x> <y>                    a right click
 //   middleclick <x> <y>                   a click of the middle button, a mouse's wheel
+//   sideclick <x> <y> back|forward        a click of a mouse's back or forward side button
 //   clickkey <x> <y>                      a left click in the key window, such as the command bar
 //   doubleclickkey <x> <y>                two left clicks in the key window, as doubleclick
 //   rightclickkey <x> <y>                 a right click in the key window
@@ -48,14 +49,18 @@
 //   pageswipe <x> <y> back|forward        a swipe between pages at (x, y), as three fingers or
 //                                         a mouse's swipe send one, handed to the host's monitor
 //   wheel <x> <y> <dx>                    a mouse wheel's tick across at (x, y), <dx> lines right
-//   dragover <x> <y> [url|file|text <s>]  a drag from another app at (x, y), carrying the URL,
-//                                         the file at the path or the text <s>, handed to the view
+//   dragover <x> <y> [url|file|text|tab <s>]
+//                                         a drag from another app at (x, y), carrying the URL,
+//                                         the file at the path or the text <s>, or tab <s>, as a
+//                                         tab's row dragged from another of the app's windows
+//                                         carries it (host_drag_tab), handed to the view
 //                                         AppKit would hand it to, which it logs with whether it
 //                                         takes it, as "browser: drag over <view class> taken"
 //   dragdrop <x> <y> [url|file|text <s>]  lets go of that drag there, as dragover, then logs
 //                                         "browser: drag dropped" or "browser: drag refused"
 //   dragleave                             takes the drag away, as cancelled
 //   resize <width> <height>               resizes the window, keeping its top-left corner
+//   resizekey <width> <height>            as resize, the key window's content, such as Settings
 //   fullscreen                            enters or leaves full screen, like the green button
 //   display add <width> <height> [main]   plugs in a second display of that size in points, a
 //                                         virtual one, the main one with the menu bar if main
@@ -66,6 +71,16 @@
 //                                         once AppKit's screens no longer have it
 //   minimize                              minimizes the window to the Dock, or brings it back
 //   hide                                  hides the app, as ⌘H does, or brings it back
+//   active                                posts the app's became-active notification, as coming
+//                                         back to it from another app does, such as from System
+//                                         Settings, which a run can't do: macOS lets no background
+//                                         process make an app active, and a hidden app on a runner
+//                                         with nothing else in front stays the active one
+//   yield <pid>                           hands the app's activation to the app of process <pid>,
+//                                         another copy of the app, as the Little ilo window does
+//                                         to the app behind it, logging "browser: yielded to
+//                                         <pid>": the active app may give it away, though no
+//                                         background process can take it
 //   place <x> <y> <width> <height>        moves and resizes the window to that frame, in points
 //                                         from the main display's top-left corner
 //   screen                                logs the screen the app opens windows on, the main
@@ -79,6 +94,9 @@
 //                                         them, the driven one too, after each one's frame, as
 //                                         "browser: frame window <n> <x> <y> <width> <height>"
 //                                         in place's terms
+//   desktop                               logs the browser windows on the desktop shown, as
+//                                         "browser: desktop shown window <n> window <m> …",
+//                                         numbered as order numbers them
 //   layout                                logs the frames of the window's views and child
 //                                         windows, the centres of its close, minimize and
 //                                         zoom buttons, the frame of the page that has the
@@ -94,13 +112,22 @@
 //                                         no key window titled <text>, windows <title> | <title>",
 //                                         the app's windows shown, the key one marked "(key)"
 //   pasteboard                            logs the text on the run's pasteboard, which stands in
-//                                         for the clipboard, as "browser: pasteboard text <text>"
+//                                         for the clipboard, as "browser: pasteboard text <text>",
+//                                         after its types, as "browser: pasteboard types <types>"
 //   savepanel <path>                      picks <path> in the save panel the app began, once it
 //                                         has, through the panel's completion handler, logging
 //                                         "browser: save panel answered", or "browser: no save
 //                                         panel" if none begins within 5 s. The driver keeps each
 //                                         save panel the app begins off screen, logging "browser:
 //                                         save panel offers <name> in <folder>"
+//   savecancel                            ends the save panel the app began as its Cancel does,
+//                                         once it has, logging "browser: save panel cancelled",
+//                                         or "browser: no save panel" if none begins within 5 s
+//   pip                                   logs the frame of Chrome's Picture in Picture window, a
+//                                         floating call's or the Mini Player's, as "browser: pip
+//                                         at <x> <y> <width> <height>" in place's terms, or
+//                                         "browser: pip none". The driver doesn't move or size it:
+//                                         the window server does that with the real pointer
 //   front                                 logs which of the app's windows other apps take for
 //                                         the one in front, as "browser: front <first>, main
 //                                         <window>, key <window>, ax focused <window>, ax main
@@ -109,6 +136,11 @@
 //                                         T3 Code's window capture takes. Each is "driven",
 //                                         "window <n>" for another browser window, "none", or
 //                                         "<class> <width>x<height> <accessibility role>"
+//   stack                                 logs the windows on screen at the normal level over
+//                                         the driven one and overlapping it, front first, down
+//                                         to it, as Windows' driver does, as "browser: stack
+//                                         <window>, …, driven": each as front names it, or
+//                                         another app's as "other <its process's name>"
 //   backdrop <grey>|off                   a window of the driver's in <grey> (0–255, sRGB) behind
 //                                         the browser window and 100 points past its edges, for
 //                                         the window's material to blur something known. Each
@@ -123,6 +155,16 @@
 //                                         "browser: menu bar <menu>: <titles>", enabled as
 //                                         AppKit would show them now, written as "menu shown"
 //                                         writes a menu's, and chooses none
+//   dock [<title>]                        chooses the Dock menu's item titled <title>, the menu
+//                                         the Dock icon's right click opens, or with none logs
+//                                         its items, as "browser: dock menu <titles>"
+//   dockicon <path>                       draws the Dock's icon, as the app last set it, to a 1024
+//                                         px PNG at <path> and logs the color of its dot, as
+//                                         "browser: dock icon <r> <g> <b>" in sRGB
+//   statusitem [click | capture <path>]   logs whether the menu bar has Little ilo's button,
+//                                         "browser: status item shown" or "none", or clicks it,
+//                                         or draws it to a PNG at <path>, logged as "browser:
+//                                         status item captured <w>x<h>"
 //   openmenu <menu>                       opens the main menu's <menu>, the same menu the menu
 //                                         bar opens, near the window's top left, tracked until
 //                                         dismiss or choose closes it. Commands still come in
@@ -132,17 +174,27 @@
 //                                         alert shown, Chrome's too
 //   dismiss                               closes the menu a right click or openmenu showed,
 //                                         choosing none
-//   ime on|off                            the scripted input method, for keys to the UI or the
-//                                         page, Chromium's or Safari's engine's: letters add to a
-//                                         composition, space converts it to 日本語, return
-//                                         commits it and escape cancels it
-//   window <n>                            drives the n-th browser window opened, from 1, from
+//   makekey <overlay>                     makes the window of <overlay>, such as theme picker,
+//                                         key at its next hide, as its fade out starts, as
+//                                         AppKit can, logging "browser: made <overlay> key"
+//   ime on|ko|off                         the scripted input method, for keys to the UI or the
+//                                         page, Chromium's or Safari's engine's: on, letters add
+//                                         to a composition, space converts it to 日本語, return
+//                                         commits it and escape cancels it; ko, a 2-set Korean
+//                                         keyboard, where gksrmf types 한글, and any other key
+//                                         commits and goes on
+//   window <n> [behind]                   drives the n-th browser window opened, from 1, from
 //                                         now, bringing it to the front with the keyboard as a
-//                                         click on it does, logging "browser: drive window <n>"
+//                                         click on it does, logging "browser: drive window <n>",
+//                                         or with behind leaving it where it is, for the pointer
+//                                         over a window behind another (#1432)
 //   agentspace <agent> <name>             makes a Space named <name> for the agent with the id
 //                                         <agent> and the name <name>, as agent code will once
 //                                         there is some, logging "browser: made space <space> for
 //                                         agent <agent>"
+//   agentopen <agent> <url>               the agent opens <url> in a tab of its Space, as its
+//                                         MCP tool does, logging "browser: agent <agent> opened
+//                                         <tab>"
 //   agentmayact <agent> <tab> [action]    logs whether the agent may do the action, "navigate" if none,
 //                                         to the tab, as "browser: agent <agent> may act on
 //                                         <tab>: <0|1>", and if not "browser: agent <agent>
@@ -158,6 +210,11 @@
 //                                         later, for the next tab shown to unload those
 //                                         bc_unload_idle_tabs lets go. From then each check logs
 //                                         "browser: idle tabs checked" once it's done
+//   battery <percent> plugged|unplugged   the battery reads that from now, with
+//                                         --battery-for-testing (core/battery_saver.h)
+//   pair <tab> pin|confirm|passkey        a Bluetooth device <tab>'s page pairs with asks for its
+//                                         PIN, whether to pair, or whether its passkey matches, as
+//                                         bc_tab_pair_for_testing
 //
 // Clicks, drags and moves go to the app's window on top at that point of the browser window
 // driven, such as the sidebar reveal over its edge, scrolls and layout to the browser window
@@ -165,9 +222,12 @@
 // command n arrives and "browser: drive <n> done, key <window class>, focus <view class>, active
 // <0|1>, marked <location,length|none>" once AppKit has handled its events, "browser: menu tracked
 // <titles>" as a menu AppKit tracks opens, such as DevTools' page's, "browser: modal shown <texts
-// and buttons>" as an alert does, and "browser: desktop space changed" once macOS has slid to
-// another Space. A page ignores clicks while the app isn't the active app, and macOS doesn't let a
-// background process make it active.
+// and buttons>" as an alert does, "browser: desktop space changed" once macOS has slid to
+// another Space, "browser: window resigned key" and "browser: window became key" as the browser
+// window driven loses the keyboard and has it back, and "browser: app activated <bundle
+// id|unbundled>, windows <level:size...>" as another app becomes the active one. A page ignores
+// clicks while the app isn't the active app, and macOS doesn't let a background process make it
+// active.
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 
@@ -183,6 +243,9 @@
 #include "browser_core.h"
 #include "../host.h"
 #include "menu_window.h"
+
+// host.mm's menu bar button for Little ilo, nil while it's off.
+NSStatusBarButton* HostLittleStatusButton();
 
 // A drag from another app, as AppKit describes it to the view under the pointer: what it carries
 // and where it is.
@@ -257,6 +320,12 @@
 - (BOOL)applySettings:(CGVirtualDisplaySettings*)settings;
 @end
 
+// host.mm's: where this driver's pointer last was, which host_pointer answers.
+extern NSPoint g_driven_pointer;
+extern bool g_driven_pointer_known;
+// host.mm's, for makekey.
+bool HostMakeOverlayKey(const char* name);
+
 namespace {
 
 // A character typed with ⇧, such as + or ?, has its key's code on a US keyboard.
@@ -270,7 +339,8 @@ const std::map<std::string, unsigned short> kKeyCodes = {
     {"0", 29}, {"-", 27}, {"+", 27}, {"[", 33}, {"]", 30}, {"up", 126}, {"down", 125},
     {"left", 123}, {"right", 124}, {"backspace", 51}, {",", 43}, {"delete", 117},
     {"pageup", 116}, {"pagedown", 121}, {"/", 44}, {"?", 44}, {"=", 24}, {"&", 26}, {"_", 27},
-    {":", 41}, {"@", 19}, {"f12", 111}, {"f10", 109}, {"f6", 97},
+    {":", 41}, {"@", 19}, {"!", 18}, {"(", 25}, {")", 29}, {"f12", 111}, {"f10", 109},
+    {"f6", 97},
 };
 // AppKit's characters for the arrows are NSUpArrowFunctionKey to NSRightArrowFunctionKey, and for
 // the others NSDeleteFunctionKey, NSPageUpFunctionKey, NSPageDownFunctionKey, NSF12FunctionKey,
@@ -449,12 +519,21 @@ NSWindow* MainWindow() {
   return window.visible ? window : nil;
 }
 
+// Where the driver's pointer last was, on screen, AppKit's way up, which host_pointer answers in a
+// driven run: its events move no real pointer, which stays wherever the desktop's is.
+void Pointed(NSWindow* window, NSPoint location) {
+  g_driven_pointer = [window convertPointToScreen:location];
+  g_driven_pointer_known = true;
+}
+
 void PostMouse(NSWindow* window,
                NSEventType type,
                double x,
                double y,
                int count,
-               NSEventModifierFlags flags = 0) {
+               NSEventModifierFlags flags = 0,
+               CGMouseButton other = kCGMouseButtonCenter) {
+  Pointed(window, NSMakePoint(x, NSHeight(window.frame) - y));
   NSEvent* event = [NSEvent mouseEventWithType:type
                                       location:NSMakePoint(x, NSHeight(window.frame) - y)
                                  modifierFlags:flags
@@ -469,7 +548,7 @@ void PostMouse(NSWindow* window,
   if (right || type == NSEventTypeOtherMouseDown || type == NSEventTypeOtherMouseUp) {
     CGEventRef numbered = CGEventCreateCopy(event.CGEvent);
     CGEventSetIntegerValueField(numbered, kCGMouseEventButtonNumber,
-                                right ? kCGMouseButtonRight : kCGMouseButtonCenter);
+                                right ? kCGMouseButtonRight : other);
     event = [NSEvent eventWithCGEvent:numbered];
     CFRelease(numbered);
   }
@@ -651,6 +730,10 @@ bool DragOver(NSWindow* window, double x, double y, std::istringstream& words) {
       [pasteboard writeObjects:@[ url ]];
     } else if (kind == "text") {
       [pasteboard setString:value forType:NSPasteboardTypeString];
+    } else if (kind == "tab") {
+      // As host_drag_tab carries one from another of the app's windows.
+      [pasteboard setString:[NSString stringWithFormat:@"%d %@", getpid(), value]
+                    forType:@"dev.ilo.browser.tab"];
     } else {
       [pasteboard releaseGlobally];
       return false;
@@ -743,12 +826,125 @@ IMP g_handle_event;
 IMP g_interpret_key_events;
 IMP g_handle_event_by_input_method;
 
+// ime ko's 2-set (dubeolsik) Korean keyboard, as macOS's 2-Set Korean makes the calls (#2457):
+// each key rebuilds the syllable it composes, a key that can't join it commits it and starts the
+// next, and a vowel after a final consonant takes that consonant into the next syllable (핫 then
+// ㅔ gives 하 and 세). Any other key commits what's composing and goes on to the view, return
+// too, unlike Japanese input; backspace takes the last letter off. Only the plain consonants and
+// vowels, without the compound ones, which "한글" and "안녕하세요" don't need.
+bool g_korean = false;
+struct Jamo {
+  char key;
+  unichar alone;  // Its compatibility letter, for it composing alone.
+  int initial;    // As a syllable's first consonant, or -1 for a vowel.
+  int final;      // As its last, or 0.
+  int vowel;      // As its vowel, or -1 for a consonant.
+};
+constexpr Jamo kJamo[] = {
+    {'r', 0x3131, 0, 1, -1},   {'s', 0x3134, 2, 4, -1},   {'e', 0x3137, 3, 7, -1},
+    {'f', 0x3139, 5, 8, -1},   {'a', 0x3141, 6, 16, -1},  {'q', 0x3142, 7, 17, -1},
+    {'t', 0x3145, 9, 19, -1},  {'d', 0x3147, 11, 21, -1}, {'w', 0x3148, 12, 22, -1},
+    {'c', 0x314A, 14, 23, -1}, {'z', 0x314B, 15, 24, -1}, {'x', 0x314C, 16, 25, -1},
+    {'v', 0x314D, 17, 26, -1}, {'g', 0x314E, 18, 27, -1}, {'k', 0x314F, -1, 0, 0},
+    {'o', 0x3150, -1, 0, 1},   {'i', 0x3151, -1, 0, 2},   {'j', 0x3153, -1, 0, 4},
+    {'p', 0x3154, -1, 0, 5},   {'u', 0x3155, -1, 0, 6},   {'h', 0x3157, -1, 0, 8},
+    {'y', 0x315B, -1, 0, 12},  {'n', 0x315C, -1, 0, 13},  {'b', 0x3160, -1, 0, 17},
+    {'m', 0x3161, -1, 0, 18},  {'l', 0x3163, -1, 0, 20},
+};
+// The syllable composing: its first consonant, vowel and last consonant, each null if none.
+const Jamo* g_first = nullptr;
+const Jamo* g_vowel = nullptr;
+const Jamo* g_last = nullptr;
+
+NSString* Syllable(const Jamo* first, const Jamo* vowel, const Jamo* last) {
+  unichar c;
+  if (first && vowel) {
+    c = 0xAC00 + (first->initial * 21 + vowel->vowel) * 28 + (last ? last->final : 0);
+  } else if (first || vowel) {
+    c = (first ?: vowel)->alone;
+  } else {
+    return @"";
+  }
+  return [NSString stringWithCharacters:&c length:1];
+}
+
+void MarkKorean(id<NSTextInputClient> client) {
+  NSString* text = Syllable(g_first, g_vowel, g_last);
+  g_composition = text.length ? text : nil;
+  [client setMarkedText:text
+          selectedRange:NSMakeRange(text.length, 0)
+       replacementRange:NSMakeRange(NSNotFound, 0)];
+}
+
+// Commits |first|, |vowel| and |last| as a syllable, and composes nothing.
+void CommitKorean(id<NSTextInputClient> client,
+                  const Jamo* first,
+                  const Jamo* vowel,
+                  const Jamo* last) {
+  [client insertText:Syllable(first, vowel, last) replacementRange:NSMakeRange(NSNotFound, 0)];
+  g_first = g_vowel = g_last = nullptr;
+  g_composition = nil;
+}
+
+bool KoreanKey(id<NSTextInputClient> client, NSEvent* event) {
+  NSString* characters = event.characters;
+  const Jamo* jamo = nullptr;
+  for (const Jamo& each : kJamo) {
+    if (characters.length == 1 && [characters characterAtIndex:0] == each.key) {
+      jamo = &each;
+    }
+  }
+  if (!jamo) {
+    if (!g_composition) {
+      return false;
+    }
+    if (event.keyCode == 51) {  // backspace
+      if (g_last) {
+        g_last = nullptr;
+      } else if (g_first && g_vowel) {
+        g_vowel = nullptr;
+      } else {
+        g_first = g_vowel = nullptr;
+      }
+      MarkKorean(client);
+      return true;
+    }
+    CommitKorean(client, g_first, g_vowel, g_last);
+    return false;
+  }
+  if (jamo->vowel < 0) {
+    if (g_first && g_vowel && !g_last && jamo->final) {
+      g_last = jamo;
+    } else {
+      if (g_composition) {
+        CommitKorean(client, g_first, g_vowel, g_last);
+      }
+      g_first = jamo;
+    }
+  } else if (g_first && !g_vowel) {
+    g_vowel = jamo;
+  } else {
+    // The last consonant moves on to start the syllable this vowel is in.
+    const Jamo* moving = g_last;
+    if (g_composition) {
+      CommitKorean(client, g_first, g_vowel, nullptr);
+    }
+    g_first = moving;
+    g_vowel = jamo;
+  }
+  MarkKorean(client);
+  return true;
+}
+
 // Returns false for a key the input method leaves to the view.
 bool ImeKey(id<NSTextInputClient> client, NSEvent* event) {
   constexpr NSEventModifierFlags kShortcut =
       NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption;
   if (!g_ime_on || event.type != NSEventTypeKeyDown || (event.modifierFlags & kShortcut)) {
     return false;
+  }
+  if (g_korean) {
+    return KoreanKey(client, event);
   }
   NSString* characters = event.characters;
   bool letter = characters.length == 1 && [NSCharacterSet.lowercaseLetterCharacterSet
@@ -854,6 +1050,7 @@ void (^g_save_panel_done)(NSModalResponse);
 NSURL* g_save_panel_url;
 IMP g_save_panel_class;
 IMP g_begin_panel;
+IMP g_begin_sheet;
 IMP g_panel_url;
 
 void BeginPanel(NSSavePanel* self, SEL selector, void (^done)(NSModalResponse)) {
@@ -866,6 +1063,18 @@ void BeginPanel(NSSavePanel* self, SEL selector, void (^done)(NSModalResponse)) 
   g_save_panel_done = done;
   fprintf(stderr, "browser: save panel offers %s in %s\n",
           self.nameFieldStringValue.UTF8String ?: "", self.directoryURL.path.UTF8String ?: "");
+}
+
+// Chrome begins a download's panel as a sheet on the browser window, which the driver keeps off
+// screen too: its view is out of process, where a posted escape never reaches it.
+void BeginSheet(NSSavePanel* self, SEL selector, NSWindow* parent,
+                void (^done)(NSModalResponse)) {
+  if ([self isKindOfClass:NSOpenPanel.class]) {
+    ((void (*)(id, SEL, NSWindow*, void (^)(NSModalResponse)))g_begin_sheet)(self, selector, parent,
+                                                                             done);
+    return;
+  }
+  BeginPanel(self, @selector(beginWithCompletionHandler:), done);
 }
 
 NSURL* PanelURL(NSSavePanel* self, SEL selector) {
@@ -883,6 +1092,12 @@ NSSavePanel* SavePanel(id self, SEL selector) {
       class_getInstanceMethod(kind, @selector(beginWithCompletionHandler:)), (IMP)BeginPanel);
   if (begin != (IMP)BeginPanel) {
     g_begin_panel = begin;
+  }
+  IMP sheet = method_setImplementation(
+      class_getInstanceMethod(kind, @selector(beginSheetModalForWindow:completionHandler:)),
+      (IMP)BeginSheet);
+  if (sheet != (IMP)BeginSheet) {
+    g_begin_sheet = sheet;
   }
   IMP url = method_setImplementation(class_getInstanceMethod(kind, @selector(URL)), (IMP)PanelURL);
   if (url != (IMP)PanelURL) {
@@ -922,14 +1137,15 @@ void AwaitKeyTitle(NSString* text, int tries, void (^done)(void)) {
 
 // Picks |path| in the save panel the app began, once it has, which may be a moment after the app
 // asked for it: for up to 5 s.
+// With no |path|, as its Cancel.
 void AnswerSavePanel(NSString* path, int tries, void (^done)(void)) {
   if (g_save_panel_done) {
     void (^answer)(NSModalResponse) = g_save_panel_done;
     g_save_panel_done = nil;
-    g_save_panel_url = [NSURL fileURLWithPath:path isDirectory:NO];
-    fprintf(stderr, "browser: save panel answered\n");
+    g_save_panel_url = path ? [NSURL fileURLWithPath:path isDirectory:NO] : nil;
+    fprintf(stderr, "browser: save panel %s\n", path ? "answered" : "cancelled");
     // The app's handler reads the panel's URL as it runs.
-    answer(NSModalResponseOK);
+    answer(path ? NSModalResponseOK : NSModalResponseCancel);
     g_save_panel = nil;
     g_save_panel_url = nil;
     done();
@@ -974,6 +1190,10 @@ void AppendViews(NSMutableString* line, NSView* content, NSView* parent) {
                        NSMinX(frame), NSMinY(frame), NSWidth(frame), NSHeight(frame)];
     if (view.layer.masksToBounds && view.layer.cornerRadius > 0) {
       [line appendFormat:@" radius %.0f", view.layer.cornerRadius];
+      // The core's engine rounds pages on the continuous curve the window's corner has.
+      if ([view.layer.cornerCurve isEqual:kCACornerCurveContinuous]) {
+        [line appendString:@" continuous"];
+      }
     }
   }
 }
@@ -998,6 +1218,18 @@ NSString* Describe(id element) {
   return [NSString stringWithFormat:@"%@ %.0fx%.0f %@", NSStringFromClass(window.class),
                                     NSWidth(window.frame), NSHeight(window.frame),
                                     window.accessibilityRole];
+}
+
+// Chrome's Picture in Picture window: one of the app's on screen, over the normal level, that is
+// Chrome's own, not a browser window, and no other window's child, as the command bar and Peek are.
+NSWindow* PictureInPicture() {
+  for (NSWindow* window in NSApp.orderedWindows) {
+    if (window.visible && !window.parentWindow && window.level > NSNormalWindowLevel &&
+        [NSStringFromClass(window.class) hasPrefix:@"NativeWidgetMac"]) {
+      return window;
+    }
+  }
+  return nil;
 }
 
 // The app's first window on screen at the normal level, front to back, as another app finds it.
@@ -1142,9 +1374,15 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (!(words >> number) || number == 0 || !host_browser_window(number - 1)) {
       return false;
     }
+    std::string behind;
+    if (words >> behind && behind != "behind") {
+      return false;
+    }
     g_driven = number - 1;
-    fprintf(stderr, "browser: drive window %zu\n", number);
-    [(__bridge NSWindow*)host_browser_window(g_driven) makeKeyAndOrderFront:nil];
+    fprintf(stderr, "browser: drive window %zu%s\n", number, behind.empty() ? "" : " behind");
+    if (behind.empty()) {
+      [(__bridge NSWindow*)host_browser_window(g_driven) makeKeyAndOrderFront:nil];
+    }
     done();
     return true;
   }
@@ -1156,6 +1394,31 @@ bool Run(const std::string& line, void (^done)(void)) {
     } else {
       [driven miniaturize:nil];
     }
+    done();
+    return true;
+  }
+  if (action == "active") {
+    [NSNotificationCenter.defaultCenter
+        postNotificationName:NSApplicationDidBecomeActiveNotification
+                      object:NSApp];
+    done();
+    return true;
+  }
+  if (action == "yield") {
+    pid_t pid;
+    if (!(words >> pid)) {
+      return false;
+    }
+    NSRunningApplication* to = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    if (!to) {
+      return false;
+    }
+    // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
+    if (@available(macOS 14, *)) {
+      [NSApp yieldActivationToApplication:to];
+      [to activateFromApplication:NSRunningApplication.currentApplication options:0];
+    }
+    fprintf(stderr, "browser: yielded to %d\n", pid);
     done();
     return true;
   }
@@ -1204,6 +1467,14 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     NSWindow* target = WindowAt(window, x, y);
+    // A click that another window of the app's takes, such as one AppKit puts over a full-screen
+    // window, says which, since a check's click that does nothing logs nothing else (#1090).
+    if (target != window) {
+      const NSRect frame = target.frame;
+      fprintf(stderr, "browser: drive click went to %s %ld at %.0f,%.0f %.0fx%.0f\n",
+              NSStringFromClass([target class]).UTF8String, (long)target.windowNumber,
+              frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+    }
     Convert(window, target, &x, &y);
     Click(target, x, y, 1, Modifiers(words));
     done();
@@ -1247,6 +1518,22 @@ bool Run(const std::string& line, void (^done)(void)) {
     Convert(window, target, &x, &y);
     PostMouse(target, NSEventTypeRightMouseDown, x, y, 1);
     PostMouse(target, NSEventTypeRightMouseUp, x, y, 1);
+    done();
+    return true;
+  }
+  // A mouse's side buttons are the window server's buttons 3 and 4, which AppKit and GPUI read as
+  // back and forward.
+  if (action == "sideclick") {
+    double x, y;
+    std::string way;
+    if (!(words >> x >> y >> way) || (way != "back" && way != "forward")) {
+      return false;
+    }
+    NSWindow* target = WindowAt(window, x, y);
+    Convert(window, target, &x, &y);
+    const CGMouseButton button = static_cast<CGMouseButton>(way == "back" ? 3 : 4);
+    PostMouse(target, NSEventTypeOtherMouseDown, x, y, 1, 0, button);
+    PostMouse(target, NSEventTypeOtherMouseUp, x, y, 1, 0, button);
     done();
     return true;
   }
@@ -1366,19 +1653,22 @@ bool Run(const std::string& line, void (^done)(void)) {
     NSView* content = target.contentView;
     NSView* hit = [content hitTest:[content.superview convertPoint:move.locationInWindow
                                                           fromView:nil]];
+    Pointed(target, move.locationInWindow);
     [hit mouseMoved:move];
     TrackMove(content, move, hit);
     [NSApp postEvent:move atStart:NO];
     done();
     return true;
   }
-  if (action == "scroll") {
+  // As scroll, in the window with the keyboard, such as Settings', as clickkey clicks there.
+  if (action == "scroll" || action == "scrollkey") {
     double x, y, dy;
     int count;
-    if (!(words >> x >> y >> dy >> count) || count < 1) {
+    NSWindow* in = action == "scrollkey" ? NSApp.keyWindow : window;
+    if (!in || !(words >> x >> y >> dy >> count) || count < 1) {
       return false;
     }
-    Scroll(window, x, y, dy, count, done);
+    Scroll(in, x, y, dy, count, done);
     return true;
   }
   if (action == "swipe") {
@@ -1469,6 +1759,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "pip") {
+    NSWindow* pip = PictureInPicture();
+    if (!pip) {
+      fprintf(stderr, "browser: pip none\n");
+    } else {
+      const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
+      const NSRect frame = pip.frame;
+      fprintf(stderr, "browser: pip at %.0f %.0f %.0f %.0f\n", NSMinX(frame),
+              top - NSMaxY(frame), NSWidth(frame), NSHeight(frame));
+    }
+    done();
+    return true;
+  }
   if (action == "screen") {
     double visible[4];
     if (host_screens(visible, 1) < 1) {
@@ -1517,6 +1820,18 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "desktop") {
+    NSMutableString* shown = [NSMutableString string];
+    for (size_t index = 0; index < 64; index++) {
+      NSWindow* each = (__bridge NSWindow*)host_browser_window(index);
+      if (each && each.visible && each.onActiveSpace) {
+        [shown appendFormat:@" window %zu", index + 1];
+      }
+    }
+    fprintf(stderr, "browser: desktop shown%s\n", shown.UTF8String);
+    done();
+    return true;
+  }
   if (action == "layout") {
     Layout(window);
     done();
@@ -1534,6 +1849,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     const bc_id space = bc_space_create_for_agent(name.c_str(), agent.c_str(), name.c_str());
     fprintf(stderr, "browser: made space %llu for agent %s\n", (unsigned long long)space,
             agent.c_str());
+    done();
+    return true;
+  }
+  if (action == "agentopen") {
+    std::string agent, url;
+    if (!(words >> agent >> url)) {
+      return false;
+    }
+    const bc_id tab = bc_agent_open_tab(agent.c_str(), url.c_str());
+    if (!tab) {
+      return false;
+    }
+    fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
     done();
     return true;
   }
@@ -1599,6 +1927,68 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "battery") {
+    int percent;
+    std::string power;
+    if (!(words >> percent >> power) || (power != "plugged" && power != "unplugged")) {
+      return false;
+    }
+    bc_battery_for_testing(percent, power == "plugged");
+    done();
+    return true;
+  }
+  if (action == "pair") {
+    bc_id tab;
+    std::string kind;
+    if (!(words >> tab >> kind)) {
+      return false;
+    }
+    const int pair = kind == "pin" ? BC_PAIR_PIN : kind == "confirm" ? BC_PAIR_CONFIRM
+                   : kind == "passkey" ? BC_PAIR_PASSKEY : -1;
+    if (pair < 0) {
+      return false;
+    }
+    bc_tab_pair_for_testing(tab, pair);
+    done();
+    return true;
+  }
+  if (action == "stack") {
+    NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+    const auto bounds = [](NSDictionary* info) {
+      CGRect rect = CGRectNull;
+      CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],
+                                             &rect);
+      return rect;
+    };
+    CGRect over = CGRectNull;
+    for (NSDictionary* info in windows) {
+      if ([info[(id)kCGWindowNumber] integerValue] == window.windowNumber) {
+        over = bounds(info);
+      }
+    }
+    NSMutableArray<NSString*>* stack = [NSMutableArray array];
+    for (NSDictionary* info in windows) {
+      const NSInteger number = [info[(id)kCGWindowNumber] integerValue];
+      if (number == window.windowNumber) {
+        [stack addObject:@"driven"];
+        break;
+      }
+      if ([info[(id)kCGWindowLayer] intValue] != 0 || [info[(id)kCGWindowAlpha] doubleValue] == 0 ||
+          !CGRectIntersectsRect(bounds(info), over)) {
+        continue;
+      }
+      if ([info[(id)kCGWindowOwnerPID] intValue] == getpid()) {
+        [stack addObject:Describe([NSApp windowWithWindowNumber:number]
+                                      ?: [NSString stringWithFormat:@"number %ld", (long)number])];
+      } else {
+        [stack addObject:[NSString stringWithFormat:@"other %@", info[(id)kCGWindowOwnerName]]];
+      }
+    }
+    fprintf(stderr, "browser: stack %s\n", [stack componentsJoinedByString:@", "].UTF8String);
+    done();
+    return true;
+  }
   if (action == "front") {
     fprintf(stderr, "browser: front %s, main %s, key %s, ax focused %s, ax main %s\n",
             Describe(FirstNormalWindow()).UTF8String, Describe(NSApp.mainWindow).UTF8String,
@@ -1616,7 +2006,13 @@ bool Run(const std::string& line, void (^done)(void)) {
     AnswerSavePanel(@(line.substr(std::min(line.size(), action.size() + 1)).c_str()), 50, done);
     return true;
   }
+  if (action == "savecancel") {
+    AnswerSavePanel(nil, 50, done);
+    return true;
+  }
   if (action == "pasteboard") {
+    fprintf(stderr, "browser: pasteboard types %s\n",
+            [g_pasteboard.types componentsJoinedByString:@" "].UTF8String ?: "");
     fprintf(stderr, "browser: pasteboard text %s\n",
             [g_pasteboard stringForType:NSPasteboardTypeString].UTF8String ?: "");
     done();
@@ -1683,6 +2079,100 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "dock") {
+    NSString* title = @(line.substr(std::min(line.size(), action.size() + 1)).c_str());
+    id<NSApplicationDelegate> delegate = NSApp.delegate;
+    NSMenu* menu = [delegate respondsToSelector:@selector(applicationDockMenu:)]
+                       ? [delegate applicationDockMenu:NSApp]
+                       : nil;
+    if (!menu) {
+      return false;
+    }
+    if (title.length) {
+      NSInteger index = [menu indexOfItemWithTitle:title];
+      if (index < 0) {
+        return false;
+      }
+      [menu performActionForItemAtIndex:index];
+    } else {
+      NSMutableArray<NSString*>* titles = [NSMutableArray array];
+      for (NSMenuItem* item in menu.itemArray) {
+        if (!item.separatorItem && !item.hidden) {
+          [titles addObject:item.title];
+        }
+      }
+      fprintf(stderr, "browser: dock menu %s\n", [titles componentsJoinedByString:@", "].UTF8String);
+    }
+    done();
+    return true;
+  }
+  if (action == "dockicon") {
+    // The image the app gave the Dock, which is what the Dock draws: a capture of the Dock itself
+    // would need the screen, with other apps' icons. Drawn as dock.mm draws macOS's, with the dot
+    // at (512, 328) from the top left.
+    std::string path;
+    std::getline(words >> std::ws, path);
+    if (path.empty()) {
+      return false;
+    }
+    NSBitmapImageRep* picture =
+        [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:nullptr
+                                                pixelsWide:1024
+                                                pixelsHigh:1024
+                                             bitsPerSample:8
+                                           samplesPerPixel:4
+                                                  hasAlpha:YES
+                                                  isPlanar:NO
+                                            colorSpaceName:NSDeviceRGBColorSpace
+                                               bytesPerRow:0
+                                              bitsPerPixel:0];
+    [NSGraphicsContext saveGraphicsState];
+    NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:picture];
+    [NSApp.applicationIconImage drawInRect:NSMakeRect(0, 0, 1024, 1024)];
+    [NSGraphicsContext restoreGraphicsState];
+    NSData* png = [picture representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    NSColor* dot =
+        [[picture colorAtX:512 y:328] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    if (!dot || ![png writeToFile:@(path.c_str()) atomically:YES]) {
+      return false;
+    }
+    fprintf(stderr, "browser: dock icon %.0f %.0f %.0f\n", dot.redComponent * 255,
+            dot.greenComponent * 255, dot.blueComponent * 255);
+    done();
+    return true;
+  }
+  if (action == "statusitem") {
+    NSStatusBarButton* button = HostLittleStatusButton();
+    std::string what;
+    words >> what;
+    if (what == "click") {
+      if (!button) {
+        return false;
+      }
+      [button performClick:nil];
+    } else if (what == "capture") {
+      // The button draws itself into a picture, as the menu bar shows it: the menu bar's window
+      // isn't one a capture of the app's windows finds, and a capture of the screen would hold
+      // other apps' buttons.
+      std::string path;
+      std::getline(words >> std::ws, path);
+      if (!button || path.empty()) {
+        return false;
+      }
+      NSBitmapImageRep* picture = [button bitmapImageRepForCachingDisplayInRect:button.bounds];
+      [button cacheDisplayInRect:button.bounds toBitmapImageRep:picture];
+      NSData* png = [picture representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+      if (![png writeToFile:@(path.c_str()) atomically:YES]) {
+        return false;
+      }
+      fprintf(stderr, "browser: status item captured %.0fx%.0f\n", button.bounds.size.width,
+              button.bounds.size.height);
+    } else {
+      fprintf(stderr, "browser: status item %s\n", button ? "shown" : "none");
+    }
+    done();
+    return true;
+  }
   if (action == "menubar") {
     NSString* title = @(line.substr(std::min(line.size(), action.size() + 1)).c_str());
     NSMenu* menu = [NSApp.mainMenu itemWithTitle:title].submenu;
@@ -1728,6 +2218,14 @@ bool Run(const std::string& line, void (^done)(void)) {
     dispatch_async(dispatch_get_main_queue(), done);
     return true;
   }
+  if (action == "makekey") {
+    std::string name = line.substr(std::min(line.size(), action.size() + 1));
+    if (!HostMakeOverlayKey(name.c_str())) {
+      return false;
+    }
+    done();
+    return true;
+  }
   if (action == "dismiss") {
     if (!host_menu_window_dismiss()) {
       NSMenu* menu = g_tracked;
@@ -1742,16 +2240,31 @@ bool Run(const std::string& line, void (^done)(void)) {
   if (action == "ime") {
     std::string state;
     words >> state;
-    if (state != "on" && state != "off") {
+    if (state != "on" && state != "off" && state != "ko") {
       return false;
     }
     HookIme();
-    g_ime_on = state == "on";
+    g_ime_on = state != "off";
+    g_korean = state == "ko";
     g_composition = nil;
+    g_first = g_vowel = g_last = nullptr;
     done();
     return true;
   }
   NSWindow* key_window = NSApp.keyWindow ?: window;
+  if (action == "resizekey") {
+    double width, height;
+    if (!(words >> width >> height)) {
+      return false;
+    }
+    NSRect frame = key_window.frame;
+    NSSize size = [key_window frameRectForContentRect:NSMakeRect(0, 0, width, height)].size;
+    [key_window setFrame:NSMakeRect(NSMinX(frame), NSMaxY(frame) - size.height, size.width,
+                                    size.height)
+                 display:YES];
+    done();
+    return true;
+  }
   if (action == "keydown" || action == "keyup") {
     std::string key, repeat;
     words >> key >> repeat;
@@ -1869,6 +2382,35 @@ void drive_start(void) {
               usingBlock:^(NSNotification*) {
                 fprintf(stderr, "browser: desktop space changed\n");
               }];
+  // Another app taking activation mid-run leaves every later key with nowhere to go (#968). Only
+  // the bundle identifier, as an unbundled process's name can name the machine.
+  [NSWorkspace.sharedWorkspace.notificationCenter
+      addObserverForName:NSWorkspaceDidActivateApplicationNotification
+                  object:nil
+                   queue:nil
+              usingBlock:^(NSNotification* notification) {
+                NSRunningApplication* app = notification.userInfo[NSWorkspaceApplicationKey];
+                if ([app isEqual:NSRunningApplication.currentApplication]) {
+                  return;
+                }
+                // Its windows on screen, by level and size alone, to tell an alert from a panel.
+                NSMutableString* windows = [NSMutableString string];
+                NSArray* list = CFBridgingRelease(CGWindowListCopyWindowInfo(
+                    kCGWindowListOptionOnScreenOnly, kCGNullWindowID));
+                for (NSDictionary* info in list) {
+                  if ([info[(id)kCGWindowOwnerPID] intValue] != app.processIdentifier) {
+                    continue;
+                  }
+                  CGRect r;
+                  CGRectMakeWithDictionaryRepresentation(
+                      (__bridge CFDictionaryRef)info[(id)kCGWindowBounds], &r);
+                  [windows appendFormat:@" %@:%.0fx%.0f", info[(id)kCGWindowLayer],
+                                        r.size.width, r.size.height];
+                }
+                fprintf(stderr, "browser: app activated %s, windows%s\n",
+                        app.bundleIdentifier ? app.bundleIdentifier.UTF8String : "unbundled",
+                        windows.length ? windows.UTF8String : " none");
+              }];
   // Full-screen transitions animate, and end well after the command's done.
   for (NSNotificationName name :
        {NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification}) {
@@ -1897,6 +2439,24 @@ void drive_start(void) {
                 fprintf(stderr, "browser: window on screen %.0fx%.0f, full screen %d\n", size.width,
                         size.height, (window.styleMask & NSWindowStyleMaskFullScreen) != 0);
               }];
+  // The browser window losing the keyboard and having it back between two commands, as to
+  // Chrome's dialog for what a page shares, which the commands' own lines miss: Chrome does what
+  // waits on the window being active, such as showing the tab a page shares, only while it is
+  // (#2148).
+  for (NSNotificationName name :
+       {NSWindowDidResignKeyNotification, NSWindowDidBecomeKeyNotification}) {
+    const char* what =
+        [name isEqualToString:NSWindowDidBecomeKeyNotification] ? "became" : "resigned";
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:name
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* notification) {
+                  if (notification.object == (__bridge NSWindow*)host_browser_window(g_driven)) {
+                    fprintf(stderr, "browser: window %s key\n", what);
+                  }
+                }];
+  }
   // The same transitions timed, on the uptime clock the core's and the app's lines read: when
   // AppKit starts one, when the window gets its size, and when it ends (above). check.sh reads them.
   for (NSNotificationName name :

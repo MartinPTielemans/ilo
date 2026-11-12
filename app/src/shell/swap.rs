@@ -1,11 +1,12 @@
 //! A glyph changing into another on the same thing, such as reload into stop as the tab's page
 //! starts loading: the old one fades and shrinks as the new one fades and grows in, as Arc's do.
-//! Lucide's check draws itself along its stroke, and a row's ✕ turns into −, as Arc's do.
+//! Lucide's check draws itself along its stroke.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, Hsla, PathBuilder, Transformation, Window, canvas, div, fill, point,
+    AnyElement, App, Bounds, Hsla, PathBuilder, Transformation, Window, canvas, div, fill, point,
     prelude::*, px, size, svg,
 };
 
@@ -25,18 +26,16 @@ pub(super) enum Swapped {
     CopyUrl,
     /// The arrow before a Space's Clear, while Clear would close its last Today tabs.
     Clear(u64),
-    /// A row's close button, by its first tab: − on the selected pinned row, else ✕.
-    Close(u64),
+    /// A pinned tab's or favorite's return mark, while it's away from its pinned URL.
+    Away(u64),
 }
 
 pub(super) const CHECK: &str = "icons/check.svg";
 pub(super) const LINK: &str = "icons/link.svg";
 pub(super) const ARROW_DOWN: &str = "icons/arrow-down.svg";
+pub(super) const UNDO: &str = "icons/undo-2.svg";
 /// No glyph, for one that comes and goes.
 pub(super) const NONE: &str = "";
-/// The close button's ✕ and −, two bars drawn at an angle rather than a file.
-pub(super) const CLOSE: &str = "close";
-pub(super) const UNLOAD: &str = "unload";
 // Both glyphs move from the same moment, linearly, about the glyph's middle: the old one fades
 // out and shrinks to 0.6 over 70 ms, and the new one fades in over 40 ms and grows from 0.8 over
 // 80 (Arc 1.170 rec at 2×, reload into stop and back).
@@ -45,8 +44,6 @@ const LEAVE: f32 = 0.07;
 const COME: f32 = 0.04;
 const SHRUNK: f32 = 0.6;
 const SMALL: f32 = 0.8;
-// The ✕'s bars turn level into − in 110 ms, linearly (Arc 1.170 rec at 2×).
-const TURN: f32 = 0.11;
 // The check draws in 250 ms, ease-in-out (ours), while the link leaves as above.
 const CHECK_DRAW: f32 = 0.25;
 // Lucide's check in its 24 box, from its left end down to its point and up to its right end,
@@ -92,15 +89,22 @@ impl Swaps {
             if (was.from, was.to) == (to, from) {
                 // The glyph coming in leaves from as far as it had come.
                 let left = 1. - arrived(was.to, was.elapsed(now));
-                let back = left * if is_bars(to) { TURN } else { LEAVE };
-                start = now.checked_sub(Duration::from_secs_f32(back)).unwrap_or(now);
+                let back = left * LEAVE;
+                start = now
+                    .checked_sub(Duration::from_secs_f32(back))
+                    .unwrap_or(now);
             }
         }
-        self.0.push(Swap { what, from, to, start });
+        self.0.push(Swap {
+            what,
+            from,
+            to,
+            start,
+        });
     }
 
     /// Starts what a report on `tab`'s page changes: the header's reload or stop, only for the tab
-    /// shown, and the tab's speaker, only while it stays shown.
+    /// shown, the tab's speaker, only while it stays shown, and its return mark.
     pub(super) fn page_changed(
         &mut self,
         tab: u64,
@@ -118,13 +122,36 @@ impl Swaps {
             let (from, to) = (speaker_glyph(before.muted), speaker_glyph(after.muted));
             self.start(Swapped::Speaker(tab), from, to, now);
         }
+        // A tab's first report draws its row, whose mark shows at once.
+        if !before.url.is_empty() {
+            let mark = |page: &Page| {
+                if page.away_from_pinned_url {
+                    UNDO
+                } else {
+                    NONE
+                }
+            };
+            self.start(Swapped::Away(tab), mark(before), mark(after), now);
+        }
     }
 
-    /// Starts each folder of the Space shown that opened or closed.
-    pub(super) fn folders_changed(&mut self, before: &Folders, after: &Folders, now: Instant) {
+    /// Starts each folder of the Space shown that opened or closed, to its dots if it lists the
+    /// tab shown over folders it hides, `eliding` before and after.
+    pub(super) fn folders_changed(
+        &mut self,
+        before: &Folders,
+        after: &Folders,
+        eliding: (Vec<u64>, Vec<u64>),
+        now: Instant,
+    ) {
         for (&folder, &(_, open)) in &after.folders {
             if let Some(&(_, was)) = before.folders.get(&folder) {
-                self.start(Swapped::Folder(folder), folder_glyph(was), folder_glyph(open), now);
+                self.start(
+                    Swapped::Folder(folder),
+                    folder_glyph(was, eliding.0.contains(&folder)),
+                    folder_glyph(open, eliding.1.contains(&folder)),
+                    now,
+                );
             }
         }
     }
@@ -167,24 +194,29 @@ impl Swaps {
         path: &'static str,
         side: f32,
         color: Hsla,
+        cx: &App,
     ) -> AnyElement {
-        let Some(swap) = self.0.iter().find(|swap| swap.what == what && swap.to == path) else {
+        let Some(swap) = self
+            .0
+            .iter()
+            .find(|swap| swap.what == what && swap.to == path)
+        else {
             return match path {
                 NONE => div().flex_none().size(px(side)).into_any_element(),
-                CLOSE | UNLOAD => bars(bars_angle(path), side, color).into_any_element(),
-                _ => svg().path(path).size(px(side)).text_color(color).into_any_element(),
+                _ => svg()
+                    .path(path)
+                    .size(px(side))
+                    .text_color(color)
+                    .into_any_element(),
             };
         };
         let elapsed = swap.elapsed(Instant::now());
-        if is_bars(path) {
-            let (from, to) = (bars_angle(swap.from), bars_angle(path));
-            let angle = from + (to - from) * arrived(path, elapsed);
-            return bars(angle, side, color).into_any_element();
-        }
+        // Under Reduce Motion the glyphs cross-fade at their size.
         let glyph = |path: &'static str, opacity: f32, scale: f32| {
             if path == NONE {
                 return div().into_any_element();
             }
+            let scale = crate::motion::scale(scale, cx);
             svg()
                 .absolute()
                 .size_full()
@@ -209,15 +241,20 @@ impl Swaps {
 }
 
 /// A folder's icon, open or closed.
-pub(super) fn folder_glyph(open: bool) -> &'static str {
-    if open { "icons/folder-open.svg" } else { "icons/folder.svg" }
+/// A folder's glyph, open or closed, and closed with three dots while it lists the tab shown with
+/// folders hidden between them (#1405).
+pub(super) fn folder_glyph(open: bool, elided: bool) -> &'static str {
+    match (open, elided) {
+        (true, _) => "icons/folder-open.svg",
+        (false, true) => "icons/folder-ellipsis.svg",
+        (false, false) => "icons/folder.svg",
+    }
 }
 
 /// How long a change to `to` takes.
 fn lasts(to: &'static str) -> f32 {
     match to {
         CHECK => CHECK_DRAW,
-        _ if is_bars(to) => TURN,
         _ => SWAP,
     }
 }
@@ -237,30 +274,13 @@ fn grown(elapsed: f32) -> f32 {
     (elapsed / SWAP).clamp(0., 1.)
 }
 
-/// How far a change to `to` has come, `elapsed` seconds in, 0 to 1: the check drawn, the bars
-/// turned, or another glyph faded in.
+/// How far a change to `to` has come, `elapsed` seconds in, 0 to 1: the check drawn, or another
+/// glyph faded in.
 fn arrived(to: &'static str, elapsed: f32) -> f32 {
     match to {
         CHECK => ease(elapsed / CHECK_DRAW),
-        _ if is_bars(to) => (elapsed / TURN).clamp(0., 1.),
         _ => coming(elapsed),
     }
-}
-
-/// Whether `path` is the close button's, drawn as two bars.
-fn is_bars(path: &'static str) -> bool {
-    matches!(path, CLOSE | UNLOAD)
-}
-
-/// The angle the close button's bars stand at from level, either way: ✕'s 45° or −'s 0.
-fn bars_angle(path: &'static str) -> f32 {
-    if path == UNLOAD { 0. } else { 45. }
-}
-
-/// The close button's bars, `side` square, crossing at its middle `angle` degrees from level
-/// either way, from one glyph so they don't darken where they cross (assets::bars).
-fn bars(angle: f32, side: f32, color: Hsla) -> impl IntoElement {
-    svg().path(super::assets::bars_path(angle)).flex_none().size(px(side)).text_color(color)
 }
 
 /// Ease-in-out, exactly 0 and 1 at its ends, which the curve's search only comes near.
@@ -275,7 +295,10 @@ fn ease(t: f32) -> f32 {
 /// The points of Lucide's check drawn `way` of its length along, from its left end, in its 24 box.
 fn check_line(way: f32) -> Vec<(f32, f32)> {
     let length = |(ax, ay): (f32, f32), (bx, by): (f32, f32)| (bx - ax).hypot(by - ay);
-    let total: f32 = CHECK_LINE.windows(2).map(|pair| length(pair[0], pair[1])).sum();
+    let total: f32 = CHECK_LINE
+        .windows(2)
+        .map(|pair| length(pair[0], pair[1]))
+        .sum();
     let mut left = way.clamp(0., 1.) * total;
     let mut line = vec![CHECK_LINE[0]];
     for pair in CHECK_LINE.windows(2) {
@@ -296,7 +319,7 @@ fn check_line(way: f32) -> Vec<(f32, f32)> {
 }
 
 /// The check, drawn `way` of the way along its stroke.
-fn drawing_check(way: f32, color: Hsla) -> impl IntoElement {
+pub(crate) fn drawing_check(way: f32, color: Hsla) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
@@ -332,8 +355,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        CLOSE, COME, LEAVE, Page, SWAP, Swapped, Swaps, TURN, UNLOAD, arrived, check_line, coming,
-        grown, leaving,
+        COME, LEAVE, Page, SWAP, Swapped, Swaps, UNDO, check_line, coming, grown, leaving,
     };
 
     fn near(a: (f32, f32), b: (f32, f32)) -> bool {
@@ -347,7 +369,11 @@ mod tests {
         assert_eq!(check_line(0.), vec![(4., 12.)]);
         let down = check_line(5. / 32.);
         assert_eq!(down.len(), 2);
-        assert!(near(down[1], (6.5, 14.5)), "half way down it's at {:?}", down[1]);
+        assert!(
+            near(down[1], (6.5, 14.5)),
+            "half way down it's at {:?}",
+            down[1]
+        );
         let point = check_line(5. / 16.);
         assert!(near(*point.last().unwrap(), (9., 17.)), "{point:?}");
         let up = check_line(5. / 16. + 11. / 32.);
@@ -375,7 +401,10 @@ mod tests {
     fn only_a_change_on_the_tab_shown_moves_its_reload() {
         let now = Instant::now();
         let idle = Page::default();
-        let loading = Page { loading: true, ..Page::default() };
+        let loading = Page {
+            loading: true,
+            ..Page::default()
+        };
         let mut swaps = Swaps::default();
         swaps.page_changed(2, 1, &idle, &loading, now);
         assert!(!swaps.changing(Swapped::Reload(2)));
@@ -383,18 +412,67 @@ mod tests {
         assert!(swaps.changing(Swapped::Reload(1)));
         assert!(!swaps.changing(Swapped::Reload(2)));
         swaps.page_changed(1, 1, &loading, &loading, now);
-        assert!(swaps.changing(Swapped::Reload(1)), "a report that changes nothing keeps it");
+        assert!(
+            swaps.changing(Swapped::Reload(1)),
+            "a report that changes nothing keeps it"
+        );
 
-        let audible = Page { audible: true, ..Page::default() };
-        let muted = Page { audible: true, muted: true, ..Page::default() };
+        let audible = Page {
+            audible: true,
+            ..Page::default()
+        };
+        let muted = Page {
+            audible: true,
+            muted: true,
+            ..Page::default()
+        };
         swaps.page_changed(3, 1, &idle, &muted, now);
-        assert!(!swaps.changing(Swapped::Speaker(3)), "a speaker that just came shows at once");
+        assert!(
+            !swaps.changing(Swapped::Speaker(3)),
+            "a speaker that just came shows at once"
+        );
         swaps.page_changed(3, 1, &audible, &muted, now);
         assert!(swaps.changing(Swapped::Speaker(3)));
     }
 
+    /// A pinned tab leaving its pinned URL, or going back, moves its return mark, on any tab, as
+    /// its row shows whichever is shown; a tab's first report shows it at once.
+    #[test]
+    fn a_return_mark_comes_and_goes_but_shows_at_once_on_a_new_row() {
+        let now = Instant::now();
+        let home = Page {
+            url: "https://example.com/".into(),
+            ..Page::default()
+        };
+        let away = Page {
+            url: "https://example.com/notes".into(),
+            away_from_pinned_url: true,
+            ..Page::default()
+        };
+        let mut swaps = Swaps::default();
+        swaps.page_changed(4, 1, &Page::default(), &away, now);
+        assert!(
+            !swaps.changing(Swapped::Away(4)),
+            "a new row's mark shows at once"
+        );
+        swaps.page_changed(4, 1, &home, &away, now);
+        // It's read against the clock, a moment after the change started.
+        assert!(
+            swaps
+                .toward(Swapped::Away(4), UNDO)
+                .is_some_and(|way| way < 0.5)
+        );
+        swaps.page_changed(5, 1, &away, &home, now);
+        assert!(
+            swaps
+                .toward(Swapped::Away(5), UNDO)
+                .is_some_and(|way| way > 0.5),
+            "going, it starts whole"
+        );
+    }
+
     /// Changed back mid-way, a glyph goes back from where it was: the one coming in leaves from
-    /// as far as it had come, and the close button's bars turn back from their angle.
+    /// as far as it had come.
     #[test]
     fn a_change_undone_goes_back_from_where_it_is() {
         let start = Instant::now();
@@ -406,13 +484,10 @@ mod tests {
         let swap = &swaps.0[0];
         assert_eq!((swap.from, swap.to), ("b", "a"));
         let gone = leaving(swap.elapsed(back));
-        assert!((1. - gone - came).abs() < 1e-3, "it came {came} and is {} there", 1. - gone);
-
-        swaps.start(Swapped::Close(2), CLOSE, UNLOAD, start);
-        let back = start + Duration::from_secs_f32(TURN * 0.3);
-        swaps.start(Swapped::Close(2), UNLOAD, CLOSE, back);
-        let swap = swaps.0.iter().find(|swap| swap.what == Swapped::Close(2)).unwrap();
-        let turned = arrived(CLOSE, swap.elapsed(back));
-        assert!((turned - 0.7).abs() < 1e-3, "it turned 0.3 of the way and is {turned} back");
+        assert!(
+            (1. - gone - came).abs() < 1e-3,
+            "it came {came} and is {} there",
+            1. - gone
+        );
     }
 }

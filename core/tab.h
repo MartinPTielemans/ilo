@@ -9,6 +9,7 @@
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/functional/function_ref.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/task/cancelable_task_tracker.h"
@@ -21,6 +22,7 @@
 #include "components/favicon/core/favicon_driver_observer.h"
 #include "components/infobars/core/infobar_manager.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/session_storage_namespace_handle.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
@@ -114,12 +116,23 @@ class Tab : public content::WebContentsObserver,
   GURL Url() const;
   // Its history, with its name, icon and mute, as the session keeps it.
   SavedTab Save() const;
+  // The id of its page's sessionStorage in its profile, loaded or not, which the session file keeps
+  // for the next launch (SavedTab::session_storage), or empty.
+  std::string SessionStorageId() const;
 
   // Lets go of the tab's page, keeping its history, name and icon, and its place: it's a tab without
   // its page (Wake). Chrome's tab strip deletes the page, so none of its unload handlers run.
   void Unload();
   // Whether Unload is deleting its page.
   bool unloading() const { return unloading_; }
+  // Points the tab, while it has no page, at |url| titled |title|, as a navigation another device
+  // made reached (sync_spaces.h), without loading it: its history goes on to |url| as a
+  // navigation's does, dropping what was forward of where it was. Shown, it loads there. Returns
+  // whether it could: not with its page, nor for an invalid |url|.
+  bool Repoint(const GURL& url, const std::u16string& title);
+  // Whether its page may ask before it's left, as one with unsaved changes does: a frame of it has
+  // a beforeunload handler, which Chromium asks with only once the frame was clicked or typed in.
+  bool AsksBeforeLeaving() const;
   // For a tab without its page: gives it one in |window|'s Browser for its profile, at its history,
   // not shown, which loads once it is. Returns it, else null, and the tab stays without.
   content::WebContents* Wake(Window& window);
@@ -160,6 +173,8 @@ class Tab : public content::WebContentsObserver,
 
   // Mutes or unmutes the tab, as Chrome's speaker button does.
   void SetMuted(bool muted);
+  // Sets the tab's volume, as bc_tab_set_volume.
+  void SetVolume(double volume);
   // While another page shares a tab, has it share this tab's page instead, as Chrome's infobar's
   // Share this tab instead does.
   void ShareInstead();
@@ -218,6 +233,9 @@ class Tab : public content::WebContentsObserver,
   // Where the user last pressed the mouse in the page, in points from the top-left of its view:
   // where a link it opens was clicked.
   gfx::PointF last_click() const { return last_click_; }
+  // The page's last press, of the pointer or a key, held ⌘ (Ctrl off the Mac), which tells
+  // ⌥⌘-click on a link from ⌥-click, as both ask the browser for a split view.
+  bool last_press_held_command() const { return last_press_held_command_; }
 
   // When a window last stopped showing the tab, else when it opened, for the auto-archive and for
   // unloading tabs unseen a while.
@@ -298,6 +316,14 @@ class Tab : public content::WebContentsObserver,
 
   // media_session::mojom::MediaSessionObserver, for the media the sidebar's player shows:
   void MediaSessionInfoChanged(media_session::mojom::MediaSessionInfoPtr info) override;
+  // Scales the page's media to volume_ through its media session's ducking, which Chromium applies
+  // to each player the session has and each it gains: content has no volume of its own for a
+  // page. Only while the session plays: the audio focus manager undoes a paused session's ducking
+  // as its state leaves suspended, and the two would go back and forth for good. A session drops
+  // its ducking as its last player goes, or as the focus manager settles who ducks, so each change
+  // asks again; |again| takes a new volume while it ducks, as a multiplier changes only as ducking
+  // starts.
+  void ApplyVolume(bool again);
   void MediaSessionMetadataChanged(
       const std::optional<media_session::MediaMetadata>& metadata) override;
   void MediaSessionActionsChanged(
@@ -343,13 +369,22 @@ class Tab : public content::WebContentsObserver,
   base::WeakPtr<Profile> profile_;
   // Without its page, its history and mute.
   std::optional<SavedTab> unloaded_;
+  // Without its page, its page's sessionStorage, kept for its next page, where a site may keep its
+  // sign-in, as Chrome's discarded tabs keep theirs (#1934): the one its last page had, or the one
+  // the last launch saved it with.
+  scoped_refptr<content::SessionStorageNamespaceHandle> storage_;
   bool unloading_ = false;
   std::string name_;
   std::string icon_;
+  // bc_tab_set_volume's, from 0 to 1.
+  double volume_ = 1;
+  // Whether ApplyVolume ducked the session, so a volume back at 1 undoes only its own ducking.
+  bool ducked_ = false;
   base::Time last_seen_ = base::Time::Now();
   std::optional<SkColor> page_color_;
   bool state_report_posted_ = false;
   gfx::PointF last_click_;
+  bool last_press_held_command_ = false;
   // Whether the app was last told the page is full screen.
   bool fullscreen_ = false;
   // Whether the app was last told the pointer is on a link.
@@ -385,6 +420,8 @@ class Tab : public content::WebContentsObserver,
   // document committed, so each document's title is told even when it's the one before's.
   std::vector<uint8_t> system_page_favicon_;
   std::optional<std::string> system_page_title_;
+  // The title the app was last told of.
+  std::string reported_title_;
   // The system page the app was told its protected video is kept off the screen at, until the tab
   // goes to another site or back to Chromium.
   GURL output_restricted_at_;

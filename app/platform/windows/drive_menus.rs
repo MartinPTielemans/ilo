@@ -1,6 +1,7 @@
-//! The app's menus for the Windows driver (drive.cc), which runs its menu and menubar commands
-//! through them as the Mac's runs them through its menu bar. Windows shows no menu bar, so an item
-//! is run in the driven window as AppKit's menu bar runs it in the key one.
+//! The app's menus and dialog for the Windows driver (drive.cc), which runs its menu and menubar
+//! commands through them as the Mac's runs them through its menu bar, and its choose in the dialog
+//! as Linux's does. Windows shows no menu bar, so an item is run in the driven window as AppKit's
+//! menu bar runs it in the key one.
 
 use std::ffi::{CStr, c_char, c_void};
 
@@ -44,6 +45,16 @@ pub extern "C" fn run(ui_view: *mut c_void, title: *const c_char, bar: bool) -> 
         })
     })
     .is_ok()
+}
+
+/// Answers with the button `label` names in the app's dialog that shows. False if none shows.
+pub extern "C" fn choose(label: *const c_char) -> bool {
+    // SAFETY: the driver passes a C string it holds for the call.
+    let Ok(label) = unsafe { CStr::from_ptr(label) }.to_str() else {
+        return false;
+    };
+    CX.with_borrow(Clone::clone)
+        .is_some_and(|cx| cx.update(|cx| browser::dialog::choose(label, cx)))
 }
 
 /// `menu`'s items as drive.mm's menubar logs them: a submenu's as "Submenu › Item", and each

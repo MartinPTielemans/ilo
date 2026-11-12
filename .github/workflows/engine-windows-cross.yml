@@ -4,18 +4,26 @@
 # recompiles only what changed. Microsoft's compiler and SDK come from a zip the owner packaged on a
 # Windows machine, which Microsoft's licence lets no one redistribute: it stays on that machine, in
 # $ILO_ENGINE_ROOT/windows-toolchain, and nothing here uploads it (engine/README.md, Windows). Run
-# by hand, nightly on main, and on main when the pin, the series or the cross build's scripts
+# by hand, each night on main when its core or engine changed since the newest Windows engine
+# (#871), and on main when the pin, the series, the cross build's scripts or ilo's Windows icon
 # change. Not for each core change: that rebuilt it on every merge, on the one runner the Linux
-# engines wait for, so a Windows lane that needs today's core from main dispatches it by hand.
-# Never on branches or pull requests, as the repository is public. engine-windows.yml builds the
-# same engine on GitHub's Windows runners, by hand only.
+# engines wait for, so a Windows lane that needs today's core from main dispatches it by hand. Never
+# on branches or pull requests, as the repository is public. engine-windows.yml builds the same
+# engine on GitHub's Windows runners, by hand only.
 name: Engine on Windows (cross-compiled)
 
 on:
   workflow_dispatch:
-  # Main's core, once a day, at 02:00 UTC.
+    inputs:
+      yielded:
+        description: Set by tools/engine-yield.sh on a lane's retry after it gave the runner to a release.
+        type: boolean
+        default: false
+  # Main's core, once a day, at 02:00 UTC, when it changed (tools/engine-changed.sh).
   schedule:
     - cron: '0 2 * * *'
+  # Not on a change to this file, so a change to how it builds never starts a build, or replaces
+  # one waiting. These paths, and the core, are the night's inputs (engine-changed.sh).
   push:
     branches: [main]
     paths:
@@ -24,29 +32,81 @@ on:
       - engine/patches/**
       - engine/tree.sh
       - engine/windows/cross/**
-      - .github/workflows/engine-windows-cross.yml
+      - engine/icons.py
+      - app/platform/windows/package/Assets/ilo.ico
 
 # The runner takes one job at a time, so this never builds beside the Linux engine. Of this
-# workflow's waiting runs only the newest is kept. Sharing the Linux engine's group would instead
-# let each platform's waiting run cancel the other's.
+# workflow's waiting runs only the newest is kept, but the night and a release batch's runs have
+# groups of their own, so neither replaces a waiting dispatch, a main push's run or a lane's retry,
+# nor one of those it (#2332). Sharing the Linux engine's group would instead let each platform's
+# waiting run cancel the other's.
 concurrency:
-  group: ilo-engine-windows
+  group: >-
+    ilo-engine-windows${{ github.event_name == 'schedule' && '-night'
+    || startsWith(github.ref, 'refs/heads/engine-build/batch-') && '-release' || '' }}
   cancel-in-progress: false
 
 jobs:
+  # On GitHub's runners, so a night with nothing to build never takes the engine's runner. A push or
+  # a dispatch always builds.
+  changes:
+    name: Changes
+    if: github.repository == 'MartinPTielemans/ilo'
+    runs-on: ubuntu-24.04
+    # A retry may wait for a release for up to 5 hours (tools/engine-yield.sh).
+    timeout-minutes: ${{ inputs.yielded && 310 || 10 }}
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      # A lane's retry after it gave the runner to a release waits here, on GitHub's runner, until the
+      # release has the runner, so it gives way once for each release (tools/engine-yield.sh).
+      - if: inputs.yielded
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/engine-yield.sh?ref=$GITHUB_SHA" \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/engine-yield.sh" || exit 0
+          bash "$RUNNER_TEMP/engine-yield.sh" wait
+      - if: github.event_name == 'schedule'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: decide
+        run: |
+          status=0
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            tools/engine-changed.sh windows > "$RUNNER_TEMP/changed" || status=$?
+            tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/changed"
+          fi
+          if [ "$status" = 3 ]; then echo build=false; else echo build=true; fi >> "$GITHUB_OUTPUT"
+
   build:
-    if: github.repository == 'MartinPTielemans/browser'
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     # Microsoft's toolchain zip stays on the owner's machine, so a second Linux engine runner must
     # never take this job.
     runs-on: [self-hosted, linux, x64, ilo-engine, ilo-engine-windows]
     # As long as the Linux engine's first build, or longer: the first build compiles all of Chrome.
     timeout-minutes: 1440
     permissions:
+      actions: write
       contents: read
     env:
       # As engine-linux.yml: a job per 3 GB of the job's 22 GB.
       BUILD_JOBS: 7
     steps:
+      # A lane's build that gets the runner while a release's waits gives it back, before any checkout,
+      # so that costs the runner seconds (tools/engine-yield.sh, #2332).
+      - if: ${{ !startsWith(github.ref, 'refs/heads/engine-build/batch-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/engine-yield.sh?ref=$GITHUB_SHA" \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/engine-yield.sh" || exit 0
+          bash "$RUNNER_TEMP/engine-yield.sh" yield
       # With its history, where tree.sh finds the versions of our patches a kept tree has in it.
       - uses: actions/checkout@v4
         with:

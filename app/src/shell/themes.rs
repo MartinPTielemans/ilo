@@ -5,8 +5,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ColorSpace, Context, Global, Hsla, Point, Rgba, canvas, div, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, size,
+    App, ColorSpace, Context, Global, Hsla, Rgba, canvas, div, linear_color_stop, linear_gradient,
+    point, prelude::*, px, rgb, size,
 };
 
 use super::{
@@ -28,7 +28,8 @@ impl Global for AppAppearance {}
 
 /// The appearance View › Appearance has chosen.
 pub fn app_appearance(cx: &App) -> Appearance {
-    cx.try_global::<AppAppearance>().map_or(Appearance::Automatic, |chosen| chosen.0)
+    cx.try_global::<AppAppearance>()
+        .map_or(Appearance::Automatic, |chosen| chosen.0)
 }
 
 /// How many themes' palettes a window keeps, the least recently drawn going first: more than
@@ -40,7 +41,11 @@ impl Shell {
     pub(super) fn theme_of(&self, space: u64) -> Option<Theme> {
         match self.theme_preview {
             Some((previewed, theme)) if previewed == space => Some(theme),
-            _ => self.spaces.iter().find(|each| each.id == space).and_then(|each| each.theme),
+            _ => self
+                .spaces
+                .iter()
+                .find(|each| each.id == space)
+                .and_then(|each| each.theme),
         }
     }
 
@@ -51,19 +56,27 @@ impl Shell {
             return None;
         }
         let dark = self.tone_of(space) == Tone::Dark;
-        self.theme_of(space).map(|theme| theme.shown(dark)).or_else(|| {
-            let entry = self.spaces.iter().find(|each| each.id == space)?;
-            entry.color.map(Theme::of_color)
-        })
+        self.theme_of(space)
+            .map(|theme| theme.shown(dark))
+            .or_else(|| {
+                let entry = self.spaces.iter().find(|each| each.id == space)?;
+                entry.color.map(Theme::of_color)
+            })
     }
 
     /// Whether `space`'s window is dark or light: as its theme's appearance forces it, else as
     /// the system's is, as Arc's follows it. A private window is dark, as Arc's is.
     pub(super) fn tone_of(&self, space: u64) -> Tone {
+        self.tone_with(self.theme_of(space).as_ref())
+    }
+
+    /// The tone a Space with `theme` draws in: the theme's, else the system's; dark in a private
+    /// window.
+    pub(super) fn tone_with(&self, theme: Option<&Theme>) -> Tone {
         if self.private {
             return Tone::Dark;
         }
-        match self.theme_of(space).map(|theme| theme.appearance) {
+        match theme.map(|theme| theme.appearance) {
             Some(Appearance::Light) => Tone::Light,
             Some(Appearance::Dark) => Tone::Dark,
             Some(Appearance::Automatic) | None => self.system_tone,
@@ -102,6 +115,23 @@ impl Shell {
         self.browser.set_appearance(appearance, cx);
         self.update_menus(cx);
         cx.refresh_windows();
+    }
+
+    /// View › Appearance and Show Space Header as they came from the account (settings_synced):
+    /// the window draws with them and its menus say so, as when the user chose them here, but
+    /// nothing is kept again, as the core has them.
+    pub fn look_followed(&mut self, appearance: Appearance, header: bool, cx: &mut Context<Self>) {
+        cx.set_global(AppAppearance(appearance));
+        cx.set_global(super::LoneSpaceHeader(header));
+        if self.app_appearance == appearance && self.lone_header == header {
+            return;
+        }
+        self.app_appearance = appearance;
+        // check.sh waits for the outline the rows are drawn with next.
+        self.outline_changed |= self.lone_header != header;
+        self.lone_header = header;
+        self.update_menus(cx);
+        cx.notify();
     }
 
     /// Draws the window as if the system's appearance were `tone`, as the preview does to show
@@ -149,17 +179,18 @@ impl Shell {
             self.capture_look = Some(look);
             self.browser.capture_look(self.selected, look, cx);
         }
-        if cx.try_global::<super::commands::ShellHandle>().is_some_and(|key| key.0 == cx.weak_entity()) {
+        if super::commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity()) {
             palette::set_current(palette, cx);
         }
     }
 
-    /// Shows the theme picker for `space` pointing at `anchor`, the middle of a row's right end
-    /// in the window, with the Space's theme, or its colour alone if it has no theme.
+    /// Shows the theme picker for `space` `at` its place in the window, to its left if `left`, with
+    /// the Space's theme, or its colour alone if it has no theme.
     pub(super) fn show_theme_picker(
         &mut self,
         space: u64,
-        anchor: Point<f32>,
+        at: theme_picker::At,
+        left: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(entry) = self.spaces.iter().find(|each| each.id == space) else {
@@ -167,24 +198,47 @@ impl Shell {
         };
         // A theme of two looks opens as the one shown, and what the picker makes is one look.
         let dark = self.tone_of(space) == Tone::Dark;
-        let theme = entry.theme.map(|theme| theme.shown(dark)).or_else(|| entry.color.map(Theme::of_color));
+        let theme = entry
+            .theme
+            .map(|theme| theme.shown(dark))
+            .or_else(|| entry.color.map(Theme::of_color));
         let shell = cx.weak_entity();
         let changed: Changed = Rc::new(move |theme, done, cx| {
-            shell.update(cx, |shell, cx| shell.theme_changed(space, theme, done, cx)).ok();
+            shell
+                .update(cx, |shell, cx| shell.theme_changed(space, theme, done, cx))
+                .ok();
         });
         let height = f32::from(self.viewport.height);
         // A card showing would stay under the picker, as rows' cards wait while it shows.
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
-        theme_picker::show(space, theme, anchor, height, changed, cx);
+        theme_picker::show(
+            self.browser.window(),
+            space,
+            theme,
+            at,
+            left,
+            height,
+            changed,
+            cx,
+        );
     }
 
     /// The picker made `theme` for `space`: the window shows it at once, and once the user is
     /// `done` the core keeps it, with its main colour as the Space's colour, as one step for ⌘Z:
     /// a drag is one, however many frames it took.
-    pub(super) fn theme_changed(&mut self, space: u64, theme: Theme, done: bool, cx: &mut Context<Self>) {
+    pub(super) fn theme_changed(
+        &mut self,
+        space: u64,
+        theme: Theme,
+        done: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.theme_preview = Some((space, theme));
         if done {
-            let color = Value::Color { color: Some(theme.main_color()), theme: theme.to_text() };
+            let color = Value::Color {
+                color: Some(theme.main_color()),
+                theme: theme.to_text(),
+            };
             self.change(Prop::SpaceColor(space), color, cx);
         }
         cx.notify();
@@ -192,7 +246,10 @@ impl Shell {
 
     /// Takes `space`'s theme and colour away, so it shows the underlay alone and ilo's accent.
     pub(super) fn remove_space_theme(&mut self, space: u64, cx: &mut Context<Self>) {
-        let none = Value::Color { color: None, theme: String::new() };
+        let none = Value::Color {
+            color: None,
+            theme: String::new(),
+        };
         self.change(Prop::SpaceColor(space), none, cx);
     }
 
@@ -202,7 +259,11 @@ impl Shell {
         let Some((space, theme)) = self.theme_preview else {
             return;
         };
-        let kept = self.spaces.iter().find(|each| each.id == space).map(|each| each.theme);
+        let kept = self
+            .spaces
+            .iter()
+            .find(|each| each.id == space)
+            .map(|each| each.theme);
         if kept.is_none_or(|kept| kept.map(|kept| kept.to_text()) == Some(theme.to_text())) {
             self.theme_preview = None;
         }
@@ -216,12 +277,19 @@ impl Shell {
         let colors: Vec<Rgba> = theme.colors().into_iter().map(rgb).collect();
         let main = Hsla::from(colors[0]);
         let color = match colors.len() {
-            1 => Rgba::from(Hsla { l: (main.l + 0.25 * y).min(1.), ..main }),
+            1 => Rgba::from(Hsla {
+                l: (main.l + 0.25 * y).min(1.),
+                ..main
+            }),
             count => {
                 let (width, height) = (self.viewport.width.into(), self.viewport.height.into());
                 let along = (theme::diagonal(x, y, width, height) / SECOND_AT).min(1.);
                 let two = theme::mix_oklab(colors[0], colors[1], along);
-                if count > 2 { theme::mix_oklab(two, colors[2], y) } else { two }
+                if count > 2 {
+                    theme::mix_oklab(two, colors[2], y)
+                } else {
+                    two
+                }
             }
         };
         Rgba { a: alpha, ..color }
@@ -230,7 +298,11 @@ impl Shell {
     /// Where the sidebar's middle is across the window, 0 to 1, where the window's colour is taken
     /// for what covers it.
     pub(super) fn sidebar_x(&self) -> f32 {
-        self.width() / 2. / f32::from(self.viewport.width).max(1.)
+        let x = self.width() / 2. / f32::from(self.viewport.width).max(1.);
+        match self.right() {
+            true => 1. - x,
+            false => x,
+        }
     }
 
     /// The window's colour behind everything: the gradient down it, or with a Space of more than
@@ -250,19 +322,30 @@ impl Shell {
                 (space, theme, weight)
             })
             .collect();
-        let layered = themes.iter().any(|(_, theme, _)| theme.is_some_and(|theme| theme.count > 1));
+        let layered = themes
+            .iter()
+            .any(|(_, theme, _)| theme.is_some_and(|theme| theme.count > 1));
         let background = div().absolute().size_full();
         let background = if layered {
-            background.children(themes.iter().map(|&(space, theme, weight)| {
-                self.theme_layer(theme, space).opacity(weight)
-            }))
+            background.children(
+                themes
+                    .iter()
+                    .map(|&(space, theme, weight)| self.theme_layer(theme, space).opacity(weight)),
+            )
         } else {
             background.bg(self.gradient(None))
         };
-        let dimmed = if self.window_active { 1. } else { INACTIVE_TEXTURE };
+        let dimmed = if self.window_active {
+            1.
+        } else {
+            INACTIVE_TEXTURE
+        };
         background.children(themes.iter().filter_map(|&(_, theme, weight)| {
             let theme = theme.filter(|theme| theme.grain > 0.)?;
-            Some(texture_layer(theme.texture, theme.grain_opacity() * weight * dimmed))
+            Some(texture_layer(
+                theme.texture,
+                theme.grain_opacity() * weight * dimmed,
+            ))
         }))
     }
 
@@ -275,7 +358,10 @@ impl Shell {
         let colors: Vec<Rgba> = theme.colors().into_iter().map(rgb).collect();
         let alpha = self.palette_of(space).layer_alpha;
         let stop = |color: Rgba, at: f32| linear_color_stop(Rgba { a: alpha, ..color }, at);
-        let (width, height) = (f32::from(self.viewport.width), f32::from(self.viewport.height));
+        let (width, height) = (
+            f32::from(self.viewport.width),
+            f32::from(self.viewport.height),
+        );
         let (side, start, end) = diagonal_stops(width, height);
         let diagonal = linear_gradient(135., stop(colors[0], start), stop(colors[1], end))
             .color_space(ColorSpace::Oklab);
@@ -327,7 +413,9 @@ fn texture_layer(texture: Texture, opacity: f32) -> impl IntoElement {
                         let origin =
                             bounds.origin + point(px(column as f32 * tile), px(row as f32 * tile));
                         let tile = gpui::Bounds::new(origin, size(px(tile), px(tile)));
-                        window.paint_image(tile, tile, px(0.).into(), image.clone(), 0, false).ok();
+                        window
+                            .paint_image(tile, tile, px(0.).into(), image.clone(), 0, false)
+                            .ok();
                     }
                 }
             },

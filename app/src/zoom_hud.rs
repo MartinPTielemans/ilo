@@ -4,10 +4,8 @@
 //! as its child, and the mouse goes through it to the page. What it asks of its window goes
 //! through `Host`.
 
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, FontWeight, Global, Hsla, Task, TitlebarOptions, WeakEntity, Window,
@@ -18,16 +16,16 @@ use gpui::{
 use crate::palette::Palette;
 use crate::shell::{CARD_INSET, Shell, cubic_bezier, scaled::scaled_from_top};
 
+use crate::elevation::Level;
+use crate::tokens::zoom_hud::FILL;
 use crate::tokens::zoom_hud::HEIGHT;
+pub use crate::tokens::zoom_hud::MARGIN;
 use crate::tokens::zoom_hud::PADDING;
 use crate::tokens::zoom_hud::RADIUS;
-use crate::tokens::zoom_hud::TEXT_SIZE;
-use crate::elevation::Level;
 use crate::tokens::zoom_hud::SHADE;
-pub use crate::tokens::zoom_hud::MARGIN;
-pub use crate::tokens::zoom_hud::WINDOW_WIDTH;
+use crate::tokens::zoom_hud::TEXT_SIZE;
 pub use crate::tokens::zoom_hud::WINDOW_HEIGHT;
-use crate::tokens::zoom_hud::FILL;
+pub use crate::tokens::zoom_hud::WINDOW_WIDTH;
 /// Where the window goes, from the top right corner of the focused page's pane in the window.
 pub const WINDOW_RIGHT: f32 = CARD_INSET + 8. - MARGIN;
 pub const WINDOW_TOP: f32 = CARD_INSET + 8. - MARGIN;
@@ -86,7 +84,10 @@ impl Pose {
     /// `seconds` after it started leaving, from where the motion was then.
     fn leaving(self, seconds: f32) -> Self {
         let t = cubic_bezier(0.42, 0., 1., 1., (seconds / LEAVE).min(1.));
-        Pose { scale: self.scale + (FROM - self.scale) * t, opacity: self.opacity * (1. - t) }
+        Pose {
+            scale: self.scale + (FROM - self.scale) * t,
+            opacity: self.opacity * (1. - t),
+        }
     }
 
     /// How opaque the percent is: it's gone by the time the pill has shrunk to 0.45.
@@ -114,8 +115,7 @@ struct Shown {
 
 impl Shown {
     fn pose(&self) -> Pose {
-        let mut pose =
-            Pose::arriving(self.shown.map_or(0., |shown| shown.elapsed().as_secs_f32()));
+        let mut pose = Pose::arriving(self.shown.map_or(0., |shown| shown.elapsed().as_secs_f32()));
         if let Some((at, from)) = self.changed {
             pose = from.changing(at.elapsed().as_secs_f32());
         }
@@ -131,7 +131,9 @@ impl Shown {
         };
         self.leaving.is_some()
             || shown.elapsed().as_secs_f32() < GROW
-            || self.changed.is_some_and(|(at, _)| at.elapsed().as_secs_f32() < DIP + BACK)
+            || self
+                .changed
+                .is_some_and(|(at, _)| at.elapsed().as_secs_f32() < DIP + BACK)
     }
 
     /// The percent the pill shows now: the old one until it has shrunk away.
@@ -173,8 +175,6 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<ZoomHud>> {
         is_minimizable: false,
         // The pill and its shadow are drawn.
         window_background: WindowBackgroundAppearance::Transparent,
-        // GPUI holds a window that isn't the key one to 30 fps, and this one never is.
-        inactive_frame_interval: None,
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| cx.new(|_| ZoomHud { host, shown: None }));
@@ -192,6 +192,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<ZoomHud>> {
 
 /// Shows `tab`'s zoom, `percent`, over the browser window `shell` draws in, for a while from now.
 pub fn show(tab: u64, percent: i32, shell: WeakEntity<Shell>, cx: &mut App) {
+    crate::lazy_window::ready::<ZoomHud>(cx);
     let Some(window) = cx.try_global::<ZoomHudWindow>().map(|hud| hud.0) else {
         return;
     };
@@ -249,7 +250,9 @@ impl ZoomHud {
         }
         shown.leaving = Some((Instant::now(), shown.pose()));
         shown._timer = cx.spawn(async move |hud, cx| {
-            cx.background_executor().timer(Duration::from_secs_f32(LEAVE)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(LEAVE))
+                .await;
             hud.update(cx, |hud, cx| {
                 hud.shown = None;
                 hud.host.hide();
@@ -285,7 +288,10 @@ impl Render for ZoomHud {
         let shell = shown.shell.upgrade();
         let look = shell.map(|shell| (shell.read(cx).window_fill(), shell.read(cx).palette()));
         let (fill, palette) = look.unwrap_or((rgb(FILL).into(), Palette::default()));
-        let bottom = Hsla { l: fill.l * SHADE, ..fill };
+        let bottom = Hsla {
+            l: fill.l * SHADE,
+            ..fill
+        };
         let pill = div()
             .h(px(HEIGHT))
             .px(px(PADDING))
@@ -294,13 +300,21 @@ impl Render for ZoomHud {
             .rounded(px(RADIUS))
             .border(px(0.5))
             .border_color(Level::Popover.rim())
-            .bg(linear_gradient(180., linear_color_stop(fill, 0.), linear_color_stop(bottom, 1.)))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(fill, 0.),
+                linear_color_stop(bottom, 1.),
+            ))
             .shadow(Level::Popover.shadow())
             .opacity(pose.opacity)
             .text_size(px(TEXT_SIZE))
             .font_weight(FontWeight::MEDIUM)
             .text_color(palette.ink)
-            .child(div().opacity(pose.text_opacity()).child(format!("{}%", shown.percent())));
+            .child(
+                div()
+                    .opacity(pose.text_opacity())
+                    .child(format!("{}%", shown.percent())),
+            );
         root.child(scaled_from_top(pill, pose.scale))
     }
 }

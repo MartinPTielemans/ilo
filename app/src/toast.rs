@@ -4,17 +4,14 @@
 //! over the browser window's top right corner, as its child, and the mouse goes through it to the
 //! page, unless it has buttons, as Capture's does. What it asks of its window goes through `Host`.
 
-use std::{
-    cell::Cell,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{cell::Cell, rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
-    App, Bounds, ClickEvent, Context, FontWeight, Global, Hsla, Pixels, Point, Role,
-    SharedString, Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowKind, WindowOptions, canvas, div, linear_color_stop, linear_gradient, point,
-    accesskit::Live, prelude::*, px, size, svg,
+    App, Bounds, ClickEvent, Context, FontWeight, Global, Hsla, Pixels, Point, Role, SharedString,
+    Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, accesskit::Live, canvas, div, linear_color_stop, linear_gradient,
+    point, prelude::*, px, size, svg,
 };
 
 use crate::palette::{Palette, STATE_HOVERED, STATE_PRESSED};
@@ -26,21 +23,20 @@ use crate::shell::{CARD_INSET, cubic_bezier, scaled::scaled_from_top, spring};
 use crate::tokens::toast::HEIGHT;
 const RIGHT: f32 = CARD_INSET + 8.;
 const TOP: f32 = CARD_INSET + 8.;
-use crate::tokens::toast::TEXT_LEFT;
-use crate::tokens::toast::TEXT_RIGHT;
-use crate::tokens::toast::RADIUS;
-use crate::tokens::toast::TEXT_SIZE;
+use crate::elevation::{Level, WINDOW_MARGIN};
+use crate::tokens::toast::CHIP_FILL;
+use crate::tokens::toast::CHIP_GAP;
+use crate::tokens::toast::CHIP_GLYPH;
 use crate::tokens::toast::CHIP_HEIGHT;
 use crate::tokens::toast::CHIP_RADIUS;
 use crate::tokens::toast::CHIP_X;
-use crate::tokens::toast::CHIP_GAP;
-use crate::tokens::toast::CHIP_FILL;
-use crate::tokens::toast::CHIP_GLYPH;
-use crate::tokens::toast::KEY_GAP;
 use crate::tokens::toast::KEY_COLOR;
-use crate::elevation::Level;
+use crate::tokens::toast::KEY_GAP;
+use crate::tokens::toast::RADIUS;
 use crate::tokens::toast::SHADE;
-pub use crate::tokens::toast::WINDOW_WIDTH;
+use crate::tokens::toast::TEXT_LEFT;
+use crate::tokens::toast::TEXT_RIGHT;
+use crate::tokens::toast::TEXT_SIZE;
 pub use crate::tokens::toast::WINDOW_HEIGHT;
 /// Arc's motion: it grows from 0.7 of its size about the middle of its top edge on a spring of
 /// 0.32 s and ζ 0.52, fading in over the first 0.1 s, and leaves the way it came over 0.07 s,
@@ -50,6 +46,12 @@ const RESPONSE: f32 = 0.32;
 const DAMPING: f32 = 0.52;
 const FADE_IN: f32 = 0.1;
 const LEAVE: f32 = 0.07;
+/// Asked for again while it's in place, it stays and bumps (Arc 1.171, measured by an outside
+/// reverse-engineering, *interim*, #1404): to 1.044 of its size in 40 ms, easing out, and back by
+/// 0.2 s.
+const BUMP: f32 = 1.044;
+const BUMP_UP: f32 = 0.04;
+const BUMP_TIME: f32 = 0.2;
 /// The note a window shows as it goes full screen (Arc 1.170 rec at 2×): 41 tall, 4 from the
 /// window's top and its right edge on the card's, in the toast's look and motion, for 4.8 s. Off
 /// the Mac, Chrome's words there, as keys are named in words off the Mac (#772).
@@ -87,8 +89,6 @@ pub enum Label {
     Glyph(&'static str),
     /// Words and a key's name after them, in the button's chip: Undo ⌘Z.
     Keyed(SharedString, SharedString),
-    /// No chip: the toast itself is the button, as Arc's New Tab Created is.
-    Plate,
 }
 
 /// A button after the toast's words, such as Capture's Save. A click runs it with where the
@@ -117,6 +117,14 @@ impl Pose {
         }
     }
 
+    /// `seconds` after it was asked for again in place: a little bigger, and back.
+    fn bumped(self, seconds: f32) -> Self {
+        Pose {
+            scale: self.scale * bump(seconds).unwrap_or(1.),
+            ..self
+        }
+    }
+
     /// `seconds` after it started leaving, from where the motion was then.
     fn leaving(self, seconds: f32) -> Self {
         let t = cubic_bezier(0.42, 0., 1., 1., (seconds / LEAVE).min(1.));
@@ -125,6 +133,24 @@ impl Pose {
             opacity: self.opacity * (1. - t),
         }
     }
+}
+
+/// How much bigger the bump makes the toast `seconds` in, none once it's over.
+fn bump(seconds: f32) -> Option<f32> {
+    let up = if seconds < BUMP_UP {
+        cubic_bezier(0., 0., 0.58, 1., seconds.max(0.) / BUMP_UP)
+    } else if seconds < BUMP_TIME {
+        1. - cubic_bezier(
+            0.42,
+            0.,
+            0.58,
+            1.,
+            (seconds - BUMP_UP) / (BUMP_TIME - BUMP_UP),
+        )
+    } else {
+        return None;
+    };
+    Some(1. + (BUMP - 1.) * up)
 }
 
 struct Shown {
@@ -138,6 +164,8 @@ struct Shown {
     expired: bool,
     /// When its window was first on screen, where the motion starts.
     shown: Option<Instant>,
+    /// When it was last asked for again while in place, which bumps it.
+    bumped: Option<Instant>,
     /// Once it's leaving: when, and where the motion was.
     leaving: Option<(Instant, Pose)>,
     settled: bool,
@@ -155,15 +183,26 @@ impl Shown {
         let arrived = Pose::arriving(self.shown.map_or(0., |shown| shown.elapsed().as_secs_f32()));
         match self.leaving {
             Some((at, from)) => from.leaving(at.elapsed().as_secs_f32()),
-            None => arrived,
+            None => match self.bumped {
+                Some(at) => arrived.bumped(at.elapsed().as_secs_f32()),
+                None => arrived,
+            },
         }
     }
 
-    fn moving(&self) -> bool {
+    /// Whether it's still on its way in or out, or bumping. Under Reduce Motion it's in once it
+    /// has faded in, as it's drawn at its size and never bumps.
+    fn moving(&self, cx: &App) -> bool {
+        let bumping = self
+            .bumped
+            .is_some_and(|at| bump(at.elapsed().as_secs_f32()).is_some());
         match (self.shown, self.leaving) {
             (_, Some(_)) | (None, _) => true,
+            (Some(shown), None) if crate::motion::still(cx) => {
+                shown.elapsed().as_secs_f32() < FADE_IN
+            }
             (Some(shown), None) => {
-                spring(shown.elapsed().as_secs_f32(), RESPONSE, DAMPING).is_some()
+                bumping || spring(shown.elapsed().as_secs_f32(), RESPONSE, DAMPING).is_some()
             }
         }
     }
@@ -187,7 +226,8 @@ struct ToastWindow(WindowHandle<Toast>);
 impl Global for ToastWindow {}
 
 /// Opens the toast's window, hidden, for `host` to show over the browser window, ahead of time as
-/// the find bar's is. The toast takes `look`'s colour and palette.
+/// the find bar's is. The toast takes `look`'s colour and palette. The host makes the window as
+/// wide as the page it shows over, and a toast too long for that shortens its words.
 pub fn open(
     host: Rc<dyn Host>,
     look: impl Fn(&App) -> (Hsla, Palette) + 'static,
@@ -196,7 +236,7 @@ pub fn open(
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
-            size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)),
+            size(px(WINDOW_HEIGHT), px(WINDOW_HEIGHT)),
         ))),
         titlebar: Some(TitlebarOptions {
             title: None,
@@ -211,8 +251,6 @@ pub fn open(
         is_minimizable: false,
         // The toast and its shadow are drawn.
         window_background: WindowBackgroundAppearance::Transparent,
-        // GPUI holds a window that isn't the key one to 30 fps, and this one never is.
-        inactive_frame_interval: None,
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
@@ -302,7 +340,11 @@ pub fn hide_held(tab: u64, cx: &mut App) {
     };
     window
         .update(cx, |toast, _, cx| {
-            if toast.shown.as_ref().is_some_and(|shown| shown.held == Some(tab)) {
+            if toast
+                .shown
+                .as_ref()
+                .is_some_and(|shown| shown.held == Some(tab))
+            {
                 toast.leave(cx);
             }
         })
@@ -331,15 +373,24 @@ pub fn showing(text: &str, cx: &App) -> bool {
         .is_some_and(|shown| shown.leaving.is_none() && shown.text == text)
 }
 
-/// The undo it offered has been done some other way: its toast goes, if it shows.
+/// The undo it offered has been done some other way: its toast goes, if it shows, whether it
+/// offers the undo with its button or names its key, as "Space deleted! Use ⌘Z to undo." does.
 pub fn hide_undo(cx: &mut App) {
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
+    let undo_key = crate::shell::keystroke_label("cmd-z");
     window
         .update(cx, |toast, _, cx| {
             let undoing = toast.shown.as_ref().is_some_and(|shown| {
-                shown.buttons.iter().any(|button| button.name == UNDO_BUTTON)
+                shown
+                    .buttons
+                    .iter()
+                    .any(|button| button.name == UNDO_BUTTON)
+                    || shown
+                        .key
+                        .as_ref()
+                        .is_some_and(|(key, _)| **key == *undo_key)
             });
             if undoing {
                 toast.leave(cx);
@@ -377,6 +428,7 @@ fn present(
     held: Option<u64>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<Toast>(cx);
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
@@ -385,8 +437,11 @@ fn present(
             // check.sh reads this line.
             let words = key.map_or(String::new(), |(key, rest)| format!(" {key} {rest}"));
             let names: Vec<&str> = buttons.iter().map(|button| button.name).collect();
-            let names =
-                if names.is_empty() { String::new() } else { format!(" [{}]", names.join(", ")) };
+            let names = if names.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", names.join(", "))
+            };
             log!("browser: toast shown {text}{words}{names}");
             let timer = match time {
                 Some(time) => cx.spawn(async move |toast, cx| {
@@ -395,8 +450,16 @@ fn present(
                 }),
                 None => Task::ready(()),
             };
-            // One already in place stays there with the new words, and one leaving comes back.
+            // One already in place stays there with the new words and time, and bumps, as nothing
+            // else would show it was asked for again; one leaving comes back. Under Reduce Motion
+            // it doesn't scale.
             let shown = toast.shown.take().filter(|shown| shown.leaving.is_none());
+            let in_place = shown.as_ref().is_some_and(|shown| shown.shown.is_some());
+            let bumped = (in_place && !crate::motion::still(cx)).then(|| {
+                // check.sh reads this line.
+                log!("browser: toast bumped");
+                Instant::now()
+            });
             toast.shown = Some(Shown {
                 text: text.to_string().into(),
                 key: key.map(|(key, rest)| (key.to_string().into(), rest.to_string().into())),
@@ -404,6 +467,7 @@ fn present(
                 hovered: shown.as_ref().is_some_and(|shown| shown.hovered),
                 expired: false,
                 shown: shown.and_then(|shown| shown.shown),
+                bumped,
                 leaving: None,
                 settled: false,
                 full_screen,
@@ -421,9 +485,10 @@ fn present(
 impl Toast {
     /// Tells the host whether the toast takes clicks: while it has buttons and isn't leaving.
     fn take_clicks(&mut self, _: &mut Context<Self>) {
-        let takes = self.shown.as_ref().is_some_and(|shown| {
-            !shown.buttons.is_empty() && shown.leaving.is_none()
-        });
+        let takes = self
+            .shown
+            .as_ref()
+            .is_some_and(|shown| !shown.buttons.is_empty() && shown.leaving.is_none());
         if takes != self.takes_clicks {
             self.takes_clicks = takes;
             self.host.take_clicks(takes);
@@ -446,6 +511,10 @@ impl Toast {
         let Some(shown) = self.shown.as_mut().filter(|shown| shown.leaving.is_none()) else {
             return;
         };
+        if shown.hovered != hovered {
+            // check.sh reads this line: a toast with the pointer on it stays past its time.
+            log!("browser: toast hovered {hovered}");
+        }
         shown.hovered = hovered;
         if !hovered && shown.expired {
             self.leave(cx);
@@ -453,7 +522,11 @@ impl Toast {
     }
 
     fn press(&mut self, index: usize, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(button) = self.shown.as_ref().and_then(|shown| shown.buttons.get(index)) else {
+        let Some(button) = self
+            .shown
+            .as_ref()
+            .and_then(|shown| shown.buttons.get(index))
+        else {
             return;
         };
         let run = button.run.clone();
@@ -479,7 +552,9 @@ impl Toast {
             return;
         };
         shown._timer = cx.spawn(async move |toast, cx| {
-            cx.background_executor().timer(Duration::from_secs_f32(LEAVE)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(LEAVE))
+                .await;
             toast
                 .update(cx, |toast, cx| {
                     toast.shown = None;
@@ -509,12 +584,16 @@ impl Render for Toast {
             false => (HEIGHT, TOP, RIGHT),
         };
         let root = root.pt(px(top)).pr(px(right)).font_family(crate::face::UI);
+        // Its window is the page's width, and it keeps the margin its shadow falls in from the
+        // window's left edge too: words that would make it wider shorten, where the window's edge
+        // cut them (#1462).
+        let widest = (window.viewport_size().width - px(right + WINDOW_MARGIN)).max(px(0.));
         // AppKit puts the window on screen some frames after it's asked to, and only then does
         // GPUI draw it, so the motion starts there rather than skip its start.
         if shown.shown.is_none() && window.is_visible() {
             shown.shown = Some(Instant::now());
         }
-        let at_rest = !shown.moving();
+        let at_rest = !shown.moving(cx);
         if !at_rest {
             window.request_animation_frame();
         } else if !shown.settled {
@@ -524,11 +603,12 @@ impl Render for Toast {
         }
         let pose = shown.pose();
         let (fill, palette) = (self.look)(cx);
-        let bottom = Hsla { l: fill.l * SHADE, ..fill };
+        let bottom = Hsla {
+            l: fill.l * SHADE,
+            ..fill
+        };
         let a11y = window.is_a11y_active();
-        let plate = shown.buttons.iter().position(|button| button.label == Label::Plate);
         let buttons: Vec<_> = (shown.buttons.iter().enumerate())
-            .filter(|(_, button)| button.label != Label::Plate)
             .map(|(index, button)| {
                 let chip = div()
                     .id(("toast-button", index))
@@ -546,7 +626,7 @@ impl Render for Toast {
                             // A keyed button goes by its words: Undo.
                             Label::Text(text) | Label::Keyed(text, _) => text.to_string(),
                             // A glyph's button goes by its name, "share" read as Share.
-                            Label::Glyph(_) | Label::Plate => {
+                            Label::Glyph(_) => {
                                 let mut name = button.name.to_owned();
                                 name[..1].make_ascii_uppercase();
                                 name
@@ -559,15 +639,17 @@ impl Render for Toast {
                     }));
                 match &button.label {
                     Label::Text(text) => chip.child(text.clone()),
-                    // Left out above: the toast itself is its button.
-                    Label::Plate => chip,
                     Label::Glyph(path) => chip.child(
-                        svg().path(*path).size(px(CHIP_GLYPH)).text_color(palette.ink),
+                        svg()
+                            .path(*path)
+                            .size(px(CHIP_GLYPH))
+                            .text_color(palette.ink),
                     ),
                     // The key is fainter than the word it goes with.
-                    Label::Keyed(text, key) => chip.gap(px(KEY_GAP)).child(text.clone()).child(
-                        div().text_color(palette.text(KEY_COLOR)).child(key.clone()),
-                    ),
+                    Label::Keyed(text, key) => chip
+                        .gap(px(KEY_GAP))
+                        .child(text.clone())
+                        .child(div().text_color(palette.text(KEY_COLOR)).child(key.clone())),
                 }
             })
             .collect();
@@ -579,21 +661,15 @@ impl Render for Toast {
         let toast = div()
             .id("toast")
             .when(a11y, |toast| {
-                let toast = match plate {
-                    Some(_) => toast.role(Role::Button).aria_label(said),
-                    None => toast.role(Role::Status).aria_value(said),
-                };
-                toast.a11y_synthetic_children(|builder| {
-                    builder.parent_node().set_live(Live::Polite)
-                })
-            })
-            .when_some(plate, |toast, index| {
-                toast.on_click(cx.listener(move |toast, event: &ClickEvent, _, cx| {
-                    toast.press(index, event.position(), cx)
-                }))
+                toast
+                    .role(Role::Status)
+                    .aria_value(said)
+                    .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
             })
             .on_hover(cx.listener(|toast, hovered: &bool, _, cx| toast.hover(*hovered, cx)))
             .h(px(height))
+            .flex_none()
+            .max_w(widest)
             .pl(px(TEXT_LEFT))
             .pr(px(TEXT_RIGHT))
             .flex()
@@ -602,13 +678,18 @@ impl Render for Toast {
             .rounded(px(RADIUS))
             .border(px(0.5))
             .border_color(Level::Popover.rim())
-            .bg(linear_gradient(180., linear_color_stop(fill, 0.), linear_color_stop(bottom, 1.)))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(fill, 0.),
+                linear_color_stop(bottom, 1.),
+            ))
             .shadow(Level::Popover.shadow())
             .opacity(pose.opacity)
             .text_size(px(TEXT_SIZE))
             .font_weight(FontWeight::MEDIUM)
             .text_color(palette.ink)
-            .child(shown.text.clone())
+            // Only the words give way; the buttons after them keep their size.
+            .child(div().min_w_0().truncate().child(shown.text.clone()))
             .children(shown.key.clone().map(|(key, rest)| {
                 div()
                     .flex()
@@ -631,24 +712,39 @@ impl Render for Toast {
             // The plate is what takes clicks, so the host is told where it is once it has come to
             // rest, since it's drawn scaled until then, and the plate under a click is where it
             // was drawn.
-            .child(canvas(
-                {
-                    let (host, told) = (self.host.clone(), self.plate.clone());
-                    move |bounds, _, _| {
-                        // Inside the plate's 0.5 border.
-                        let bounds = bounds.dilate(px(0.5));
-                        if at_rest && told.replace(Some(bounds)) != Some(bounds) {
-                            host.plate(bounds);
+            .child(
+                canvas(
+                    {
+                        let (host, told) = (self.host.clone(), self.plate.clone());
+                        move |bounds, window, _| {
+                            // Inside the plate's 0.5 border.
+                            let bounds = bounds.dilate(px(0.5));
+                            if at_rest && told.replace(Some(bounds)) != Some(bounds) {
+                                let (x, y) =
+                                    (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+                                let (width, height) = (bounds.size.width, bounds.size.height);
+                                let window = window.viewport_size();
+                                // check.sh reads this line, to click just outside the plate and to see
+                                // the window holds it whole.
+                                log!(
+                                    "browser: toast plate {x:.0} {y:.0} {:.0} {:.0} in {:.0} {:.0}",
+                                    f32::from(width),
+                                    f32::from(height),
+                                    f32::from(window.width),
+                                    f32::from(window.height)
+                                );
+                                host.plate(bounds);
+                            }
                         }
-                    }
-                },
-                |_, _, _, _| {},
-            )
-            // Over the plate's whole inside, not after its padding.
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full());
+                    },
+                    |_, _, _, _| {},
+                )
+                // Over the plate's whole inside, not after its padding.
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
         root.child(scaled_from_top(toast, pose.scale))
     }
 }

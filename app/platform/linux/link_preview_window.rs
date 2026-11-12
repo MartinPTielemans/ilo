@@ -76,9 +76,15 @@ fn around(content: Size<Pixels>, hole: Bounds<Pixels>) -> [Bounds<Pixels>; 4] {
     let rows = hole.size.height;
     [
         Bounds::new(point(px(0.), px(0.)), size(width, hole.top())),
-        Bounds::new(point(px(0.), hole.bottom()), size(width, height - hole.bottom())),
+        Bounds::new(
+            point(px(0.), hole.bottom()),
+            size(width, height - hole.bottom()),
+        ),
         Bounds::new(point(px(0.), hole.top()), size(hole.left(), rows)),
-        Bounds::new(point(hole.right(), hole.top()), size(width - hole.right(), rows)),
+        Bounds::new(
+            point(hole.right(), hole.top()),
+            size(width - hole.right(), rows),
+        ),
     ]
 }
 
@@ -93,7 +99,11 @@ fn place(view: *mut c_void, shown: &Shown) {
     };
     gpui_linux::set_overlay_pointer(view, areas.as_deref());
     // Which puts its outline in place too.
-    gpui_linux::move_overlay(view, Bounds::new(point(px(0.), px(0.)), shown.content), px(0.));
+    gpui_linux::move_overlay(
+        view,
+        Bounds::new(point(px(0.), px(0.)), shown.content),
+        px(0.),
+    );
 }
 
 /// The user left the preview: a click in its page, as GPUI hears the browser window's too, or
@@ -124,7 +134,13 @@ pub extern "C" fn host_show_link_preview(ui_view: *mut c_void) {
     };
     let window = crate::window_with_view(ui_view);
     // All of it until its first frame says where the page is.
-    let shown = Shown { ui_view, window, content, hole: None, released: false };
+    let shown = Shown {
+        ui_view,
+        window,
+        content,
+        hole: None,
+        released: false,
+    };
     let view = PREVIEW.with_borrow_mut(|preview| {
         preview.shown = Some(shown);
         preview.view
@@ -135,9 +151,9 @@ pub extern "C" fn host_show_link_preview(ui_view: *mut c_void) {
     gpui_linux::set_overlay_outline(view, &outline(content, None));
     gpui_linux::set_overlay_pointer(view, None);
     let bounds = Bounds::new(point(px(0.), px(0.)), content);
-    gpui_linux::show_overlay(view, ui_view, bounds, px(0.), false, left);
+    crate::overlays::show_over(view, ui_view, bounds, px(0.), false, left);
     // check.sh reads this line.
-    eprintln!("browser: link preview shown");
+    browser::log!("browser: link preview shown");
 }
 
 #[unsafe(no_mangle)]
@@ -170,14 +186,14 @@ pub extern "C" fn host_link_preview_drew(
 /// what it shows over, if it did.
 fn release(except: *mut c_void) -> Option<Shown> {
     let (view, shown) = PREVIEW.with_borrow_mut(|preview| {
-        let shown = (preview.shown.as_mut())
-            .filter(|shown| !shown.released && shown.ui_view != except)?;
+        let shown =
+            (preview.shown.as_mut()).filter(|shown| !shown.released && shown.ui_view != except)?;
         shown.released = true;
         Some((preview.view, *shown))
     })?;
     place(view, &shown);
     // check.sh reads this line.
-    eprintln!("browser: link preview released");
+    browser::log!("browser: link preview released");
     Some(shown)
 }
 
@@ -197,7 +213,9 @@ pub(crate) fn took_keyboard(ui_view: *mut c_void) {
         && let Some(cx) = crate::CX.with_borrow(Clone::clone)
     {
         // After the event, which the app may be handling.
-        cx.foreground_executor().spawn(async move { dismissed() }).detach();
+        cx.foreground_executor()
+            .spawn(async move { dismissed() })
+            .detach();
     }
 }
 
@@ -208,14 +226,17 @@ pub extern "C" fn host_hide_link_preview() {
     if let Some(view) = view {
         gpui_linux::hide_overlay(view, || {});
         // check.sh reads this line.
-        eprintln!("browser: link preview hidden");
+        browser::log!("browser: link preview hidden");
     }
 }
 
 /// `ui_view`'s window's content may have changed size, which the preview covers all of.
 pub(crate) fn resized(ui_view: *mut c_void) {
     let placed = PREVIEW.with_borrow_mut(|preview| {
-        let shown = preview.shown.as_mut().filter(|shown| shown.ui_view == ui_view)?;
+        let shown = preview
+            .shown
+            .as_mut()
+            .filter(|shown| shown.ui_view == ui_view)?;
         shown.content = gpui_linux::embedder_size(ui_view)?;
         Some((preview.view, *shown))
     });

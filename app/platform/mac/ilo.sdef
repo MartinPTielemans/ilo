@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<!--
+  ilo's AppleScript dictionary (#704): the windows, the user's Spaces and their tabs, what each
+  shows, and the commands a click gives, carried out through the UI (scripting.mm, scripting_host.rs).
+  Nothing reads a page, its cookies or its passwords, and nothing runs JavaScript (principle 3).
+  Every property is read-only. Settings › Agents' "Let scripts control the browser" lets scripts
+  in, and lists what each did. The codes are Chromium's where it had the same term.
+-->
+<dictionary title="ilo Terminology">
+  <suite name="Standard Suite" code="core" description="The commands every app has.">
+    <command name="count" code="corecnte" description="The number of elements of a kind in an object.">
+      <cocoa class="NSCountCommand"/>
+      <direct-parameter type="specifier" description="The object whose elements are counted."/>
+      <parameter name="each" code="kocl" type="type" optional="yes" description="The kind of element to count.">
+        <cocoa key="ObjectClass"/>
+      </parameter>
+      <result type="integer"/>
+    </command>
+    <command name="exists" code="coredoex" description="Whether an object exists.">
+      <cocoa class="NSExistsCommand"/>
+      <direct-parameter type="any" description="The object."/>
+      <result type="boolean"/>
+    </command>
+    <command name="make" code="corecrel" description="Make a new window, or a new tab loading a page: in a window's Space, in a Space of a window, or, at the application, as a link from another app opens, by Settings › Links' rules.">
+      <cocoa class="ILOMakeCommand"/>
+      <parameter name="new" code="kocl" type="type" description="window or tab.">
+        <cocoa key="ObjectClass"/>
+      </parameter>
+      <parameter name="at" code="insh" type="location specifier" optional="yes" description="The window or the Space, such as end of tabs of window 1.">
+        <cocoa key="Location"/>
+      </parameter>
+      <parameter name="with properties" code="prdt" type="record" optional="yes" description="A tab's URL, an http or https page.">
+        <cocoa key="KeyDictionary"/>
+      </parameter>
+      <result type="specifier"/>
+    </command>
+  </suite>
+
+  <suite name="ilo Suite" code="ILOs" description="ilo's windows, Spaces and tabs.">
+    <class name="application" code="capp" description="ilo.">
+      <cocoa class="NSApplication"/>
+      <property name="frontmost" code="pisf" type="boolean" access="r" description="Whether it's the active app.">
+        <cocoa key="isActive"/>
+      </property>
+      <element type="window" access="r" description="The windows, front to back. A private window is never among them.">
+        <cocoa key="iloWindows"/>
+      </element>
+    </class>
+
+    <class name="window" code="cwin" plural="windows" description="A browser window.">
+      <cocoa class="ILOScriptWindow"/>
+      <property name="id" code="ID  " type="integer" access="r" description="Its unique identifier, for as long as the app runs.">
+        <cocoa key="uniqueID"/>
+      </property>
+      <property name="index" code="pidx" type="integer" access="r" description="Its place, front to back, from 1.">
+        <cocoa key="orderedIndex"/>
+      </property>
+      <property name="name" code="pnam" type="text" access="r" description="The title of the tab it shows.">
+        <cocoa key="name"/>
+      </property>
+      <property name="active space" code="acSp" type="space" access="r" description="The Space it shows, if it's one of the user's.">
+        <cocoa key="activeSpace"/>
+      </property>
+      <property name="active tab" code="acTa" type="tab" access="r" description="The tab it shows.">
+        <cocoa key="activeTab"/>
+      </property>
+      <element type="space" access="r" description="The user's Spaces, as its switcher lists them.">
+        <cocoa key="iloSpaces"/>
+      </element>
+      <element type="tab" access="r" description="The tabs of the Space it shows, pinned then Today.">
+        <cocoa key="iloTabs"/>
+      </element>
+    </class>
+
+    <class name="space" code="ILsp" plural="spaces" description="One of the user's Spaces, in a window.">
+      <cocoa class="ILOScriptSpace"/>
+      <property name="id" code="ID  " type="integer" access="r" description="Its unique identifier, for as long as the app runs.">
+        <cocoa key="uniqueID"/>
+      </property>
+      <property name="name" code="pnam" type="text" access="r" description="Its name.">
+        <cocoa key="name"/>
+      </property>
+      <element type="tab" access="r" description="Its tabs, pinned then Today.">
+        <cocoa key="iloTabs"/>
+      </element>
+      <responds-to command="focus">
+        <cocoa method="handleFocusCommand:"/>
+      </responds-to>
+    </class>
+
+    <class name="tab" code="CrTb" plural="tabs" description="A tab.">
+      <cocoa class="ILOScriptTab"/>
+      <property name="id" code="ID  " type="integer" access="r" description="Its unique identifier, for as long as the app runs.">
+        <cocoa key="uniqueID"/>
+      </property>
+      <property name="title" code="pnam" type="text" access="r" description="Its title, as its row shows it.">
+        <cocoa key="title"/>
+      </property>
+      <property name="URL" code="URL " type="text" access="r" description="The address of its page.">
+        <cocoa key="URL"/>
+      </property>
+      <responds-to command="select">
+        <cocoa method="handleSelectCommand:"/>
+      </responds-to>
+    </class>
+
+    <command name="focus" code="ILOsfocs" description="Show a Space in its window, as a click in the switcher does.">
+      <direct-parameter type="space" description="The Space."/>
+    </command>
+    <command name="select" code="ILOsslct" description="Show a tab in its window, as a click on its row does.">
+      <direct-parameter type="tab" description="The tab."/>
+    </command>
+  </suite>
+</dictionary>

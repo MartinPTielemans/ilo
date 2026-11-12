@@ -10,11 +10,11 @@ body:
         ilo copies Arc's structure and Dia's polish, measured, and then takes the next step.
         Before asking, read:
 
-        - [docs/decisions.md](https://github.com/MartinPTielemans/browser/blob/main/docs/decisions.md):
+        - [docs/decisions.md](https://github.com/MartinPTielemans/ilo/blob/main/docs/decisions.md):
           settled choices. What's off the table stays off: Electron as the product, WebKit or
           Gecko as ilo's engine, and closed source; so do paid features, ads and license checks.
           A decision reopens only with the evidence its "Revisit" line names.
-        - [docs/ux-principles.md](https://github.com/MartinPTielemans/browser/blob/main/docs/ux-principles.md):
+        - [docs/ux-principles.md](https://github.com/MartinPTielemans/ilo/blob/main/docs/ux-principles.md):
           why Arc's design works, which is what decides anything Arc never did.
 
         Asking for something isn't asking for a PR. Agree on direction here first (CONTRIBUTING.md).

@@ -3,7 +3,7 @@
 //! system's browsers in a made-up home folder.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use web_time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Os {
@@ -132,7 +132,11 @@ pub const BROWSERS: &[Browser] = &[
                 Flatpak,
                 "com.brave.Browser/config/BraveSoftware/Brave-Browser",
             ),
-            (Linux, Snap, "brave/current/.config/BraveSoftware/Brave-Browser"),
+            (
+                Linux,
+                Snap,
+                "brave/current/.config/BraveSoftware/Brave-Browser",
+            ),
         ],
     },
     Browser {
@@ -323,6 +327,91 @@ impl Source {
         }
     }
 
+    /// The ids the system knows the browser's app by, for its icon: on the Mac its bundle id; on
+    /// Linux its desktop entry's, a Flatpak's app id and a Snap's `<name>_<name>` read from where
+    /// its profiles are, else the names its packages install; on Windows its exe, beside its
+    /// profiles where it's installed for the user alone, then its name in the registry's App
+    /// Paths, which only the host reads.
+    pub fn app_ids(&self, os: Os) -> Vec<String> {
+        let mac = |id: &str| vec![id.to_string()];
+        match os {
+            Os::Mac => match self.browser.name {
+                "Arc" => mac("company.thebrowser.Browser"),
+                "Chrome" => mac("com.google.Chrome"),
+                "Dia" => mac("company.thebrowser.dia"),
+                "Edge" => mac("com.microsoft.edgemac"),
+                "Brave" => mac("com.brave.Browser"),
+                "Vivaldi" => mac("com.vivaldi.Vivaldi"),
+                "Opera" => mac("com.operasoftware.Opera"),
+                "Chromium" => mac("org.chromium.Chromium"),
+                "Helium" => mac("net.imput.helium"),
+                "Firefox" => mac("org.mozilla.firefox"),
+                "Zen" => mac("app.zen-browser.zen"),
+                "LibreWolf" => mac("org.mozilla.librewolf"),
+                "Safari" => mac("com.apple.Safari"),
+                _ => Vec::new(),
+            },
+            Os::Linux => {
+                let parts: Vec<String> = (self.dir.components())
+                    .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                let after = |a: &str, b: &str| {
+                    (parts.windows(3)).find_map(|w| (w[0] == a && w[1] == b).then(|| w[2].clone()))
+                };
+                if let Some(id) = after(".var", "app") {
+                    return vec![id];
+                }
+                if let Some(name) =
+                    (parts.windows(2)).find_map(|w| (w[0] == "snap").then(|| w[1].clone()))
+                {
+                    return vec![format!("{name}_{name}")];
+                }
+                let names: &[&str] = match self.browser.name {
+                    "Chrome" => &["google-chrome"],
+                    "Edge" => &["microsoft-edge"],
+                    "Brave" => &["brave-browser"],
+                    "Vivaldi" => &["vivaldi-stable"],
+                    "Opera" => &["opera"],
+                    "Chromium" => &["chromium", "chromium-browser"],
+                    "Helium" => &["helium"],
+                    "Firefox" => &["firefox", "firefox-esr"],
+                    "Zen" => &["zen"],
+                    "LibreWolf" => &["librewolf"],
+                    _ => &[],
+                };
+                names.iter().map(|name| name.to_string()).collect()
+            }
+            Os::Windows => {
+                // The exe its installer puts in App Paths, but where another's has the same name.
+                let (exe, registered) = match self.browser.name {
+                    "Chrome" => ("chrome.exe", true),
+                    "Edge" => ("msedge.exe", true),
+                    "Brave" => ("brave.exe", true),
+                    "Vivaldi" => ("vivaldi.exe", true),
+                    "Chromium" | "Helium" => ("chrome.exe", false),
+                    "Firefox" => ("firefox.exe", true),
+                    "Zen" => ("zen.exe", true),
+                    "LibreWolf" => ("librewolf.exe", true),
+                    _ => return Vec::new(),
+                };
+                // A Chromium installed for the user alone keeps its exe beside its profiles.
+                let beside = (self.dir.file_name().is_some_and(|name| name == "User Data"))
+                    .then(|| self.dir.parent())
+                    .flatten()
+                    .map(|dir| {
+                        dir.join("Application")
+                            .join(exe)
+                            .to_string_lossy()
+                            .into_owned()
+                    });
+                beside
+                    .into_iter()
+                    .chain(registered.then(|| exe.to_string()))
+                    .collect()
+            }
+        }
+    }
+
     /// Arc's sidebar, beside its user data folder, where its Spaces, pinned tabs and favorites are.
     pub fn arc_sidebar(&self) -> Option<PathBuf> {
         let path = self.dir.parent()?.join("StorableSidebar.json");
@@ -381,7 +470,12 @@ pub fn find(roots: &Roots) -> Vec<Source> {
     // An install is named only beside another of the same browser.
     for index in 0..found.len() {
         let name = found[index].browser.name;
-        if found.iter().filter(|other| other.browser.name == name).count() == 1 {
+        if found
+            .iter()
+            .filter(|other| other.browser.name == name)
+            .count()
+            == 1
+        {
             found[index].install = None;
         }
     }
@@ -448,10 +542,16 @@ fn source(
         used: None,
     };
     files.extend(source.arc_sidebar());
+    // A file's time is std's, which the web's clock isn't.
+    let modified = |file: &PathBuf| {
+        let modified = file.metadata().ok()?.modified().ok()?;
+        modified.duration_since(std::time::UNIX_EPOCH).ok()
+    };
     source.used = files
         .iter()
-        .filter_map(|file| file.metadata().ok()?.modified().ok())
-        .max();
+        .filter_map(modified)
+        .max()
+        .map(|since| UNIX_EPOCH + since);
     Some(source)
 }
 

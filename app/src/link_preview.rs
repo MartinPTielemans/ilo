@@ -1,49 +1,50 @@
 //! The link preview: a link clicked in a pinned tab or a favorite, to another site than the tab's,
 //! opens over the window in a card rather than taking the tab away from its own site (Arc's Peek,
 //! docs/ux-spec.md › Phase 4 features). The page is a real one, in a tab of no Space, in its
-//! native view, which the host puts over this window's card. ⌘↩ or the card's button keeps it as a
-//! Today tab, as it is. GPUI can't draw over the page's native view, so the dim and the card are a
-//! window of their own that the host shows over the browser window, as its child, as the
-//! dialog's are. Where no window of the app's can hold a page, as on Linux, the page shows in the
-//! browser window under this one, which leaves it a hole and draws the card round it. What it asks
-//! of its window and the core goes through `Host`.
+//! native view, which the host puts over this window's card: the page is the card, with the site
+//! and the buttons floating over the dim above it. ⌘↩ or the keep button keeps it as a Today tab,
+//! as it is. GPUI can't draw over the page's native view, so the dim and the card are a window of
+//! their own that the host shows over the browser window, as its child, as the dialog's are, and
+//! nothing of the preview's own lies over the page. Where no window of the app's can hold a page,
+//! as on Linux, the page shows in the browser window under this one, which leaves it a hole and
+//! draws the card's rim round it. What it asks of its window and the core goes through `Host`.
 
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
-    App, Bounds, Context, FocusHandle, Global, Hsla, KeyBinding, MouseButton, PathBuilder, Pixels,
-    Point, SharedString, Size, Task, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, fill, point,
-    prelude::*, px, rgb, size, svg,
+    AnyElement, App, Bounds, BoxShadow, Context, FocusHandle, FontWeight, Global, Hsla, Image,
+    KeyBinding, MouseButton, PathBuilder, Pixels, Point, SharedString, Size, Task, TitlebarOptions,
+    Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    accesskit::Role, actions, canvas, div, fill, img, point, prelude::*, px, rgb, size, svg,
 };
 
 use crate::elevation::Level;
 use crate::icon_picker::outline;
-use crate::palette::{self, STATE_HOVERED, STATE_PRESSED};
-use crate::shell::{cubic_bezier, scaled::scaled};
-use crate::tokens::dialog::{DIM, DIM_OPACITY};
+use crate::palette::{self, Palette, STATE_HOVERED, STATE_PRESSED};
+use crate::shell::{cubic_bezier, keystroke_keys, scaled::scaled};
+use crate::tokens::dialog::DIM;
 use crate::tokens::link_preview::{
-    FRAME, HEADER_LEFT, HEADER_TEXT, INSET_MAX, INSET_MIN, INSET_SHARE, MIN_RADIUS,
+    BUTTON_GAP, CONTROLS, CONTROLS_GAP, DIM_OPACITY, GLYPH, INSET_MAX, INSET_MIN, INSET_SHARE,
+    RADIUS, RIM, SITE_END, SITE_GAP, SITE_X,
 };
-use crate::tokens::shell::{
-    NAV, NAV_RADIUS, TITLE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE,
-};
+use crate::tokens::shell::{FAVICON_DRAWN, NAV, SECONDARY};
+use crate::tokens::text::BODY;
+use crate::tooltip::{Anchor, Tip};
 
 actions!(link_preview, [Close, Keep]);
 
-/// The header over the page, a button's height, as the side panel's.
-const HEADER: f32 = URL_BUTTON_SIZE + 2. * URL_BUTTON_INSET;
+/// The controls' row over the card: their height and the gap under them.
+const OVER_CARD: f32 = CONTROLS + CONTROLS_GAP;
 
 /// The dialog's measured motion, from the link: it grows in over 0.275 s from half its size,
 /// opaque after the first 0.135 s, as the window dims. It shrinks back into the link in 0.2 s,
-/// as fast as an overlay grows in, and grows into the tab's place in 0.275 s.
-const OPEN: f32 = 0.275;
+/// as fast as an overlay grows in, and grows into the tab's place in 0.275 s. A task's page watched
+/// in the page area zooms out of its thumbnail and back on the same curves (shell/task_area.rs).
+pub(crate) const OPEN: f32 = 0.275;
 const FADE_IN: f32 = 0.135;
 const FROM_SCALE: f32 = 0.5;
-const CLOSE: f32 = 0.2;
+pub(crate) const CLOSE: f32 = 0.2;
 const KEEP: f32 = 0.275;
 
 /// What the preview asks of its window and the core.
@@ -67,11 +68,19 @@ pub trait Host {
     fn hide(&self);
     /// Closes the preview's page, whose tab is `tab`.
     fn close(&self, tab: u64);
-    /// Makes `tab` a Today tab of the Space `window` shows, and shows it there, as it is.
-    fn keep(&self, window: u64, tab: u64);
+    /// Makes `tab` a Today tab of the Space `window` shows, and shows it there, as it is. A preview
+    /// of the archived tab `archived` goes to the Space that tab closed in, as a restore does, and
+    /// takes it out of the archive.
+    fn keep(&self, window: u64, tab: u64, archived: Option<u64>);
+    /// The kept preview was of the archived tab `archived`, which is the window's tab now, as a tab
+    /// restored from it is.
+    fn kept_archived(&self, _window: u64, _archived: u64, _cx: &mut App) {}
     /// The user closed the preview over the browser window `window`, for ⌘Z and ⇧⌘T to open
     /// again; `undone` if Redo closed it, as that history has it already.
     fn closed(&self, window: u64, closed: Closed, undone: bool, cx: &mut App);
+    /// Shows `tip` hanging from a button at its anchor, in the browser window, after the tooltip's
+    /// delay, or ends the tooltip, as the shell's buttons ask for theirs.
+    fn tooltip(&self, tip: Option<(Tip, Anchor)>, cx: &mut App);
 }
 
 /// A preview the user closed: the tab it was over, the page it was at and where its link was.
@@ -124,38 +133,79 @@ pub fn is_meeting(url: &str) -> bool {
     }
 }
 
-/// The site a URL is on, as the header shows it: its host, without "www.".
+/// The site a URL is on, as the preview shows it: its host, without "www." or a port.
 pub fn site_of(url: &str) -> &str {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    // An IPv6 address keeps its colons, in its brackets.
+    let host = match host.find(']') {
+        Some(end) if host.starts_with('[') => &host[..=end],
+        _ => host.split(':').next().unwrap_or(host),
+    };
     host.strip_prefix("www.").unwrap_or(host)
 }
 
-/// Where the card goes over a window's page at `page`.
+/// Where the card goes over a window's page at `page`: in from its sides and bottom by a share of
+/// it, and from its top by that and the controls' row over the card.
 fn card(page: Bounds<Pixels>) -> Bounds<Pixels> {
     let side = f32::from(page.size.width.min(page.size.height));
     let inset = (side * INSET_SHARE).clamp(INSET_MIN, INSET_MAX);
+    let top = inset + OVER_CARD;
     Bounds::new(
-        page.origin + point(px(inset), px(inset)),
-        size(page.size.width - px(2. * inset), page.size.height - px(2. * inset)),
+        page.origin + point(px(inset), px(top)),
+        size(
+            (page.size.width - px(2. * inset)).max(px(0.)),
+            (page.size.height - px(top + inset)).max(px(0.)),
+        ),
     )
 }
 
-/// Where the page goes in `card`: under the header, inside the frame.
+/// Where the page goes in `card`: all of it inside the rim.
 fn page_in(card: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(
-        card.origin + point(px(FRAME), px(HEADER)),
-        size(card.size.width - px(2. * FRAME), card.size.height - px(HEADER + FRAME)),
+        card.origin + point(px(RIM), px(RIM)),
+        size(
+            card.size.width - px(2. * RIM),
+            card.size.height - px(2. * RIM),
+        ),
     )
+}
+
+/// Where a page under the window waits while it isn't to show, at its size where it rests, `rest`:
+/// left of the window's content, past any margin round it, where the window clips it. It moves by
+/// whole points, so the core lays it out at the same whole size as where it rests.
+fn out_of_sight(rest: Bounds<Pixels>) -> Bounds<Pixels> {
+    let by = f32::from(rest.right()).ceil() + 1000.;
+    Bounds::new(point(rest.left() - px(by), rest.top()), rest.size)
 }
 
 /// The card with its page at `page`.
 fn card_around(page: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(
-        page.origin - point(px(FRAME), px(HEADER)),
-        size(page.size.width + px(2. * FRAME), page.size.height + px(HEADER + FRAME)),
+        page.origin - point(px(RIM), px(RIM)),
+        size(
+            page.size.width + px(2. * RIM),
+            page.size.height + px(2. * RIM),
+        ),
     )
+}
+
+/// The controls' row over a card at `card`, as wide as it.
+fn controls_over(card: Bounds<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(
+        card.origin - point(px(0.), px(OVER_CARD)),
+        size(card.size.width, px(CONTROLS)),
+    )
+}
+
+/// Where the keep and close buttons are, at the right end of the controls' row `row`.
+fn buttons_in(row: Bounds<Pixels>) -> [Bounds<Pixels>; 2] {
+    let at = |from_right: f32| {
+        let origin = point(row.right() - px(from_right), row.origin.y);
+        Bounds::new(origin, size(px(CONTROLS), px(CONTROLS)))
+    };
+    [at(2. * CONTROLS + BUTTON_GAP), at(CONTROLS)]
 }
 
 fn scaled_about(frame: Bounds<Pixels>, scale: f32, about: Point<Pixels>) -> Bounds<Pixels> {
@@ -169,8 +219,14 @@ fn scaled_about(frame: Bounds<Pixels>, scale: f32, about: Point<Pixels>) -> Boun
 fn between(from: Bounds<Pixels>, to: Bounds<Pixels>, t: f32) -> Bounds<Pixels> {
     let mix = |a: Pixels, b: Pixels| a + (b - a) * t;
     Bounds::new(
-        point(mix(from.origin.x, to.origin.x), mix(from.origin.y, to.origin.y)),
-        size(mix(from.size.width, to.size.width), mix(from.size.height, to.size.height)),
+        point(
+            mix(from.origin.x, to.origin.x),
+            mix(from.origin.y, to.origin.y),
+        ),
+        size(
+            mix(from.size.width, to.size.width),
+            mix(from.size.height, to.size.height),
+        ),
     )
 }
 
@@ -249,7 +305,12 @@ fn frames(
 fn corners(size: Size<Pixels>, radius: f32) -> [(f32, f32, f32); 4] {
     let (width, height) = (f32::from(size.width), f32::from(size.height));
     let radius = radius.min(width / 2.).min(height / 2.);
-    [(0., 0., radius), (width, 0., radius), (width, height, radius), (0., height, radius)]
+    [
+        (0., 0., radius),
+        (width, 0., radius),
+        (width, height, radius),
+        (0., height, radius),
+    ]
 }
 
 /// The parts of a window of `size` round `hole`: above it, below it, left and right of it.
@@ -257,9 +318,15 @@ fn around(hole: Bounds<Pixels>, size: Size<Pixels>) -> [Bounds<Pixels>; 4] {
     let (width, height, rows) = (size.width, size.height, hole.size.height);
     [
         Bounds::new(point(px(0.), px(0.)), gpui::size(width, hole.top())),
-        Bounds::new(point(px(0.), hole.bottom()), gpui::size(width, height - hole.bottom())),
+        Bounds::new(
+            point(px(0.), hole.bottom()),
+            gpui::size(width, height - hole.bottom()),
+        ),
         Bounds::new(point(px(0.), hole.top()), gpui::size(hole.left(), rows)),
-        Bounds::new(point(hole.right(), hole.top()), gpui::size(width - hole.right(), rows)),
+        Bounds::new(
+            point(hole.right(), hole.top()),
+            gpui::size(width - hole.right(), rows),
+        ),
     ]
 }
 
@@ -289,10 +356,97 @@ fn paint_frame(
     }
 }
 
+/// A control's plate, floating over the dim: the overlay's fill with the popover level, `shadow`
+/// as the window allows, round at its ends. Clicks on it stay off the dim under it.
+fn plate(id: &'static str, palette: &Palette, shadow: Vec<BoxShadow>) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .h(px(CONTROLS))
+        .rounded_full()
+        .bg(palette.overlay)
+        .border(px(RIM))
+        .border_color(Level::Popover.rim_in(palette))
+        .shadow(shadow)
+        .occlude()
+}
+
+/// A round button: its id, its icon and how the preview leaves on its click, which names it, as
+/// the header's buttons are, on its own plate.
+fn button(
+    (id, icon, how): (&'static str, &'static str, Leave),
+    palette: &Palette,
+    shadow: Vec<BoxShadow>,
+) -> gpui::Stateful<gpui::Div> {
+    let rest = palette.overlay;
+    plate(id, palette, shadow)
+        .w(px(CONTROLS))
+        .flex()
+        .items_center()
+        .justify_center()
+        .role(Role::Button)
+        .aria_label(how.named().0)
+        .hover(|style| style.bg(palette.state_over(rest, STATE_HOVERED)))
+        .active(|style| style.bg(palette.state_over(rest, STATE_PRESSED)))
+        .child(
+            svg()
+                .path(icon)
+                .size(px(GLYPH))
+                .text_color(palette.on_overlay_glyph(NAV)),
+        )
+}
+
+/// The site, quietly, on a plate: its favicon, or a globe until it has one, in the plate's round
+/// end, and its host, which ends in an ellipsis where the row is too narrow for it.
+fn site_plate(
+    (site, favicon): (SharedString, Option<Arc<Image>>),
+    palette: &Palette,
+    shadow: Vec<BoxShadow>,
+) -> gpui::Stateful<gpui::Div> {
+    let icon: AnyElement = match favicon {
+        Some(favicon) => img(favicon).size(px(FAVICON_DRAWN)).into_any_element(),
+        None => svg()
+            .path("icons/globe.svg")
+            .size(px(FAVICON_DRAWN))
+            .text_color(palette.on_overlay_glyph(NAV))
+            .into_any_element(),
+    };
+    plate("link-preview-site", palette, shadow)
+        .flex_shrink(1.)
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(SITE_GAP))
+        // From the plate's edge, outside its rim.
+        .pl(px(SITE_X - RIM))
+        .pr(px(SITE_END - RIM))
+        .child(div().flex_none().child(icon))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(BODY))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(palette.on_overlay(SECONDARY))
+                .child(site),
+        )
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Leave {
     Close,
     Keep,
+}
+
+impl Leave {
+    /// The name of the button that leaves this way, and the key that does the same, which its
+    /// tooltip shows.
+    fn named(self) -> (&'static str, &'static str) {
+        match self {
+            Leave::Keep => ("Open as Tab", "cmd-enter"),
+            Leave::Close => ("Close", "escape"),
+        }
+    }
 }
 
 /// The preview of one page, from the click that opens it until it has left.
@@ -305,8 +459,13 @@ struct Preview {
     /// The tab whose link it opened from.
     over: u64,
     url: SharedString,
+    /// Its page's favicon, once the core has one.
+    favicon: Option<Arc<Image>>,
     /// Redo closed it, so ⌘Z's history has it already.
     undone: bool,
+    /// The archived tab it previews, from the Library, which keeping it restores and closing it
+    /// leaves in the archive.
+    archived: Option<u64>,
     /// Where the link was clicked in the browser window.
     link: Point<Pixels>,
     /// When the app asked for it, from which its first frame is timed.
@@ -314,6 +473,15 @@ struct Preview {
     /// When its window was first on screen, where the motion starts.
     shown: Option<Instant>,
     settled: bool,
+    /// Where its page was laid out last.
+    placed: Bounds<Pixels>,
+    /// Whether a page under the window shows through its hole.
+    cut: bool,
+    /// Whether the window's page is to have the keyboard back once a page under the window has
+    /// left, as it's closing.
+    releasing: bool,
+    /// The frame check.sh last read the card holds the page at, in pixels, and the scale.
+    logged: Option<([i32; 4], f32)>,
     /// Once it's leaving: when, how, and where the motion was.
     leaving: Option<(Instant, Leave, Pose)>,
     _leave: Option<Task<()>>,
@@ -328,14 +496,40 @@ impl Preview {
         }
     }
 
-    fn moving(&self) -> bool {
-        self.leaving.is_some()
-            || self.shown.is_none_or(|shown| shown.elapsed().as_secs_f32() < OPEN)
+    /// Where it's drawn: as its motion has it, or under Reduce Motion at its size, and in the
+    /// tab's place from the moment it's kept, fading.
+    fn drawn(&self, cx: &App) -> Pose {
+        let pose = self.pose();
+        let kept = match self.leaving {
+            Some((_, Leave::Keep, _)) => 1. - crate::motion::offset(1. - pose.kept, cx),
+            _ => pose.kept,
+        };
+        Pose {
+            scale: crate::motion::scale(pose.scale, cx),
+            kept,
+            ..pose
+        }
     }
 
-    /// The page's corners, which the card's follow outside the frame.
-    fn radius(&self) -> f32 {
-        self.radius.max(MIN_RADIUS)
+    /// Lays a page under the window out at `at`, unless it's there.
+    fn lay_out(&mut self, host: &dyn Host, at: Bounds<Pixels>) {
+        if self.placed != at {
+            self.placed = at;
+            host.place(self.tab, at, RADIUS);
+        }
+    }
+
+    fn moving(&self) -> bool {
+        self.leaving.is_some()
+            || self
+                .shown
+                .is_none_or(|shown| shown.elapsed().as_secs_f32() < OPEN)
+    }
+
+    /// The page's corners, which the card's follow outside its rim: the preview's own at rest, and
+    /// the window's page's once `kept` has grown it into the tab's place, so it lands with them.
+    fn page_radius(&self, kept: f32) -> f32 {
+        RADIUS + (self.radius - RADIUS) * kept
     }
 }
 
@@ -343,6 +537,9 @@ pub struct LinkPreview {
     host: Rc<dyn Host>,
     focus: FocusHandle,
     preview: Option<Preview>,
+    /// The button whose tooltip it asked for, until the pointer leaves it or the preview goes,
+    /// since a button that goes from under the pointer sends no hover-out.
+    tipped: Option<Leave>,
 }
 
 pub struct LinkPreviewWindow(WindowHandle<LinkPreview>);
@@ -355,7 +552,11 @@ impl LinkPreviewWindow {
     /// from any of its pages, which the preview's never is, so while the preview shows, with the
     /// keyboard, its window's keys are its own.
     pub fn holds(&self, window: u64, tab: u64, cx: &App) -> bool {
-        let shown = self.0.read(cx).ok().and_then(|preview| preview.preview.as_ref());
+        let shown = self
+            .0
+            .read(cx)
+            .ok()
+            .and_then(|preview| preview.preview.as_ref());
         shown.is_some_and(|shown| {
             shown.tab == tab || (window != 0 && shown.window == window && shown.leaving.is_none())
         })
@@ -365,24 +566,34 @@ impl LinkPreviewWindow {
 /// Opens the preview's window, hidden, for `host` to show over a browser window, ahead of time as
 /// the dialog's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<LinkPreview>> {
+    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(800.), px(600.)));
+    open_at(host, bounds, false, cx)
+}
+
+/// Opens the preview's window at `bounds`, shown if `show`, as the preview binary has it over its
+/// window, whose host can't place one.
+pub fn open_at(
+    host: Rc<dyn Host>,
+    bounds: Bounds<Pixels>,
+    show: bool,
+    cx: &mut App,
+) -> Option<WindowHandle<LinkPreview>> {
     let key = |key, action| crate::shell::view_binding(key, action, "LinkPreview", cx);
-    let mac_keys = [key("cmd-w", Box::new(Close)), key("cmd-enter", Box::new(Keep))];
+    let mac_keys = [
+        key("cmd-w", Box::new(Close)),
+        key("cmd-enter", Box::new(Keep)),
+    ];
     cx.bind_keys(mac_keys);
-    cx.bind_keys([
-        KeyBinding::new("escape", Close, Some("LinkPreview")),
-    ]);
+    cx.bind_keys([KeyBinding::new("escape", Close, Some("LinkPreview"))]);
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-            point(px(0.), px(0.)),
-            size(px(800.), px(600.)),
-        ))),
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
             title: None,
             appears_transparent: true,
             traffic_light_position: None,
         }),
         kind: WindowKind::Floating,
-        show: false,
+        show,
         focus: false,
         is_movable: false,
         is_resizable: false,
@@ -392,7 +603,12 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<LinkPreview
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        cx.new(|cx| LinkPreview { host, focus: cx.focus_handle(), preview: None })
+        cx.new(|cx| LinkPreview {
+            host,
+            focus: cx.focus_handle(),
+            preview: None,
+            tipped: None,
+        })
     });
     match window {
         Ok(window) => {
@@ -410,13 +626,16 @@ fn update<R>(
     cx: &mut App,
     change: impl FnOnce(&mut LinkPreview, &mut Window, &mut Context<LinkPreview>) -> R,
 ) -> Option<R> {
-    let window = cx.try_global::<LinkPreviewWindow>().map(|preview| preview.0)?;
+    let window = cx
+        .try_global::<LinkPreviewWindow>()
+        .map(|preview| preview.0)?;
     window.update(cx, change).ok()
 }
 
 /// Shows `tab`'s page, at `url`, over the browser window `window`, whose page is at `page` with
-/// corners of that radius, growing from `link` there, where the link in `over`'s page was clicked.
-/// A preview showing goes at once.
+/// corners of that radius, growing from `link` there, where the link in `over`'s page was clicked,
+/// or the row of the archived tab `archived` it previews. A preview showing goes at once.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     window: u64,
     tab: u64,
@@ -424,32 +643,45 @@ pub fn show(
     url: SharedString,
     (page, radius): (Bounds<Pixels>, f32),
     link: Point<Pixels>,
+    archived: Option<u64>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<LinkPreview>(cx);
     update(cx, |preview, gpui_window, cx| {
         preview.finish(cx);
         // check.sh reads this line.
         log!("browser: link preview {tab} {url}");
-        let shown = Preview {
+        let mut shown = Preview {
             window,
             page,
             radius,
             tab,
             over,
             url,
+            favicon: None,
             undone: false,
+            archived,
             link,
             asked: Instant::now(),
             shown: None,
             settled: false,
+            placed: page_in(card(page)),
+            cut: false,
+            releasing: false,
+            logged: None,
             leaving: None,
             _leave: None,
         };
-        preview.host.place(tab, page_in(card(page)), shown.radius());
+        // A page under the window is laid out at its size from the first, and waits out of sight
+        // while the card grows (render).
+        if preview.host.page_under() {
+            shown.placed = out_of_sight(shown.placed);
+        }
+        preview.host.place(tab, shown.placed, RADIUS);
         preview.host.show(window);
         preview.preview = Some(shown);
-        // The page has the keyboard, and the header's keys are there once a click gives it to the
-        // card.
+        // The page has the keyboard, and the preview's keys are there once a click gives it to the
+        // controls.
         gpui_window.focus(&preview.focus, cx);
         cx.notify();
     });
@@ -468,7 +700,10 @@ pub fn page_moved(window: u64, (page, radius): (Bounds<Pixels>, f32), cx: &mut A
         }
         shown.page = page;
         shown.radius = radius;
-        host.place(shown.tab, page_in(card(page)), shown.radius());
+        // A page under the window is laid out by the frame it draws next.
+        if !host.page_under() {
+            host.place(shown.tab, page_in(card(page)), RADIUS);
+        }
         cx.notify();
     });
 }
@@ -483,15 +718,30 @@ pub fn set_url(tab: u64, url: SharedString, cx: &mut App) {
     });
 }
 
+/// `tab`'s page has `favicon` now, or none.
+pub fn set_favicon(tab: u64, favicon: Option<Arc<Image>>, cx: &mut App) {
+    update(cx, |preview, _, cx| {
+        if let Some(shown) = preview.preview.as_mut().filter(|shown| shown.tab == tab) {
+            shown.favicon = favicon;
+            cx.notify();
+        }
+    });
+}
+
 /// The preview's tab, while one shows.
 pub fn tab(cx: &mut App) -> Option<u64> {
-    update(cx, |preview, _, _| preview.preview.as_ref().map(|shown| shown.tab)).flatten()
+    update(cx, |preview, _, _| {
+        preview.preview.as_ref().map(|shown| shown.tab)
+    })
+    .flatten()
 }
 
 /// What `keystroke` from `tab`'s page in the browser window `window` does, if it's the preview's
 /// (LinkPreviewWindow::holds): it's done, and whether the page loses it. None for another page.
 pub fn key(window: u64, tab: u64, keystroke: &str, reserved: bool, cx: &mut App) -> Option<bool> {
-    let holds = cx.try_global::<LinkPreviewWindow>().is_some_and(|it| it.holds(window, tab, cx));
+    let holds = cx
+        .try_global::<LinkPreviewWindow>()
+        .is_some_and(|it| it.holds(window, tab, cx));
     if !holds {
         return None;
     }
@@ -499,7 +749,11 @@ pub fn key(window: u64, tab: u64, keystroke: &str, reserved: bool, cx: &mut App)
         Some(KeyAction::Close) => preview.close(keystroke, cx),
         Some(KeyAction::Keep) => preview.keep(keystroke, cx),
         Some(KeyAction::CopyUrl) => {
-            let url = preview.preview.as_ref().map(|shown| shown.url.clone()).unwrap_or_default();
+            let url = preview
+                .preview
+                .as_ref()
+                .map(|shown| shown.url.clone())
+                .unwrap_or_default();
             crate::shell::copy_url_of_preview(&url, cx);
             true
         }
@@ -528,8 +782,13 @@ pub fn dismissed(cx: &mut App) {
 /// The tab closed, and its preview goes with it at once.
 pub fn tab_closed(tab: u64, cx: &mut App) {
     update(cx, |preview, _, cx| {
-        if preview.preview.as_ref().is_some_and(|shown| shown.tab == tab) {
+        if preview
+            .preview
+            .as_ref()
+            .is_some_and(|shown| shown.tab == tab)
+        {
             preview.preview = None;
+            preview.end_tip(cx);
             preview.host.hide();
             cx.notify();
         }
@@ -540,7 +799,13 @@ impl LinkPreview {
     /// Closes the preview back into its link, giving the browser window the keyboard and the
     /// clicks at once, and its page once it has left. Whether it was showing.
     fn close(&mut self, why: &str, cx: &mut Context<Self>) -> bool {
-        self.leave(Leave::Close, why, CLOSE, cx)
+        // A page under the window can't leave once the user has left it, as laying it out would
+        // take the keyboard after them, so the preview goes at once rather than shrink over it.
+        let seconds = match why == "dismissed" && self.host.page_under() {
+            true => 0.,
+            false => CLOSE,
+        };
+        self.leave(Leave::Close, why, seconds, cx)
     }
 
     /// Grows the preview into the tab's place, then keeps its page there as a Today tab.
@@ -549,21 +814,42 @@ impl LinkPreview {
     }
 
     fn leave(&mut self, how: Leave, why: &str, seconds: f32, cx: &mut Context<Self>) -> bool {
-        let Some(shown) = self.preview.as_mut().filter(|shown| shown.leaving.is_none()) else {
+        // A click on a button ends its tooltip, as on other buttons, and a key does too.
+        self.end_tip(cx);
+        let Some(shown) = self
+            .preview
+            .as_mut()
+            .filter(|shown| shown.leaving.is_none())
+        else {
             return false;
         };
         shown.leaving = Some((Instant::now(), how, shown.pose()));
         // check.sh reads this line, before the host's that it's released.
-        let what = if how == Leave::Keep { "keeping" } else { "closing" };
+        let what = if how == Leave::Keep {
+            "keeping"
+        } else {
+            "closing"
+        };
         log!("browser: link preview {what} ({why})");
-        self.host.release();
+        // A page under the window that shows leaves in the card's frames first (render), while it
+        // still has the keyboard, as laying it out takes it.
+        shown.releasing = how == Leave::Close && shown.cut && why != "dismissed";
+        if !shown.releasing {
+            self.host.release();
+        }
         let tab = shown.tab;
         shown._leave = Some(cx.spawn(async move |preview, cx| {
-            cx.background_executor().timer(Duration::from_secs_f32(seconds)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(seconds))
+                .await;
             preview
                 .update(cx, |preview, cx| {
                     // Unless another preview took its place meanwhile.
-                    if preview.preview.as_ref().is_some_and(|shown| shown.tab == tab) {
+                    if preview
+                        .preview
+                        .as_ref()
+                        .is_some_and(|shown| shown.tab == tab)
+                    {
                         preview.finish(cx);
                         cx.notify();
                     }
@@ -577,24 +863,82 @@ impl LinkPreview {
     /// Ends the preview shown, if any, where its leaving would: its page closed or kept, and its
     /// window hidden. One the user closed is the window's to reopen.
     fn finish(&mut self, cx: &mut App) {
+        self.end_tip(cx);
         let Some(shown) = self.preview.take() else {
             return;
         };
         match shown.leaving {
             Some((_, Leave::Keep, _)) => {
-                self.host.keep(shown.window, shown.tab);
+                self.host.keep(shown.window, shown.tab, shown.archived);
                 // check.sh reads this line.
                 log!("browser: link preview kept {}", shown.tab);
                 self.host.hide();
+                if let Some(archived) = shown.archived {
+                    self.host.kept_archived(shown.window, archived, cx);
+                }
             }
             leaving => {
                 self.host.hide();
                 self.host.close(shown.tab);
-                if leaving.is_some() {
-                    let Preview { window, over, url, link, undone, .. } = shown;
-                    self.host.closed(window, Closed { over, url, link }, undone, cx);
+                // An archived tab's preview leaves it in the archive, which is how to get back to
+                // it: nothing for ⌘Z to reopen.
+                if leaving.is_some() && shown.archived.is_none() {
+                    let Preview {
+                        window,
+                        over,
+                        url,
+                        link,
+                        undone,
+                        ..
+                    } = shown;
+                    self.host
+                        .closed(window, Closed { over, url, link }, undone, cx);
                 }
             }
+        }
+    }
+}
+
+impl LinkPreview {
+    /// The pointer has come onto or left the button that leaves `how`, whose tooltip names it and
+    /// its key, as the header's buttons' do: Open as Tab ⌘↩, and Close ⎋, written off the Mac as
+    /// Settings writes them there. It hangs from the button where it rests.
+    fn hover_button(&mut self, how: Leave, hovered: bool, window: Size<Pixels>, cx: &mut App) {
+        let resting = self
+            .preview
+            .as_ref()
+            .filter(|shown| shown.leaving.is_none());
+        match resting.filter(|_| hovered) {
+            Some(shown) => {
+                let [keep, close] = buttons_in(controls_over(card(shown.page)));
+                let frame = if how == Leave::Keep { keep } else { close };
+                let (name, keystroke) = how.named();
+                let keys = keystroke_keys(keystroke)
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
+                self.tipped = Some(how);
+                self.host.tooltip(
+                    Some((
+                        Tip {
+                            text: name.into(),
+                            keys,
+                        },
+                        Anchor::under(frame, window),
+                    )),
+                    cx,
+                );
+            }
+            // Unless the pointer went from it onto the other button, whose tooltip took its place.
+            None if self.tipped == Some(how) => self.end_tip(cx),
+            None => {}
+        }
+    }
+
+    /// Ends the tooltip of the button it asked for one for, if any.
+    fn end_tip(&mut self, cx: &mut App) {
+        if self.tipped.take().is_some() {
+            self.host.tooltip(None, cx);
         }
     }
 }
@@ -610,6 +954,8 @@ impl Render for LinkPreview {
             .on_action(cx.listener(|preview, _: &Keep, _, cx| {
                 preview.keep("cmd-enter", cx);
             }))
+            // A tooltip shows once the pointer rests (tooltip.rs).
+            .on_mouse_move(|_, _, cx| crate::tooltip::moved(cx))
             .size_full()
             .font_family(".SystemUIFont");
         let Some(shown) = self.preview.as_mut() else {
@@ -623,7 +969,7 @@ impl Render for LinkPreview {
             let ms = shown.asked.elapsed().as_secs_f64() * 1000.;
             log!("browser: link preview first frame in {ms:.1} ms");
         }
-        let pose = shown.pose();
+        let pose = shown.drawn(cx);
         let moving = shown.moving();
         let settling = !moving && !shown.settled;
         shown.settled |= settling;
@@ -632,68 +978,97 @@ impl Render for LinkPreview {
         }
         let (card_frame, about, page) = frames(pose, shown.page, shown.link);
         let under = self.host.page_under();
-        // A page under the window shows only where it rests, and the host hears again as that
-        // moves.
-        let page = match under {
-            true => page.intersect(&page_in(card(shown.page))),
-            false => page,
+        let page_radius = shown.page_radius(pose.kept);
+        // A page under the window shows only through the window's hole, where nothing of the
+        // window's draws over it, and the host hears again as that moves. It can't scale or fade,
+        // and isn't resized for the motion, as a page reads its size as it loads (#2519): it waits
+        // out of sight while the card grows with a plate where it will show, comes in under the
+        // plate as the card comes to rest, and shows through the hole from the next frame. As it
+        // closes, the plate is in the hole the frame before the hole closes and the page leaves,
+        // and the card shrinks back with it.
+        let mut leave_to = None;
+        let (page, plate) = match under {
+            false => (page, false),
+            true => {
+                let rest = page_in(card(shown.page));
+                let none = Bounds::new(about, Size::default());
+                let how = shown.leaving.as_ref().map(|(_, how, _)| *how);
+                match (how, shown.cut) {
+                    (None, true) => {
+                        shown.lay_out(&*self.host, rest);
+                        (rest, false)
+                    }
+                    (None, false) if !moving => {
+                        shown.cut = shown.placed == rest;
+                        shown.lay_out(&*self.host, rest);
+                        window.request_animation_frame();
+                        (if shown.cut { rest } else { none }, false)
+                    }
+                    (Some(Leave::Close), true) => {
+                        shown.cut = false;
+                        window.request_animation_frame();
+                        (shown.placed, true)
+                    }
+                    (Some(Leave::Keep), true) => (page.intersect(&rest), false),
+                    _ => {
+                        if how.is_none() || shown.releasing {
+                            leave_to = Some(out_of_sight(rest));
+                        }
+                        (none, false)
+                    }
+                }
+            }
         };
         if moving || settling || under {
-            self.host.drew(page, shown.radius() * pose.scale, pose.page);
+            self.host.drew(page, page_radius * pose.scale, pose.page);
+        }
+        // The page leaves once the hole has closed over it.
+        if let Some(at) = leave_to {
+            shown.lay_out(&*self.host, at);
+            if std::mem::take(&mut shown.releasing) {
+                self.host.release();
+            }
         }
         if settling {
-            // check.sh reads this line.
+            // check.sh reads these lines, the button's before it waits on the other, to rest on it.
+            let [keep, _] = buttons_in(controls_over(card(shown.page)));
+            let (x, y) = (f32::from(keep.center().x), f32::from(keep.center().y));
+            log!("browser: link preview keep button at {x} {y}");
+            // check/peek-motion.sh reads where the page rests and the point it grows from, to
+            // tell where the card is in each frame of the motion it films.
+            let rest = page_in(card(shown.page));
+            let (left, top) = (f32::from(rest.left()), f32::from(rest.top()));
+            let (width, height) = (f32::from(rest.size.width), f32::from(rest.size.height));
+            let (from_x, from_y) = (f32::from(about.x), f32::from(about.y));
+            log!(
+                "browser: link preview page at {left} {top} {width} {height} from {from_x} {from_y}"
+            );
             log!("browser: link preview settled");
         }
+        if shown.settled && shown.leaving.is_none() {
+            // check.sh reads where the card holds the page, in the pixels it's drawn in, against
+            // the page's frame in the browser window's, at rest and again as either moves (#2541).
+            let (frame, scale) = (page_in(card(shown.page)), window.scale_factor());
+            let pixels = |at: Pixels| (f32::from(at) * scale).round() as i32;
+            let drawn = [
+                frame.left(),
+                frame.top(),
+                frame.size.width,
+                frame.size.height,
+            ]
+            .map(pixels);
+            if shown.logged != Some((drawn, scale)) {
+                shown.logged = Some((drawn, scale));
+                let [left, top, width, height] = drawn;
+                log!(
+                    "browser: link preview page frame {left} {top} {width} {height} at scale {scale}"
+                );
+            }
+        }
         let palette = palette::current(cx);
-        let radius = shown.radius() + FRAME;
-        let site = SharedString::from(site_of(&shown.url).to_string());
-        let button = |id: &'static str, icon: &'static str| {
-            div()
-                .id(id)
-                .flex_none()
-                .size(px(URL_BUTTON_SIZE))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(NAV_RADIUS))
-                .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
-                .active(|style| style.bg(palette.plate(STATE_PRESSED)))
-                .child(
-                    svg()
-                        .path(icon)
-                        .size(px(URL_BUTTON_GLYPH))
-                        .text_color(palette.on_overlay_glyph(NAV)),
-                )
-        };
-        let header = div()
-            .h(px(HEADER))
-            .flex()
-            .items_center()
-            .gap(px(URL_BUTTON_INSET))
-            .pl(px(HEADER_LEFT))
-            .pr(px(URL_BUTTON_INSET))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(HEADER_TEXT))
-                    .text_color(palette.on_overlay(TITLE))
-                    .child(site),
-            )
-            .child(
-                button("link-preview-keep", "icons/maximize.svg").on_click(
-                    cx.listener(|preview, _, _, cx| {
-                        preview.keep("button", cx);
-                    }),
-                ),
-            )
-            .child(button("link-preview-close", "icons/x.svg").on_click(cx.listener(
-                |preview, _, _, cx| {
-                    preview.close("button", cx);
-                },
-            )));
+        let card_radius = page_radius + RIM;
+        // Nothing casts a shadow where the page shows under the window, as it would fall on it.
+        let shadow = |level: Level| if under { Vec::new() } else { level.shadow() };
         let card = div()
             .id("link-preview-card")
             .absolute()
@@ -701,29 +1076,77 @@ impl Render for LinkPreview {
             .top(card_frame.top())
             .w(card_frame.size.width)
             .h(card_frame.size.height)
-            .rounded(px(radius))
+            .rounded(px(card_radius))
             .opacity(pose.card)
             // Clicks on the card stay off the dim under it.
             .occlude();
         let card = match under {
+            // The page lies over all of it but the rim.
             false => card
                 .bg(palette.overlay)
-                .border_1()
+                .border(px(RIM))
                 .border_color(Level::Modal.rim_in(&palette))
-                .shadow(Level::Modal.shadow()),
-            // No shadow, which would show in the hole.
+                .shadow(shadow(Level::Modal)),
             true => {
-                let hole = (scaled_about(page, 1. / pose.scale, about), shown.radius());
+                let hole = (scaled_about(page, 1. / pose.scale, about), page_radius);
                 let color = Hsla::from(palette.overlay);
-                let colors = (color, color.opacity(1. - pose.page), Level::Modal.rim_in(&palette));
+                let coming = match plate {
+                    true => color,
+                    false => color.opacity(1. - pose.page),
+                };
+                let colors = (color, coming, Level::Modal.rim_in(&palette));
                 let frame = canvas(
                     |_, _, _| {},
-                    move |_, _, window, _| paint_frame((card_frame, radius), hole, colors, window),
+                    move |_, _, window, _| {
+                        paint_frame((card_frame, card_radius), hole, colors, window)
+                    },
                 );
                 card.child(frame.absolute().size_full())
             }
-        }
-        .child(header);
+        };
+        let site = site_of(&shown.url).to_string();
+        let site = (!site.is_empty()).then(|| (site.into(), shown.favicon.clone()));
+        let lift = shadow(Level::Popover);
+        let keep = button(
+            ("link-preview-keep", "icons/maximize.svg", Leave::Keep),
+            &palette,
+            lift.clone(),
+        );
+        let close = button(
+            ("link-preview-close", "icons/x.svg", Leave::Close),
+            &palette,
+            lift.clone(),
+        );
+        let row = controls_over(card_frame);
+        let controls = div()
+            .absolute()
+            .left(row.left())
+            .top(row.top())
+            .w(row.size.width)
+            .h(row.size.height)
+            .flex()
+            .items_center()
+            .gap(px(BUTTON_GAP))
+            .opacity(pose.card)
+            .children(site.map(|site| site_plate(site, &palette, lift)))
+            .child(div().flex_1())
+            .child(
+                keep.on_hover(cx.listener(|preview, hovered, window, cx| {
+                    preview.hover_button(Leave::Keep, *hovered, window.viewport_size(), cx);
+                }))
+                .on_click(cx.listener(|preview, _, _, cx| {
+                    preview.keep("button", cx);
+                })),
+            )
+            .child(
+                close
+                    .on_hover(cx.listener(|preview, hovered, window, cx| {
+                        preview.hover_button(Leave::Close, *hovered, window.viewport_size(), cx);
+                    }))
+                    .on_click(cx.listener(|preview, _, _, cx| {
+                        preview.close("button", cx);
+                    })),
+            );
         let dim = div()
             .id("link-preview-dim")
             .absolute()
@@ -748,7 +1171,9 @@ impl Render for LinkPreview {
                     .bg(dim_color)
             })),
         };
-        root.child(dim).child(scaled(card, pose.scale, about))
+        // The controls grow from the link and leave with the card, as part of it.
+        let preview = div().absolute().size_full().child(card).child(controls);
+        root.child(dim).child(scaled(preview, pose.scale, about))
     }
 }
 

@@ -2,33 +2,126 @@
 //! hidden, its reveal over the page (docs/ux-spec.md › Sidebar reveal); its gradient in the
 //! Space's colour; and the marker for the selected tab's row scrolled out of the list.
 
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
-    App, Bounds, ClickEvent, Context, CursorStyle, DispatchPhase, Hsla, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Rgba, canvas, div, linear_color_stop, linear_gradient, point,
-    prelude::*, px, size,
+    App, Bounds, ClickEvent, Context, CursorStyle, DispatchPhase, Hsla, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, canvas, div,
+    linear_color_stop, linear_gradient, point, prelude::*, px, size,
 };
 
 use super::access::Accessible as _;
 use crate::tokens::shell::{SHOWN_MARKER, SHOWN_MARKER_HIT};
 
 use super::{
-    PLATE_INSET, ROW_HEIGHT, Row, Slot,
-    CARD_INSET, PRIVATE_SHADE, REVEAL_HOLD, REVEAL_INSET, REVEAL_IN_DAMPING, REVEAL_IN_RESPONSE, REVEAL_OUT_DAMPING,
-    REVEAL_OUT_RESPONSE, REVEAL_OVERSHOOT, REVEAL_WAIT, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX,
-    SIDEBAR_MIN, SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Space, settle_progress, spring,
+    CARD_INSET, PLATE_INSET, PRIVATE_SHADE, REVEAL_HOLD, REVEAL_IN_DAMPING, REVEAL_IN_RESPONSE,
+    REVEAL_INSET, REVEAL_MOVE, REVEAL_OUT_DAMPING, REVEAL_OUT_RESPONSE, REVEAL_OVERSHOOT,
+    REVEAL_WAIT, ROW_HEIGHT, Row, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX, SIDEBAR_MIN,
+    SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Slot, Space, settle_progress, spring,
 };
 
-/// What the toast says when a tab opens with the sidebar hidden, Arc's words, and for how long
-/// (ours: Arc's isn't measured).
+/// What the toast says when a tab opens with the sidebar hidden, Arc's words, and for how long,
+/// counted again each time it's asked for (Arc 1.171, measured by an outside reverse-engineering,
+/// *interim*, #1404). The Space toast takes the same time (ours).
 pub(super) const OPENED: &str = "New Tab Created";
-const OPENED_TIME: Duration = Duration::from_secs(4);
+const OPENED_TIME: Duration = Duration::from_millis(4800);
+
+/// Settings › Tabs & Sidebar's "Show the hidden sidebar at the window's edge", on unless the user
+/// turned it off: a display to the left, or a scrollbar against that edge, can set it off by
+/// accident. ⌘S and ⌥ still bring the sidebar out. The user's preference: agents have no call to
+/// change it.
+#[derive(Clone, Copy)]
+pub struct SidebarEdge(pub bool);
+
+impl gpui::Global for SidebarEdge {}
+
+/// Whether the pointer at the window's edge brings the hidden sidebar out.
+pub fn edge_reveals(cx: &gpui::App) -> bool {
+    cx.try_global::<SidebarEdge>().is_none_or(|edge| edge.0)
+}
+
+/// Settings › Tabs & Sidebar's Sidebar position, Right rather than the default Left (#2375): the
+/// sidebar, the window's buttons and the reveal go to the window's right, and what opens toward the
+/// page opens to their left. This device's, not synced: a laptop and a desk with a second screen
+/// can want different sides. Every window follows at once. The user's preference: agents have no
+/// call to change it.
+#[derive(Clone, Copy)]
+pub struct SidebarRight(pub bool);
+
+impl gpui::Global for SidebarRight {}
+
+/// Whether Sidebar position is Right.
+pub fn sidebar_right(cx: &gpui::App) -> bool {
+    cx.try_global::<SidebarRight>().is_some_and(|right| right.0)
+}
+
+/// `x` across a window `width` wide, measured from the sidebar's side: itself on the left, from the
+/// right edge on the right. Its own inverse.
+pub(super) fn from_side(right: bool, width: f32, x: f32) -> f32 {
+    match right {
+        true => width - x,
+        false => x,
+    }
+}
+
+/// `frame` in a window `width` wide, mirrored when the sidebar is on the right.
+pub(super) fn mirrored(right: bool, width: Pixels, frame: Bounds<Pixels>) -> Bounds<Pixels> {
+    match right {
+        true => Bounds::new(
+            point(width - frame.origin.x - frame.size.width, frame.origin.y),
+            frame.size,
+        ),
+        false => frame,
+    }
+}
 
 impl Shell {
+    /// Whether this window's sidebar is on the right (`SidebarRight`). A Little ilo window has
+    /// none.
+    pub(super) fn right(&self) -> bool {
+        self.right
+    }
+
+    /// `x` across the window from the sidebar's side (`from_side`).
+    pub(super) fn from_side(&self, x: f32) -> f32 {
+        from_side(self.right, f32::from(self.viewport.width), x)
+    }
+
+    /// Where the docked sidebar's column starts across the window: 0, or its width in from the
+    /// right edge.
+    pub(super) fn column_x(&self) -> f32 {
+        match self.right {
+            true => f32::from(self.viewport.width) - self.width(),
+            false => 0.,
+        }
+    }
+
+    /// The docked sidebar's edge toward the page, across the window, where what it opens beside
+    /// it points from.
+    pub(super) fn page_edge_x(&self) -> f32 {
+        self.column_x() + if self.right { 0. } else { self.width() }
+    }
+
+    /// Follows Sidebar position: the window lays itself out on the other side, and its host moves
+    /// the window's buttons and the reveal's edge.
+    pub fn set_sidebar_right(&mut self, right: bool, cx: &mut Context<Self>) {
+        let right = right && self.little.is_none();
+        if right == self.right {
+            return;
+        }
+        self.right = right;
+        self.conceal_now(cx);
+        self.browser.set_sidebar_right(right, cx);
+        // check.sh waits for this line.
+        log!(
+            "browser: sidebar on the {}",
+            if right { "right" } else { "left" }
+        );
+        self.update_menus(cx);
+        cx.notify();
+    }
+
     /// The docked sidebar's width as drawn: with the pointer while its edge is dragged, then on its
     /// way to where it rests.
     pub(super) fn width(&self) -> f32 {
@@ -38,16 +131,22 @@ impl Shell {
         let Some((from, start)) = self.width_motion else {
             return self.sidebar_width;
         };
-        settle_progress(start)
-            .map_or(self.sidebar_width, |progress| from + (self.sidebar_width - from) * progress)
+        settle_progress(start).map_or(self.sidebar_width, |progress| {
+            from + (self.sidebar_width - from) * progress
+        })
     }
 
     /// The docked sidebar's right edge, which drags its width and puts it back on a double-click.
     pub(super) fn sidebar_edge(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let width = self.width();
+        // Toward the page widens it, so the arrows turn with the side.
+        let (wider, narrower) = match self.right {
+            true => (CursorStyle::ResizeLeft, CursorStyle::ResizeRight),
+            false => (CursorStyle::ResizeRight, CursorStyle::ResizeLeft),
+        };
         let cursor = match width {
-            width if width <= SIDEBAR_MIN => CursorStyle::ResizeRight,
-            width if width >= SIDEBAR_MAX => CursorStyle::ResizeLeft,
+            width if width <= SIDEBAR_MIN => wider,
+            width if width >= SIDEBAR_MAX => narrower,
             _ => CursorStyle::ResizeLeftRight,
         };
         let resizing = self.resize.is_some();
@@ -57,7 +156,10 @@ impl Shell {
             .absolute()
             .top_0()
             .bottom_0()
-            .left(px(width - SIDEBAR_EDGE))
+            .left(px(match self.right {
+                true => self.column_x(),
+                false => width - SIDEBAR_EDGE,
+            }))
             .w(px(SIDEBAR_EDGE))
             .cursor(cursor)
             .block_mouse_except_scroll()
@@ -101,16 +203,18 @@ impl Shell {
             return;
         }
         self.width_motion = None;
-        self.resize = Some((f32::from(event.position.x) - width, width));
+        self.resize = Some((self.from_side(f32::from(event.position.x)) - width, width));
         cx.notify();
     }
 
-    /// The pointer dragging the edge is at `x`. Past half the narrowest width, as AppKit's split
-    /// view collapses a pane, the sidebar hides in one frame and keeps the width it had (Arc).
+    /// The pointer dragging the edge is at `x` across the window. Past half the narrowest width, as
+    /// AppKit's split view collapses a pane, the sidebar hides in one frame and keeps the width it
+    /// had (Arc).
     pub(super) fn drag_edge(&mut self, x: f32, cx: &mut Context<Self>) {
         let Some((grab, _)) = self.resize else {
             return;
         };
+        let x = self.from_side(x);
         if x - grab >= SIDEBAR_MIN / 2. {
             self.resize = Some((grab, x - grab));
             return cx.notify();
@@ -140,11 +244,14 @@ impl Shell {
         if to != self.sidebar_width {
             self.sidebar_width = to;
             self.browser.set_sidebar_width(to, cx);
+            // The tasks' lines and chips at the foot wrap to the new width.
+            self.reshape_foot(cx);
         }
-        self.width_motion = (from != to).then(|| (from, Instant::now()));
+        self.width_motion = (from != to).then(|| (from, crate::motion::start(cx)));
         if self.width_motion.is_none() {
             // check.sh waits for these lines, then reads where the page is.
-            self.logged_once_laid.push(format!("browser: sidebar width {to}"));
+            self.logged_once_laid
+                .push(format!("browser: sidebar width {to}"));
         }
         cx.notify();
     }
@@ -152,7 +259,11 @@ impl Shell {
     /// How far the sidebar has moved since `start`, or None once it's there.
     pub(super) fn sidebar_progress(&self, start: Instant) -> Option<f32> {
         let t = start.elapsed().as_secs_f32();
-        let time = if self.sidebar_hidden { SIDEBAR_HIDE } else { SIDEBAR_SHOW };
+        let time = if self.sidebar_hidden {
+            SIDEBAR_HIDE
+        } else {
+            SIDEBAR_SHOW
+        };
         (t < time).then(|| 1. - (1. - t / time).powi(3))
     }
 
@@ -171,7 +282,7 @@ impl Shell {
         }
         let from = self.card_left();
         self.sidebar_hidden = !self.sidebar_hidden;
-        self.sidebar_motion = Some((from, Instant::now()));
+        self.sidebar_motion = Some((from, crate::motion::start(cx)));
         self.sidebar_hover(false, cx);
         self.recent_downloads_gone(cx);
         self.update_menus(cx);
@@ -192,7 +303,10 @@ impl Shell {
             return;
         };
         let row = self.row_of(tab);
-        let shut: Vec<u64> = space.holders(row).filter(|&folder| !space.is_open(folder)).collect();
+        let shut: Vec<u64> = space
+            .holders(row)
+            .filter(|&folder| !space.is_open(folder))
+            .collect();
         if self.sidebar_hidden && !self.reveal_shown() {
             self.toggle_sidebar(cx);
         }
@@ -204,7 +318,7 @@ impl Shell {
     }
 
     /// Tabs opened in the Space shown while the sidebar is hidden, whose rows aren't seen: a toast
-    /// says so, and a click on it reveals the top one's row (Arc's release notes).
+    /// says so, and its Show reveals the top one's row (Arc's release notes), as the Spaces' does.
     pub(super) fn toast_opened(&mut self, tabs: &[u64], cx: &mut Context<Self>) {
         let Some(&tab) = tabs.first().filter(|_| self.unseen_sidebar()) else {
             return;
@@ -217,7 +331,8 @@ impl Shell {
         let show = Rc::new(move |cx: &mut App| {
             shell.update(cx, |shell, cx| shell.reveal_row(tab, cx)).ok();
         });
-        self.browser.toast_button(&text, (None, "show"), show, OPENED_TIME, cx);
+        self.browser
+            .toast_button(&text, ("Show", "show"), show, OPENED_TIME, cx);
     }
 
     /// Whether what's added to the sidebar goes unseen: it's hidden, its reveal isn't out, and the
@@ -232,7 +347,10 @@ impl Shell {
     /// itself. Spaces made while the toast still tells of others are told of with them.
     pub(super) fn toast_spaces(&mut self, made: Vec<u64>, cx: &mut Context<Self>) {
         let form = self.form.as_ref().map(|form| form.space);
-        let made: Vec<u64> = made.into_iter().filter(|&space| Some(space) != form).collect();
+        let made: Vec<u64> = made
+            .into_iter()
+            .filter(|&space| Some(space) != form)
+            .collect();
         if made.is_empty() || !self.unseen_sidebar() {
             return;
         }
@@ -246,15 +364,21 @@ impl Shell {
         let text = match told.len() {
             1 => {
                 let name = self.spaces.iter().find(|space| space.id == first);
-                format!("Added the Space “{}”", name.map_or("", |space| space.name.as_ref()))
+                format!(
+                    "Added the Space “{}”",
+                    name.map_or("", |space| space.name.as_ref())
+                )
             }
             count => format!("Added {count} Spaces"),
         };
         let shell = cx.entity().downgrade();
         let show = Rc::new(move |cx: &mut App| {
-            shell.update(cx, |shell, cx| shell.show_made_space(first, cx)).ok();
+            shell
+                .update(cx, |shell, cx| shell.show_made_space(first, cx))
+                .ok();
         });
-        self.browser.toast_button(&text, (Some("Show"), "show"), show, OPENED_TIME, cx);
+        self.browser
+            .toast_button(&text, ("Show", "show"), show, OPENED_TIME, cx);
     }
 
     /// The Space toast's Show: the Space, if it's still there, with the sidebar back.
@@ -271,10 +395,10 @@ impl Shell {
     /// Whether the selected tab's row is scrolled wholly out past the list's top (true) or its
     /// bottom (false), as the list was last drawn. None while any of it shows.
     fn selected_row_past(&self) -> Option<bool> {
-        let Row::Tab(row) = self.selected_row() else {
+        let Some(Row::Tab(row)) = self.selected_row() else {
             return None;
         };
-        let top = *self.layout().get(&Slot::Tab(row))? + self.tiles_room();
+        let top = *self.layout().get(&Slot::Tab(row))? + self.tiles_room() - self.fixed_head();
         let height = f32::from(self.list_scroll.bounds().size.height);
         // Where the list will draw: GPUI clamps a wheel's move past either end in the layout
         // after this, and a marker drawn from the unclamped offset would flash up and stay.
@@ -289,7 +413,11 @@ impl Shell {
         let past = self.selected_row_past();
         let list = self.list_scroll.bounds();
         let drawn = past.map(|top| {
-            let y = if top { list.top() } else { list.bottom() - px(SHOWN_MARKER_HIT) };
+            let y = if top {
+                list.top()
+            } else {
+                list.bottom() - px(SHOWN_MARKER_HIT)
+            };
             let width = list.size.width - px(2. * PLATE_INSET);
             let origin = point(list.left() + px(PLATE_INSET), y);
             (top, Bounds::new(origin, size(width, px(SHOWN_MARKER_HIT))))
@@ -323,9 +451,15 @@ impl Shell {
             .h(px(SHOWN_MARKER_HIT))
             .flex()
             .flex_col()
-            .map(|marker| if top { marker.top_0() } else { marker.bottom_0().justify_end() })
+            // At the scrolled rows' edge, under the name row that stays put.
+            .map(|marker| match top {
+                true => marker.top(px(self.fixed_head())),
+                false => marker.bottom_0().justify_end(),
+            })
             .block_mouse_except_scroll()
-            .when(self.a11y, |marker| marker.button_named("Scroll to the Selected Tab"))
+            .when(self.a11y, |marker| {
+                marker.button_named("Scroll to the Selected Tab")
+            })
             .on_click(cx.listener(move |shell, _: &ClickEvent, _, cx| {
                 shell.scroll_to_row(tab);
                 cx.notify();
@@ -350,6 +484,14 @@ impl Shell {
     }
 
     fn window_buttons_drawn(&self) -> WindowButtons {
+        // A Little ilo window's are over its bar, where the window's own go.
+        if self.little.is_some() {
+            return WindowButtons {
+                window: true,
+                library: false,
+                sidebar: false,
+            };
+        }
         window_buttons_at(
             self.library_open,
             self.library_moving(),
@@ -395,7 +537,8 @@ impl Shell {
     }
 
     pub(super) fn reveal_out(&self) -> f32 {
-        self.reveal_step().unwrap_or(if self.revealed { 1. } else { 0. })
+        self.reveal_step()
+            .unwrap_or(if self.revealed { 1. } else { 0. })
     }
 
     /// The Space the window's colour is of, and while the sidebar pages between two, the one
@@ -431,18 +574,34 @@ impl Shell {
         let to = self.space_color_at(beside, x, y);
         let mix = |from: f32, to: f32| from + (to - from) * t;
         let (r, g, b) = (mix(from.r, to.r), mix(from.g, to.g), mix(from.b, to.b));
-        Rgba { r, g, b, a: mix(from.a, to.a) }.into()
+        Rgba {
+            r,
+            g,
+            b,
+            a: mix(from.a, to.a),
+        }
+        .into()
     }
 
     /// `space`'s colour `x` of the way across the window and `y` of the way down, as the gradient
     /// has it: its theme's, or nothing over the underlay without one.
     pub(super) fn space_color_at(&self, space: u64, x: f32, y: f32) -> Rgba {
         if self.private {
-            return Rgba { r: 0., g: 0., b: 0., a: PRIVATE_SHADE };
+            return Rgba {
+                r: 0.,
+                g: 0.,
+                b: 0.,
+                a: PRIVATE_SHADE,
+            };
         }
         match self.space_theme(space) {
             Some(theme) => self.theme_color_at(&theme, self.palette_of(space).layer_alpha, x, y),
-            None => Rgba { r: 0., g: 0., b: 0., a: 0. },
+            None => Rgba {
+                r: 0.,
+                g: 0.,
+                b: 0.,
+                a: 0.,
+            },
         }
     }
 
@@ -480,14 +639,55 @@ impl Shell {
         Hsla::from(self.palette.underlay).blend(self.gradient_color(y))
     }
 
-    /// The pointer is at `x` in the browser window: kept at its left edge it brings the hidden
-    /// sidebar out over the page, and more than the hold zone past the panel's edge, and off a
-    /// row's hover card, it sends it away, and the card with it.
+    /// The pointer moved to `at` over the browser window's own view, which has the strip at its
+    /// left edge while the sidebar is hidden: it brings the sidebar out once it has moved a few
+    /// points up or down in the strip, not as it comes in, so one flung at the edge leaves the
+    /// sidebar hidden (Arc 1.171).
+    pub(super) fn pointer_over(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let (x, y) = (f32::from(at.x), f32::from(at.y));
+        self.reveal_strip =
+            (0. ..CARD_INSET)
+                .contains(&self.from_side(x))
+                .then(|| match self.reveal_strip {
+                    Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
+                    None => (y, false),
+                });
+        self.pointer_at(x, cx);
+    }
+
+    /// The pointer left the browser window's own view, onto the page or another window, so a wait
+    /// at the edge ends as one the pointer passed. On Linux and Windows the page is Chromium's
+    /// window, whose moves the shell doesn't hear, so its leave is how the shell knows.
+    pub(super) fn pointer_left(&mut self) {
+        if !self.revealed {
+            self.reveal_wait = None;
+            self.reveal_strip = None;
+        }
+    }
+
+    /// `x` across the reveal's window, `width` wide, as across the browser window, whose edge on the
+    /// sidebar's side the reveal's window is at.
+    pub fn from_reveal(&self, x: f32, width: f32) -> f32 {
+        match self.right {
+            true => f32::from(self.viewport.width) - width + x,
+            false => x,
+        }
+    }
+
+    /// The pointer is at `x` in the browser window: kept at its edge on the sidebar's side, unless
+    /// Settings › Tabs & Sidebar has the edge off, it brings the hidden sidebar out over the page,
+    /// and more than the hold zone past the panel's edge, and off a row's hover card, it sends it
+    /// away, and the card with it. The hosts say the pointer has gone with an `x` past any window.
     pub fn pointer_at(&mut self, x: f32, cx: &mut Context<Self>) {
         self.reveal_x = x;
         if !self.can_reveal() {
             return;
         }
+        // From the sidebar's side, gone staying gone.
+        let x = match x < f32::MAX {
+            true => self.from_side(x),
+            false => x,
+        };
         let held = REVEAL_INSET + self.width() + REVEAL_HOLD;
         if self.revealed_by_option {
             if x > held {
@@ -495,16 +695,17 @@ impl Shell {
             }
             self.revealed_by_option = false;
         }
-        // The edge is the card's margin. Left of the window, the pointer has gone to another
-        // window or display.
+        // The edge is the card's margin. Past it, out of the window, the pointer has gone to
+        // another window or display.
         if !(0. ..CARD_INSET).contains(&x) {
             self.reveal_wait = None;
-            // A question keeps it out until it's answered, the Cast card and its menu until
-            // they close.
+            self.reveal_strip = None;
+            // A question or a chooser keeps it out until it's answered, the Cast card and its
+            // menu until they close.
             if x > held
                 && self.revealed
                 && !self.pointer_on_card
-                && self.question().is_none()
+                && !self.page_asks()
                 && self.agent_question.is_none()
                 && self.cast.is_none()
                 && !self.menu_open
@@ -512,15 +713,23 @@ impl Shell {
                 self.set_revealed(false, cx);
                 self.browser.hover_card(crate::hover_card::Hover::Close, cx);
             }
-        } else if !self.revealed && self.reveal_wait.is_none() {
+        } else if !self.revealed
+            && self.reveal_wait.is_none()
+            && self.reveal_strip.is_some_and(|(_, moved)| moved)
+            && edge_reveals(cx)
+            && self.is_key_window(cx)
+        {
             // Arc waits a moment, so a pointer passing the edge on its way to another window or
-            // display leaves the sidebar where it is.
+            // display leaves the sidebar where it is. Only the key window's comes out, as Arc's:
+            // a window behind leaves its edge to the pointer on its way to the one in front.
+            // check.sh reads this line.
+            log!("browser: reveal waits");
             self.reveal_wait = Some(cx.spawn(async move |shell, cx| {
                 cx.background_executor().timer(REVEAL_WAIT).await;
                 shell
                     .update(cx, |shell, cx| {
                         shell.reveal_wait = None;
-                        if shell.can_reveal() {
+                        if shell.can_reveal() && shell.is_key_window(cx) {
                             shell.set_revealed(true, cx);
                         }
                     })
@@ -547,6 +756,12 @@ impl Shell {
         }
     }
 
+    /// Whether this is the window the user last made key, which stays the one while the app is
+    /// behind another's.
+    fn is_key_window(&self, cx: &Context<Self>) -> bool {
+        super::commands::key_shell(cx).is_none_or(|key| key == cx.weak_entity())
+    }
+
     /// Whether the sidebar is hidden and still, so the reveal can bring it out.
     pub(super) fn can_reveal(&self) -> bool {
         let still = self.sidebar_motion.is_none() && self.library.is_none();
@@ -555,14 +770,16 @@ impl Shell {
 
     /// Starts the reveal's panel moving out over the page, or away, from wherever it is.
     pub(super) fn set_revealed(&mut self, revealed: bool, cx: &mut Context<Self>) {
-        if revealed == self.revealed {
+        // A Little ilo window has no sidebar to reveal.
+        if revealed == self.revealed || (revealed && self.little.is_some()) {
             return;
         }
-        self.reveal_motion = Some((self.reveal_out(), Instant::now()));
+        self.reveal_motion = Some((self.reveal_out(), crate::motion::start(cx)));
         self.revealed = revealed;
         self.revealed_by_option = false;
         if revealed {
-            self.browser.show_reveal(REVEAL_INSET + self.width() + REVEAL_OVERSHOOT, cx);
+            self.browser
+                .show_reveal(REVEAL_INSET + self.width() + REVEAL_OVERSHOOT, cx);
         } else {
             // The panel takes them away, and the pointer it had.
             self.recent_downloads_gone(cx);
@@ -614,7 +831,11 @@ pub(super) fn window_buttons_at(
     at_rest: bool,
     docked: bool,
 ) -> WindowButtons {
-    let window = if moving { at_rest && (open || docked) } else { open || docked };
+    let window = if moving {
+        at_rest && (open || docked)
+    } else {
+        open || docked
+    };
     WindowButtons {
         window,
         library: (open || moving) && !window,
@@ -644,9 +865,11 @@ mod tests {
         WindowOptions, point, prelude::*, px, size,
     };
 
+    use std::ops::DerefMut as _;
+
     use super::super::{
-        Folders, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_WIDTH, Shell, drag::detents::shell_with,
-        recorder::Recorder,
+        Folders, NAME_HEIGHT, PLATE_HEIGHT, ROW_HEIGHT, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_WIDTH,
+        Shell, Slot, drag::detents::shell_with, recorder::Recorder,
     };
 
     /// A Space made while the sidebar is hidden gets a toast whose Show shows it with the sidebar
@@ -658,33 +881,59 @@ mod tests {
         let spaces = |ids: &'static [u64]| {
             move |shell: &mut Shell, cx: &mut Context<Shell>| {
                 let entry = |&id: &u64| {
-                    (id, format!("Space {id}").into(), None, 0, "".into(), "".into(), "".into())
+                    (
+                        id,
+                        format!("Space {id}").into(),
+                        None,
+                        0,
+                        "".into(),
+                        "".into(),
+                        "".into(),
+                    )
                 };
                 shell.set_spaces(ids.iter().map(entry).collect(), cx)
             }
         };
         shell.update(cx, spaces(&[1, 2]));
-        assert!(host.toasts.borrow().is_empty(), "a toast with the sidebar shown");
+        assert!(
+            host.toasts.borrow().is_empty(),
+            "a toast with the sidebar shown"
+        );
         shell.update(cx, |shell, cx| shell.toggle_sidebar(cx));
         shell.update(cx, spaces(&[1]));
         shell.update(cx, spaces(&[1, 2]));
-        assert!(host.toasts.borrow().is_empty(), "a toast for a Space brought back");
+        assert!(
+            host.toasts.borrow().is_empty(),
+            "a toast for a Space brought back"
+        );
         host.behind.set(true);
         shell.update(cx, spaces(&[1, 2, 3]));
-        assert!(host.toasts.borrow().is_empty(), "a toast from a window behind");
+        assert!(
+            host.toasts.borrow().is_empty(),
+            "a toast from a window behind"
+        );
         host.behind.set(false);
         shell.update(cx, spaces(&[1, 2, 3, 4]));
         assert_eq!(*host.toasts.borrow(), ["Added the Space “Space 4”"]);
         shell.update(cx, spaces(&[1, 2, 3, 4, 5]));
         assert_eq!(host.toasts.borrow().last().unwrap(), "Added 2 Spaces");
-        let show = host.toast_run.borrow_mut().take().expect("no Show");
+        let (label, show) = host.toast_run.borrow_mut().take().expect("no Show");
+        assert_eq!(label, "Show");
         cx.update(|cx| show(cx));
-        assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden), "Show left it hidden");
-        assert_eq!(host.shown.borrow().last(), Some(&4), "Show didn't show the first Space");
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.sidebar_hidden),
+            "Show left it hidden"
+        );
+        assert_eq!(
+            host.shown.borrow().last(),
+            Some(&4),
+            "Show didn't show the first Space"
+        );
     }
 
-    /// A tab opening while the sidebar is hidden gets a toast whose click brings the sidebar back at
-    /// its row; tabs moving, or opening with the sidebar shown, get none.
+    /// A tab opening while the sidebar is hidden gets a toast whose Show, as the Spaces' toast has,
+    /// brings the sidebar back at its row; tabs moving, or opening with the sidebar shown, get
+    /// none.
     #[gpui::test]
     fn a_tab_opened_with_the_sidebar_hidden_is_toasted(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[], &[1], Folders::default());
@@ -694,7 +943,10 @@ mod tests {
             }
         };
         shell.update(cx, tabs(vec![2, 1]));
-        assert!(host.toasts.borrow().is_empty(), "a toast with the sidebar shown");
+        assert!(
+            host.toasts.borrow().is_empty(),
+            "a toast with the sidebar shown"
+        );
         shell.update(cx, |shell, cx| shell.toggle_sidebar(cx));
         shell.update(cx, tabs(vec![1, 2]));
         assert!(host.toasts.borrow().is_empty(), "a toast for tabs moved");
@@ -702,9 +954,17 @@ mod tests {
         assert_eq!(*host.toasts.borrow(), ["2 New Tabs Created"]);
         shell.update(cx, tabs(vec![5, 3, 4, 1, 2]));
         assert_eq!(host.toasts.borrow().last().unwrap(), super::OPENED);
-        let click = host.toast_run.borrow_mut().take().expect("the toast can't be clicked");
-        cx.update(|cx| click(cx));
-        assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden), "the click left it hidden");
+        let (label, show) = host
+            .toast_run
+            .borrow_mut()
+            .take()
+            .expect("the toast has no Show");
+        assert_eq!(label, "Show");
+        cx.update(|cx| show(cx));
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.sidebar_hidden),
+            "Show left it hidden"
+        );
     }
 
     /// ⌥ tapped alone brings the hidden sidebar out wherever the pointer is, which keeps it out
@@ -747,7 +1007,8 @@ mod tests {
 
     impl Render for Reveal {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            self.0.update(cx, |shell, cx| shell.render_reveal(window, cx))
+            self.0
+                .update(cx, |shell, cx| shell.render_reveal(window, cx))
         }
     }
 
@@ -765,7 +1026,8 @@ mod tests {
                 show: false,
                 ..Default::default()
             };
-            cx.open_window(options, |_, cx| cx.new(|_| Reveal(reveal))).unwrap();
+            cx.open_window(options, |_, cx| cx.new(|_| Reveal(reveal)))
+                .unwrap();
         });
         shell.update(cx, |shell, cx| {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
@@ -774,18 +1036,90 @@ mod tests {
         });
         cx.run_until_parked();
         // Tab 4's row fits in the browser window but is past the bottom of the reveal's list.
-        let offset = shell.update(cx, |shell, cx| {
-            shell.set_tabs(1, Vec::new(), vec![2, 3, 4], Vec::new(), Folders::default(), cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![2, 3, 4],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(4, cx);
-            shell.list_scroll.offset().y
         });
-        assert_eq!(offset, px(0.));
+        draw(&shell, cx);
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.list_scroll.offset().y),
+            px(0.)
+        );
     }
 
-    /// Draws the shell again, as the app's next frame does.
+    /// Draws the shell again, as the app's next frame does, by when the list's glide to a row has
+    /// landed.
     fn draw(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
-        shell.update(cx, |_, cx| cx.notify());
+        shell.update(cx, |shell, cx| {
+            shell.land_list_glide();
+            cx.notify();
+        });
         cx.run_until_parked();
+    }
+
+    /// A shortcut the page handed back hides the row under the pointer until it moves (#2133).
+    /// With the sidebar hidden, its panel's window hears that move: ⌘S from the page, then ⌥, and
+    /// the pointer over a row in the panel shows that row's hover.
+    #[gpui::test]
+    fn a_move_in_the_revealed_panel_shows_its_row_after_a_page_key(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+        let reveal = shell.clone();
+        let window = cx.update(|_, cx| {
+            let bounds = Bounds::new(point(px(0.), px(0.)), size(px(SIDEBAR_WIDTH), px(600.)));
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            };
+            cx.open_window(options, |_, cx| cx.new(|_| Reveal(reveal)))
+                .unwrap()
+        });
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![2, 3],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            shell.set_selected(2, cx);
+            shell.run_for_page(super::super::Command::ToggleSidebar, cx);
+            shell.sidebar_motion = None;
+            shell.option_tapped(cx);
+            shell.reveal_motion = None;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            shell.read_with(cx, |shell, _| shell.revealed),
+            "⌥ left it in"
+        );
+        let mut panel = VisualTestContext::from_window(window.into(), cx.deref_mut());
+        // Down the panel until the pointer is on a tab's row.
+        let mut hovered = None;
+        for y in (0..600).step_by(8) {
+            panel.simulate_mouse_move(point(px(100.), px(y as f32)), None, Modifiers::none());
+            hovered = shell.read_with(&panel, |shell, _| shell.hovered);
+            if hovered.is_some() {
+                break;
+            }
+        }
+        assert!(hovered.is_some(), "no row in the panel heard the pointer");
+        assert!(
+            shell.read_with(&panel, |shell, _| shell.pointer_row() == hovered),
+            "the panel's row under the pointer drew no hover"
+        );
     }
 
     /// The selected tab's row scrolled out past the list's bottom, and then its top, puts a sliver
@@ -799,30 +1133,53 @@ mod tests {
             let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
-            shell.set_tabs(1, Vec::new(), (10..70).collect(), Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                (10..70).collect(),
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(69, cx);
         });
         draw(&shell, cx);
         // Showing it scrolled the list to its row; the wheel takes the list back up.
-        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), px(0.))));
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(0.)))
+        });
         draw(&shell, cx);
         let marker = shell.read_with(cx, |shell, _| shell.marker_drawn.get());
         let (top, frame) = marker.expect("no marker for the row under the list's bottom");
-        assert!(!top, "the marker for the row under the list's bottom is at its top");
+        assert!(
+            !top,
+            "the marker for the row under the list's bottom is at its top"
+        );
         cx.simulate_click(frame.center(), Modifiers::none());
         draw(&shell, cx);
         let (marker, scrolled) = shell.read_with(cx, |shell, _| {
             (shell.marker_drawn.get(), shell.list_scroll.offset().y)
         });
-        assert_eq!(marker, None, "the marker stayed once its row scrolled into the list");
-        assert!(scrolled < px(0.), "a click on the marker didn't scroll to the row");
+        assert_eq!(
+            marker, None,
+            "the marker stayed once its row scrolled into the list"
+        );
+        assert!(
+            scrolled < px(0.),
+            "a click on the marker didn't scroll to the row"
+        );
         // The top row selected there, past the list's top.
         shell.update(cx, |shell, cx| shell.set_selected(10, cx));
         draw(&shell, cx);
-        shell.update(cx, |shell, _| shell.list_scroll.set_offset(point(px(0.), scrolled)));
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), scrolled))
+        });
         draw(&shell, cx);
         let marker = shell.read_with(cx, |shell, _| shell.marker_drawn.get());
-        assert!(matches!(marker, Some((true, _))), "no marker at the top: {marker:?}");
+        assert!(
+            matches!(marker, Some((true, _))),
+            "no marker at the top: {marker:?}"
+        );
     }
 
     /// The wheel takes the list up, as favorites.sh's does: a marker comes only once the selected
@@ -838,7 +1195,14 @@ mod tests {
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
             shell.set_favorites(vec![(10, 1)], cx);
-            shell.set_tabs(1, Vec::new(), vec![11, 12], Vec::new(), Folders::default(), cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![11, 12],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
             shell.set_selected(12, cx);
         });
         draw(&shell, cx);
@@ -863,19 +1227,34 @@ mod tests {
         shell.update(cx, |shell, cx| shell.set_selected(12, cx));
         draw(&shell, cx);
         let markers: Vec<_> = (0..8).map(|_| wheel(cx, 10.)).collect();
-        let first = markers.iter().position(Option::is_some).expect("no marker on the way up");
-        assert!(markers[first..].iter().all(|&past| past == Some(false)), "{markers:?}");
+        let first = markers
+            .iter()
+            .position(Option::is_some)
+            .expect("no marker on the way up");
+        assert!(
+            markers[first..].iter().all(|&past| past == Some(false)),
+            "{markers:?}"
+        );
         draw(&shell, cx);
         let marker = shell.read_with(cx, |shell, _| shell.marker_drawn.get());
         let (top, frame) = marker.expect("the marker went once the list was drawn at its top");
-        assert!(!top, "the marker for the row under the list's bottom is at its top");
+        assert!(
+            !top,
+            "the marker for the row under the list's bottom is at its top"
+        );
         cx.simulate_click(frame.center(), Modifiers::none());
         draw(&shell, cx);
         let (marker, scrolled) = shell.read_with(cx, |shell, _| {
             (shell.marker_drawn.get(), shell.list_scroll.offset().y)
         });
-        assert_eq!(marker, None, "the marker stayed once its row scrolled into the list");
-        assert!(scrolled < px(0.), "a click on the marker didn't scroll to the row");
+        assert_eq!(
+            marker, None,
+            "the marker stayed once its row scrolled into the list"
+        );
+        assert!(
+            scrolled < px(0.),
+            "a click on the marker didn't scroll to the row"
+        );
     }
 
     /// Presses the sidebar's edge where it's drawn, and drags it to `to`, a list of x's.
@@ -912,7 +1291,10 @@ mod tests {
         drag_edge(&shell, cx, &[SIDEBAR_MIN - 20.]);
         assert_eq!(shell.read_with(cx, |shell, _| shell.width()), SIDEBAR_MIN);
         shell.update(cx, |shell, cx| shell.let_go_edge(cx));
-        assert_eq!(shell.read_with(cx, |shell, _| shell.sidebar_width), SIDEBAR_MIN);
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.sidebar_width),
+            SIDEBAR_MIN
+        );
     }
 
     /// Dragged on past half the narrowest width, the sidebar hides at once and keeps the width it
@@ -923,12 +1305,350 @@ mod tests {
         drag_edge(&shell, cx, &[200., SIDEBAR_MIN, SIDEBAR_MIN / 2. + 1.]);
         assert!(!shell.read_with(cx, |shell, _| shell.sidebar_hidden));
         drag_edge(&shell, cx, &[SIDEBAR_MIN / 2. - 1.]);
-        let (hidden, moving) =
-            shell.read_with(cx, |shell, _| (shell.sidebar_hidden, shell.sidebar_motion.is_some()));
+        let (hidden, moving) = shell.read_with(cx, |shell, _| {
+            (shell.sidebar_hidden, shell.sidebar_motion.is_some())
+        });
         assert_eq!((hidden, moving), (true, false));
         shell.update(cx, |shell, cx| shell.let_go_edge(cx));
         let (hidden, width) =
             shell.read_with(cx, |shell, _| (shell.sidebar_hidden, shell.sidebar_width));
         assert_eq!((hidden, width), (true, SIDEBAR_WIDTH));
+    }
+
+    /// A shell in a window 340 tall, showing a Space with `today` tabs, drawn.
+    fn list_shell(
+        today: Vec<u64>,
+        cx: &mut TestAppContext,
+    ) -> (Entity<Shell>, &mut VisualTestContext) {
+        let host = Rc::new(Recorder::default());
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+        cx.simulate_resize(size(px(1000.), px(340.)));
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(1, Vec::new(), today, Vec::new(), Folders::default(), cx);
+        });
+        draw(&shell, cx);
+        (shell, cx)
+    }
+
+    /// Scrolled, the rows go under the Space's name row, which stays put over them as Arc 1.170's:
+    /// the scrolled part starts under it, and a right-click on it still shows the Space's menu, not
+    /// the menu of a row scrolled under it.
+    #[gpui::test]
+    fn the_rows_scroll_under_the_name_row(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        cx.simulate_resize(size(px(1000.), px(340.)));
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                (10..40).collect(),
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+        });
+        draw(&shell, cx);
+        let name_top = shell.read_with(cx, |shell, _| {
+            shell.sidebar_origin.get().y + px(shell.drawn_list_top())
+        });
+        let rows_top = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| shell.list_scroll.bounds().top())
+        };
+        assert_eq!(
+            rows_top(cx),
+            name_top + px(NAME_HEIGHT),
+            "the rows don't start under the name"
+        );
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(-200.)))
+        });
+        draw(&shell, cx);
+        assert_eq!(
+            rows_top(cx),
+            name_top + px(NAME_HEIGHT),
+            "the name row scrolled with the rows"
+        );
+        let at = point(px(100.), name_top + px(NAME_HEIGHT / 2.));
+        host.menus.borrow_mut().clear();
+        cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+        cx.run_until_parked();
+        let menu = host.menus.borrow().last().cloned().unwrap_or_default();
+        let space_menu = menu
+            .iter()
+            .any(|(title, _)| title.as_ref() == "Rename Space…");
+        assert!(space_menu, "a right-click on the name row showed {menu:?}");
+    }
+
+    /// Rows hidden under the list's foot bring its edge line, and the list scrolled all the way
+    /// takes it away, though the room after the last row is still under it: there the last row's
+    /// plate ends 121 above the foot, as Arc's.
+    #[gpui::test]
+    fn the_foot_edge_shows_only_while_rows_are_hidden_under_it(cx: &mut TestAppContext) {
+        let (shell, cx) = list_shell((10..30).collect(), cx);
+        let edges = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| (shell.top_edge.shown, shell.foot_edge.shown))
+        };
+        assert_eq!(
+            edges(cx),
+            (false, true),
+            "the rows under the foot brought no edge"
+        );
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(-1e4)))
+        });
+        draw(&shell, cx);
+        draw(&shell, cx);
+        assert_eq!(
+            edges(cx),
+            (true, false),
+            "the list scrolled all the way kept its foot's edge"
+        );
+        let ends = shell.read_with(cx, |shell, _| {
+            let last = shell.layout()[&Slot::Tab(29)] + shell.tiles_room() - shell.fixed_head();
+            let plate_end = last + (ROW_HEIGHT + PLATE_HEIGHT) / 2.;
+            let height = f32::from(shell.list_scroll.bounds().size.height);
+            height - (plate_end + f32::from(shell.list_scroll.offset().y))
+        });
+        assert!(
+            (ends - 121.).abs() < 0.5,
+            "the last row's plate ends {ends} above the foot"
+        );
+        // Rows that all fit bring no edge at the foot.
+        let (shell, cx) = list_shell(vec![10, 11], cx.deref_mut());
+        let foot = shell.read_with(cx, |shell, _| shell.foot_edge.shown);
+        assert!(!foot, "rows that fit brought the foot's edge");
+    }
+
+    /// Wheel ticks of a fraction of a line, as Windows' are, scrolled down and back leave the list
+    /// a rounding error off its top, which is its top: the edge under the favorites goes.
+    #[gpui::test]
+    fn the_list_back_at_its_top_hides_its_edge_after_fractional_ticks(cx: &mut TestAppContext) {
+        let (shell, cx) = list_shell((10..30).collect(), cx);
+        let tick = 26. * (12. / 120. * 3.);
+        let mut offset = 0f32;
+        for _ in 0..5 {
+            offset -= tick;
+        }
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(offset)))
+        });
+        draw(&shell, cx);
+        draw(&shell, cx);
+        let top = shell.read_with(cx, |shell, _| shell.top_edge.shown);
+        assert!(top, "the list scrolled down showed no edge");
+        for _ in 0..5 {
+            offset += tick;
+        }
+        assert!(offset < 0., "the ticks summed back to the top exactly");
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(offset)))
+        });
+        draw(&shell, cx);
+        draw(&shell, cx);
+        let top = shell.read_with(cx, |shell, _| shell.top_edge.shown);
+        assert!(!top, "the list {offset} off its top kept its edge");
+    }
+
+    /// The list glides to the row of a tab shown under its foot, and a scroll of the user's on the
+    /// way ends the glide where the user has it.
+    #[gpui::test]
+    fn a_scroll_on_the_way_to_a_row_ends_the_glide(cx: &mut TestAppContext) {
+        let (shell, cx) = list_shell((10..70).collect(), cx);
+        shell.update(cx, |shell, cx| shell.set_selected(69, cx));
+        let to = shell.read_with(cx, |shell, _| shell.list_glide.get().map(|glide| glide.to));
+        assert!(
+            to.is_some_and(|to| to > 0.),
+            "showing the last tab didn't glide to its row"
+        );
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        shell.update(cx, |shell, _| {
+            shell.list_scroll.set_offset(point(px(0.), px(-37.)))
+        });
+        draw(&shell, cx);
+        let (glide, offset) = shell.read_with(cx, |shell, _| {
+            (shell.list_glide.get(), shell.list_scroll.offset().y)
+        });
+        assert!(glide.is_none(), "the glide went on past the user's scroll");
+        assert_eq!(
+            offset,
+            px(-37.),
+            "the glide moved the list from where the user had it"
+        );
+    }
+
+    /// ⌘T's command bar, with the list scrolled down to its last row, scrolls it back up to the
+    /// New Tab row, which ends at the list's top, as Arc's.
+    #[gpui::test]
+    fn new_tab_scrolls_the_list_to_its_row(cx: &mut TestAppContext) {
+        let (shell, cx) = list_shell((10..70).collect(), cx);
+        shell.update(cx, |shell, cx| shell.set_selected(69, cx));
+        draw(&shell, cx);
+        shell.update(cx, |shell, cx| shell.set_new_tab(true, cx));
+        draw(&shell, cx);
+        let (top, offset) = shell.read_with(cx, |shell, _| {
+            let top = shell.layout()[&Slot::NewTab] + shell.tiles_room() - shell.fixed_head();
+            (top, -f32::from(shell.list_scroll.offset().y))
+        });
+        assert_eq!(offset, top, "the New Tab row isn't at the list's top");
+    }
+
+    /// With two windows, the pointer at the edge of the one behind leaves its sidebar hidden, and
+    /// at the key window's brings it out.
+    #[gpui::test]
+    fn only_the_key_windows_edge_reveals(cx: &mut TestAppContext) {
+        let (behind, _) = shell_with(cx, &[], &[1], Default::default());
+        let (key, _) = shell_with(cx, &[], &[2], Default::default());
+        for shell in [&behind, &key] {
+            shell.update(cx, |shell, cx| {
+                shell.sidebar_hidden = true;
+                shell.pointer_over(point(px(1.), px(300.)), cx);
+                shell.pointer_over(point(px(1.), px(304.)), cx);
+            });
+        }
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        let revealed = |shell: &Entity<Shell>, cx: &mut TestAppContext| {
+            shell.read_with(cx, |shell, _| shell.revealed)
+        };
+        assert!(
+            !revealed(&behind, cx),
+            "the window behind brought its sidebar out"
+        );
+        assert!(
+            revealed(&key, cx),
+            "the key window's edge didn't bring its sidebar out"
+        );
+    }
+
+    /// With Settings' edge switch off, the pointer moving along the edge leaves the hidden sidebar
+    /// hidden, and ⌘S still brings it back.
+    #[gpui::test]
+    fn off_the_edge_brings_nothing_out(cx: &mut TestAppContext) {
+        let (shell, _) = shell_with(cx, &[], &[1], Default::default());
+        cx.update(|cx| cx.set_global(super::SidebarEdge(false)));
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            shell.pointer_over(point(px(1.), px(300.)), cx);
+            shell.pointer_over(point(px(1.), px(304.)), cx);
+        });
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(
+                !shell.revealed,
+                "the edge brought the sidebar out while off"
+            );
+            assert!(shell.reveal_wait.is_none());
+        });
+        shell.update(cx, |shell, cx| {
+            shell.run(crate::shell::Command::ToggleSidebar, "key", cx)
+        });
+        assert!(
+            shell.read_with(cx, |shell, _| !shell.sidebar_hidden),
+            "⌘S didn't show it"
+        );
+    }
+
+    /// A pointer that jumps into the strip at the window's edge and stays leaves the sidebar
+    /// hidden, one moving only across it too, and moving a few points up or down in it brings the
+    /// sidebar out, as Arc 1.171's does.
+    #[gpui::test]
+    fn the_pointer_has_to_move_in_the_edge_to_reveal(cx: &mut TestAppContext) {
+        let (shell, _) = shell_with(cx, &[], &[1], Default::default());
+        let to = |shell: &Entity<Shell>, x: f32, y: f32, cx: &mut TestAppContext| {
+            shell.update(cx, |shell, cx| shell.pointer_over(point(px(x), px(y)), cx));
+            cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+            shell.read_with(cx, |shell, _| shell.revealed)
+        };
+        shell.update(cx, |shell, _| shell.sidebar_hidden = true);
+        assert!(
+            !to(&shell, 400., 300., cx),
+            "the pointer over the page brought it out"
+        );
+        assert!(
+            !to(&shell, 5., 300., cx),
+            "a jump into the edge brought it out"
+        );
+        assert!(
+            !to(&shell, 1., 301., cx),
+            "a move across the edge brought it out"
+        );
+        assert!(
+            to(&shell, 1., 304., cx),
+            "a few points down the edge didn't bring it out"
+        );
+        // Out of the strip and back, it's a new jump in.
+        shell.update(cx, |shell, cx| {
+            shell.set_revealed(false, cx);
+            shell.reveal_motion = None;
+        });
+        assert!(
+            !to(&shell, 400., 304., cx),
+            "the pointer over the page brought it out"
+        );
+        assert!(
+            !to(&shell, 2., 200., cx),
+            "a jump back into the edge brought it out"
+        );
+        assert!(
+            to(&shell, 2., 196., cx),
+            "a few points up the edge didn't bring it out"
+        );
+    }
+
+    /// The same as GPUI tells it, with the sidebar hidden: the window hears the pointer leave its
+    /// own view for the page's, whose moves it doesn't hear, so the wait at the edge ends.
+    #[gpui::test]
+    fn the_hidden_sidebars_window_hears_the_pointer_leave_for_the_page(cx: &mut TestAppContext) {
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(Rc::new(Recorder::default()), cx));
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_mouse_move(point(px(1.), px(300.)), None, Modifiers::none());
+        cx.simulate_mouse_move(point(px(1.), px(306.)), None, Modifiers::none());
+        assert!(
+            shell.read_with(cx, |shell, _| shell.reveal_wait.is_some()),
+            "the pointer moving down the edge didn't start the wait"
+        );
+        cx.simulate_event(gpui::MouseExitEvent {
+            position: point(px(-1.), px(-1.)),
+            pressed_button: None,
+            modifiers: Modifiers::none(),
+        });
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        cx.run_until_parked();
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.revealed),
+            "the pointer gone onto the page brought the sidebar out"
+        );
+    }
+
+    /// A pointer that moves down the edge and goes on onto the page, which on Linux and Windows
+    /// is a window the shell doesn't hear the pointer in, leaves the sidebar hidden.
+    #[gpui::test]
+    fn a_pointer_leaving_the_edge_for_the_page_leaves_the_sidebar_hidden(cx: &mut TestAppContext) {
+        let (shell, _) = shell_with(cx, &[], &[1], Default::default());
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            shell.pointer_over(point(px(1.), px(300.)), cx);
+            shell.pointer_over(point(px(1.), px(306.)), cx);
+            shell.pointer_left();
+        });
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.revealed),
+            "the pointer gone onto the page brought the sidebar out"
+        );
     }
 }

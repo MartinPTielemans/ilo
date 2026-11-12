@@ -1,6 +1,6 @@
 //! What the readers find in another browser's files, in the shape it comes in here: Spaces with
-//! their pinned tabs and folders, favorites and history, each in the profile it was kept in, and
-//! Arc's link rules.
+//! their pinned and Today tabs and folders, favorites, history and addresses, each in the profile
+//! it was kept in, and Arc's link rules.
 
 use super::extensions::Extension;
 use crate::link_rules::Condition;
@@ -37,7 +37,23 @@ pub struct Tab {
 pub enum Node {
     Tab(Tab),
     Folder { name: String, children: Vec<Node> },
+    Split(Split),
 }
+
+/// A split view: its tabs, two or three, left to right, and the name, icon and orientation the
+/// user gave it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Split {
+    pub tabs: Vec<Tab>,
+    /// Empty for none, as for an icon, which is an emoji.
+    pub name: String,
+    pub icon: String,
+    /// Its pages top to bottom rather than side by side.
+    pub stacked: bool,
+}
+
+/// The most tabs a split view holds, as the core keeps it (bc_tab_split_with).
+pub const SPLIT_TABS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Space {
@@ -47,6 +63,8 @@ pub struct Space {
     pub icon: String,
     pub theme: Option<Theme>,
     pub pinned: Vec<Node>,
+    /// The tabs the browser had open, as the Space's Today tabs, in its order.
+    pub today: Vec<Tab>,
 }
 
 /// A page from the browser's history.
@@ -61,6 +79,23 @@ pub struct Page {
     pub typed: u32,
 }
 
+/// A saved address, as Chromium's Web Data keeps one: each of its fields by Chromium's FieldType
+/// number, which the core reads as Chromium's own table does.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Address {
+    pub fields: Vec<Field>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Field {
+    /// Chromium's FieldType, such as 33 for the city.
+    pub kind: i32,
+    pub value: String,
+    /// Chromium's VerificationStatus: how the value came to be, such as typed by the user or
+    /// parsed from the rest.
+    pub status: i32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Found {
     pub spaces: Vec<Space>,
@@ -69,17 +104,29 @@ pub struct Found {
     pub history: Vec<(FromProfile, Vec<Page>)>,
     /// The Web Store extensions of every profile, once each, pinned if any profile pinned it.
     pub extensions: Vec<Extension>,
+    pub addresses: Vec<(FromProfile, Vec<Address>)>,
     /// Arc's Air Traffic Control rules, in its order.
     pub link_rules: Vec<LinkRule>,
+    /// Where Arc opens a link no rule matches, if not in Little Arc, ours' default too.
+    pub link_otherwise: Option<Destination>,
 }
 
-/// A link rule: links whose URL meets `condition` with `text` open in the Space at `space` among
-/// the found Spaces.
+/// A link rule: links whose URL meets `condition` with `text` open at `to`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinkRule {
     pub condition: Condition,
     pub text: String,
-    pub space: usize,
+    pub to: Destination,
+}
+
+/// Where a link rule, or everything else, opens a link.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Destination {
+    /// The Space at this index among the found Spaces.
+    Space(usize),
+    /// The Space the window in front shows.
+    Front,
+    Little,
 }
 
 /// Whether a page at `url` can open here: another browser's own pages, such as `arc://` or

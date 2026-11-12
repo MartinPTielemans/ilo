@@ -14,19 +14,19 @@ use gpui::{
 use crate::site_controls;
 
 use super::{
-    MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, PLATE_INSET, PRESSED, Shell,
-    ShellHandle, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X,
-    URL_FIELD_TOP, UserKeys, user_keys, written_as,
+    Command, MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLATE_INSET, PRESSED,
+    Shell, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X, URL_FIELD_TOP,
+    UserKeys, user_keys, written_as,
 };
 
-use crate::tokens::shell::extensions::HOST_ROOM;
-use crate::tokens::shell::extensions::ACTION_ICON;
 use crate::tokens::shell::extensions::ACTION_DIMMED;
+use crate::tokens::shell::extensions::ACTION_ICON;
 use crate::tokens::shell::extensions::BADGE_COLOR;
 use crate::tokens::shell::extensions::BADGE_HEIGHT;
-use crate::tokens::shell::extensions::BADGE_TEXT;
 use crate::tokens::shell::extensions::BADGE_RADIUS;
+use crate::tokens::shell::extensions::BADGE_TEXT;
 use crate::tokens::shell::extensions::BADGE_TEXT_COLOR;
+use crate::tokens::shell::extensions::HOST_ROOM;
 
 /// An extension of a profile's, one Chrome's extensions page lists.
 #[derive(Clone, PartialEq, Debug)]
@@ -91,6 +91,26 @@ struct RunExtension(SharedString);
 #[action(namespace = browser, no_json)]
 struct PinExtension(SharedString);
 
+/// `id` as a number a `Command` can carry, as Chrome's ids are 32 letters from a to p, four bits
+/// each. None for any other id.
+pub(super) fn id_number(id: &str) -> Option<u128> {
+    if id.len() != 32 {
+        return None;
+    }
+    id.bytes().try_fold(0u128, |number, letter| {
+        let nibble = letter.checked_sub(b'a').filter(|&nibble| nibble < 16)?;
+        Some(number << 4 | nibble as u128)
+    })
+}
+
+/// The id `id_number` made `number` from.
+pub(super) fn id_text(number: u128) -> String {
+    (0..32)
+        .rev()
+        .map(|place| (b'a' + (number >> (place * 4) & 0xf) as u8) as char)
+        .collect()
+}
+
 /// The menu bar's item that runs `extension`.
 pub fn menu_item(extension: &Extension) -> MenuItem {
     MenuItem::action(extension.name.clone(), RunExtension(extension.id.clone()))
@@ -108,11 +128,13 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) else {
+        let Some(shell) = super::commands::key_shell(cx) else {
             return;
         };
         let keystroke = keystroke_text(&event.keystroke);
-        let ran = shell.update(cx, |shell, cx| shell.run_extension_key(&keystroke, "ui", cx));
+        let ran = shell.update(cx, |shell, cx| {
+            shell.run_extension_key(&keystroke, "ui", cx)
+        });
         if ran.unwrap_or(false) {
             cx.stop_propagation();
         }
@@ -122,16 +144,20 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        if let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) {
-            shell.update(cx, |shell, cx| shell.run_extension(&run.0, cx)).ok();
+        if let Some(shell) = super::commands::key_shell(cx) {
+            shell
+                .update(cx, |shell, cx| shell.run_extension(&run.0, cx))
+                .ok();
         }
     });
     cx.on_action(|pin: &PinExtension, cx| {
         if crate::dialog::asking(cx) {
             return;
         }
-        if let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) {
-            shell.update(cx, |shell, cx| shell.toggle_pinned(&pin.0, cx)).ok();
+        if let Some(shell) = super::commands::key_shell(cx) {
+            shell
+                .update(cx, |shell, cx| shell.toggle_pinned(&pin.0, cx))
+                .ok();
         }
     });
 }
@@ -145,25 +171,37 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         // check.sh reads these lines.
-        let ids: Vec<&str> = extensions.iter().map(|extension| extension.id.as_ref()).collect();
+        let ids: Vec<&str> = extensions
+            .iter()
+            .map(|extension| extension.id.as_ref())
+            .collect();
         log!("browser: extensions {profile} {}", ids.join(" "));
         let pinned = extensions.iter().filter(|extension| extension.pinned);
         let pinned: Vec<&str> = pinned.map(|extension| extension.id.as_ref()).collect();
         log!("browser: pinned extensions {profile} {}", pinned.join(" "));
-        for extension in extensions.iter().filter(|extension| !extension.commands.is_empty()) {
+        for extension in extensions
+            .iter()
+            .filter(|extension| !extension.commands.is_empty())
+        {
             let keys: Vec<String> = (extension.commands.iter())
                 .map(|command| {
                     let suggested = if command.suggested { " suggested" } else { "" };
                     format!("{}={}{suggested}", command.name, command.keystroke)
                 })
                 .collect();
-            log!("browser: extension keys {} {}", extension.id, keys.join(", "));
+            log!(
+                "browser: extension keys {} {}",
+                extension.id,
+                keys.join(", ")
+            );
         }
         // One the user added from an import's list that the other browser pinned is pinned as it
         // comes in, by whichever window hears of it first.
         if let Some(had) = self.extensions.get(&profile) {
             let had: Vec<&str> = had.iter().map(|extension| extension.id.as_ref()).collect();
-            let now = extensions.iter().map(|each| (each.id.as_ref(), each.pinned));
+            let now = extensions
+                .iter()
+                .map(|each| (each.id.as_ref(), each.pinned));
             for id in crate::import::extensions::to_pin(&had, now) {
                 log!("browser: extension {id} pinned as it was in the browser imported from");
                 self.browser.set_extension_pinned(profile, &id, true, cx);
@@ -187,9 +225,15 @@ impl Shell {
             })
             .collect();
         log!("browser: extension actions {}", shown.join(" "));
+        let actions = self.extension_actions.iter().chain(&self.unpinned_actions);
+        let driven = std::env::var_os("BROWSER_DRIVE").is_some();
+        if let Some(line) = titles_line(actions, driven) {
+            log!("{line}");
+        }
         // The panel takes them only while it shows for the tab.
         let grid = self.site_controls_extensions();
-        self.browser.site_controls_extensions(self.selected, grid, cx);
+        self.browser
+            .site_controls_extensions(self.selected, grid, cx);
         cx.notify();
     }
 
@@ -220,16 +264,41 @@ impl Shell {
             return;
         }
         let (shown, overflow) = self.shown_actions();
-        let button = (self.extension_actions.iter().position(|action| action.id == id))
-            .map(|index| index.min(shown))
-            .filter(|&place| place < shown || overflow)
-            .filter(|_| self.url_field_bounds().is_some())
-            .map(|place| self.action_bounds(place));
+        let button = (self
+            .extension_actions
+            .iter()
+            .position(|action| action.id == id))
+        .map(|index| index.min(shown))
+        .filter(|&place| place < shown || overflow)
+        .filter(|_| self.url_field_bounds().is_some() || self.little_title().is_some())
+        .map(|place| self.action_bounds(place));
         let anchor = button.or(self.url_field_bounds()).unwrap_or_else(|| {
-            let corner = point(px(self.card_left() + PLATE_INSET), px(PLATE_INSET));
+            let corner = point(px(self.card_corner() + PLATE_INSET), px(PLATE_INSET));
             Bounds::new(corner, Default::default())
         });
         self.run_extension_from(id, anchor, cx);
+    }
+
+    /// The command bar's row for each extension that runs in the window, found by its name, which
+    /// runs its action on the tab shown as the Extensions menu does (Arc's webContentExtension).
+    /// None with no tab shown, which an action needs. No hidden words, so "ext" doesn't lift every
+    /// extension above Manage Extensions….
+    pub(super) fn extension_bar_rows(&self) -> Vec<super::commands::NamedRow> {
+        if self.selected == 0 {
+            return Vec::new();
+        }
+        let profile = self.shown_space().map_or(0, |space| space.profile);
+        (self.extensions.get(&profile).into_iter().flatten())
+            .filter(|extension| extension.runs(self.private))
+            .filter_map(|extension| {
+                let id = id_number(&extension.id)?;
+                Some((
+                    extension.name.clone(),
+                    Vec::new(),
+                    Command::RunExtension(id),
+                ))
+            })
+            .collect()
     }
 
     /// Runs the extension's action on the tab shown, its popup hanging from `anchor` in the
@@ -248,7 +317,10 @@ impl Shell {
             f32::from(size.width),
             f32::from(size.height)
         );
-        log!("browser: run extension {id} {}", if ran { "ran" } else { "refused" });
+        log!(
+            "browser: run extension {id} {}",
+            if ran { "ran" } else { "refused" }
+        );
     }
 
     /// Runs the keyboard command that `keystroke` is in the shown Space's profile, if there's one,
@@ -287,9 +359,14 @@ impl Shell {
             return;
         };
         let extensions = self.extensions.get(&profile).into_iter().flatten();
-        let pinned = extensions.filter(|extension| extension.id == id).any(|each| each.pinned);
+        let pinned = extensions
+            .filter(|extension| extension.id == id)
+            .any(|each| each.pinned);
         // check.sh waits for this line.
-        log!("browser: {} extension {id}", if pinned { "unpin" } else { "pin" });
+        log!(
+            "browser: {} extension {id}",
+            if pinned { "unpin" } else { "pin" }
+        );
         self.browser.set_extension_pinned(profile, id, !pinned, cx);
     }
 
@@ -299,8 +376,11 @@ impl Shell {
         let Some(profile) = self.shown_space().map(|space| space.profile) else {
             return;
         };
-        let pinned: Vec<SharedString> =
-            self.extension_actions.iter().map(|action| action.id.clone()).collect();
+        let pinned: Vec<SharedString> = self
+            .extension_actions
+            .iter()
+            .map(|action| action.id.clone())
+            .collect();
         // check.sh waits for this line.
         log!("browser: move extension {id} to top");
         if !pinned.iter().any(|each| each == id) {
@@ -345,16 +425,36 @@ impl Shell {
     /// that leave the host its room with the field's button shown, so they keep their places as
     /// it comes and goes.
     pub(super) fn shown_actions(&self) -> (usize, bool) {
+        // A Little ilo window's end its bar's title, leaving it the room for its favicon and host.
+        if let Some(title) = self.little_title() {
+            let room = f32::from(title.size.width) - NAV_SIZE - HOST_ROOM;
+            let places = (room / URL_BUTTON_SIZE).floor().max(0.) as usize;
+            return fit_actions(places, self.extension_actions.len());
+        }
         let field = self.width() - 2. * PLATE_INSET;
         let room = field - (URL_FIELD_TEXT_X - PLATE_INSET) - HOST_ROOM - URL_BUTTON_INSET;
         let places = ((room - URL_BUTTON_SIZE) / URL_BUTTON_SIZE).floor().max(0.) as usize;
         fit_actions(places, self.extension_actions.len())
     }
 
+    /// Where a Little ilo window's bar's title was last drawn, whose end holds its buttons.
+    fn little_title(&self) -> Option<Bounds<Pixels>> {
+        self.little.as_ref().and_then(|little| little.title.get())
+    }
+
     /// Place `index`'s button in the window, the places in a row at the URL field's end.
     fn action_bounds(&self, index: usize) -> Bounds<Pixels> {
         let (shown, overflow) = self.shown_actions();
-        let end = self.width() - PLATE_INSET - URL_BUTTON_INSET;
+        if let Some(title) = self.little_title() {
+            let left =
+                title.right() - px((shown + overflow as usize - index) as f32 * URL_BUTTON_SIZE);
+            let top = title.top() + (title.size.height - px(URL_BUTTON_SIZE)) / 2.;
+            return Bounds::new(
+                point(left, top),
+                size(px(URL_BUTTON_SIZE), px(URL_BUTTON_SIZE)),
+            );
+        }
+        let end = self.column_x() + self.width() - PLATE_INSET - URL_BUTTON_INSET;
         let left = end - (shown + overflow as usize - index) as f32 * URL_BUTTON_SIZE;
         Bounds::new(
             point(px(left), px(URL_FIELD_TOP + URL_BUTTON_INSET)),
@@ -399,7 +499,9 @@ impl Shell {
                     .id(SharedString::from(format!("action-{}", action.id)))
                     .absolute()
                     .top(px(URL_BUTTON_INSET))
-                    .right(px(URL_BUTTON_INSET + (places - 1 - index) as f32 * URL_BUTTON_SIZE))
+                    .right(px(
+                        URL_BUTTON_INSET + (places - 1 - index) as f32 * URL_BUTTON_SIZE
+                    ))
                     .size(px(URL_BUTTON_SIZE))
                     .flex()
                     .items_center()
@@ -547,15 +649,28 @@ impl Shell {
     /// at the next launch if the dialog was busy or the browser went first.
     pub fn tell_crashed_extension(&mut self, profile: u64, cx: &mut Context<Self>) {
         let extensions = self.extensions.get(&profile).map_or(&[][..], Vec::as_slice);
-        let Some(extension) = extensions.iter().find(|extension| extension.crashed).cloned() else {
+        let Some(extension) = extensions
+            .iter()
+            .find(|extension| extension.crashed)
+            .cloned()
+        else {
             return;
         };
-        let Extension { id, name, removable, .. } = extension;
+        let Extension {
+            id,
+            name,
+            removable,
+            ..
+        } = extension;
         let shell = cx.weak_entity();
         let also = removable.then(|| {
             let (id, name) = (id.clone(), name.clone());
             let remove: Box<dyn FnOnce(&mut App)> = Box::new(move |cx| {
-                shell.update(cx, |shell, cx| shell.remove_extension(profile, id, name, cx)).ok();
+                shell
+                    .update(cx, |shell, cx| {
+                        shell.remove_extension(profile, id, name, cx)
+                    })
+                    .ok();
             });
             (SharedString::from("Remove…"), remove)
         });
@@ -572,7 +687,7 @@ impl Shell {
             also,
             fields: Vec::new(),
             check: None,
-            return_cancels: false,
+            on_return: crate::dialog::Return::Action,
         };
         let browser = self.browser.clone();
         let turn_on = id.clone();
@@ -581,7 +696,10 @@ impl Shell {
             Box::new(move |_, cx| {
                 let on = browser.turn_on_extension(profile, &turn_on, cx);
                 // check.sh waits for this line.
-                log!("browser: turn on extension {turn_on} {}", if on { "on" } else { "refused" });
+                log!(
+                    "browser: turn on extension {turn_on} {}",
+                    if on { "on" } else { "refused" }
+                );
             }),
             cx,
         );
@@ -606,11 +724,14 @@ fn command_for<'a>(
         return None;
     }
     let ours = keys.command_for(keystroke, false).is_some();
-    extensions.iter().filter(|extension| extension.runs(private)).find_map(|extension| {
-        (extension.commands.iter())
-            .find(|command| command.keystroke == keystroke && !(ours && command.suggested))
-            .map(|command| (extension, command))
-    })
+    extensions
+        .iter()
+        .filter(|extension| extension.runs(private))
+        .find_map(|extension| {
+            (extension.commands.iter())
+                .find(|command| command.keystroke == keystroke && !(ours && command.suggested))
+                .map(|command| (extension, command))
+        })
 }
 
 /// `keystroke` as the browser's shortcuts write it, with the modifiers in their order, and off the
@@ -641,10 +762,15 @@ fn grid(
     extensions: &[Extension],
 ) -> Vec<site_controls::Extension> {
     let turned_on = |id: &SharedString| {
-        extensions.iter().find(|extension| extension.id == *id).is_none_or(|each| each.enabled)
+        extensions
+            .iter()
+            .find(|extension| extension.id == *id)
+            .is_none_or(|each| each.enabled)
     };
     let tile = |action: &ExtensionAction| {
-        let extension = extensions.iter().find(|extension| extension.id == action.id);
+        let extension = extensions
+            .iter()
+            .find(|extension| extension.id == action.id);
         site_controls::Extension {
             id: action.id.clone(),
             title: action.title.clone(),
@@ -671,13 +797,29 @@ fn fit_actions(places: usize, count: usize) -> (usize, bool) {
     }
 }
 
+/// The actions' titles as a line for check.sh, whose extension says in its title how far its
+/// popup's page has got (#2241), or None unless the driver runs the app (BROWSER_DRIVE): a title
+/// can say what the user does, as an unread count, so the app never writes it in normal use.
+fn titles_line<'a>(
+    actions: impl Iterator<Item = &'a ExtensionAction>,
+    driven: bool,
+) -> Option<String> {
+    let titles: Vec<String> = (actions.filter(|_| driven))
+        .map(|action| format!("{}={}", action.id, action.title))
+        .collect();
+    driven.then(|| format!("browser: extension titles {}", titles.join(" | ")))
+}
+
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
 
     use gpui::{AppContext, TestAppContext, point, px};
 
-    use super::{Extension, ExtensionAction, ExtensionCommand, UserKeys, command_for, fit_actions};
+    use super::{
+        Extension, ExtensionAction, ExtensionCommand, UserKeys, command_for, fit_actions,
+        titles_line,
+    };
     use crate::shell::{Command, Folders, Shell, recorder::Recorder};
     use crate::site_controls;
 
@@ -708,14 +850,22 @@ mod tests {
     fn a_crashed_extension_is_told_of_once_and_turns_on_again(cx: &mut TestAppContext) {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
-        let crashed = Extension { crashed: true, ..extension("wallet", false, &[]) };
+        let crashed = Extension {
+            crashed: true,
+            ..extension("wallet", false, &[])
+        };
         host.dialog_busy.set(true);
         shell.update(cx, |shell, cx| {
             shell.set_extensions(3, vec![extension("notes", true, &[]), crashed.clone()], cx);
             shell.tell_crashed_extension(3, cx);
         });
         assert!(host.told.borrow().is_empty());
-        assert!(!host.take().iter().any(|call| call.starts_with("crash told")));
+        assert!(
+            !host
+                .take()
+                .iter()
+                .any(|call| call.starts_with("crash told"))
+        );
 
         host.dialog_busy.set(false);
         shell.update(cx, |shell, cx| shell.tell_crashed_extension(3, cx));
@@ -730,7 +880,10 @@ mod tests {
 
         // Told, the core reports it no longer crashed, and nothing asks again.
         shell.update(cx, |shell, cx| {
-            let told = Extension { crashed: false, ..crashed };
+            let told = Extension {
+                crashed: false,
+                ..crashed
+            };
             shell.set_extensions(3, vec![told], cx);
             shell.tell_crashed_extension(3, cx);
         });
@@ -744,13 +897,32 @@ mod tests {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
         let menu = |id: &'static str, cx: &mut TestAppContext| {
-            shell.update(cx, |shell, cx| shell.action_menu(id.into(), point(px(0.), px(0.)), cx));
+            shell.update(cx, |shell, cx| {
+                shell.action_menu(id.into(), point(px(0.), px(0.)), cx)
+            });
             let items = host.menus.borrow().last().cloned().unwrap_or_default();
-            items.into_iter().map(|(title, _)| title.to_string()).collect::<Vec<_>>()
+            items
+                .into_iter()
+                .map(|(title, _)| title.to_string())
+                .collect::<Vec<_>>()
         };
         shell.update(cx, |shell, cx| {
-            shell.set_spaces(vec![(1, "Space 1".into(), None, 0, "".into(), "".into(), "".into())], cx);
-            let blocker = Extension { removable: false, ..extension("ublock", true, &[]) };
+            shell.set_spaces(
+                vec![(
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )],
+                cx,
+            );
+            let blocker = Extension {
+                removable: false,
+                ..extension("ublock", true, &[])
+            };
             shell.set_extensions(0, vec![extension("notes", true, &[]), blocker], cx);
             shell.set_space(1, cx);
         });
@@ -764,8 +936,16 @@ mod tests {
     fn extension_keys_give_way_to_the_browsers_as_in_chrome() {
         let extensions = [
             extension("off", false, &[("hello", "shift-cmd-y", false)]),
-            extension("a", true, &[("hello", "shift-cmd-y", true), ("tab", "cmd-t", false)]),
-            extension("b", true, &[("library", "shift-cmd-l", true), ("side", "cmd-s", false)]),
+            extension(
+                "a",
+                true,
+                &[("hello", "shift-cmd-y", true), ("tab", "cmd-t", false)],
+            ),
+            extension(
+                "b",
+                true,
+                &[("library", "shift-cmd-l", true), ("side", "cmd-s", false)],
+            ),
         ];
         let run = |keystroke| {
             command_for(keystroke, &extensions, false, &UserKeys::default())
@@ -783,7 +963,10 @@ mod tests {
     #[gpui::test]
     fn a_private_window_runs_only_extensions_allowed_in_incognito(cx: &mut TestAppContext) {
         let allowed = extension("allowed", true, &[("go", "shift-cmd-y", true)]);
-        let allowed = Extension { incognito: true, ..allowed };
+        let allowed = Extension {
+            incognito: true,
+            ..allowed
+        };
         let other = extension("other", true, &[("side", "shift-cmd-u", true)]);
         let extensions = vec![other, allowed];
         let run = |keystroke, private| {
@@ -799,7 +982,35 @@ mod tests {
         let listed = shell.update(cx, |shell, cx| {
             shell.set_extensions(7, extensions.clone(), cx);
             let bar = shell.menu_bar(cx);
-            bar.extensions.iter().map(|extension| extension.id.to_string()).collect::<Vec<_>>()
+            bar.extensions
+                .iter()
+                .map(|extension| extension.id.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(listed, ["allowed"]);
+    }
+
+    /// A private window opened after the core reported the extensions lists those allowed in
+    /// Incognito from the window it opened from, as it hears them only once they change.
+    #[gpui::test]
+    fn a_private_window_lists_the_allowed_extensions_its_opener_heard(cx: &mut TestAppContext) {
+        let allowed = Extension {
+            incognito: true,
+            ..extension("allowed", true, &[])
+        };
+        let extensions = vec![extension("other", true, &[]), allowed];
+        let host = Rc::new(Recorder::default());
+        let from = cx.new(|cx| Shell::new(host.clone(), cx));
+        from.update(cx, |shell, cx| shell.set_extensions(7, extensions, cx));
+        let private = cx.new(|cx| {
+            let mut shell = Shell::private_window(host.clone(), 1, "Private".into(), 7, cx);
+            shell.hear_extensions_from(&from, cx);
+            shell
+        });
+        let listed = private.update(cx, |shell, cx| {
+            (shell.menu_bar(cx).extensions.iter())
+                .map(|extension| extension.id.to_string())
+                .collect::<Vec<_>>()
         });
         assert_eq!(listed, ["allowed"]);
     }
@@ -824,7 +1035,15 @@ mod tests {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
         shell.update(cx, |shell, cx| {
-            let space = (1, "Space 1".into(), None, 7, "".into(), "".into(), "".into());
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                7,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![space], cx);
             shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_space(1, cx);
@@ -846,19 +1065,32 @@ mod tests {
             shell.set_extension_actions(vec![action("zeta", true), action("beta", true)], cx);
             shell.run(Command::SiteControls, "ui", cx);
         });
-        let last = || host.site_controls_extensions.borrow().last().cloned().unwrap_or_default();
+        let last = || {
+            host.site_controls_extensions
+                .borrow()
+                .last()
+                .cloned()
+                .unwrap_or_default()
+        };
         assert_eq!(host.site_controls.borrow().len(), 1);
         assert_eq!(last(), ["zeta", "beta"]);
         shell.update(cx, |shell, cx| {
-            let others = [action("delta", false), action("gamma", false), action("alpha", false)];
-            let actions = [action("zeta", true), action("beta", true)].into_iter().chain(others);
+            let others = [
+                action("delta", false),
+                action("gamma", false),
+                action("alpha", false),
+            ];
+            let actions = [action("zeta", true), action("beta", true)]
+                .into_iter()
+                .chain(others);
             shell.set_extension_actions(actions.collect(), cx);
         });
         assert_eq!(last(), ["zeta", "beta", "alpha", "delta"]);
-        let toolbar: Vec<String> = (shell.read_with(cx, |shell, _| shell.extension_actions.clone()))
-            .iter()
-            .map(|action| action.id.to_string())
-            .collect();
+        let toolbar: Vec<String> = (shell
+            .read_with(cx, |shell, _| shell.extension_actions.clone()))
+        .iter()
+        .map(|action| action.id.to_string())
+        .collect();
         assert_eq!(toolbar, ["zeta", "beta"]);
     }
 
@@ -869,7 +1101,15 @@ mod tests {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
         shell.update(cx, |shell, cx| {
-            let space = (1, "Space 1".into(), None, 7, "".into(), "".into(), "".into());
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                7,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
             let extensions = ["alpha", "beta", "zeta"].map(|id| extension(id, true, &[]));
@@ -883,7 +1123,10 @@ mod tests {
             });
             host.take()
         };
-        assert_eq!(move_to_top("beta", cx), ["pin 7 zeta false", "pin 7 zeta true"]);
+        assert_eq!(
+            move_to_top("beta", cx),
+            ["pin 7 zeta false", "pin 7 zeta true"]
+        );
         assert_eq!(
             move_to_top("alpha", cx),
             [
@@ -896,6 +1139,77 @@ mod tests {
         );
     }
 
+    /// The command bar finds an extension that runs in the window by its name, and its row runs its
+    /// action on the tab shown, as Arc's bar does; one that's off, or with no tab shown, has none.
+    #[gpui::test]
+    fn the_command_bar_runs_an_extension_by_its_name(cx: &mut TestAppContext) {
+        const DARK: &str = "eimadpbcbfnmbkopoojfekhnkhdbieeh";
+        const OFF: &str = "cjpalhdlnbpafiamejdnhcphjbkeiagm";
+        let host = Rc::new(Recorder::default());
+        let shell = cx.new(|cx| Shell::new(host.clone(), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_spaces(
+                vec![(1, "One".into(), None, 4, "".into(), "".into(), "".into())],
+                cx,
+            );
+            shell.set_space(1, cx);
+            shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+            let named = |id: &str, name: &str, enabled| Extension {
+                name: name.to_string().into(),
+                ..extension(id, enabled, &[])
+            };
+            let extensions = vec![
+                named(DARK, "Dark Reader", true),
+                named(OFF, "Dark Mode Off", false),
+                // Not an id Chrome gives, so nothing could run it.
+                named("notes", "Dark Notes", true),
+            ];
+            shell.set_extensions(4, extensions, cx);
+        });
+        let found = |typed: &str, cx: &mut TestAppContext| {
+            shell.read_with(cx, |shell, _| {
+                let keys = UserKeys::default();
+                let rows = shell.extension_bar_rows();
+                crate::shell::with_named_rows(Vec::new(), typed, &rows, &keys)
+                    .into_iter()
+                    .map(|row| (row.name.to_string(), row.command))
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(found("dark", cx), [], "no tab is shown yet");
+
+        shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+        let run = Command::RunExtension(super::id_number(DARK).unwrap());
+        assert_eq!(found("dark", cx), [("Dark Reader".to_string(), run)]);
+        assert_eq!(found("reader", cx), [("Dark Reader".to_string(), run)]);
+        assert_eq!(found("ext", cx), [], "only its name finds it");
+
+        host.take();
+        shell.update(cx, |shell, cx| shell.run(run, "command-bar", cx));
+        let ran = host.take();
+        let prefix = format!("run extension {DARK} from ");
+        assert!(ran.iter().any(|call| call.starts_with(&prefix)), "{ran:?}");
+    }
+
+    /// A Chrome extension id goes into a command and comes back out as it was; anything else
+    /// doesn't go in.
+    #[test]
+    fn an_extension_id_fits_in_a_command() {
+        for id in [
+            "eimadpbcbfnmbkopoojfekhnkhdbieeh",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert_eq!(super::id_text(super::id_number(id).unwrap()), id);
+        }
+        assert_eq!(
+            super::id_number("pppppppppppppppppppppppppppppppp"),
+            Some(u128::MAX)
+        );
+        assert_eq!(super::id_number("notes"), None);
+        assert_eq!(super::id_number("qimadpbcbfnmbkopoojfekhnkhdbieeh"), None);
+        assert_eq!(super::id_number("Eimadpbcbfnmbkopoojfekhnkhdbieeh"), None);
+    }
+
     /// Every pinned action has a place to be run from: its own, or the overflow button's.
     #[test]
     fn actions_that_dont_fit_are_behind_the_overflow_button() {
@@ -905,5 +1219,21 @@ mod tests {
         assert_eq!(fit_actions(1, 5), (0, true));
         // With no place at all, the Extensions menu runs them.
         assert_eq!(fit_actions(0, 1), (0, false));
+    }
+
+    /// The titles line, which can say what the user does, is written only while the driver runs
+    /// the app, as for check.sh, and is silent in normal use.
+    #[test]
+    fn action_titles_are_logged_only_for_the_driver() {
+        let action = ExtensionAction {
+            title: "3 unread".into(),
+            ..action("check", true)
+        };
+        let line = titles_line(std::iter::once(&action), true);
+        assert_eq!(
+            line.as_deref(),
+            Some("browser: extension titles check=3 unread")
+        );
+        assert_eq!(titles_line(std::iter::once(&action), false), None);
     }
 }

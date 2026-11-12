@@ -33,7 +33,12 @@ pub(crate) struct Track {
 impl Track {
     /// Where it is at once.
     pub(crate) fn at(value: f32) -> Self {
-        Track { from: value, to: value, seconds: 0., curve: LINEAR }
+        Track {
+            from: value,
+            to: value,
+            seconds: 0.,
+            curve: LINEAR,
+        }
     }
 
     fn value(self, elapsed: f32) -> f32 {
@@ -57,7 +62,11 @@ pub(crate) struct Motion {
 impl Motion {
     /// Its opacity alone on its way, at full size.
     pub(crate) fn fade(opacity: Track) -> Self {
-        Motion { scale: Track::at(1.), origin: point(px(0.), px(0.)), opacity }
+        Motion {
+            scale: Track::at(1.),
+            origin: point(px(0.), px(0.)),
+            opacity,
+        }
     }
 
     fn look(self, elapsed: f32) -> RootLook {
@@ -75,6 +84,16 @@ impl Motion {
 thread_local! {
     /// The motion each window's view was last given, and when it started.
     static MOVING: RefCell<Vec<(usize, Motion, Instant)>> = const { RefCell::new(Vec::new()) };
+    /// The views whose windows blur what's behind them at rest (`blur`).
+    static BLURRED: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The window of `view` blurs what's behind it, as the Mac's material does, while it shows at its
+/// full size and opacity: the compositor blurs under the window's whole shape at full strength, which
+/// would show around a card still growing, shrinking or fading in it.
+pub(crate) fn blur(view: *mut c_void) {
+    BLURRED.with_borrow_mut(|all| all.push(view as usize));
+    gpui_linux::set_overlay_blur(view, true);
 }
 
 /// How the window of `view` shows now, after any motion: as it draws if it never had one.
@@ -83,7 +102,12 @@ fn now(view: usize) -> RootLook {
         (moving.iter().find(|(each, ..)| *each == view))
             .map(|(_, motion, started)| motion.look(started.elapsed().as_secs_f32()))
     });
-    look.unwrap_or(RootLook { scale: 1., origin: point(px(0.), px(0.)), opacity: 1., moving: false })
+    look.unwrap_or(RootLook {
+        scale: 1.,
+        origin: point(px(0.), px(0.)),
+        opacity: 1.,
+        moving: false,
+    })
 }
 
 /// The window of `view` moves as it's told from now on. Each frame it draws reads its motion
@@ -112,10 +136,28 @@ pub(crate) fn start(view: *mut c_void, mut motion: Motion) {
     if !gpui_linux::overlays_blend() {
         motion.opacity = Track::at(1.);
     }
+    let started = Instant::now();
     MOVING.with_borrow_mut(|moving| {
         moving.retain(|(each, ..)| *each != view as usize);
-        moving.push((view as usize, motion, Instant::now()));
+        moving.push((view as usize, motion, started));
     });
+    if BLURRED.with_borrow(|all| all.contains(&(view as usize))) {
+        let rests = motion.scale.to == 1. && motion.opacity.to == 1.;
+        let moving = motion.look(0.).moving;
+        gpui_linux::set_overlay_blur(view, rests && !moving);
+        if rests && moving {
+            let seconds = motion.scale.seconds.max(motion.opacity.seconds);
+            after(seconds, move || {
+                // Unless another motion started since.
+                let same = MOVING.with_borrow(|moving| {
+                    (moving.iter()).any(|&(each, _, at)| each == view as usize && at == started)
+                });
+                if same {
+                    gpui_linux::set_overlay_blur(view, true);
+                }
+            });
+        }
+    }
     crate::update_app_later(move |cx| {
         crate::overlays::update_window(view, cx, |window, _| window.refresh());
     });
@@ -134,7 +176,9 @@ pub(crate) fn hold(view: *mut c_void, look: RootLook) {
 /// Runs `then` once `seconds` have gone by, as a motion ends.
 pub(crate) fn after(seconds: f32, then: impl FnOnce() + 'static) {
     if let Some(cx) = crate::CX.with_borrow(Clone::clone) {
-        let timer = cx.background_executor().timer(Duration::from_secs_f32(seconds));
+        let timer = cx
+            .background_executor()
+            .timer(Duration::from_secs_f32(seconds));
         cx.foreground_executor()
             .spawn(async move {
                 timer.await;

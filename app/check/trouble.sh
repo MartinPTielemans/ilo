@@ -4,10 +4,11 @@
 # no card. A page whose renderer dies, killed as macOS kills one under memory pressure, leaves its
 # pane to the card's This page stopped, whose Reload, or ⇧⌘R, loads it again, while a tab behind
 # whose renderer dies is unloaded instead and loads once it's shown, with no card. A load that fails
-# shows the core's error page, with the error's code, and one refused for want of a server loads
-# again by itself, through Chromium's auto-reload, once the server is there. Offline, the page
-# offers ilo's game, which Space starts and a click doesn't, at chrome://dino too, with ⌘L still
-# the browser's over a run; and a page whose network comes back mid-run loads once the run ends.
+# shows the core's error page, with the error's code, readable in Light as in Dark, and one refused
+# for want of a server loads again by itself, through Chromium's auto-reload, once the server is
+# there. Offline, the page offers ilo's game, which Space starts and a click doesn't, at
+# chrome://dino too, with ⌘L still the browser's over a run; and a page whose network comes back
+# mid-run loads once the run ends.
 
 serve
 # Typing w in it keeps its renderer busy for 20 s, past Chrome's 15 s hang timeout, then the title
@@ -46,8 +47,9 @@ if [ "$active" != 1 ]; then
   exit 0
 fi
 
-# expect, for up to 30 s: Chrome calls a page hung only 15 s after the input it hasn't answered.
-expect_late() {
+# expect_late, failing at once if the app exits: Chrome calls a page hung only 15 s after the input
+# it hasn't answered.
+expect_hung() {
   for _ in $(seq 300); do
     sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1" && return 0
     kill -0 "$pid" 2>/dev/null || fail "the app exited"
@@ -67,7 +69,7 @@ toast_wait="$((width - 18 - 106)) 41"
 hang() {
   send click $page_point
   send key w
-  expect_late "browser: tab $tab page hung" "$1: the busy page wasn't called hung"
+  expect_hung "browser: tab $tab page hung" "$1: the busy page wasn't called hung"
   expect "^browser: page $tab trouble hung\$" "$1: the app didn't hear the page hung"
   expect '^browser: toast shown Not responding \[wait, reload\]$' "$1: the toast didn't say Not responding"
   expect '^browser: toast settled$' "$1: the toast didn't settle"
@@ -76,7 +78,7 @@ hang() {
 # Hung, the note shows with the row's mark, and goes by itself once the page answers.
 hang "hung"
 ../tools/window-screenshot.sh "$pid" "$out/hung.png" || fail "no window to capture"
-expect_late "^browser: title $tab woke 1\$" "the busy page didn't wake"
+expect_hung "^browser: title $tab woke 1\$" "the busy page didn't wake"
 expect "^browser: page $tab trouble fine\$" "the page answering didn't make it fine"
 expect '^browser: toast hidden$' "the note stayed once the page answered"
 
@@ -86,7 +88,7 @@ send move $toast_wait
 send click $toast_wait
 expect '^browser: toast button wait$' "Wait wasn't pressed at $toast_wait"
 expect "^browser: page $tab trouble fine\$" "Wait didn't make the page fine"
-expect_late "^browser: title $tab woke 2\$" "the busy page didn't wake after Wait"
+expect_hung "^browser: title $tab woke 2\$" "the busy page didn't wake after Wait"
 none_since "page $tab trouble hung" || fail "the page was called hung again within Wait's time"
 
 # Reload ends the renderer and loads the page again, without the crash card.
@@ -154,6 +156,40 @@ expect '^browser: command bar go https://nothing.invalid/$' "the bar didn't go t
 expect "^browser: page $tab trouble network -105\$" "a host that doesn't resolve wasn't a network error"
 await '^browser: title [0-9]* nothing.invalid$' || fail "the error page didn't take the host for its title"
 ../tools/window-screenshot.sh "$pid" "$out/network-error.png" || fail "no window to capture"
+# In Light its words are dark, in the palette's ink, on the pane, which is light then (#1567).
+# inked <capture>: how many pixels darker than 100 in each channel lie in the middle of the
+# window's right part, where the page's words are, away from the sidebar's.
+inked() {
+  # pixel leaves the capture as $out/pixel.bmp.
+  pixel "$1" 0 0 > /dev/null
+  python3 -I - "$out/pixel.bmp" << 'PY'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+offset, = struct.unpack_from("<I", data, 10)
+width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
+rows = abs(height)
+stride = (bits * width + 31) // 32 * 4
+count = 0
+for y in range(int(rows * 0.35), int(rows * 0.65)):
+    start = offset + (y if height < 0 else rows - 1 - y) * stride
+    for x in range(int(width * 0.4), int(width * 0.95)):
+        at = start + x * bits // 8
+        count += max(data[at], data[at + 1], data[at + 2]) < 100
+print(count)
+PY
+}
+send menu "$(cased 'Appearance › Light')"
+expect '^browser: appearance light$' "View › Appearance › Light didn't change the appearance"
+for _ in $(seq 20); do
+  ../tools/window-screenshot.sh "$pid" "$out/network-error-light.png" || fail "no window to capture"
+  inked=$(inked "$out/network-error-light.png")
+  [ "$inked" -ge 20 ] && break
+done
+[ "$inked" -ge 20 ] ||
+  fail "in Light, the error page's words didn't read on its pane: $inked dark pixels where they are"
+send menu "$(cased 'Appearance › Automatic')"
+expect '^browser: appearance automatic$' \
+  "View › Appearance › Automatic didn't give back the system's appearance"
 # Space on it starts no game, which only the offline page has. A click away from its Reload focuses
 # it; the refused step after gives a run that started time to say so.
 send click 300 120
@@ -166,9 +202,15 @@ expect '^browser: command bar shown$' "⌘L didn't open the command bar"
 send insert "http://127.0.0.1:$free/"
 send key return
 expect "^browser: page $tab trouble network -102\$" "a port with no server wasn't refused"
-python3 -I -m http.server "$free" --bind 127.0.0.1 --directory "$out/site" > "$out/late-server.log" 2>&1 &
+# A TCPServer, as site.sh's binds: http.server's looks 127.0.0.1's name up, which takes 35 s on the
+# hosted Mac (#2022).
+python3 -I -c '
+import functools, http.server, socketserver, sys
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[2])
+socketserver.ThreadingTCPServer(("127.0.0.1", int(sys.argv[1])), handler).serve_forever()
+' "$free" "$out/site" > "$out/late-server.log" 2>&1 &
 stuck=$!
-expect_late "^browser: loaded $tab http://127.0.0.1:$free/\$" "the refused page didn't load once the server was there"
+expect_hung "^browser: loaded $tab http://127.0.0.1:$free/\$" "the refused page didn't load once the server was there"
 expect "^browser: page $tab trouble fine\$" "the page that came wasn't fine"
 kill "$stuck"
 stuck=
@@ -181,7 +223,7 @@ grep -q 'browser: tab [0-9]* game running$' "$log" && fail "Space started a game
 cat > "$out/network.py" <<'PY'
 import base64, json, os, socket, struct, sys, urllib.request
 
-port = open(sys.argv[1]).read().split()[0]
+port = open(sys.argv[1], encoding="utf-8").read().split()[0]
 targets = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list"))
 url = next(t["webSocketDebuggerUrl"] for t in targets
            if t["type"] == "page" and t["url"].startswith(sys.argv[2]))
@@ -246,7 +288,15 @@ for line in sys.stdin:
 PY
 rm -f "$out/network"
 mkfifo "$out/network"
-python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < "$out/network" > "$out/network.log" 2>&1 &
+# Windows' Python can't open Git Bash's FIFO, so on Windows it reads a pipe that cat fills from it,
+# as windows_bridge does (git-bash.sh); a plain pipe, as the Mac's bash 3.2 parses this file --posix.
+if windows; then
+  cat "$out/network" | python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" \
+    > "$out/network.log" 2>&1 &
+else
+  python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < "$out/network" \
+    > "$out/network.log" 2>&1 &
+fi
 network=$!
 exec 4> "$out/network"
 # Takes the tab $1, offline or online.
@@ -306,6 +356,27 @@ awk -v run="$run" 'BEGIN { exit !(run != "" && run < 2) }' ||
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
+# DevTools' PUT /json/new, which names no window, opens its tab in the window's Space, at the top of
+# Today, as ⌘T's tab goes there (#1831). The Space is emptied first, so the window shows no page
+# and holds no Browser of its profile, which Chrome would find by itself, and opened a window of
+# its own, with a tab strip, without one.
+for _ in 1 2 3 4; do
+  [ -z "$(today)" ] && break
+  send key w cmd
+  expect '^browser: tab [0-9]* closed$' "⌘W didn't close the Space's tab"
+  expect '^browser: today' "the Space's Today didn't change as its tab closed"
+done
+[ -z "$(today)" ] || fail "⌘W left the Space's Today as \"$(today)\""
+python3 -I - "$(head -1 "$ports")" "${site}index.html" << 'PY' || fail "DevTools didn't answer PUT /json/new"
+import sys, urllib.request
+port, url = sys.argv[1:]
+urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/json/new?{url}", method="PUT"))
+PY
+expect '^browser: tab [0-9]* opened by 0 in the foreground$' "/json/new's tab didn't open in the window"
+opened=$(grep '^browser: tab [0-9]* opened by 0 in the foreground$' "$log" | tail -1 | cut -d' ' -f3)
+expect_tabs "$opened" "$opened" "/json/new's tab"
+expect "^browser: loaded $opened ${site}index.html\$" "/json/new's tab didn't load its page"
+
 quit_by_key
 exited
-echo "ok: a page that stops answering gets Not responding with Wait and Reload and goes by itself once it answers, Wait gives it longer and Reload ends its renderer and loads it again without the crash card, a dead page's pane shows This page stopped, whose Reload loads it again, a tab behind whose renderer dies is unloaded and loads once shown, a host that doesn't resolve shows the core's error page and a refused page loads by itself once its server comes. Offline, Space starts the game and a click doesn't, a page whose network comes back mid-run loads only once the run ends, chrome://dino opens it, and ⌘L opens the bar over a run, which ends it. Windows: $out/hung.png, $out/crashed.png, $out/network-error.png, $out/offline.png, $out/offline-game.png"
+echo "ok: a page that stops answering gets Not responding with Wait and Reload and goes by itself once it answers, Wait gives it longer and Reload ends its renderer and loads it again without the crash card, a dead page's pane shows This page stopped, whose Reload loads it again, a tab behind whose renderer dies is unloaded and loads once shown, a host that doesn't resolve shows the core's error page, readable in Light too, and a refused page loads by itself once its server comes. Offline, Space starts the game and a click doesn't, a page whose network comes back mid-run loads only once the run ends, chrome://dino opens it, and ⌘L opens the bar over a run, which ends it. DevTools' /json/new opens its tab at the top of the window's Today, with the Space empty. Windows: $out/hung.png, $out/crashed.png, $out/network-error.png, $out/network-error-light.png, $out/offline.png, $out/offline-game.png"

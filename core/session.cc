@@ -1,6 +1,8 @@
 #include "browser_core/session.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -10,16 +12,19 @@
 
 #include "base/base64.h"
 #include "base/callback_list.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/i18n/time_formatting.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/pickle.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -29,12 +34,20 @@
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/favorites.h"
+#include "browser_core/host.h"
 #include "browser_core/profiles.h"
+#include "browser_core/sidebar_backups.h"
 #include "browser_core/space.h"
+#include "browser_core/sync_settings.h"
+#include "browser_core/sync_spaces.h"
 #include "browser_core/tab.h"
+#include "browser_core/webrtc.h"
 #include "browser_core/window.h"
+#include "chrome/browser/browser_process.h"
+#include "build/build_config.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/sessions/content/content_serialized_navigation_builder.h"
@@ -43,7 +56,9 @@
 #include "components/sync/protocol/unique_position.pb.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
@@ -55,11 +70,15 @@ namespace {
 struct SavedWindow {
   // The Space it showed, among the session's.
   int space = 0;
-  // Its frame out of full screen, empty if it was saved before frames were kept.
+  // Its frame out of full screen and maximized, empty if it was saved before frames were kept.
   gfx::Rect bounds;
   // Its docked sidebar's width, or 0 for none.
   double sidebar_width = 0;
   bool fullscreen = false;
+  // Its show state, as Chromium's session keeps a window's (ui::mojom::WindowShowState): maximized,
+  // or normal. A minimized window comes back normal, as Chrome's does. Never on the Mac, where
+  // Chromium's widget calls a zoomed window maximized, and its zoom is a frame, which |bounds| has.
+  bool maximized = false;
 };
 
 struct Saved {
@@ -70,6 +89,8 @@ struct Saved {
   std::vector<SavedWindow> windows;
   std::vector<ArchivedTab> archive;
   Settings settings;
+  // The last id handed out, 0 for a session saved before ids were kept.
+  bc_id last_id = 0;
 };
 
 // The windows the last launch saved, for the app to open again, and the Spaces RestoreSession
@@ -112,17 +133,62 @@ Space::Node ReadNode(const base::DictValue& dict) {
   return node;
 }
 
-// The favorite |id| as the session keeps it, else empty history if it has no page to keep.
-SavedTab SaveFavorite(bc_id id) {
+// The favorite |id| as the session keeps it, else empty history if it has no page to keep, in a
+// split view with |above|, the favorite of its list saved before it, if they're in one.
+SavedTab SaveFavorite(bc_id id, bc_id above) {
   const Tab* saving = Tab::Get(id);
   SavedTab tab = saving ? saving->Save() : SavedTab();
   if (tab.history.empty()) {
     return tab;
   }
+  tab.session_storage = saving->SessionStorageId();
   tab.pinned_url = Favorites::Url(id);
   tab.profile = Favorites::ProfileOf(id);
   tab.site = Favorites::SiteOf(id);
+  if (const SplitView* split = Favorites::SplitOf(id)) {
+    tab.split = above && std::ranges::contains(split->tabs, above);
+    tab.stacked = split->stacked;
+    if (!split->shares.empty()) {
+      tab.share = split->shares[std::ranges::find(split->tabs, id) - split->tabs.begin()];
+    }
+    tab.expanded = split->expanded == id;
+    tab.focused = Favorites::Focused(id) == id;
+  }
   return tab;
+}
+
+// Joins the favorites restored from |saved|, which |tabs| has in its order, 0 for one that didn't
+// come back, in the split views they were saved in.
+void RestoreFavoriteSplits(const std::vector<SavedTab>& saved, const std::vector<bc_id>& tabs) {
+  // Each profile's favorites are in their order among the others'.
+  std::map<std::string, SplitView> runs;
+  const auto finish = [](SplitView& run) {
+    if (run.tabs.size() > 1) {
+      Favorites::RestoreSplit(run);
+    }
+    run = SplitView();
+  };
+  for (size_t i = 0; i < saved.size() && i < tabs.size(); ++i) {
+    SplitView& run = runs[saved[i].profile];
+    if (!saved[i].split) {
+      finish(run);
+    }
+    if (!tabs[i]) {
+      continue;
+    }
+    run.tabs.push_back(tabs[i]);
+    run.stacked = run.stacked || saved[i].stacked;
+    run.shares.push_back(saved[i].share);
+    if (saved[i].expanded) {
+      run.expanded = tabs[i];
+    }
+    if (saved[i].focused) {
+      run.focused = tabs[i];
+    }
+  }
+  for (auto& [profile, run] : runs) {
+    finish(run);
+  }
 }
 
 std::string ScopeName(int scope) {
@@ -211,6 +277,7 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
   to.color = space.color();
   to.icon = space.icon();
   to.theme = space.theme();
+  to.touched = space.touched();
   to.profile = space.profile();
   to.agent = space.agent();
   to.pinned_open = space.pinned_open();
@@ -244,11 +311,16 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
       if (tab.history.empty()) {
         continue;
       }
+      tab.session_storage = saving->SessionStorageId();
       if (id == shown) {
         to.shown = index;
       }
       tab.split = above && std::ranges::contains(space.Panes(id), above);
       tab.stacked = tab.split && space.Stacked(id);
+      if (tab.split) {
+        tab.split_name = space.SplitName(id);
+        tab.split_icon = space.SplitIcon(id);
+      }
       if (std::vector<double> shares = space.Shares(id); !shares.empty()) {
         std::vector<bc_id> panes = space.Panes(id);
         tab.share = shares[std::ranges::find(panes, id) - panes.begin()];
@@ -258,8 +330,8 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
       tab.pinned_url = space.PinnedUrl(id);
       if (tabs == &to.pinned) {
         tab.folder = folder_of(id);
-        tab.node = node_of(id);
       }
+      tab.node = node_of(id);
       if (tabs == &to.today) {
         tab.last_seen = Window::Showing(id) ? base::Time::Now() : saving->last_seen();
         if (today) {
@@ -271,11 +343,13 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
     }
   }
   // Under Each Space, the favorites that are its own.
+  bc_id above_favorite = 0;
   for (bc_id id : Favorites::OwnedBy(space.id())) {
-    SavedTab tab = SaveFavorite(id);
+    SavedTab tab = SaveFavorite(id, above_favorite);
     if (tab.history.empty()) {
       continue;
     }
+    above_favorite = id;
     if (id == shown) {
       to.shown_own_favorite = to.favorites.size();
     }
@@ -288,19 +362,24 @@ namespace {
 
 Saved Collect() {
   Saved saved;
-  // The regular windows, as nothing of a private one is saved.
+  // The regular windows, as nothing of a window with a Space of its own is saved.
   std::vector<Window*> windows = Window::All();
-  std::erase_if(windows, [](const Window* each) { return each->off_the_record(); });
+  std::erase_if(windows, [](const Window* each) { return each->own_space(); });
   saved.settings = UserSettings();
+  saved.last_id = LastId();
   // Each Space saved, by its place among them.
   std::map<bc_id, int> spaces;
   // Each favorite saved, by its place among them. Those of a Space are saved with it.
   std::map<bc_id, int> favorites;
+  // The favorite saved last of each profile.
+  std::map<std::string, bc_id> above;
   for (bc_id id : Favorites::All()) {
-    SavedTab tab = Favorites::SpaceOf(id) ? SavedTab() : SaveFavorite(id);
+    SavedTab tab =
+        Favorites::SpaceOf(id) ? SavedTab() : SaveFavorite(id, above[Favorites::ProfileOf(id)]);
     if (tab.history.empty()) {
       continue;
     }
+    above[Favorites::ProfileOf(id)] = id;
     favorites[id] = saved.favorites.size();
     saved.favorites.push_back(std::move(tab));
   }
@@ -323,11 +402,15 @@ Saved Collect() {
     views::Widget* widget = window->widget();
     saved.windows.push_back(
         {.space = space == spaces.end() ? 0 : space->second,
-         .bounds = widget ? widget->GetRestoredBounds() : gfx::Rect(),
+         .bounds = window->RestoredFrame(),
          .sidebar_width = window->sidebar_width(),
          // The user's full screen, not a page's: one saved as a video plays would come back
          // without it.
-         .fullscreen = widget && widget->IsFullscreen() && !window->FullScreenForPage()});
+         .fullscreen = widget && widget->IsFullscreen() && !window->FullScreenForPage(),
+#if !BUILDFLAG(IS_MAC)
+         .maximized = widget && widget->IsMaximized() && !widget->IsFullscreen(),
+#endif
+        });
   }
   saved.archive = Archived();
   return saved;
@@ -374,21 +457,34 @@ std::optional<std::string> ToJson(const Saved& saved) {
       if (tab.stacked) {
         dict.Set("stacked", true);
       }
+      if (!tab.split_name.empty()) {
+        dict.Set("split_name", tab.split_name);
+      }
+      if (!tab.split_icon.empty()) {
+        dict.Set("split_icon", tab.split_icon);
+      }
       if (tab.share) {
         dict.Set("share", tab.share);
       }
       if (tab.expanded) {
         dict.Set("expanded", true);
       }
+      if (tab.focused) {
+        dict.Set("focused", true);
+      }
       if (folders) {
         write_folder(*folders, tab.folder, dict);
-        WriteNode(tab.node, dict);
       }
+      // A pinned or Today tab's, which a favorite has none of.
+      WriteNode(tab.node, dict);
       if (!tab.profile.empty()) {
         dict.Set("profile", tab.profile);
       }
       if (tab.site) {
         dict.Set("site", tab.site);
+      }
+      if (!tab.session_storage.empty()) {
+        dict.Set("session_storage", tab.session_storage);
       }
       list.Append(std::move(dict));
     }
@@ -434,6 +530,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
     if (!space.pinned_open) {
       dict.Set("pinned_open", false);
     }
+    if (!space.touched) {
+      dict.Set("untouched", true);
+    }
     if (!space.profile.empty()) {
       dict.Set("profile", space.profile);
     }
@@ -462,6 +561,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
     if (window.fullscreen) {
       dict.Set("fullscreen", true);
     }
+    if (window.maximized) {
+      dict.Set("maximized", true);
+    }
     windows.Append(std::move(dict));
   }
   root.Set("windows", std::move(windows));
@@ -470,11 +572,20 @@ std::optional<std::string> ToJson(const Saved& saved) {
     archive.Append(base::DictValue()
                        .Set("url", tab.url.spec())
                        .Set("title", tab.title)
-                       .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull()));
+                       .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull())
+                       .Set("little", tab.little));
+    if (tab.space.is_valid()) {
+      archive.back().GetDict().Set("space", tab.space.AsLowercaseString());
+    }
   }
   root.Set("archive", std::move(archive));
+  // A string, as JSON's numbers can't hold every id.
+  root.Set("last_id", base::NumberToString(saved.last_id));
   root.Set("settings", base::DictValue()
                            .Set("archive_after", saved.settings.archive_after.InSecondsF())
+                           .Set("little_archive_after",
+                                saved.settings.little_archive_after.InSecondsF())
+                           .Set("little_windows", saved.settings.little_windows)
                            .Set("haptics", saved.settings.haptics)
                            .Set("warn_before_quitting", saved.settings.warn_before_quitting)
                            .Set("archive_noted", saved.settings.archive_noted)
@@ -484,13 +595,19 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("unload_idle_tabs", saved.settings.unload_idle_tabs)
                            .Set("ad_blocking", saved.settings.ad_blocking)
                            .Set("send_crash_reports", saved.settings.send_crash_reports)
+                           .Set("relay_calls", saved.settings.relay_calls)
                            .Set("link_previews", saved.settings.link_previews)
                            .Set("auto_picture_in_picture",
                                 saved.settings.auto_picture_in_picture)
                            .Set("option_reveals_sidebar", saved.settings.option_reveals_sidebar)
                            .Set("hover_kinds", saved.settings.hover_kinds)
                            .Set("crash_report_offered", saved.settings.crash_report_offered)
-                           .Set("widevine", saved.settings.widevine));
+                           .Set("widevine", saved.settings.widevine)
+                           .Set("ask_where_to_save", saved.settings.ask_where_to_save)
+                           .Set("page_zoom", saved.settings.page_zoom)
+                           .Set("notification_prompts", saved.settings.notification_prompts)
+                           .Set("appearance", saved.settings.appearance)
+                           .Set("space_header", saved.settings.space_header));
   return base::WriteJson(root);
 }
 
@@ -532,12 +649,22 @@ std::optional<SavedTab> ReadTab(const base::Value& value) {
   }
   tab.split = dict->FindBool("split").value_or(false);
   tab.stacked = tab.split && dict->FindBool("stacked").value_or(false);
+  if (const std::string* name = dict->FindString("split_name"); name && tab.split) {
+    tab.split_name = *name;
+  }
+  if (const std::string* icon = dict->FindString("split_icon"); icon && tab.split) {
+    tab.split_icon = *icon;
+  }
   tab.share = dict->FindDouble("share").value_or(0);
   tab.expanded = dict->FindBool("expanded").value_or(false);
+  tab.focused = dict->FindBool("focused").value_or(false);
   if (const std::string* profile = dict->FindString("profile")) {
     tab.profile = *profile;
   }
   tab.site = std::max(dict->FindInt("site").value_or(0), 0);
+  if (const std::string* storage = dict->FindString("session_storage")) {
+    tab.session_storage = *storage;
+  }
   return tab;
 }
 
@@ -584,6 +711,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
       to.theme = *theme;
     }
     to.pinned_open = space->FindBool("pinned_open").value_or(true);
+    to.touched = !space->FindBool("untouched").value_or(false);
     if (const std::string* profile = space->FindString("profile")) {
       to.profile = *profile;
     }
@@ -661,6 +789,8 @@ std::optional<Saved> Read(const base::FilePath& path) {
         }
         if (tab && tabs == &to.pinned) {
           tab->folder = folder_of(*dict);
+        }
+        if (tab) {
           tab->node = ReadNode(*dict);
         }
         if (tab) {
@@ -690,6 +820,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
       }
       to.sidebar_width = window->FindDouble("sidebar_width").value_or(0);
       to.fullscreen = window->FindBool("fullscreen").value_or(false);
+      to.maximized = window->FindBool("maximized").value_or(false);
     }
   } else {
     // Saved when the session kept one window, without its frame.
@@ -705,18 +836,29 @@ std::optional<Saved> Read(const base::FilePath& path) {
       const std::string* title = tab ? tab->FindString("title") : nullptr;
       std::optional<double> archived = tab ? tab->FindDouble("archived") : std::nullopt;
       if (url && title && archived && GURL(*url).is_valid()) {
+        const std::string* space = tab->FindString("space");
         saved.archive.push_back(
             {.url = GURL(*url),
              .title = *title,
-             .archived = base::Time::FromMillisecondsSinceUnixEpoch(*archived)});
+             .archived = base::Time::FromMillisecondsSinceUnixEpoch(*archived),
+             .little = tab->FindBool("little").value_or(false),
+             .space = space ? base::Uuid::ParseLowercase(*space) : base::Uuid()});
       }
     }
+  }
+  if (const std::string* last_id = root->FindString("last_id")) {
+    base::StringToUint64(*last_id, &saved.last_id);
   }
   if (const base::DictValue* settings = root->FindDict("settings")) {
     const double archive_after = settings->FindDouble("archive_after").value_or(0);
     if (archive_after > 0) {
       saved.settings.archive_after = base::Seconds(archive_after);
     }
+    const double little_archive_after = settings->FindDouble("little_archive_after").value_or(0);
+    if (little_archive_after > 0) {
+      saved.settings.little_archive_after = base::Seconds(little_archive_after);
+    }
+    saved.settings.little_windows = settings->FindBool("little_windows").value_or(true);
     saved.settings.haptics = settings->FindBool("haptics").value_or(true);
     saved.settings.warn_before_quitting =
         settings->FindBool("warn_before_quitting").value_or(true);
@@ -731,6 +873,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
     saved.settings.ad_blocking = settings->FindBool("ad_blocking").value_or(true);
     saved.settings.send_crash_reports =
         settings->FindBool("send_crash_reports").value_or(false);
+    saved.settings.relay_calls = settings->FindBool("relay_calls").value_or(false);
     saved.settings.link_previews = settings->FindBool("link_previews").value_or(true);
     saved.settings.auto_picture_in_picture =
         settings->FindBool("auto_picture_in_picture").value_or(true);
@@ -740,8 +883,193 @@ std::optional<Saved> Read(const base::FilePath& path) {
     saved.settings.crash_report_offered =
         settings->FindDouble("crash_report_offered").value_or(0);
     saved.settings.widevine = settings->FindBool("widevine").value_or(false);
+    saved.settings.ask_where_to_save = settings->FindBool("ask_where_to_save").value_or(false);
+    const double page_zoom = settings->FindDouble("page_zoom").value_or(1);
+    saved.settings.page_zoom = page_zoom > 0 ? page_zoom : 1;
+    saved.settings.notification_prompts =
+        settings->FindBool("notification_prompts").value_or(true);
+    const int appearance = settings->FindInt("appearance").value_or(0);
+    saved.settings.appearance = appearance >= 0 && appearance <= 2 ? appearance : 0;
+    saved.settings.space_header = settings->FindBool("space_header").value_or(false);
   }
   return saved;
+}
+
+base::FilePath BackupsDir(Profile* profile) {
+  return profile->GetPath().Append(FILE_PATH_LITERAL("Sidebar Backups"));
+}
+
+// Named by when it was taken, so listing them reads no file.
+base::FilePath BackupPath(const base::FilePath& dir, base::Time time) {
+  return dir.AppendASCII(base::NumberToString(time.InMillisecondsSinceUnixEpoch()) + ".json");
+}
+
+// The backups in |dir|, newest first.
+std::vector<base::Time> ListBackups(const base::FilePath& dir) {
+  std::vector<base::Time> times;
+  base::FileEnumerator files(dir, /*recursive=*/false, base::FileEnumerator::FILES,
+                             FILE_PATH_LITERAL("*.json"));
+  for (base::FilePath file = files.Next(); !file.empty(); file = files.Next()) {
+    int64_t milliseconds = 0;
+    if (base::StringToInt64(file.BaseName().RemoveExtension().MaybeAsASCII(), &milliseconds)) {
+      times.push_back(base::Time::FromMillisecondsSinceUnixEpoch(milliseconds));
+    }
+  }
+  std::ranges::sort(times, std::greater());
+  return times;
+}
+
+// On the writer's sequence: writes |saved| as a backup in |dir| at |now| if |force|, or if it's
+// the first or the newest is kBackupGap old, then deletes those Arc's schedule doesn't keep.
+// Returns those left, newest first.
+std::vector<base::Time> BackUp(const base::FilePath& dir,
+                               std::optional<Saved> saved,
+                               base::Time now,
+                               bool force) {
+  std::vector<base::Time> times = ListBackups(dir);
+  // To the millisecond, as its name has it.
+  now = base::Time::FromMillisecondsSinceUnixEpoch(now.InMillisecondsSinceUnixEpoch());
+  if (saved && (force || times.empty() || (now - times.front()).magnitude() >= kBackupGap)) {
+    std::optional<std::string> json = ToJson(*saved);
+    if (json && base::CreateDirectory(dir) &&
+        base::ImportantFileWriter::WriteFileAtomically(BackupPath(dir, now), *json)) {
+      times.insert(times.begin(), now);
+    }
+  }
+  std::vector<base::Time> kept = BackupsKept(times, now);
+  for (base::Time time : times) {
+    if (!std::ranges::contains(kept, time)) {
+      base::DeleteFile(BackupPath(dir, time));
+    }
+  }
+  return kept;
+}
+
+// On the writer's sequence: reads the backup in |dir| taken at |chosen|, then backs up |current|.
+std::pair<std::optional<Saved>, std::vector<base::Time>> ReadBackup(const base::FilePath& dir,
+                                                                    base::Time chosen,
+                                                                    Saved current,
+                                                                    base::Time now) {
+  std::optional<Saved> saved = Read(BackupPath(dir, chosen));
+  return {std::move(saved), BackUp(dir, std::move(current), now, /*force=*/true)};
+}
+
+// The directory of the profile |dir| names, the one the core started with for none.
+std::string SidebarProfile(const std::string& dir) {
+  Profile* start = dir.empty() ? StartProfile() : nullptr;
+  return start ? DirOf(start) : dir;
+}
+
+// The sidebar of the profile in |dir| in |saved|: its user's Spaces and its favorites, those of a
+// Space being saved with it.
+Saved ProfileSidebar(const Saved& saved, const std::string& dir) {
+  Saved sidebar;
+  // Where each favorite went among those kept, or -1.
+  std::vector<int> favorites;
+  for (const SavedTab& favorite : saved.favorites) {
+    const bool kept = SidebarProfile(favorite.profile) == dir;
+    favorites.push_back(kept ? static_cast<int>(sidebar.favorites.size()) : -1);
+    if (kept) {
+      sidebar.favorites.push_back(favorite);
+    }
+  }
+  for (const SavedSpace& space : saved.spaces) {
+    if (!space.agent && SidebarProfile(space.profile) == dir) {
+      SavedSpace& to = sidebar.spaces.emplace_back(space);
+      if (to.shown_favorite >= 0) {
+        to.shown_favorite = favorites[to.shown_favorite];
+      }
+    }
+  }
+  return sidebar;
+}
+
+// Tells the app which backups the profile in |dir| has, newest first.
+void ReportBackups(const std::string& dir, const std::vector<base::Time>& times) {
+  // check.sh reads this line.
+  fprintf(stderr, "browser: sidebar backups of %s: %zu\n", dir.c_str(), times.size());
+  if (!Host().sidebar_backups_changed) {
+    return;
+  }
+  std::vector<std::string> labels;
+  for (base::Time time : times) {
+    // Dates, not "Today", which would be wrong by the next day, in the user's locale and clock.
+    labels.push_back(base::UTF16ToUTF8(base::TimeFormatFriendlyDate(time) + u", " +
+                                       base::TimeFormatTimeOfDay(time)));
+  }
+  std::vector<bc_sidebar_backup> backups;
+  for (size_t i = 0; i < times.size(); ++i) {
+    backups.push_back({.time = times[i].InMillisecondsFSinceUnixEpoch(),
+                       .label = labels[i].c_str()});
+  }
+  Host().sidebar_backups_changed(Host().context, ProfileId(dir), backups.data(), backups.size());
+}
+
+// Puts |saved|, a backup of the sidebar of the profile in |dir|, in place of that profile's, and
+// has |window| show the Space it showed if the backup has it.
+void PutBackSidebar(Window& window, const std::string& dir, const Saved& saved) {
+  Profile* profile = ProfileFor(dir);
+  const bool any = std::ranges::any_of(saved.spaces, [](const SavedSpace& space) {
+    return !space.agent;
+  });
+  if (!profile || DirOf(profile) != dir || !any) {
+    return;
+  }
+  std::vector<bc_id> old;
+  for (Space* space : Space::All()) {
+    if (!space->agent() && SidebarProfile(space->profile()) == dir) {
+      old.push_back(space->id());
+    }
+  }
+  const Space* shown = Space::FromId(window.space());
+  const base::Uuid shown_node = shown ? shown->node().id : base::Uuid();
+  // Under One Profile the profile's favorites are its sidebar's. Under Every Space they're every
+  // profile's, which they stay, and under Each Space they come with their Spaces.
+  std::vector<bc_id> favorites;
+  if (Favorites::scope() == BC_FAVORITES_PROFILE) {
+    for (bc_id tab : Favorites::Of(dir)) {
+      if (!Favorites::SpaceOf(tab)) {
+        Window::CloseTab(tab);
+      }
+    }
+    for (const SavedTab& saved_tab : saved.favorites) {
+      const bc_id tab = favorites.emplace_back(Tab::Restore(profile, saved_tab));
+      if (tab) {
+        Favorites::Restore(tab,
+                           saved_tab.pinned_url.is_valid()
+                               ? saved_tab.pinned_url
+                               : saved_tab.history[saved_tab.current].virtual_url(),
+                           /*space=*/0, saved_tab.site);
+      }
+    }
+    RestoreFavoriteSplits(saved.favorites, favorites);
+  }
+  bc_id show = 0;
+  for (const SavedSpace& saved_space : saved.spaces) {
+    if (saved_space.agent) {
+      continue;
+    }
+    Space* space = RestoreSpace(window, profile, saved_space);
+    const int favorite = saved_space.shown_favorite;
+    if (favorite >= 0 && static_cast<size_t>(favorite) < favorites.size() &&
+        favorites[favorite]) {
+      window.SetSelectedIn(space->id(), favorites[favorite]);
+    }
+    if (!show || (shown_node.is_valid() && saved_space.node.id == shown_node)) {
+      show = space->id();
+    }
+  }
+  // Under Every Space, the profile gets a tab for each site its Spaces came back without.
+  Favorites::Complete();
+  window.ShowSpace(show);
+  // Once the backup's are in, as the last Space isn't deleted. The sidebar they made up is the
+  // newest backup, which brings them back.
+  for (bc_id space : old) {
+    Window::DeleteSpace(space);
+  }
+  // check.sh waits for this line.
+  fprintf(stderr, "browser: sidebar of %s restored, %zu Spaces\n", dir.c_str(),
+          saved.spaces.size());
 }
 
 class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
@@ -775,6 +1103,8 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     }
   }
 
+  bool kept() const { return kept_; }
+
   void Flush() {
     if (writer_.HasPendingWrite()) {
       writer_.DoScheduledWrite();
@@ -788,10 +1118,99 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
   base::ImportantFileWriter::BackgroundDataProducerCallback
   GetSerializedDataProducerForBackgroundSequence() override {
     // What's in the Spaces is read here, and written out as JSON on the writer's sequence.
-    return base::BindOnce(&ToJson, Collect());
+    Saved saved = Collect();
+    BackUpSidebars(saved);
+    return base::BindOnce(&ToJson, std::move(saved));
+  }
+
+  // Lists the backups of the profiles the Spaces are in, for the app's menu.
+  void ListSidebars() {
+    for (const Space* space : Space::All()) {
+      const std::string dir = SidebarProfile(space->profile());
+      if (!space->agent() && !sidebars_.contains(dir)) {
+        PostBackUp(dir, std::nullopt);
+      }
+    }
+  }
+
+  bool RestoreSidebar(Window& window, base::Time time) {
+    const Space* shown = Space::FromId(window.space());
+    if (!shown || shown->agent() || window.off_the_record()) {
+      return false;
+    }
+    const std::string dir = SidebarProfile(shown->profile());
+    Profile* profile = ProfileFor(dir);
+    if (!profile || DirOf(profile) != dir) {
+      return false;
+    }
+    sidebars_[dir].busy = true;
+    task_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(&ReadBackup, BackupsDir(profile), time, ProfileSidebar(Collect(), dir),
+                       base::Time::Now()),
+        base::BindOnce(&Saver::OnReadBackup, base::Unretained(this), window.id(), dir));
+    return true;
   }
 
  private:
+  // A profile's backups, newest first, once listed, and whether a backup or a listing is on the
+  // writer's sequence.
+  struct Sidebar {
+    std::vector<base::Time> backups;
+    bool busy = false;
+  };
+
+  // Backs up the sidebar of each profile in |saved| whose newest backup is kBackupGap old. One not
+  // listed yet is listed, and backed up if it's due.
+  void BackUpSidebars(const Saved& saved) {
+    const base::Time now = base::Time::Now();
+    std::set<std::string> dirs;
+    for (const SavedSpace& space : saved.spaces) {
+      if (!space.agent) {
+        dirs.insert(SidebarProfile(space.profile));
+      }
+    }
+    for (const std::string& dir : dirs) {
+      auto it = sidebars_.find(dir);
+      if (it != sidebars_.end() &&
+          (it->second.busy || (!it->second.backups.empty() &&
+                               (now - it->second.backups.front()).magnitude() < kBackupGap))) {
+        continue;
+      }
+      PostBackUp(dir, ProfileSidebar(saved, dir));
+    }
+  }
+
+  void PostBackUp(const std::string& dir, std::optional<Saved> saved) {
+    Profile* profile = ProfileFor(dir);
+    if (!profile || DirOf(profile) != dir) {
+      return;
+    }
+    sidebars_[dir].busy = true;
+    task_runner_->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(&BackUp, BackupsDir(profile), std::move(saved), base::Time::Now(),
+                       /*force=*/false),
+        base::BindOnce(&Saver::OnBackedUp, base::Unretained(this), dir));
+  }
+
+  void OnBackedUp(const std::string& dir, std::vector<base::Time> backups) {
+    sidebars_[dir] = {.backups = backups};
+    ReportBackups(dir, backups);
+  }
+
+  void OnReadBackup(bc_id window,
+                    const std::string& dir,
+                    std::pair<std::optional<Saved>, std::vector<base::Time>> read) {
+    OnBackedUp(dir, std::move(read.second));
+    Window* showing = Window::FromId(window);
+    if (!showing || !read.first) {
+      fprintf(stderr, "browser: sidebar of %s not restored\n", dir.c_str());
+      return;
+    }
+    PutBackSidebar(*showing, dir, *read.first);
+  }
+
   // At logout, restart or SIGTERM, Chrome writes what it must and exits without waiting for the
   // writer's sequence, so the Spaces are written here, as it allows.
   void OnClosingAll(bool closing) {
@@ -806,12 +1225,17 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
   }
 
   void OnRead(base::OnceClosure loaded, std::optional<Saved> saved) {
+    // Before any tab comes back, so none takes an id an agent knew from the last launch (#1449).
+    if (saved && saved->last_id) {
+      StartIdsAfter(saved->last_id);
+    }
     if (saved) {
       LoadArchive(std::exchange(saved->archive, {}));
       UserSettings() = saved->settings;
       LoadedWindows() = std::exchange(saved->windows, {});
       // Without the last session's windows, the launch opens one, where the front one was, and
-      // windowed, as a new window would be.
+      // out of full screen, as a new window would be. Maximized it stays so, as Windows' launch
+      // window had it.
       if (!UserSettings().restore_windows && !LoadedWindows().empty()) {
         LoadedWindows().erase(LoadedWindows().begin() + 1, LoadedWindows().end());
         LoadedWindows().front().fullscreen = false;
@@ -820,7 +1244,10 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     // The profile the browser started in loaded before the settings were read.
     ApplyAdBlocking();
     ApplyAutoPictureInPicture(/*changed=*/false);
+    ApplyWebRtc();
+    ApplyAppearance();
     ArchiveDefaultRead();
+    sync_settings::Read();
     // The profiles the Spaces and favorites are in load before they come back.
     std::set<std::string> profiles;
     if (saved) {
@@ -841,6 +1268,8 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
   base::CallbackListSubscription closing_all_;
   std::optional<Saved> loaded_;
   bool kept_ = false;
+  // By profile directory.
+  std::map<std::string, Sidebar> sidebars_;
 };
 
 // Made by LoadSession and never deleted, as Chrome's shutdown may still be writing its file.
@@ -860,6 +1289,8 @@ void SessionChanged() {
   if (g_saver) {
     g_saver->Changed();
   }
+  sync_spaces::Changed();
+  sync_settings::Changed();
 }
 
 void KeepSession() {
@@ -874,9 +1305,24 @@ void FlushSession() {
   }
 }
 
+bool SessionKept() {
+  return g_saver && g_saver->kept();
+}
+
 Settings& UserSettings() {
   static Settings settings;
   return settings;
+}
+
+void ApplyAppearance() {
+#if !BUILDFLAG(IS_MAC)
+  // Chromium's own override of the system's scheme, which every page's color provider follows.
+  using Scheme = ui::NativeTheme::PreferredColorScheme;
+  const int appearance = UserSettings().appearance;
+  ui::NativeTheme::SetPreferredColorSchemeOverride(appearance == 1   ? std::optional(Scheme::kLight)
+                                                   : appearance == 2 ? std::optional(Scheme::kDark)
+                                                                     : std::nullopt);
+#endif
 }
 
 double SavedSidebarWidth() {
@@ -889,6 +1335,10 @@ std::vector<gfx::Rect> SavedWindowFrames() {
     frames.push_back(window.bounds);
   }
   return frames;
+}
+
+bool SavedWindowMaximized(size_t index) {
+  return index < LoadedWindows().size() && LoadedWindows()[index].maximized;
 }
 
 bool RestoreSavedWindow(Window& window, size_t index) {
@@ -930,6 +1380,7 @@ Space* RestoreSpace(Window& window,
   space->SetIcon(saved_space.icon);
   space->SetTheme(saved_space.theme);
   space->SetPinnedOpen(saved_space.pinned_open);
+  space->SetTouched(saved_space.touched);
   space->SetProfile(DirOf(profile));
   // Else the Space comes back as a new window shows it: its pinned tabs, none shown, and no Today
   // tabs, which go in the archive.
@@ -980,9 +1431,11 @@ Space* RestoreSpace(Window& window,
   restore_folders(saved_space.pinned.size());
   space->RestoreNodes(saved_space.node, nodes);
   // Under Each Space, its favorites, in its profile.
+  std::vector<bc_id> own_favorites;
   for (size_t j = 0; j < saved_space.favorites.size(); ++j) {
     const SavedTab& saved_tab = saved_space.favorites[j];
-    if (bc_id tab = Tab::Restore(profile, saved_tab)) {
+    const bc_id tab = own_favorites.emplace_back(Tab::Restore(profile, saved_tab));
+    if (tab) {
       Favorites::Restore(tab,
                          saved_tab.pinned_url.is_valid()
                              ? saved_tab.pinned_url
@@ -993,20 +1446,32 @@ Space* RestoreSpace(Window& window,
       }
     }
   }
+  RestoreFavoriteSplits(saved_space.favorites, own_favorites);
   // Bottom up, as each goes at the top, of the Space or of the archive.
   for (size_t j = saved_space.today.size(); j-- > 0;) {
     if (!whole) {
       const SavedTab& saved_tab = saved_space.today[j];
-      if (saved_tab.current >= 0 &&
+      // An agent's pages don't come back, nor go in the user's archive (#1408).
+      if (!saved_space.agent && saved_tab.current >= 0 &&
           static_cast<size_t>(saved_tab.current) < saved_tab.history.size()) {
         const sessions::SerializedNavigationEntry& entry = saved_tab.history[saved_tab.current];
-        Archive(/*tab=*/0, entry.virtual_url(), base::UTF16ToUTF8(entry.title()));
+        Archive(/*tab=*/0, entry.virtual_url(), base::UTF16ToUTF8(entry.title()), space->node().id);
       }
       continue;
     }
     if (bc_id tab = today_ids[j] = restore(saved_space.today[j], pinned + static_cast<int>(j))) {
       space->Add(tab, /*opener=*/0, /*foreground=*/false);
     }
+  }
+  // The Today tabs' nodes, which sync knows them by.
+  std::map<bc_id, Space::Node> today_nodes;
+  for (size_t j = 0; j < today_ids.size(); ++j) {
+    if (today_ids[j]) {
+      today_nodes[today_ids[j]] = saved_space.today[j].node;
+    }
+  }
+  if (!today_nodes.empty()) {
+    space->RestoreNodes(saved_space.node, today_nodes);
   }
   for (auto [tabs, ids] : {std::pair(&saved_space.pinned, &pinned_ids),
                            std::pair(&saved_space.today, &today_ids)}) {
@@ -1019,9 +1484,16 @@ Space* RestoreSpace(Window& window,
       if (!tab.split || j == 0) {
         shares.clear();
         expanded = 0;
-      } else if ((*ids)[j] && (*ids)[j - 1] && space->Split((*ids)[j], (*ids)[j - 1], GURL()) &&
-                 tab.stacked) {
-        space->SetStacked((*ids)[j], true);
+      } else if ((*ids)[j] && (*ids)[j - 1] && space->Split((*ids)[j], (*ids)[j - 1], GURL())) {
+        if (tab.stacked) {
+          space->SetStacked((*ids)[j], true);
+        }
+        if (!tab.split_name.empty()) {
+          space->SetSplitName((*ids)[j], tab.split_name);
+        }
+        if (!tab.split_icon.empty()) {
+          space->SetSplitIcon((*ids)[j], tab.split_icon);
+        }
       }
       if ((*ids)[j]) {
         shares.push_back(tab.share);
@@ -1040,7 +1512,37 @@ Space* RestoreSpace(Window& window,
   return space;
 }
 
+namespace {
+
+// Once the tabs are back from the last launch, deletes the sessionStorage no tab came back for, and
+// the session-only cookies of sites the user has cleared on exit, in each profile, as Chrome does
+// once its session restore has given its tabs theirs (SessionRestoreImpl), or at a launch that
+// restores none.
+void DeleteStaleSessionData() {
+  static bool deleted = false;
+  if (std::exchange(deleted, true) || !g_browser_process->profile_manager()) {
+    return;
+  }
+  for (Profile* profile : g_browser_process->profile_manager()->GetLoadedProfiles()) {
+    if (!profile->IsOffTheRecord()) {
+      profile->GetDefaultStoragePartition()->DeleteStaleSessionData();
+    }
+  }
+}
+
+bool RestoreSavedSession(Window& window);
+
+}  // namespace
+
 bool RestoreSession(Window& window) {
+  const bool restored = RestoreSavedSession(window);
+  DeleteStaleSessionData();
+  return restored;
+}
+
+namespace {
+
+bool RestoreSavedSession(Window& window) {
   std::optional<Saved> saved = g_saver ? g_saver->TakeLoaded() : std::nullopt;
   if (!saved || !StartProfile() || !Space::All().empty()) {
     return false;
@@ -1059,6 +1561,7 @@ bool RestoreSession(Window& window) {
                          /*space=*/0, saved_tab.site);
     }
   }
+  RestoreFavoriteSplits(saved->favorites, favorites);
   RestoredSpaces().clear();
   for (const SavedSpace& saved_space : saved->spaces) {
     Space* space = RestoreSpace(window, ProfileFor(saved_space.profile), saved_space);
@@ -1074,7 +1577,14 @@ bool RestoreSession(Window& window) {
   if (!RestoreSavedWindow(window, 0)) {
     window.ShowSpace(RestoredSpaces().front(), /*page=*/UserSettings().restore_windows);
   }
+  g_saver->ListSidebars();
   return true;
+}
+
+}  // namespace
+
+bool RestoreSidebar(Window& window, base::Time time) {
+  return g_saver && g_saver->RestoreSidebar(window, time);
 }
 
 }  // namespace browser_core

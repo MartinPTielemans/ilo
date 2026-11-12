@@ -26,7 +26,7 @@ index 8732badd32..ef553825c0 100644
  trait BoolExt {
      fn to_objc(self) -> Bool;
 diff --git a/crates/gpui_macos/src/platform.rs b/crates/gpui_macos/src/platform.rs
-index 4b48188131..2b8c859e84 100644
+index 4b48188131..b9b785975c 100644
 --- a/crates/gpui_macos/src/platform.rs
 +++ b/crates/gpui_macos/src/platform.rs
 @@ -60,6 +60,12 @@ const MAC_PLATFORM_IVAR: &CStr = c"platform";
@@ -205,7 +205,19 @@ index 4b48188131..2b8c859e84 100644
              let _: () = msg_send![app, setDelegate: app_delegate];
  
              let self_ptr = self as *const Self as *mut c_void;
-@@ -1105,8 +1167,8 @@ impl Platform for MacPlatform {
+@@ -735,6 +797,11 @@ impl Platform for MacPlatform {
+         MacWindow::active_window()
+     }
+ 
++    // Active while a window that isn't GPUI's has the keyboard too, such as an embedder's.
++    fn is_active(&self) -> Option<bool> {
++        Some(NSApplication::sharedApplication(self.1).isActive())
++    }
++
+     // Returns the windows ordered front-to-back, meaning that the active
+     // window is the first one in the returned vec.
+     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
+@@ -1105,8 +1172,8 @@ impl Platform for MacPlatform {
          unsafe {
              let app: *mut AnyObject = msg_send![APP_CLASS, sharedApplication];
              let mut state = self.0.lock();
@@ -215,7 +227,7 @@ index 4b48188131..2b8c859e84 100644
              let menu = self.create_menu_bar(&menus, delegate, actions, keymap);
              drop(state);
              let _: () = msg_send![app, setMainMenu: &*menu];
-@@ -1120,10 +1182,9 @@ impl Platform for MacPlatform {
+@@ -1120,10 +1187,9 @@ impl Platform for MacPlatform {
  
      fn set_dock_menu(&self, menu: Vec<MenuItem>, keymap: &Keymap) {
          unsafe {

@@ -33,8 +33,9 @@ struct Panel {
 
 thread_local! {
     static PANELS: RefCell<Vec<Panel>> = const { RefCell::new(Vec::new()) };
-    /// Each browser window's page's top right corner, from its content's (host_set_pane_corner).
-    static CORNERS: RefCell<Vec<(*mut c_void, f64, f64)>> = const { RefCell::new(Vec::new()) };
+    /// Each browser window's page's left edge and top right corner, from its content's
+    /// (host_set_pane_corner).
+    static CORNERS: RefCell<Vec<(*mut c_void, f64, f64, f64)>> = const { RefCell::new(Vec::new()) };
 }
 
 fn with_panel<R>(matches: impl Fn(&Panel) -> bool, f: impl FnOnce(&mut Panel) -> R) -> Option<R> {
@@ -98,7 +99,14 @@ pub(crate) fn below_find_bar(ui_view: *mut c_void) -> Option<f64> {
 pub(crate) fn page_corner(ui_view: *mut c_void) -> (f64, f64) {
     CORNERS.with_borrow(|corners| {
         (corners.iter().find(|(each, ..)| *each == ui_view))
-            .map_or((0., 0.), |&(_, right, top)| (right, top))
+            .map_or((0., 0.), |&(_, _, right, top)| (right, top))
+    })
+}
+
+/// Where `ui_view`'s window's page starts, from its content's left, where the toast's window does.
+pub(crate) fn page_left(ui_view: *mut c_void) -> f64 {
+    CORNERS.with_borrow(|corners| {
+        (corners.iter().find(|(each, ..)| *each == ui_view)).map_or(0., |&(_, left, ..)| left)
     })
 }
 
@@ -113,7 +121,7 @@ fn show(kind: Kind, ui_view: *mut c_void, keyboard: bool) {
     if keyboard && !had {
         overlays::lend_keyboard(window, view, true);
         // check.sh reads this line.
-        eprintln!("browser: {} takes the keyboard", name(kind));
+        browser::log!("browser: {} takes the keyboard", name(kind));
     }
     with_panel(
         |p| p.view == view,
@@ -132,7 +140,7 @@ fn show(kind: Kind, ui_view: *mut c_void, keyboard: bool) {
     else {
         return;
     };
-    gpui_linux::show_overlay(view, ui_view, bounds, px(radius as f32), keyboard, left);
+    crate::overlays::show_over(view, ui_view, bounds, px(radius as f32), keyboard, left);
     // check.sh reads these lines.
     let at = [
         bounds.origin.x,
@@ -141,8 +149,8 @@ fn show(kind: Kind, ui_view: *mut c_void, keyboard: bool) {
         bounds.size.height,
     ];
     let [x, y, width, height] = at.map(f32::from);
-    eprintln!("browser: {} at {x} {y} {width} {height}", name(kind));
-    eprintln!("browser: {} shown", name(kind));
+    browser::log!("browser: {} at {x} {y} {width} {height}", name(kind));
+    browser::log!("browser: {} shown", name(kind));
     if kind == Kind::FindBar {
         place(ui_view);
     }
@@ -164,7 +172,7 @@ fn hide(kind: Kind, ui_view: *mut c_void) {
         }
     });
     // check.sh reads this line.
-    eprintln!("browser: {} hidden", name(kind));
+    browser::log!("browser: {} hidden", name(kind));
     if kind == Kind::FindBar {
         place(ui_view);
     }
@@ -173,7 +181,10 @@ fn hide(kind: Kind, ui_view: *mut c_void) {
 /// The views of the panels that show, for the test driver (drive.rs).
 pub(crate) fn shown() -> Vec<*mut c_void> {
     PANELS.with_borrow(|panels| {
-        (panels.iter()).filter(|panel| panel.shown).map(|panel| panel.view).collect()
+        (panels.iter())
+            .filter(|panel| panel.shown)
+            .map(|panel| panel.view)
+            .collect()
     })
 }
 
@@ -211,7 +222,7 @@ fn left(view: *mut c_void) {
     overlays::lend_keyboard(window, view, false);
     if let Some(kind) = kind {
         // check.sh reads this line.
-        eprintln!("browser: {} gives the keyboard back", name(kind));
+        browser::log!("browser: {} gives the keyboard back", name(kind));
     }
 }
 
@@ -259,7 +270,12 @@ pub extern "C" fn host_hide_find_bar(ui_view: *mut c_void) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn host_add_offer(ui_view: *mut c_void, offer_view: *mut c_void, right: f64, top: f64) {
+pub extern "C" fn host_add_offer(
+    ui_view: *mut c_void,
+    offer_view: *mut c_void,
+    right: f64,
+    top: f64,
+) {
     let radius = browser::tokens::offer::RADIUS.into();
     add(Kind::Offer, ui_view, offer_view, radius, right, top);
 }
@@ -276,10 +292,10 @@ pub extern "C" fn host_hide_offer(ui_view: *mut c_void) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn host_set_pane_corner(ui_view: *mut c_void, right: f64, top: f64) {
+pub extern "C" fn host_set_pane_corner(ui_view: *mut c_void, left: f64, right: f64, top: f64) {
     CORNERS.with_borrow_mut(|corners| {
         corners.retain(|(each, ..)| *each != ui_view);
-        corners.push((ui_view, right, top));
+        corners.push((ui_view, left, right, top));
     });
     place(ui_view);
 }
@@ -299,7 +315,9 @@ pub extern "C" fn host_forget_window(ui_view: *mut c_void) {
     overlays::forget_window(ui_view);
     crate::menu_window::forget_window(ui_view);
     crate::floats::forget_window(ui_view);
+    crate::frames::forget_window(ui_view);
     crate::popovers::forget_window(ui_view);
+    crate::active_window::forget_window(ui_view);
     crate::link_preview_window::forget_window(ui_view);
     crate::reveal_window::forget_window(ui_view);
     CORNERS.with_borrow_mut(|corners| corners.retain(|(each, ..)| *each != ui_view));

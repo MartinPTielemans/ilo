@@ -88,13 +88,24 @@ impl Shell {
         reply: PageReply,
         cx: &mut Context<Self>,
     ) {
-        if self.page_dialogs.get(&tab).is_none_or(|dialog| dialog.id != id) {
+        if self
+            .page_dialogs
+            .get(&tab)
+            .is_none_or(|dialog| dialog.id != id)
+        {
             return;
         }
-        self.page_dialogs.remove(&tab);
+        let stayed = self
+            .page_dialogs
+            .remove(&tab)
+            .is_some_and(|dialog| dialog.kind == DialogKind::Leave && !reply.accept);
         self.page_dialog_shown = None;
         // check.sh reads this line, which never has what was typed.
         log!("browser: page {tab} dialog answered {reply:?}");
+        // A page that asks to stay stops a quit, and so a restart into an update.
+        if stayed {
+            crate::updates::restart_stopped(cx);
+        }
         self.browser.answer_page_dialog(tab, id, reply, cx);
         cx.notify();
     }
@@ -106,11 +117,20 @@ impl Shell {
     pub(super) fn show_page_dialog(&mut self, cx: &mut Context<Self>) {
         let asked = self.page_dialogs.get(&self.selected);
         let asked = asked.filter(|_| !self.page(self.selected).system_engine);
+        // The user's page is out of the window while a task has the page area, and its dialog
+        // waits for it.
+        let asked = asked.filter(|_| self.task_area.is_none());
+        // A Little ilo window's own page first, then what a tab it sent behind asks to open.
+        let asked = asked
+            .map(|dialog| (self.selected, dialog))
+            .or_else(|| self.little_sent_asks());
         let wanted = match (asked, self.page_laid) {
-            (Some(dialog), Some(over)) => Some((self.selected, dialog.clone(), over)),
+            (Some((tab, dialog)), Some(over)) => Some((tab, dialog.clone(), over)),
             _ => None,
         };
-        let key = wanted.as_ref().map(|(tab, dialog, over)| (*tab, dialog.id, *over));
+        let key = wanted
+            .as_ref()
+            .map(|(tab, dialog, over)| (*tab, dialog.id, *over));
         if self.page_dialog_shown == key {
             return;
         }

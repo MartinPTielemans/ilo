@@ -35,32 +35,60 @@ themed=$(cased "$colors, Remove Theme Color")
 swatch_y=380
 swatch_x() { echo "$1" | awk '{ print 13 + 60.5 + 29.5 * $1 }'; }
 # Its profiles, in the one the check starts with, for a Space with tabs and an empty one.
-profile=$(cased "Profile › Default (checked), Profile › New Profile (disabled)")
-empty_profile=$(cased "Profile › Default (checked), Profile › New Profile")
+profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile (disabled)")
+# A Space menu's Export “name” into Folder ›, a Space an item, wherever a run doesn't check it
+# itself, as Spaces come and go (spaces checks it). It goes in a menu's line before Export as
+# Markdown…, through cased.
+into='\(Export “[^”]*” into Folder › [^,]*, \)*'
+empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile")
 # The product's name, which the app's menus and alerts use, and the dev build's id.
 app_name=$(cat branding/name)
 app_id=dev.browser.app
 # The KeyboardEvent property a page reads ⌘ from, which off the Mac is pressed with Ctrl (keys.rs).
 cmd_key=metaKey
 { windows || [ "$(uname)" = Linux ]; } && cmd_key=ctrlKey
+# ⇧⌘C's toast's log line: with the capture toast's Share button where there's a share sheet, which
+# Linux hasn't.
+url_toast='^browser: toast shown Copied Current URL \[share\]$'
+[ "$(uname)" != Linux ] || url_toast='^browser: toast shown Copied Current URL$'
 # Points from the window's top-left corner. The sidebar is 228 wide.
 page_point="600 400"
 sidebar_point="100 400"
 
 # After a failure, nothing the check started keeps running.
 cleanup() {
+  status=${1:-$?}
+  # A command that failed under set -e ends the check without fail's line, so a result would read
+  # as an exit with no failure, as sync-extensions' mkfifo on the pipe a run before left did (#2486).
+  if [ "$status" != 0 ] && [ -z "${failed:-}" ]; then
+    echo "FAIL: ${run:-the check} stopped at a command that failed, with status $status, before saying why; the lines above are its last" >&2
+  fi
   # The servers may be gone already, and under set -e a failed kill would end the trap here.
   [ -z "${server:-}" ] || kill "$server" 2>/dev/null || true
   [ -z "${collector:-}" ] || kill "$collector" 2>/dev/null || true
   [ -z "${stuck:-}" ] || kill "$stuck" 2>/dev/null || true
   [ -z "${helper:-}" ] || kill "$helper" 2>/dev/null || true
+  [ -z "${ilo_server:-}" ] || kill "$ilo_server" 2>/dev/null || true
   [ -z "${tls:-}" ] || kill "$tls" 2>/dev/null || true
+  # The other copies of the app a run started, as sync-devices' devices: on Windows by taskkill, as
+  # the app is below, since Git Bash's kill leaves a crash report from each (#1017).
+  if [ -n "${others:-}" ] && windows; then
+    for other in $others; do
+      taskkill //F //T //PID "$(cat "/proc/$other/winpid" 2>/dev/null)" > /dev/null 2>&1 || true
+    done
+  elif [ -n "${others:-}" ]; then
+    kill $others 2>/dev/null || true
+  fi
   # The access run's session and AT-SPI buses.
   [ -z "${buses:-}" ] || kill $buses 2>/dev/null || true
+  # A run's own way back, named in run_undo, such as policies' taking its policies off the system.
+  [ -z "${run_undo:-}" ] || $run_undo || true
   # A run's temp dir, such as the updates run's with its key.
   [ -z "${scratch:-}" ] || rm -rf "$scratch"
   # A check VM that a run turned light or dark goes back to the appearance it had.
   [ -z "${dark_mode:-}" ] || appearance "$dark_mode" || true
+  # So does one whose Dock and menu bar a run hid.
+  [ -z "${bars:-}" ] || show_bars || true
   # A crash's minidump goes with the run's captures, once Crashpad's handler has written it.
   for _ in $(seq 60); do
     ls "$profile_dir"/Crashpad/new/*.dmp > /dev/null 2>&1 || break
@@ -86,8 +114,18 @@ cleanup() {
   pkill -9 -f "$procs" || true
 }
 fail() {
+  failed=1
   echo "FAIL: $1" >&2
-  grep -v '^$' "$log" | tail -5 >&2
+  # After a wait that ran out, what it waited for and what came instead (#2566).
+  if [ -n "${waited_for:-}" ]; then
+    wait_report >&2
+  else
+    grep -v '^$' "$log" | tail -5 >&2
+  fi
+  # What the window showed, for a failure the log doesn't explain, as on CI.
+  if [ -n "${pid:-}" ] && [ -n "${out:-}" ] && kill -0 "$pid" 2>/dev/null; then
+    ../tools/window-screenshot.sh "$pid" "$out/failed.png" > /dev/null 2>&1 || true
+  fi
   exit 1
 }
 # The app ended by itself.
@@ -95,14 +133,129 @@ gone() {
   wait "$pid" 2>/dev/null && ended=0 || ended=$?
   fail "the app exited with status $ended"
 }
+# A prod build or a released package sends its daily count to ilo's hosted server 30 s in, which
+# counted each check's launch on a fresh profile as a new user (#2303). Each such launch starts on
+# the profile $1 with the count off, as Settings › Privacy leaves it, which every release since
+# 0.1.10 honours, so its log says "daily count not sent: off" and nothing leaves. count.sh alone
+# sends counts, to a server of its own.
+count_off() {
+  mkdir -p "$1"
+  : > "$1/no-daily-count"
+}
+# The logs of launches that named a count server of the run's own, as count.sh's do.
+own_count_logs=
+# Fails the check if a launch's log says a count was sent and it named no server of the run's own:
+# that count reached the hosted server. check.sh asks after each run.
+counted_nowhere() {
+  # The run is over, and so is what its last wait was about.
+  waited_for=
+  for counted in $(grep -rlx --include='*.log' 'browser: daily count sent' "$out" || true); do
+    case " $own_count_logs " in
+      *" $counted "*) ;;
+      *)
+        log=$counted
+        fail "$counted says a daily count was sent with no server of the run's own: the launch needs count_off"
+        ;;
+    esac
+  done
+}
+# Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
+# step that needs a core change: an engine built before it skips the step, saying so.
+engine_has() {
+  local commit
+  commit=$(../engine/fetch.sh commit 2> /dev/null) && git diff --quiet "$commit" -- "$@"
+}
 # Waits up to 30 s for a line matching $1 in the log of the current run.
 await() {
+  wait_begins
   for _ in $(seq 300); do
     grep -q "$1" "$log" && return 0
-    kill -0 "$pid" 2>/dev/null || gone
+    kill -0 "$pid" 2>/dev/null || {
+      ran_out "$1" "" exited
+      gone
+    }
     sleep 0.1
   done
+  ran_out "$1" ""
   return 1
+}
+# A wait for a line starts: the one before it, met or not, is no longer what a failure is about.
+# Seconds by the shell's clock where it has one, as Git Bash forks slowly, or else by date's.
+wait_begins() {
+  waited_for=
+  wait_began=${SECONDS:-$(date +%s)}
+}
+# Notes, for fail, a wait for a line matching $1 that ran out, or that the app's exit ended with
+# $3 "exited", which read the app's lines from command $2 on, or all of them.
+ran_out() {
+  waited_for=$1
+  waited_from=$2
+  waited_end=${3:-}
+  waited_secs=$((${SECONDS:-$(date +%s)} - ${wait_began:-0}))
+}
+# What fail says after a wait ran out, for someone who has never seen the run (#2566): what it
+# waited for and how long, the app's lines from the wait's command on, and the log's lines nearest
+# to what it waited for, those starting as the pattern's plain start does. Most often the line came,
+# but in another form, from another layer, or before the command.
+wait_report() {
+  local plain= near= at=
+  if [ "$waited_end" = exited ]; then
+    echo "The app exited during a wait for a line matching: $waited_for"
+  else
+    echo "The wait ran out after ${waited_secs} s, for a line matching: $waited_for"
+  fi
+  if [ -n "$waited_from" ]; then
+    echo "What the app logged from command $waited_from ($(sed -n "s/^browser: drive $waited_from: //p" "$log" | head -1)) on, the last 40 lines:"
+    since "$waited_from" | grep -v '^$' | fold_alike | tail -40 | sed 's/^/  /'
+    at=$(grep -n "^browser: drive $waited_from: " "$log" | head -1 | cut -d: -f1)
+  else
+    echo "What the app logged last, 40 lines:"
+    grep -v '^$' "$log" | fold_alike | tail -40 | sed 's/^/  /'
+  fi
+  # The pattern's start up to its first special character, then a word shorter each time while two
+  # are left, until some line starts with it: "browser:" alone would match every line. No "[." in
+  # the bracket, which starts a collating symbol there.
+  plain=$(printf '%s\n' "$waited_for" | sed 's/^\^//; s/[]$*.\\[].*//; s/ *$//')
+  while [ "${plain% *}" != "$plain" ]; do
+    near=$(awk -v plain="$plain" 'index($0, plain) == 1 { print NR ": " $0 }' "$log" | tail -5)
+    if [ -n "$near" ]; then
+      echo "The log's last lines starting \"$plain\", by line number${at:+ (command $waited_from is line $at)}:"
+      printf '%s\n' "$near" | sed 's/^/  /'
+      break
+    fi
+    plain=${plain% *}
+  done
+  [ -n "$near" ] || echo "No line in the log starts as the pattern does."
+  waited_for=
+}
+# Folds each run of lines that are alike but for their numbers into its first and last line,
+# saying how many there were.
+fold_alike() {
+  awk '
+    function flush() {
+      if (n == 1) print first
+      else if (same) print first "  (" n " times)"
+      else {
+        print first
+        if (n > 2) print "... " n - 2 " more like it ..."
+        print last
+      }
+    }
+    { key = $0; gsub(/[0-9]+/, "#", key) }
+    n && key == run { n++; last = $0; if ($0 != first) same = 0; next }
+    { if (n) flush(); run = key; first = last = $0; n = 1; same = 1 }
+    END { if (n) flush() }'
+}
+# Puts View › Appearance back to Automatic, the profile's first, by taking away the choice the core
+# keeps with the Spaces, and the file an older app kept it in, which a run that picks Light or Dark
+# and fails before Automatic leaves for the runs after (#1791). The core reads it only as it
+# launches, so this goes before a launch. On every OS, and it fails if it stays.
+forget_appearance() {
+  rm -f "$profile_dir/Appearance"
+  [ -e "$saved" ] || return 0
+  sed 's/"appearance":[0-9]*/"appearance":0/' "$saved" > "$saved.forget" && mv "$saved.forget" "$saved"
+  ! grep -q '"appearance":[12]' "$saved" ||
+    fail "the profile kept its saved appearance, $(grep -o '"appearance":[0-9]*' "$saved")"
 }
 # The app logs "browser: loaded" when the main frame has loaded.
 await_load() {
@@ -184,8 +337,19 @@ exited() {
   pgrep -f "$app/.*chrome_crashpad_handler" > /dev/null &&
     fail "Crashpad's handler outlived the app"
   pgrep -f "$procs" > /dev/null && fail "Chromium helper processes were left running"
+  # What the app left for Safari's engine as it quit, which the next forget takes away.
+  [ "$(uname)" != Darwin ] || echo "engine sites after the quit: $(engine_sites)"
   return 0
 }
+# What the runs that trace record: tabs, and perf's traced switches. Unset, it's latency, Chrome's
+# tab switch spans, which tabs reads, and perf traces nothing. CHECK_TRACE_CATEGORIES names others for
+# a breakdown, as #2377's, latency among them, and a run on CI takes them from its check workflow's
+# trace input. More than latency fills tabs' trace before its run ends, so then it keeps the run's
+# last part, and says how many of its switches have a span; perf traces only its switches, through
+# DevTools, so its buffer holds them all.
+trace_categories=${CHECK_TRACE_CATEGORIES:-latency}
+trace_mode=
+[ "$trace_categories" = latency ] || trace_mode=--trace-startup-record-mode=record-continuously
 # A quit Apple Event goes through -[NSApplication terminate:], the way macOS quits apps when the
 # user logs out. On Windows each browser window is asked to close, as its close button does, and
 # Chromium quits with its last one: taskkill without /F closed one of two (#1017). On Linux SIGINT
@@ -195,18 +359,98 @@ quit_app() {
   if windows; then
     python3 -I check/app-windows.py close "$(cat "/proc/$pid/winpid")"
   elif [ "$(uname)" = Linux ]; then
-    kill -INT "$pid"
+    kill -INT "$(app_pid)"
   else
     osascript -e "tell application id \"$app_id\" to quit"
   fi
+}
+# Ends the session as the system does at a logout or restart. The Mac and Linux send SIGTERM, which
+# Chromium takes for the session ending. Windows asks the app's windows and then tells them it ends
+# (app-windows.py end-session, #1990): Git Bash's kill would end the app's children first, and then
+# the app from a thread of its own, which no sign-out does.
+end_session() {
+  if windows; then
+    python3 -I check/app-windows.py end-session "$(cat "/proc/$pid/winpid")"
+  else
+    kill -TERM "$pid"
+  fi
+}
+# The app's own process: the one started, or in the Flatpak, where that's flatpak's, the browser
+# process in its sandbox, as the host numbers it, the chrome process that isn't a helper.
+app_pid() {
+  if [ -z "${BROWSER_FLATPAK:-}" ]; then
+    echo "$pid"
+    return
+  fi
+  for p in $(pgrep -f '^/app/ilo/chrome( |$)'); do
+    tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -q '^--type=' || { echo "$p"; return; }
+  done
+  echo "$pid"
+}
+# The number the app's windows carry as theirs (_NET_WM_PID): in a sandbox its own there.
+window_pid() {
+  awk '/^NSpid:/ { print $NF }' "/proc/$(app_pid)/status"
 }
 # Turns the Mac's appearance dark (true) or light (false), as System Settings › Appearance does.
 appearance() {
   osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1"
 }
+# Hides the Dock and, for the apps launched after, the menu bar, as System Settings › Desktop &
+# Dock and Control Center do, keeping what they were in $bars for show_bars.
+hide_bars() {
+  bars="$(defaults read com.apple.dock autohide 2>/dev/null || echo none)"
+  bars="$bars $(defaults read -g _HIHideMenuBar 2>/dev/null || echo none)"
+  defaults write com.apple.dock autohide -bool true
+  defaults write -g _HIHideMenuBar -bool true
+  killall Dock 2>/dev/null || true
+}
+# Puts the Dock and the menu bar back as hide_bars found them.
+show_bars() {
+  set -- $bars
+  bars=
+  case $1 in
+    none) defaults delete com.apple.dock autohide ;;
+    1) defaults write com.apple.dock autohide -bool true ;;
+    *) defaults write com.apple.dock autohide -bool false ;;
+  esac
+  case $2 in
+    none) defaults delete -g _HIHideMenuBar ;;
+    1) defaults write -g _HIHideMenuBar -bool true ;;
+    *) defaults write -g _HIHideMenuBar -bool false ;;
+  esac
+  killall Dock 2>/dev/null || true
+}
 quit() {
   quit_app
   exited "$@"
+}
+# Whether the run is on X11 through sway's Xwayland, where a child window such as the password
+# offer or the find bar can't keep the X focus, which wlroots' window manager sends back to the
+# browser window (#1646). Wayland and Xvfb keep it.
+sway_xwayland() {
+  [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ] && [ -z "${WAYLAND_DISPLAY:-}" ]
+}
+# On sway's Xwayland, the steps from here on, $1, need a child window to keep the X focus. There
+# they're skipped and the run ends.
+skip_on_sway_xwayland() {
+  sway_xwayland || return 0
+  exec 3>&-
+  quit
+  echo "skip: $1: sway's Xwayland sends child windows' X focus back (#1646)"
+  exit 0
+}
+# Under Xvfb and KWin (check.sh's BROWSER_XVFB=kwin), whether a window that shows asks KWin to blur
+# under it within 2 s, as an overlay does once its motion ends at rest (#2134). Elsewhere, false.
+kwin_blurs() {
+  [ "${BROWSER_XVFB:-}" = kwin ] || return 1
+  for _ in $(seq 20); do
+    for window in $(xwininfo -root -children | awk '$1 ~ /^0x/ { print $1 }'); do
+      xwininfo -id "$window" | grep -q 'Map State: IsViewable' || continue
+      xprop -id "$window" _KDE_NET_WM_BLUR_BEHIND_REGION | grep -q ' = [0-9]' && return 0
+    done
+    sleep 0.1
+  done
+  return 1
 }
 
 # Sends a command to the app's driver (platform/mac/drive.mm, platform/windows/drive.cc,
@@ -236,28 +480,34 @@ share='\(, Share…\( (disabled)\)\?\|, Share › [^,]*\(, Share › [^,]*\)*\)\
 # Waits for a line matching $1 logged after the last command was sent, or after command $3, and
 # fails with $2.
 expect() {
+  wait_begins
   for _ in $(seq 100); do
     logged "$1" "${3:-}" && return 0
     exited_without "$1" "$2" "${3:-}"
     sleep 0.1
   done
+  ran_out "$1" "${3:-$step}"
   fail "$2"
 }
 # expect, for up to 30 s, for what waits on a process that may still be starting.
 expect_late() {
+  wait_begins
   for _ in $(seq 300); do
     sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1" && return 0
     sleep 0.1
   done
+  ran_out "$1" "$step"
   fail "$2"
 }
 # expect, looking every 10 ms, for a press that has to land within the first frames of a motion.
 expect_soon() {
+  wait_begins
   for _ in $(seq 1000); do
     logged "$1" && return 0
     exited_without "$1" "$2"
     sleep 0.01
   done
+  ran_out "$1" "$step"
   fail "$2"
 }
 # A line matching $1 was logged after the last command was sent, or after command $2.
@@ -267,7 +517,10 @@ logged() {
 # The app that was to log $1 is gone without it, which says why the step $2 failed. It's looked
 # for again, as the app may have logged it as it went.
 exited_without() {
-  [ -z "${pid:-}" ] || kill -0 "$pid" 2>/dev/null || logged "$1" "${3:-}" || fail "the app exited: $2"
+  [ -z "${pid:-}" ] || kill -0 "$pid" 2>/dev/null || logged "$1" "${3:-}" || {
+    ran_out "$1" "${3:-$step}" exited
+    fail "the app exited: $2"
+  }
 }
 # Settings has drawn its tab $1, or whichever it shows, since the last command, on showing or on a
 # change of tab: until it has, a click in it finds nothing to land on (#1101, #1133).
@@ -275,7 +528,8 @@ settings_drew() {
   expect "^browser: settings drew ${1:-.*}\$" "Settings didn't draw ${1:-its tab}"
 }
 # Where Settings last drew its control $1, "x y" for clickkey, once it has: it logs each place it
-# draws one ("browser: settings $1 at x y").
+# draws one ("browser: settings $1 at x y"). That can be a frame from before the state a run just
+# waited for, which drawn_after leaves out.
 drawn() {
   for _ in $(seq 100); do
     sed -n "s/^browser: settings $1 at //p" "$log" | tail -1 | grep . && return 0
@@ -283,9 +537,74 @@ drawn() {
   done
   return 1
 }
-# Nothing logged since the last command was sent matches $1.
+# As drawn, from a frame drawn after the last line that matches $2, the state the run waited for:
+# a point drawn before it is the old layout's, where a press lands on whatever was there (#1885).
+drawn_after() {
+  for _ in $(seq 100); do
+    awk -v state="$2" -v name="browser: settings $1 at " '
+      $0 ~ state { at = "" }
+      index($0, name) == 1 { at = substr($0, length(name) + 1) }
+      END { if (at == "") exit 1; print at }' "$log" && return 0
+    sleep 0.1
+  done
+  return 1
+}
+# Sets at to where Settings drew its control $1, as drawn does, in the card's sight: between its
+# held title and its fade, where the card shows a row whole ("browser: settings card shows <top> to
+# <bottom>"). One drawn past them, as a section with more rows than the window's height puts at its
+# foot, is under the card's edge, where a press lands on nothing, so the card scrolls it into
+# sight first, from its middle, and at is where the frame after that draws it (#1950). Returns 1
+# if it never drew it.
+in_sight() {
+  at=$(drawn "$1") || return 1
+  sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
+  [ -n "$sight" ] || return 0
+  top=${sight%% to *}
+  bottom=${sight##* to }
+  y=${at#* }
+  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+  # Past it by its row's half, 24, and a little more.
+  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+  at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
+  # GPUI on Windows takes the driver's wheel messages for lines, about two thirds of the points
+  # asked, which can leave the row under the edge: scroll the rest. Where the card can't scroll
+  # further, nothing draws again and at stays where it was.
+  y=${at#* }
+  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+  rest=$(drawn_after "$1" "^browser: drive $step: ") && at=$rest
+  return 0
+}
+# Clicks Settings' control $1 in the card, where the card shows it whole, as in_sight scrolls it:
+# one at $(drawn …) under a short window's edge takes the click on nothing (#2503). $2 is the
+# driver's command, clickkey unless named. in_sight's variables are its own here, so a caller's at,
+# a mark it awaits from, keeps.
+click_in_sight() {
+  local at sight top bottom y by rest
+  in_sight "$1" || fail "Settings didn't draw $1"
+  send "${2:-clickkey}" $at
+}
+# ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
+# checks it). Escape closes it, leaving the window with no page that the steps after expect. With
+# a path, the windows are captured there while it's open.
+new_window_bar() {
+  expect '^browser: command new-tab via new window$' "the new window didn't open the command bar"
+  expect '^browser: command bar shown$' "the new window's command bar didn't show"
+  [ -z "${1:-}" ] || ../tools/window-screenshot.sh "$pid" "$1" all || fail "no window to capture"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the new window's command bar"
+}
+# What the app logged since the last command was sent, or since command $1.
+since() {
+  sed -n "/^browser: drive ${1:-$step}: /,\$p" "$log"
+}
+# Nothing logged since the last command was sent, or since command $2, matches $1. Straight after
+# a send of input it can pass before the app has got to it: the app handles input in the order it
+# comes, so a later step's expect is what says it has.
 none_since() {
-  ! sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1"
+  ! since "${2:-}" | grep -q "$1"
 }
 # Nothing logged while the driver handled the last command matches $1: what it did at once, not
 # what a timer of the app's did after, which on Windows send's own greps can outlast.
@@ -295,14 +614,27 @@ none_while() {
 # Kills the app's pages' renderers, as macOS kills one under memory pressure. Not an extension's,
 # which is a renderer too and whose death shows Chromium's balloon saying the extension crashed.
 kill_pages() {
+  # On Windows, Git Bash's ps lists its own processes alone: the build's renderers, from Windows',
+  # ended as TerminateProcess ends one.
+  if windows; then
+    renderers=$(powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.CommandLine -match '--type=renderer' -and \
+      \$_.CommandLine -notmatch '--extension-process' -and \$_.ExecutablePath -like '*\\build\\Browser\\*' } |
+      ForEach-Object { \$_.ProcessId }" | tr -d '\r')
+    [ -n "$renderers" ] || return 1
+    for renderer in $renderers; do
+      taskkill //F //PID "$renderer" > /dev/null 2>&1
+    done
+    return 0
+  fi
   renderers=$(ps -Ao pid=,args= | grep -e "$procs.*--type=rendere[r]" |
     grep -v -e '--extension-process' | awk '{ print $1 }')
   [ -n "$renderers" ] && kill -KILL $renderers
 }
-# Where Settings' close button is, in $close: AppKit's on the Mac, else where Settings drew its own,
-# which on Windows is in the top right corner.
+# Where Settings' close button is, in $close: AppKit's on the Mac, the middle of the 14 pt button
+# Settings puts at 12, 16, else where Settings drew its own, which on Windows is in the top right.
 settings_close() {
-  close="16 16"
+  close="19 23"
   [ "$(uname)" = Darwin ] && return
   await '^browser: settings close at ' || fail "Settings didn't draw its close button"
   close=$(sed -n 's/^browser: settings close at //p' "$log" | tail -1)
@@ -330,13 +662,23 @@ page_shortcut() {
   send key "$1" cmd
   expect "^browser: command $2 via page$" "⌘$(echo "$1" | tr a-z A-Z) with the page focused didn't reach the UI"
 }
+# Command $1 ran once since the last command was sent, which $2 names: under Wayland GPUI reads a
+# page's key after Chromium, and once the app's answer has given the UI the keyboard, as closing
+# the page that had it does, GPUI would run the key again (#2442). Read once the command's effect
+# is logged, which comes after a second run would.
+ran_once() {
+  ran=$(since | grep -c "^browser: command $1 via ")
+  [ "$ran" = 1 ] || fail "$2 ran $1 $ran times"
+}
 
 # What the sidebar last logged of $1, "sidebar hovered" or "sidebar tools": 1 or shown, 0 or hidden,
 # or nothing before its first change.
 last() { grep "^browser: $1 " "$log" | tail -1 | sed 's/.* //'; }
 # Records the window to $out/$1.mp4 for $2 seconds, for the parity rows whose target moves: it
 # returns once frames are being written, so the motion driven next is in it, and recorded waits
-# for the file.
+# for the file. A still taken while it records ends the recording (ReplayKit's -5814), so a run
+# takes its stills after recorded. A recording that doesn't start is tried once more, then the
+# run goes on without it, saying why: the video is the motion's proof, never a step's.
 record() {
   # tools/window-record.sh records with the Mac's ScreenCaptureKit alone.
   if [ "$(uname)" != Darwin ]; then
@@ -345,25 +687,40 @@ record() {
     return 0
   fi
   recording="$out/$1.mp4"
-  ../tools/window-record.sh "$pid" "$2" "$recording" > "$out/$1-record.log" 2>&1 &
-  recorder=$!
-  for _ in $(seq 300); do
-    grep -q '^recording$' "$out/$1-record.log" && return 0
-    if ! kill -0 "$recorder" 2> /dev/null; then
-      unrecorded || fail "the window's recording didn't start: $(tail -1 "$out/$1-record.log")"
-      return 0
+  for try in 1 2; do
+    ../tools/window-record.sh "$pid" "$2" "$recording" > "$out/$1-record.log" 2>&1 &
+    recorder=$!
+    for _ in $(seq 300); do
+      grep -q '^recording$' "$out/$1-record.log" && return 0
+      kill -0 "$recorder" 2> /dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$recorder" 2> /dev/null; then
+      kill "$recorder" 2> /dev/null
+      wait "$recorder" 2> /dev/null
+      echo "the recording didn't start in 30 s" >> "$out/$1-record.log"
     fi
-    sleep 0.1
+    unrecorded && return 0
+    [ "$try" = 2 ] || echo "retry: recording $1, as it didn't start: $(tail -1 "$out/$1-record.log")"
   done
-  fail "the window's recording didn't start in 30 s"
+  echo "skip: recording $1, as it didn't start, twice: $(tail -1 "$out/$1-record.log")"
+  recording=""
 }
 recorded() {
   [ -n "$recording" ] || return 0
   wait "$recorder" && return 0
-  unrecorded || fail "the window's recording didn't finish: $(tail -1 "${recording%.mp4}-record.log")"
+  unrecorded && return 0
+  # A stream that ended by itself says why when it does, before the failure it leads to (#2280).
+  said=$(grep '^the stream ended by itself' "${recording%.mp4}-record.log" | tail -1)
+  [ -n "$said" ] || said=$(tail -1 "${recording%.mp4}-record.log")
+  case "$said" in
+  *Code=-5814*) fail "the window's recording ended early, as a still taken while it records ends it: $said" ;;
+  esac
+  fail "the window's recording didn't finish: $said"
 }
 # GitHub's hosted Mac starts a recording and never gets its first frame, ReplayKit's -5822 (#1108),
-# so there the run goes on without it, saying so. Anywhere else a failed recording fails the run.
+# so there the run goes on without it, saying so. Anywhere else a recording that started and then
+# failed fails the run.
 unrecorded() {
   said=$(tail -1 "${recording%.mp4}-record.log")
   case "${GITHUB_ACTIONS:-}: $said" in
@@ -394,13 +751,15 @@ expect_tabs() {
   expect "^browser: today $1\$" "$3: Today is \"$(today)\", not \"$1\""
   expect "^browser: selected $2\( in .*\)\{0,1\}\$" "$3: tab $2 isn't shown"
 }
-# Opens a tab from the command bar, to https://$1.
+# Opens a tab from the command bar, to https://$1. The scheme is typed: a bare host goes to http
+# and Chrome's HTTPS-Upgrades takes it to https, falling back to http when the runner's https is
+# slow or fails (#1261), and the runs that follow expect https. history checks the upgrade itself.
 open_from_bar() {
   before=$(today)
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
   expect '^browser: new tab plate 1$' "⌘T didn't give New Tab the selected plate"
-  send type "$1"
+  send type "https://$1"
   send key return
   expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for $1 didn't open at the top of Today"
   tab=$(today | cut -d' ' -f1)
@@ -417,6 +776,30 @@ switch() {
 # under the divider, 15 tall, and the Space's name, 44 tall and 90 below the window's top.
 row() {
   echo "100 $((90 + 44 + 15 + 41 * ($1 + 1) + 20))"
+}
+# The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
+# from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
+# cpu <not> leaves out the processes whose command line holds <not>.
+cpu() {
+  if windows; then
+    local not=
+    [ -z "${1:-}" ] || not=" -and \$_.CommandLine -notlike '*$1*'"
+    powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*'$not } |
+      ForEach-Object -Begin { \$n = 0; \$t = 0 } -Process { \$n++; \$t += \$_.UserModeTime + \$_.KernelModeTime } \
+      -End { '{0:F2} {1}' -f (\$t / 1e7), \$n }" | tr -d '\r'
+  elif [ -d /proc ]; then
+    for p in $(pgrep -f -- "$procs"); do
+      # Chromium writes its processes' command lines over with spaces, others keep their NULs.
+      [ -z "${1:-}" ] || ! tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -qF -e "$1" || continue
+      sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null
+    done | awk -v hz="$(getconf CLK_TCK)" '{ n++; t += $12 + $13 } END { printf "%.2f %d\n", t / hz, n }'
+  else
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' |
+      awk -v not="${1:-}" 'not == "" || !index($0, not)' | awk '{
+      n++; s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]; t += s }
+      END { printf "%.2f %d\n", t, n }'
+  fi
 }
 # Switch times in milliseconds, one a line, as "median <m> ms, max <x> ms, <n> switches".
 summary() {
@@ -516,27 +899,135 @@ pinned_favicon() {
   echo "26 $((90 + 44 + 41 * $1 + 20))"
 }
 
-# Forgets the sites the profile keeps for Safari's engine, the notes it closed and the listed hosts
-# it turned off, which a run that turns them on leaves for the runs after. Only while the app isn't
-# running, as it writes its preferences as it quits.
-forget_engine_sites() {
+# What the profile keeps for Safari's engine, as JSON: its sites, the notes it closed and the listed
+# hosts turned off, or {} for none. The Mac's alone, as Safari's engine is.
+engine_sites() {
   prefs="$profile_dir/Default/Preferences"
+  [ -e "$prefs" ] || { echo "{}"; return 0; }
+  python3 -I -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    engine = json.load(f).get("browser_core", {}).get("system_engine", {})
+print(json.dumps({kind: engine[kind] for kind in ("sites", "closed_notes", "listed_off") if kind in engine}))
+' "$prefs"
+}
+# Forgets the sites the profile keeps for Safari's engine, the notes it closed and the listed hosts
+# it turned off, which a run that turns them on leaves for the runs after (#1782). The app writes
+# its preferences as it quits, so a forget while any process of it is left loses to that write: it
+# waits up to 20 s for the last to go, and fails if one stays. It says what it found, which a run
+# before it left, and the profile then has none of it before the launch that follows. On the Mac
+# only, as only its Safari's engine keeps them.
+forget_engine_sites() {
+  [ "$(uname)" = Darwin ] || return 0
+  local _ left
+  for _ in $(seq 200); do
+    pgrep -f "$procs" > /dev/null || break
+    sleep 0.1
+  done
+  left=$(pgrep -f "$procs" | tr '\n' ' ')
+  [ -z "$left" ] ||
+    fail "the app is still running ($left), and its last write of its preferences would undo the forget of Safari's engine's sites"
+  prefs="$profile_dir/Default/Preferences"
+  echo "engine sites before the forget: $(engine_sites)"
   [ -e "$prefs" ] || return 0
   python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     prefs = json.load(f)
 engine = prefs.get("browser_core", {}).get("system_engine", {})
 for kind in ("sites", "closed_notes", "listed_off"):
     engine.pop(kind, None)
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" || fail "the profile's sites for Safari's engine couldn't be reset"
+  [ "$(engine_sites)" = "{}" ] ||
+    fail "the profile kept Safari's engine's sites through the forget: $(engine_sites)"
 }
 
-# Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site.
+# Starts the app on the page $1 with the profile $2 and the arguments after $3, and check/cdp.py
+# attached to the page whose address ends in $3, or with $3 empty to none until its attach command,
+# logging to $log and $cdp_log, with the driver on fd 3 and cdp.py's commands on fd 5, through fifos
+# in $scratch. Sets $pid and $helper.
+start_with_cdp() {
+  cdp_url=$1 cdp_profile=$2 cdp_page=$3
+  shift 3
+  mkfifo "$scratch/cdp"
+  if windows; then
+    # Chrome on Windows takes its DevTools pipe as handles, which Git Bash can't give it, so
+    # DevTools listens on a loopback port instead, which the browser says on its standard error. A
+    # native program can't read Git Bash's fifo, so cat passes cdp.py its commands, and the page is
+    # named without its slash, which Git Bash would make a path of Git's own.
+    BROWSER_DRIVE=1 BROWSER_URL="$cdp_url" BROWSER_PROFILE_DIR="$cdp_profile" \
+      "$browser" --remote-debugging-port=0 "$@" < "$out/drive" > "$log" 2>&1 &
+    pid=$!
+    exec 3> "$out/drive"
+    await '^DevTools listening on ws://' || fail "DevTools didn't say where it listens"
+    socket=$(grep -m1 '^DevTools listening on ws://' "$log" | cut -d' ' -f4 | tr -d '\r')
+    cat "$scratch/cdp" | python3 -I -u check/cdp.py --socket "$socket" "${cdp_page#/}" \
+      > "$cdp_log" 2>&1 &
+  else
+    mkfifo "$scratch/to-browser" "$scratch/from-browser"
+    # Each end of a pipe waits for the other to open, in this order: the driver's, the browser's
+    # DevTools pipe, then cdp.py's input.
+    BROWSER_DRIVE=1 BROWSER_URL="$cdp_url" BROWSER_PROFILE_DIR="$cdp_profile" \
+      "$browser" --remote-debugging-pipe "$@" < "$out/drive" 3< "$scratch/to-browser" \
+      4> "$scratch/from-browser" > "$log" 2>&1 &
+    pid=$!
+    python3 -I -u check/cdp.py "$scratch/to-browser" "$scratch/from-browser" "$cdp_page" \
+      < "$scratch/cdp" > "$cdp_log" 2>&1 &
+    exec 3> "$out/drive"
+  fi
+  helper=$!
+  exec 5> "$scratch/cdp"
+}
+# The display the app opens on, "X Y WIDTH HEIGHT" in points from the main display's top left, as
+# Chrome's --window-position takes a place: with BROWSER_DISPLAY=builtin the Mac's own screen, as the
+# app's host finds it (platform/mac/host.mm), so a Chrome a run starts doesn't cover what's playing
+# on another, else the main display.
+display_bounds() {
+  [ "$(uname)" = Darwin ] || fail "display_bounds is the Mac's"
+  osascript -l JavaScript -e '
+    ObjC.import("AppKit");
+    ObjC.import("CoreGraphics");
+    const screens = $.NSScreen.screens.js;
+    const main = screens[0].frame;
+    const builtin = ObjC.unwrap(
+      $.NSProcessInfo.processInfo.environment.objectForKey("BROWSER_DISPLAY")) == "builtin";
+    const own = screens.find((screen) => builtin &&
+      $.CGDisplayIsBuiltin(screen.deviceDescription.objectForKey("NSScreenNumber").unsignedIntValue));
+    const frame = (own || screens[0]).frame;
+    [frame.origin.x, main.size.height - frame.origin.y - frame.size.height, frame.size.width,
+     frame.size.height].map(Math.round).join(" ");' || fail "the displays didn't say where the Mac's own is"
+}
+# Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
+# serves every run after, so only cleanup stops it: a run that did would leave the next its address
+# and no server (#1369).
 serve() {
   [ -n "${site:-}" ] || . check/site.sh
+}
+# Waits for the tab $3, or any, to start loading the default engine's search for $1, the query as
+# its URL has it, failing with $2, and sets $searched to the tab. The app logs where a page goes as
+# its load starts, so this proves the search without DuckDuckGo's page, which a runner may never
+# get an answer for (#1875).
+searching() {
+  local line="^browser: page ${3:-[0-9]*} back [0-9]* forward [0-9]* loading [01] https://duckduckgo\.com/?q=$1\$"
+  expect "$line" "$2"
+  searched=$(grep "$line" "$log" | tail -1 | cut -d' ' -f3)
+}
+# Of the addresses on stdin, one a line, those of Google's servers, with ungoogled-chromium's
+# substitutes for its domains, but the security components' updates that engine/README.md › What
+# reaches Google lets through and every user's browser makes, the first a minute after launch: the
+# update check, and CRLSet's, PKI Metadata's and the SSL error assistant's downloads, over https,
+# from the hosts it names. A profile that has a component already gets its update as a diff, at
+# diffgen-puffin/<id>/<hash>.
+google_asked() {
+  hosts='\(dl\.google\.com\|[a-z0-9.-]*\.gvt1\.com\|www\.google\.com/dl\)'
+  ids='\(hfnkpimlhhgieaddgfemjhofmfblmnib\|efniojlnjndmcbiieegkicadnoecjjef\)'
+  grep -i '^[a-z]*://[^/]*\(google\|gstatic\|gvt1\|9oo91e\|qjz9zk\)' |
+    grep -v -e '^https://update\.googleapis\.com/service/update2/json\(?[^/]*\)\{0,1\}$' \
+      -e "^https://$hosts/.*/${ids}_[0-9.]*_[a-z0-9_]*\.crx3\$" \
+      -e "^https://$hosts/.*/diffgen-puffin/$ids/[0-9a-f]*\$" \
+      -e "^https://$hosts/.*/[0-9.]*_all_sslErrorAssistant\.crx3\$" || true
 }
 # Waits up to 3 s for the clipboard to hold the text $1, off the Mac, where a run's clipboard is its
 # headless session's, which wl-paste reads, Xwayland's too, as sway hands it over. The Mac's
@@ -589,4 +1080,48 @@ dark() {
 brighter() {
   set -- $1 $2
   [ "$1" -ge $(($4 + 8)) ] && [ "$2" -ge $(($5 + 8)) ] && [ "$3" -ge $(($6 + 8)) ]
+}
+# Under Wayland: in $other_app_token, an activation token for a click in another app's window,
+# check/drag's, as an app hands on the one it got for the user's click in it with the link they
+# clicked, or a desktop with a click on a notification. sway brings an open window forward for it,
+# where before sway 1.10 one from its own exec, as a launch gets, only marks the window urgent. The
+# window, the click's, holds the keyboard until other_app_closes.
+other_app_click() {
+  if [ -z "${other_app:-}" ]; then
+    cargo build -q --release --manifest-path check/drag/Cargo.toml --target-dir target ||
+      fail "check/drag didn't build"
+    rm -f "$out/other-app-in"
+    : > "$out/other-app.log"
+    mkfifo "$out/other-app-in"
+    target/release/drag 1280x800 window < "$out/other-app-in" > "$out/other-app.log" 2>&1 &
+    other_app=$!
+    exec 4> "$out/other-app-in"
+    other_app_says 0 '^drag: ready$' "check/drag's window didn't show"
+    swaymsg '[app_id=ilo-drag] move absolute position 1220 740' > /dev/null
+  fi
+  # In front again, as a window that came forward since is over it.
+  swaymsg '[app_id=ilo-drag] focus' > /dev/null
+  set -- "$(wc -l < "$out/other-app.log")"
+  printf '%s\n' 'move 1244 764' press release >&4
+  other_app_says "$1" '^drag: pressed$' "the click in check/drag's window didn't reach it"
+  set -- "$(wc -l < "$out/other-app.log")"
+  echo token >&4
+  other_app_says "$1" '^drag: token ' "check/drag got no activation token for its click"
+  other_app_token=$(tail -n "+$(($1 + 1))" "$out/other-app.log" | sed -n 's/^drag: token //p')
+}
+# Waits for check/drag's line $2 after its first $1, failing with $3.
+other_app_says() {
+  for _ in $(seq 100); do
+    tail -n "+$(($1 + 1))" "$out/other-app.log" | grep -q "$2" && return 0
+    sleep 0.05
+  done
+  fail "$3: $(tr '\n' ' ' < "$out/other-app.log")"
+}
+# Closes check/drag's window other_app_click opened.
+other_app_closes() {
+  [ -n "${other_app:-}" ] || return 0
+  exec 4>&-
+  wait "$other_app" || true
+  other_app=
+  other_app_token=
 }

@@ -4,18 +4,20 @@
 //! through, as ilo's menu draws its panels' in its own window. On X11 with no compositor there's
 //! none, as the X server would draw it opaque.
 //!
-//! shortcut: an arrow casts none, as GPUI shadows only rounded rectangles: the shadow is the
-//! card's, through the corners rounded the most.
+//! GPUI shadows only rounded rectangles, so an outline of its own, such as a card with an arrow,
+//! casts its shadow from a picture of its path, blurred as GPUI blurs a box's.
 
 use std::{
     cell::RefCell,
     ffi::{c_int, c_void},
+    sync::Arc,
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, BoxShadow, Context, IntoElement, ParentElement as _, Pixels,
-    Render, Styled as _, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    RootLook, WindowKind, WindowOptions, div, hsla, point, px, size,
+    App, AppContext as _, Bounds, BoxShadow, Context, DevicePixels, IntoElement, ObjectFit,
+    ParentElement as _, Pixels, Render, RenderImage, RootLook, Styled as _, StyledImage as _,
+    SvgSize, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, div, hsla, img, point, px, size,
 };
 
 use crate::motion::{self, Motion};
@@ -73,6 +75,18 @@ struct Slot {
     /// Where the overlay's top left is in the shadow's window, as it showed last.
     inset: gpui::Point<Pixels>,
     shown: bool,
+    /// The picture of its outline's shadow, and what it was drawn for.
+    picture: Option<(Picture, Arc<RenderImage>)>,
+}
+
+/// What a picture of an outline's shadow is drawn for: the outline, where it is in the window, the
+/// window's size and its scale.
+#[derive(Clone, PartialEq)]
+struct Picture {
+    corners: Vec<(f32, f32, f32)>,
+    inset: gpui::Point<Pixels>,
+    size: gpui::Size<Pixels>,
+    scale: f32,
 }
 
 thread_local! {
@@ -84,17 +98,51 @@ fn with<R>(overlay: c_int, f: impl FnOnce(&mut Slot) -> R) -> Option<R> {
 }
 
 /// The view of a shadow's window: the card, inside the window by the level's margins, with no
-/// fill.
+/// fill, casting the level's shadows; or a picture of them, for an outline of its own.
 pub(crate) struct Shadow(c_int);
 
 impl Render for Shadow {
-    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div().size_full();
-        let Some((elevation, radius)) = with(self.0, |slot| (slot.elevation, slot.radius)) else {
+        let Some((elevation, radius, corners, inset)) = with(self.0, |slot| {
+            (
+                slot.elevation,
+                slot.radius,
+                slot.corners.clone(),
+                slot.inset,
+            )
+        }) else {
             return root;
         };
         let (above, sides, below) = elevation.margins();
         let size = window.viewport_size();
+        if let Some(corners) = corners {
+            let wanted = Picture {
+                corners,
+                inset,
+                size,
+                scale: window.scale_factor(),
+            };
+            let drawn = with(self.0, |slot| {
+                (slot.picture.as_ref())
+                    .filter(|(drawn, _)| *drawn == wanted)
+                    .map(|(_, picture)| picture.clone())
+            })
+            .flatten();
+            let picture = drawn.or_else(|| {
+                let picture = outline_shadow(elevation, &wanted, cx)?;
+                let old = with(self.0, |slot| {
+                    slot.picture.replace((wanted, picture.clone()))
+                });
+                if let Some(Some((_, old))) = old {
+                    window.drop_image(old).ok();
+                }
+                Some(picture)
+            });
+            if let Some(picture) = picture {
+                return root.child(img(picture).size_full().object_fit(ObjectFit::Fill));
+            }
+        }
         root.child(
             div()
                 .absolute()
@@ -141,6 +189,7 @@ pub extern "C" fn host_set_overlay_elevation(
                 radius: 0.,
                 inset: point(px(0.), px(0.)),
                 shown: false,
+                picture: None,
             })
         });
         crate::update_app_later(move |cx| open(overlay, cx));
@@ -160,12 +209,10 @@ fn open(overlay: c_int, cx: &mut App) {
         is_resizable: false,
         is_minimizable: false,
         window_background: WindowBackgroundAppearance::Transparent,
-        // GPUI holds a window that isn't the key one to 30 fps, and this one never is.
-        inactive_frame_interval: None,
         ..Default::default()
     };
     let Ok(window) = cx.open_window(options, |_, cx| cx.new(|_| Shadow(overlay))) else {
-        eprintln!("browser: couldn't open the shadow window of overlay {overlay}");
+        browser::log!("browser: couldn't open the shadow window of overlay {overlay}");
         return;
     };
     let Ok(view) = window.update(cx, |_, window, _| {
@@ -197,7 +244,17 @@ pub(crate) fn attach(overlay: c_int, over: *mut c_void) {
 
 /// `overlay`'s outline isn't a rounded rectangle: `corners`, from its top left.
 pub(crate) fn set_shape(overlay: c_int, corners: &[(f32, f32, f32)]) {
-    with(overlay, |slot| slot.corners = Some(corners.to_vec()));
+    // A shadow on screen takes the new outline, which a size it may keep wouldn't redraw.
+    let shown = with(overlay, |slot| {
+        let changed = slot.corners.as_deref() != Some(corners);
+        slot.corners = Some(corners.to_vec());
+        slot.window.filter(|_| changed && slot.shown)
+    });
+    if let Some(Some((window, _))) = shown {
+        crate::update_app_later(move |cx| {
+            window.update(cx, |_, window, _| window.refresh()).ok();
+        });
+    }
 }
 
 /// `overlay` shows, or moves, at `bounds` over `ui_view`, its corners rounded by `radius` unless
@@ -205,7 +262,7 @@ pub(crate) fn set_shape(overlay: c_int, corners: &[(f32, f32, f32)]) {
 /// over the browser window in the order they're mapped, whatever X's stacking says.
 pub(crate) fn show(overlay: c_int, ui_view: *mut c_void, bounds: Bounds<Pixels>, radius: f32) {
     if let Some((view, framed)) = place(overlay, bounds, radius) {
-        gpui_linux::show_overlay(view, ui_view, framed, px(0.), false, |_| {});
+        crate::overlays::show_over(view, ui_view, framed, px(0.), false, |_| {});
     }
 }
 
@@ -224,17 +281,13 @@ fn place(
 ) -> Option<(*mut c_void, Bounds<Pixels>)> {
     let (window, view, changed, framed) = with(overlay, |slot| {
         let (window, view) = slot.window?;
-        let (card, radius) = match &slot.corners {
-            Some(corners) => card_of(corners, bounds),
-            None => (bounds, radius),
-        };
         let changed = slot.radius != radius;
         slot.radius = radius;
         slot.shown = true;
         let (above, sides, below) = slot.elevation.margins();
         let framed = Bounds::from_corners(
-            card.origin - point(px(sides), px(above)),
-            card.bottom_right() + point(px(sides), px(below)),
+            bounds.origin - point(px(sides), px(above)),
+            bounds.bottom_right() + point(px(sides), px(below)),
         );
         slot.inset = bounds.origin - framed.origin;
         Some((window, view, changed, framed))
@@ -263,7 +316,15 @@ pub(crate) fn follow(overlay: c_int, mut motion: Motion) {
 pub(crate) fn drew(overlay: c_int, scale: f32, opacity: f32, origin: gpui::Point<Pixels>) {
     if let Some(Some((view, inset))) = with(overlay, |slot| Some((slot.window?.1, slot.inset))) {
         let origin = origin + inset;
-        motion::hold(view, RootLook { scale, origin, opacity, moving: false });
+        motion::hold(
+            view,
+            RootLook {
+                scale,
+                origin,
+                opacity,
+                moving: false,
+            },
+        );
     }
 }
 
@@ -277,22 +338,48 @@ pub(crate) fn hide(overlay: c_int) {
     }
 }
 
-/// The card of an outline through `corners` at `bounds`: the box of the corners rounded the most,
-/// as an arrow's are rounded less, and their radius.
-fn card_of(corners: &[(f32, f32, f32)], bounds: Bounds<Pixels>) -> (Bounds<Pixels>, f32) {
-    let radius = corners
-        .iter()
-        .map(|&(_, _, radius)| radius)
-        .fold(0., f32::max);
-    let card = corners.iter().filter(|&&(_, _, each)| each == radius);
-    let (mut left, mut top, mut right, mut bottom) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    for &(x, y, _) in card {
-        (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x), bottom.max(y));
-    }
-    let origin = bounds.origin;
-    let card = Bounds::from_corners(
-        origin + point(px(left), px(top)),
-        origin + point(px(right), px(bottom)),
+/// The picture of the shadow an outline casts, as `picture` says, at its level: its path, filled
+/// and blurred by each of the level's shadows as GPUI blurs a box's, whose blur radius is the
+/// Gaussian's deviation.
+fn outline_shadow(elevation: Elevation, picture: &Picture, cx: &App) -> Option<Arc<RenderImage>> {
+    let (width, height) = (
+        f32::from(picture.size.width),
+        f32::from(picture.size.height),
     );
-    (card, radius)
+    let (x, y) = (f32::from(picture.inset.x), f32::from(picture.inset.y));
+    let path = browser::icon_picker::outline_svg(&picture.corners, x, y);
+    let shadow = |id: &str, opacity: f32, radius: f32, drop: f32| {
+        if opacity <= 0. {
+            return String::new();
+        }
+        format!(
+            "<filter id=\"{id}\" filterUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" \
+             width=\"{width}\" height=\"{height}\"><feGaussianBlur stdDeviation=\"{radius}\"/>\
+             </filter><path d=\"{path}\" transform=\"translate(0 {drop})\" \
+             fill-opacity=\"{opacity}\" filter=\"url(#{id})\"/>"
+        )
+    };
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" \
+         viewBox=\"0 0 {width} {height}\">{}{}</svg>",
+        shadow(
+            "drop",
+            elevation.shadow_opacity,
+            elevation.shadow_radius,
+            elevation.shadow_drop
+        ),
+        shadow(
+            "outline",
+            elevation.outline_opacity,
+            elevation.outline_radius,
+            0.
+        ),
+    );
+    let renderer = cx.svg_renderer();
+    let parsed = renderer.parse_svg(svg.as_bytes()).ok()?;
+    let pixels = |points: f32| DevicePixels((points * picture.scale).round().max(1.) as i32);
+    let size = size(pixels(width), pixels(height));
+    renderer
+        .render_parsed(&parsed, SvgSize::ExactSize(size))
+        .ok()
 }

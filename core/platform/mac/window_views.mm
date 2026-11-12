@@ -3,9 +3,18 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 
+#include <cmath>
+#include <cstdio>
+#include <memory>
+#include <utility>
+
 #include "base/apple/foundation_util.h"
 #include "base/functional/callback.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
+#include "content/public/browser/frame_shown.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/stretch_content_on_resize_mac.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/widget/widget.h"
@@ -58,7 +67,18 @@
 @property(nonatomic) NSUInteger focused;
 @property(strong, nonatomic) BrowserCoreFocusRing* ring;
 @property(strong, nonatomic) BrowserCorePane* sidePanel;
+// The views of the pages a switch replaced, kept over the pages it shows until those have drawn,
+// and those pages. A page shown again shows only its background until its first frame, 60 to 230 ms
+// on GitHub's hosted Mac, which over the old page would leave no page in the page area (#1438).
+@property(strong, nonatomic) NSHashTable<NSView*>* leaving;
+@property(strong, nonatomic) NSHashTable<NSView*>* awaited;
+// How many switches have kept pages, so the limit on keeping them ends only the last one's.
+@property(nonatomic) NSUInteger holds;
+// What the panes are drawn at, about the centre of their frames (ScalePages); 0 is 1.
+@property(nonatomic) double pageScale;
 - (void)layOutPage;
+- (void)scalePages;
+- (void)letLeavingGo;
 @end
 
 @implementation BrowserCoreWindowView
@@ -67,9 +87,47 @@
 @synthesize focused = _focused;
 @synthesize ring = _ring;
 @synthesize sidePanel = _sidePanel;
+@synthesize leaving = _leaving;
+@synthesize awaited = _awaited;
+@synthesize holds = _holds;
+@synthesize pageScale = _pageScale;
 
 - (BOOL)isFlipped {
   return YES;
+}
+
+// Through the pages a switch is leaving, as if they had gone: they only stand in for the pages it
+// shows until those draw.
+- (NSView*)hitTest:(NSPoint)point {
+  NSView* hit = [super hitTest:point];
+  if (!hit || self.leaving.count == 0) {
+    return hit;
+  }
+  BOOL leaving = NO;
+  for (NSView* page in self.leaving) {
+    leaving = leaving || [hit isDescendantOf:page];
+  }
+  if (!leaving) {
+    return hit;
+  }
+  NSPoint local = [self convertPoint:point fromView:self.superview];
+  for (NSView* subview in [self.subviews reverseObjectEnumerator]) {
+    if (![self.leaving containsObject:subview]) {
+      if (NSView* under = [subview hitTest:local]) {
+        return under;
+      }
+    }
+  }
+  return self;
+}
+
+- (void)letLeavingGo {
+  for (NSView* page in self.leaving.allObjects) {
+    if (page.superview == self) {
+      [page removeFromSuperview];
+    }
+  }
+  [self.leaving removeAllObjects];
 }
 
 // After AppKit's pass rather than by autoresizing, which would resize the page twice: resizing the
@@ -109,6 +167,53 @@
   if (self.sidePanel.page.superview == self) {
     self.sidePanel.page.frame = [self frameOf:self.sidePanel];
   }
+  [self scalePages];
+}
+
+// By each view's layer transform, so the pages are never laid out again for it. AppKit keeps each
+// layer's anchor point and which way up it is, so where a transform puts it is measured in this
+// view's layer rather than worked out.
+- (void)scalePages {
+  NSMutableArray<CALayer*>* layers = [NSMutableArray array];
+  for (BrowserCorePane* pane in self.panes) {
+    for (NSView* view in @[ pane.page ?: NSNull.null, pane.devtools ?: NSNull.null ]) {
+      if ([view isKindOfClass:NSView.class] && view.superview == self && view.layer) {
+        [layers addObject:view.layer];
+      }
+    }
+  }
+  if (self.ring.superview == self && self.ring.layer) {
+    [layers addObject:self.ring.layer];
+  }
+  CALayer* space = self.layer;
+  auto frame = [space](CALayer* layer) { return [layer convertRect:layer.bounds toLayer:space]; };
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  CGRect frames = CGRectNull;
+  for (CALayer* layer in layers) {
+    layer.transform = CATransform3DIdentity;
+    frames = CGRectUnion(frames, frame(layer));
+  }
+  const double scale = self.pageScale > 0 ? self.pageScale : 1;
+  if (scale != 1 && !CGRectIsNull(frames)) {
+    const CGPoint about = CGPointMake(CGRectGetMidX(frames), CGRectGetMidY(frames));
+    for (CALayer* layer in layers) {
+      const CGRect own = frame(layer);
+      const CGPoint want = CGPointMake(about.x + scale * (CGRectGetMinX(own) - about.x),
+                                       about.y + scale * (CGRectGetMinY(own) - about.y));
+      const CATransform3D scaled = CATransform3DMakeScale(scale, scale, 1);
+      layer.transform = scaled;
+      const CGRect at = frame(layer);
+      const double dx = want.x - CGRectGetMinX(at);
+      const double dy = want.y - CGRectGetMinY(at);
+      layer.transform = CATransform3DConcat(scaled, CATransform3DMakeTranslation(dx, dy, 0));
+      // A layer upside down to this one moves the other way.
+      if (std::abs(CGRectGetMinY(frame(layer)) - want.y) > 0.5) {
+        layer.transform = CATransform3DConcat(scaled, CATransform3DMakeTranslation(dx, -dy, 0));
+      }
+    }
+  }
+  [CATransaction commit];
 }
 @end
 
@@ -136,7 +241,10 @@ void Unhide(NSView* view, bool hidden) {
   view.wantsLayer = YES;
 }
 
+// On the continuous curve the Mac rounds its windows with, so the card's corners, the window's
+// radius less the frame, are concentric with the window's (the app's window-radius-mac token).
 void RoundCorners(NSView* view, double radius, CACornerMask corners) {
+  view.layer.cornerCurve = kCACornerCurveContinuous;
   view.layer.cornerRadius = radius;
   view.layer.maskedCorners = corners;
   view.layer.masksToBounds = radius > 0 && corners;
@@ -169,6 +277,53 @@ void UpdateOcclusion(NSWindow* window) {
   }
   Class<BrowserCoreOcclusionChecker> checker = NSClassFromString(@"WebContentsOcclusionCheckerMac");
   [[checker sharedInstance] performOcclusionStateUpdates];
+}
+
+// How long the pages a switch left stay over one that hasn't drawn, such as one whose renderer is
+// stuck.
+constexpr base::TimeDelta kLeavingAtMost = base::Seconds(1);
+
+// Keeps the pages leaving |view| until each of |arrivals| has drawn in it. Asked once they're in
+// the window, so the frame each waits for is one drawn there. Not at the first frame of the page's
+// compositor, which can come before the page's own and, with the new layer it draws into, leaves
+// a frame of neither page on screen.
+void HoldLeaving(BrowserCoreWindowView* view,
+                 base::span<const Pane> panes,
+                 NSSet<NSView*>* arrivals) {
+  const NSUInteger hold = ++view.holds;
+  const base::TimeTicks since = base::TimeTicks::Now();
+  // check.sh's switch-frames run reads these lines.
+  fprintf(stderr, "browser: switch keeps the page it left\n");
+  __weak BrowserCoreWindowView* weak_view = view;
+  for (const Pane& pane : panes) {
+    NSView* page_view = pane.page.GetNativeNSView();
+    if (![arrivals containsObject:page_view]) {
+      continue;
+    }
+    [view.awaited addObject:page_view];
+    __weak NSView* weak_page = page_view;
+    content::CallWhenFrameShown(pane.widget, base::BindOnce(^{
+      BrowserCoreWindowView* shown_in = weak_view;
+      if (NSView* drawn = weak_page) {
+        [shown_in.awaited removeObject:drawn];
+      }
+      if (shown_in.awaited.count == 0 && shown_in.leaving.count > 0) {
+        fprintf(stderr, "browser: switch let the page it left go after %.1f ms\n",
+                (base::TimeTicks::Now() - since).InMillisecondsF());
+        [shown_in letLeavingGo];
+      }
+    }));
+  }
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(^{
+        BrowserCoreWindowView* shown_in = weak_view;
+        if (shown_in.holds == hold && shown_in.leaving.count > 0) {
+          fprintf(stderr, "browser: switch let the page it left go at the limit\n");
+          [shown_in.awaited removeAllObjects];
+          [shown_in letLeavingGo];
+        }
+      }),
+      kLeavingAtMost);
 }
 
 constexpr CACornerMask kAllCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
@@ -211,9 +366,62 @@ void ShowPages(views::Widget* widget,
   if (panel_view) {
     [staying addObject:panel_view];
   }
+  const bool hidden = !widget->IsVisible();
+  if (!view.leaving) {
+    view.leaving = [NSHashTable weakObjectsHashTable];
+    view.awaited = [NSHashTable weakObjectsHashTable];
+  }
+  // A page left that shows again is no longer leaving, and one awaited that no longer shows is no
+  // longer awaited.
+  for (NSView* page in view.leaving.allObjects) {
+    if ([staying containsObject:page]) {
+      [view.leaving removeObject:page];
+    }
+  }
+  for (NSView* page in view.awaited.allObjects) {
+    if (![staying containsObject:page]) {
+      [view.awaited removeObject:page];
+    }
+  }
+  // The pages put in the window, each showing only its background until its renderer has drawn
+  // there, even one that was drawing unseen for a picture or in another window.
+  NSMutableSet<NSView*>* arrivals = [NSMutableSet set];
+  for (const Pane& pane : panes) {
+    NSView* page_view = pane.page.GetNativeNSView();
+    if (!hidden && pane.widget && page_view.superview != view) {
+      [arrivals addObject:page_view];
+    }
+  }
+  const bool arriving = arrivals.count > 0;
+  // The pages that leave stay where they are, over the pages a switch shows, until those have
+  // drawn, as do the ones an earlier switch left while its pages haven't.
+  NSWindow* window = view.window;
   for (NSView* subview in [view.subviews copy]) {
-    if (subview != view.uiView && subview != view.ring && ![staying containsObject:subview]) {
+    if (subview == view.uiView || subview == view.ring || [staying containsObject:subview]) {
+      continue;
+    }
+    const bool kept = [view.leaving containsObject:subview];
+    if (!arriving && !(kept && view.awaited.count > 0)) {
+      [view.leaving removeObject:subview];
       [subview removeFromSuperview];
+      continue;
+    }
+    if (!kept) {
+      [view.leaving addObject:subview];
+      // The window has the keyboard once the page that had it leaves, as if it had gone.
+      NSView* keyboard = base::apple::ObjCCast<NSView>(window.firstResponder);
+      if ([keyboard isDescendantOf:subview]) {
+        [window makeFirstResponder:nil];
+      }
+    }
+  }
+  const bool holding = arriving && view.leaving.count > 0;
+  // The pages put in the window go under the ones leaving it.
+  NSView* lowest_leaving = nil;
+  for (NSView* subview in view.subviews) {
+    if ([view.leaving containsObject:subview]) {
+      lowest_leaving = subview;
+      break;
     }
   }
   NSRect bounds = view.bounds;
@@ -222,7 +430,6 @@ void ShowPages(views::Widget* widget,
     return NSEdgeInsetsMake(NSMinY(rect), NSMinX(rect), NSHeight(bounds) - NSMaxY(rect),
                             NSWidth(bounds) - NSMaxX(rect));
   };
-  const bool hidden = !widget->IsVisible();
   NSMutableArray<BrowserCorePane*>* shown = [NSMutableArray array];
   for (const Pane& pane : panes) {
     NSView* page_view = pane.page.GetNativeNSView();
@@ -244,7 +451,11 @@ void ShowPages(views::Widget* widget,
       RoundCorners(page_view, corner_radius, kAllCorners);
     }
     if (page_view.superview != view) {
-      [view addSubview:page_view];
+      if (lowest_leaving) {
+        [view addSubview:page_view positioned:NSWindowBelow relativeTo:lowest_leaving];
+      } else {
+        [view addSubview:page_view];
+      }
     }
     if (devtools_view) {
       // Only when it's out of order: a view moved loses the keyboard.
@@ -284,6 +495,7 @@ void ShowPages(views::Widget* widget,
       // Arc's: 2 pt, inside the page's edge.
       view.ring.layer.borderWidth = 2;
     }
+    view.ring.layer.cornerCurve = kCACornerCurveContinuous;
     view.ring.layer.cornerRadius = corner_radius;
     view.ring.layer.borderColor = [NSColor colorWithSRGBRed:((ring_color >> 16) & 0xff) / 255.0
                                                       green:((ring_color >> 8) & 0xff) / 255.0
@@ -301,6 +513,20 @@ void ShowPages(views::Widget* widget,
   if (!had_page && !panes.empty()) {
     UpdateOcclusion(view.window);
   }
+  if (holding) {
+    HoldLeaving(view, panes, arrivals);
+  }
+}
+
+void ScalePages(views::Widget* widget, double scale) {
+  BrowserCoreWindowView* view = WindowView(widget);
+  view.pageScale = scale;
+  [view scalePages];
+}
+
+// AppKit gives a view's points from its frame, which the layer's scale doesn't move.
+gfx::PointF LaidOutPagePoint(gfx::NativeView, const gfx::PointF& point) {
+  return point;
 }
 
 void HoldPagesForResize(views::Widget*) {}
@@ -316,6 +542,8 @@ void HidePages(views::Widget* widget) {
     pane.devtools.hidden = YES;
   }
   view.sidePanel.page.hidden = YES;
+  [view.awaited removeAllObjects];
+  [view letLeavingGo];
 }
 
 void ShowPageIn(views::Widget*,
@@ -339,6 +567,13 @@ void ShowPageIn(views::Widget*,
   }
   page_view.frame = rect;
   UpdateOcclusion(holder.window);
+}
+
+bool FocusSettledOnActivation() {
+  // AppKit can be part way through moving the keyboard, as when a committing page hides the view
+  // that had it and Chromium makes the window key: a page view focused inside that move believes
+  // it has the keyboard after AppKit has given it elsewhere.
+  return false;
 }
 
 bool PageDialogsInOwnWindow() {
@@ -368,6 +603,39 @@ bool KeyboardForPage(views::Widget* widget) {
 
 void ReleaseKeyboard(views::Widget* widget) {
   [widget->GetNativeWindow().GetNativeNSWindow() makeFirstResponder:nil];
+}
+
+bool OverlayHasKeyboard(views::Widget* widget) {
+  if (!widget) {
+    return false;
+  }
+  NSWindow* window = widget->GetNativeWindow().GetNativeNSWindow();
+  // A submenu's window is the menu's child.
+  for (NSWindow* over = NSApp.keyWindow.parentWindow; over; over = over.parentWindow) {
+    if (over == window) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go) {
+  NSWindow* overlay = NSApp.keyWindow;
+  if (!overlay) {
+    return;
+  }
+  auto held = std::make_shared<base::OnceClosure>(std::move(let_go));
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  __block id observer = [center addObserverForName:NSWindowDidResignKeyNotification
+                                            object:overlay
+                                             queue:nil
+                                        usingBlock:^(NSNotification*) {
+                                          [center removeObserver:observer];
+                                          observer = nil;
+                                          // Posted, as the next key window takes it after.
+                                          base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+                                              FROM_HERE, std::move(*held));
+                                        }];
 }
 
 void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {

@@ -1,6 +1,6 @@
 //! Updates on Linux, where ilo is the Flatpak on Flathub (docs/ux-spec.md › Updates): Flatpak's
 //! portal says when Flathub has a newer build, ilo installs it beside the one running, without
-//! waiting for the software centre, and offers to restart into it. Outside a Flatpak, as in a dev
+//! waiting for the software centre, and Restart to Update at the sidebar's foot restarts into it. Outside a Flatpak, as in a dev
 //! build, there's no portal to ask, and no updates.
 
 use std::collections::HashMap;
@@ -56,8 +56,15 @@ pub enum State {
 #[derive(Debug, PartialEq)]
 pub enum Event {
     /// Flatpak found a build: `local` installed and `remote` on Flathub, against the running one.
-    Available { running: String, local: String, remote: String },
-    Progress { status: u32, error: String },
+    Available {
+        running: String,
+        local: String,
+        remote: String,
+    },
+    Progress {
+        status: u32,
+        error: String,
+    },
 }
 
 impl State {
@@ -68,12 +75,17 @@ impl State {
             Event::Available { running, local, .. } if local != running => (State::Ready, false),
             Event::Available { local, remote, .. } if remote != local => (State::Installing, true),
             Event::Available { .. } => (self.clone(), false),
-            Event::Progress { status: RUNNING, .. } => (State::Installing, false),
+            Event::Progress {
+                status: RUNNING, ..
+            } => (State::Installing, false),
             Event::Progress { status: EMPTY, .. } if *self == State::Installing => {
                 (State::Current, false)
             }
             Event::Progress { status: DONE, .. } => (State::Ready, false),
-            Event::Progress { status: ERROR, error } => (State::Failed(error.clone()), false),
+            Event::Progress {
+                status: ERROR,
+                error,
+            } => (State::Failed(error.clone()), false),
             Event::Progress { .. } => (self.clone(), false),
         }
     }
@@ -84,7 +96,10 @@ impl Event {
         let header = message.header();
         let info: HashMap<String, OwnedValue> = message.body().deserialize().ok()?;
         let text = |key: &str| {
-            info.get(key).and_then(|value| value.downcast_ref::<&str>().ok()).unwrap_or("").to_string()
+            info.get(key)
+                .and_then(|value| value.downcast_ref::<&str>().ok())
+                .unwrap_or("")
+                .to_string()
         };
         match header.member()?.as_str() {
             "UpdateAvailable" => Some(Event::Available {
@@ -120,7 +135,13 @@ impl Portal {
     pub async fn open(connection: zbus::Connection) -> zbus::Result<(Portal, Events)> {
         let options: HashMap<&str, Value> = HashMap::new();
         let reply = connection
-            .call_method(Some(PORTAL), PATH, Some(PORTAL), "CreateUpdateMonitor", &(options,))
+            .call_method(
+                Some(PORTAL),
+                PATH,
+                Some(PORTAL),
+                "CreateUpdateMonitor",
+                &(options,),
+            )
             .await?;
         let monitor: OwnedObjectPath = reply.body().deserialize()?;
         let rule = zbus::MatchRule::builder()
@@ -129,23 +150,43 @@ impl Portal {
             .path(monitor.clone())?
             .build();
         let events = zbus::MessageStream::for_match_rule(rule, &connection, None).await?;
-        Ok((Portal { connection, monitor }, Events(events)))
+        Ok((
+            Portal {
+                connection,
+                monitor,
+            },
+            Events(events),
+        ))
     }
 
     /// Installs the newest build beside the running one; Progress says how it goes.
     pub async fn update(&self) -> zbus::Result<()> {
         let options: HashMap<&str, Value> = HashMap::new();
         let monitor = self.monitor.as_ref();
-        self.connection.call_method(Some(PORTAL), monitor, Some(MONITOR), "Update", &("", options)).await?;
+        self.connection
+            .call_method(
+                Some(PORTAL),
+                monitor,
+                Some(MONITOR),
+                "Update",
+                &("", options),
+            )
+            .await?;
         Ok(())
     }
 
     /// Starts the newest build through the Flatpak's command, once this one has let go of its
     /// profile, whose `lock` Chromium holds while it runs: a second copy would hand its launch to
-    /// this one and end. This one quits next. Without this launch's arguments: cobalt adds its
-    /// flags again, and the session brings back the pages a launch's URLs opened.
+    /// this one and end. Asked as this one's restart goes ahead, never before, as nothing could
+    /// take it back. Without this launch's arguments: cobalt adds its flags again, and the session
+    /// brings back the pages a launch's URLs opened.
     pub async fn restart(&self, lock: &Path) -> zbus::Result<()> {
-        let mut command = vec!["/bin/sh".to_string(), "-c".into(), RESTART.into(), "sh".into()];
+        let mut command = vec![
+            "/bin/sh".to_string(),
+            "-c".into(),
+            RESTART.into(),
+            "sh".into(),
+        ];
         command.push(lock.to_string_lossy().into_owned());
         command.push(COMMAND.into());
         // Byte strings, ended with a NUL, as the portal reads them.
@@ -155,7 +196,9 @@ impl Portal {
         let envs: HashMap<&str, &str> = HashMap::new();
         let options: HashMap<&str, Value> = HashMap::new();
         let body = (bytes(""), argv, fds, envs, LATEST_VERSION, options);
-        self.connection.call_method(Some(PORTAL), PATH, Some(PORTAL), "Spawn", &body).await?;
+        self.connection
+            .call_method(Some(PORTAL), PATH, Some(PORTAL), "Spawn", &body)
+            .await?;
         Ok(())
     }
 }
@@ -232,11 +275,13 @@ async fn install_waiting(portal: &Portal, answer: Duration) -> Option<State> {
 }
 
 /// Where the update stands as the user is told, once the portal has answered, what Restart runs:
-/// the portal's start of the newest build, and the quit, and what Try Again runs after a failure.
+/// the browser's restart, then as it goes ahead, the portal's start of the newest build; and what
+/// Try Again runs after a failure.
 #[derive(Default)]
 struct Told {
     state: Option<State>,
     restart: Option<Rc<dyn Fn(&mut App)>>,
+    relaunch: Option<Rc<dyn Fn() -> bool>>,
     retry: Option<Rc<dyn Fn(&mut App)>>,
 }
 
@@ -245,6 +290,12 @@ impl Global for Told {}
 /// The portal answered: Restart runs `restart`.
 pub fn on_restart(restart: impl Fn(&mut App) + 'static, cx: &mut App) {
     cx.default_global::<Told>().restart = Some(Rc::new(restart));
+}
+
+/// The portal answered: a restart that goes ahead with a build in runs `relaunch`, which starts
+/// it in place of this one, true if it did.
+pub fn on_relaunch(relaunch: impl Fn() -> bool + 'static, cx: &mut App) {
+    cx.default_global::<Told>().relaunch = Some(Rc::new(relaunch));
 }
 
 /// The portal answered: Try Again, after a failed install, runs `retry`.
@@ -260,13 +311,71 @@ pub fn retries(cx: &mut App) -> futures::channel::mpsc::UnboundedReceiver<()> {
     retries
 }
 
-/// The update is at `state` now, which once a build is ready offers to restart into it.
+/// The update is at `state` now, which Settings › About's row says, and once a build is ready,
+/// Restart to Update at the sidebar's foot, as on the Mac and Windows, rather than a dialog.
 pub fn changed(state: State, cx: &mut App) {
-    let ready = state == State::Ready;
+    crate::updates::changed(state.stage(), cx);
     cx.default_global::<Told>().state = Some(state);
-    if ready {
-        check(cx);
+}
+
+impl State {
+    /// Where the row says the update stands. The portal names no version.
+    fn stage(&self) -> crate::updates::Stage {
+        use crate::updates::Stage;
+        match self {
+            State::Current => Stage::Current,
+            State::Installing => Stage::Downloading(None),
+            State::Ready => Stage::Ready(None),
+            State::Failed(_) => Stage::Failed { found: true },
+        }
     }
+}
+
+/// Restart, as the offer's: restarts the browser, once the portal has answered, into the newest
+/// build if the restart goes ahead (`relaunch`).
+pub fn restart(cx: &mut App) {
+    if let Some(restart) = cx.default_global::<Told>().restart.clone() {
+        restart(cx);
+    }
+}
+
+/// A restart goes ahead: the newest build starts in place of this one, if one is in. True if it
+/// did, so Chromium doesn't start this one again.
+pub fn relaunch(cx: &mut App) -> bool {
+    let told = cx.default_global::<Told>();
+    let relaunch = told
+        .relaunch
+        .clone()
+        .filter(|_| told.state == Some(State::Ready));
+    relaunch.is_some_and(|relaunch| relaunch())
+}
+
+/// How long the quit waits on the portal to start the newest build.
+pub const SPAWN: Duration = Duration::from_secs(5);
+
+/// Has the portal start the newest build once `lock` has gone, waiting up to `answer` for it to
+/// say it has, as the quit can't go on before.
+pub fn start_newest(portal: &Portal, lock: &Path, answer: Duration) -> Result<(), String> {
+    let started = async { Some(portal.restart(lock).await) };
+    let unanswered = async {
+        async_io::Timer::after(answer).await;
+        None
+    };
+    match async_io::block_on(future::or(started, unanswered)) {
+        Some(Ok(())) => Ok(()),
+        Some(Err(error)) => Err(error.to_string()),
+        None => Err("Flatpak’s portal didn’t answer".into()),
+    }
+}
+
+/// Try Again, after an install failed: true if it tried.
+pub fn retry(cx: &mut App) -> bool {
+    let told = cx.default_global::<Told>();
+    let retry = told
+        .retry
+        .clone()
+        .filter(|_| matches!(told.state, Some(State::Failed(_))));
+    retry.map(|retry| retry(cx)).is_some()
 }
 
 /// Check for Updates…. Flatpak's portal can't be asked to look now, as it looks every half hour
@@ -275,9 +384,14 @@ pub fn changed(state: State, cx: &mut App) {
 pub fn check(cx: &mut App) {
     let told = cx.default_global::<Told>();
     let failed = matches!(told.state, Some(State::Failed(_)));
-    let action = if failed { told.retry.clone() } else { told.restart.clone() };
+    let action = if failed {
+        told.retry.clone()
+    } else {
+        told.restart.clone()
+    };
     let question = question(told.state.as_ref(), told.retry.is_some());
     dialog::pose(
+        None,
         question,
         Box::new(move |_, cx| {
             if let Some(action) = action {
@@ -304,18 +418,26 @@ pub fn question(state: Option<&State>, retries: bool) -> Question {
         }
         Some(State::Installing) => (
             concat!(env!("APP_NAME"), " is updating"),
-            "It will offer to restart once the new version is in.".to_string(),
+            "Restart to Update shows in the sidebar once the new version is in.".to_string(),
         ),
         Some(State::Failed(error)) => {
             let failed = notice(concat!(env!("APP_NAME"), " couldn’t update"), error.clone());
             if !retries {
                 return failed;
             }
-            return Question { action: "Try Again".into(), cancel: "Later".into(), ..failed };
+            return Question {
+                action: "Try Again".into(),
+                cancel: "Later".into(),
+                ..failed
+            };
         }
         Some(State::Current) | None => (
             "No update yet",
-            concat!(env!("APP_NAME"), " looks for one every half hour while it’s open.").into(),
+            concat!(
+                env!("APP_NAME"),
+                " looks for one every half hour while it’s open."
+            )
+            .into(),
         ),
     };
     notice(message, detail)
@@ -334,7 +456,7 @@ fn notice(message: &str, detail: String) -> Question {
         also: None,
         fields: Vec::new(),
         check: None,
-        return_cancels: false,
+        on_return: crate::dialog::Return::Action,
     }
 }
 

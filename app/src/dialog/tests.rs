@@ -7,20 +7,33 @@ use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px, size};
 use super::*;
 use crate::settling::SETTLING;
 
+/// What the dialog asks of its window, and apart, in order, its holds of the keys around its hide.
 #[derive(Default)]
-struct Recorder(RefCell<Vec<String>>);
+struct Recorder(RefCell<Vec<String>>, RefCell<Vec<&'static str>>);
 
 impl Host for Recorder {
-    fn show(&self, over: Option<Bounds<Pixels>>) {
-        let call = match over {
+    fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>) {
+        let mut call = match over {
             Some(over) => format!("show over {}", f32::from(over.origin.x)),
             None => "show".into(),
         };
+        if let Some(window) = window {
+            call += &format!(" in {window}");
+        }
         self.0.borrow_mut().push(call);
     }
 
     fn hide(&self) {
         self.0.borrow_mut().push("hide".into());
+        self.1.borrow_mut().push("hide");
+    }
+
+    fn hold_keys(&self) {
+        self.1.borrow_mut().push("hold");
+    }
+
+    fn give_held_keys(&self) {
+        self.1.borrow_mut().push("give");
     }
 }
 
@@ -33,11 +46,15 @@ struct Asking {
 impl Asking {
     fn new(cx: &mut TestAppContext) -> Self {
         let host = Rc::new(Recorder::default());
-        let window = cx.update(|cx| open(host.clone(), cx)).expect("no window for the dialog");
+        let window = cx
+            .update(|cx| open(host.clone(), cx))
+            .expect("no window for the dialog");
         let deleted = host.clone();
         cx.update(|cx| {
             let delete = Box::new(move |_: &mut App| deleted.0.borrow_mut().push("delete".into()));
-            ask("Delete “Work”?".into(), "Its 3 tabs close too.".into(), "Delete", delete, cx);
+            let detail = "Its 3 tabs go with it. ⌘Z brings them back.".into();
+            let (message, detail) = ("Delete “Work”?".into(), detail);
+            ask(None, message, detail, "Delete", delete, cx);
         });
         let cx = VisualTestContext::from_window(window.into(), cx);
         cx.simulate_resize(size(px(800.), px(600.)));
@@ -51,22 +68,52 @@ impl Asking {
     }
 
     fn click(&mut self, x: f32, y: f32) {
-        self.cx.simulate_click(point(px(x), px(y)), Modifiers::none());
+        self.cx
+            .simulate_click(point(px(x), px(y)), Modifiers::none());
         self.cx.run_until_parked();
     }
 
     /// What the dialog asked of the host since the last time, once it has had time to leave.
     fn calls(&mut self) -> Vec<String> {
-        self.cx.executor().advance_clock(Duration::from_secs_f32(MOVE));
+        self.cx
+            .executor()
+            .advance_clock(Duration::from_secs_f32(MOVE));
         self.cx.run_until_parked();
         self.host.0.take()
     }
+}
+
+/// The keys typed as the dialog leaves, such as ⌥⌘N right after Esc, are held from the answer
+/// until it has hidden, then given to the browser window, which has the keyboard back by then,
+/// rather than lost to the dialog going (#1930). A click's answer holds them the same way.
+#[gpui::test]
+fn the_keys_typed_as_it_leaves_wait_for_the_window(cx: &mut TestAppContext) {
+    let mut dialog = Asking::new(cx);
+    dialog.keys("escape");
+    assert_eq!(
+        *dialog.host.1.borrow(),
+        ["hold"],
+        "it didn't hold the keys as it left"
+    );
+    dialog.calls();
+    assert_eq!(*dialog.host.1.borrow(), ["hold", "hide", "give"]);
 }
 
 #[gpui::test]
 fn escape_cancels(cx: &mut TestAppContext) {
     let mut dialog = Asking::new(cx);
     dialog.keys("escape");
+    assert_eq!(dialog.calls(), ["show", "hide"]);
+}
+
+#[gpui::test]
+fn asked_to_close_it_cancels_and_its_window_stays(cx: &mut TestAppContext) {
+    let mut dialog = Asking::new(cx);
+    // As Windows asks for Alt+F4 (#1362).
+    assert!(
+        !dialog.cx.simulate_close(),
+        "the dialog's window let itself be closed"
+    );
     assert_eq!(dialog.calls(), ["show", "hide"]);
 }
 
@@ -90,22 +137,82 @@ fn a_click_around_the_card_cancels(cx: &mut TestAppContext) {
     assert_eq!(dialog.calls(), ["hide"]);
 }
 
+/// VoiceOver reads the card as an alert by its question, with its detail after, and its buttons
+/// by their labels, and its press on one answers as a click does (#1381).
+#[gpui::test]
+fn voiceover_reads_the_question_and_its_buttons(cx: &mut TestAppContext) {
+    use gpui::accesskit::{Action, Role};
+    let mut dialog = Asking::new(cx);
+    dialog.cx.simulate_a11y_activation();
+    dialog.cx.run_until_parked();
+    let tree = dialog.cx.a11y_tree().expect("GPUI built a tree");
+    let find = |role: Role, label: &str| {
+        let found = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.role() == role && node.label() == Some(label));
+        found
+            .unwrap_or_else(|| panic!("no {role:?} called {label}"))
+            .clone()
+    };
+    let (_, alert) = find(Role::AlertDialog, "Delete “Work”?");
+    assert_eq!(
+        alert.description(),
+        Some("Its 3 tabs go with it. ⌘Z brings them back.")
+    );
+    assert_eq!(tree.focus, find(Role::AlertDialog, "Delete “Work”?").0);
+    find(Role::Button, "Cancel");
+    let (delete, _) = find(Role::Button, "Delete");
+    dialog.cx.simulate_a11y_action(delete, Action::Click);
+    assert_eq!(dialog.calls(), ["show", "hide", "delete"]);
+}
+
 #[gpui::test]
 fn an_ask_while_one_shows_is_dropped(cx: &mut TestAppContext) {
     let mut dialog = Asking::new(cx);
     dialog.cx.cx.update(|cx| {
         let clear = Box::new(|_: &mut App| panic!("the second dialog ran"));
-        ask("Clear the archive?".into(), String::new(), "Clear Archive", clear, cx);
+        ask(
+            None,
+            "Clear the archive?".into(),
+            String::new(),
+            "Clear Archive",
+            clear,
+            cx,
+        );
     });
     dialog.keys("enter");
     assert_eq!(dialog.calls(), ["show", "hide", "delete"]);
+}
+
+#[gpui::test]
+fn a_window_s_question_shows_over_that_window(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    cx.update(|cx| open(host.clone(), cx))
+        .expect("no window for the dialog");
+    // A window behind another asks from its sidebar's context menu (#1432).
+    cx.update(|cx| {
+        let delete = Box::new(|_: &mut App| {});
+        ask(
+            Some(2),
+            "Delete “Work”?".into(),
+            String::new(),
+            "Delete",
+            delete,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert_eq!(*host.0.borrow(), ["show in 2"]);
 }
 
 /// The dialog asking to quit, with "Quit, and don't ask again" at the left. Each answer records
 /// itself on the host when it runs.
 fn asking_to_quit(cx: &mut TestAppContext) -> Asking {
     let host = Rc::new(Recorder::default());
-    let window = cx.update(|cx| open(host.clone(), cx)).expect("no window for the dialog");
+    let window = cx
+        .update(|cx| open(host.clone(), cx))
+        .expect("no window for the dialog");
     let (quit, always) = (host.clone(), host.clone());
     cx.update(|cx| {
         let question = Question {
@@ -122,9 +229,14 @@ fn asking_to_quit(cx: &mut TestAppContext) -> Asking {
             )),
             fields: Vec::new(),
             check: None,
-            return_cancels: false,
+            on_return: Return::Action,
         };
-        pose(question, Box::new(move |_, _| quit.0.borrow_mut().push("quit".into())), cx);
+        pose(
+            None,
+            question,
+            Box::new(move |_, _| quit.0.borrow_mut().push("quit".into())),
+            cx,
+        );
     });
     let cx = VisualTestContext::from_window(window.into(), cx);
     cx.simulate_resize(size(px(800.), px(600.)));
@@ -161,7 +273,10 @@ fn add_extension(action: &str, host: &Rc<Recorder>, cx: &mut App) {
         detail: "It can:".into(),
         list: vec![
             ("Read your browsing history".into(), Vec::new()),
-            ("Read and change your data on example.org".into(), vec!["example.org".into()]),
+            (
+                "Read and change your data on example.org".into(),
+                vec!["example.org".into()],
+            ),
         ],
         action: action.to_owned().into(),
         cancel: "Cancel".into(),
@@ -169,11 +284,13 @@ fn add_extension(action: &str, host: &Rc<Recorder>, cx: &mut App) {
         also: None,
         fields: Vec::new(),
         check: None,
-        return_cancels: false,
+        on_return: Return::Action,
     };
     let host = host.clone();
     let answered = Box::new(move |yes, _: &mut App| {
-        host.0.borrow_mut().push(if yes { "yes" } else { "no" }.into());
+        host.0
+            .borrow_mut()
+            .push(if yes { "yes" } else { "no" }.into());
     });
     ask_chrome(question, answered, cx);
 }
@@ -181,7 +298,9 @@ fn add_extension(action: &str, host: &Rc<Recorder>, cx: &mut App) {
 /// The dialog, open and asking nothing.
 fn opened(cx: &mut TestAppContext) -> (VisualTestContext, Rc<Recorder>) {
     let host = Rc::new(Recorder::default());
-    let window = cx.update(|cx| open(host.clone(), cx)).expect("no window for the dialog");
+    let window = cx
+        .update(|cx| open(host.clone(), cx))
+        .expect("no window for the dialog");
     let cx = VisualTestContext::from_window(window.into(), cx);
     cx.simulate_resize(size(px(800.), px(600.)));
     (cx, host)
@@ -266,10 +385,13 @@ fn asking_about_downloads(cx: &mut TestAppContext) -> Asking {
             also: None,
             fields: Vec::new(),
             check: None,
-            return_cancels: true,
+            on_return: Return::Cancel,
         };
         let answered = Box::new(move |quit, _: &mut App| {
-            answers.0.borrow_mut().push(if quit { "quit" } else { "continue" }.into());
+            answers
+                .0
+                .borrow_mut()
+                .push(if quit { "quit" } else { "continue" }.into());
         });
         ask_chrome(question, answered, cx);
     });
@@ -300,7 +422,10 @@ fn a_driver_chooses_a_button_by_its_label(cx: &mut TestAppContext) {
 fn chromes_question_waits_for_the_dialog_that_shows(cx: &mut TestAppContext) {
     let mut dialog = Asking::new(cx);
     let host = dialog.host.clone();
-    dialog.cx.cx.update(|cx| add_extension("Add extension", &host, cx));
+    dialog
+        .cx
+        .cx
+        .update(|cx| add_extension("Add extension", &host, cx));
     dialog.keys("enter");
     assert_eq!(dialog.calls(), ["show", "hide", "delete", "show"]);
     dialog.keys("escape");
@@ -311,7 +436,10 @@ fn chromes_question_waits_for_the_dialog_that_shows(cx: &mut TestAppContext) {
 fn chromes_next_question_takes_the_place_of_the_last(cx: &mut TestAppContext) {
     let mut dialog = Asking::chrome("Add extension", cx);
     let host = dialog.host.clone();
-    dialog.cx.cx.update(|cx| add_extension("Re-enable", &host, cx));
+    dialog
+        .cx
+        .cx
+        .update(|cx| add_extension("Re-enable", &host, cx));
     // The first leaves untold, and the second comes up after it.
     assert_eq!(dialog.calls(), ["show", "hide", "show"]);
     dialog.settle();
@@ -326,6 +454,60 @@ fn with_no_dialog_chrome_hears_no_at_once(cx: &mut TestAppContext) {
     assert_eq!(host.0.take(), ["no"]);
 }
 
+/// The account's question whether to add a device, which records the answer on `host`.
+fn add_device(host: &Rc<Recorder>, cx: &mut App) {
+    let pairing = crate::account::Pairing {
+        id: "p".into(),
+        name: "Pixel 9".into(),
+        os: "Android".into(),
+        code: "312568".into(),
+        asked: "15:04".into(),
+        signed_in: "2 minutes ago".into(),
+    };
+    let host = host.clone();
+    let answered = Box::new(move |yes, _: &mut App| {
+        host.0
+            .borrow_mut()
+            .push(if yes { "add" } else { "not me" }.into());
+    });
+    ask_account(crate::account::pairing_question(&pairing), answered, cx);
+}
+
+/// Another device asks to be added while Chrome asks about an extension: it waits its turn, and
+/// neither takes the other's place. ↩ is Not me, even once it has settled, so a key meant for the
+/// page can't add a device: Add takes a click.
+#[gpui::test]
+fn the_accounts_question_waits_for_chromes_and_return_is_not_me(cx: &mut TestAppContext) {
+    let mut dialog = Asking::chrome("Add extension", cx);
+    let host = dialog.host.clone();
+    dialog.cx.cx.update(|cx| add_device(&host, cx));
+    assert_eq!(dialog.calls(), ["show"]);
+    dialog.settle();
+    dialog.keys("enter");
+    assert_eq!(dialog.calls(), ["hide", "yes", "show"]);
+    dialog.settle();
+    dialog.keys("enter");
+    assert_eq!(dialog.calls(), ["hide", "not me"]);
+}
+
+/// The core takes the account's question back, as another device took the request: it leaves
+/// untold, and Chrome's waiting behind it comes up.
+#[gpui::test]
+fn the_account_takes_its_question_back(cx: &mut TestAppContext) {
+    let (cx, host) = opened(cx);
+    let mut dialog = Asking { cx, host };
+    let host = dialog.host.clone();
+    dialog.cx.cx.update(|cx| add_device(&host, cx));
+    dialog
+        .cx
+        .cx
+        .update(|cx| add_extension("Add extension", &host, cx));
+    dialog.cx.cx.update(withdraw_account);
+    assert_eq!(dialog.calls(), ["show", "hide", "show"]);
+    dialog.keys("escape");
+    assert_eq!(dialog.calls(), ["hide", "no"]);
+}
+
 /// A page's question, over its tab's card at `x`, which records its answer, with what was typed,
 /// on `host`.
 fn ask_from_page(
@@ -335,12 +517,17 @@ fn ask_from_page(
     host: &Rc<Recorder>,
     cx: &mut App,
 ) {
-    let over = (Bounds::new(point(px(x), px(10.)), size(px(600.), px(500.))), 10.);
+    let over = (
+        Bounds::new(point(px(x), px(10.)), size(px(600.), px(500.))),
+        10.,
+    );
     let host = host.clone();
     let answered = Box::new(move |reply: Reply, _: &mut App| {
         let answer = if reply.accept { "accept" } else { "cancel" };
         let checked = if reply.checked { " checked" } else { "" };
-        host.0.borrow_mut().push(format!("{answer} {}{checked}", reply.texts.join(" ")));
+        host.0
+            .borrow_mut()
+            .push(format!("{answer} {}{checked}", reply.texts.join(" ")));
     });
     ask_page((tab, id), question, over, answered, cx);
 }
@@ -358,12 +545,16 @@ fn page_question(fields: Vec<Field>, check: Option<&'static str>) -> Question {
         also: None,
         fields,
         check: check.map(Into::into),
-        return_cancels: false,
+        on_return: Return::Action,
     }
 }
 
 fn field(text: &str, secure: bool) -> Field {
-    Field { placeholder: "".into(), text: text.to_owned().into(), secure }
+    Field {
+        placeholder: "".into(),
+        text: text.to_owned().into(),
+        secure,
+    }
 }
 
 impl Asking {
@@ -371,17 +562,41 @@ impl Asking {
     fn page(question: Question, cx: &mut TestAppContext) -> Self {
         let (cx, host) = opened(cx);
         cx.cx.update(crate::text_input::bind_keys);
-        cx.cx.update(|cx| ask_from_page((1, 7), question, 100., &host, cx));
+        cx.cx
+            .update(|cx| ask_from_page((1, 7), question, 100., &host, cx));
         cx.run_until_parked();
         Asking { cx, host }
     }
+}
+
+/// What a page's dialog asked of the host from `shown` on, answered with `answer`: as it starts
+/// leaving on Linux, whose page has the keyboard back then, and once it has hidden elsewhere.
+fn left(shown: &[&str], answer: &str) -> Vec<String> {
+    let mut calls: Vec<String> = shown.iter().map(|call| call.to_string()).collect();
+    match PAGE_ANSWERED_AS_IT_LEAVES {
+        true => calls.extend([answer.into(), "hide".into()]),
+        false => calls.extend(["hide".into(), answer.into()]),
+    }
+    calls
+}
+
+/// On Linux the page has the keyboard back as its dialog starts leaving, and Chromium drops its keys
+/// until its question is answered, so a shortcut typed right after Esc, such as ⌘L, needs the answer
+/// at once (#1711, #1963).
+#[gpui::test]
+fn a_pages_question_is_answered_once_the_page_has_the_keyboard_back(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(Vec::new(), None), cx);
+    dialog.keys("escape");
+    let answered = dialog.host.0.borrow().iter().any(|call| call == "cancel ");
+    assert_eq!(answered, PAGE_ANSWERED_AS_IT_LEAVES);
+    assert_eq!(*dialog.host.1.borrow(), ["hold"], "it hid before leaving");
 }
 
 #[gpui::test]
 fn a_pages_question_shows_over_its_card_and_return_answers_it(cx: &mut TestAppContext) {
     let mut dialog = Asking::page(page_question(Vec::new(), None), cx);
     dialog.keys("enter");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "accept "]);
+    assert_eq!(dialog.calls(), left(&["show over 100"], "accept "));
 }
 
 #[gpui::test]
@@ -390,7 +605,7 @@ fn a_click_on_the_cards_dim_leaves_a_pages_question(cx: &mut TestAppContext) {
     dialog.click(400., 40.);
     assert_eq!(dialog.calls(), ["show over 100"]);
     dialog.keys("escape");
-    assert_eq!(dialog.calls(), ["hide", "cancel "]);
+    assert_eq!(dialog.calls(), left(&[], "cancel "));
 }
 
 #[gpui::test]
@@ -399,7 +614,7 @@ fn a_prompt_answers_what_was_typed(cx: &mut TestAppContext) {
     // What it starts with is selected, so typing replaces it.
     dialog.cx.simulate_input("Grace");
     dialog.keys("enter");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "accept Grace"]);
+    assert_eq!(dialog.calls(), left(&["show over 100"], "accept Grace"));
 }
 
 #[gpui::test]
@@ -410,24 +625,37 @@ fn tab_moves_to_the_next_field(cx: &mut TestAppContext) {
     dialog.keys("tab");
     dialog.cx.simulate_input("secret");
     dialog.keys("enter");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "accept ada secret"]);
+    assert_eq!(
+        dialog.calls(),
+        left(&["show over 100"], "accept ada secret")
+    );
 }
 
 #[gpui::test]
 fn a_reply_never_shows_what_was_typed(cx: &mut TestAppContext) {
-    let reply = Reply { accept: true, texts: vec!["ada".into(), "secret".into()], checked: false };
+    let reply = Reply {
+        accept: true,
+        texts: vec!["ada".into(), "secret".into()],
+        checked: false,
+    };
     let shown = format!("{reply:?}");
-    assert!(!shown.contains("secret") && !shown.contains("ada"), "{shown}");
+    assert!(
+        !shown.contains("secret") && !shown.contains("ada"),
+        "{shown}"
+    );
     // Nor does the field show it, though it answers it.
     let mut dialog = Asking::page(page_question(vec![field("", true)], None), cx);
     dialog.cx.simulate_input("secret");
     let shown = dialog.cx.cx.update(|cx| {
         let window = cx.global::<DialogWindow>().0;
-        window.read(cx).unwrap().asked.as_ref().unwrap().fields[0].read(cx).shown().to_string()
+        window.read(cx).unwrap().asked.as_ref().unwrap().fields[0]
+            .read(cx)
+            .shown()
+            .to_string()
     });
     assert_eq!(shown, "••••••");
     dialog.keys("enter");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "accept secret"]);
+    assert_eq!(dialog.calls(), left(&["show over 100"], "accept secret"));
 }
 
 #[gpui::test]
@@ -436,10 +664,19 @@ fn asked_again_a_pages_question_only_moves(cx: &mut TestAppContext) {
     dialog.cx.simulate_input("typed");
     let host = dialog.host.clone();
     dialog.cx.cx.update(|cx| {
-        ask_from_page((1, 7), page_question(vec![field("", false)], None), 240., &host, cx)
+        ask_from_page(
+            (1, 7),
+            page_question(vec![field("", false)], None),
+            240.,
+            &host,
+            cx,
+        )
     });
     dialog.keys("enter");
-    assert_eq!(dialog.calls(), ["show over 100", "show over 240", "hide", "accept typed"]);
+    assert_eq!(
+        dialog.calls(),
+        left(&["show over 100", "show over 240"], "accept typed")
+    );
 }
 
 #[gpui::test]
@@ -454,21 +691,23 @@ fn a_pages_question_taken_back_leaves_untold(cx: &mut TestAppContext) {
         .cx
         .update(|cx| ask_from_page((2, 8), page_question(Vec::new(), None), 100., &host, cx));
     dialog.keys("escape");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "cancel "]);
+    assert_eq!(dialog.calls(), left(&["show over 100"], "cancel "));
 }
 
 #[gpui::test]
 fn the_checkbox_answers_with_a_click(cx: &mut TestAppContext) {
     let mut question = page_question(Vec::new(), Some("Always allow"));
-    question.return_cancels = true;
+    question.on_return = Return::Cancel;
     let mut dialog = Asking::page(question, cx);
     dialog.cx.cx.update(|cx| {
         let window = cx.global::<DialogWindow>().0;
-        window.update(cx, |dialog, _, cx| dialog.toggle_check(cx)).unwrap();
+        window
+            .update(cx, |dialog, _, cx| dialog.toggle_check(cx))
+            .unwrap();
     });
     // ↩ cancels, so a page can't time a key to open an app.
     dialog.keys("enter");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "cancel  checked"]);
+    assert_eq!(dialog.calls(), left(&["show over 100"], "cancel  checked"));
 }
 
 /// A window with a button all over it, and its own dialog, as Settings has on Linux.
@@ -494,6 +733,7 @@ impl Render for Covered {
 
 #[gpui::test]
 fn a_windows_own_dialog_covers_it_until_it_has_gone(cx: &mut TestAppContext) {
+    let on_return = std::cell::Cell::new(Return::Action);
     let host = Rc::new(Recorder::default());
     let (view, cx) = cx.add_window_view(|_, cx| Covered {
         dialog: in_window(host.clone(), cx),
@@ -505,7 +745,18 @@ fn a_windows_own_dialog_covers_it_until_it_has_gone(cx: &mut TestAppContext) {
         let delete = Box::new(move |_: &mut App| deleted.0.borrow_mut().push("delete".into()));
         cx.update(|window, cx| {
             let dialog = view.read(cx).dialog.clone();
-            ask_in(&dialog, "Delete “Work”?".into(), String::new(), "Delete", delete, window, cx);
+            let delete_work = ("Delete “Work”?".into(), String::new(), "Delete");
+            let (message, detail, action) = delete_work;
+            ask_in(
+                &dialog,
+                message,
+                detail,
+                action,
+                on_return.get(),
+                delete,
+                window,
+                cx,
+            );
         });
         cx.run_until_parked();
     };
@@ -525,4 +776,95 @@ fn a_windows_own_dialog_covers_it_until_it_has_gone(cx: &mut TestAppContext) {
     cx.executor().advance_clock(Duration::from_secs_f32(MOVE));
     cx.run_until_parked();
     assert_eq!(host.0.take(), ["show", "hide", "delete"]);
+
+    // One that only a click answers: ↩ does nothing, and escape still cancels.
+    on_return.set(Return::Nothing);
+    ask(cx);
+    cx.simulate_keystrokes("enter");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(host.0.take(), ["show"]);
+    cx.update(|_, cx| {
+        assert!(
+            cover(&view.read(cx).dialog, cx).is_some(),
+            "it's still asking"
+        )
+    });
+    cx.simulate_keystrokes("escape");
+    cx.executor().advance_clock(Duration::from_secs_f32(MOVE));
+    cx.run_until_parked();
+    assert_eq!(host.0.take(), ["hide"]);
+}
+
+/// Under Reduce Motion the dialog doesn't drop into place: it fades in where it rests (#1380).
+#[gpui::test]
+fn under_reduce_motion_the_dialog_fades_in_where_it_rests(cx: &mut TestAppContext) {
+    let mut dialog = Asking::new(cx);
+    let window = dialog.cx.cx.update(|cx| cx.global::<DialogWindow>().0);
+    let arriving = |dialog: &mut Asking| {
+        dialog.cx.cx.update(|cx| {
+            window
+                .update(cx, |dialog, _, cx| {
+                    let asked = dialog.asked.as_mut().expect("nothing asked");
+                    asked.shown = Some(Instant::now());
+                    let pose = asked.drawn(cx);
+                    (pose.raised, pose.opacity)
+                })
+                .unwrap()
+        })
+    };
+    let (raised, opacity) = arriving(&mut dialog);
+    assert!(raised > DROP * 0.9 && opacity < 0.1, "{raised} {opacity}");
+    dialog.cx.cx.update(|cx| cx.set_reduce_motion(true));
+    let (raised, opacity) = arriving(&mut dialog);
+    assert!(raised == 0. && opacity < 0.1, "{raised} {opacity}");
+    dialog.keys("escape");
+    assert_eq!(dialog.calls(), ["show", "hide"]);
+}
+
+/// The open-app dialog's "Always allow" line wraps inside the card, as its detail does, however
+/// long the site's name, and its box sits beside the label's first line (#1920).
+#[gpui::test]
+fn the_checkbox_label_wraps_inside_the_card(cx: &mut TestAppContext) {
+    let label = "Always allow https://sign-in.a-very-long-identity-provider.example.com:8443 to \
+                 open links of this type in the associated app";
+    let mut question = page_question(Vec::new(), Some(label));
+    question.on_return = Return::Cancel;
+    let dialog = Asking::page(question, cx);
+    let mut dialog = dialog;
+    dialog
+        .cx
+        .executor()
+        .advance_clock(Duration::from_secs_f32(MOVE));
+    dialog.cx.run_until_parked();
+    let drawn = dialog.cx.cx.update(|cx| {
+        let window = cx.global::<DialogWindow>().0;
+        window
+            .update(cx, |dialog, _, _| {
+                dialog.asked.as_ref().map(|asked| asked.check_drawn.get())
+            })
+            .unwrap()
+    });
+    let drawn = drawn.expect("the dialog asks nothing");
+    let (card, check, label) = (drawn.card, drawn.check, drawn.label);
+    assert!(card.size.width > px(0.), "the card wasn't drawn: {drawn:?}");
+    // Inside the card's text inset, as the detail's lines are.
+    let right = card.right() - px(TEXT_INSET);
+    assert!(
+        label.right() <= right + px(0.5),
+        "the label runs to {:?}, past the card's text at {right:?}",
+        label.right()
+    );
+    assert!(
+        label.size.height >= px(2. * DETAIL_LINE),
+        "the long label didn't wrap: {:?}",
+        label.size.height
+    );
+    // The box's middle is the first line's.
+    let first_line = label.top() + px(DETAIL_LINE / 2.);
+    let middle = check.top() + check.size.height / 2.;
+    assert!(
+        (middle - first_line).abs() < px(0.5),
+        "the box's middle is at {middle:?}, the first line's at {first_line:?}"
+    );
 }

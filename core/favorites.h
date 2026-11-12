@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "browser_core/public/browser_core.h"
+#include "browser_core/split_view.h"
 #include "url/gurl.h"
 
 namespace browser_core {
@@ -77,8 +78,42 @@ class Favorites {
   static void SpaceMoved(bc_id space);
   // The Space |space| is going: under Each Space, its favorites close with it.
   static void SpaceDeleting(bc_id space);
+  // The profile in the directory |profile| is going: its favorites' tabs close with it. Under
+  // Every Space the other profiles keep the sites.
+  static void ProfileDeleting(const std::string& profile);
   // Under Every Space, gives each profile that shows favorites a tab for each site it lacks.
   static void Complete();
+
+  // A favorite can be a split view, its tabs one favorite, together in its list, in its order. The
+  // lists' |index| counts it as one.
+
+  // The tabs shown with the favorite |tab|, in their order: its split's, else |tab| alone. Empty if
+  // it isn't a favorite.
+  static std::vector<bc_id> Panes(bc_id tab);
+  // The split the favorite |tab| is in, else null.
+  static const SplitView* SplitOf(bc_id tab);
+  // The tab of the favorite |tab|'s split focused last, else its first: what showing the split
+  // shows focused, in whichever Space. |tab| for a favorite in none, 0 for a tab that isn't one.
+  static bc_id Focused(bc_id tab);
+  // |tab|, the user's focus now, is the tab of its split focused last.
+  static void SetFocused(bc_id tab);
+  // Takes |tab| out of its split, to just after the tabs left in it, a favorite alone. The split
+  // goes once one is left. Under Every Space, in every profile, as Move moves a site in each.
+  static void Separate(bc_id tab);
+  // As Space's calls of the same names, for the favorite |tab|'s split. MoveInSplit moves the site
+  // in every profile under Every Space.
+  static bool MoveInSplit(bc_id tab, size_t index);
+  static bool SetStacked(bc_id tab, bool stacked);
+  static bool SetShares(bc_id tab, std::vector<double> shares);
+  static bool SetExpanded(bc_id tab, bool expanded);
+  // Makes |split|'s tabs, a split of |space|'s and in no Space now, the favorite at |index| of the
+  // list |space| shows, else the last, each at its URL in |urls|, with |split|'s look and the tab
+  // it has focused. Under Every Space every other profile that shows favorites gets the split in
+  // tabs of its own.
+  static void AddSplit(SplitView split, const std::vector<GURL>& urls, size_t index, bc_id space);
+  // Joins |split|'s tabs, favorites of one list restored one after another, in a split as |split|
+  // has them. Does nothing if they aren't.
+  static void RestoreSplit(SplitView split);
 };
 
 }  // namespace browser_core

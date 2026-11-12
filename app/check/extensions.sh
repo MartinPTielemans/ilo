@@ -7,7 +7,9 @@
 # for the tab shown as it changes. A click on a pinned action runs
 # it, its popup hanging from it, and its right-click menu unpins it, opens its options or its
 # details on Chrome's extensions page, or removes it once the user confirms. The actions that don't
-# fit are behind an overflow button in the last place, whose menu runs them. Manage Extensions…
+# fit are behind an overflow button in the last place, whose menu runs them. In a Little ilo window
+# they end its bar's title, and a click on one runs it there, its popup hanging from it (#693).
+# Manage Extensions…
 # opens Chrome's extensions page. The Site Controls list every turned-on extension, unpinned ones
 # too, and a click on one's tile runs it, its popup hanging from the tile. A right-click on a tile
 # gives its menu: Move to Top pins it first, Unpin puts it back by name, and Remove asks first. An
@@ -34,10 +36,7 @@ script='chrome.action.onClicked.addListener(async tab => {
   chrome.tabs.create({url: "clicked.html"});
 });
 chrome.commands.onCommand.addListener(() => chrome.tabs.create({url: "command.html"}));'
-# Chrome keeps running the script it first registered for an extension, so a changed script is a
-# new extension, in a folder of its own. In a profile the check ran in before, the old one still
-# holds ⇧⌘Y and the new one gets no key, so what changes goes in its page's script instead.
-clicked_dir="$extensions/clicked-$(printf %s "$script" | cksum | cut -d' ' -f1)"
+clicked_dir="$extensions/clicked"
 mkdir -p "$clicked_dir" "$extensions/popup" "$extensions/third" "$extensions/panel"
 printf '%s\n' "$script" > "$clicked_dir/background.js"
 cat > "$clicked_dir/manifest.json" << 'EOF'
@@ -48,6 +47,19 @@ EOF
 echo '<title>clicked</title><script src="clicked.js"></script>' > "$clicked_dir/clicked.html"
 cat > "$clicked_dir/clicked.js" << 'EOF'
 (async () => {
+  // The check's own pop-up window, which stays until the next tab opens, saying in the title what
+  // it hears from it.
+  if (location.search === "?keep") {
+    let type = "", id = 0;
+    chrome.runtime.onMessage.addListener(message => { document.title = `clicked ${message} ${type}`; });
+    chrome.windows.onRemoved.addListener(gone => {
+      if (gone === id) document.title = "clicked kept closed";
+    });
+    chrome.tabs.onCreated.addListener(tab => { if (id && tab.windowId !== id) chrome.windows.remove(id); });
+    ({type, id} = await chrome.windows.create(
+      {type: "popup", url: "kept.html", width: 360, height: 240, focused: true}));
+    return;
+  }
   const made = await chrome.windows.create(
     {type: "popup", url: "made.html", width: 360, height: 240, focused: false});
   const tabs = await chrome.tabs.query({windowId: made.id});
@@ -56,6 +68,12 @@ cat > "$clicked_dir/clicked.js" << 'EOF'
 })();
 EOF
 echo '<title>made</title>' > "$clicked_dir/made.html"
+# The pop-up window the check captures, which says so once it has drawn twice.
+echo '<title>kept</title><body style="font:16px system-ui;display:grid;place-items:center">
+a pop-up window<script src="kept.js"></script></body>' > "$clicked_dir/kept.html"
+echo 'chrome.runtime.sendMessage(`kept ${document.visibilityState}`);
+requestAnimationFrame(() => requestAnimationFrame(() =>
+  chrome.runtime.sendMessage("kept drawn")));' > "$clicked_dir/kept.js"
 echo '<title>command</title>' > "$clicked_dir/command.html"
 # Off the Mac Chrome keeps Alt+Shift+P (New Tab Group) and Ctrl+J (Downloads) for itself and gives
 # no extension a key of its own, so there they suggest others.
@@ -66,7 +84,25 @@ cat > "$extensions/popup/manifest.json" << 'EOF'
 EOF
 echo '<body style="width:240px;height:120px;display:grid;place-items:center;font:16px system-ui">
 the popup<script src="popup.js"></script></body>' > "$extensions/popup/popup.html"
-echo 'chrome.action.setBadgeText({text: "1"});' > "$extensions/popup/popup.js"
+# Its action's title says "(loading)" as its page loads and "(painted)" once it has painted, as
+# site.sh's painted() tells, for close_popup to say which a missed escape came after (#2241).
+cat > "$extensions/popup/popup.js" << 'EOF2'
+chrome.action.setBadgeText({text: "1"});
+chrome.action.setTitle({title: "Check Popup (loading)"});
+let done = false;
+const call = () =>
+  done || (done = true, chrome.action.setTitle({title: "Check Popup (painted)"}));
+new PerformanceObserver((entries, observer) => {
+  observer.disconnect();
+  call();
+}).observe({type: "paint", buffered: true});
+let first;
+const frame = time => {
+  first ??= time;
+  time - first > 600 ? call() : done || requestAnimationFrame(frame);
+};
+requestAnimationFrame(frame);
+EOF2
 cat > "$extensions/third/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Third", "version": "1",
  "action": {"default_popup": "popup.html"}, "options_ui": {"page": "options.html"},
@@ -96,10 +132,14 @@ echo '<title>the tab panel</title><body style="font:16px system-ui">the tab pane
   "$extensions/panel/tab.html"
 page='data:text/html,<title>loading</title>
 <script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));</script>'
+# A profile of the run's own, new each time: an unpacked extension's id comes from its folder's
+# path, so one that loaded them from another checkout would keep its copies in the menu (#1890).
+profile_dir="$extensions/profile"
+rm -rf "$profile_dir"
+mkdir -p "$profile_dir"
 log="$out/extensions.log"
 step=0
-rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
+BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
   --load-extension="$(app_path "$clicked_dir"),$(app_path "$extensions/popup"),$(app_path "$extensions/third"),$(app_path "$extensions/panel")" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -177,9 +217,27 @@ close_popup() {
     how="a click on its action"
   else
     send key escape
-    how=escape
+    how="escape, $(painted_by_escape), the keyboard in $key, focus on $focus,"
   fi
   expect '^browser: extension popup none$' "$how didn't close the extension's popup"
+}
+# Whether Check Popup's page had said it painted by the escape just sent, by its action's title
+# since the popup showed, which the app logs while its action is pinned or the Site Controls show.
+painted_by_escape() {
+  awk -v popup="$popup" -v escape="^browser: drive $step: " '
+    $0 == "browser: extension popup " popup { said = "not yet" }
+    /^browser: extension titles / {
+      listed = index($0, popup "=") > 0
+      if (said && index($0, popup "=Check Popup (loading)")) said = "not yet"
+      if (said && index($0, popup "=Check Popup (painted)")) said = "painted"
+    }
+    $0 ~ escape {
+      if (!said) print "with no popup shown"
+      else if (said == "painted") print "its page painted"
+      else if (listed) print "its page not yet painted"
+      else print "its page'"'"'s paint unseen, as its action isn'"'"'t listed"
+      exit
+    }' "$log"
 }
 if [ "$(uname)" = Linux ]; then
   echo "skip: the extension's popup taking the keyboard and escape closing it: on Linux the core gives the keyboard to a page alone (#708)."
@@ -195,7 +253,55 @@ fi
 # The Extensions menu runs a pinned one too, its popup hanging from its action.
 send menu "Check Popup"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the menu"
-close_popup
+# On Linux a click on its action would run it again, so the page's click closes it, for the bar.
+close_popup "$page_point"
+# The command bar finds it by its name and runs it, as Arc's does (#1396). Captured before the
+# expect, so a build without the row shows what's there instead.
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+send type check popup
+await '^browser: command bar commands "check popup": Check Popup$' || true
+../tools/window-screenshot.sh "$pid" "$out/bar-extension.png" || fail "no window to capture"
+expect '^browser: command bar commands "check popup": Check Popup$' \
+  "the command bar didn't find Check Popup by its name: $(grep \
+    '^browser: command bar commands "check popup"' "$log" | tail -1)"
+send key return
+expect '^browser: command run-extension via command bar$' "Check Popup didn't run from the bar"
+expect "^browser: run extension $popup ran\$" "the bar's Check Popup didn't run its action"
+expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the bar"
+../tools/window-screenshot.sh "$pid" "$out/bar-extension-popup.png" || fail "no window to capture"
+close_popup "$page_point"
+# In a Little ilo window the pinned actions end its bar's title, as they end the URL field, and a
+# click on one runs it there, its popup hanging from its button (#693).
+send key n cmd alt
+expect '^browser: little window opened [0-9]* ' "⌥⌘N didn't open a Little ilo window"
+little=$(grep '^browser: little window opened ' "$log" | tail -1 | cut -d' ' -f5)
+expect "^browser: window opened $little\$" "the Little ilo window didn't open"
+send window "$(grep -c '^browser: window opened ' "$log")"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
+send insert "data:text/html,<title>little</title>A page in Little ilo"
+send key return
+expect "^browser: extension actions $popup[^ ]* $clicked" "the Little ilo window didn't list the pinned actions"
+# Logged as the window first drew its bar, before its page.
+await '^browser: little bar title ends at ' || fail "the Little ilo window's bar didn't say where its title ends"
+read -r end_x end_y << EOF
+$(sed -n 's/^browser: little bar title ends at //p' "$log" | tail -1)
+EOF
+# Check Popup, before Check Clicked, which ends the title.
+send click $((end_x - 45)) "$end_y"
+expect "^browser: run extension $popup ran\$" "a click on Check Popup's action in Little ilo didn't run it"
+expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from Little ilo"
+../tools/window-screenshot.sh "$pid" "$out/little-extension-popup.png" all || fail "no window to capture"
+if [ "$(uname)" = Linux ]; then
+  send click $((end_x - 45)) "$end_y"
+else
+  send key escape
+fi
+expect '^browser: extension popup none$' "Check Popup's popup in Little ilo didn't close"
+send key w cmd
+expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window"
+send window 1
 # A right-click on an action shows its menu: Manage Extension opens its details, and Unpin
 # unpins it. Check Clicked has no options.
 post rightclick $second_place
@@ -470,10 +576,22 @@ expect "^browser: menu shown $(cased 'Manage Extension, Close Side Panel')\$" \
   "a click on the side panel's ⋯ didn't show its menu"
 send choose "$(cased 'Close Side Panel')"
 expect '^browser: side panel none$' "Close Side Panel didn't close the side panel"
+# Check Clicked's page opened as clicked.html?keep keeps a pop-up window, as MetaMask's are, with
+# the keyboard, which the check captures over the browser window once it has drawn. It's none of
+# the app's tabs, and the next one, Check Clicked's from the Extensions menu, closes it.
+go_from_bar "chrome-extension://$clicked/clicked.html?keep"
+await '^browser: title [0-9]* clicked kept drawn popup$' ||
+  fail "Check Clicked's page didn't keep a pop-up window that drew: $(grep 'title [0-9]* clicked kept' "$log")"
+kept=$(sed -n "s|^browser: loaded \([0-9]*\) chrome-extension://$clicked/kept.html\$|\1|p" "$log" | tail -1)
+today | tr ' ' '\n' | grep -qx "$kept" && fail "Check Clicked's kept pop-up window opened as a tab"
+../tools/window-screenshot.sh "$pid" "$out/extension-popup-window.png" all ||
+  fail "no window to capture"
+send menu "Check Clicked"
+expect '^browser: title [0-9]* clicked kept closed$' "Check Clicked's kept pop-up window didn't close"
 quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't quit"
 exited
-echo "ok: the Extensions menu lists the profile's extensions by name, and choosing one runs its action on the tab shown: one without a popup hears the click, and opens a pop-up window of its own, not a tab, and one with a popup shows it with the keyboard, which escape closes, giving the browser window the keyboard back. Pin to URL Field pins and unpins them, and the pinned actions show at the URL field's end in the order pinned, with their badges for the tab shown as they change. A click on one runs it, with its popup hanging from it, and its right-click menu unpins it, opens its options and its details, and removes it after asking. The ones that don't fit are behind the overflow button, whose menu runs them. Manage Extensions… opens Chrome's extensions page. The Site Controls list the unpinned extensions by name, and a click on one's tile runs it, its popup hanging from the tile, and its right-click menu moves it to the top, pinning it, unpins it, and asks before removing it. Their keyboard commands and their actions' keys run from the page and the UI, but one they suggest that's the browser's stays the browser's. An extension's side panel opens from its action as a card right of the page with its page loaded, its page takes the keyboard, its edge drags it narrower, its header's ✕ and ⋯ menu close it, and a tab's own panel goes on a switch to a tab without one and comes back with it at the width given. Windows: $out/extension-actions.png, $out/extension-popup.png, $out/extension-overflow.png, $out/extension-overflow-popup.png, $out/extension-key-popup.png, $out/extensions.png, $out/extension-remove.png, $out/site-controls-extensions.png, $out/site-controls-extension-popup.png, $out/site-controls-move-to-top.png, $out/site-controls-remove.png, $out/side-panel.png, $out/side-panel-resized.png"
+echo "ok: the Extensions menu lists the profile's extensions by name, and choosing one runs its action on the tab shown: one without a popup hears the click, and opens a pop-up window of its own, not a tab ($out/extension-popup-window.png), and one with a popup shows it with the keyboard, which escape closes, giving the browser window the keyboard back. Pin to URL Field pins and unpins them, and the pinned actions show at the URL field's end in the order pinned, with their badges for the tab shown as they change. A click on one runs it, with its popup hanging from it, and its right-click menu unpins it, opens its options and its details, and removes it after asking. The ones that don't fit are behind the overflow button, whose menu runs them. Manage Extensions… opens Chrome's extensions page. The Site Controls list the unpinned extensions by name, and a click on one's tile runs it, its popup hanging from the tile, and its right-click menu moves it to the top, pinning it, unpins it, and asks before removing it. Their keyboard commands and their actions' keys run from the page and the UI, but one they suggest that's the browser's stays the browser's. An extension's side panel opens from its action as a card right of the page with its page loaded, its page takes the keyboard, its edge drags it narrower, its header's ✕ and ⋯ menu close it, and a tab's own panel goes on a switch to a tab without one and comes back with it at the width given. Windows: $out/extension-actions.png, $out/extension-popup.png, $out/extension-overflow.png, $out/extension-overflow-popup.png, $out/extension-key-popup.png, $out/extensions.png, $out/extension-remove.png, $out/site-controls-extensions.png, $out/site-controls-extension-popup.png, $out/site-controls-move-to-top.png, $out/site-controls-remove.png, $out/side-panel.png, $out/side-panel-resized.png"
 
 # A desktop app's native messaging host that only another Chromium browser's folder has, as
 # 1Password writes its own only for the browsers it knows. The launch has a profile without one and
@@ -572,22 +690,26 @@ fi
 echo "ok: an extension reaches a native messaging host that only Chrome Beta's folder has, or on Windows only Edge's key, and hears its answer. Window: $out/native-host.png"
 
 # An extension's .crx from the served page, which Chrome installs from off the Web Store with
-# ungoogled-chromium's flag, asking first. It's added in a profile of the launch's own, which the
-# check starts without, so no other run ever has it. Chrome takes a .crx signed with the key its id
-# comes from.
+# ungoogled-chromium's flag, asking first. It's added in a profile of the launch's own, new each
+# time, so no other run ever has it. Chrome takes a .crx signed with the key its id comes from.
 serve
 crx="$PWD/$out/install"
+rm -rf "$crx"
 mkdir -p "$crx/source" "$crx/profile/Default"
 cat > "$crx/source/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Install", "version": "1", "permissions": ["tabs"],
  "host_permissions": ["https://example.org/*"]}
 EOF
-installed=$(python3 -I -c '
+# Packs $crx/source into the site's check.crx, or $1.crx, signed with the key made the first time,
+# so a later version is the same extension, and says its id.
+pack_crx() {
+python3 -I -c '
 import hashlib, io, os, struct, subprocess, sys, zipfile
 
 source, crx = sys.argv[1], sys.argv[2]
 key = os.path.join(os.path.dirname(source), "key.pem")
-subprocess.run(["openssl", "genrsa", "-out", key, "2048"], check=True, capture_output=True)
+if not os.path.exists(key):
+    subprocess.run(["openssl", "genrsa", "-out", key, "2048"], check=True, capture_output=True)
 public = subprocess.run(["openssl", "rsa", "-in", key, "-pubout", "-outform", "DER"],
                         check=True, capture_output=True).stdout
 archive = io.BytesIO()
@@ -616,9 +738,11 @@ header = field(2, field(1, public) + field(2, signature)) + field(10000, signed)
 with open(crx, "wb") as f:
     f.write(b"Cr24" + struct.pack("<II", 3, len(header)) + header + archive)
 print("".join(chr(ord("a") + int(c, 16)) for c in crx_id.hex()))
-' "$crx/source" "$out/site/check.crx") || fail "couldn't make the check's .crx"
+' "$crx/source" "$out/site/${1:-check}.crx"
+}
+installed=$(pack_crx) || fail "couldn't make the check's .crx"
 printf '{"download": {"default_directory": "%s", "prompt_for_download": false}}' \
-  "$(app_path "$PWD/$out/downloads")" > "$crx/profile/Default/Preferences"
+  "$(native_path "$PWD/$out/downloads" | sed 's/\\/\\\\/g')" > "$crx/profile/Default/Preferences"
 log="$out/install.log"
 step=0
 BROWSER_DRIVE=1 BROWSER_URL="$site" BROWSER_PROFILE_DIR="$crx/profile" \
@@ -656,6 +780,82 @@ send key return
 expect '^browser: dialog confirmed$' "return didn't confirm adding Check Install"
 expect "^browser: extensions menu.* $installed" "Check Install wasn't added"
 expect '^browser: extension question none$' "Chrome didn't hear the install was confirmed"
+# Its third version, asking for more again, is served first, from the updates.xml the second names
+# as where its updates come from.
+cat > "$crx/source/manifest.json" << EOF
+{"manifest_version": 3, "name": "Check Install", "version": "3",
+ "permissions": ["tabs", "history", "bookmarks"],
+ "host_permissions": ["https://example.org/*", "https://example.com/*"],
+ "update_url": "${site}updates.xml"}
+EOF
+[ "$(pack_crx check3)" = "$installed" ] || fail "the third version's .crx isn't the same extension"
+hash=$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+  "$out/site/check3.crx")
+printf "<?xml version='1.0' encoding='UTF-8'?>
+<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'><app appid='%s'>
+<updatecheck codebase='%scheck3.crx' version='3' hash_sha256='%s'/></app></gupdate>\n" \
+  "$installed" "$site" "$hash" > "$out/site/updates.xml"
+# Its next version, asking for more, from the page over the one added: Chrome asks again with the
+# browser's dialog, listing the new warnings (extension-update.png), and return updates it. Installed,
+# it asks the browser to check for its updates, as Chrome checks on its own only every 5 hours and
+# ignores --extensions-update-frequency.
+cat > "$crx/source/worker.js" << 'EOF'
+chrome.runtime.onInstalled.addListener(() => chrome.runtime.requestUpdateCheck(() => {}));
+EOF
+cat > "$crx/source/manifest.json" << EOF
+{"manifest_version": 3, "name": "Check Install", "version": "2", "permissions": ["tabs", "history"],
+ "host_permissions": ["https://example.org/*", "https://example.com/*"],
+ "update_url": "${site}updates.xml", "background": {"service_worker": "worker.js"}}
+EOF
+[ "$(pack_crx)" = "$installed" ] || fail "the second version's .crx isn't the same extension"
+send click $page_point
+send key y
+expect '^browser: dialog shown .*"Check Install"' "the second version didn't ask with the browser's dialog"
+asked=$(grep -c '^browser: dialog shown ' "$log" || true)
+grep "^browser: extension question $installed asks " "$log" | tail -1 | grep -q 'example.com' ||
+  fail "the second version's question didn't list its new site: $(grep 'extension question' "$log" | tail -1)"
+await '^browser: dialog settled$' || fail "the update's dialog didn't settle"
+../tools/window-screenshot.sh "$pid" "$out/extension-update.png" || fail "no window to capture"
+expect '^browser: dialog takes input$' "the update's dialog never took input"
+send key return
+expect '^browser: dialog confirmed$' "return didn't confirm the second version"
+expect '^browser: extension question none$' "Chrome didn't hear the update was confirmed"
+# The third version comes from that check, where no one is asked, so Chrome turns it off. Turned on
+# again on Chrome's extensions page, as only the user can, it asks with the browser's dialog, listing
+# the new warning (extension-reenable.png), and return turns it on.
+# Off once the Extensions menu the app logs no longer lists it, within 60 s.
+for _ in $(seq 600); do
+  case "$(grep '^browser: extensions menu' "$log" | tail -1) " in *" $installed "*) ;; *) break ;; esac
+  sleep 0.1
+done
+case "$(grep '^browser: extensions menu' "$log" | tail -1) " in
+  *" $installed "*)
+    fail "the update it asked for didn't turn Check Install off within 60 s: $(grep -c updates.xml "$out/site.log" || true) asks for updates.xml, $(grep -c check3.crx "$out/site.log" || true) for check3.crx" ;;
+esac
+[ "$(grep -c '^browser: dialog shown ' "$log" || true)" = "$asked" ] ||
+  fail "the fetched update asked, where Chrome turns it off: $(grep '^browser: dialog shown ' "$log" | tail -1)"
+before=$(today)
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type "chrome://extensions/?id=$installed"
+send key return
+expect "^browser: loaded [0-9]* chrome://extensions/?id=$installed\$" \
+  "Chrome's extensions page didn't open on Check Install"
+# Its first control is the back arrow, which the page focuses as it shows, then the switch.
+send key tab
+send key space
+expect '^browser: dialog shown .*"Check Install"' \
+  "turning Check Install on again didn't ask with the browser's dialog"
+grep "^browser: extension question $installed asks " "$log" | tail -1 | grep -qi 'bookmarks' ||
+  fail "turning it on again didn't list its new warning: $(grep 'extension question' "$log" | tail -1)"
+await '^browser: dialog settled$' || fail "the re-enable dialog didn't settle"
+../tools/window-screenshot.sh "$pid" "$out/extension-reenable.png" || fail "no window to capture"
+expect '^browser: dialog takes input$' "the re-enable dialog never took input"
+send key return
+expect '^browser: dialog confirmed$' "return didn't confirm turning Check Install on"
+expect "^browser: extensions menu.* $installed" "confirmed, Check Install didn't come back on"
+send key w cmd
+expect "^browser: today $before\$" "⌘W didn't close Chrome's extensions page"
 before=$(today)
 send menu "Add Extension…"
 expect '^browser: command add-extension via ui$' "Add Extension… didn't reach the UI"
@@ -663,4 +863,75 @@ expect "^browser: today [0-9]* $before\$" "Add Extension… didn't open a tab"
 quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't quit"
 exited
-echo "ok: a .crx from a page asks to be added with the browser's dialog, in Chrome's words, listing its warnings. Escape cancels it, return adds it, and Add Extension… opens a tab. Window: $out/extension-install.png"
+echo "ok: a .crx from a page asks to be added with the browser's dialog, in Chrome's words, listing its warnings. Escape cancels it, return adds it, its next version asking for more asks again with the new warnings, an update the browser fetches asking for more turns it off, turning it on again asks with the new warning, and Add Extension… opens a tab. Windows: $out/extension-install.png, $out/extension-update.png, $out/extension-reenable.png"
+
+# An extension whose own process crashes twice, across launches, is turned off: the browser's
+# dialog says so once, with Turn On Again, Keep Off and Remove…, and Turn On Again turns it on. Its
+# page in a tab runs in its process, which chrome://crash in that tab crashes. It's loaded in a
+# profile of the block's own, which counts the crashes.
+crashing="$PWD/$out/crashing"
+rm -rf "$crashing"
+mkdir -p "$crashing/extension" "$crashing/profile"
+cat > "$crashing/extension/manifest.json" << 'JSON'
+{"manifest_version": 3, "name": "Check Crash", "version": "1", "action": {}}
+JSON
+echo '<title>crash page</title>' > "$crashing/extension/page.html"
+# Launches the app on the block's profile with the extension, logging to $1, and sets $crashing_id.
+crash_launch() {
+  log="$out/$1.log"
+  step=0
+  BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$crashing/profile" \
+    "$browser" --load-extension="$(app_path "$crashing/extension")" \
+    < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  await "^browser: extensions menu [a-p]* $ublock\$" ||
+    fail "the Extensions menu didn't list Check Crash: $(grep '^browser: extensions menu' "$log")"
+  crashing_id=$(grep -m1 "^browser: extensions menu [a-p]* $ublock\$" "$log" | cut -d' ' -f4)
+}
+# The extension's page in the tab shown, and chrome://crash in it, the extension's crash $1. Fails
+# if its process ends and the core counts no crash, and returns 1 if it doesn't end in 30 s.
+crash_once() {
+  go_from_bar "chrome-extension://$crashing_id/page.html"
+  expect '^browser: title [0-9]* crash page$' "Check Crash's page didn't load"
+  go_from_bar "chrome://crash/"
+  for _ in $(seq 300); do
+    logged "browser: extension $crashing_id crashed, $1 times\$" && return 0
+    sleep 0.1
+  done
+  logged 'browser: tab [0-9]* page gone' &&
+    fail "chrome://crash ended Check Crash's page without counting its crash $1"
+  return 1
+}
+crash_block() {
+  crash_launch extension-crash
+  crash_once 1 || return 1
+  none_since "browser: extension $crashing_id turned off" || fail "one crash turned Check Crash off"
+  exec 3>&-
+  quit
+  crash_launch extension-crash-again
+  crash_once 2 || return 1
+  expect "browser: extension $crashing_id turned off for crashing\$" \
+    "a second crash, after a relaunch, didn't turn Check Crash off"
+  expect '^browser: dialog shown “Check Crash” was turned off$' \
+    "the browser didn't say it turned Check Crash off"
+  expect "^browser: told extension $crashing_id crashed\$" "the browser didn't hear it told the user"
+  expect '^browser: dialog settled$' "the dialog saying Check Crash was turned off didn't settle"
+  ../tools/window-screenshot.sh "$pid" "$out/extension-crashed-off.png" || fail "no window to capture"
+  grep "^browser: extensions menu" "$log" | tail -1 | grep -q " $crashing_id " &&
+    fail "Check Crash stayed in the Extensions menu, turned off"
+  send key return
+  expect "^browser: turn on extension $crashing_id on\$" "Turn On Again didn't turn Check Crash on"
+  expect "^browser: extensions menu $crashing_id $ublock\$" \
+    "Check Crash didn't come back in the Extensions menu"
+  exec 3>&-
+  quit
+}
+if ! crash_block; then
+  exec 3>&-
+  quit
+  echo "skip: an extension turned off after two crashes: the page chrome://crash crashed didn't end in 30 s on this machine, so the core heard no crash."
+else
+  echo "ok: an extension whose own process crashes twice, across a relaunch, is turned off, and the browser's dialog says so, with Turn On Again, which turns it on. Window: $out/extension-crashed-off.png"
+fi

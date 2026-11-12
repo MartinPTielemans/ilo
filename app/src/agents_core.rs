@@ -9,7 +9,7 @@ use std::sync::Arc;
 use browser::agents::{self, Agents, Browser, GlobalAgents, PageAction, Question, TabInfo};
 use gpui::{App, AppContext};
 
-use crate::{WINDOWS, bc, ids, name};
+use crate::{WINDOWS, bar_picks_host, bc, ids, name};
 
 thread_local! {
     /// A call of the Agents' into the core is under way, whose check the Agents log themselves.
@@ -51,7 +51,9 @@ impl Browser for Core {
     }
 
     fn space_tabs(&self, space: u64, cx: &App) -> Vec<TabInfo> {
-        (self.space_tab_ids(space, cx).into_iter()).map(|tab| self.tab(tab, cx)).collect()
+        (self.space_tab_ids(space, cx).into_iter())
+            .map(|tab| self.tab(tab, cx))
+            .collect()
     }
 
     fn space_tab_ids(&self, space: u64, _: &App) -> Vec<u64> {
@@ -74,11 +76,14 @@ impl Browser for Core {
     }
 
     fn tab(&self, tab: u64, cx: &App) -> TabInfo {
+        // A pinned tab has the URL it goes back to; agents' Spaces have no favorites, which do too.
+        let pinned = unsafe { bc::bc_tab_pinned_url(tab, std::ptr::null_mut(), 0) } > 0;
         // Every window's shell has every Space's tabs.
         let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
         let Some(shell) = shell.and_then(|shell| shell.upgrade()) else {
             return TabInfo {
                 id: tab,
+                pinned,
                 ..TabInfo::default()
             };
         };
@@ -87,6 +92,7 @@ impl Browser for Core {
             id: tab,
             title: shell.title(tab),
             url: shell.page(tab).url,
+            pinned,
         }
     }
 
@@ -152,9 +158,12 @@ impl Browser for Core {
             PageAction::Key => bc::BC_AGENT_PAGE_KEY,
             PageAction::ScrollDown => bc::BC_AGENT_PAGE_SCROLL_DOWN,
             PageAction::ScrollUp => bc::BC_AGENT_PAGE_SCROLL_UP,
+            PageAction::ScrollTo => bc::BC_AGENT_PAGE_SCROLL_TO,
             PageAction::Back => bc::BC_AGENT_PAGE_BACK,
             PageAction::Forward => bc::BC_AGENT_PAGE_FORWARD,
             PageAction::Screenshot => bc::BC_AGENT_PAGE_SCREENSHOT,
+            PageAction::Quiet => bc::BC_AGENT_PAGE_QUIET,
+            PageAction::Select => bc::BC_AGENT_PAGE_SELECT,
         };
         // A NUL can't reach the page, so text with one goes without what follows it.
         let text = text.split('\0').next().unwrap_or_default();
@@ -162,17 +171,28 @@ impl Browser for Core {
             return;
         };
         unsafe {
-            bc::bc_agent_page(agent.as_ptr(), tab, request, action as i32, element, text.as_ptr())
+            bc::bc_agent_page(
+                agent.as_ptr(),
+                tab,
+                request,
+                action as i32,
+                element,
+                text.as_ptr(),
+            )
         };
     }
 
     fn url_for(&self, text: &str) -> Option<String> {
         // Searches with the engine of the profile the core started with, as no window is asked.
-        crate::url_for(text, |text, url, capacity| unsafe { bc::bc_typed_url(0, text, url, capacity) })
+        crate::url_for(text, |text, url, capacity| unsafe {
+            bc::bc_typed_url(0, text, url, capacity)
+        })
     }
 
     fn ask(&self, question: Option<Question>, cx: &mut App) {
-        crate::update_shells_in(cx, |shell, cx| shell.set_agent_question(question.clone(), cx));
+        crate::update_shells_in(cx, |shell, cx| {
+            shell.set_agent_question(question.clone(), cx)
+        });
     }
 
     fn hand_off(&self, agent: &str, tab: u64) -> bool {
@@ -190,12 +210,128 @@ impl Browser for Core {
         unsafe { bc::bc_tab_hand_back(tab) }
     }
 
-    fn close_tab(&self, tab: u64, _: &mut App) {
+    fn close_tab(&self, agent: &str, tab: u64, discard: bool, _: &mut App) -> agents::Closed {
+        let Ok(agent) = CString::new(agent) else {
+            return agents::Closed::Refused;
+        };
+        match unsafe { bc::bc_agent_close_tab(agent.as_ptr(), tab, discard) } as u32 {
+            bc::BC_AGENT_CLOSED => agents::Closed::Closed,
+            bc::BC_AGENT_CLOSE_PINNED => agents::Closed::Pinned,
+            bc::BC_AGENT_CLOSE_ASKS => agents::Closed::Asks,
+            _ => agents::Closed::Refused,
+        }
+    }
+
+    fn close_user_tab(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_close(tab, false) };
     }
 
-    fn give(&self, tab: u64, space: u64, _: &mut App) -> bool {
-        unsafe { bc::bc_tab_give_to_agent(tab, space) }
+    fn answer_download(&self, download: u64, keep: bool) {
+        unsafe { bc::bc_agent_download_answer(download, keep) };
+    }
+
+    fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {
+        unsafe { bc::bc_tab_set_pinned(tab, pinned) };
+    }
+
+    // The core has no call that removes a pinned tab, so it's the two the row's remove button
+    // takes: unpinning, then closing it with its split.
+    fn remove_pinned(&self, tab: u64, _: &mut App) {
+        unsafe {
+            bc::bc_tab_set_pinned(tab, false);
+            bc::bc_tab_close(tab, true);
+        }
+    }
+
+    fn split(&self, tab: u64, _: &App) -> Vec<u64> {
+        let mut split = [0; agents::tools::SPLIT_TABS];
+        let count = unsafe { bc::bc_tab_split(tab, split.as_mut_ptr(), split.len()) };
+        split[..count.min(split.len())].to_vec()
+    }
+
+    // Unlike the UI's, an agent's split isn't shown: its tabs never take the user's window.
+    fn split_with(&self, tab: u64, with: u64, _: &mut App) -> bool {
+        unsafe { bc::bc_tab_split_with(tab, with, false) }
+    }
+
+    fn separate(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_separate(tab) };
+    }
+
+    fn set_muted(&self, tab: u64, muted: bool) {
+        unsafe { bc::bc_tab_set_muted(tab, muted) };
+    }
+
+    fn make_task_space(&self, agent: &str, agent_name: &str, like: u64, cx: &mut App) -> u64 {
+        let space = self.make_agent_space(agent, agent_name, cx);
+        let profile = unsafe { bc::bc_space_profile(like) };
+        if space != 0 && profile != 0 && !unsafe { bc::bc_space_set_profile(space, profile) } {
+            browser::log!("browser: task space {space} couldn't take profile {profile}");
+        }
+        space
+    }
+
+    fn delete_space(&self, space: u64, _: &mut App) {
+        unsafe { bc::bc_space_delete(space) };
+    }
+
+    fn task_spaces(&self) -> Vec<u64> {
+        (ids(bc::bc_spaces).into_iter())
+            .filter(|&space| agents::is_task(&name(bc::bc_space_agent, space)))
+            .collect()
+    }
+
+    fn move_tab(&self, tab: u64, space: u64, _: &mut App) {
+        unsafe { bc::bc_tab_move_to_space(tab, space) }
+    }
+
+    fn user_space(&self, like: u64) -> u64 {
+        let profile = unsafe { bc::bc_space_profile(like) };
+        let users = |space: u64| {
+            space != 0
+                && name(bc::bc_space_agent, space).is_empty()
+                && unsafe { bc::bc_space_profile(space) } == profile
+        };
+        let shown = unsafe { bc::bc_window_space(crate::front().0) };
+        match users(shown) {
+            true => shown,
+            false => ids(bc::bc_spaces)
+                .into_iter()
+                .find(|&space| users(space))
+                .unwrap_or(shown),
+        }
+    }
+
+    fn request(&self, agent: &str, tab: u64, request: u64, sent: &agents::request::Request) {
+        let headers: String = (sent.headers.iter())
+            .map(|(name, value)| format!("{name}: {value}\n"))
+            .collect();
+        let method = CString::new(sent.method.as_str());
+        let url = CString::new(sent.url.as_str());
+        // The tool's checks leave no NUL, but an answer comes whatever happens.
+        let (Ok(agent), Ok(method), Ok(url), Ok(headers)) =
+            (CString::new(agent), method, url, CString::new(headers))
+        else {
+            let error = Some("The request can't hold a NUL character.".to_string());
+            let response = agents::request::Response {
+                error,
+                ..Default::default()
+            };
+            return update(move |agents, cx| agents.request_done(request, response, cx));
+        };
+        let body = sent.body.as_bytes();
+        unsafe {
+            bc::bc_agent_request(
+                agent.as_ptr(),
+                tab,
+                request,
+                method.as_ptr(),
+                url.as_ptr(),
+                headers.as_ptr(),
+                body.as_ptr().cast(),
+                body.len(),
+            )
+        };
     }
 }
 
@@ -223,9 +359,19 @@ pub fn start(cx: &mut App) {
         return;
     }
     let socket = agents::address(std::path::Path::new(&crate::profile_dir()));
-    // Beside the browser's executable: in the app bundle, or beside Chromium's on Linux.
-    let exe = std::env::current_exe().unwrap_or_default();
-    let bridge = exe.with_file_name(agents::bridge::NAME);
+    // Beside the browser's executable: in the app bundle, or beside Chromium's on Linux and
+    // Windows, but in a copy the Store updates, whose folder moves with each update, its alias.
+    #[allow(unused_mut)]
+    let mut bridge = std::env::current_exe()
+        .unwrap_or_default()
+        .with_file_name(agents::bridge::NAME);
+    #[cfg(target_os = "windows")]
+    if crate::updated_by_store()
+        && let Ok(local) = std::env::var("LOCALAPPDATA")
+    {
+        bridge = agents::bridge::store_alias(&local);
+    }
+    let bridge = agents::bridge::launch(&bridge, agents::bridge::flatpak_id().as_deref());
     let made = Agents::new(
         Rc::new(Core),
         Arc::new(agents::System),
@@ -233,12 +379,42 @@ pub fn start(cx: &mut App) {
         socket,
         bridge,
     );
-    let made = cx.new(|_| made);
+    let made = cx.new(|cx| {
+        let mut made = made;
+        // A run before that ended without quitting left its tasks' Spaces.
+        made.end_old_tasks(cx);
+        made
+    });
     cx.set_global(GlobalAgents(made.clone()));
     // The bar in an agent's Space follows what it does, and what the user holds from it.
     cx.observe(&made, |agents, cx| {
         let status = agents.read(cx).status();
-        crate::update_shells_in(cx, |shell, cx| shell.set_agent_status(status.clone(), cx));
+        // Each card is compared with the last, so a window redraws only for a task that changed.
+        let cards = agents.read(cx).shown_cards(cx);
+        browser::needs_you::follow(&cards, cx);
+        // Each task that ended goes to Library › Agents of its home Space's profile, as its receipt
+        // shows it, for 30 days (browser::agent_history).
+        let ended = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        for (home, past) in ended {
+            let profile = unsafe { bc::bc_space_profile(home) };
+            if profile == 0 {
+                continue;
+            }
+            let kept = browser::agent_history::read(&bar_picks_host::sessions(profile));
+            let kept = browser::agent_history::kept(kept, past, browser::usage::now());
+            bar_picks_host::set_sessions(profile, &browser::agent_history::write(&kept));
+            // check.sh reads this line.
+            browser::log!(
+                "browser: agents history keeps {} in profile {profile}",
+                kept[0].id
+            );
+        }
+        let archived = agents.read(cx).archived_tasks(cx);
+        let shells: Vec<_> = WINDOWS
+            .with_borrow(|windows| windows.iter().map(|window| window.shell.clone()).collect());
+        let conversation = |agent: &str, cx: &App| agents.read(cx).conversation(agent, cx);
+        browser::shell::send_agents(status, cards, archived, conversation, &shells, cx);
+        browser::command_bar::task_agents_changed(cx);
     })
     .detach();
     cx.spawn(async move |cx| {
