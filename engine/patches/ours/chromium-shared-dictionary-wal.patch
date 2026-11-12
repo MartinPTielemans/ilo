@@ -6,7 +6,9 @@ Windows' runner a quit as it loaded took 0.4 to 1.5 s, growing with the dictiona
 (#2439). In WAL mode sql::Database sets synchronous=NORMAL: a commit appends to the log without
 waiting for the disk, and only checkpoints and the close do. A power cut may lose the last commits,
 each a whole registration or deletion, but leaves the database uncorrupted, which the rollback
-journal without flush_to_media doesn't promise (sql/database.h).
+journal without flush_to_media doesn't promise (sql/database.h). Each clear ends with a
+truncating checkpoint, so a power cut after Clear browsing data or a Clear-Site-Data header can't
+bring back what it cleared.
 
 --- a/net/extras/sqlite/sqlite_persistent_shared_dictionary_store.cc
 +++ b/net/extras/sqlite/sqlite_persistent_shared_dictionary_store.cc
@@ -21,6 +23,35 @@ journal without flush_to_media doesn't promise (sql/database.h).
    bool CreateDatabaseSchema() override;
    std::optional<int> DoMigrateDatabaseSchema() override;
    void DoCommit() override;
+@@ -1065,6 +1069,10 @@
+   if (!transaction.Commit()) {
+     return base::unexpected(Error::kFailedToCommitTransaction);
+   }
++  // browser_core: in WAL mode a commit reaches the disk only at a checkpoint,
++  // so a power cut could bring back what was cleared. The checkpoint makes the
++  // clear durable, and truncating the log drops the cleared rows it held.
++  db()->CheckpointDatabase(/*truncate=*/true);
+   return base::ok(
+       std::set<base::UnguessableToken>(tokens.begin(), tokens.end()));
+ }
+@@ -1114,6 +1122,8 @@
+   }
+ 
+   transaction.Commit();
++  // browser_core: as in ClearAllDictionariesImpl.
++  db()->CheckpointDatabase(/*truncate=*/true);
+   return base::ok(
+       std::set<base::UnguessableToken>(tokens.begin(), tokens.end()));
+ }
+@@ -1281,6 +1291,8 @@
+     }
+   }
+   transaction.Commit();
++  // browser_core: as in ClearAllDictionariesImpl.
++  db()->CheckpointDatabase(/*truncate=*/true);
+   return base::ok(
+       std::set<base::UnguessableToken>(tokens.begin(), tokens.end()));
+ }
 --- a/net/extras/sqlite/sqlite_persistent_store_backend_base.cc
 +++ b/net/extras/sqlite/sqlite_persistent_store_backend_base.cc
 @@ -103,7 +103,8 @@
