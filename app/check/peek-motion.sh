@@ -42,6 +42,21 @@ if [ "$active" != 1 ]; then
   echo "skip: peek-motion. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
+# The motion is what it reads, and the app keeps still under Reduce Motion, as with Windows'
+# animations off, which GitHub's runner starts with. Turned on only on a CI VM, as the setting is
+# the system's, and off again after.
+animations=
+if windows && [ -n "${GITHUB_ACTIONS:-}" ] && [ "$(last 'reduce motion')" = on ]; then
+  windows_animations 1 || fail "PowerShell didn't turn Windows' animations on"
+  animations=off
+  expect '^browser: reduce motion off$' "Windows' animations turned on didn't bring the app's motion back"
+fi
+if [ "$(last 'reduce motion')" = on ]; then
+  exec 3>&-
+  quit
+  echo "skip: peek-motion. The system's animations are off, so the app keeps still and Peek doesn't move."
+  exit 0
+fi
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
@@ -109,6 +124,7 @@ done
 [ "$(today)" = "$a" ] || fail "Peek opened a tab: Today is \"$(today)\""
 exec 3>&-
 quit
+[ -z "$animations" ] || windows_animations 0 || fail "PowerShell didn't turn Windows' animations off again"
 case $status in
 0) ;;
 2) if windows; then
