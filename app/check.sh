@@ -19,7 +19,9 @@
 # keychain, which uses the real Keychain, on the prod build and only in a check VM. Shots takes
 # the Store's pictures from pages on the internet, so it runs only when named too. Tab-drag drags a
 # tab's row between windows with the data device's own drag, which only Wayland's sessions can, so it
-# runs only when named, and skips elsewhere, where the windows run checks it.
+# runs only when named, and skips elsewhere, where the windows run checks it. Paste pastes another
+# app's copy into the UI's fields, Linux's alone, as the clipboard there is the session's, so it
+# runs only when named too.
 # Sync-versions syncs one account with the release ILO_OLD names, installed as ilo's Flatpak, on
 # Linux under Xvfb, so it runs only when named too.
 # Perf measures the browser against #456's targets, and Chrome beside it, which takes it 16 minutes,
@@ -109,7 +111,7 @@ runs="$runs passwords links preview access trouble dialogs crash import quit onb
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
 runs="$runs handback webrtc count translate pictures boosts sidebar-right foot-bar"
-named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
+named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine paste updates nightly update-checks keychain shots tab-drag perf"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
