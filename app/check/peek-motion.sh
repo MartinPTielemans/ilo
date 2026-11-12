@@ -1,8 +1,8 @@
 # Peek grows from the link and shrinks back into it showing only the card: at a point inside its
 # resting frame, every frame shows the window's own page there until the card reaches it, and
 # again once the card has left it as it closes, never Peek's page laid out where it rests; inside
-# the card no frame shows the window's page undimmed; and Peek's page is laid out at its resting
-# size from the first, never resized by the motion (#2519).
+# the card no frame shows the window's page undimmed; and Peek's page is never resized by the
+# motion (#2519).
 # It films opens and closes (tools/window-frames.sh, which keeps every picture) and reads
 # each frame with check/peek_motion.py, which takes where the motion is from the dim the frame
 # shows over the window's page. Its frames: build/check/peek-frames/open-1, close-1 and on.
@@ -16,9 +16,8 @@ fi
 serve
 # The window's page is one green, its top 40% a link to another site, localhost, and Peek's page
 # one magenta, so a frame says whose page shows at a point. The titles say "ready" once drawn, and
-# Peek's its size as its first script read it and at its first frame, and how many times it was
-# resized before that frame and after: it's laid out where it rests from the first, never in the
-# motion's frames (#2519).
+# Peek's its size as its first script read it, at its first frame and now, and how many times it
+# was resized before that frame and after: the motion never resizes it (#2519).
 target="http://localhost:$port/peek-motion-target.html"
 printf '%s' "<title>loading</title>
 <body style=\"margin:0;height:100vh;background:rgb(0,176,0)\">
@@ -30,7 +29,8 @@ printf '%s' "<title>loading</title><body style=\"margin:0;height:100vh;backgroun
 <script>
 const first = innerWidth + 'x' + innerHeight;
 let painted = '', before = 0, after = 0;
-const say = () => document.title = 'peek ready ' + first + ' ' + painted + ' ' + before + ' ' + after;
+const say = () => document.title = 'peek ready ' + first + ' ' + painted + ' ' + innerWidth + 'x' +
+  innerHeight + ' ' + before + ' ' + after;
 addEventListener('resize', () => { painted ? (after++, say()) : before++; });
 requestAnimationFrame(() => requestAnimationFrame(() => { painted = innerWidth + 'x' + innerHeight; say(); }));
 </script>" > "$out/site/peek-motion-target.html"
@@ -114,12 +114,19 @@ round() {
   expect "^browser: title $p peek ready " "Peek's page didn't draw"
   rest=$(grep '^browser: link preview page at ' "$log" | tail -1 | sed 's/^browser: link preview page at //')
   [ -n "$rest" ] || fail "Peek didn't say where its page rests"
-  # Its size where it rests, in points, as its first script read it, to the point, and never
-  # resized. Read after the frames, which say what the motion showed either way.
+  # Its sizes against its resting size. The motion never resizes it, so it ends at its resting
+  # size, resized once at most: it's still made at the window's page's size and loads before Peek
+  # sizes it, which comes in once, before or after its first frame (#2539).
+  # Its resting size in whole points either way, as it reads them, which it may take a moment more
+  # to reach; the sizes below say if it never does.
+  whole=$(echo "$rest" | awk '{ printf "\\(%d\\|%d\\)x\\(%d\\|%d\\)", $3, $3 + 0.999, $4, $4 + 0.999 }')
+  await "^browser: title $p peek ready [0-9x]* [0-9x]* $whole " || true
   said=$(grep "^browser: title $p peek ready " "$log" | tail -1 | sed 's/.*peek ready //')
-  echo "$rest $said" | awk '{ split($8, size, "x");
-      exit !(size[1] - $3 <= 1 && $3 - size[1] <= 1 && size[2] - $4 <= 1 && $4 - size[2] <= 1 && $10 + $11 == 0) }' ||
-    resized=$(echo "$said" | awk -v rest="$(echo "$rest" | cut -d' ' -f3,4)" '{ printf "read %s at its first script and %s at its first frame, resized %d times before that frame and %d after, against its resting %s", $1, $2, $3, $4, rest }')
+  sizes=$(echo "$said" | awk -v rest="$(echo "$rest" | cut -d' ' -f3,4)" '{ printf "read %s at its first script, %s at its first frame and %s at last, resized %d times before that frame and %d after, against its resting %s", $1, $2, $3, $4, $5, rest }')
+  echo "Peek's page $sizes" >> "$frames/sizes.txt"
+  echo "$rest $said" | awk '{ split($10, size, "x");
+      exit !(size[1] - $3 <= 1 && $3 - size[1] <= 1 && size[2] - $4 <= 1 && $4 - size[2] <= 1 && $11 + $12 <= 1) }' ||
+    resized=$sizes
   film "close-$1"
   send key escape
   expect '^browser: link preview hidden$' "Esc didn't close Peek"
@@ -151,5 +158,5 @@ case $status in
    exit 0 ;;
 *) fail "a frame shows Peek's resting frame outside its card, or the window's page undimmed inside it: $(grep 'FAIL' "$out/peek-motion.txt" | tr '\n' ' ')" ;;
 esac
-[ -z "$resized" ] || fail "Peek's page $resized"
-echo "ok: Peek grows from the link and shrinks back into it with only its card on screen: each frame shows the window's page at a point of Peek's resting frame until the card reaches it and once it has left, never undimmed inside the card, and its page read its resting size from its first script, never resized. Frames: build/check/peek-frames, read in build/check/peek-motion.txt"
+[ -z "$resized" ] || fail "Peek's page was resized more than once, or not to its resting size: it $resized"
+echo "ok: Peek grows from the link and shrinks back into it with only its card on screen: each frame shows the window's page at a point of Peek's resting frame until the card reaches it and once it has left, never undimmed inside the card, and its page was resized once at most, to its resting size. Its sizes: $(tail -1 "$frames/sizes.txt"). Frames: build/check/peek-frames, read in build/check/peek-motion.txt"
