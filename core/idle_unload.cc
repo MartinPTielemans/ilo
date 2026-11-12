@@ -114,8 +114,10 @@ void UnloadIdle() {
   }
 }
 
-// Unloads the tab unseen longest, whatever its age, each time the system says memory is short:
-// one a notification, as Chrome's urgent discarding does, and macOS notifies again while it lasts.
+// Unloads the page of the tab unseen longest, whatever its age, each time the system says memory is
+// short: one a notification, as Chrome's urgent discarding does, and macOS notifies again while it
+// lasts. Only a tab with a page counts, as one without, such as a tab put back at launch and not
+// yet shown, would free nothing and stay the unseen longest at every notification after.
 class PressureListener : public base::MemoryPressureListener {
  public:
   PressureListener() = default;
@@ -128,7 +130,7 @@ class PressureListener : public base::MemoryPressureListener {
     }
     Tab* oldest = nullptr;
     for (Tab* tab : Tab::All()) {
-      if ((!oldest || tab->last_seen() < oldest->last_seen()) &&
+      if ((!oldest || tab->last_seen() < oldest->last_seen()) && Tab::Loaded(tab->id()) &&
           MayUnload(*tab, DiscardReason::URGENT)) {
         oldest = tab;
       }

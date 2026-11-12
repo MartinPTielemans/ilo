@@ -952,6 +952,8 @@ start_with_cdp() {
   cdp_url=$1 cdp_profile=$2 cdp_page=$3
   shift 3
   mkfifo "$scratch/cdp"
+  # The browser opens its log only once the pipes before it have opened, after the first await.
+  : > "$log"
   if windows; then
     # Chrome on Windows takes its DevTools pipe as handles, which Git Bash can't give it, so
     # DevTools listens on a loopback port instead, which the browser says on its standard error. A
