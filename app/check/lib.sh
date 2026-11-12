@@ -57,6 +57,12 @@ sidebar_point="100 400"
 
 # After a failure, nothing the check started keeps running.
 cleanup() {
+  status=${1:-$?}
+  # A command that failed under set -e ends the check without fail's line, so a result would read
+  # as an exit with no failure, as sync-extensions' mkfifo on the pipe a run before left did (#2486).
+  if [ "$status" != 0 ] && [ -z "${failed:-}" ]; then
+    echo "FAIL: ${run:-the check} stopped at a command that failed, with status $status, before saying why; the lines above are its last" >&2
+  fi
   # The servers may be gone already, and under set -e a failed kill would end the trap here.
   [ -z "${server:-}" ] || kill "$server" 2>/dev/null || true
   [ -z "${collector:-}" ] || kill "$collector" 2>/dev/null || true
@@ -108,6 +114,7 @@ cleanup() {
   pkill -9 -f "$procs" || true
 }
 fail() {
+  failed=1
   echo "FAIL: $1" >&2
   grep -v '^$' "$log" | tail -5 >&2
   # What the window showed, for a failure the log doesn't explain, as on CI.
