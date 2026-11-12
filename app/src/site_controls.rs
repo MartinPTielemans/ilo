@@ -861,8 +861,10 @@ pub fn show(
 }
 
 /// Has the panel's next opening ring the row of the permission Chrome calls `key`, such as
-/// "notifications", once the core has read the site, if the site lists it.
+/// "notifications", once the core has read the site, if the site lists it. The panel's window is
+/// made first if it's still to be made, or the first opening would lose the ring.
 pub fn open_at_permission(key: &'static str, cx: &mut App) {
+    crate::lazy_window::ready::<SiteControls>(cx);
     update(cx, |panel, _, _| panel.at_permission = Some(key));
 }
 

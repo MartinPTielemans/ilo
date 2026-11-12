@@ -1248,6 +1248,10 @@ impl Browser for Fake {
         let room = size(px(site_controls::WIDTH), window.height - at.y);
         let bounds = Bounds::new(PREVIEW_ORIGIN.get() + at, room);
         if site_controls::open_at(Rc::new(PreviewSiteControls), bounds, true, cx).is_some() {
+            // The shell asked for Notifications' ring before this window was made.
+            if std::env::var("PREVIEW_QUIET").as_deref() == Ok("held") {
+                site_controls::open_at_permission("notifications", cx);
+            }
             site_controls::show(tab, place, window, extensions, profiles, cx);
             site_controls::changed(tab, preview_site(), cx);
         }
@@ -2521,6 +2525,17 @@ fn main() {
                         };
                         shell.set_page(tab, page, cx);
                     }
+                    // PREVIEW_QUIET=held has the first tab's page ask to send notifications with
+                    // no click behind it, so a bell waits in the URL field; =allowed and =blocked
+                    // are its Site Controls once Allow or Block there answered it (#2323).
+                    if std::env::var("PREVIEW_QUIET").as_deref() == Ok("held") {
+                        let question = shell::Question {
+                            site: "en.wikipedia.org".into(),
+                            permissions: vec!["Show notifications".into()],
+                            quiet: true,
+                        };
+                        shell.set_question(1, Some(question), cx);
+                    }
                     // PREVIEW_DRM=1 has the first tab's page ask for video ilo can't play, so its
                     // note shows, offering what this system's does (#2468).
                     if std::env::var_os("PREVIEW_DRM").is_some() {
@@ -3302,6 +3317,11 @@ fn preview_site() -> Site {
             "Connection is secure",
         ),
     };
+    let (notifications, notifications_state) = match std::env::var("PREVIEW_QUIET").as_deref() {
+        Ok("held") => (Value::Ask, "Ask (default)"),
+        Ok("blocked") => (Value::Block, "Blocked"),
+        _ => (Value::Allow, "Allowed"),
+    };
     Site {
         site: site.into(),
         connection,
@@ -3320,8 +3340,8 @@ fn preview_site() -> Site {
                 6,
                 "notifications",
                 "Notifications",
-                Value::Allow,
-                "Allowed",
+                notifications,
+                notifications_state,
                 &Value::ALL,
             ),
             permission(

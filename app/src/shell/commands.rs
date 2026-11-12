@@ -579,7 +579,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         &["reopen", "undo close"],
     ),
     ("Find…", Command::Find, &[]),
-    ("Site Controls", Command::SiteControls, &["permissions"]),
+    (
+        "Site Controls",
+        Command::SiteControls,
+        &["permissions", "notifications"],
+    ),
     ("Cast…", Command::Cast, &["chromecast", "tv", "mirror"]),
     ("Go Back", Command::Back, &[]),
     ("Go Forward", Command::Forward, &[]),

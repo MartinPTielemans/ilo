@@ -2568,7 +2568,8 @@ impl Settings {
         let prompts_line = match prompts {
             // When a site may ask as a card, and when it waits behind the bell (#2323).
             true => {
-                "A site asks when you press its button for it. Otherwise a bell in the URL field waits."
+                "A site asks when you press its button for it. Others wait behind a bell in the URL \
+                 field."
             }
             false => "Off: no site can ask. A site you allowed or blocked keeps its choice.",
         };

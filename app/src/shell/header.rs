@@ -445,9 +445,15 @@ impl Shell {
     /// Opens the Site Controls under the URL field, hanging from their button, or with the field
     /// hidden at the page's top left corner, as an extension's popup is; or closes them. They list
     /// every turned-on extension, the pinned ones first, which the core reports once they show.
+    /// With a request to show notifications held, they open at Notifications, its row ringed, so
+    /// the bell's press and the keyboard's way in, the command bar's Site Controls, answer it alike
+    /// (#2323).
     pub(super) fn site_controls(&mut self, cx: &mut Context<Self>) {
         if self.field_tab() == 0 {
             return;
+        }
+        if self.held_notifications(self.field_tab()).is_some() {
+            crate::site_controls::open_at_permission("notifications", cx);
         }
         let place = match self.url_field_bounds() {
             Some(field) => {
@@ -726,7 +732,6 @@ impl Shell {
                     cx.listener(|shell, _, _, cx| {
                         cx.stop_propagation();
                         shell.browser.tooltip(None, cx);
-                        crate::site_controls::open_at_permission("notifications", cx);
                         shell.run(Command::SiteControls, "bell", cx);
                     }),
                 )
