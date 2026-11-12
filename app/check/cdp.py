@@ -32,7 +32,8 @@ takes a command a line on its standard input:
                   its text or its id, or none for no such page or nothing focused: a WebUI dialog
                   takes the keyboard a moment after its page loads
   requests FILE   records each request the attached page and its frames make from now on, a JSON
-                  line each in FILE: "sent" with its id, address and wall time in ms, "failed"
+                  line each in FILE: "sent" with its id, address and wall time in ms, and
+                  "redirect": true where it's a redirect of the request before it, "failed"
                   with its id and Chromium's error, as net::ERR_BLOCKED_BY_CLIENT for an ad
                   blocker's, and "answered" with its id for a response from no server, network
                   cache or service worker, as the browser's own ad blocker's stand-in is, then
@@ -211,6 +212,10 @@ def record(message):
     if method == "Network.requestWillBeSent":
         line = {"event": "sent", "id": params["requestId"], "url": params["request"]["url"],
                 "at": int(params["wallTime"] * 1000)}
+        # A redirect keeps its request's id, but a new request can take an id used before: ids
+        # are a renderer's process id and a count, and the OS gives a later process the same id.
+        if "redirectResponse" in params:
+            line["redirect"] = True
     elif method == "Network.loadingFailed":
         line = {"event": "failed", "id": params["requestId"], "error": params["errorText"]}
     elif method == "Network.responseReceived":

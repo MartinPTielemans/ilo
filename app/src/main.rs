@@ -898,6 +898,13 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     {
         args.push(format!("{TEST_HOST}={host}"));
     }
+    // A process that crashes prints its stack to the stderr the browser shares with its child
+    // processes, a piece at a time, so a line of the browser's written meanwhile lands in the
+    // middle of one, where the checks reading the log don't find it (#2496). check.sh keeps
+    // those stacks out with BROWSER_STACK_TRACES=off; a crash still ends the process as before.
+    if std::env::var("BROWSER_STACK_TRACES").is_ok_and(|traces| traces.trim() == "off") {
+        args.push("--disable-in-process-stack-traces".into());
+    }
     // The checks' crash, which has Crashpad write a minidump (core/crash_reports.h).
     const CRASH_TEST: &str = "--crash-after-start";
     // Where the user's crash reports go if they send them, a default service URL that a fork or a
