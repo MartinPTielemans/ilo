@@ -1527,6 +1527,25 @@ FRAME
   send key escape
   bar_gone "Esc in the command bar after the display adapter restarted"
 fi
+# On the Mac, AppKit can make a hidden overlay's panel key, as it can one still fading out after the
+# UI hid it, and what the user typed went to it unseen. The driver makes the bar key as it fades:
+# its browser window takes the keyboard back, and ⌘T opens the bar with the keys (#2594).
+if [ "$(uname)" = Darwin ]; then
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send key escape
+  expect '^browser: command bar hidden$' "Esc didn't close the command bar"
+  send makekey command bar
+  expect '^browser: made command bar key$' "the driver found no command bar to make key"
+  expect '^browser: command bar hidden, its browser window takes the keyboard$' \
+    "the command bar, made key as it faded, kept the keyboard"
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T after the hidden bar was made key didn't open it"
+  send type g
+  expect '^browser: command bar drew "g"$' "what's typed after the hidden bar was made key didn't go into it"
+  send key escape
+  expect '^browser: command bar hidden$' "Esc didn't close the command bar after it was made key hidden"
+fi
 
 # Arc's bar commands that call what the menus do: Mute All Tabs mutes every tab, and Unmute All
 # Tabs, listed while one is muted, unmutes them; Enter Full Screen puts the window full screen and
