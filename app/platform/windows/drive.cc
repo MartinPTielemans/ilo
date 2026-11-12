@@ -40,7 +40,8 @@
 // Linux's driver does. ime ja makes Microsoft's Japanese IME, where it's installed, the UI thread's
 // input method, on in hiragana, and sends the keys typed until ime off without a shortcut's
 // modifiers through Windows' input queue, to the window in front, which must be ilo's, so the IME
-// composes them, in a page too: "nihongo" composes にほんご, space converts it to 日本語.
+// composes them, in a page too: "nihongo" composes にほんご, space converts it to 日本語. ime ko does
+// the same with Microsoft's Korean IME, in Hangul: "gksrmf" composes 한글 (#2457).
 // fullscreen puts the window full screen or takes it out through the core, as Linux's driver does.
 // The others, pageswipe, displays, hide, backdrop and openmenu, Windows has nothing the driver can
 // stand in for yet: each logs "browser: drive: unsupported <command>" before drive.mm's "can't do
@@ -884,22 +885,31 @@ std::optional<std::string> g_composition;
 // keyboard's do, so the IME composes them itself, in the UI's fields and in a page alike: posted
 // ones would pass it by.
 bool g_japanese = false;
+// Microsoft's Korean IME, while ime ko is on, its keys sent as the Japanese IME's are.
+bool g_korean = false;
+// The key that switches a Korean IME between Hangul and the keyboard's letters.
+constexpr UINT kImeHangul = VK_HANGUL;
 // The keys that turn a Japanese IME on in hiragana (VK_DBE_HIRAGANA, which not every SDK's headers
 // name) and on or off (VK_KANJI, Alt+` on a US keyboard).
 constexpr UINT kImeHiragana = 0xF2;
 constexpr UINT kImeOnOff = VK_KANJI;
 
-// Microsoft's Japanese IME, where it's one of the user's input methods, which a runner gets from
-// the Language.Basic~~~ja-JP capability and its language list (check-windows.yml).
-HKL JapaneseLayout() {
+// The input method for |language|, where it's one of the user's, which a runner gets from that
+// language's Language.Basic capability and its language list (check-windows.yml).
+HKL LanguageLayout(WORD language) {
   HKL layouts[32];
   const int count = GetKeyboardLayoutList(32, layouts);
   for (int i = 0; i < count; ++i) {
-    if (LOWORD(reinterpret_cast<UINT_PTR>(layouts[i])) == 0x0411) {
+    if (LOWORD(reinterpret_cast<UINT_PTR>(layouts[i])) == language) {
       return layouts[i];
     }
   }
   return nullptr;
+}
+
+// Microsoft's Japanese IME.
+HKL JapaneseLayout() {
+  return LanguageLayout(0x0411);
 }
 
 // |vk| pressed and let go through the input queue, to the window in front.
@@ -932,6 +942,10 @@ void AwaitKeyTitle(const std::string& text, int tries) {
 // Waits, up to |tries| times, for the keys SendInput queued to be handled: the driver's posted
 // messages come off the queue before input does.
 void WaitForKeys(int tries) {
+  if (g_korean && tries == 0) {
+    fprintf(stderr, "browser: drive: ko: keys still queued after 100 tries\n");
+    fflush(stderr);
+  }
   if (tries > 0 && HIWORD(GetQueueStatus(QS_KEY))) {
     g_steps.push_front({[tries] { WaitForKeys(tries - 1); }, 16});
   }
@@ -947,6 +961,10 @@ bool AddSentKey(UINT vk) {
       return;
     }
     SendVirtualKey(vk);
+    if (g_korean) {
+      fprintf(stderr, "browser: drive: ko: sent %u\n", vk);
+      fflush(stderr);
+    }
   }, 30});
   g_steps.push_back({[] { WaitForKeys(100); }, 16});
   // What the IME does with the key, as a composition it cancels, can come a moment after.
@@ -963,8 +981,9 @@ bool AddSentKey(UINT vk) {
 // as plain keys it would pass for a composition.
 int AddImeKey(const std::string& key, int modifiers) {
   const bool letter = key.size() == 1 && key[0] >= 'a' && key[0] <= 'z';
-  // Microsoft's Japanese IME takes the keys without a shortcut's modifiers, as a keyboard's.
-  if (g_japanese && !((modifiers | g_flags) & (kCtrl | kAlt))) {
+  // Microsoft's Japanese and Korean IMEs take the keys without a shortcut's modifiers, as a
+  // keyboard's.
+  if ((g_japanese || g_korean) && !((modifiers | g_flags) & (kCtrl | kAlt))) {
     int held = modifiers;
     const UINT vk = VirtualKey(key, &held);
     return vk && !held && AddSentKey(vk) ? 1 : 0;
@@ -1992,8 +2011,40 @@ bool Run(const std::string& line) {
   if (action == "ime") {
     std::string state;
     words >> state;
-    if (state != "on" && state != "off" && state != "ja") {
+    if (state != "on" && state != "off" && state != "ja" && state != "ko") {
       return false;
+    }
+    if (state == "ko") {
+      // The UI thread's input method is the Korean IME, switched to Hangul as the user would.
+      HKL korean = LanguageLayout(0x0412);
+      if (!korean) {
+        fprintf(stderr, "browser: drive: no Korean IME\n");
+        return false;
+      }
+      // Diagnostic for #2474: which step never returns.
+      g_steps.push_back({[korean] {
+        fprintf(stderr, "browser: drive: ko: activating %p, the thread's %p\n", korean,
+                GetKeyboardLayout(0));
+        fflush(stderr);
+        HKL was = ActivateKeyboardLayout(korean, 0);
+        fprintf(stderr, "browser: drive: ko: activated, was %p, now %p, error %lu\n", was,
+                GetKeyboardLayout(0), GetLastError());
+        fflush(stderr);
+      }});
+      g_steps.push_back({[] {
+        fprintf(stderr, "browser: drive: ko: sending hangul\n");
+        fflush(stderr);
+      }});
+      g_korean = AddSentKey(kImeHangul);
+      g_steps.push_back({[] {
+        fprintf(stderr, "browser: drive: ko: hangul sent, layout %p, keys queued %d\n",
+                GetKeyboardLayout(0), HIWORD(GetQueueStatus(QS_KEY)) != 0);
+        fflush(stderr);
+      }});
+      return true;
+    }
+    if (std::exchange(g_korean, false)) {
+      AddSentKey(kImeHangul);
     }
     if (state == "ja") {
       // The UI thread's input method is the IME, on, in hiragana, as the user would pick it. Off,
