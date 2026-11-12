@@ -338,6 +338,45 @@ quit() {
   quit_app
   exited "$@"
 }
+# uBlock Origin's selfie of its filters (#2381, #2502), which goes with uBlock Origin (#2111). A
+# launch takes its filters in from it, or with none compiles them, and 53 s after its lists last
+# changed writes it, about a minute into a new profile's first launch, in the browser's pool, main
+# and IO threads and the extension's process: 0.85 s of CPU in 4 s on the Mac. A user's launches
+# after are on it, so a run's that measure them are too.
+# ublock_selfie: whether uBlock Origin wrote its selfie's three parts, which it takes in only
+# together, to its IndexedDB, whose keys are UTF-16, and to its extension storage. A key it takes
+# out stays in their files until they compact, so this says only that one was written.
+ublock_selfie() {
+  local store key
+  for store in "$profile_dir/Default/IndexedDB/chrome-extension_oghkpboejbohceocapipmnjifoklonij_0.indexeddb.leveldb" \
+    "$profile_dir/Default/Local Extension Settings/oghkpboejbohceocapipmnjifoklonij"; do
+    for key in staticMain staticExtFilteringEngine staticNetFilteringEngine; do
+      cat "$store"/*.log "$store"/*.ldb 2> /dev/null | LC_ALL=C tr -d '\000' |
+        grep -q "selfie/$key" || return 1
+    done
+  done
+}
+# selfie_launch <url> <log>: a launch on page <url>, logged to <log>, that stays until uBlock Origin
+# has written its selfie, checking each second, and quits, so its work has ended before the next
+# launch. $selfie_at is the seconds it took.
+selfie_launch() {
+  local run_log=$log stayed
+  log=$2
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  stayed=$(date +%s)
+  BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+  pid=$!
+  selfie_at=
+  for _ in $(seq 180); do
+    ublock_selfie && selfie_at=$(($(date +%s) - stayed)) && break
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 1
+  done
+  quit
+  [ -n "$selfie_at" ] || fail "uBlock Origin wrote no selfie in a launch that stayed 180 s"
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  log=$run_log
+}
 # Whether the run is on X11 through sway's Xwayland, where a child window such as the password
 # offer or the find bar can't keep the X focus, which wlroots' window manager sends back to the
 # browser window (#1646). Wayland and Xvfb keep it.

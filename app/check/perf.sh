@@ -239,28 +239,18 @@ done
 perf_row launch-new "Launch, a new profile's first, link to page painted" \
   "$(perf_stats '%.0f' < "$perf_dir/new") ms, held $(perf_stats '%.0f' < "$perf_dir/new-held") ms" \
   "none: once a profile"
-# uBlock Origin's selfie (#2381), all in this block, which goes whole with uBlock Origin (#2111).
+# uBlock Origin's selfie (#2381), all in this block and lib.sh's, which go whole with uBlock
+# Origin (#2111).
 # A launch takes its filters in from its selfie, the filters it compiled, or with none from its
 # lists. It writes the selfie 53 s after its lists last changed, in the session then, and takes it
 # out as a list changes, so a launch after a list update has none, as has each launch while no
 # session has lasted the 53 s. Those are 5 launches that quit seconds in; then one stays until the
 # selfie is written, and the launches after it are on it, a user's.
 if [ -n "$held" ]; then
-  ublock=oghkpboejbohceocapipmnjifoklonij
-  # Whether uBlock Origin wrote its selfie: to its IndexedDB, whose keys are UTF-16, and to its
-  # extension storage, as adblock-live reads them. A key it takes out stays in their files until
-  # they compact, so this says only that one was written.
-  perf_selfie() {
-    for store in "$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb.leveldb" \
-      "$profile_dir/Default/Local Extension Settings/$ublock"; do
-      cat "$store"/*.log "$store"/*.ldb 2> /dev/null | LC_ALL=C tr -d '\000' |
-        grep -q 'selfie/staticNetFilteringEngine' || return 1
-    done
-  }
   : > "$perf_dir/unselfied"
   : > "$perf_dir/unselfied-held"
   for n in 1 2 3 4 5; do
-    ! perf_selfie ||
+    ! ublock_selfie ||
       fail "uBlock Origin wrote its selfie before launch unselfied$n, in one that quit seconds in"
     rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
     perf_launch "$page?unselfied$n" "unselfied$n" "unselfied$n"
@@ -271,21 +261,7 @@ if [ -n "$held" ]; then
   perf_row launch-unselfied "Launch with no uBlock Origin selfie, link to page painted" \
     "$unselfied ms, held $(perf_stats '%.0f' < "$perf_dir/unselfied-held") ms" \
     "none: after a list update, until a session lasts 53 s"
-  # The launch that stays, checking both stores each second, until both have the selfie.
-  log="$perf_dir/launch-selfie.log"
-  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
-  stayed=$(date +%s)
-  BROWSER_URL="$page?selfie" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" \
-    2>&1 &
-  pid=$!
-  selfie_at=
-  for _ in $(seq 180); do
-    perf_selfie && selfie_at=$(($(date +%s) - stayed)) && break
-    kill -0 "$pid" 2> /dev/null || gone
-    sleep 1
-  done
-  quit
-  [ -n "$selfie_at" ] || fail "uBlock Origin wrote no selfie in a launch that stayed 180 s"
+  selfie_launch "$page?selfie" "$perf_dir/launch-selfie.log"
   echo "perf: uBlock Origin wrote its selfie $selfie_at s into a launch that stayed;" \
     "the launches below are on it"
   selfied=", on uBlock Origin's selfie"
