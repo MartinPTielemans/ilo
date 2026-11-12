@@ -189,22 +189,21 @@ exited() {
   # app opening it while the last writer is still open reads that writer's pipe, which ends as
   # `exec 3>` replaces it, and the relaunched app never gets a command.
   exec 3>&-
-  # #2439's probe, not to merge: a quit whose threads haven't stopped 3 s after stopping is dumped.
+  # #2439's probe, not to merge: a quit whose threads haven't stopped 1 s after stopping is dumped,
+  # with its child processes.
   if windows && kill -0 "$pid" 2>/dev/null; then
     probe_winpid=$(cat "/proc/$pid/winpid" 2>/dev/null || true)
     probe_out="${log%.log}"
     probe_log=$log
     (
-      for _ in $(seq 300); do
+      for _ in $(seq 600); do
         grep -q '^browser: stopping$' "$probe_log" && break
-        sleep 0.1
-      done
-      for _ in $(seq 30); do
-        grep -q '^browser: quit: threads stopped' "$probe_log" && exit 0
-        sleep 0.1
+        sleep 0.05
       done
       [ -n "$probe_winpid" ] &&
-        python3 -I check/dump-windows.py "$probe_winpid" "$probe_out.dmp" > "$probe_out.threads" 2>&1
+        python3 -I check/dump-windows.py "$probe_winpid" "$probe_out.dmp" "$probe_log" 1000 \
+          > "$probe_out.threads" 2>&1
+      [ -s "$probe_out.threads" ] || rm -f "$probe_out.threads"
     ) &
   fi
   ticks=$((${1:-10} * 2))
