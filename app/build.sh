@@ -7,6 +7,15 @@
 # APP_TRACK=nightly builds a nightly, which About names so and whose switch starts on.
 set -e
 cd "$(dirname "$0")"
+# The prebuilt engine's commit and the files changed since it, for check/lib.sh's engine_has in a
+# copy of the tree with no repository, as a check VM's (#2554): compared here, where git and the
+# engine's tags are. A build that can't compare leaves none, so no stale answer outlives it.
+mkdir -p build
+if commit=$(../engine/fetch.sh commit 2> /dev/null) && changed=$(git diff --name-only "$commit" --); then
+  printf '%s\n%s\n' "$commit" "$changed" > build/engine-changes
+else
+  rm -f build/engine-changes
+fi
 # On Linux, build/Browser: a copy of the engine, chrome and what it runs with, and libBrowser.so
 # beside it, which chrome loads (linux/Cargo.toml). Hard links, as chrome finds its files and the
 # app's beside its own path, which a symbolic link would leave in the engine's folder.
