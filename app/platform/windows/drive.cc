@@ -1242,6 +1242,10 @@ HRESULT DriveDrag(IDataObject* data, DWORD, DWORD* effect, POINT* at) {
     g_drag_target->DragLeave();
   }
   EndDrag();
+  // DoDragDrop's loop takes the pointer for a window of its own, which ends the press that started
+  // the drag. Held on, the window the tab left kept the pointer, and the driver sent it the click
+  // meant for the window the tab opened in (#2607).
+  ReleaseCapture();
   data->AddRef();
   g_drag = data;
   AppDrag drag;
