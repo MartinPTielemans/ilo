@@ -2342,6 +2342,16 @@ BC_EXPORT void bc_set_send_crash_reports(bool send);
 // The user's answer to crash_report_offered: send that one report, though Send Crash Reports is
 // off, or delete it. Nothing once answered, or without an offer.
 BC_EXPORT void bc_answer_crash_report(bool send);
+// The id of the last report the collector took, the report's own as 32 hex digits, which the core
+// gives a Sentry collector as the event's id so the report is found by it, or nothing before one
+// was taken. Help › Report a Problem… lists it. The core keeps it with the Spaces, and turning
+// Send Crash Reports off doesn't clear it. Copied as bc_profile_name copies a name.
+BC_EXPORT size_t bc_last_crash_report(char* id, size_t capacity);
+
+// Whether Chromium's sandbox confines the browser's other processes: on Linux, as chrome://sandbox
+// reads it, both its namespace layer and seccomp-bpf, and elsewhere unless the browser was started
+// with --no-sandbox. Help › Report a Problem… lists it. False until the browser has started.
+BC_EXPORT bool bc_sandboxed(void);
 
 // The daily usage count, which Settings › Privacy › Send a Daily Usage Count turns off. Posts one
 // count, as JSON, to the endpoint the app named with --daily-count-url, https or a loopback http,
