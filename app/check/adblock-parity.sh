@@ -1,3 +1,4 @@
+# check.sh runs this at 740, only when named.
 # The parity gate a native ad block engine has to pass before it takes uBlock Origin's place
 # (#2111), run with uBlock Origin, or with the browser's own engine where engine is native, as
 # adblock-native's is. In a new profile, once its lists block, each site in check/adblock-sites.txt

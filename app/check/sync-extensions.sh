@@ -1,3 +1,4 @@
+# check.sh runs this at 700, only when named.
 # What a device chooses to sync besides the Spaces (#1235), on an ilo-server of the run's own
 # (ilo-server.sh), each device a copy of the app with a profile of its own. A adds uBlock Origin
 # Lite from the Chrome Web Store, as the store run does, and picks View › Appearance › Dark, then

@@ -1,3 +1,4 @@
+# check.sh runs this at 590.
 # Settings' everyday rows that are Chromium's (#1636), browser-wide, which the core writes into
 # every profile, on a page of the check's own server, a secure context as notifications need:
 # - General › Page zoom at 125% zooms the page the user is on, as its devicePixelRatio says, and

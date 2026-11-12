@@ -1,3 +1,4 @@
+# check.sh runs this at 130.
 # ⌘D pins the tab shown, from the page and from the UI, at the bottom of the pinned tabs, and unpins
 # it to the top of Today. ⌘1–⌘9 count the pinned tabs first. ⌘W, the − under the pointer, on the
 # tab shown or not, or a middle-click on its row, unloads a pinned tab and keeps its row, and shows

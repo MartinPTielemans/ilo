@@ -1,3 +1,4 @@
+# check.sh runs this at 270.
 # A page's submitted login brings our offer to save its password, a card 18 in from the page
 # card's top right corner, which keeps its place through a resize. Showing another tab closes it,
 # and showing the tab again doesn't bring it back, but the key after the host in the URL field

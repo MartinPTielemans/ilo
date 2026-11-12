@@ -1,3 +1,4 @@
+# check.sh runs this at 160.
 # A Today tab's menu is Arc's, whose Copy Link is Copy Link as Markdown with ⌥ held, and its row
 # dragged onto the Space's name takes the tab out of Today into a tile above the Space's rows, its
 # press having shown it. Resting on the tile shows its hover card, which other apps don't take for
