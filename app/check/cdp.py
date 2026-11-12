@@ -36,6 +36,10 @@ takes a command a line on its standard input:
                   opened last at an address starting with PREFIX has played, whether it's paused,
                   whether its player shows an ad, and refused where Chrome kept it from starting,
                   as YouTube's player says
+  content         logs "cdp: content TEXT IMAGES covered|open|none": the attached page's shown
+                  text, in characters, its shown pictures at least 50 px a side, and covered where
+                  one element fixed in place covers the middle of the viewport and half its area,
+                  as a wall asking the user to turn their ad blocker off does, or none for no page
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, "failed"
@@ -446,6 +450,35 @@ def video(prefix):
     return value or "none"
 
 
+# What a page shows: its text, its pictures and whether something covers it, which a page broken
+# by a blocked script, or a wall, changes.
+CONTENT = """(() => {
+  if (!document.body) return "";
+  const shown = (e) => {
+    const box = e.getBoundingClientRect();
+    return box.width >= 50 && box.height >= 50 && getComputedStyle(e).visibility !== "hidden";
+  };
+  const images = [...document.querySelectorAll("img, picture, video, canvas, svg")]
+    .filter((e) => (e.tagName !== "IMG" || e.naturalWidth > 0) && shown(e)).length;
+  let covered = false;
+  const area = innerWidth * innerHeight;
+  for (let e = document.elementFromPoint(innerWidth / 2, innerHeight / 2); e; e = e.parentElement) {
+    const box = e.getBoundingClientRect();
+    if (getComputedStyle(e).position === "fixed" && box.width * box.height >= area / 2) {
+      covered = true;
+      break;
+    }
+  }
+  return document.body.innerText.length + " " + images + (covered ? " covered" : " open");
+})()"""
+
+
+def content():
+    value = session and call("Runtime.evaluate", {"expression": CONTENT, "returnByValue": True},
+                             session).get("result", {}).get("value")
+    return value or "none"
+
+
 for line in sys.stdin:
     words = line.split()
     if words[:1] == ["attach"] and len(words) == 2:
@@ -476,6 +509,8 @@ for line in sys.stdin:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:
         log("focus " + focus(words[1]))
+    elif words == ["content"]:
+        log("content " + content())
     elif words[:1] == ["video"] and len(words) == 2:
         log("video " + video(words[1]))
     elif words[:1] == ["requests"] and len(words) == 2 and session and not recording:

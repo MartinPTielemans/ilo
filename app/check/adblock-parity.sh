@@ -20,6 +20,9 @@
 # whether an ad showed before the video played 5 s, and it fails where the baseline's played with
 # no ad and this run's showed one or didn't play. It needs the network and the sites, so it runs
 # only when named: ./check.sh adblock-parity.
+# For each site the table also says what its page shows 8 s after the load: its text's characters,
+# its pictures, and whether an element fixed in place covers it (cdp.py's content), the measure of a
+# site an engine breaks, which no rule holds a run to yet (#2111).
 # It leaves adblock-parity/sites.tsv, a capture a site, and the requests recorded.
 engine=${engine:-ublock}
 
@@ -118,6 +121,21 @@ video() {
   done
   grep '^cdp: video ' "$cdp_log" | tail -1 | cut -d' ' -f3-
 }
+# A site's line in $contents: the site, then what cdp.py's content says the page shows 8 s after its
+# load: its text's characters, its pictures, and covered or open.
+contents="$dir/contents.txt"
+: > "$contents"
+look_content() {
+  asked=$(grep -c '^cdp: content ' "$cdp_log" || true)
+  echo content >&5
+  for _ in $(seq 50); do
+    [ "$(grep -c '^cdp: content ' "$cdp_log" || true)" -gt "$asked" ] && break
+    sleep 0.1
+  done
+  [ "$(grep -c '^cdp: content ' "$cdp_log" || true)" -gt "$asked" ] ||
+    fail "cdp.py didn't say what $1 shows: it said $(tail -1 "$cdp_log")"
+  echo "$1 $(grep '^cdp: content ' "$cdp_log" | tail -1 | cut -d' ' -f3-)" >> "$contents"
+}
 # A watch page's line in $videos: the site, "ad" if its player showed an ad or "no-ad", and the
 # seconds its video played, or none for no video, as YouTube's bot check has none. An ad plays
 # before the video does, so the player is read each half second from the load until the video
@@ -194,6 +212,7 @@ while read -r url <&4; do
   # The requests of both goes are the site's, from the first's Return on.
   echo "$first $url $loaded$bot" >> "$starts"
   [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] && continue
+  look_content "$url"
   ../tools/window-screenshot.sh "$pid" "$dir/$(printf %02d "$n").png" ||
     fail "no window to capture"
 done 4< check/adblock-sites.txt
@@ -224,12 +243,12 @@ rm -rf "$scratch"
 [ -s "$requests" ] || fail "DevTools recorded no requests"
 # What's wrong, if anything, as a here-document in a command substitution trips the Mac's bash 3.2.
 result="$dir/result.txt"
-python3 -I - "$requests" "$starts" "$videos" "$dir/sites.tsv" "${ADBLOCK_PARITY_BASELINE:-}" > "$result" << 'PY' || fail "$(cat "$result")"
+python3 -I - "$requests" "$starts" "$videos" "$contents" "$dir/sites.tsv" "${ADBLOCK_PARITY_BASELINE:-}" > "$result" << 'PY' || fail "$(cat "$result")"
 
 import json, sys
 from urllib.parse import urlsplit
 
-recorded, starts, watched, table, baseline = sys.argv[1:]
+recorded, starts, watched, shown, table, baseline = sys.argv[1:]
 # Each request: its address, when it went, and whether the ad blocker blocked it or answered it
 # with a stand-in, an extension's resource it redirected the request to. Its later events come by
 # its id, which a later request can take again, once a renderer's process id comes back: an id sent
@@ -263,6 +282,13 @@ videos = {}
 for line in open(watched, encoding="utf-8"):
     url, ad, played = line.split()
     videos[url] = {"ad": ad == "ad", "played": None if played == "none" else float(played)}
+
+# What a site's page showed: its text's characters, its pictures, and whether it was covered.
+contents = {}
+for line in open(shown, encoding="utf-8"):
+    url, *said = line.split()
+    if len(said) == 3:
+        contents[url] = {"text": int(said[0]), "images": int(said[1]), "covered": said[2] == "covered"}
 
 
 def plays(video):
@@ -298,14 +324,21 @@ def video_of(cell):
     return {"ad": ad == "ad", "played": None if played in ("", "none") else float(played)} if cell else None
 
 
+def content_cells(content):
+    if not content:
+        return ["", "", ""]
+    return [str(content["text"]), str(content["images"]), "1" if content["covered"] else "0"]
+
+
 with open(table, "w", encoding="utf-8") as out:
     out.write("site\tloaded\tload_ms\trequests\tblocked\tstand_ins\tblocked_hosts\tallowed_hosts"
-              "\tbot_check\tvideo\n")
+              "\tbot_check\tvideo\ttext\timages\tcovered\n")
     for s in sites:
         out.write("\t".join([s["url"], "1" if s["loaded"] else "0", s["load_ms"], str(s["requests"]),
                              str(s["blocked_n"]), str(s["standin_n"]), ",".join(s["blocked"]),
                              ",".join(s["allowed"]), "1" if s["bot"] else "0",
-                             video_cell(s["video"])]) + "\n")
+                             video_cell(s["video"])]
+                            + content_cells(contents.get(s["url"]))) + "\n")
 
 worse = []
 # A site that was Cloudflare's bot check in this run or the baseline's, which an older table
