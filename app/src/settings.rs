@@ -38,14 +38,17 @@ use gpui::{
 use crate::{bc, ns_view, platform, show_menu};
 use browser::menu::{self, Look};
 use browser::palette::{INK, PAPER};
-use browser::settings_card::{self, Card};
+use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
     Chip, Look as RowLook, SLIDE, chip, detailed_row, end, frame, glyph_plate, group, group_lined,
     named_button, row, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
-use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
+use browser::settings_search::{
+    self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
+    Search,
+};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
@@ -446,6 +449,8 @@ pub struct Settings {
     look: RowLook,
     /// The card the section shows on, which a section starts at the top of.
     card: Card,
+    /// The column's sections, which scroll at the window's least height.
+    sections: settings_column::Sections,
     /// It was asked to show, or changed section, and logs the section it draws next.
     shown: bool,
     /// An assistive app asks for the tree, so Settings names what it draws (#1381).
@@ -1265,6 +1270,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             appearance: shell::app_appearance(cx),
             look,
             card: Card::default(),
+            sections: Default::default(),
             shown: false,
             a11y: false,
             switched: None,
@@ -2320,11 +2326,26 @@ impl Settings {
             Some("Counted from when you leave the window.".into()),
             vec![little_archive.into_any_element()],
         ));
+        let sign_in_close = self.toggle(
+            "sign-in pages close",
+            "Close sign-in pages when done",
+            crate::sign_in_close::sign_in_close(),
+            set_sign_in_close,
+            accent,
+            cx,
+        );
+        let sign_in_close = nested(setting(
+            look,
+            "Close sign-in pages when done",
+            Some("When an app's sign-in finishes in Little ilo, its window closes.".into()),
+            vec![sign_in_close],
+        ));
         // Its own settings only while it's on.
         let little: Vec<Row> = [little]
             .into_iter()
             .chain(menu_bar)
             .chain(little_on.then_some(little_archive))
+            .chain(little_on.then_some(sign_in_close))
             .collect();
         let previews = unsafe { bc::bc_link_previews() };
         let previews = self.toggle(
@@ -4518,6 +4539,10 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
     crate::set_little_in_menu_bar(on);
 }
 
+fn set_sign_in_close(on: bool, cx: &mut App) {
+    crate::sign_in_close::set_sign_in_close(on, cx);
+}
+
 fn set_little_windows(on: bool, cx: &mut App) {
     crate::set_little_windows(on, cx);
 }
@@ -5173,6 +5198,7 @@ impl Render for Settings {
             }))
             .child(field);
         let column = settings_column::column(
+            &self.sections,
             self.section,
             self.dark,
             self.drawn_logged.clone(),
@@ -5206,6 +5232,7 @@ impl Render for Settings {
                 settings.record(&event.keystroke, cx)
             }))
             .on_key_down(cx.listener(|settings, event: &KeyDownEvent, window, cx| {
+                settings.space_pages(event, window, cx);
                 settings.type_to_search(event, window, cx)
             }))
             .on_action(|_: &CloseSettings, _, cx| hide(cx))
@@ -5215,6 +5242,20 @@ impl Render for Settings {
                 window.focus(&focus, cx);
                 cx.notify();
             }))
+            .on_action(
+                cx.listener(|settings, _: &PageDown, _, cx| settings.page_card(Paging::Down, cx)),
+            )
+            .on_action(
+                cx.listener(|settings, _: &PageUp, _, cx| settings.page_card(Paging::Up, cx)),
+            )
+            .on_action(
+                cx.listener(|settings, _: &PageTop, _, cx| settings.page_card(Paging::Top, cx)),
+            )
+            .on_action(
+                cx.listener(|settings, _: &PageBottom, _, cx| {
+                    settings.page_card(Paging::Bottom, cx)
+                }),
+            )
             .on_action(|_: &NextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &PreviousControl, window, cx| window.focus_prev(cx))
             .on_action(cx.listener(|settings, _: &EndSearch, window, cx| {
@@ -5416,6 +5457,23 @@ impl Settings {
                 found.join(", ")
             ),
         }
+    }
+
+    /// The card's page moves as `to` says, as Page Down, Page Up, Home and End ask.
+    fn page_card(&mut self, to: Paging, cx: &mut Context<Self>) {
+        if self.card.page(to) {
+            cx.notify();
+        }
+    }
+
+    /// Space and ⇧Space page the card while Settings itself has the keyboard.
+    fn space_pages(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(to) = Paging::space(&event.keystroke).filter(|_| self.focus.is_focused(window))
+        else {
+            return;
+        };
+        cx.stop_propagation();
+        self.page_card(to, cx);
     }
 
     /// Typing a character with Settings itself holding the keyboard, as it opens, starts a search

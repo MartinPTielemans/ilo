@@ -1769,8 +1769,16 @@ bool MenuTakesPointer(WPARAM message, POINT pt) {
     }
     if (kind >= 0) {
       const double scale = Scale(g_menu.hwnd);
-      return g_menu.pointer(kind, (pt.x - g_menu.frame.left) / scale,
-                            (pt.y - g_menu.frame.top) / scale);
+      const bool taken = g_menu.pointer(kind, (pt.x - g_menu.frame.left) / scale,
+                                        (pt.y - g_menu.frame.top) / scale);
+      // GPUI captures the mouse for the window a press went to until that window hears the
+      // release, and Windows sends that window all of the thread's mouse input meanwhile: a
+      // release taken here, such as the one of the press that opened the menu, would leave the
+      // theme picker's presses going to the browser window under it, which moves for them (#2516).
+      if (taken && kind == 3) {
+        ReleaseCapture();
+      }
+      return taken;
     }
   }
   return false;

@@ -98,7 +98,7 @@ relay_switch() {
     expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
   fi
   settings_drew Privacy
-  send clickkey $(drawn "switch relay calls")
+  click_in_sight "switch relay calls"
   expect "^browser: relay calls $1\$" "a click on Relay calls' switch didn't turn it $1"
   [ "$1" = off ] ||
     ../tools/window-screenshot.sh "$pid" "$out/webrtc-settings.png" all || fail "no window to capture"

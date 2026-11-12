@@ -660,10 +660,12 @@ impl Shell {
             opt_in.name(),
             if on { "off" } else { "on" }
         );
-        match opt_in {
-            OptIn::CrashReports => self.browser.set_crash_reports(!on, cx),
-            OptIn::Agents => self.browser.set_agents(!on, cx),
-        }
+        // After this update, as turning agents off ends their ask, which reads every Shell (#2459).
+        let browser = self.browser.clone();
+        cx.defer(move |cx| match opt_in {
+            OptIn::CrashReports => browser.set_crash_reports(!on, cx),
+            OptIn::Agents => browser.set_agents(!on, cx),
+        });
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.switched = Some((opt_in, Instant::now()));
         }
