@@ -2021,27 +2021,19 @@ bool Run(const std::string& line) {
         fprintf(stderr, "browser: drive: no Korean IME\n");
         return false;
       }
-      // Diagnostic for #2474: which step never returns. ActivateKeyboardLayout from the Japanese
-      // IME to the Korean one never returned (run 43134495200); this goes through the US keyboard.
-      g_steps.push_back({[] {
-        HKL english = LanguageLayout(0x0409);
-        fprintf(stderr, "browser: drive: ko: activating US %p, the thread's %p\n", english,
-                GetKeyboardLayout(0));
-        fflush(stderr);
-        if (english) {
-          HKL was = ActivateKeyboardLayout(english, 0);
-          fprintf(stderr, "browser: drive: ko: activated US, was %p, now %p, error %lu\n", was,
-                  GetKeyboardLayout(0), GetLastError());
-          fflush(stderr);
-        }
-      }, 150});
+      // Diagnostic for #2474. ActivateKeyboardLayout from the Japanese IME never returned, to the
+      // Korean IME (run 43134495200) or to the US keyboard (43135787319). This asks the focused
+      // window to switch, as Win+Space does, whose DefWindowProc activates the layout.
       g_steps.push_back({[korean] {
-        fprintf(stderr, "browser: drive: ko: activating %p, the thread's %p\n", korean,
-                GetKeyboardLayout(0));
+        HWND target = KeyTarget();
+        fprintf(stderr, "browser: drive: ko: requesting %p of %p, the thread's %p\n", korean,
+                target, GetKeyboardLayout(0));
         fflush(stderr);
-        HKL was = ActivateKeyboardLayout(korean, 0);
-        fprintf(stderr, "browser: drive: ko: activated, was %p, now %p, error %lu\n", was,
-                GetKeyboardLayout(0), GetLastError());
+        PostMessageW(target, WM_INPUTLANGCHANGEREQUEST, 0, reinterpret_cast<LPARAM>(korean));
+      }, 300});
+      g_steps.push_back({[] {
+        fprintf(stderr, "browser: drive: ko: after the request, the thread's %p\n",
+                GetKeyboardLayout(0));
         fflush(stderr);
       }});
       g_steps.push_back({[] {
