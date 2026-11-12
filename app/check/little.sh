@@ -781,7 +781,7 @@ expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
 send clickkey $(drawn "toolbar Features")
 settings_drew Features
-send clickkey $(drawn "switch little windows")
+click_in_sight "switch little windows"
 expect '^browser: little windows off$' "a click on Little ilo's switch didn't turn it off"
 ../tools/window-screenshot.sh "$pid" "$out/little-off.png" || fail "no window to capture"
 send key w cmd
@@ -807,7 +807,7 @@ expect '^browser: tab [0-9]* opened by [0-9]* in the background$' \
 send menu Settings…
 expect '^browser: settings shown Features$' "Settings… didn't show Features again"
 settings_drew Features
-send clickkey $(drawn "switch little windows")
+click_in_sight "switch little windows"
 expect '^browser: little windows on$' "a click on Little ilo's switch didn't turn it on again"
 send key w cmd
 exec 3>&-
