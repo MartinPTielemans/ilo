@@ -308,6 +308,12 @@ enum DownloadChoice {
     Clear,
 }
 
+/// Where a download's Trash puts the file, by Windows' own name for it there (#2468).
+const TRASH: &str = match cfg!(all(target_os = "windows", not(test))) {
+    true => "Move to Recycle Bin",
+    false => "Move to Trash",
+};
+
 /// The menu a right-click on `download`'s row shows, what can be done with it where it is, with
 /// Clear List enabled if any download is `finished`.
 fn download_menu_items(
@@ -346,7 +352,7 @@ fn download_menu_items(
                 DownloadAction::Show,
             ),
             (
-                MenuEntry::new("Move to Trash", true).destructive(),
+                MenuEntry::new(TRASH, true).destructive(),
                 Some(DownloadChoice::Trash),
             ),
         ],
@@ -435,6 +441,10 @@ pub(super) struct Library {
     sites: Vec<(String, Option<bool>)>,
     /// Where the page's controls were drawn, as the log said, for check.sh to click them.
     drawn: Rc<RefCell<Vec<String>>>,
+    /// The page's requests opened to show where each went and what it sent (#2326), by their
+    /// past task's id and step, and those of them showing every line.
+    steps_opened: Vec<(String, usize)>,
+    steps_all: Vec<(String, usize)>,
     _search: Subscription,
 }
 
@@ -919,6 +929,8 @@ impl Shell {
             logged: None,
             opened: None,
             sites: Vec::new(),
+            steps_opened: Vec::new(),
+            steps_all: Vec::new(),
             drawn: Rc::default(),
             _search: observe,
         });
@@ -2300,7 +2312,7 @@ impl Shell {
             Item::Clear => return self.agents_clear_item(cx),
             Item::PastHead(past) => return self.past_head_item(past, cx),
             Item::PastSite(site) => return self.past_site_item(site, cx),
-            Item::PastStep(past, step) => return self.past_step_item(past, step),
+            Item::PastStep(past, step) => return self.past_step_item(past, step, cx),
             Item::Boost(boost) => return self.boost_item(boost, cx),
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
@@ -2753,53 +2765,140 @@ impl Shell {
     }
 
     /// A step of the past task, in the words Settings › Agents' activity log has, over when it
-    /// came and why it was refused, if it was.
-    fn past_step_item(&mut self, index: usize, step: usize) -> AnyElement {
-        let Some(step) = (self.agent_history.get(index)).and_then(|past| past.steps.get(step))
-        else {
+    /// came and why it was refused, if it was. A request opens, as it does there, to show where it
+    /// went and what it sent (#2326).
+    fn past_step_item(&mut self, index: usize, step: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(past) = self.agent_history.get(index) else {
+            return div().into_any_element();
+        };
+        let Some(each) = past.steps.get(step) else {
             return div().into_any_element();
         };
         let did = crate::agents::tools::Did {
-            tool: step.action.clone(),
-            site: step.site.clone(),
+            tool: each.action.clone(),
+            site: each.site.clone(),
+            target: each.target.clone(),
             ..Default::default()
         };
-        let tense = match step.refused.is_empty() {
+        let tense = match each.refused.is_empty() {
             true => crate::agents::tools::Tense::Done,
             false => crate::agents::tools::Tense::Failed,
         };
-        let when = crate::agents::local_time(step.at);
-        let under = match step.refused.is_empty() {
+        let when = crate::agents::local_time(each.at);
+        let under = match each.refused.is_empty() {
             true => when,
-            false => format!("{when} · Refused: {}", step.refused),
+            false => format!("{when} · Refused: {}", each.refused),
         };
-        div()
+        let title = crate::agents::tools::step_title(&did, tense);
+        let key = (past.id.clone(), step);
+        let opens = !each.url.is_empty();
+        let (opened, all) = match &self.library {
+            Some(library) => (
+                library.steps_opened.contains(&key),
+                library.steps_all.contains(&key),
+            ),
+            None => (false, false),
+        };
+        let secondary = self.palette.text(SECONDARY);
+        let head = div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
-            .pr(px(ARCHIVED_RIGHT))
+            .pr(px(ARCHIVED_RIGHT + 8.))
             .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .flex()
+            .items_center()
             .child(
                 div()
-                    .size_full()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
                     .flex()
                     .flex_col()
                     .justify_center()
                     .pl(px(ARCHIVED_TEXT_X))
                     .pr(px(8.))
                     .child(text_line(
-                        crate::agents::tools::step_title(&did, tense).into(),
+                        title.clone().into(),
                         text::BODY,
                         17.,
                         self.palette.text(UNSELECTED_TITLE),
                     ))
-                    .child(text_line(
-                        under.into(),
-                        text::SMALL,
-                        15.,
-                        self.palette.text(SECONDARY),
-                    )),
+                    .child(text_line(under.into(), text::SMALL, 15., secondary)),
             )
-            .into_any_element()
+            .child(crate::settings_rows::chevron_slot(
+                opens.then_some(opened),
+                secondary,
+            ));
+        if !opens {
+            return head.into_any_element();
+        }
+        let drawn = (self.library.as_ref()).map(|library| {
+            crate::settings_rows::drawn(format!("library step {step}"), library.drawn.clone())
+        });
+        let head = head
+            .id(("past-step", step))
+            .relative()
+            .children(drawn)
+            .role(gpui::accesskit::Role::Button)
+            .aria_label(title)
+            .aria_expanded(opened)
+            .on_click(cx.listener(move |shell, _, _, cx| shell.open_past_step(step, false, cx)));
+        let part = opened.then(|| {
+            let more = cx.listener(move |shell, _: &gpui::ClickEvent, _, cx| {
+                shell.open_past_step(step, true, cx)
+            });
+            crate::settings_rows::sent_part(
+                ("past-step-all", step),
+                &each.url,
+                &each.sent,
+                !each.refused.is_empty(),
+                all,
+                (self.palette.text(UNSELECTED_TITLE), secondary),
+                true,
+                move |window, cx| more(&gpui::ClickEvent::default(), window, cx),
+            )
+            .pl(px(ARCHIVED_LEFT + ARCHIVED_TEXT_X))
+            .pr(px(ARCHIVED_RIGHT + 8.))
+            .pb(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+        });
+        div().child(head).children(part).into_any_element()
+    }
+
+    /// Opens the opened past task's request at `step`, or closes it, or with `all` shows every
+    /// line of what it sent, and measures its line of the list again.
+    pub(super) fn open_past_step(&mut self, step: usize, all: bool, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        let Some(id) = library.opened.clone() else {
+            return;
+        };
+        let key = (id, step);
+        let place = |keys: &[(String, usize)]| keys.iter().position(|each| *each == key);
+        let said = match (all, place(&library.steps_opened)) {
+            (true, _) => {
+                library.steps_all.push(key.clone());
+                "shows all"
+            }
+            (false, Some(at)) => {
+                library.steps_opened.remove(at);
+                "closed"
+            }
+            (false, None) => {
+                library.steps_opened.push(key.clone());
+                "opened"
+            }
+        };
+        let past = (library.items.iter()).position(|item| match item {
+            Item::PastStep(_, each) => *each == step,
+            _ => false,
+        });
+        if let Some(at) = past {
+            library.list.splice(at..at + 1, 1);
+        }
+        // check.sh waits for this line.
+        log!("browser: library step {step} {said}");
+        cx.notify();
     }
 
     /// Reads the window's profile's Boosts, as Library › Boosts lists them.
@@ -3671,7 +3770,7 @@ impl Shell {
             .child({
                 let (scale, alpha) = self.archive_glyph(web_time::Instant::now());
                 svg()
-                    .path("icons/archive.svg")
+                    .path("icons/library.svg")
                     .size(px(16.))
                     .text_color(self.palette.glyph(alpha))
                     .when(scale != 1., |glyph| {

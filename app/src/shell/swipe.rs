@@ -17,6 +17,10 @@ use super::{
     wheel_gestures::{GAP, LONG},
 };
 
+/// Points the fingers go on the web before which way they went says whether they swipe across
+/// or scroll along.
+const DECIDE: f32 = 4.;
+
 impl Shell {
     /// The Spaces' pages the sidebar draws, and where from its left edge: the shown Space's, and
     /// while a swipe or a settle moves one, it and the page beside it.
@@ -363,28 +367,69 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.note("wheel", "");
         let ScrollDelta::Pixels(delta) = event.delta else {
             return self.scroll_at(event, at, window, cx);
         };
-        let larger = if delta.x.abs() >= delta.y.abs() {
-            delta.x
-        } else {
-            delta.y
+        // The way the swipe goes once that's known, so a hand's drift along a swipe across never
+        // reads as the fingers turning; until then, the way of the larger delta.
+        let across = self.swipe.as_ref().and_then(|swipe| swipe.across);
+        let way = match across {
+            Some(true) => delta.x,
+            Some(false) => delta.y,
+            None if delta.x.abs() >= delta.y.abs() => delta.x,
+            None => delta.y,
         };
-        let cut = self.web_wheel.event(f32::from(larger), at);
+        let cut = self.web_wheel.event(f32::from(way), at);
         let phase = |touch_phase, delta| ScrollEvent {
             touch_phase,
             delta,
             ..event.clone()
         };
         let still = ScrollDelta::Pixels(Point::default());
-        if cut.lifted {
-            self.scroll_at(&phase(TouchPhase::Ended, still), at, window, cx);
+        if let Some(why) = cut.lifted {
+            self.note("lift", why);
+            self.web_undecided = None;
+            self.web_lift(&phase(TouchPhase::Ended, still), at, window, cx);
         }
-        if cut.landed {
+        if let Some(why) = cut.landed {
+            self.note("land", why);
+            self.web_undecided = Some(Point::default());
             self.scroll_at(&phase(TouchPhase::Started, still), at, window, cx);
         }
-        let took = self.scroll_at(&phase(TouchPhase::Moved, event.delta), at, window, cx);
+        // The fingers' first DECIDE points go on as one move, so the way they went, not one
+        // event a browser rounded or summed, tells across from along, as AppKit starts a scroll
+        // only once they've gone a few points.
+        let moved = match self.web_undecided.take() {
+            Some(way) => {
+                let way = way + delta;
+                if way.x.abs().max(way.y.abs()) < px(DECIDE) {
+                    self.web_undecided = Some(way);
+                    None
+                } else {
+                    Some(ScrollDelta::Pixels(way))
+                }
+            }
+            None => Some(event.delta),
+        };
+        let deciding = self
+            .swipe
+            .as_ref()
+            .is_none_or(|swipe| swipe.across.is_none());
+        // Until the lift is found, momentum moves the pages as fingers would, on past the Space they
+        // take. There only fingers going faster than they have yet move them further: one swipe
+        // takes one Space, and past it fingers only stretch the band.
+        let held = !self.web_wheel.fastest()
+            && self
+                .swipe
+                .as_ref()
+                .is_some_and(|swipe| self.past_next(swipe));
+        let took = moved.is_none_or(|delta| {
+            held || self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx)
+        });
+        if deciding && let Some(across) = self.swipe.as_ref().and_then(|swipe| swipe.across) {
+            self.note("axis", if across { "across" } else { "along" });
+        }
         let lift = phase(TouchPhase::Ended, still);
         self.web_wheel_quiet = Some(cx.spawn_in(window, async move |shell, cx| {
             // Slowed fingers lift after GAP, and others after LONG.
@@ -400,6 +445,12 @@ impl Shell {
         took
     }
 
+    /// Whether `swipe` has taken the pages past the Space beside the one it began on.
+    fn past_next(&self, swipe: &Swipe) -> bool {
+        let across = swipe.across == Some(true) && swipe.cards.is_none() && !swipe.library;
+        across && self.swiped_to(swipe).abs() > self.width()
+    }
+
     /// No wheel event since the last, at `now`: fingers still down lift, as `lift`.
     fn web_quiet(
         &mut self,
@@ -408,8 +459,54 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.web_wheel.quiet(now) {
-            self.scroll_at(lift, now, window, cx);
+        if let Some(why) = self.web_wheel.quiet(now) {
+            self.note("lift", why);
+            self.web_lift(lift, now, window, cx);
+        }
+    }
+
+    /// The fingers lifted, as a browser's wheel events tell some events after they did: by then
+    /// their momentum has moved the page on, as the app's settle would have, so the settle keeps no
+    /// more of their speed than lands it without passing its place. Their full speed still says
+    /// which Space it lands on.
+    fn web_lift(
+        &mut self,
+        lift: &ScrollEvent,
+        at: Instant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.settle.as_ref().map(|settle| settle.start);
+        let (from, library) = (
+            self.swipe.as_ref().map(|swipe| swipe.from),
+            self.library_open,
+        );
+        self.scroll_at(lift, at, window, cx);
+        if self.library_open != library {
+            self.note("library", if self.library_open { "open" } else { "closed" });
+        }
+        if let Some(settle) = self
+            .settle
+            .as_mut()
+            .filter(|settle| Some(settle.start) != before)
+        {
+            settle.spend();
+            let space = settle.space;
+            let index = |id| self.spaces.iter().position(|space| space.id == id);
+            if let Some((to, from)) = index(space).zip(from.and_then(index)) {
+                self.note("space", &format!("{:+}", to as i64 - from as i64));
+            }
+        }
+    }
+
+    /// Has the demo's `?trace` told each thing the wheel's events decide of a swipe.
+    pub fn note_wheel(&mut self, notes: super::WheelNotes) {
+        self.web_notes = Some(notes);
+    }
+
+    fn note(&self, kind: &'static str, what: &str) {
+        if let Some(notes) = &self.web_notes {
+            notes(kind, what);
         }
     }
 
@@ -1566,23 +1663,25 @@ mod tests {
         assert_eq!(circle(cx), ready);
     }
 
-    /// Fingers across the sidebar, `dx` this event, a moment after the last, as a trackpad sends
-    /// them. Returns how many detents the trackpad has been asked for.
+    /// Fingers across the sidebar, `dx` this event, 2 ms after the last on the test's `clock`, as
+    /// a trackpad sends them: the clock is the test's, not the runner's, as the fingers' speed
+    /// decides the clicks (#2446). Returns how many detents the trackpad has been asked for.
     fn finger(
         shell: &mut Shell,
         host: &Recorder,
+        clock: &mut Instant,
         touch_phase: TouchPhase,
         dx: f32,
         window: &mut Window,
         cx: &mut Context<Shell>,
     ) -> usize {
-        std::thread::sleep(Duration::from_millis(2));
+        *clock += Duration::from_millis(2);
         let event = ScrollEvent {
             delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
             touch_phase,
             ..Default::default()
         };
-        shell.scroll(&event, window, cx);
+        shell.scroll_at(&event, *clock, window, cx);
         host.detents.get()
     }
 
@@ -1595,28 +1694,29 @@ mod tests {
         use TouchPhase::{Ended, Moved, Started};
         let (shell, host, cx) = three_spaces(cx, 2);
         shell.update_in(cx, |shell, window, cx| {
+            let mut clock = Instant::now();
             let step = -0.05 * shell.width() / SWIPE_TRACKING;
-            let first = finger(shell, &host, Started, step, window, cx);
+            let first = finger(shell, &host, &mut clock, Started, step, window, cx);
             assert_eq!(first, 0, "a click before the fingers had gone two moves");
             assert_eq!(
-                finger(shell, &host, Moved, step, window, cx),
+                finger(shell, &host, &mut clock, Moved, step, window, cx),
                 1,
                 "no click going"
             );
             for _ in 0..2 {
                 assert_eq!(
-                    finger(shell, &host, Moved, step, window, cx),
+                    finger(shell, &host, &mut clock, Moved, step, window, cx),
                     1,
                     "a click going on"
                 );
             }
             assert_eq!(
-                finger(shell, &host, Ended, 0., window, cx),
+                finger(shell, &host, &mut clock, Ended, 0., window, cx),
                 1,
                 "a click at the lift"
             );
             for _ in 0..10 {
-                let momentum = finger(shell, &host, Moved, step, window, cx);
+                let momentum = finger(shell, &host, &mut clock, Moved, step, window, cx);
                 assert_eq!(momentum, 1, "a click in the momentum");
             }
         });
@@ -1630,24 +1730,31 @@ mod tests {
         use TouchPhase::{Ended, Moved, Started};
         let (shell, host, cx) = three_spaces(cx, 1);
         shell.update_in(cx, |shell, window, cx| {
+            let mut clock = Instant::now();
             let step = 0.05 * shell.library_width() / SWIPE_TRACKING;
-            assert_eq!(finger(shell, &host, Started, step, window, cx), 0);
             assert_eq!(
-                finger(shell, &host, Moved, step, window, cx),
+                finger(shell, &host, &mut clock, Started, step, window, cx),
+                0
+            );
+            assert_eq!(
+                finger(shell, &host, &mut clock, Moved, step, window, cx),
                 1,
                 "no click to the Library"
             );
-            assert_eq!(finger(shell, &host, Moved, step, window, cx), 1);
+            assert_eq!(finger(shell, &host, &mut clock, Moved, step, window, cx), 1);
             // The moves out are past the ones the fingers' speed is read from.
-            let before = Instant::now() - Duration::from_millis(500);
+            let before = clock - Duration::from_millis(500);
             for (at, _) in &mut shell.swipe.as_mut().expect("a swipe").samples {
                 *at = (*at).min(before);
             }
-            assert_eq!(finger(shell, &host, Moved, -step / 2., window, cx), 1);
-            let back = finger(shell, &host, Moved, -step / 2., window, cx);
+            assert_eq!(
+                finger(shell, &host, &mut clock, Moved, -step / 2., window, cx),
+                1
+            );
+            let back = finger(shell, &host, &mut clock, Moved, -step / 2., window, cx);
             assert_eq!(back, 2, "no click turning back");
             assert_eq!(
-                finger(shell, &host, Ended, 0., window, cx),
+                finger(shell, &host, &mut clock, Ended, 0., window, cx),
                 2,
                 "a click at the lift"
             );
@@ -1662,9 +1769,13 @@ mod tests {
         use TouchPhase::{Moved, Started};
         let (shell, host, cx) = three_spaces(cx, 3);
         shell.update_in(cx, |shell, window, cx| {
-            assert_eq!(finger(shell, &host, Started, -20., window, cx), 0);
+            let mut clock = Instant::now();
+            assert_eq!(
+                finger(shell, &host, &mut clock, Started, -20., window, cx),
+                0
+            );
             for _ in 0..30 {
-                let detents = finger(shell, &host, Moved, -20., window, cx);
+                let detents = finger(shell, &host, &mut clock, Moved, -20., window, cx);
                 let ready = shell.swipe.as_ref().expect("a swipe").ready;
                 assert_eq!(
                     detents, ready as usize,

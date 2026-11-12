@@ -21,6 +21,7 @@ use browser::boost_editor;
 use browser::boost_style::{self, Case, Face, Style};
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
+use browser::foot_bar;
 use browser::icon_picker::{self, Recents};
 use browser::import::sources::{Os, Roots};
 use browser::link_preview;
@@ -920,6 +921,7 @@ impl Browser for Fake {
                                     action: action.into(),
                                     site: format!("example{n}.com"),
                                     refused: refused.into(),
+                                    ..Default::default()
                                 };
                             [
                                 step(at, "open_tab", ""),
@@ -933,6 +935,7 @@ impl Browser for Fake {
                             site: String::new(),
                             refused: "Agents never read passwords, cookies or autofill data."
                                 .into(),
+                            ..Default::default()
                         }])
                         .collect(),
                     answers: "claude-code".into(),
@@ -1074,8 +1077,15 @@ impl Browser for Fake {
         self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
     }
 
+    // Safari's engine is the Mac's alone, so elsewhere the note offers what each system's does.
     fn can_use_system_engine(&self) -> bool {
-        true
+        cfg!(target_os = "macos")
+    }
+
+    // PREVIEW_DRM=default draws the note as where ilo is the system's default browser.
+    fn elsewhere(&self) -> Option<browser::shell::Elsewhere> {
+        let default = || std::env::var("PREVIEW_DRM").is_ok_and(|drm| drm == "default");
+        browser::shell::Elsewhere::on(self.os(), default)
     }
 
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
@@ -2208,6 +2218,8 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ];
             ("clear", rows)
         }
+        // The bar adds Open Library… itself, whose glyph the sidebar foot's button shares.
+        "library" => ("library", vec![search("library")]),
         "sites" => (
             "wik",
             vec![
@@ -2258,7 +2270,8 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ],
         ),
     };
-    let rows_shown = rows.len();
+    // The command the bar adds for what's typed takes a row too.
+    let rows_shown = rows.len() + usize::from(mode == "library");
     let bounds = Bounds::new(
         at,
         size(px(command_bar::WIDTH), px(command_bar::height(rows_shown))),
@@ -2330,7 +2343,35 @@ fn main() {
             // PREVIEW_SIDEBAR_POSITION=left or right shows Settings › Tabs & Sidebar's sidebar group
             // alone, Sidebar position's drawings with that side chosen (#2407).
             if let Ok(side) = std::env::var("PREVIEW_SIDEBAR_POSITION") {
-                preview_sidebar_position(side == "right", cx);
+                preview_pictures(
+                    Pictures::Sidebar {
+                        right: side == "right",
+                    },
+                    cx,
+                );
+                return;
+            }
+            // PREVIEW_APPEARANCE_PICKER=automatic, light or dark shows Settings › General's Look
+            // group alone, Appearance's drawings with that one chosen and Settings drawn in it,
+            // Automatic's as PREVIEW_APPEARANCE has the system (#2429).
+            if let Ok(chosen) = std::env::var("PREVIEW_APPEARANCE_PICKER") {
+                let chosen = match chosen.as_str() {
+                    "light" => browser::theme::Appearance::Light,
+                    "dark" => browser::theme::Appearance::Dark,
+                    _ => browser::theme::Appearance::Automatic,
+                };
+                preview_pictures(Pictures::Appearance(chosen), cx);
+                return;
+            }
+            // PREVIEW_SHARE_FAVORITES=every, profile or space shows Settings › Tabs & Sidebar's
+            // Share favorites group alone, its drawings with that scope chosen (#2430).
+            if let Ok(chosen) = std::env::var("PREVIEW_SHARE_FAVORITES") {
+                let chosen = match chosen.as_str() {
+                    "every" => browser::shell::FavoritesScope::Every,
+                    "space" => browser::shell::FavoritesScope::Space,
+                    _ => browser::shell::FavoritesScope::Profile,
+                };
+                preview_pictures(Pictures::Favorites(chosen), cx);
                 return;
             }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
@@ -2516,8 +2557,8 @@ fn main() {
                         };
                         shell.set_page(tab, page, cx);
                     }
-                    // PREVIEW_DRM=1 has the first tab's page ask for video ilo plays only in Apple's
-                    // engine, so its note shows.
+                    // PREVIEW_DRM=1 has the first tab's page ask for video ilo can't play, so its
+                    // note shows, offering what this system's does (#2468).
                     if std::env::var_os("PREVIEW_DRM").is_some() {
                         shell.set_media_unsupported(1, "com.widevine.alpha", cx);
                     }
@@ -2761,8 +2802,8 @@ fn main() {
                     cx.quit();
                 }
             }
-            // PREVIEW_BAR=tabs, sites or commands shows the command bar over the window, with made-up
-            // suggestions.
+            // PREVIEW_BAR=tabs, sites, commands or library shows the command bar over the window, with
+            // made-up suggestions.
             if let Ok(mode) = std::env::var("PREVIEW_BAR") {
                 let left = x + (width - command_bar::WIDTH as f64) / 2.;
                 let top = y as f32 + command_bar::centered_top(height as f32);
@@ -2869,6 +2910,14 @@ fn main() {
                     );
                 }
             }
+            // PREVIEW_FOOT_BAR=arrange shows the foot bar over the page's bottom centre with one
+            // line, as Arrange's, =point with two, as pointing's, and =long with a question past
+            // its two lines.
+            if let Ok(kind) = std::env::var("PREVIEW_FOOT_BAR")
+                && let Some(shell) = shell_window
+            {
+                preview_foot_bar(&kind, shell, bounds, cx);
+            }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
             // drawn the URL field they hang from.
             let site_controls = std::env::var_os("PREVIEW_SITE_CONTROLS").is_some();
@@ -2918,6 +2967,12 @@ fn main() {
                 if let Some(shell) = shell_window {
                     preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Left, cx);
                 }
+            }
+            // PREVIEW_MODEL_MENU=<claude|codex>[,<model>] shows Settings › Agents' Model menu for that
+            // CLI as it opens, from the CLI's recorded list, on Default or the model chosen, light
+            // with PREVIEW_APPEARANCE=light (#2455).
+            if let Ok(cli) = std::env::var("PREVIEW_MODEL_MENU") {
+                preview_model_menu(bounds, &cli, cx);
             }
             // PREVIEW_PAGE_MENU=<link|image|text|field>,<x>,<y>[,<key>…] shows a page's menu there, made
             // up as Chrome builds it for a link, an image, selected text or a misspelt word in a text
@@ -3041,6 +3096,45 @@ fn preview_page_menu(
     .detach();
 }
 
+/// A CLI's Model menu as Settings › Agents opens it with Default chosen, its models as the CLI's
+/// recorded answer lists them, in the light or dark Settings.
+fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
+    use browser::agents::ready::{claude_listed, codex_listed};
+    let (cli, chosen) = cli.split_once(',').unwrap_or((cli, ""));
+    let answer = |text: &str| serde_json::from_str(text).unwrap_or_default();
+    let models = match cli {
+        "codex" => Some(codex_listed(&answer(include_str!(
+            "agents/runner/answers/codex-0.167.1-model-list.json"
+        )))),
+        _ => claude_listed(&answer(include_str!(
+            "agents/runner/answers/claude-2.1.322-initialize.json"
+        ))),
+    }
+    .unwrap_or_default();
+    let (_, items) =
+        browser::agents::task::model_menu(chosen, models.default.as_deref(), models.listed);
+    let light = preview_tone() == Some(Tone::Light);
+    if menu::open_at(Rc::new(PreviewMenu), bounds, cx).is_none() {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        cx.update(|cx| {
+            let request = menu::Request {
+                items,
+                at: point(px(40.), px(40.)),
+                area: Bounds::new(point(px(0.), px(0.)), bounds.size),
+                look: menu::Look::plain(light),
+                chosen: menu::picked(|_, _| {}),
+            };
+            menu::show(request, cx);
+        });
+    })
+    .detach();
+}
+
 /// ilo's menu over the preview's window, whose host can't move it: its window covers the preview's.
 struct PreviewMenu;
 
@@ -3051,6 +3145,60 @@ impl menu::Host for PreviewMenu {
 }
 
 /// The icon picker over the preview's window, whose host can't move it: it opened where it's to be.
+thread_local! {
+    /// Where the foot bar asked to go.
+    static FOOT_BAR_PLACE: std::cell::Cell<Option<foot_bar::Place>> =
+        const { std::cell::Cell::new(None) };
+}
+
+struct PreviewFootBar;
+
+impl foot_bar::Host for PreviewFootBar {
+    fn show(&self, _: u64, place: foot_bar::Place) {
+        FOOT_BAR_PLACE.set(Some(place));
+    }
+
+    fn hide(&self) {}
+}
+
+/// Shows the foot bar with made-up words over the page of the preview's `window` at `bounds`.
+/// The host sizes the bar's window to what it shows, so a hidden one lays it out first, as the
+/// host would place it.
+fn preview_foot_bar(
+    kind: &str,
+    window: gpui::WindowHandle<Shell>,
+    bounds: Bounds<Pixels>,
+    cx: &mut App,
+) {
+    let Ok((page, palette)) = window.read_with(cx, |shell, _| {
+        (shell.page_frame(bounds.size).0, shell.palette())
+    }) else {
+        return;
+    };
+    let Some(bar) = foot_bar::sample(kind) else {
+        return;
+    };
+    let look = move |_, _: &App| palette;
+    let hidden = Bounds::new(bounds.origin, size(px(1.), px(1.)));
+    let Some(measuring) = foot_bar::open_at(Rc::new(PreviewFootBar), look, hidden, false, cx)
+    else {
+        return;
+    };
+    foot_bar::show(0, page, bounds.size, bar.clone(), cx);
+    let _ = measuring.update(cx, |_, window, _| window.remove_window());
+    let Some(place) = FOOT_BAR_PLACE.get() else {
+        return;
+    };
+    let across = f32::from(bounds.size.width) - place.left - place.right;
+    let left = place.left + (across - f32::from(place.size.width)) / 2.;
+    let top = f32::from(bounds.size.height - place.size.height) - place.bottom;
+    let at = Bounds::new(bounds.origin + point(px(left), px(top)), place.size);
+    if foot_bar::open_at(Rc::new(PreviewFootBar), look, at, true, cx).is_some() {
+        foot_bar::show(0, page, bounds.size, bar, cx);
+        log!("preview: foot bar shown");
+    }
+}
+
 struct PreviewPicker;
 
 impl icon_picker::Host for PreviewPicker {
@@ -3346,11 +3494,22 @@ fn preview_account(state: &str, cx: &mut App) {
     }
 }
 
-/// Settings › Tabs & Sidebar's sidebar group on its card, as Settings draws it, in a window of
-/// Settings' size: Sidebar position's drawings, `right` chosen, and the two switches under it.
-/// PREVIEW_BUTTONS=mac, windows or linux draws that OS's window buttons in the drawings.
-fn preview_sidebar_position(right: bool, cx: &mut App) {
-    use browser::settings_side::Buttons;
+/// A Settings group whose row is chosen from drawings, on its card as Settings draws it.
+#[derive(Clone, Copy)]
+enum Pictures {
+    /// Tabs & Sidebar's sidebar group: Sidebar position, `right` chosen, and the two switches
+    /// under it.
+    Sidebar { right: bool },
+    /// General's Look group: Appearance, the one chosen, and Page zoom under it.
+    Appearance(browser::theme::Appearance),
+    /// Tabs & Sidebar's Share favorites, the scope chosen, in its group of one.
+    Favorites(browser::shell::FavoritesScope),
+}
+
+/// `shown`'s group in a window of Settings' size. PREVIEW_BUTTONS=mac, windows or linux draws that
+/// OS's window buttons in the drawings.
+fn preview_pictures(shown: Pictures, cx: &mut App) {
+    use browser::settings_pictures::Buttons;
     use browser::tokens::settings::{HEIGHT, WIDTH};
     let buttons = match std::env::var("PREVIEW_BUTTONS").as_deref() {
         Ok("mac") => Buttons::Mac,
@@ -3376,8 +3535,8 @@ fn preview_sidebar_position(right: bool, cx: &mut App) {
                     .placeholder_color(look.detail)
                     .caret_color(look.ink)
             });
-            SidebarPage {
-                right,
+            PicturesPage {
+                shown,
                 buttons,
                 card: Card::default(),
                 search,
@@ -3386,19 +3545,19 @@ fn preview_sidebar_position(right: bool, cx: &mut App) {
         })
     });
     if let Err(error) = opened {
-        log!("preview: couldn't open Sidebar position's window: {error}");
+        log!("preview: couldn't open the pictures' window: {error}");
     }
 }
 
-struct SidebarPage {
-    right: bool,
-    buttons: browser::settings_side::Buttons,
+struct PicturesPage {
+    shown: Pictures,
+    buttons: browser::settings_pictures::Buttons,
     card: Card,
     search: gpui::Entity<browser::text_input::TextInput>,
     logged: Rc<std::cell::RefCell<Vec<String>>>,
 }
 
-impl gpui::Render for SidebarPage {
+impl gpui::Render for PicturesPage {
     fn render(
         &mut self,
         window: &mut gpui::Window,
@@ -3407,13 +3566,23 @@ impl gpui::Render for SidebarPage {
         use browser::palette::{INK, PAPER};
         use browser::settings_card::Colors;
         use browser::settings_column::{self, Section};
-        use browser::settings_rows::{Look, end, frame, group, stop_switch, text as row_text};
-        use browser::settings_side::picker;
+        use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
+        use browser::settings_rows::{
+            Look, end, frame, group, popup, stop_switch, text as row_text,
+        };
+        use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
-        use browser::tokens::settings::{HEADING_BOTTOM, NAME, SIDE_ROOM, SIDE_TOP, TEXT_X};
+        use browser::tokens::settings::{
+            HEADING_BOTTOM, NAME, POPUP_WIDTH, SIDE_ROOM, SIDE_TOP, TEXT_X,
+        };
         use browser::tokens::text;
         use gpui::{FontWeight, ParentElement, Styled, div, rgb};
-        let dark = preview_tone() != Some(Tone::Light);
+        // Settings takes Light's or Dark's look when it's chosen, and the system's for Automatic.
+        let dark = match self.shown {
+            Pictures::Appearance(Appearance::Light) => false,
+            Pictures::Appearance(Appearance::Dark) => true,
+            _ => preview_tone() != Some(Tone::Light),
+        };
         let look = Look::settings(dark);
         let base = if dark { rgb(PAPER) } else { rgb(INK) };
         let a11y = window.is_a11y_active();
@@ -3424,8 +3593,13 @@ impl gpui::Render for SidebarPage {
             |_, _| {},
             cx,
         );
+        let section = match self.shown {
+            Pictures::Sidebar { .. } | Pictures::Favorites(_) => Section::TabsAndSidebar,
+            Pictures::Appearance(_) => Section::General,
+        };
         let column = settings_column::column(
-            Section::TabsAndSidebar,
+            &Default::default(),
+            section,
             dark,
             Rc::default(),
             gpui::IntoElement::into_any_element(field),
@@ -3435,81 +3609,178 @@ impl gpui::Render for SidebarPage {
             a11y,
         );
         let page = cx.entity().downgrade();
-        let pair = picker(
-            &look,
-            base,
-            dark,
-            self.right,
-            self.buttons,
-            a11y,
-            self.logged.clone(),
-            move |side, _, cx| {
-                log!(
-                    "preview: sidebar position {}",
-                    browser::settings_side::title(side)
+        let (heading, rows) = match self.shown {
+            Pictures::Sidebar { right } => {
+                let pair = picker(
+                    &look,
+                    base,
+                    dark,
+                    right,
+                    self.buttons,
+                    a11y,
+                    self.logged.clone(),
+                    move |side, _, cx| {
+                        log!(
+                            "preview: sidebar position {}",
+                            browser::settings_pictures::title(side)
+                        );
+                        page.update(cx, |page, cx| {
+                            page.shown = Pictures::Sidebar { right: side };
+                            cx.notify();
+                        })
+                        .ok();
+                    },
                 );
-                page.update(cx, |page, cx| {
-                    page.right = side;
-                    cx.notify();
-                })
-                .ok();
-            },
-        );
-        let position = frame()
-            .flex_col()
-            .items_stretch()
-            .child(row_text(
-                &look,
-                "Sidebar position",
-                Some("The side of the window the sidebar and the window's buttons are on.".into()),
-            ))
-            .child(div().flex().mt(px(SIDE_TOP)).ml(px(-SIDE_ROOM)).child(pair));
-        let switch = |name: &'static str, on: bool| {
-            end([gpui::IntoElement::into_any_element(stop_switch(
-                &look,
-                name,
-                name,
-                on,
-                1.,
-                look.accent,
-                a11y,
-            ))])
+                let position = frame()
+                    .flex_col()
+                    .items_stretch()
+                    .child(row_text(
+                        &look,
+                        "Sidebar position",
+                        Some(
+                            "The side of the window the sidebar and the window's buttons are on."
+                                .into(),
+                        ),
+                    ))
+                    .child(div().flex().mt(px(SIDE_TOP)).ml(px(-SIDE_ROOM)).child(pair));
+                let switch = |name: &'static str, on: bool| {
+                    end([gpui::IntoElement::into_any_element(stop_switch(
+                        &look,
+                        name,
+                        name,
+                        on,
+                        1.,
+                        look.accent,
+                        a11y,
+                    ))])
+                };
+                let side = if right { "right" } else { "left" };
+                let edge = frame()
+                    .child(row_text(
+                        &look,
+                        "Show the hidden sidebar at the window's edge",
+                        Some(
+                            format!(
+                                "Move the pointer along the {side} edge. ⌘S shows it either way."
+                            )
+                            .into(),
+                        ),
+                    ))
+                    .child(switch("edge", true));
+                let option = frame()
+                    .child(row_text(
+                        &look,
+                        "Show the hidden sidebar when ⌥ is pressed alone",
+                        Some("Press and let go of ⌥ with no other key.".into()),
+                    ))
+                    .child(switch("option", false));
+                (Some("The sidebar"), vec![position, edge, option])
+            }
+            Pictures::Appearance(chosen) => {
+                let three = appearance_picker(
+                    &look,
+                    base,
+                    chosen,
+                    self.buttons,
+                    a11y,
+                    self.logged.clone(),
+                    move |appearance, _, cx| {
+                        log!("preview: appearance {appearance:?}");
+                        page.update(cx, |page, cx| {
+                            page.shown = Pictures::Appearance(appearance);
+                            cx.notify();
+                        })
+                        .ok();
+                    },
+                );
+                let line = match self.buttons {
+                    browser::settings_pictures::Buttons::Mac => {
+                        "Light, dark, or as macOS is. View › Appearance has it too."
+                    }
+                    _ => "Light, dark, or as the system is.",
+                };
+                let appearance = frame()
+                    .flex_col()
+                    .items_stretch()
+                    .child(row_text(&look, "Appearance", Some(line.into())))
+                    .child(
+                        div()
+                            .flex()
+                            .mt(px(SIDE_TOP))
+                            .ml(px(-SIDE_ROOM))
+                            .child(three),
+                    );
+                let zoom = frame()
+                    .child(row_text(
+                        &look,
+                        "Page zoom",
+                        Some(
+                            "Every page's size, until you zoom a site, which keeps its own.".into(),
+                        ),
+                    ))
+                    .child(end([gpui::IntoElement::into_any_element(popup(
+                        &look,
+                        "100%",
+                        POPUP_WIDTH,
+                        false,
+                    ))]));
+                (Some("Look"), vec![appearance, zoom])
+            }
+            Pictures::Favorites(chosen) => {
+                let three = favorites_picker(
+                    &look,
+                    base,
+                    dark,
+                    chosen,
+                    a11y,
+                    self.logged.clone(),
+                    move |scope, _, cx| {
+                        log!("preview: share favorites {}", scope.title());
+                        page.update(cx, |page, cx| {
+                            page.shown = Pictures::Favorites(scope);
+                            cx.notify();
+                        })
+                        .ok();
+                    },
+                );
+                let shared = frame()
+                    .flex_col()
+                    .items_stretch()
+                    .child(row_text(
+                        &look,
+                        "Share favorites",
+                        Some("Which Spaces show the same favorites.".into()),
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .mt(px(SIDE_TOP))
+                            .ml(px(-SIDE_ROOM))
+                            .child(three),
+                    );
+                (None, vec![shared])
+            }
         };
-        let side = if self.right { "right" } else { "left" };
-        let edge = frame()
-            .child(row_text(
-                &look,
-                "Show the hidden sidebar at the window's edge",
-                Some(
-                    format!("Move the pointer along the {side} edge. ⌘S shows it either way.")
-                        .into(),
-                ),
-            ))
-            .child(switch("edge", true));
-        let option = frame()
-            .child(row_text(
-                &look,
-                "Show the hidden sidebar when ⌥ is pressed alone",
-                Some("Press and let go of ⌥ with no other key.".into()),
-            ))
-            .child(switch("option", false));
-        let heading = div()
-            .px(px(TEXT_X))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(look.heading)
-            .child("The sidebar");
+        let heading = heading.map(|heading| {
+            div()
+                .px(px(TEXT_X))
+                .mb(px(HEADING_BOTTOM))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(look.heading)
+                .child(heading)
+        });
         let colors = Colors {
             line: look.line,
             name: base.opacity(NAME),
             heading: look.heading,
         };
         let card = self.card.draw(
-            Section::TabsAndSidebar.name(),
-            div().flex().flex_col().child(heading).child(
-                div()
-                    .mt(px(HEADING_BOTTOM))
-                    .child(group(&look, [position, edge, option])),
-            ),
+            section.name(),
+            div()
+                .flex()
+                .flex_col()
+                .children(heading)
+                .child(group(&look, rows)),
             dark,
             colors,
         );
@@ -3563,6 +3834,7 @@ impl gpui::Render for AccountPage {
             cx,
         );
         let column = settings_column::column(
+            &Default::default(),
             Section::Sync,
             dark,
             Rc::default(),
@@ -3703,8 +3975,10 @@ fn preview_update(update: &str, cx: &mut App) {
 /// for its first Today tab, else its first pinned one. `host` hears `layOut(x, y, width, height,
 /// radius)` for the page's frame, `show(url)` for the tab shown ("" for none), `space(index)` for
 /// the Space shown, `cover(covered)` while something draws over the frame, and `ready()` once the
-/// first frame is up. The demo takes the keyboard only once it's clicked or its command bar opens,
-/// and gives it back when the bar closes; `openBar()` opens the bar.
+/// first frame is up. `host.scheme`, "dark" or "light", keeps the demo in that appearance; without
+/// it the demo follows the visitor's, as the app follows the system's. The demo takes the keyboard
+/// only once it's clicked or its command bar opens, and gives it back when the bar closes;
+/// `openBar()` opens the bar.
 #[cfg(target_family = "wasm")]
 mod web {
     use std::{
@@ -3715,6 +3989,7 @@ mod web {
 
     use browser::command_bar::{self, CommandBar, Suggestion};
     use browser::log;
+    use browser::palette::Tone;
     use browser::shell::{self, Command, Folders, Page, Shell, SpaceEntry};
     use gpui::{
         AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, Entity, Focusable, Image,
@@ -3830,6 +4105,11 @@ mod web {
     /// Starts the demo in `canvas`, with the Spaces in `spaces`, telling `host` what it does.
     #[wasm_bindgen]
     pub fn start(canvas: web_sys::HtmlCanvasElement, spaces: JsValue, host: JsValue) {
+        let tone = match get(&host, "scheme").as_string().as_deref() {
+            Some("dark") => Some(Tone::Dark),
+            Some("light") => Some(Tone::Light),
+            _ => None,
+        };
         HOST.with_borrow_mut(|site| *site = host);
         let favorites = tabs(&spaces, "favorites");
         let spaces: Vec<SiteSpace> = list(&spaces, "spaces")
@@ -3842,7 +4122,7 @@ mod web {
                 selected: get(&space, "selected").as_string(),
             })
             .collect();
-        trace(&canvas);
+        let notes = trace(&canvas);
         gpui_web::draw_in(canvas);
         gpui_platform::web_init();
         gpui_platform::single_threaded_web()
@@ -3862,7 +4142,12 @@ mod web {
                     let mut space_ids = Vec::new();
                     let mut pages = Vec::new();
                     let shell = cx.new(|cx| {
-                        let shell = shell_of(&favorites, &spaces, &mut icons, &mut space_ids, cx);
+                        let mut shell =
+                            shell_of(&favorites, &spaces, &mut icons, &mut space_ids, cx);
+                        shell.force_tone(tone);
+                        if let Some(notes) = &notes {
+                            shell.note_wheel(notes.clone());
+                        }
                         pages = favorites
                             .iter()
                             .chain(
@@ -3886,37 +4171,68 @@ mod web {
     }
 
     /// With `?trace` on the page, records the wheel events over the demo, when the trackpad gave each
-    /// and when the page heard it, and puts a button on the page that saves them as JSON: a real
-    /// swipe, to check what `shell::swipe`'s model assumes of a trackpad and a browser against.
-    fn trace(canvas: &web_sys::HtmlCanvasElement) {
+    /// and when the page heard it, the page's frames while they come, and what the demo decided of
+    /// each swipe from them, and puts a button on the page that saves them as JSON: a real swipe,
+    /// to check what `shell::swipe`'s model assumes of a trackpad and a browser against, and to
+    /// replay through the model (`replay_wheel_trace`). Gives the shell what to tell its decisions.
+    fn trace(canvas: &web_sys::HtmlCanvasElement) -> Option<shell::WheelNotes> {
+        // Version 2 added `frames`, `decisions` and each event's `demo`; version 1 had no version.
         const RECORD: &str = r#"
             if (!new URLSearchParams(location.search).has("trace")) return;
-            const events = [];
+            const events = [], frames = [], decisions = [];
+            let heard = -Infinity, framing = false;
             const button = document.createElement("button");
             const label = () => { button.textContent = `Save wheel trace (${events.length} events)`; };
+            // Frames only for a second after the wheel's last event, so an idle page stays idle.
+            const frame = (now) => {
+                frames.push(now);
+                framing = performance.now() - heard < 1000;
+                if (framing) requestAnimationFrame(frame);
+            };
             canvas.addEventListener("wheel", (event) => {
                 const { timeStamp: stamp, deltaX: x, deltaY: y, deltaMode: mode } = event;
-                events.push({ stamp, heard: performance.now(), x, y, mode });
+                heard = performance.now();
+                events.push({ stamp, heard, x, y, mode });
+                if (!framing) {
+                    framing = true;
+                    requestAnimationFrame(frame);
+                }
                 label();
             }, { capture: true, passive: true });
             Object.assign(button.style, { position: "fixed", right: "12px", bottom: "12px",
                 zIndex: "2147483647", font: "13px system-ui, sans-serif", padding: "6px 10px" });
             button.onclick = () => {
-                const trace = { userAgent: navigator.userAgent, devicePixelRatio, events };
+                const trace = { version: 2, userAgent: navigator.userAgent, devicePixelRatio,
+                    events, frames, decisions };
                 const link = document.createElement("a");
                 link.href = URL.createObjectURL(new Blob([JSON.stringify(trace)], { type: "application/json" }));
                 link.download = "ilo-wheel-trace.json";
                 link.click();
-                events.length = 0;
+                events.length = frames.length = decisions.length = 0;
                 label();
             };
             label();
             document.body.append(button);
+            // The demo hears each event after this listener, so its decisions are the last event's,
+            // or with no event, its quiet timer's. "wheel" marks an event it took as a swipe's.
+            return (kind, what) => {
+                const event = events.length - 1;
+                if (kind !== "wheel") decisions.push({ event, heard: performance.now(), kind, what });
+                else if (event >= 0) events[event].demo = true;
+            };
         "#;
         let record = js_sys::Function::new_with_args("canvas", RECORD);
-        if let Err(error) = record.call1(&JsValue::NULL, canvas) {
-            log!("couldn't record wheel events: {error:?}");
-        }
+        let note = match record.call1(&JsValue::NULL, canvas) {
+            Ok(note) => note.dyn_into::<js_sys::Function>().ok()?,
+            Err(error) => {
+                log!("couldn't record wheel events: {error:?}");
+                return None;
+            }
+        };
+        Some(Rc::new(move |kind: &'static str, what: &str| {
+            let (kind, what) = (JsValue::from_str(kind), JsValue::from_str(what));
+            note.call2(&JsValue::NULL, &kind, &what).ok();
+        }))
     }
 
     /// Opens the command bar and gives it the keyboard, as ⌘K (⌃K) in the demo does: the site calls

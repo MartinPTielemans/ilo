@@ -10,8 +10,11 @@
 # shell's page shows through, and more Spaces than fit (#1401): 16 in the switcher of a sidebar
 # 300 wide, and 8 in the Library's Spaces in a window 1100 wide, and Settings › Sync at Settings'
 # 720 by 480 least size, scrolled, the section's name held at the card's top, and the URL field's
-# translate mark lit under the pointer, light and dark (#2112). The preview's Linux host places no window, so
-# sway puts Site Controls and the icon picker in the middle rather than where the Mac's host would.
+# translate mark lit under the pointer, light and dark (#2112), and the foot bar with two lines over
+# the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380), and
+# Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default
+# naming its model, light and dark (#2455). The preview's Linux host places no window, so sway
+# puts Site Controls and the icon picker in the middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -41,6 +44,11 @@ screens=(
   "settings-least|settings held Sync|PREVIEW_ACCOUNT=words PREVIEW_SIZE=720x480 PREVIEW_SCROLL=200"
   "translate-hover-dark|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=dark|translate mark drawn at"
   "translate-hover-light|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=light|translate mark drawn at"
+  "foot-bar|foot bar shown|PREVIEW_FOOT_BAR=point"
+  "model-menu-claude-dark|menu shown|PREVIEW_MODEL_MENU=claude,sonnet PREVIEW_APPEARANCE=dark"
+  "model-menu-claude-light|menu shown|PREVIEW_MODEL_MENU=claude,sonnet PREVIEW_APPEARANCE=light"
+  "model-menu-codex-dark|menu shown|PREVIEW_MODEL_MENU=codex PREVIEW_APPEARANCE=dark"
+  "model-menu-codex-light|menu shown|PREVIEW_MODEL_MENU=codex PREVIEW_APPEARANCE=light"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;

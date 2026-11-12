@@ -38,22 +38,26 @@ use gpui::{
 use crate::{bc, ns_view, platform, show_menu};
 use browser::menu::{self, Look};
 use browser::palette::{INK, PAPER};
-use browser::settings_card::{self, Card};
+use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
+use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Chip, Look as RowLook, SLIDE, chip, detailed_row, end, frame, glyph_plate, group, group_lined,
-    named_button, row, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
+    Chip, Look as RowLook, SLIDE, chevron_slot, chip, detailed_row, end, frame, glyph_plate, group,
+    group_lined, named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore,
+    stop_switch, text,
 };
-use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
-use browser::settings_side::title as side_title;
+use browser::settings_search::{
+    self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
+    Search,
+};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP,
-    FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
-    GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP,
-    MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING,
-    SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE, WIDTH,
+    FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP,
+    HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME,
+    PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK, SHORT_PADDING, SHORT_ROW, SIDE_ROOM,
+    SIDE_TOP, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -404,7 +408,6 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Popup {
     LittleArchiveAfter,
-    Favorites,
     PasswordsProfile,
     /// A profile's, in General.
     SearchEngine(u64),
@@ -416,8 +419,6 @@ enum Popup {
     TaskAgent,
     /// The model a CLI runs tasks with.
     TaskModel(Cli),
-    /// General's Appearance.
-    Appearance,
     /// General's Page zoom.
     PageZoom,
 }
@@ -427,14 +428,12 @@ impl Popup {
     fn spoken(self) -> SharedString {
         match self {
             Popup::LittleArchiveAfter => "Archive windows left unused after".into(),
-            Popup::Favorites => "Share favorites".into(),
             Popup::PasswordsProfile => "Profile".into(),
             Popup::SearchEngine(_) => "Search engine".into(),
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
             Popup::Notes(_) => "New Note".into(),
             Popup::TaskAgent => "Run tasks on".into(),
             Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
-            Popup::Appearance => "Appearance".into(),
             Popup::PageZoom => "Page zoom".into(),
         }
     }
@@ -446,9 +445,13 @@ pub struct Settings {
     /// Whether the window is dark, as View › Appearance or the system has it, which its rows,
     /// pop-up menus and the views it shows follow.
     dark: bool,
+    /// View › Appearance's choice, which General's Appearance rings.
+    appearance: Appearance,
     look: RowLook,
     /// The card the section shows on, which a section starts at the top of.
     card: Card,
+    /// The column's sections, which scroll at the window's least height.
+    sections: settings_column::Sections,
     /// It was asked to show, or changed section, and logs the section it draws next.
     shown: bool,
     /// An assistive app asks for the tree, so Settings names what it draws (#1381).
@@ -514,6 +517,10 @@ pub struct Settings {
     nightly: Entity<NightlyRow>,
     /// Draws Agents again as the agents change.
     _agents: Option<Subscription>,
+    /// The agents' requests opened in their activity, by entry, to show where each went and what
+    /// it sent (#2326), and those of them showing every line.
+    requests_opened: HashSet<u64>,
+    requests_all: HashSet<u64>,
 }
 
 /// Settings' dialog, which it draws in its own content, so there's nothing to show.
@@ -1265,8 +1272,10 @@ fn view(cx: &mut App) -> Entity<Settings> {
             section: Section::General,
             focus: cx.focus_handle(),
             dark,
+            appearance: shell::app_appearance(cx),
             look,
             card: Card::default(),
+            sections: Default::default(),
             shown: false,
             a11y: false,
             switched: None,
@@ -1288,6 +1297,8 @@ fn view(cx: &mut App) -> Entity<Settings> {
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
+            requests_opened: HashSet::new(),
+            requests_all: HashSet::new(),
             import: None,
             _import: None,
             drawn_size: None,
@@ -1574,6 +1585,18 @@ impl Settings {
     /// Takes the look View › Appearance, else the system, gives it now, and hands it to the views
     /// it shows.
     fn follow_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A choice that leaves the look as it was, such as Automatic after Light on a light
+        // system, still moves Appearance's ring.
+        let appearance = shell::app_appearance(cx);
+        if appearance != self.appearance {
+            self.appearance = appearance;
+            // check.sh waits for this line.
+            log!(
+                "browser: settings appearance {}",
+                appearance_title(appearance)
+            );
+            cx.notify();
+        }
         let dark = dark(window, cx);
         if dark == self.dark {
             return;
@@ -1865,18 +1888,45 @@ impl Settings {
             vec![ask],
         );
         let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
-        let appearance = shell::app_appearance(cx);
-        let appearance_popup = self.popup(
-            Popup::Appearance,
-            appearance_label(appearance).into(),
-            POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_appearance(appearance, window, cx)
-            }),
-        );
-        let appearance_line = match cfg!(target_os = "macos") {
+        let appearance = self.appearance;
+        let appearance_line: SharedString = match cfg!(target_os = "macos") {
             true => "Light, dark, or as macOS is. View › Appearance has it too.",
             false => "Light, dark, or as the system is.",
+        }
+        .into();
+        let appearances = browser::settings_pictures::appearance_picker(
+            look,
+            self.base(),
+            appearance,
+            browser::settings_pictures::Buttons::HERE,
+            self.a11y,
+            self.drawn_logged.clone(),
+            |appearance, _, cx| {
+                crate::browser_windows::update_shells_in(cx, |shell, cx| {
+                    shell.run(Command::Appearance(appearance), "settings", cx)
+                })
+            },
+        )
+        .relative()
+        // Drawn once for each choice the first time it's shown, which check.sh waits for.
+        .child(self.drawn(format!("appearance {}", appearance_title(appearance))));
+        // As Sidebar position's: the drawings under the row's line, their ring's room outside it.
+        let appearances = Row {
+            div: frame()
+                .flex_col()
+                .items_stretch()
+                .child(text(look, "Appearance", Some(appearance_line.clone())))
+                .child(
+                    div()
+                        .flex()
+                        .mt(px(SIDE_TOP))
+                        .ml(px(-SIDE_ROOM))
+                        .child(appearances),
+                ),
+            name: "Appearance".into(),
+            line: Some(appearance_line),
+            keys: None,
+            nested: false,
         };
         let zoom = unsafe { bc::bc_page_zoom() };
         let zoom_chosen = PAGE_ZOOM
@@ -1895,16 +1945,7 @@ impl Settings {
             }),
         );
         let mut looks = vec![
-            setting(
-                look,
-                "Appearance",
-                Some(appearance_line.into()),
-                vec![
-                    appearance_popup
-                        .child(self.drawn("appearance".into()))
-                        .into_any_element(),
-                ],
-            ),
+            appearances,
             setting(
                 look,
                 "Page zoom",
@@ -2027,21 +2068,45 @@ impl Settings {
             vec![battery],
         );
         let scope = favorites_scope();
-        let favorites = self.popup(
-            Popup::Favorites,
-            MenuEntry::label(scope.title()),
-            FAVORITES_POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_favorites_scope(scope, window, cx)
-            }),
-        );
-        let favorites = favorites.child(self.drawn("favorites".into()));
-        let favorites = setting(
+        let settings = cx.weak_entity();
+        let shared = browser::settings_pictures::favorites_picker(
             look,
-            "Share favorites",
-            Some("Which Spaces show the same favorites.".into()),
-            vec![favorites.into_any_element()],
-        );
+            self.base(),
+            self.dark,
+            scope,
+            self.a11y,
+            self.drawn_logged.clone(),
+            // The core keeps the favorites it had, copying or merging the lists, and tells the
+            // windows (`favorites_changed`).
+            move |scope, _, cx| {
+                // check.sh waits for this line.
+                log!("browser: favorites scope {}", scope.title());
+                unsafe { bc::bc_set_favorites_scope(scope.to_core()) };
+                settings.update(cx, |_, cx| cx.notify()).ok();
+            },
+        )
+        .relative()
+        // Drawn again once the scope changes, which check.sh waits for.
+        .child(self.drawn(format!("share favorites {}", scope.title())));
+        let favorites_line: SharedString = "Which Spaces show the same favorites.".into();
+        // As Sidebar position's: the drawings under the row's line, their ring's room outside it.
+        let favorites = Row {
+            div: frame()
+                .flex_col()
+                .items_stretch()
+                .child(text(look, "Share favorites", Some(favorites_line.clone())))
+                .child(
+                    div()
+                        .flex()
+                        .mt(px(SIDE_TOP))
+                        .ml(px(-SIDE_ROOM))
+                        .child(shared),
+                ),
+            name: "Share favorites".into(),
+            line: Some(favorites_line),
+            keys: None,
+            nested: false,
+        };
         let moving = self.toggle(
             "warn moving profiles",
             "Ask before moving a tab to another profile",
@@ -2069,12 +2134,12 @@ impl Settings {
         let right = shell::sidebar_right(cx);
         let line: SharedString =
             "The side of the window the sidebar and the window's buttons are on.".into();
-        let pair = browser::settings_side::picker(
+        let pair = browser::settings_pictures::picker(
             look,
             self.base(),
             self.dark,
             right,
-            browser::settings_side::Buttons::HERE,
+            browser::settings_pictures::Buttons::HERE,
             self.a11y,
             self.drawn_logged.clone(),
             |side, _, cx| set_sidebar_right(side, cx),
@@ -2268,11 +2333,26 @@ impl Settings {
             Some("Counted from when you leave the window.".into()),
             vec![little_archive.into_any_element()],
         ));
+        let sign_in_close = self.toggle(
+            "sign-in pages close",
+            "Close sign-in pages when done",
+            crate::sign_in_close::sign_in_close(),
+            set_sign_in_close,
+            accent,
+            cx,
+        );
+        let sign_in_close = nested(setting(
+            look,
+            "Close sign-in pages when done",
+            Some("When an app's sign-in finishes in Little ilo, its window closes.".into()),
+            vec![sign_in_close],
+        ));
         // Its own settings only while it's on.
         let little: Vec<Row> = [little]
             .into_iter()
             .chain(menu_bar)
             .chain(little_on.then_some(little_archive))
+            .chain(little_on.then_some(sign_in_close))
             .collect();
         let previews = unsafe { bc::bc_link_previews() };
         let previews = self.toggle(
@@ -2878,37 +2958,6 @@ impl Settings {
         self.pop_up(Popup::SearchEngine(profile), items, picked, window, cx);
     }
 
-    /// Opens the favorites' pop-up menu over its button, as the archive's, and sets the scope
-    /// picked. The core keeps the favorites it had, copying or merging the lists, and tells the
-    /// windows (`favorites_changed`).
-    fn choose_favorites_scope(
-        &mut self,
-        chosen: shell::FavoritesScope,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        let items: Vec<MenuEntry> = (shell::FavoritesScope::ALL.iter())
-            .map(|&scope| {
-                let on = scope == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::new(scope.title(), true)
-                }
-            })
-            .collect();
-        let settings = cx.weak_entity();
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(scope) = picked.map(|index| shell::FavoritesScope::ALL[index]) {
-                // check.sh waits for this line.
-                log!("browser: favorites scope {}", scope.title());
-                unsafe { bc::bc_set_favorites_scope(scope.to_core()) };
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::Favorites, items, picked, window, cx);
-    }
-
     /// General's Page zoom: Chrome's choices, which every profile's pages take.
     fn choose_page_zoom(&mut self, chosen: Option<usize>, window: &Window, cx: &mut Context<Self>) {
         let items: Vec<MenuEntry> = (PAGE_ZOOM.iter().enumerate())
@@ -2931,32 +2980,6 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::PageZoom, items, picked, window, cx);
-    }
-
-    /// General's Appearance: Automatic, Light or Dark, View › Appearance's choice, which every
-    /// window takes.
-    fn choose_appearance(&mut self, chosen: Appearance, window: &Window, cx: &mut Context<Self>) {
-        const ALL: [Appearance; 3] = [Appearance::Automatic, Appearance::Light, Appearance::Dark];
-        let items: Vec<MenuEntry> = (ALL.iter())
-            .map(|&each| {
-                let on = each == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::new(appearance_label(each), true)
-                }
-            })
-            .collect();
-        let settings = cx.weak_entity();
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(appearance) = picked.map(|index| ALL[index]) {
-                crate::browser_windows::update_shells_in(cx, |shell, cx| {
-                    shell.run(Command::Appearance(appearance), "settings", cx)
-                });
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::Appearance, items, picked, window, cx);
     }
 
     /// Shows `which` pop-up's menu of `items` in ilo's menu over Settings' window, light or dark as
@@ -3634,7 +3657,7 @@ impl Settings {
                     let ago = div()
                         .text_color(look.detail)
                         .child(agents::ago(entry.at, now));
-                    line_row(look, what, detail, vec![ago.into_any_element()])
+                    self.request_row(agents, entry, what, detail, ago, cx)
                 })
                 .collect();
             if grants.is_none() && entries.is_empty() {
@@ -3737,6 +3760,114 @@ impl Settings {
         blocks
     }
 
+    /// An entry of an agent's activity, its time at its end and then the chevron's place, which a
+    /// request fills: a press opens it to show where it went and what it sent (#2326). Every row
+    /// keeps the place, so every time ends on one edge.
+    fn request_row(
+        &self,
+        agents: &Entity<Agents>,
+        entry: &agents::Activity,
+        what: String,
+        detail: Option<SharedString>,
+        ago: gpui::Div,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        let look = &self.look;
+        let id = entry.id;
+        let opens = !entry.url.is_empty();
+        let opened = self.requests_opened.contains(&id);
+        let slot = chevron_slot(opens.then_some(opened), look.detail.into());
+        let controls = vec![ago.into_any_element(), slot.into_any_element()];
+        let head = line_row(look, what.clone(), detail, controls);
+        if !opens {
+            return head;
+        }
+        let head = head
+            .id(("request", id))
+            .relative()
+            .tab_index(0)
+            .focus_from_keys_only()
+            .focus_visible(browser::settings_rows::ring(look.ink))
+            .when(self.a11y, |head| {
+                named_button(head, what.clone()).aria_expanded(opened)
+            })
+            // Its method, which check.sh tells reads from changes by, and no path: its "/" would
+            // end the run's pattern.
+            .child(self.drawn(format!("request {id} {}", method(&entry.target))))
+            .on_click({
+                let (agents, agent) = (agents.clone(), entry.agent.clone());
+                cx.listener(move |settings, _, _, cx| {
+                    settings.open_request(&agents, &agent, id, cx)
+                })
+            });
+        let all = self.requests_all.contains(&id);
+        let refused = !entry.refused.is_empty();
+        let colors = (look.ink.into(), look.detail.into());
+        let more = cx.listener(move |settings: &mut Self, _: &gpui::ClickEvent, _, cx| {
+            settings.requests_all.insert(id);
+            // check.sh waits for this line.
+            log!("browser: settings request {id} shows all");
+            cx.notify();
+        });
+        let part = opened.then(|| {
+            sent_part(
+                ("request-all", id),
+                &entry.url,
+                &entry.sent,
+                refused,
+                all,
+                colors,
+                self.a11y,
+                move |window, cx| more(&gpui::ClickEvent::default(), window, cx),
+            )
+            .px(px(ROW_X))
+            .pb(px(browser::tokens::settings::PADDING))
+            .mt(px(-SENT_TUCK))
+        });
+        div().child(head).children(part)
+    }
+
+    /// Opens an agent's request in its activity, or closes it, and says what it shows.
+    fn open_request(
+        &mut self,
+        agents: &Entity<Agents>,
+        agent: &str,
+        id: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.requests_opened.remove(&id) {
+            self.requests_opened.insert(id);
+        }
+        let opened = self.requests_opened.contains(&id);
+        let said = |sent: &[agents::request::Sent]| {
+            let lines = sent.iter().map(|line| match line.name.is_empty() {
+                true => line.value.clone(),
+                false => format!("{}: {}", line.name, line.value),
+            });
+            lines.collect::<Vec<_>>().join(" · ")
+        };
+        let found = (agents.read(cx).activity(agent))
+            .find(|entry| entry.id == id)
+            .map(|entry| {
+                (
+                    entry.url.clone(),
+                    entry.refused.is_empty(),
+                    said(&entry.sent),
+                )
+            });
+        // check.sh reads this line: where it went, and what it sent, secrets hidden.
+        match (opened, found) {
+            (true, Some((url, true, sent))) => {
+                log!("browser: settings request {id} opened to {url}, sent: {sent}")
+            }
+            (true, Some((url, false, sent))) => {
+                log!("browser: settings request {id} opened to {url}, not sent: {sent}")
+            }
+            _ => log!("browser: settings request {id} closed"),
+        }
+        cx.notify();
+    }
+
     /// The tasks ⇥ asks in ⌘T: the agent they run on, then each CLI, whether it's installed and
     /// signed in, with the command that does it to copy, as ilo runs neither, and the model it runs
     /// tasks with.
@@ -3810,11 +3941,8 @@ impl Settings {
         }
         let chosen = model.task_model(cli).to_string();
         let models = model.task_models(cli);
-        let label: SharedString = match models.iter().find(|(id, _)| *id == chosen) {
-            Some((_, name)) => name.clone().into(),
-            None if chosen.is_empty() => MenuEntry::label("Default"),
-            None => chosen.clone().into(),
-        };
+        let label: SharedString = (models.iter().find(|(id, _)| *id == chosen))
+            .map_or(MenuEntry::label("Default"), |(_, name)| name.clone().into());
         let agents = agents.clone();
         let popup = self.popup(
             Popup::TaskModel(cli),
@@ -3875,20 +4003,7 @@ impl Settings {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let model = agents.read(cx);
-        let chosen = model.task_model(cli).to_string();
-        let mut models = vec![(String::new(), MenuEntry::label("Default").to_string())];
-        models.extend(model.task_models(cli));
-        let items = (models.iter())
-            .map(|(id, name)| {
-                let on = *id == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::named(name.clone(), true)
-                }
-            })
-            .collect();
+        let (models, items) = agents.read(cx).task_model_menu(cli);
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some((id, _)) = picked.and_then(|index| models.get(index)) {
@@ -4539,6 +4654,10 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
     crate::set_little_in_menu_bar(on);
 }
 
+fn set_sign_in_close(on: bool, cx: &mut App) {
+    crate::sign_in_close::set_sign_in_close(on, cx);
+}
+
 fn set_little_windows(on: bool, cx: &mut App) {
     crate::set_little_windows(on, cx);
 }
@@ -4741,15 +4860,6 @@ fn set_warn_moving_profiles(warn: bool, _: &mut App) {
     unsafe { bc::bc_set_warn_moving_profiles(warn) };
 }
 
-/// Appearance's choices as View › Appearance names them.
-fn appearance_label(appearance: Appearance) -> &'static str {
-    match appearance {
-        Appearance::Automatic => "Automatic",
-        Appearance::Light => "Light",
-        Appearance::Dark => "Dark",
-    }
-}
-
 /// The browser window in front's shell, if there's one.
 fn front_shell() -> Option<Entity<shell::Shell>> {
     let (_, view) = crate::browser_windows::front();
@@ -4863,6 +4973,11 @@ fn manage_passwords(profile: u64, cx: &mut App) {
     log!("browser: manage passwords {profile}");
     crate::open_in_profile(profile, "chrome://password-manager/passwords");
     hide(cx);
+}
+
+/// A request's method, the first word of its target ("POST /api/items").
+fn method(target: &str) -> &str {
+    target.split(' ').next().unwrap_or_default()
 }
 
 /// A row: its name, the line under it, if any, and its controls at its end.
@@ -5203,6 +5318,7 @@ impl Render for Settings {
             }))
             .child(field);
         let column = settings_column::column(
+            &self.sections,
             self.section,
             self.dark,
             self.drawn_logged.clone(),
@@ -5236,6 +5352,7 @@ impl Render for Settings {
                 settings.record(&event.keystroke, cx)
             }))
             .on_key_down(cx.listener(|settings, event: &KeyDownEvent, window, cx| {
+                settings.space_pages(event, window, cx);
                 settings.type_to_search(event, window, cx)
             }))
             .on_action(|_: &CloseSettings, _, cx| hide(cx))
@@ -5245,6 +5362,20 @@ impl Render for Settings {
                 window.focus(&focus, cx);
                 cx.notify();
             }))
+            .on_action(
+                cx.listener(|settings, _: &PageDown, _, cx| settings.page_card(Paging::Down, cx)),
+            )
+            .on_action(
+                cx.listener(|settings, _: &PageUp, _, cx| settings.page_card(Paging::Up, cx)),
+            )
+            .on_action(
+                cx.listener(|settings, _: &PageTop, _, cx| settings.page_card(Paging::Top, cx)),
+            )
+            .on_action(
+                cx.listener(|settings, _: &PageBottom, _, cx| {
+                    settings.page_card(Paging::Bottom, cx)
+                }),
+            )
             .on_action(|_: &NextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &PreviousControl, window, cx| window.focus_prev(cx))
             .on_action(cx.listener(|settings, _: &EndSearch, window, cx| {
@@ -5446,6 +5577,23 @@ impl Settings {
                 found.join(", ")
             ),
         }
+    }
+
+    /// The card's page moves as `to` says, as Page Down, Page Up, Home and End ask.
+    fn page_card(&mut self, to: Paging, cx: &mut Context<Self>) {
+        if self.card.page(to) {
+            cx.notify();
+        }
+    }
+
+    /// Space and ⇧Space page the card while Settings itself has the keyboard.
+    fn space_pages(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(to) = Paging::space(&event.keystroke).filter(|_| self.focus.is_focused(window))
+        else {
+            return;
+        };
+        cx.stop_propagation();
+        self.page_card(to, cx);
     }
 
     /// Typing a character with Settings itself holding the keyboard, as it opens, starts a search

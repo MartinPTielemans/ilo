@@ -4,7 +4,8 @@
 # A finished build keeps that tree for 90 days, so the next build of the same Chromium major starts
 # from it and recompiles only what changed. A tree of an earlier point release, such as a security
 # release's, is brought to pins.ini's in place by engine/setup.sh update, as the MacBook's is; another
-# major's is never built on. Without a kept tree it starts cold, from engine/setup.sh.
+# major's is never built on. Without a kept tree it starts cold, from engine/setup.sh. A major keeps
+# one tree, the newest: the prune job deletes the older ones once a build has kept its own.
 # The stages run Chromium's build scripts and hold no secret. The publish job alone holds
 # ENGINE_RELEASE_TOKEN: it checks the packed engine's checksum, then releases it as
 # engine-mac-<commit> in ilo-engine, as tools/mac-engine-publish.sh does from the MacBook. The first
@@ -364,3 +365,37 @@ jobs:
           gh release upload "$tag" -R "$repo" \
             "$RUNNER_TEMP/engine/Chromium-mac-arm64.tar.xz#Chromium-mac-arm64.tar.xz, from Engine on macOS run $GITHUB_RUN_ID" \
             "$RUNNER_TEMP/engine/Chromium-mac-arm64.tar.xz.sha256"
+
+  # One kept tree of a major, the newest, so nightly builds don't hold 8 GB each for 90 days. Only
+  # once this run kept its finished tree, and only trees of pins.ini's major, from other runs. The
+  # job holds GITHUB_TOKEN alone, with the one permission deleting an artifact needs.
+  prune:
+    needs: build-8
+    if: needs.build-8.outputs.finished == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: engine
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(git config -f engine/pins.ini chromium.version)
+          major=${version%%.*}
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq \
+            '.artifacts[].name' | grep -qx "engine-mac-tree-$version" ||
+            { echo "::error::This run kept no engine-mac-tree-$version, so no older tree is deleted."; exit 1; }
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/engine-mac.yml/runs?per_page=100" --jq '.workflow_runs[].id'); do
+            [ "$id" != "$GITHUB_RUN_ID" ] || continue
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" --jq \
+              ".artifacts[] | select((.expired | not) and (.name | startswith(\"engine-mac-tree-$major.\"))) | \"\\(.id) \\(.name)\"" |
+              while read -r artifact name; do
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact"
+                echo "Deleted run $id's $name, older than this run's." | tee -a "$GITHUB_STEP_SUMMARY"
+              done
+          done

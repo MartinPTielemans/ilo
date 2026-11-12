@@ -391,6 +391,24 @@ impl toast::Host for ToastHost {
     }
 }
 
+/// The foot bar's requests, to the host's foot bar window, over the browser window it names.
+pub(crate) struct FootBarHost;
+
+impl browser::foot_bar::Host for FootBarHost {
+    fn show(&self, window: u64, place: browser::foot_bar::Place) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (width, height) = (place.size.width.into(), place.size.height.into());
+        let (left, right, bottom) = (place.left.into(), place.right.into(), place.bottom.into());
+        unsafe { platform::host_show_foot_bar(view, left, right, bottom, width, height) };
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_foot_bar() };
+    }
+}
+
 /// The zoom HUD's requests, to the host's HUD window, over the browser window it names.
 pub(crate) struct HudHost;
 

@@ -291,7 +291,8 @@ fn panel_width(
             (None, Some(note)) => GAP + width_of(note),
             (None, None) => 0.,
         };
-        width_of(&entry.title) + trailing
+        let detail = (entry.detail.as_ref()).map_or(0., |detail| DETAIL_GAP + width_of(detail));
+        width_of(&entry.title) + detail + trailing
     })
     .fold(0., f32::max);
     let submenus = items
@@ -900,6 +901,10 @@ pub(crate) fn described(entries: &[MenuEntry]) -> String {
 /// The menu's items as `described` has them, with each item's ⌥ alternate in its place if `alt`.
 pub(crate) fn described_held(entries: &[MenuEntry], alt: bool) -> String {
     let mark = |entry: &MenuEntry, title: String| {
+        let title = match &entry.detail {
+            Some(detail) => format!("{title} [{detail}]"),
+            None => title,
+        };
         let title = match (entry.page, entry.favicon.is_some()) {
             (false, _) => title,
             (true, true) => format!("{title} (favicon)"),
@@ -1556,7 +1561,10 @@ impl ContextMenu {
             }),
         };
         let a11y = self.a11y;
-        let name = entry.title.clone();
+        let name = match &entry.detail {
+            Some(detail) => format!("{}, {detail}", entry.title).into(),
+            None => entry.title.clone(),
+        };
         let enabled = entry.enabled || entry.header;
         let (checked, keys) = (entry.checked, shortcut.clone());
         let spoken_note = entry.note.clone();
@@ -1605,7 +1613,13 @@ impl ContextMenu {
                             .text_size(px(HEADER_TEXT))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                     })
-                    .child(entry.title.clone()),
+                    .child(entry.title.clone())
+                    .when_some(entry.detail.clone(), |title, detail| {
+                        title
+                            .flex()
+                            .gap(px(DETAIL_GAP))
+                            .child(div().flex_none().text_color(secondary).child(detail))
+                    }),
             )
             .children(trailing)
             .when(a11y, |row| {

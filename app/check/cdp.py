@@ -31,8 +31,14 @@ takes a command a line on its standard input:
                   last at an address starting with PREFIX, through its shadow trees, its label,
                   its text or its id, or none for no such page or nothing focused: a WebUI dialog
                   takes the keyboard a moment after its page loads
+  video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|-", or "cdp: video
+                  none" for no such page or no video in it: how far the first video in the page
+                  opened last at an address starting with PREFIX has played, whether it's paused,
+                  whether its player shows an ad, and refused where Chrome kept it from starting,
+                  as YouTube's player says
   requests FILE   records each request the attached page and its frames make from now on, a JSON
-                  line each in FILE: "sent" with its id, address and wall time in ms, "failed"
+                  line each in FILE: "sent" with its id, address and wall time in ms, and
+                  "redirect": true where it's a redirect of the request before it, "failed"
                   with its id and Chromium's error, as net::ERR_BLOCKED_BY_CLIENT for an ad
                   blocker's, and "answered" with its id for a response from no server, network
                   cache or service worker, as the browser's own ad blocker's stand-in is, then
@@ -211,6 +217,10 @@ def record(message):
     if method == "Network.requestWillBeSent":
         line = {"event": "sent", "id": params["requestId"], "url": params["request"]["url"],
                 "at": int(params["wallTime"] * 1000)}
+        # A redirect keeps its request's id, but a new request can take an id used before: ids
+        # are a renderer's process id and a count, and the OS gives a later process the same id.
+        if "redirectResponse" in params:
+            line["redirect"] = True
     elif method == "Network.loadingFailed":
         line = {"event": "failed", "id": params["requestId"], "error": params["errorText"]}
     elif method == "Network.responseReceived":
@@ -367,17 +377,25 @@ def reveal(field_id):
     return "hidden" if "display: none" in attributes(eye).get("style", "") else "shown"
 
 
-def shows(prefix, text):
+def page_session(prefix):
+    """A session on the page opened last at an address starting with PREFIX, or None."""
     with answered:
         target = page_target(lambda url: url.startswith(prefix))
     if not target:
-        return "none"
+        return None
     if target == attached:
         sessions[target] = session
     if target not in sessions:
         sessions[target] = call("Target.attachToTarget",
                                 {"targetId": target, "flatten": True})["sessionId"]
-    root = call("DOM.getDocument", {"depth": -1, "pierce": True}, sessions[target])["root"]
+    return sessions[target]
+
+
+def shows(prefix, text):
+    on = page_session(prefix)
+    if not on:
+        return "none"
+    root = call("DOM.getDocument", {"depth": -1, "pierce": True}, on)["root"]
     found = find(root, lambda node: text in node.get("nodeValue", "")
                  or any(text in value for value in attributes(node).values()))
     return "yes" if found else "no"
@@ -396,17 +414,35 @@ FOCUSED = """(() => {
 
 
 def focus(prefix):
-    with answered:
-        target = page_target(lambda url: url.startswith(prefix))
-    if not target:
-        return "none"
-    if target == attached:
-        sessions[target] = session
-    if target not in sessions:
-        sessions[target] = call("Target.attachToTarget",
-                                {"targetId": target, "flatten": True})["sessionId"]
-    value = call("Runtime.evaluate", {"expression": FOCUSED, "returnByValue": True},
-                 sessions[target]).get("result", {}).get("value")
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {"expression": FOCUSED, "returnByValue": True},
+                        on).get("result", {}).get("value")
+    return value or "none"
+
+
+# The page's first video: how far it has played, whether it's paused, whether its player shows an
+# ad, and whether Chrome refused to start it, as YouTube's says with classes on the player round
+# it. Refused, the player has asked to play, as playing-mode says, and has the data to, but the
+# video is still paused and has never started, as Chrome lets a page start a video with sound only
+# once the user has acted on it.
+VIDEO = """(() => {
+  const video = document.querySelector("video");
+  if (!video) return "";
+  const player = video.closest(".html5-video-player");
+  const ad = player && (player.classList.contains("ad-showing") ||
+                        player.classList.contains("ad-interrupting"));
+  const refused = player && player.classList.contains("playing-mode") &&
+    player.classList.contains("unstarted-mode") && video.paused &&
+    video.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA;
+  return video.currentTime.toFixed(1) + (video.paused ? " paused" : " playing") +
+         (ad ? " ad" : " no-ad") + (refused ? " refused" : " -");
+})()"""
+
+
+def video(prefix):
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {"expression": VIDEO, "returnByValue": True},
+                        on).get("result", {}).get("value")
     return value or "none"
 
 
@@ -440,6 +476,8 @@ for line in sys.stdin:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:
         log("focus " + focus(words[1]))
+    elif words[:1] == ["video"] and len(words) == 2:
+        log("video " + video(words[1]))
     elif words[:1] == ["requests"] and len(words) == 2 and session and not recording:
         recording = open(words[1], "w", encoding="utf-8", buffering=1)
         call("Network.enable", {}, session)
