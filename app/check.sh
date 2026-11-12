@@ -55,6 +55,10 @@ export BROWSER_ONBOARDING=skip
 # The runs place their clicks under the Space's name row, which a lone unnamed Space hides unless
 # Show Space Header keeps it, so theirs is kept; spaces' checks it hiding (#1400).
 export BROWSER_SPACE_HEADER=shown
+# The browser's lines are whole, but a child process that crashes, as the crash steps make one,
+# prints its stack beside them a piece at a time, so a line could start mid-way through one. So no
+# process prints its stack (#2496).
+export BROWSER_STACK_TRACES=off
 cd "$(dirname "$0")"
 if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   # Under Xvfb, as CI runs it (check-linux.yml): a 1280 by 800 screen, as the sway session's
