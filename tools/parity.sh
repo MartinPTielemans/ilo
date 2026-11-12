@@ -14,9 +14,10 @@
 # the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380), and
 # Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default
 # naming its model, light and dark (#2455), and the bell of a page's held request to show
-# notifications, light and dark, its Site Controls opened at Notifications, and those Site Controls
-# once Allow or Block there answered it (#2323). The preview's Linux host places no window, so sway
-# puts Site Controls and the icon picker in the middle rather than where the Mac's host would.
+# notifications in the Site Controls' place, light and dark, at rest and with the pointer over the
+# field, its Site Controls opened at Notifications, and those Site Controls once Allow or Block
+# there answered it (#2323). The preview's Linux host places no window, so sway puts Site Controls
+# and the icon picker in the middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -53,6 +54,8 @@ screens=(
   "model-menu-codex-light|menu shown|PREVIEW_MODEL_MENU=codex PREVIEW_APPEARANCE=light"
   "quiet-bell-dark|notification bell|PREVIEW_QUIET=held PREVIEW_APPEARANCE=dark"
   "quiet-bell-light|notification bell|PREVIEW_QUIET=held PREVIEW_APPEARANCE=light"
+  "quiet-bell-pointer-dark|sidebar tools shown|PREVIEW_QUIET=held PREVIEW_APPEARANCE=dark PREVIEW_POINTER=100,64"
+  "quiet-bell-pointer-light|sidebar tools shown|PREVIEW_QUIET=held PREVIEW_APPEARANCE=light PREVIEW_POINTER=100,64"
   "quiet-site-controls|site controls keyed|PREVIEW_QUIET=held PREVIEW_SITE_CONTROLS=1"
   "quiet-allowed|site controls settled|PREVIEW_QUIET=allowed PREVIEW_SITE_CONTROLS=1"
   "quiet-blocked|site controls settled|PREVIEW_QUIET=blocked PREVIEW_SITE_CONTROLS=1"
