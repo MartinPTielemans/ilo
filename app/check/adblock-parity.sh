@@ -12,9 +12,11 @@
 # first site, and the probe waits for the ad script to load rather than be blocked. With
 # ADBLOCK_PARITY_BASELINE naming the sites.tsv an earlier run left, it fails where this run is worse:
 #   - a site that loaded there and doesn't here;
-#   - a host blocked on a site there that this run let through on that site.
-# A host neither run requested counts for neither, as the ads a site serves change from load to
-# load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If the check
+#   - a host blocked on a site there that this run let through on that site. Where the baseline
+#     both blocked and let through a host's requests on the site, the host alone can't say, so
+#     its blocked addresses, host and path, are held to this run's instead (#2111).
+# A host or address neither run requested counts for neither, as the ads a site serves change from
+# load to load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If the check
 # still stands in either run, the site isn't compared, and the result names it, as a bot check has
 # no ads to block. On a YouTube watch page the run reads the player from the load on, to say
 # whether an ad showed before the video played 5 s, and it fails where the baseline's played with
@@ -283,6 +285,12 @@ for i, s in enumerate(sites):
     s["requests"] = len(mine)
     s["blocked"] = sorted({host(r) for r in mine if r["how"] != "allowed"})
     s["allowed"] = sorted({host(r) for r in mine if r["how"] == "allowed"})
+    # Addresses, host and path, as a query changes from load to load.
+    address = lambda r: host(r) + urlsplit(r["url"]).path
+    s["blocked_at"] = {address(r) for r in mine if r["how"] != "allowed"}
+    s["allowed_at"] = {address(r) for r in mine if r["how"] == "allowed"}
+    # Where the run both blocked and let through a host's requests, those it blocked.
+    s["split"] = sorted(a for a in s["blocked_at"] if a.split("/")[0] in s["allowed"])
     s["blocked_n"] = sum(r["how"] == "blocked" for r in mine)
     s["standin_n"] = sum(r["how"] == "stand-in" for r in mine)
 
@@ -300,12 +308,12 @@ def video_of(cell):
 
 with open(table, "w", encoding="utf-8") as out:
     out.write("site\tloaded\tload_ms\trequests\tblocked\tstand_ins\tblocked_hosts\tallowed_hosts"
-              "\tbot_check\tvideo\n")
+              "\tbot_check\tvideo\tsplit_blocked\n")
     for s in sites:
         out.write("\t".join([s["url"], "1" if s["loaded"] else "0", s["load_ms"], str(s["requests"]),
                              str(s["blocked_n"]), str(s["standin_n"]), ",".join(s["blocked"]),
                              ",".join(s["allowed"]), "1" if s["bot"] else "0",
-                             video_cell(s["video"])]) + "\n")
+                             video_cell(s["video"]), " ".join(s["split"])]) + "\n")
 
 worse = []
 # A site that was Cloudflare's bot check in this run or the baseline's, which an older table
@@ -334,7 +342,13 @@ if baseline:
         elif plays(was) and not plays(s["video"]):
             now = video_said(s["video"]) if s["video"] else "wasn't watched"
             worse.append(f"{s['url']}'s video {now}, where the baseline's {video_said(was)}")
-        through = sorted(set(b[6].split(",")) & set(s["allowed"]) - set(s["blocked"]) - {""})
+        through = set(b[6].split(",")) & set(s["allowed"]) - set(s["blocked"]) - {""}
+        # A table from before split_blocked holds every host to the host rule.
+        if "split_blocked" in named[s["url"]]:
+            split = set(named[s["url"]]["split_blocked"].split())
+            through -= {a.split("/")[0] for a in split}
+            through |= split & s["allowed_at"] - s["blocked_at"]
+        through = sorted(through)
         if through:
             worse.append(f"{s['url']} let through what the baseline blocked: {', '.join(through)}")
 loaded = [s for s in sites if s["loaded"]]
