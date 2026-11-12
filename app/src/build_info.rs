@@ -293,6 +293,24 @@ mod tests {
         );
     }
 
+    /// On Windows, the system and the chip come from the registry, not the fallbacks, which
+    /// named them "windows" and "x86_64" (#2458).
+    #[cfg(windows)]
+    #[test]
+    fn reads_windows_version_and_processor() {
+        let system = system();
+        assert!(
+            system.starts_with("Windows ") && system.contains("(build "),
+            "expected the edition and build from Windows's version key, read: {system}"
+        );
+        let chip = chip();
+        assert_ne!(
+            chip,
+            std::env::consts::ARCH,
+            "expected the processor's name from the registry, read only the architecture"
+        );
+    }
+
     /// Windows is named by its edition, release and build, Windows 11 by its build though the
     /// registry calls it Windows 10, and what the registry lacks is left out (#2458).
     #[test]
