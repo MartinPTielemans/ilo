@@ -235,7 +235,7 @@ pub fn window_radius() -> f32 {
     #[cfg(target_os = "macos")]
     return tokens::WINDOW_RADIUS_MAC;
     #[cfg(target_os = "windows")]
-    return match windows_11() {
+    return match crate::build_info::windows_11() {
         true => tokens::WINDOW_RADIUS_WINDOWS,
         false => 0.,
     };
@@ -243,37 +243,6 @@ pub fn window_radius() -> f32 {
     return tokens::WINDOW_RADIUS_LINUX;
 }
 
-/// Whether this is Windows 11, build 22000 on, which rounds a window's corners, as the registry
-/// says (the window captures in tools/window-screenshot.sh read it there too).
-#[cfg(target_os = "windows")]
-fn windows_11() -> bool {
-    use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
-    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    let build = *BUILD.get_or_init(|| {
-        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
-        let folder = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-        let name = wide("CurrentBuildNumber");
-        let mut text = [0u16; 16];
-        let mut size = std::mem::size_of_val(&text) as u32;
-        let read = unsafe {
-            RegGetValueW(
-                HKEY_LOCAL_MACHINE,
-                folder.as_ptr(),
-                name.as_ptr(),
-                RRF_RT_REG_SZ,
-                std::ptr::null_mut(),
-                text.as_mut_ptr().cast(),
-                &mut size,
-            )
-        };
-        let text = String::from_utf16_lossy(&text[..(size as usize / 2).min(text.len())]);
-        match read {
-            0 => text.trim_end_matches('\0').parse().unwrap_or(0),
-            _ => 0,
-        }
-    });
-    build >= 22000
-}
 /// The most pages a split view shows, as the core's Space has it.
 const MAX_PANES: usize = 3;
 use crate::tokens::shell::FOCUS_GLOW;
@@ -3725,10 +3694,7 @@ impl Shell {
     /// unless a page took it there, and leaving takes that away.
     pub fn set_full_screen(&mut self, entered: bool, cx: &mut Context<Self>) {
         self.full_screen = entered;
-        // A new window waiting for its full screen opens its bar at the next frame.
-        if self.opening.is_some() {
-            cx.notify();
-        }
+        self.opening_heard(entered, cx);
         // There for the page, or back, with no resize to end the hold, as a window already its
         // screen's size goes: held on, the page stayed put for good, under the Library (#1633).
         if entered == self.page_fullscreen && self.page_held.take().is_some() {

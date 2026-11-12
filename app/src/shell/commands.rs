@@ -1721,11 +1721,11 @@ impl Shell {
             }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
-                let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
+                let url = BuildInfo::here(cx).issue_url(build_info::NEW_ISSUE);
                 return self.browser.open_page(&url, cx);
             }
             Command::CopyBuildInfo => {
-                return self.copy(&BuildInfo::here().text(), "Copied Build Info", cx);
+                return self.copy(&BuildInfo::here(cx).text(), "Copied Build Info", cx);
             }
             Command::HelpCenter => return self.browser.open_page(build_info::HELP_CENTER, cx),
             Command::WhatsNew => return self.browser.open_page(build_info::WHATS_NEW, cx),
