@@ -31,10 +31,11 @@ takes a command a line on its standard input:
                   last at an address starting with PREFIX, through its shadow trees, its label,
                   its text or its id, or none for no such page or nothing focused: a WebUI dialog
                   takes the keyboard a moment after its page loads
-  video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad|none": how far the first video
-                  in the page opened last at an address starting with PREFIX has played, whether
-                  it's paused, and whether its player shows an ad, as YouTube's player says, or
-                  none for no such page or no video in it
+  video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|-", or "cdp: video
+                  none" for no such page or no video in it: how far the first video in the page
+                  opened last at an address starting with PREFIX has played, whether it's paused,
+                  whether its player shows an ad, and refused where Chrome kept it from starting,
+                  as YouTube's player says
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, "failed"
@@ -419,16 +420,22 @@ def focus(prefix):
     return value or "none"
 
 
-# The page's first video: how far it has played, whether it's paused, and whether its player
-# shows an ad, as YouTube's says with a class on the player round it.
+# The page's first video: how far it has played, whether it's paused, whether its player shows an
+# ad, and whether Chrome refused to start it, as YouTube's says with classes on the player round
+# it. Refused, the player has asked to play, as playing-mode says, and has the data to, but the
+# video is still paused and has never started, as Chrome lets a page start a video with sound only
+# once the user has acted on it.
 VIDEO = """(() => {
   const video = document.querySelector("video");
   if (!video) return "";
   const player = video.closest(".html5-video-player");
   const ad = player && (player.classList.contains("ad-showing") ||
                         player.classList.contains("ad-interrupting"));
+  const refused = player && player.classList.contains("playing-mode") &&
+    player.classList.contains("unstarted-mode") && video.paused &&
+    video.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA;
   return video.currentTime.toFixed(1) + (video.paused ? " paused" : " playing") +
-         (ad ? " ad" : " no-ad");
+         (ad ? " ad" : " no-ad") + (refused ? " refused" : " -");
 })()"""
 
 

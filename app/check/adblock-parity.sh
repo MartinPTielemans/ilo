@@ -106,7 +106,7 @@ done
 grep -q '^cdp: recording requests' "$cdp_log" ||
   fail "DevTools didn't record the requests: cdp.py said $(tail -1 "$cdp_log")"
 # What cdp.py says of the first video in the page at an address starting with $1: its seconds
-# played, playing or paused, and ad or no-ad, or none.
+# played, playing or paused, ad or no-ad, and refused or -, or none.
 video() {
   asked=$(grep -c '^cdp: video ' "$cdp_log" || true)
   echo "video $1" >&5
@@ -120,35 +120,31 @@ video() {
 # seconds its video played, or none for no video, as YouTube's bot check has none. An ad plays
 # before the video does, so the player is read each half second from the load until the video
 # has played 5 s, or for 30 s. Chrome lets a page start a video with sound only once the user has
-# acted on it, so a video still waiting at its start 3 s on gets k, YouTube's play key, once, as a
-# user's press of play. Sooner, the key can land as the player starts the video itself, and pause
-# it.
+# acted on it, so a video whose start Chrome refused, as YouTube's player says, gets k, YouTube's
+# play key, once, as a user's press of play. Before the player has asked to play, the key would
+# start the video, and the player's own start would then pause it.
 videos="$dir/videos.txt"
 : > "$videos"
 watch_video() {
-  ad=no-ad played=none pressed= waiting= since=$(date +%s)
+  site=$1 ad=no-ad played=none pressed= since=$(date +%s)
   while [ $(($(date +%s) - since)) -lt 30 ]; do
-    said=$(video https://www.youtube.com/watch)
-    case $said in
-      none | '') ;;
-      '0.0 paused '*)
-        waiting=${waiting:-$(date +%s)}
-        if [ -z "$pressed" ] && [ $(($(date +%s) - waiting)) -ge 3 ]; then
-          send key k
-          pressed=1
-        fi
-        played=0.0
-        case $said in *' ad') ad=ad ;; esac
-        ;;
-      *' ad') ad=ad ;;
-      *)
-        played=${said%% *}
+    # The seconds, playing or paused, ad or no-ad, refused or -.
+    set -- $(video https://www.youtube.com/watch)
+    if [ $# = 4 ]; then
+      if [ "$4" = refused ] && [ -z "$pressed" ]; then
+        send key k
+        pressed=1
+      fi
+      if [ "$3" = ad ]; then
+        ad=ad
+      else
+        played=$1
         [ "${played%.*}" -lt 5 ] || break
-        ;;
-    esac
+      fi
+    fi
     sleep 0.5
   done
-  echo "$1 $ad $played" >> "$videos"
+  echo "$site $ad $played" >> "$videos"
 }
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
 # loaded, or "none" for a load that didn't come within 45 s.
