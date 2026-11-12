@@ -1479,9 +1479,10 @@ FRAME
   bar_gone "Esc in the command bar after Alt+F4 closed the window it was over"
   # The display adapter restarting, as a driver update or a reset does, takes GPUI's device away.
   # With the bar open and the app idle, the bar's window stayed on screen with nothing drawn in it,
-  # the page reading through its frame and shadow, until the next input asked for a frame (#2536).
-  # The device's removal now wakes GPUI to draw its windows again. pnputil needs an administrator,
-  # as CI's runner is.
+  # the page reading through its frame and shadow, and the sidebar black, until the next input asked
+  # for a frame (#2536). The device's removal now wakes GPUI to draw its windows again on a new one.
+  # The bar's view isn't rendered again for it, so its "drew" line doesn't say. pnputil needs an
+  # administrator, as CI's runner is.
   send key t cmd
   expect '^browser: command bar shown$' "Ctrl+T didn't open the command bar"
   restarted=$(powershell.exe -NoProfile -Command \
@@ -1491,8 +1492,9 @@ FRAME
     *"restarted successfully"*)
       # A driver command that draws nothing, for what's logged after the restart.
       send overlays
-      expect '^browser: command bar drew ' \
-        "the command bar drew nothing after the display adapter restarted under it, with no input"
+      expect '^browser: gpui redrew its windows on a new device$' \
+        "the windows drew nothing after the display adapter restarted under the bar, with no input"
+      overlays_at "the command bar's window left the screen as the display adapter restarted"
       ../tools/window-screenshot.sh "$pid" "$out/bar-adapter-restarted.png" all ||
         fail "no window to capture"
       adapter=", and the open bar draws again after the display adapter restarts under it"
