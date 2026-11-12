@@ -3,7 +3,7 @@
 # Twelve launches open Notion's new page and quit as it loads, every other one with Chromium's
 # CompressionDictionaryTransport off, and two quit a local page, for the floor. Each says how long
 # its threads took to stop and how many dictionaries the profile then holds.
-! mac || fail "quitwait is Windows' and Linux's probe"
+[ "$(uname)" != Darwin ] || fail "quitwait is Windows' and Linux's probe"
 probe_off=1
 serve
 dictionaries() {
