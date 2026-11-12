@@ -576,6 +576,7 @@ impl Shell {
         let (site, site_color) = self.url_words(tab, &url, 1.);
         let icon = (tab != 0).then(|| self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()));
         let title = self.little_bar_title(tab, &site, &url, cx);
+        let closing = self.little.as_ref().is_some_and(|little| little.closing);
         let title = div()
             .id("little-title")
             .when(self.a11y, |title| title.button_named(site.clone()))
@@ -603,10 +604,12 @@ impl Shell {
             }))
             .children(icon.map(|icon| div().flex_none().child(favicon(&self.palette, icon))))
             // Each ends in an ellipsis rather than a cut. The host keeps at most half the row, so
-            // a long one leaves the title room, and the title gives up its room first.
+            // a long one leaves the title room, and the title gives up its room first, but for the
+            // line that the window's closing, whose key to reopen it is what it's there to say.
             .child(
                 div()
-                    .flex_shrink_0()
+                    .when(!closing, |site| site.flex_shrink_0())
+                    .when(closing, |site| site.min_w(px(0.)))
                     .max_w(relative(0.5))
                     .truncate()
                     .text_color(site_color)
@@ -614,8 +617,8 @@ impl Shell {
             )
             .child(
                 div()
-                    .flex_1()
-                    .min_w(px(0.))
+                    .when(!closing, |title| title.flex_1().min_w(px(0.)))
+                    .when(closing, |title| title.flex_none().max_w(relative(1.)))
                     .truncate()
                     .text_color(self.palette.text(TITLE))
                     .child(title),
