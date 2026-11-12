@@ -23,9 +23,10 @@ pub(crate) struct Opening {
 
 impl Shell {
     /// Whether the window is full screen of its own, not for a page: a window ⌘N opens from it
-    /// goes full screen too.
+    /// goes full screen too. As the window has it, which the shell hears a frame or more later: a
+    /// ⌘N between opened a window that went full screen without waiting for its desktop (#2553).
     pub fn in_window_full_screen(&self) -> bool {
-        self.full_screen && !self.page_fullscreen
+        (self.full_screen || self.browser.full_screen_now()) && !self.page_fullscreen
     }
 
     /// The window was opened by ⌘N or ⇧⌘N at `asked`: it opens the command bar once it's on
@@ -175,6 +176,23 @@ mod tests {
             cx.run_until_parked();
         }
         assert_eq!(bars(&host), 1, "the drawn window's bar didn't open once");
+    }
+
+    /// A window that has gone full screen is, for ⌘N, before the shell has heard so, and isn't while
+    /// a page has it full screen (#2553).
+    #[gpui::test]
+    fn a_window_is_full_screen_for_cmd_n_before_the_shell_hears(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        host.full_screen.set(true);
+        assert!(
+            shell.read_with(cx, |shell, _| shell.in_window_full_screen()),
+            "the window full screen wasn't, until the shell heard"
+        );
+        shell.update(cx, |shell, _| shell.page_fullscreen = true);
+        assert!(
+            shell.read_with(cx, |shell, _| !shell.in_window_full_screen()),
+            "the window full screen for a page was full screen of its own"
+        );
     }
 
     /// From a full-screen window, it goes full screen first, and the bar waits for that.
