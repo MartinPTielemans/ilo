@@ -28,6 +28,7 @@
 #include "browser_core/ax_text.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
+#include "browser_core/select_choices.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "browser_core/typing_keys.h"
@@ -326,6 +327,7 @@ bool IsWebFrame(content::RenderFrameHost* frame) {
 }
 
 base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwords) {
+  std::map<std::string, std::vector<std::string>> choices = SelectChoices(nodes);
   std::map<std::string, const base::DictValue*> by_id;
   for (const base::Value& node : nodes) {
     const base::DictValue* dict = node.GetIfDict();
@@ -375,6 +377,13 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
     dict->Remove("value");
     if (IsField(*dict)) {
       dict->Remove("childIds");
+    }
+    if (auto select = choices.find(*id); select != choices.end() && !select->second.empty()) {
+      base::ListValue names;
+      for (std::string& name : select->second) {
+        names.Append(std::move(name));
+      }
+      dict->Set("choices", std::move(names));
     }
     if (base::ListValue* properties = dict->FindList("properties")) {
       properties->EraseIf([](const base::Value& property) {

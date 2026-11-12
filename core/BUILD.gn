@@ -266,6 +266,16 @@ source_set("idle_check") {
   deps = [ "//base" ]
 }
 
+# A native select's choices as an agent's outline gives them, apart so browser_core_unittests tests
+# the rule alone.
+source_set("select_choices") {
+  sources = [
+    "select_choices.cc",
+    "select_choices.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.
 source_set("mini_player_place") {
   sources = [
@@ -543,6 +553,7 @@ source_set("browser_core") {
     ":mini_player_place",
     ":other_tabs",
     ":search_default",
+    ":select_choices",
     ":agent_download_hold",
     ":sidebar_backups",
     ":site_searches",
@@ -851,6 +862,7 @@ test("browser_core_unittests") {
     "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
     "search_default_unittest.cc",
+    "select_choices_unittest.cc",
     "sidebar_backups_unittest.cc",
     "site_searches_unittest.cc",
 
@@ -881,6 +893,7 @@ test("browser_core_unittests") {
     ":mini_player_place",
     ":other_tabs",
     ":search_default",
+    ":select_choices",
     ":sidebar_backups",
     ":site_searches",
     ":space_default",
