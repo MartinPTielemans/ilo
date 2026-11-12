@@ -945,6 +945,15 @@ impl Render for LinkPreview {
             let [keep, _] = buttons_in(controls_over(card(shown.page)));
             let (x, y) = (f32::from(keep.center().x), f32::from(keep.center().y));
             log!("browser: link preview keep button at {x} {y}");
+            // check/peek-motion.sh reads where the page rests and the point it grows from, to
+            // tell where the card is in each frame of the motion it films.
+            let rest = page_in(card(shown.page));
+            let (left, top) = (f32::from(rest.left()), f32::from(rest.top()));
+            let (width, height) = (f32::from(rest.size.width), f32::from(rest.size.height));
+            let (from_x, from_y) = (f32::from(about.x), f32::from(about.y));
+            log!(
+                "browser: link preview page at {left} {top} {width} {height} from {from_x} {from_y}"
+            );
             log!("browser: link preview settled");
         }
         let palette = palette::current(cx);
