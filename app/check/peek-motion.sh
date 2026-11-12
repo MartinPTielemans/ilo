@@ -13,6 +13,13 @@ if [ "$(uname)" = Darwin ]; then
   echo "skip: peek-motion. The Mac's Peek page is in its own window, scaling with the card."
   exit 0
 fi
+# Under Xvfb and openbox nothing composites, so the preview's window draws its dim opaque, and a
+# frame can't say where the motion is from it.
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ] &&
+  [ "${BROWSER_XVFB:-}" != kwin ]; then
+  echo "skip: peek-motion. Under Xvfb with no compositor, Peek's dim is drawn opaque."
+  exit 0
+fi
 serve
 # The window's page is one green, its top 40% a link to another site, localhost, and Peek's page
 # one magenta, so a frame says whose page shows at a point. The titles say "ready" once drawn, and
