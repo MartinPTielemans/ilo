@@ -235,15 +235,14 @@ if [ "${1:-}" = --steps ]; then
   await 'settings search cleared' "$at"
 
   # Korean in Settings' search, over XIM, where a syllable's commit and the next syllable come as
-  # two messages: the commit must reach the field before the next composes.
+  # two messages: the commit must reach the field before the next composes, or the search at the
+  # end isn't for "한글1". Both can come before one frame, so the search may never log 한 alone.
   # Escape left the field, so Ctrl+F gives it the keys again.
   if [ -n "${HANGUL:-}" ]; then
     key '^f'
     key '^ '
     at=$(mark); key gksr
     await 'settings search composing "한ㄱ"' "$at"
-    tail -n "+$((at + 1))" "$LOG" | grep -q 'settings search "한" finds' ||
-      fail "Settings' search didn't hear 한 committed before ㄱ composed"
     at=$(mark); key mf
     await 'settings search composing "한글"' "$at"
     at=$(mark); key $'\b'
