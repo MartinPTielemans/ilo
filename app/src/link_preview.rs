@@ -480,6 +480,8 @@ struct Preview {
     /// Whether the window's page is to have the keyboard back once a page under the window has
     /// left, as it's closing.
     releasing: bool,
+    /// The frame check.sh last read the card holds the page at, in pixels, and the scale.
+    logged: Option<([i32; 4], f32)>,
     /// Once it's leaving: when, how, and where the motion was.
     leaving: Option<(Instant, Leave, Pose)>,
     _leave: Option<Task<()>>,
@@ -666,6 +668,7 @@ pub fn show(
             placed: page_in(card(page)),
             cut: false,
             releasing: false,
+            logged: None,
             leaving: None,
             _leave: None,
         };
@@ -1041,6 +1044,26 @@ impl Render for LinkPreview {
                 "browser: link preview page at {left} {top} {width} {height} from {from_x} {from_y}"
             );
             log!("browser: link preview settled");
+        }
+        if shown.settled && shown.leaving.is_none() {
+            // check.sh reads where the card holds the page, in the pixels it's drawn in, against
+            // the page's frame in the browser window's, at rest and again as either moves (#2541).
+            let (frame, scale) = (page_in(card(shown.page)), window.scale_factor());
+            let pixels = |at: Pixels| (f32::from(at) * scale).round() as i32;
+            let drawn = [
+                frame.left(),
+                frame.top(),
+                frame.size.width,
+                frame.size.height,
+            ]
+            .map(pixels);
+            if shown.logged != Some((drawn, scale)) {
+                shown.logged = Some((drawn, scale));
+                let [left, top, width, height] = drawn;
+                log!(
+                    "browser: link preview page frame {left} {top} {width} {height} at scale {scale}"
+                );
+            }
         }
         let palette = palette::current(cx);
         let card_radius = page_radius + RIM;
