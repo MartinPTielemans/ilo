@@ -2183,6 +2183,17 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ];
             ("clear", rows)
         }
+        // The Library's row, whose glyph the sidebar foot's button shares.
+        "library" => {
+            let keys = shell::keystroke_label("shift-cmd-l");
+            let open = Suggestion::from(shell::BarCommand {
+                name: "Open Library…".into(),
+                command: Command::ViewLibrary,
+                shortcut: Some(keys.into()),
+                matched: Match::Name,
+            });
+            ("library", vec![open, search("library")])
+        }
         "sites" => (
             "wik",
             vec![
@@ -2761,8 +2772,8 @@ fn main() {
                     cx.quit();
                 }
             }
-            // PREVIEW_BAR=tabs, sites or commands shows the command bar over the window, with made-up
-            // suggestions.
+            // PREVIEW_BAR=tabs, sites, commands or library shows the command bar over the window, with
+            // made-up suggestions.
             if let Ok(mode) = std::env::var("PREVIEW_BAR") {
                 let left = x + (width - command_bar::WIDTH as f64) / 2.;
                 let top = y as f32 + command_bar::centered_top(height as f32);
