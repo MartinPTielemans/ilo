@@ -2,10 +2,11 @@
 
   peek_motion.py <frames-dir> <content-width> <page x y w h> <from x y>
 
-<frames-dir> holds open/ and close/, each a motion's pictures of the window's content, named for
-the seconds since 1970 they were asked for (tools/window-frames.sh). The page rests at <page>, in
-points from the content's top left, growing from <from>. Prints a line a frame and a verdict for each motion; exits 1 if a frame shows Peek's page
-outside the card, 2 if the frames can't tell, as when the dim isn't drawn blended.
+<frames-dir> holds open-1/, close-1/, open-2/ and so on, each a motion's pictures of the window's
+content, named for the seconds since 1970 they were asked for (tools/window-frames.sh). The page
+rests at <page>, in points from the content's top left, growing from <from>. Prints a line a frame
+and a verdict for each motion; exits 1 if a frame shows Peek's page outside the card, 2 if the
+frames can't tell yet, as when none was taken mid-motion or the dim isn't drawn blended.
 
 Each frame says where the motion is itself. The dim over the window's page darkens it linearly as
 the preview opens and closes, so a point of the window's page outside the card, D, gives the
@@ -109,15 +110,20 @@ def main():
 
     failed = unreadable = False
     base = None
-    for motion in ("open", "close"):
-        names = sorted(os.listdir(os.path.join(folder, motion)))
+    caught_in = {"open": 0, "close": 0}
+    filmed = sorted(
+        (name for name in os.listdir(folder)
+         if name.split("-")[0] in caught_in and name.split("-")[-1].isdigit()),
+        key=lambda name: (int(name.split("-")[-1]), name != "open-" + name.split("-")[-1]))
+    for filming in filmed:
+        motion = filming.split("-")[0]
+        names = sorted(os.listdir(os.path.join(folder, filming)))
         if not names:
-            print("%s: no frames" % motion)
-            unreadable = True
+            print("%s: no frames" % filming)
             continue
         rows = []
         for name in names:
-            path = os.path.join(folder, motion, name)
+            path = os.path.join(folder, filming, name)
             width = struct.unpack_from(">I", open(path, "rb").read(24), 16)[0]
             scale = width / content_width
             last = (int(max(p[0], d[0]) * scale), int(max(p[1], d[1]) * scale))
@@ -137,13 +143,11 @@ def main():
         dims = [max(0.0, min(1.0, (g0 - dd[1]) / ((g0 - DIM) * DIM_OPACITY))) for _, _, dd in rows]
         if max(dims) < 0.8:
             print("%s: the dim never reached its rest at D (%.2f at most), so it isn't drawn blended "
-                  "here and the frames can't say where the motion is" % (motion, max(dims)))
+                  "here and the frames can't say where the motion is" % (filming, max(dims)))
             unreadable = True
             continue
         caught = wrong = 0
-        started = motion == "close"
         for (name, pp, dd), dim in zip(rows, dims):
-            started = started or dim > 0.05
             if motion == "open":
                 scale = FROM_SCALE + (1 - FROM_SCALE) * bezier(*OPEN_CURVE, dim)
             else:
@@ -163,17 +167,19 @@ def main():
             elif inside:
                 verdict = "card"
             print("%s %s dim %.2f scale %.2f P %s %s D %s %s" % (
-                motion, name, dim, scale, hue(pp), pp, dd, verdict))
+                filming, name, dim, scale, hue(pp), pp, dd, verdict))
+        caught_in[motion] += caught
         if wrong:
-            print("%s: FAIL: %d frames show Peek's resting frame outside the card" % (motion, wrong))
+            print("%s: FAIL: %d frames show Peek's resting frame outside the card" % (filming, wrong))
             failed = True
-        elif not caught:
+        else:
+            print("%s: %d frames mid-motion show the window's page at P, outside the card"
+                  % (filming, caught))
+    for motion, caught in caught_in.items():
+        if not caught:
             print("%s: no frame caught the card moving short of P, so none says what's outside it"
                   % motion)
             unreadable = True
-        else:
-            print("%s: ok: %d frames mid-motion show the window's page at P, outside the card"
-                  % (motion, caught))
     sys.exit(1 if failed else 2 if unreadable else 0)
 
 

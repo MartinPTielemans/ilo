@@ -1,9 +1,9 @@
 # Peek grows from the link and shrinks back into it showing only the card: at a point inside its
 # resting frame, every frame shows the window's own page there until the card reaches it, and
 # again once the card has left it as it closes, never Peek's page laid out where it rests (#2519).
-# It films the open and the close (tools/window-frames.sh, which keeps every picture) and reads
+# It films opens and closes (tools/window-frames.sh, which keeps every picture) and reads
 # each frame with check/peek_motion.py, which takes where the motion is from the dim the frame
-# shows over the window's page. Its frames: build/check/peek-frames/open and close.
+# shows over the window's page. Its frames: build/check/peek-frames/open-1, close-1 and on.
 # Where the page shows under the preview's window, on Windows and Linux; the Mac's page is in the
 # preview's window and scales with its card, and preview.sh records it.
 
@@ -76,36 +76,45 @@ stop_film() {
 }
 mkdir -p "$frames"
 
-# ⇧-click on the link opens it in Peek, from the green page's Today tab, which stays.
-film open
-send click 600 200 shift
-expect "^browser: link preview [1-9][0-9]* $target\$" "⇧-click on the link didn't open Peek"
-p=$(grep "^browser: link preview [1-9][0-9]* $target\$" "$log" | tail -1 | cut -d' ' -f4)
-expect '^browser: link preview shown$' "Peek's window didn't show"
-expect '^browser: link preview settled$' "Peek didn't settle"
-stop_film
-expect "^browser: title $p peek ready\$" "Peek's page didn't draw"
-rest=$(grep '^browser: link preview page at ' "$log" | tail -1 | sed 's/^browser: link preview page at //')
-[ -n "$rest" ] || fail "Peek didn't say where its page rests"
+# Opens the link in Peek with ⇧-click, from the green page's Today tab, which stays, and closes it
+# with Esc, filming each motion into $frames/open-$1 and close-$1.
+round() {
+  film "open-$1"
+  send click 600 200 shift
+  expect "^browser: link preview [1-9][0-9]* $target\$" "⇧-click on the link didn't open Peek"
+  p=$(grep "^browser: link preview [1-9][0-9]* $target\$" "$log" | tail -1 | cut -d' ' -f4)
+  expect '^browser: link preview shown$' "Peek's window didn't show"
+  expect '^browser: link preview settled$' "Peek didn't settle"
+  stop_film
+  expect "^browser: title $p peek ready\$" "Peek's page didn't draw"
+  rest=$(grep '^browser: link preview page at ' "$log" | tail -1 | sed 's/^browser: link preview page at //')
+  [ -n "$rest" ] || fail "Peek didn't say where its page rests"
+  film "close-$1"
+  send key escape
+  expect '^browser: link preview hidden$' "Esc didn't close Peek"
+  expect "^browser: tab $p closed\$" "Esc didn't close Peek's page"
+  stop_film
+}
 
-film close
-send key escape
-expect '^browser: link preview hidden$' "Esc didn't close Peek"
-expect "^browser: tab $p closed\$" "Esc didn't close Peek's page"
-stop_film
+# A screen copy can take longer than a motion (Windows' took 260 ms at a time on GitHub's runner),
+# so it opens and closes Peek again until a frame has caught each motion mid-way, five times at
+# most, and fails at once on a frame that shows Peek's resting frame outside its card.
+for n in 1 2 3 4 5; do
+  round $n
+  # shellcheck disable=SC2086 # numbers: x y w h from x y
+  python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
+    > "$out/peek-motion.txt" 2>&1 && status=0 || status=$?
+  [ $status = 2 ] && ! grep -q "isn't drawn blended" "$out/peek-motion.txt" || break
+done
 [ "$(today)" = "$a" ] || fail "Peek opened a tab: Today is \"$(today)\""
 exec 3>&-
 quit
-
-# shellcheck disable=SC2086 # numbers: x y w h from x y
-python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
-  > "$out/peek-motion.txt" 2>&1 && status=0 || status=$?
 case $status in
 0) ;;
 2) if windows; then
-     fail "the frames can't say where Peek's card is: $(grep -v '^open \|^close ' "$out/peek-motion.txt" | tail -1)"
+     fail "the frames can't say where Peek's card is: $(grep -v '^open-\|^close-' "$out/peek-motion.txt" | tail -1)"
    fi
-   echo "skip: peek-motion, as the frames can't say where the card is here: $(grep -v '^open \|^close ' "$out/peek-motion.txt" | tail -1)"
+   echo "skip: peek-motion, as the frames can't say where the card is here: $(grep -v '^open-\|^close-' "$out/peek-motion.txt" | tail -1)"
    exit 0 ;;
 *) fail "Peek's resting frame shows outside its card as it moves: $(grep 'FAIL' "$out/peek-motion.txt" | tr '\n' ' ')" ;;
 esac
