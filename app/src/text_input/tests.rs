@@ -173,6 +173,31 @@ fn cmd_and_option_backspace_delete_back_to_the_start_and_a_word(cx: &mut TestApp
     assert!(input.read_with(cx, |input, _| input.composing()));
 }
 
+thread_local! {
+    static ASKED: std::cell::RefCell<Option<crate::clipboard::Done>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// With the browser's reader, as under Wayland, a field pastes what the reader hands it once it
+/// has it, not what GPUI's clipboard holds: GPUI there can't read a copy Chromium holds (#2463).
+#[gpui::test]
+fn a_paste_lands_once_the_browsers_reader_answers(cx: &mut TestAppContext) {
+    crate::clipboard::read_through(|done| ASKED.set(Some(done)));
+    let (input, mut cx) = shown("go ", cx);
+    let text =
+        |cx: &mut VisualTestContext| input.read_with(cx, |input, _| input.text().to_string());
+    cx.write_to_clipboard(ClipboardItem::new_string("gpui's".into()));
+    cx.simulate_keystrokes("cmd-v");
+    cx.run_until_parked();
+    assert_eq!(text(&mut cx), "go ");
+    let done = ASKED.take().expect("the field asked the reader");
+    // From the app, outside any window's update, as the core hands it from a task of its own.
+    cx.cx.update(|cx| done(Some("chromium's".into()), cx));
+    cx.run_until_parked();
+    assert_eq!(text(&mut cx), "go chromium's");
+    assert!(input.read_with(&cx, |input, _| input.pasted()));
+}
+
 /// A window showing a field 120 wide that fades its edges, focused.
 struct Narrow(Entity<TextInput>);
 

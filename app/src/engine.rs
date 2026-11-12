@@ -1372,18 +1372,19 @@ impl Browser for Engine {
         }
     }
 
-    fn pasted(&self, cx: &App) -> Option<String> {
+    fn pasted(&self, cx: &mut App, done: browser::clipboard::Done) {
         #[cfg(target_os = "linux")]
-        return system::pasted(cx);
+        browser::clipboard::read_text(cx, done);
         #[cfg(not(target_os = "linux"))]
         {
-            _ = cx;
             // Asked for its length first, then for the text.
             let length = unsafe { platform::host_paste(std::ptr::null_mut(), 0) };
-            let mut text = vec![0u8; length.checked_add(1)?];
+            let mut text = vec![0u8; length.saturating_add(1)];
             unsafe { platform::host_paste(text.as_mut_ptr().cast(), text.len()) };
             text.truncate(length);
-            Some(String::from_utf8_lossy(&text).into_owned()).filter(|text| !text.is_empty())
+            let text =
+                Some(String::from_utf8_lossy(&text).into_owned()).filter(|text| !text.is_empty());
+            cx.defer(move |cx| done(text, cx));
         }
     }
 

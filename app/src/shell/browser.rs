@@ -598,8 +598,9 @@ pub trait Browser {
     fn watch_control(&self, cx: &mut App);
     /// Puts `text` on the clipboard.
     fn copy(&self, text: &str, cx: &mut App);
-    /// The clipboard's text, from where `copy` puts it, or None if it holds none.
-    fn pasted(&self, cx: &App) -> Option<String>;
+    /// Hands `done` the clipboard's text, from where `copy` puts it, or None if it holds none,
+    /// never during the call (crate::clipboard says why).
+    fn pasted(&self, cx: &mut App, done: crate::clipboard::Done);
     /// The other browser the protected-playback note offers for video ilo can't play, if any.
     fn elsewhere(&self) -> Option<super::drm_note::Elsewhere> {
         super::drm_note::Elsewhere::on(self.os(), || self.is_default_browser())
