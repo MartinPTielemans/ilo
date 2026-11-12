@@ -66,10 +66,55 @@ differ() {
 dir=$(mktemp -d)
 sway_pid=
 pid=
-cleanup() {
-  [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+# The processes of the program's session, which setsid made with the program's PID, each with its
+# start time (/proc/<pid>/stat's 22nd field), so a PID given to a later process isn't taken for one.
+session() {
+  local p
+  for p in $(ps -e -o pid= -o sid= | awk -v s="$1" '$2 == s { print $1 }'); do
+    started "$p" || true
+  done
+}
+started() {
+  local stat
+  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  stat=${stat##*") "}
+  echo "$1 $(echo "$stat" | cut -d' ' -f20)"
+}
+# Those of the pairs from session() still running: the same PID and start time, not exited.
+running() {
+  local p start stat
+  while read -r p start; do
+    [ -n "$p" ] || continue
+    stat=$(cat "/proc/$p/stat" 2>/dev/null) || continue
+    stat=${stat##*") "}
+    [ "${stat%% *}" != Z ] || continue
+    [ "$(echo "$stat" | cut -d' ' -f20)" != "$start" ] || echo "$p"
+  done <<EOF
+$1
+EOF
+  return 0
+}
+# Ends the program and waits for its session's processes to go before sway does, as one still
+# quitting when the caller goes on loses its display and bus under it, and a browser then crashes
+# into its profile (#2466). One still running after 10 s is named, then killed.
+end_program() {
+  local procs left p
+  procs=$(session "$pid")
+  kill "$pid" 2>/dev/null || true
   # A browser's helpers outlive it briefly; they're its children, in its process group.
-  [ -z "$pid" ] || kill -- "-$pid" 2>/dev/null || true
+  kill -- "-$pid" 2>/dev/null || true
+  for _ in $(seq 100); do
+    left=$(running "$procs")
+    [ -n "$left" ] || return 0
+    sleep 0.1
+  done
+  for p in $left; do
+    echo "headless.sh: still running 10 s after the program was ended: $(ps -o pid=,args= -p "$p" | cut -c1-200)" >&2
+  done
+  kill -9 $left 2>/dev/null || true
+}
+cleanup() {
+  [ -z "$pid" ] || end_program
   [ -z "$sway_pid" ] || kill "$sway_pid" 2>/dev/null || true
   rm -rf "$dir"
 }
