@@ -948,6 +948,56 @@ painted(() => document.title = "choose");
   last=$(sed -n "s/^browser: title $choose_tab //p" "$log" | tail -1)
   [ "$last" = "priority High" ] || fail "a missed option changed the page, to $last"
 
+  # Choice tiles whose radios the page hid, with display: none and named by a label's "for" or
+  # inside it, show as those radios, named by the label's text and with which is chosen, and a
+  # click on one by its ref chooses it. A label with no control stays text (#2355).
+  printf '%s' '<script src="painted.js"></script>
+<fieldset><legend>Account type</legend>
+<input type=radio name=kind id=personal value=personal hidden checked>
+<label for=personal><h3>Personal</h3><p>For you</p></label>
+<label><input type=radio name=kind value=business style="display: none"><h3>Business</h3>
+<p>For a team</p></label>
+<label>No control</label></fieldset>
+<script>
+for (const radio of document.querySelectorAll("input")) {
+  radio.onchange = () => document.title = "kind " + radio.value;
+}
+painted(() => document.title = "tiles");
+</script>' > "$out/site/tiles.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/tiles.html\"}")
+  tiles_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$tiles_tab" ] || fail "opening the tiles page answered: $opened"
+  await_log "^browser: title $tiles_tab tiles\$" "the tiles page didn't paint"
+  outline=$(call snapshot "{\"tab\":$tiles_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-tiles.txt"
+  personal=$(ref_of radio "Personal For you")
+  business=$(ref_of radio "Business For a team")
+  [ -n "$personal" ] && [ -n "$business" ] ||
+    fail "the hidden radios' tiles had the refs '$personal' and '$business'"
+  case "$outline" in
+    *"radio \"Personal For you\" [$personal] (checked)"*) ;;
+    *) fail "the chosen tile didn't show as checked" ;;
+  esac
+  case "$outline" in
+    *"radio \"Business For a team\" [$business] (checked)"*) fail "both tiles showed as checked" ;;
+    *'"No control" ['*) fail "a label with no control had a ref" ;;
+  esac
+  clicked=$(call click "{\"tab\":$tiles_tab,\"ref\":\"$business\"}")
+  case "$clicked" in
+    "Clicked radio “Business For a team”."*) ;;
+    *) fail "clicking a tile answered: $clicked" ;;
+  esac
+  await_log "^browser: title $tiles_tab kind business\$" "clicking a tile didn't choose it"
+  outline=$(call snapshot "{\"tab\":$tiles_tab}")
+  printf '%s\n' "$outline" >> "$out/mcp-tiles.txt"
+  case "$outline" in
+    *"radio \"Business For a team\" [$business] (checked)"*) ;;
+    *) fail "the tile clicked didn't show as checked" ;;
+  esac
+  case "$outline" in
+    *"radio \"Personal For you\" [$personal] (checked)"*) fail "the tile left still showed as checked" ;;
+  esac
+
   # A console's list page: its table's rows and its side menu's items, which a person clicks, have
   # refs, and a click on a row opens it. Ticking the box enables Continue, and the click's answer
   # says what changed in each, not only that each did (#2355).
