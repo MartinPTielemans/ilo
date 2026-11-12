@@ -150,7 +150,17 @@ else
       [ -n "$chooser" ] || break
       xdotool windowactivate --sync "$chooser" 2>/dev/null || xdotool windowfocus --sync "$chooser" ||
         fail "the chooser asking where to save couldn't have the keyboard"
+      {
+        echo "== try: chooser $chooser, $(xdotool getwindowname "$chooser" 2>&1)"
+        xwininfo -id "$chooser" 2>&1 | grep -E 'Map State|geometry|Absolute|Width|Height'
+        echo "focus before: $(xdotool getwindowfocus 2>&1) $(xdotool getwindowfocus getwindowname 2>&1)"
+        echo "all Save File: $(xdotool search --pid "$(window_pid)" --name 'Save File' 2>&1 | tr '\n' ' ')"
+        echo "visible of pid: $(for w in $(xdotool search --onlyvisible --pid "$(window_pid)" 2>/dev/null); do printf '%s[%s] ' "$w" "$(xdotool getwindowname "$w" 2>&1)"; done)"
+        echo "root children: $(xwininfo -root -children 2>&1 | grep -c '0x')"
+      } >> "$out/x-escape.txt" 2>&1
       xdotool key Escape
+      echo "focus after: $(xdotool getwindowfocus 2>&1)" >> "$out/x-escape.txt" 2>&1
+      ../tools/window-screenshot.sh "$pid" "$out/x-escape-$(date +%s).png" all > /dev/null 2>&1 || true
       for _ in $(seq 10); do
         chooser_shown || break
         sleep 0.1
