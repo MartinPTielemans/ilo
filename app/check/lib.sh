@@ -350,22 +350,30 @@ quit() {
 # changed writes it, about a minute into a new profile's first launch, in the browser's pool, main
 # and IO threads and the extension's process: 0.85 s of CPU in 4 s on the Mac. A user's launches
 # after are on it, so a run's that measure them are too.
+# ublock_stores <command>: <command> on each of its two stores, failing as it fails on one.
+ublock_stores() {
+  local ublock=oghkpboejbohceocapipmnjifoklonij
+  "$@" "$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb.leveldb" &&
+    "$@" "$profile_dir/Default/Local Extension Settings/$ublock"
+}
+ublock_store_selfie() {
+  local keys key
+  keys=$(python3 -I check/leveldb_keys.py "$1") || return 1
+  for key in staticMain staticExtFilteringEngine staticNetFilteringEngine; do
+    printf '%s\n' "$keys" | LC_ALL=C grep -aq "selfie/$key\$" || return 1
+  done
+}
 # ublock_selfie: whether uBlock Origin wrote its selfie's three parts, which it takes in only
 # together, to its IndexedDB and to its extension storage, by the keys their files hold. A key it
 # takes out stays in them until they compact, so this says only that one was written.
-ublock_stores() {
-  local ublock=oghkpboejbohceocapipmnjifoklonij
-  printf '%s\n' "$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb.leveldb" \
-    "$profile_dir/Default/Local Extension Settings/$ublock"
-}
 ublock_selfie() {
-  local store keys key
-  while IFS= read -r store; do
-    keys=$(python3 -I check/leveldb_keys.py "$store") || return 1
-    for key in staticMain staticExtFilteringEngine staticNetFilteringEngine; do
-      printf '%s\n' "$keys" | LC_ALL=C grep -aq "selfie/$key\$" || return 1
-    done
-  done < <(ublock_stores)
+  ublock_stores ublock_store_selfie
+}
+# What <store> holds of the selfie, and its files, for a run that ends with none.
+ublock_store_note() {
+  echo "$1"
+  ls -lR "$1" "${1%.leveldb}.blob" 2> /dev/null || true
+  python3 -I check/leveldb_keys.py "$1" | LC_ALL=C grep -ao 'selfie/.*' | sort | uniq -c
 }
 # selfie_launch <url> <log>: a launch on page <url>, logged to <log>, that stays until uBlock Origin
 # has written its selfie, checking each second, and quits, so its work has ended before the next
@@ -386,11 +394,7 @@ selfie_launch() {
   quit
   if [ -z "$selfie_at" ]; then
     # Whether it wrote none or some, for a run that ends here.
-    ublock_stores | while IFS= read -r store; do
-      echo "$store"
-      ls -lR "$store" "${store%.leveldb}.blob" 2> /dev/null || true
-      python3 -I check/leveldb_keys.py "$store" | LC_ALL=C grep -ao 'selfie/.*' | sort | uniq -c
-    done > "$out/selfie-stores.txt" 2>&1
+    ublock_stores ublock_store_note > "$out/selfie-stores.txt" 2>&1 || true
     fail "uBlock Origin wrote no selfie in a launch that stayed 180 s; its stores: $out/selfie-stores.txt"
   fi
   rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
