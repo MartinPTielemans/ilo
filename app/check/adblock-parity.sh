@@ -134,7 +134,9 @@ while read -r url <&4; do
     # run's 20 minutes on Windows' Check, needs no pictures, so it waits only after the last site,
     # and gives a bot check no second go.
     [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
-    title=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep "^browser: title $tab " | tail -1)
+    # The tab's title now: its last line, as the browser logs a title only when it changes, so a
+    # second go to the same check logs none.
+    title=$(grep "^browser: title $tab " "$log" | tail -1)
     case ${title#browser: title $tab } in
       'Just a moment'*) bot=" bot-check" ;;
       *) bot= ;;
