@@ -1,3 +1,4 @@
+# check.sh runs this at 500.
 # AppleScript (#704), the Mac's alone. The app declares ilo's dictionary (platform/mac/ilo.sdef),
 # never Chromium's: no execute, save or view source, and nothing that reads a page. Off at first,
 # Settings › Agents' "Let scripts control the browser" refuses every script, reads too, with

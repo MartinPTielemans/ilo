@@ -1,3 +1,4 @@
+# check.sh runs this at 290.
 # The link preview. ⇧-click on a link in any tab's page, here a Today tab's, opens it in a card over
 # the window, and so does Open Link in Peek in the link's menu, with no tab opened and the tab on its
 # page (#1370). A link to another site in a pinned tab's page opens in one too, its page in a tab of

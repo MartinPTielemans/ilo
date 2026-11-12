@@ -1,3 +1,5 @@
+# check.sh runs this at 840, only when named.
+# It takes 16 minutes, Chrome's measures beside ilo's, so it runs only when named.
 # Measures the browser against #456's targets, the way Ardia's bench measured Ardia, Chrome, Arc
 # and Helium (docs/perf/vs-browsers.md in Ardia's repo, its numbers of 2026-10-19 the targets), and
 # says each row's median of its samples, with their range, beside its target. Those targets are an

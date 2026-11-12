@@ -1,3 +1,4 @@
+# check.sh runs this at 90.
 # The New Space form's Profile row makes a profile, asks for its name, and puts the Space in it, and its Choose a Theme
 # row colours the Space. The Space's tabs open in the new profile, without the first profile's
 # cookies, from a command bar opened in the first profile's Space too, which follows the Space shown. While it's empty the Space's menu moves it between profiles, and with a tab it keeps its

@@ -1,3 +1,4 @@
+# check.sh runs this at 280.
 # Links from other apps, as `open` sends them on the Mac, the way a link clicked in Mail does, and
 # off it as a second launch with the link does, which `xdg-open` makes on Linux and the command the
 # installer registers for links on Windows. Each opens once: Chrome opens no tab of its own for it

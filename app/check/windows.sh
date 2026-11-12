@@ -1,3 +1,4 @@
+# check.sh runs this at 210.
 # Stay On Top keeps a window over the others, and Don't Stay On Top lets it go back. ⌘N opens
 # another window on the same Spaces, showing the key window's Space with no page, with ⌘T's
 # command bar, which escape closes to its card and its one line, and a click on the card with ⌘T's

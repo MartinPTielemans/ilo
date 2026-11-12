@@ -1,3 +1,4 @@
+# check.sh runs this at 330.
 # A crash leaves a minidump in the profile's Crashpad folder: --crash-after-start crashes the
 # browser once it has started, Crashpad's handler is up and the profile's Preferences say its
 # session crashed, the handler writes the report, and no Chromium process outlives the crash, the

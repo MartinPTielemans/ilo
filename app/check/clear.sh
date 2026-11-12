@@ -1,3 +1,4 @@
+# check.sh runs this at 140.
 # View › Clear Cache and Refresh and the command bar's Clear Cookies and Refresh delete the cache
 # and the cookies of the page's site, and load the page again. ⇧⌘C and ⌥⇧⌘C from the page and the UI
 # copy the tab's URL and a Markdown link to it, to a pasteboard of the run's own, without its

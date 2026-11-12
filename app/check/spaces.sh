@@ -1,3 +1,4 @@
+# check.sh runs this at 70.
 # New Space in the Spaces menu makes a Space and shows it, empty and without a page, with a form
 # that takes the keyboard from the page. Japanese input composes in its field, return while
 # composing only commits, and return names the Space and sends the form away; ⌘T then opens a tab in

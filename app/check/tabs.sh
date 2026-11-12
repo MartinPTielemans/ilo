@@ -1,3 +1,4 @@
+# check.sh runs this at 30.
 # A tab opened from the command bar goes at the top of the Space's Today tabs and shows. The command
 # bar lists the Space's other tabs before anything is typed, those shown last first, and suggests
 # pages from history as it's typed in, growing to fit them, with the tabs already at them, never the

@@ -1,5 +1,5 @@
 #!/bin/bash
-# The runs a Mac or Windows check does, from app/check.sh's list. runs=all takes longer than the
+# The runs a Mac or Windows check does, from app/check.sh's list (check.sh --runs). runs=all takes longer than the
 # check job's 120 minutes there, so it's dealt across three jobs (#2271): the long named runs in a
 # job of their own, and the rest in two that 0.1.14's runs (42746639869, 42750992772) timed at
 # about 60 minutes each on Windows and 45 on the Mac. A new run goes in the first.
@@ -9,7 +9,7 @@
 # results file in <dir> has a line for (<run>, a tab, its result), and fails if there's one.
 set -euo pipefail
 check=$(dirname "$0")/../../app/check.sh
-all=$(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p; s/^named="\(.*\)"$/\1/p' "$check" | tr '\n' ' ')
+all=$(sh "$check" --runs)
 long="adblock-parity adblock-cost perf"
 second="load tabs history spaces profiles find pinned clear split cards extensions adblock adblock-lists
   windows little links trouble dialogs crash onboarding mcp appearance about sync filled notifications
