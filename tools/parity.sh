@@ -18,7 +18,7 @@
 # and in the narrowest sidebar with ad blocking off (#2345), and the bell of a page's held request
 # to show notifications in the Site Controls' place, light and dark, at rest and with the pointer
 # over the field, its Site Controls opened at Notifications, and those Site Controls once Allow or
-# Block there answered it (#2323). The preview's Linux host places no window, so sway puts Site
+# Block there answered it, each light and dark (#2323). The preview's Linux host places no window, so sway puts Site
 # Controls and the icon picker in the middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
@@ -63,9 +63,12 @@ screens=(
   "quiet-bell-light|notification bell|PREVIEW_QUIET=held PREVIEW_APPEARANCE=light"
   "quiet-bell-pointer-dark|sidebar tools shown|PREVIEW_QUIET=held PREVIEW_APPEARANCE=dark PREVIEW_POINTER=100,64"
   "quiet-bell-pointer-light|sidebar tools shown|PREVIEW_QUIET=held PREVIEW_APPEARANCE=light PREVIEW_POINTER=100,64"
-  "quiet-site-controls|site controls keyed|PREVIEW_QUIET=held PREVIEW_SITE_CONTROLS=1"
-  "quiet-allowed|site controls settled|PREVIEW_QUIET=allowed PREVIEW_SITE_CONTROLS=1"
-  "quiet-blocked|site controls settled|PREVIEW_QUIET=blocked PREVIEW_SITE_CONTROLS=1"
+  "quiet-site-controls-light|site controls keyed|PREVIEW_QUIET=held PREVIEW_SITE_CONTROLS=1 PREVIEW_APPEARANCE=light"
+  "quiet-site-controls-dark|site controls keyed|PREVIEW_QUIET=held PREVIEW_SITE_CONTROLS=1 PREVIEW_APPEARANCE=dark"
+  "quiet-allowed-light|site controls settled|PREVIEW_QUIET=allowed PREVIEW_SITE_CONTROLS=1 PREVIEW_APPEARANCE=light"
+  "quiet-allowed-dark|site controls settled|PREVIEW_QUIET=allowed PREVIEW_SITE_CONTROLS=1 PREVIEW_APPEARANCE=dark"
+  "quiet-blocked-light|site controls settled|PREVIEW_QUIET=blocked PREVIEW_SITE_CONTROLS=1 PREVIEW_APPEARANCE=light"
+  "quiet-blocked-dark|site controls settled|PREVIEW_QUIET=blocked PREVIEW_SITE_CONTROLS=1 PREVIEW_APPEARANCE=dark"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
