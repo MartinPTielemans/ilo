@@ -350,16 +350,6 @@ Tab::~Tab() = default;
 void Tab::Attach(content::WebContents* contents) {
   Observe(contents);
   TabLink::CreateForWebContents(contents, id_);
-  // Chrome's tab helpers make the driver as the tab is made, before anything asks for its id.
-  if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(contents)) {
-    favicon_observation_.Observe(driver);
-  }
-  // It keeps a tab audible 2 s after its sound stops, so the speaker doesn't flicker between
-  // sounds.
-  if (auto* audible = RecentlyAudibleHelper::FromWebContents(contents)) {
-    audible_subscription_ = audible->RegisterRecentlyAudibleChangedCallback(
-        base::IgnoreArgs<bool>(base::BindRepeating(&Tab::ReportStateSoon, base::Unretained(this))));
-  }
   // Its page's camera, microphone and sharing, as Chrome's tab strip marks them. Not once quitting,
   // as a page's popup can still come after StopHearingCaptures.
   if (!capture_observation_.IsObserving() && !CapturesStopped() &&
@@ -369,24 +359,55 @@ void Tab::Attach(content::WebContents* contents) {
   }
   // Another page's session is heard from once it plays.
   media_observer_.reset();
-  // Chrome's tab sharing infobar comes and goes on it as a page starts and stops sharing a tab.
   infobar_observation_.Reset();
-  if (auto* infobars = infobars::ContentInfoBarManager::FromWebContents(contents)) {
-    infobar_observation_.Observe(infobars);
-  }
   // Its page's alert(), confirm() and prompt() ask with the app's dialog.
   ScriptDialogs::Attach(contents);
   // A press with a modifier held may be the app's, such as ⇧⌘-drag's capture.
   PagePresses::CreateForWebContents(contents, id_);
   Boosts::CreateForWebContents(contents, id_);
   Arrange::CreateForWebContents(contents, id_);
-  // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
-  AutofillMenu::Watch(contents);
   // Its page's language, and the app's translation of it (#671).
   PageTranslate::CreateForWebContents(contents, id_);
+  ObserveHelpers();
   // A tab is often made with its first page already on its way, before anything observes it, so
   // the app hears it's loading now rather than once the page commits.
   ReportStateSoon();
+}
+
+void Tab::ObserveHelpers() {
+  content::WebContents* contents = web_contents();
+  if (!favicon_observation_.IsObserving()) {
+    if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(contents)) {
+      favicon_observation_.Observe(driver);
+    }
+  }
+  // It keeps a tab audible 2 s after its sound stops, so the speaker doesn't flicker between
+  // sounds.
+  if (!audible_subscription_) {
+    if (auto* audible = RecentlyAudibleHelper::FromWebContents(contents)) {
+      audible_subscription_ = audible->RegisterRecentlyAudibleChangedCallback(
+          base::IgnoreArgs<bool>(
+              base::BindRepeating(&Tab::ReportStateSoon, base::Unretained(this))));
+    }
+  }
+  // Chrome's tab sharing infobar comes and goes on it as a page starts and stops sharing a tab.
+  if (!infobar_observation_.IsObserving()) {
+    if (auto* infobars = infobars::ContentInfoBarManager::FromWebContents(contents)) {
+      infobar_observation_.Observe(infobars);
+    }
+  }
+  // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
+  AutofillMenu::Watch(contents);
+  if (auto* translate = PageTranslate::FromWebContents(contents)) {
+    translate->ObserveDriver();
+  }
+}
+
+// static
+void Tab::HelpersArrived(content::WebContents* contents) {
+  if (Tab* tab = FromWebContents(contents)) {
+    tab->ObserveHelpers();
+  }
 }
 
 // static
@@ -1073,7 +1094,9 @@ void Tab::DidOpenRequestedURL(content::WebContents* new_contents,
                               bool renderer_initiated) {
   // A pop-up an agent's page makes goes in the agent's Space, and is the agent's from now, as
   // content makes it: content starts its page as the window is shown, before the window that
-  // places it hears of it (#2660). A tab Chrome's Navigate made, the window held as it made it.
+  // places it hears of it (#2660). Its tab is made before Chrome's tab helpers, so it observes
+  // theirs once its tab strip has it (HelpersArrived). A tab Chrome's Navigate made, the window
+  // held as it made it.
   Space* space = Space::Holding(id_);
   if (!space || !space->agent()) {
     return;
