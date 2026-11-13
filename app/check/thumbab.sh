@@ -2,7 +2,7 @@
 # Proof only (#2671): this checkout's engine against the one check/thumbab-other names, built from
 # the same core, on the same runner, in rounds with the order alternated. Each launch, traced with
 # CHECK_TRACE_CATEGORIES, makes 8 tab switches a second apart over 4 tall pages, then sits while the
-# page's clock ticks 5 times, the small redraw. In the first round it also captures a light page's
+# page's clock ticks 8 times, the small redraw. In the first round it also captures a light page's
 # and a dark page's scrollbar thumb, idle, hovered and dragged.
 
 serve
@@ -25,7 +25,7 @@ let ticks = 0;
 setInterval(() => {
   clock.textContent = new Date().toLocaleTimeString();
   // A hidden tab's clock ticks too, so only the page shown says so.
-  if (++ticks == 5 && document.visibilityState == "visible") title(`ticks ${Date.now()}`);
+  if (++ticks == 8 && document.visibilityState == "visible") title(`ticks ${Date.now()}`);
 }, 1000);
 const twice = (f) => requestAnimationFrame(() => requestAnimationFrame(f));
 twice(() => title("ready"));
@@ -100,12 +100,20 @@ thumb_looks() {
   send move $thumb_point
   thumb_changed "$idle" || echo "thumbab: $2 $1: the thumb's middle stayed $idle under the pointer"
   ../tools/window-screenshot.sh "$pid" "$dir/$2-$1-hovered.png" || fail "no window to capture"
+  hovered=$(pixel "$dir/$2-$1-hovered.png" "$thumb_x" "$thumb_y")
   send press $thumb_point
-  # In steps, as a hand moves it.
+  thumb_changed "$hovered" || echo "thumbab: $2 $1: the thumb's middle stayed $hovered pressed"
+  # In steps, as a hand moves it. Under X11 the driver's sent motion doesn't move a held thumb, so
+  # the capture is of it held where it was pressed, which the run says.
   for y in 113 153 193 243 293; do
     send dragto 1261 $y
   done
-  expect_late "^browser: title [0-9]* $1 scrolled$" "a drag on $1's thumb didn't scroll it"
+  for _ in $(seq 30); do
+    grep -q "^browser: title [0-9]* $1 scrolled$" "$log" && break
+    sleep 0.1
+  done
+  grep -q "^browser: title [0-9]* $1 scrolled$" "$log" ||
+    echo "thumbab: $2 $1: the drag didn't scroll the page; captured held where pressed"
   ../tools/window-screenshot.sh "$pid" "$dir/$2-$1-dragged.png" || fail "no window to capture"
   send release 1261 293
   send move $away_point
@@ -146,7 +154,7 @@ thumb_round() {
     expect_late "^browser: title [0-9]* t[0-9] shown " "⌘$n showed no page"
     sleep 1
   done
-  expect_late "^browser: title [0-9]* t[0-9] ticks " "the page's clock didn't tick 5 times"
+  expect_late "^browser: title [0-9]* t[0-9] ticks " "the page's clock didn't tick 8 times"
   since=$(wc -l < "$cdp_log")
   echo "trace end $PWD/$dir/trace-$1-$2.json" >&5
   perf_wait "$since" "^cdp: traced " "DevTools didn't write the trace"
