@@ -986,6 +986,32 @@ PY
   fi
   snap_procs=
 fi
+# Proof only (#2377): the kernel's scheduler events on every CPU while a round's switches are traced,
+# on the monotonic clock Chromium's trace uses, so what held each CPU shows beside the trace.
+sched_dir=
+for each in /sys/kernel/tracing /sys/kernel/debug/tracing; do
+  if sudo -n test -e "$each/trace_clock" 2> /dev/null; then
+    sched_dir=$each
+    break
+  fi
+done
+[ -n "$sched_dir" ] && echo "perf: scheduler trace from $sched_dir" || echo "perf: no tracefs, so no scheduler trace"
+sched_on() {
+  [ -n "$sched_dir" ] || return 0
+  sudo -n sh -c "cd $sched_dir && echo 0 > tracing_on && echo 0 > events/enable && echo > trace &&
+    echo mono > trace_clock && echo 65536 > buffer_size_kb &&
+    echo 1 > events/sched/sched_switch/enable && echo 1 > events/sched/sched_wakeup/enable &&
+    echo 1 > tracing_on" || fail "couldn't start the scheduler trace"
+}
+sched_off() {
+  [ -n "$sched_dir" ] || return 0
+  sudo -n sh -c "cd $sched_dir && echo 0 > tracing_on && echo 0 > events/enable" || true
+  {
+    sudo -n sh -c "grep -H overrun $sched_dir/per_cpu/cpu*/stats" || true
+    sudo -n cat "$sched_dir/trace" || true
+  } | gzip > "$perf_dir/sched-$1.txt.gz"
+  echo "perf: scheduler trace sched-$1.txt.gz, $(gzip -dc "$perf_dir/sched-$1.txt.gz" | wc -l) lines"
+}
 # Proof only (#2377): the traced switches alone, ilo's and Chrome's, each in $perf_rounds launches of
 # their own, the order alternated, after a warm launch of each. Rows and traces carry the round.
 perf_round_ilo() {
@@ -1003,8 +1029,10 @@ perf_round_ilo() {
     perf_open "t$n" "traced-newtab-$1"
   done
   perf_until $((loaded + 15))
+  sched_on
   perf_trace "trace-ilo-$1.json" "$cdp_log" "ilo-$1" "traced-switch-$1-rows" "$log" \
     perf_switches "traced-switch-$1" spaced
+  sched_off "ilo-$1"
   perf_traced_rows "traced-switch-$1" "Tab switch, round $1" "ilo-$1"
   exec 3>&- 5>&-
   quit
@@ -1023,8 +1051,10 @@ perf_round_chrome() {
     perf_until $((typed / 1000 + 2))
   done
   perf_until $((loaded + 15))
+  sched_on
   perf_trace "trace-chrome-$1.json" "$log" "chrome-$1" "chrome-traced-switch-$1-rows" "" \
     chrome_switches t "chrome-traced-switch-$1" spaced
+  sched_off "chrome-$1"
   perf_traced_rows "chrome-traced-switch-$1" "Chrome here, tab switch, round $1" "chrome-$1"
   chrome_quit
   snap_procs=
