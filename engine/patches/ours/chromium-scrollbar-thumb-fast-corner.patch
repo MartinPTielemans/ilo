@@ -1,0 +1,61 @@
+A Fluent scrollbar's thumb, on Linux and Windows, is one solid colour quad clipped to a rounded rect
+of its own. That clip needs no render surface, but its shared quad state wasn't marked a fast
+rounded corner, and viz merges a surface into its embedding quad's pass only when every rounded mask
+in it is fast and fits inside the embedder's. So any scrollable page shown under fast rounded
+corners, as the core's panes are on Linux (core/platform/linux/window_views.cc), was drawn into a
+render pass of its own each frame and then copied, its thumb's mask the one thing keeping it from
+merging (#2377). By its source, Chrome's own page pays the same in its split view and wherever its
+contents are rounded, as NativeViewHostAura gives the page's layer fast rounded corners there. The
+flag is read only by the aggregator's merge test, so the thumb draws as before, with its own mask.
+--- a/cc/layers/painted_scrollbar_layer_impl.cc
++++ b/cc/layers/painted_scrollbar_layer_impl.cc
+@@ -144,6 +144,10 @@
+           gfx::RRectF(gfx::RectF(thumb_quad_rect), rounded_corner_radius));
+       shared_quad_state->mask_filter_info.ApplyTransform(
+           draw_properties().target_space_transform);
++      // The mask clips the thumb's one quad and needs no render surface, so
++      // viz can merge a surface showing it into an embedding quad's pass that
++      // has fast rounded corners of its own.
++      shared_quad_state->is_fast_rounded_corner = true;
+     }
+     auto* thumb_quad =
+         render_pass->CreateAndAppendDrawQuad<viz::SolidColorDrawQuad>();
+--- a/cc/layers/painted_scrollbar_layer_impl_unittest.cc
++++ b/cc/layers/painted_scrollbar_layer_impl_unittest.cc
+@@ -422,6 +422,36 @@
+   }
+ };
+ 
++class PaintedScrollbarLayerImplFluentTest
++    : public PaintedScrollbarLayerImplSolidColorThumbTest {
++ protected:
++  void SetUp() override {
++    LayerTreeSettings settings = CommitToPendingTreeLayerListSettings();
++    settings.enable_fluent_scrollbar = true;
++    impl_ = std::make_unique<LayerTreeImplTestBase>(settings);
++  }
++};
++
++// The Fluent thumb's rounded mask is a fast rounded corner, so that viz can
++// merge a surface showing a scrollbar into an embedding quad's pass that has
++// fast rounded corners of its own.
++TEST_F(PaintedScrollbarLayerImplFluentTest, ThumbMaskIsFastRoundedCorner) {
++  PaintedScrollbarLayerImpl* scrollbar_layer_impl = SetUpScrollbarLayerImpl(
++      ScrollbarOrientation::kVertical,
++      /*is_left_side_vertical_scrollbar=*/false, gfx::Rect(0, 0, 14, 100),
++      /*thumb_thickness=*/6, /*minimum_thumb_length=*/30);
++  CopyProperties(impl_->root_layer(), scrollbar_layer_impl);
++  impl_->CalcDrawProps(gfx::Size(500, 500));
++  impl_->AppendQuads(scrollbar_layer_impl);
++
++  ASSERT_FALSE(impl_->quad_list().empty());
++  const viz::DrawQuad* thumb_draw_quad = impl_->quad_list().ElementAt(0);
++  EXPECT_EQ(viz::DrawQuad::Material::kSolidColor, thumb_draw_quad->material);
++  EXPECT_TRUE(
++      thumb_draw_quad->shared_quad_state->mask_filter_info.HasRoundedCorners());
++  EXPECT_TRUE(thumb_draw_quad->shared_quad_state->is_fast_rounded_corner);
++}
++
+ // Since the thumb's drawn thickness is smaller than the track's thickness,
+ // verify that the computed thickness is the width of the track. This prevents
+ // cases where clicking on the margin of the thumb would cause the thumb to not
