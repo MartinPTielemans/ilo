@@ -12,9 +12,10 @@ use gpui::{
 use super::commands::{ShellHandle, bar_commands};
 use super::header::nav_places;
 use super::{
-    Command, Folders, NAV_SIZE, Page, REVEAL_WAIT, SIDEBAR_MAX, Shell, SidebarRight,
+    Command, Folders, NAV_SIZE, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
     recorder::Recorder,
 };
+use crate::tokens::shell::library::{COLUMN_WIDTH, SECTION_WIDTH, SECTION_X};
 
 const WIDTH: f32 = 1000.;
 
@@ -267,5 +268,56 @@ fn in_full_screen_the_side_moves_the_edge(cx: &mut TestAppContext) {
     assert!(
         to(WIDTH - 1., 306., cx),
         "the right edge didn't bring it out"
+    );
+}
+
+/// Open on the right, the Library takes the sidebar's side, list then sections, so the sections
+/// stay at the window's edge: the card's edge meets the list's, the empty list's line is drawn in
+/// the list, and a right-click on Archived Tabs, the fourth button, is heard where the left's is
+/// mirrored. Back on the left, the button is where it was.
+#[gpui::test]
+fn on_the_right_the_library_s_columns_swap(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    side(true, &shell, cx);
+    shell.update(cx, |shell, cx| {
+        shell.section = Section::Archive;
+        shell.set_library(true, cx);
+        // At rest where it opens.
+        shell.library_motion = None;
+        shell.sidebar_fade = None;
+    });
+    draw(&shell, cx);
+    let (library, width, card, drawn) = shell.read_with(cx, |shell, _| {
+        let (card, _) = shell.card_frames(shell.viewport);
+        let drawn = shell.empty_drawn.borrow().clone();
+        (shell.library_x(), shell.library_width(), card, drawn)
+    });
+    assert_eq!(library + width, WIDTH);
+    assert_eq!(f32::from(card.right()), library);
+    let words: Vec<&str> = drawn.split(' ').collect();
+    let (x, across): (f32, f32) = (words[2].parse().unwrap(), words[3].parse().unwrap());
+    assert!(
+        x >= library && x + across <= WIDTH - COLUMN_WIDTH,
+        "the empty line isn't in the list: {drawn}"
+    );
+    // The column's buttons are centred 5 above its middle, 100 apart.
+    let archive = |x: f32| point(px(x), px(700. / 2. + 45.));
+    let menu = |at, cx: &mut VisualTestContext| {
+        host.menus.borrow_mut().clear();
+        cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+        cx.run_until_parked();
+        let titles = host.menus.borrow().last().cloned().unwrap_or_default();
+        titles.iter().any(|(title, _)| title == "Clear Archive")
+    };
+    let middle = SECTION_X + SECTION_WIDTH / 2.;
+    assert!(
+        menu(archive(WIDTH - middle), cx),
+        "no Clear Archive on the right"
+    );
+    side(false, &shell, cx);
+    assert!(
+        menu(archive(middle), cx),
+        "no Clear Archive back on the left"
     );
 }

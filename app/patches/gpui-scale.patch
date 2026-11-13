@@ -494,7 +494,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..061ba3b490 100644
+index c559412e56..0b9c9f7500 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
@@ -545,8 +545,8 @@ index c559412e56..061ba3b490 100644
 +    (cx.app.upgrade()).is_some_and(|app| app.try_borrow_mut().is_err())
 +}
 +
-+/// Says, for ilo's checks (check.sh), that a window's `kind` update was lost, as the App was still
-+/// in an update once the update it came during was over.
++/// Says, for ilo's checks (check.sh), that a window's `kind` input or update was lost, as the App
++/// was still in an update when it came or once the update it came during was over.
 +fn dropped(kind: &str, cx: &crate::AsyncApp) {
 +    if app_busy(cx) {
 +        eprintln!("browser: gpui dropped {kind}");
@@ -713,7 +713,7 @@ index c559412e56..061ba3b490 100644
          }));
          platform_window.on_display_changed(Box::new({
              let cx = cx.to_async();
-@@ -2053,10 +2146,31 @@ impl Window {
+@@ -2053,10 +2146,40 @@ impl Window {
          platform_window.on_input({
              let mut cx = cx.to_async();
              Box::new(move |event| {
@@ -722,9 +722,18 @@ index c559412e56..061ba3b490 100644
 -                    .log_err()
 -                    .unwrap_or(DispatchEventResult::default())
 +                let modifiers = matches!(event, PlatformInput::ModifiersChanged(_));
++                // A press or release lost to an update leaves no other trace (#2658).
++                let button = match event {
++                    PlatformInput::MouseDown(_) => Some("mouse down"),
++                    PlatformInput::MouseUp(_) => Some("mouse up"),
++                    _ => None,
++                };
 +                match handle.update(&mut cx, |_, window, cx| window.dispatch_event(event, cx)) {
 +                    Ok(result) => result,
 +                    Err(_) => {
++                        if let Some(button) = button {
++                            dropped(button, &cx);
++                        }
 +                        // A window activated inside an update tells its modifiers then: once it's
 +                        // over, the ones held by then, as a key may have gone up meanwhile.
 +                        if modifiers && app_busy(&cx) {
@@ -749,7 +758,7 @@ index c559412e56..061ba3b490 100644
              })
          });
          platform_window.on_hit_test_window_control({
-@@ -2156,6 +2270,9 @@ impl Window {
+@@ -2156,6 +2279,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -759,7 +768,7 @@ index c559412e56..061ba3b490 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -2884,7 +3001,14 @@ impl Window {
+@@ -2884,7 +3010,14 @@ impl Window {
      /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -775,7 +784,7 @@ index c559412e56..061ba3b490 100644
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3636,6 +3760,14 @@ impl Window {
+@@ -3636,6 +3769,14 @@ impl Window {
          profiling::finish_frame!();
      }
  
@@ -790,7 +799,7 @@ index c559412e56..061ba3b490 100644
      /// Presents the most recently drawn frame if it hasn't been presented yet.
      #[cfg(all(test, feature = "profiler"))]
      pub fn present_if_needed(&mut self) {
-@@ -3761,7 +3893,23 @@ impl Window {
+@@ -3761,7 +3902,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -815,7 +824,7 @@ index c559412e56..061ba3b490 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4375,40 @@ impl Window {
+@@ -4227,6 +4384,40 @@ impl Window {
          result
      }
  
@@ -856,7 +865,7 @@ index c559412e56..061ba3b490 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -4273,6 +4455,13 @@ impl Window {
+@@ -4273,6 +4464,13 @@ impl Window {
          result
      }
  
@@ -870,7 +879,7 @@ index c559412e56..061ba3b490 100644
      /// When you call this method during [`Element::prepaint`], containing elements will attempt to
      /// scroll to cause the specified bounds to become visible. When they decide to autoscroll, they will call
      /// [`Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
-@@ -5578,9 +5767,8 @@ impl Window {
+@@ -5578,9 +5776,8 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -882,7 +891,7 @@ index c559412e56..061ba3b490 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7285,24 @@ impl Window {
+@@ -7097,18 +7294,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
@@ -910,7 +919,7 @@ index c559412e56..061ba3b490 100644
                          position: center,
                          modifiers: Modifiers::default(),
                          click_count: 1,
-@@ -7908,11 +8102,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
+@@ -7908,11 +8111,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
          let arena_cell = unsafe { &*arena_pointer };
          callback(&mut arena_cell.borrow_mut());
          Ok(())
@@ -953,7 +962,7 @@ index c559412e56..061ba3b490 100644
  #[cfg(test)]
  mod tests {
      use std::{
-@@ -8179,6 +8404,101 @@ mod tests {
+@@ -8179,6 +8413,101 @@ mod tests {
          }
      }
  
