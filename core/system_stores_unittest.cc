@@ -7,6 +7,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "components/prefs/testing_pref_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace browser_core {
@@ -50,13 +51,44 @@ TEST(SystemStoresTest, AFolderRemovedByHandTakesItsStoresName) {
             std::vector<std::string>{"old"});
 }
 
-TEST(SystemStoresTest, AWholeDataFolderRemovedNamesNone) {
-  base::ScopedTempDir folder;
-  ASSERT_TRUE(folder.CreateUniqueTempDir());
-  const base::FilePath gone = folder.GetPath().AppendASCII("ilo");
-  EXPECT_TRUE(StoresNamedOnDisk(gone).empty());
-  EXPECT_EQ(StoresUnnamed({"a", "b"}, StoresNamedOnDisk(gone)),
-            (std::vector<std::string>{"a", "b"}));
+// A data folder's own Local State, which lists the stores its profiles were given.
+class LocalState : public TestingPrefServiceSimple {
+ public:
+  LocalState() { RegisterGivenStores(registry()); }
+};
+
+TEST(SystemStoresTest, AFolderMovedAsideKeepsItsStoresFromACleanOneAtItsPath) {
+  base::ScopedTempDir parent;
+  ASSERT_TRUE(parent.CreateUniqueTempDir());
+  const base::FilePath folder = parent.GetPath().AppendASCII("ilo");
+  const base::FilePath aside = parent.GetPath().AppendASCII("ilo aside");
+  WriteProfile(folder, "Default", R"({"browser_core": {"system_engine": {"store": "a"}}})");
+  WriteProfile(folder, "Profile 1", R"({"browser_core": {"system_engine": {"store": "b"}}})");
+  LocalState old_state;
+  SetGivenStores(old_state, {"a", "b"});
+  // The user moves the data folder aside, its Local State with it, and the app starts a clean
+  // one at its path: its list is empty, so its first launch deletes none of the other's stores.
+  ASSERT_TRUE(base::Move(folder, aside));
+  LocalState clean_state;
+  WriteProfile(folder, "Default", R"({"browser_core": {"system_engine": {}}})");
+  EXPECT_TRUE(GivenStores(clean_state).empty());
+  EXPECT_TRUE(StoresUnnamed(GivenStores(clean_state), StoresNamedOnDisk(folder)).empty());
+  // Put back, its profiles name every store its list holds, and none is deleted.
+  ASSERT_TRUE(base::DeletePathRecursively(folder));
+  ASSERT_TRUE(base::Move(aside, folder));
+  EXPECT_EQ(GivenStores(old_state), (std::vector<std::string>{"a", "b"}));
+  EXPECT_TRUE(StoresUnnamed(GivenStores(old_state), StoresNamedOnDisk(folder)).empty());
+}
+
+// A data folder removed whole takes its list: its stores are left, unreachable, rather than a
+// list outside it deleting a moved-aside folder's.
+TEST(SystemStoresTest, AWholeDataFolderRemovedTakesItsList) {
+  base::ScopedTempDir parent;
+  ASSERT_TRUE(parent.CreateUniqueTempDir());
+  const base::FilePath folder = parent.GetPath().AppendASCII("ilo");
+  ASSERT_TRUE(base::CreateDirectory(folder));
+  LocalState clean_state;
+  EXPECT_TRUE(StoresUnnamed(GivenStores(clean_state), StoresNamedOnDisk(folder)).empty());
 }
 
 // The old ids of a data folder's profiles: Default and Profile 1 to 3, as Local State counts 4.
