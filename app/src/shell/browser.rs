@@ -623,6 +623,15 @@ pub trait Browser {
     fn download_widevine(&self, _cx: &mut App) {}
     /// Quits and starts again, bringing back the windows and their Spaces.
     fn restart(&self, _cx: &mut App) {}
+    /// Whether this launch is a safe start, with extensions and Boosts held after two crashes at
+    /// launch (crate::safe_start). Agents can't start or end one.
+    fn safe_start(&self) -> bool {
+        false
+    }
+    /// Whether Settings has ad blocking on.
+    fn ad_blocking(&self) -> bool {
+        false
+    }
     /// What PlayReady, which Windows plays protected video with, needs that the PC may lack.
     fn playready_needs(&self) -> super::PlayReady {
         super::PlayReady::None

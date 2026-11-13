@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -23,6 +24,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/page_info/chrome_page_info_delegate.h"
 #include "chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h"
+#include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/browser/website_settings_info.h"
 #include "components/content_settings/core/browser/website_settings_registry.h"
@@ -36,6 +38,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/extension_action.h"
 #include "net/cert/x509_certificate.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -111,6 +114,23 @@ bool Resettable(ChromePageInfoUiDelegate& ui_delegate, const PageInfo::Permissio
   return permission.source == SettingSource::kUser && permission.setting &&
          (ui_delegate.ShouldShowAllow(permission.type) ||
           ui_delegate.ShouldShowAsk(permission.type));
+}
+
+// What Site Controls list of Chrome's page info rows: what differs for the site (#2334). Chrome also
+// lists every type whose profile default stopped asking, which says nothing about this site; that
+// row shows here only once the site has its own value, a policy or an extension sets it, the
+// user changed it here since the page loaded (so a line doesn't vanish under their hand), or the
+// tab used it: played sound, registered for automatic Picture in Picture, or holds files open.
+bool Differs(content::WebContents* contents, const PageInfo::PermissionInfo& permission) {
+  if (permission.setting || permission.source != SettingSource::kUser ||
+      permission.type == ContentSettingsType::SOUND ||
+      permission.type == ContentSettingsType::AUTO_PICTURE_IN_PICTURE ||
+      permission.type == ContentSettingsType::FILE_SYSTEM_WRITE_GUARD) {
+    return true;
+  }
+  const auto* settings =
+      content_settings::PageSpecificContentSettings::GetForFrame(contents->GetPrimaryMainFrame());
+  return settings && settings->HasContentSettingChangedViaPageInfo(permission.type);
 }
 
 // The system page a tab shows in place of Chromium's, else null.
@@ -299,6 +319,8 @@ SiteControls::SiteControls(content::WebContents* contents)
     window_ = window->id();
     window->ShowEveryExtensionAction(true);
   }
+  // Its private windows' too, as the dispatcher is the profile's.
+  actions_.Observe(extensions::ExtensionActionDispatcher::Get(contents->GetBrowserContext()));
   Read();
 }
 
@@ -391,6 +413,18 @@ void SiteControls::WebContentsDestroyed() {
   Close();
 }
 
+void SiteControls::OnExtensionActionUpdated(extensions::ExtensionAction* action,
+                                            content::WebContents* contents,
+                                            content::BrowserContext* context) {
+  if (contents == web_contents() && IsAdBlocker(action->extension_id())) {
+    Changed();
+  }
+}
+
+void SiteControls::OnShuttingDown() {
+  actions_.Reset();
+}
+
 void SiteControls::Changed() {
   if (reporting_) {
     return;
@@ -421,7 +455,7 @@ void SiteControls::Report() {
   bool resettable = false;
   for (const PageInfo::PermissionInfo& permission : permissions_) {
     const auto* delegate = DelegateFor(permission.type);
-    if (!delegate) {
+    if (!delegate || !Differs(web_contents(), permission)) {
       continue;
     }
     names.push_back(base::UTF16ToUTF8(PageInfoUI::PermissionTypeToUIString(permission.type)));
@@ -460,10 +494,15 @@ void SiteControls::Report() {
     devices[i].kind = device_kinds[i].c_str();
   }
   const std::string connection = base::UTF16ToUTF8(connection_summary_);
-  // Chrome counts every row it lists in its button's words.
+  // uBlock Origin never sees the pages the system's engine shows.
+  const int ad_blocking =
+      SystemPageOf(web_contents()) ? BC_AD_BLOCKING_NONE : AdBlockingOf(web_contents());
+  const std::string ad_blocked =
+      ad_blocking == BC_AD_BLOCKING_ON ? AdBlockedOn(web_contents()) : std::string();
+  // Chrome counts every row it lists in its button's words; these are the lines the panel shows.
   const std::string reset =
       resettable ? base::UTF16ToUTF8(l10n_util::GetPluralStringFUTF16(
-                       IDS_PAGE_INFO_RESET_PERMISSIONS, static_cast<int>(permissions_.size())))
+                       IDS_PAGE_INFO_RESET_PERMISSIONS, static_cast<int>(permissions.size())))
                  : std::string();
   const bc_site_controls controls = {
       .site = site_.c_str(),
@@ -478,9 +517,8 @@ void SiteControls::Report() {
       .system_engine_offered = system_engine_offered_,
       .logins = c_logins.data(),
       .login_count = c_logins.size(),
-      // uBlock Origin never sees the pages the system's engine shows.
-      .ad_blocking = SystemPageOf(web_contents()) ? BC_AD_BLOCKING_NONE
-                                                  : AdBlockingOf(web_contents()),
+      .ad_blocking = ad_blocking,
+      .ad_blocked = ad_blocked.c_str(),
       .developer_mode = DeveloperModeOf(web_contents()),
       .devices = devices.data(),
       .device_count = devices.size(),

@@ -72,6 +72,10 @@ pub(super) struct Recorder {
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
+    /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
+    /// answer.
+    pub(super) safe_start: Cell<bool>,
+    pub(super) ad_blocking: Cell<bool>,
     /// The build updates itself, as `updates` answers, and how often Check for Updates ran.
     pub(super) updates: Cell<bool>,
     pub(super) checked_for_updates: Cell<usize>,
@@ -879,6 +883,14 @@ impl Browser for Recorder {
 
     fn restart(&self, _: &mut App) {
         self.record("restart".into())
+    }
+
+    fn safe_start(&self) -> bool {
+        self.safe_start.get()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        self.ad_blocking.get()
     }
 
     fn show_page_dialog(&self, shown: Option<ShownPageDialog>, _: &mut App) {

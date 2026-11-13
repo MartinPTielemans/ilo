@@ -246,6 +246,8 @@ void After(double seconds, std::function<void()> task) {
 // with it when it's minimized, and placed in points from its content's top-left.
 struct Floating {
   HWND hwnd = nullptr;
+  // What check.sh calls it, which Adopt asks for, so every window the host floats is named.
+  const char* name = nullptr;
   // Clicks go through it to the browser window under it.
   bool mouse_through = false;
   // Where it takes clicks, in pixels from its top-left, if not all of it: the hover card's or the
@@ -476,8 +478,13 @@ void OwnShadow(HWND hwnd) {
   DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof backdrop);
 }
 
-void Adopt(Floating& floating, void* view, bool mouse_through, void (*dismissed)(void)) {
+void Adopt(Floating& floating,
+           void* view,
+           const char* name,
+           bool mouse_through,
+           void (*dismissed)(void)) {
   floating.hwnd = Hwnd(view);
+  floating.name = name;
   floating.mouse_through = mouse_through;
   floating.dismissed = dismissed;
   ShowWindow(floating.hwnd, SW_HIDE);
@@ -3562,7 +3569,7 @@ void host_forget_window(void* ui_view) {
 }
 
 void host_add_overlay(int overlay, void* overlay_view, double, void (*dismissed)(void)) {
-  Adopt(g_overlays[overlay], overlay_view, false, dismissed);
+  Adopt(g_overlays[overlay], overlay_view, kOverlayNames[overlay], false, dismissed);
   g_overlays[overlay].overlay = overlay;
   // The command bar is a rounded rectangle, as Windows' frame is. The pickers and the folder
   // preview have a beak, whose shape a rectangle's corners and shadow would show round.
@@ -3718,7 +3725,7 @@ void host_release_held_keys(void) {
 
 void host_add_find_bar(void* ui_view, void* find_bar_view, double right, double top) {
   Corner& corner = g_find_bars[ui_view];
-  Adopt(corner.floating, find_bar_view, false, nullptr);
+  Adopt(corner.floating, find_bar_view, "find bar", false, nullptr);
   SystemFrame(corner.floating.hwnd);
   corner.right = right;
   corner.top = top;
@@ -3752,7 +3759,7 @@ void host_hide_find_bar(void* ui_view) {
 
 void host_add_offer(void* ui_view, void* offer_view, double right, double top) {
   Corner& corner = g_offers[ui_view];
-  Adopt(corner.floating, offer_view, false, nullptr);
+  Adopt(corner.floating, offer_view, "offer", false, nullptr);
   SystemFrame(corner.floating.hwnd);
   corner.right = right;
   corner.top = top;
@@ -3788,7 +3795,7 @@ void host_set_pane_corner(void* ui_view, double left, double right, double top) 
 }
 
 void host_add_hud(void* hud_view, double right, double top, double margin) {
-  Adopt(g_hud, hud_view, true, nullptr);
+  Adopt(g_hud, hud_view, "hud", true, nullptr);
   g_hud_right = right;
   g_hud_top = top;
   g_hud_margin = margin;
@@ -3827,7 +3834,7 @@ void host_hide_hud(void) {
 }
 
 void host_add_drop_targets(void* view) {
-  Adopt(g_drop_targets, view, true, nullptr);
+  Adopt(g_drop_targets, view, "drop targets", true, nullptr);
 }
 
 void host_show_drop_targets(void* ui_view) {
@@ -3850,7 +3857,7 @@ void host_hide_drop_targets(void) {
 }
 
 void host_add_dialog(void* dialog_view) {
-  Adopt(g_dialog, dialog_view, false, nullptr);
+  Adopt(g_dialog, dialog_view, "dialog", false, nullptr);
   g_dialog.ui_closes = true;
 }
 
@@ -3889,7 +3896,7 @@ void host_hide_dialog(void) {
 
 void host_add_site_controls(void* view, void (*dismissed)(void)) {
   // Its beak is in the window, whose rectangle Windows' corners and shadow would show round it.
-  Adopt(g_site_controls, view, false, dismissed);
+  Adopt(g_site_controls, view, "site controls", false, dismissed);
 }
 
 void host_set_site_controls_shape(const double*, size_t) {}
@@ -3944,7 +3951,7 @@ void host_hide_site_controls(void) {
 
 void* host_add_link_preview(void* view, void (*dismissed)(void)) {
   // It never has the keyboard, which stays with the page.
-  Adopt(g_link_preview.floating, view, false, nullptr);
+  Adopt(g_link_preview.floating, view, "link preview", false, nullptr);
   g_link_preview.dismissed = dismissed;
   SetWindowLongPtrW(g_link_preview.floating.hwnd, GWL_EXSTYLE,
                     GetWindowLongPtrW(g_link_preview.floating.hwnd, GWL_EXSTYLE) |
@@ -4031,7 +4038,7 @@ void host_hide_link_preview(void) {
 }
 
 void host_add_capture(void* view, void (*dismissed)(void)) {
-  Adopt(g_capture, view, false, dismissed);
+  Adopt(g_capture, view, "capture", false, dismissed);
 }
 
 void host_show_capture(void* ui_view, double left, double top, double width, double height) {
@@ -4226,7 +4233,7 @@ void host_share_png(const uint8_t* png,
 }
 
 void host_add_toast(void* toast_view) {
-  Adopt(g_toast, toast_view, true, nullptr);
+  Adopt(g_toast, toast_view, "toast", true, nullptr);
   g_toast.plate = RECT{};
 }
 
@@ -4257,7 +4264,7 @@ void host_hide_toast(void) {
 }
 
 void host_add_foot_bar(void* foot_bar_view) {
-  Adopt(g_foot_bar, foot_bar_view, false, nullptr);
+  Adopt(g_foot_bar, foot_bar_view, "foot bar", false, nullptr);
   // A click on its buttons leaves the keyboard where it was, with the browser window and the page,
   // where the mode has its keys, as the hover card's does.
   SetWindowLongPtrW(g_foot_bar.hwnd, GWL_EXSTYLE,
@@ -4290,7 +4297,7 @@ void host_hide_foot_bar(void) {
 }
 
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
-  Adopt(g_tooltip, tooltip_view, true, nullptr);
+  Adopt(g_tooltip, tooltip_view, "tooltip", true, nullptr);
   g_tooltip_away = away;
   g_tooltip_margin = margin;
 }
@@ -4319,7 +4326,7 @@ void host_hide_tooltip(double fade) {
 
 // shortcut: the card ends only as the pointer leaves it or the UI ends it, as a key does.
 void host_add_hover_card(void* card_view, double margin, void (*)(void)) {
-  Adopt(g_card, card_view, false, nullptr);
+  Adopt(g_card, card_view, "hover card", false, nullptr);
   // A click on its buttons leaves the keyboard where it was.
   SetWindowLongPtrW(g_card.hwnd, GWL_EXSTYLE,
                     GetWindowLongPtrW(g_card.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
@@ -4368,7 +4375,7 @@ void host_watch_memory_pressure(void (*pressed)(void)) {
 }
 
 void host_add_link_target(void* link_view, double margin, void (*pointer)(double x, double y)) {
-  Adopt(g_link_target, link_view, true, nullptr);
+  Adopt(g_link_target, link_view, "link target", true, nullptr);
   g_link_margin = margin;
   g_link_pointer = pointer;
 }
@@ -4692,7 +4699,7 @@ void host_add_reveal(void* ui_view,
                      void* reveal_view,
                      void (*pointer_moved)(void* ui_view, double x)) {
   Reveal& reveal = g_reveals[ui_view];
-  Adopt(reveal.floating, reveal_view, false, nullptr);
+  Adopt(reveal.floating, reveal_view, "reveal", false, nullptr);
   reveal.pointer_moved = pointer_moved;
 }
 
@@ -5424,31 +5431,23 @@ bool host_drive_key(unsigned vk, long lparam) {
 // What check.sh calls the window |hwnd| the host floats over a browser window, for the driver's
 // stack, or nothing if it's none of those.
 const char* host_floating_name(void* hwnd) {
-  const std::pair<const Floating*, const char*> named[] = {
-      {&g_link_target, "link target"}, {&g_tooltip, "tooltip"},
-      {&g_card, "hover card"},         {&g_toast, "toast"},
-      {&g_capture, "capture"},         {&g_hud, "hud"},
-      {&g_dialog, "dialog"},           {&g_site_controls, "site controls"},
-      {&g_link_preview.floating, "link preview"}};
-  for (const auto& [floating, name] : named) {
-    if (floating->hwnd && floating->hwnd == hwnd) {
-      return name;
-    }
-  }
-  for (size_t index = 0; index < std::size(g_overlays); ++index) {
-    if (g_overlays[index].hwnd && g_overlays[index].hwnd == hwnd) {
-      return kOverlayNames[index];
-    }
-  }
-  for (const auto& [corners, name] :
-       {std::pair{&g_find_bars, "find bar"}, std::pair{&g_offers, "offer"}}) {
-    for (const auto& [ui_view, corner] : *corners) {
-      if (corner.floating.hwnd && corner.floating.hwnd == hwnd) {
-        return name;
-      }
-    }
+  if (auto it = FloatingByHwnd().find(static_cast<HWND>(hwnd)); it != FloatingByHwnd().end()) {
+    return it->second->name;
   }
   return g_menu.hwnd && g_menu.hwnd == hwnd ? "menu" : nullptr;
+}
+
+// Each window the host floats over a browser window, made so far, and the menu, by its name, its
+// window and where it is in its life (Life), for the driver's lives (#2563). Every one is made
+// through Adopt, which names it, so a new one is in the list without being added to it.
+void host_floating_lives(void (*each)(void* context, const char* name, void* hwnd, int life),
+                         void* context) {
+  for (const auto& [hwnd, floating] : FloatingByHwnd()) {
+    each(context, floating->name, hwnd, static_cast<int>(floating->life));
+  }
+  if (g_menu.hwnd) {
+    each(context, "menu", g_menu.hwnd, static_cast<int>(g_menu.life));
+  }
 }
 
 }  // extern "C"

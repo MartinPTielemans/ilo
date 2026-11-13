@@ -39,7 +39,7 @@ use browser::theme::{Appearance, Theme};
 use browser::theme_picker;
 use gpui::{
     App, AppContext, Bounds, Focusable, Pixels, Point, SharedString, Size, TitlebarOptions,
-    WeakEntity, WindowBounds, WindowOptions, point, px, size,
+    TouchPhase, WeakEntity, WindowBounds, WindowOptions, point, px, size,
 };
 
 thread_local! {
@@ -1053,6 +1053,16 @@ impl Browser for Fake {
     fn elsewhere(&self) -> Option<browser::shell::Elsewhere> {
         let default = || std::env::var("PREVIEW_DRM").is_ok_and(|drm| drm == "default");
         browser::shell::Elsewhere::on(self.os(), default)
+    }
+
+    // PREVIEW_SAFE_START=1 shows a safe start's card at the sidebar's foot, with Settings' ad
+    // blocking on, or =unblocked with it off.
+    fn safe_start(&self) -> bool {
+        std::env::var_os("PREVIEW_SAFE_START").is_some()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        std::env::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
     }
 
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
@@ -2898,6 +2908,51 @@ fn main() {
                 })
                 .detach();
             }
+            // PREVIEW_SWIPE=1 brings the Library out with fingers going right on the first Space, and
+            // takes it back with them going left, through the gesture's own code, then does the
+            // same with clicks, for a recording of its motion (#2375).
+            if let Some(shell) =
+                shell_window.filter(|_| std::env::var_os("PREVIEW_SWIPE").is_some())
+            {
+                cx.spawn(async move |cx| {
+                    let executor = cx.background_executor().clone();
+                    let wait = |ms| executor.timer(Duration::from_millis(ms));
+                    wait(1000).await;
+                    // Fingers 1.2 Library widths each way in half a second, a frame at a time.
+                    for way in [1., -1.] {
+                        log!(
+                            "browser: preview swipe {}",
+                            if way > 0. { "in" } else { "out" }
+                        );
+                        let step = |phase, x| {
+                            move |shell: &mut Shell,
+                                  window: &mut gpui::Window,
+                                  cx: &mut gpui::Context<Shell>| {
+                                shell.preview_fingers(x, phase, window, cx)
+                            }
+                        };
+                        shell.update(cx, step(TouchPhase::Started, 0.)).ok();
+                        for _ in 0..30 {
+                            wait(16).await;
+                            let x = way * 1.2 * 417. / 30. / 0.5;
+                            shell.update(cx, step(TouchPhase::Moved, x)).ok();
+                        }
+                        shell.update(cx, step(TouchPhase::Ended, 0.)).ok();
+                        wait(2000).await;
+                    }
+                    for stage in ["in", "out"] {
+                        log!("browser: preview click {stage}");
+                        shell
+                            .update(cx, |shell, _, cx| {
+                                shell.run(Command::ViewLibrary, "preview", cx)
+                            })
+                            .ok();
+                        wait(2000).await;
+                    }
+                    log!("browser: preview swipe done");
+                })
+                .detach();
+            }
             // PREVIEW_PEEK=1 opens a link of the page shown in Peek, once the shell has laid the page
             // out, with the shell's page showing through the card, as it does on Linux and Windows.
             if let Some(shell) = shell_window.filter(|_| std::env::var_os("PREVIEW_PEEK").is_some())
@@ -3339,6 +3394,7 @@ fn preview_site() -> Site {
         logins: Vec::new(),
         devices: Vec::new(),
         ad_blocking: Some(true),
+        ad_blocked: "12".into(),
         developer_mode: Some(false),
         // PREVIEW_BOOST=on or off gives the site a Boost, which shows its row.
         boostable: true,

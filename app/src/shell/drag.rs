@@ -35,7 +35,8 @@ impl Shell {
     /// Under Reduce Motion the rows are in their places at once, a closed one gone with its room,
     /// and new ones still fade in.
     pub(super) fn move_rows(&mut self, before: HashMap<Slot, f32>, curve: Curve, cx: &gpui::App) {
-        let (now, moved) = (Instant::now(), crate::motion::start(cx));
+        let now = self.clock.now();
+        let moved = crate::motion::start_at(now, cx);
         let after = self.layout();
         let mut slides: Vec<_> = after
             .iter()
@@ -102,8 +103,9 @@ impl Shell {
         // Slides already over stay for the next frame to drop, which says the rows settled: under
         // Reduce Motion every slide is over at once, and the core's next answer, as a ⌘Z's second
         // and third tabs come, would otherwise take them before any frame saw them.
+        let clock = self.clock.clone();
         self.slides
-            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_none());
+            .retain(|_, (_, start, curve)| curve.at(Self::since_on(&clock, *start)).is_none());
         self.slides.extend(slides);
     }
 
@@ -116,7 +118,7 @@ impl Shell {
         }
         self.slides.get(&slot).map_or(0., |&(from, start, curve)| {
             curve
-                .at(start.elapsed().as_secs_f32())
+                .at(self.since(start))
                 .map_or(0., |done| from * (1. - done))
         })
     }
