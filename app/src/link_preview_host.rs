@@ -211,7 +211,8 @@ pub(crate) unsafe extern "C" fn tab_link_to_site(
     }
     // Outside the navigation that asked, which the core cancels once this returns.
     update_app_later(move |cx| {
-        let preview = unsafe { bc::bc_tab_open_preview(tab, url.as_ptr()) };
+        let at = rect(link_preview::resting(page.0));
+        let preview = unsafe { bc::bc_tab_open_preview(tab, url.as_ptr(), at) };
         if preview == 0 {
             log!("browser: link preview from {tab} not opened");
             return;

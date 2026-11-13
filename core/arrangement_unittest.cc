@@ -13,7 +13,8 @@ namespace {
 constexpr char kFile[] = R"({"version": 1, "changes": [
   {"kind": "settle", "name": "The video", "role": "video",
    "target": {"path": "main > video", "fp": {"tag": "video", "landmark": "main"}},
-   "before": {"name": "the article", "role": "article", "target": {"path": "main > article"}}},
+   "before": {"name": "the article", "role": "article",
+              "target": {"path": "main > article", "fp": {"tag": "article", "landmark": "main"}}}},
   {"kind": "trade", "name": "Trending", "role": "aside", "target": {"fp": {"tag": "aside", "nth": 1}},
    "with": {"name": "Sign up", "role": "form", "target": {"path": "#signup"}}},
   {"kind": "float", "name": "More like this", "role": "section", "target": {"path": "#more"},
@@ -35,6 +36,9 @@ TEST(ArrangementTest, AFileOfTheSchemaIsReadWhole) {
   ASSERT_TRUE(changes);
   ASSERT_EQ(changes->size(), 3u);
   EXPECT_EQ(*(*changes)[0].GetDict().FindStringByDottedPath("before.name"), "the article");
+  // A neighbour with a fingerprint, as the page's runtime describes every element it can, is the
+  // schema at its deepest.
+  EXPECT_EQ(*(*changes)[0].GetDict().FindStringByDottedPath("before.target.fp.tag"), "article");
   EXPECT_EQ((*changes)[1].GetDict().FindIntByDottedPath("target.fp.nth"), 1);
   EXPECT_EQ((*changes)[2].GetDict().FindDoubleByDottedPath("at.y"), 96.5);
   // What the core writes, it reads back as it was.

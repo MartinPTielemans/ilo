@@ -23,6 +23,7 @@
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/arrange.h"
+#include "browser_core/arrange_rule.h"
 #include "browser_core/arrangement.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
@@ -60,6 +61,7 @@
 #include "browser_core/permission_question.h"
 #include "browser_core/platform/playready.h"
 #include "browser_core/platform/window_views.h"
+#include "browser_core/point.h"
 #include "browser_core/profiles.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/search.h"
@@ -69,6 +71,7 @@
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/typed_http.h"
 #include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
 #include "browser_core/window.h"
@@ -92,6 +95,8 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/page_zoom.h"
+#include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -164,8 +169,9 @@ Profile* ProfileOf(const browser_core::Window& window) {
 }
 
 // Loads |url| in the tab, as Chrome loads what's typed in its location bar or a bookmark, giving a
-// tab without its page one first.
-void LoadInTab(bc_id id, const GURL& url, ui::PageTransition transition) {
+// tab without its page one first. With |typed_http| it's an http address the user wrote out, which
+// loads as written (TypedHttp).
+void LoadInTab(bc_id id, const GURL& url, ui::PageTransition transition, bool typed_http) {
   content::WebContents* contents = browser_core::Window::PageOf(id);
   tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
   if (!tab) {
@@ -180,6 +186,7 @@ void LoadInTab(bc_id id, const GURL& url, ui::PageTransition transition) {
     NavigateParams params(tab->GetBrowserWindowInterface(), url, transition);
     params.disposition = WindowOpenDisposition::CURRENT_TAB;
     params.source_contents = contents;
+    params.url_typed_with_http_scheme = typed_http;
     Navigate(&params);
   });
 }
@@ -368,6 +375,29 @@ void bc_answer_clipboard_requests(void) {
 #endif
 }
 
+void bc_clipboard_read_text(void (*done)(void* context, const char* text), void* context) {
+  if (!done) {
+    return;
+  }
+  // The context as a number, as the core never reads what it points to. Chromium answers during
+  // the read when it holds the selection itself, so the answer goes in a task of its own.
+  ui::Clipboard::GetForCurrentThread()->ReadText(
+      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/std::nullopt,
+      base::BindOnce(
+          [](void (*done)(void* context, const char* text), uintptr_t context,
+             std::u16string text) {
+            base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+                FROM_HERE,
+                base::BindOnce(
+                    [](void (*done)(void* context, const char* text), uintptr_t context,
+                       const std::string& text) {
+                      done(reinterpret_cast<void*>(context), text.c_str());
+                    },
+                    done, context, base::UTF16ToUTF8(text)));
+          },
+          done, reinterpret_cast<uintptr_t>(context)));
+}
+
 void bc_window_overlay_takes_keyboard(bc_id id, bool takes) {
 #if BUILDFLAG(IS_LINUX)
   if (views::Widget* widget = OpenWidget(id)) {
@@ -534,10 +564,10 @@ bool bc_agent_may_act(const char* agent,
     refused = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
   }
   if (refused.empty() && contents) {
-    // An agent's tab is never arranged, but the rule is the core's to keep, not the UI's.
-    const browser_core::Arrange* arrange = browser_core::Arrange::FromWebContents(contents);
-    if (arrange && arrange->on()) {
-      refused = "The user is arranging this page. Try again once they're done.";
+    // The user's clicks there are Point's until they send or close it.
+    const browser_core::PagePoint* point = browser_core::PagePoint::FromWebContents(contents);
+    if (point && point->on()) {
+      refused = "The user is pointing at this page. Try again once they've answered.";
     }
   }
   if (refused.empty() && contents &&
@@ -602,14 +632,25 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   if (!from || from->agent() || !to || !to->agent() || from->profile() != to->profile()) {
     return false;
   }
-  // Arrange is the user's alone.
   content::WebContents* contents = browser_core::Tab::FromId(tab);
-  if (browser_core::Arrange* arrange =
-          contents ? browser_core::Arrange::FromWebContents(contents) : nullptr) {
-    arrange->End(/*tell=*/true);
-  }
-  browser_core::Window::MoveToSpace(tab, space, /*to_agent=*/true);
-  if (browser_core::Space::Holding(tab) != to) {
+  const bool moved = browser_core::arrange_rule::GiveToAgent(
+      [&] {
+        if (browser_core::Arrange* arrange =
+                contents ? browser_core::Arrange::FromWebContents(contents) : nullptr) {
+          arrange->End(/*tell=*/true);
+        }
+      },
+      [&] {
+        // Pointing for one agent never goes on in another's Space.
+        if (browser_core::PagePoint* point =
+                contents ? browser_core::PagePoint::FromWebContents(contents) : nullptr;
+            point && point->on() && point->agent() != to->agent()->id) {
+          point->End(/*tell=*/true);
+        }
+        browser_core::Window::MoveToSpace(tab, space, /*to_agent=*/true);
+        return browser_core::Space::Holding(tab) == to;
+      });
+  if (!moved) {
     return false;
   }
   // One the user took back from an agent before is the agent's now.
@@ -622,6 +663,9 @@ bool bc_agent_hand_off(const char* agent, bc_id tab) {
     return false;
   }
   browser_core::Hold(tab);
+  // What the agent started there stops with the handoff, as Take Over stops it, so none of it
+  // lands in the page the user has now. Its session stays, for when they hand the tab back.
+  browser_core::AgentPage::SessionEnded(tab);
   return true;
 }
 
@@ -653,7 +697,9 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
   }
   Profile* profile = space ? browser_core::ProfileFor(space->profile()) : nullptr;
   content::WebContents* contents =
-      window && profile ? window->OpenTab(profile, target, /*when_shown=*/false) : nullptr;
+      window && profile
+          ? window->OpenTab(profile, target, /*when_shown=*/false, /*typed_http=*/false)
+          : nullptr;
   if (!contents) {
     return 0;
   }
@@ -672,7 +718,7 @@ bool bc_agent_navigate(const char* agent, bc_id tab, const char* url) {
       !target.SchemeIsHTTPOrHTTPS() || !browser_core::Window::PageOf(tab)) {
     return false;
   }
-  LoadInTab(tab, target, ui::PAGE_TRANSITION_TYPED);
+  LoadInTab(tab, target, ui::PAGE_TRANSITION_TYPED, /*typed_http=*/false);
   return true;
 }
 
@@ -1119,8 +1165,8 @@ void bc_folder_delete(bc_id folder) {
 
 bc_id bc_tab_profile(bc_id id) {
   const browser_core::Tab* tab = browser_core::Tab::Get(id);
-  Profile* profile = tab ? tab->profile() : nullptr;
-  return profile ? browser_core::ProfileId(browser_core::DirOf(profile)) : 0;
+  const std::string dir = tab ? tab->profile_dir() : std::string();
+  return dir.empty() ? 0 : browser_core::ProfileId(dir);
 }
 
 double bc_tab_last_seen(bc_id id) {
@@ -1777,11 +1823,13 @@ bool bc_window_redo_remove_suggestion(bc_id window_id, bc_id removal) {
   return window && window->RedoRemoveSuggestion(removal);
 }
 
-bc_id bc_tab_open(bc_id window_id, const char* url, bool when_shown) {
+static bc_id OpenTyped(bc_id window_id, const char* url, bool when_shown, const char* typed) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   Profile* profile = window ? ProfileOf(*window) : nullptr;
+  const GURL to(url);
+  const bool typed_http = typed && browser_core::TypedHttp(typed, to);
   content::WebContents* contents =
-      window && profile ? window->OpenTab(profile, GURL(url), when_shown) : nullptr;
+      window && profile ? window->OpenTab(profile, to, when_shown, typed_http) : nullptr;
   if (!contents) {
     return 0;
   }
@@ -1790,6 +1838,14 @@ bc_id bc_tab_open(bc_id window_id, const char* url, bool when_shown) {
     space->Add(tab, /*opener=*/0, /*foreground=*/false);
   }
   return tab;
+}
+
+bc_id bc_tab_open(bc_id window_id, const char* url, bool when_shown) {
+  return OpenTyped(window_id, url, when_shown, nullptr);
+}
+
+bc_id bc_tab_open_typed(bc_id window_id, const char* url, bool when_shown, const char* typed) {
+  return OpenTyped(window_id, url, when_shown, typed);
 }
 
 // The profile |window_id| shows, else the one the core started with.
@@ -1816,12 +1872,13 @@ size_t bc_search_url(bc_id window,
   return search.is_valid() ? CopyString(search.spec(), url, capacity) : 0;
 }
 
-bc_id bc_tab_open_preview(bc_id opener_id, const char* url) {
+bc_id bc_tab_open_preview(bc_id opener_id, const char* url, bc_rect frame) {
   content::WebContents* opener = browser_core::Tab::FromId(opener_id);
   tabs::TabInterface* tab = opener ? tabs::TabInterface::MaybeGetFromContents(opener) : nullptr;
   browser_core::Window* window =
       tab ? browser_core::Window::ForBrowser(tab->GetBrowserWindowInterface()) : nullptr;
-  content::WebContents* preview = window && url ? window->OpenPreview(*opener, GURL(url)) : nullptr;
+  content::WebContents* preview =
+      window && url ? window->OpenPreview(*opener, GURL(url), ToRect(frame).size()) : nullptr;
   return preview ? browser_core::Tab::IdOf(preview) : 0;
 }
 
@@ -1836,6 +1893,17 @@ void bc_tab_show_in(bc_id id, void* view, bc_rect frame, double corner_radius) {
                                      contents->GetNativeView(), view, ToRect(frame),
                                      corner_radius);
   contents->Focus();
+}
+
+void bc_tab_draw_preview(bc_id id, double scale, double about_x, double about_y, double opacity) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (!contents || browser_core::Window::Showing(id) || !(scale > 0)) {
+    return;
+  }
+  browser_core::Window* window = browser_core::Window::Holding(id);
+  browser_core::platform::DrawPageIn(window ? window->widget() : nullptr, contents->GetNativeView(),
+                                     static_cast<float>(scale), gfx::PointF(about_x, about_y),
+                                     static_cast<float>(std::clamp(opacity, 0.0, 1.0)));
 }
 
 void bc_window_keep_preview(bc_id window_id, bc_id id) {
@@ -1885,17 +1953,26 @@ void bc_tab_show(bc_id id, bc_rect frame) {
   }
 }
 
-void bc_tab_navigate(bc_id id, const char* url) {
+static void NavigateTyped(bc_id id, const char* url, const char* typed) {
   const GURL to(url);
+  const bool typed_http = typed && browser_core::TypedHttp(typed, to);
   const browser_core::Tab* tab = browser_core::Tab::Get(id);
   browser_core::Window* window = tab ? browser_core::Window::Holding(id) : nullptr;
   browser_core::Space* space = browser_core::Space::Holding(id);
   // As in Arc, a pinned tab keeps what it was pinned as: another address opens in a tab of its own.
   if (window && space && space->IsPinned(id) && tab->Url() != to) {
-    window->OpenFromPinned(id, to);
+    window->OpenFromPinned(id, to, typed_http);
     return;
   }
-  LoadInTab(id, to, ui::PAGE_TRANSITION_TYPED);
+  LoadInTab(id, to, ui::PAGE_TRANSITION_TYPED, typed_http);
+}
+
+void bc_tab_navigate(bc_id id, const char* url) {
+  NavigateTyped(id, url, nullptr);
+}
+
+void bc_tab_navigate_typed(bc_id id, const char* url, const char* typed) {
+  NavigateTyped(id, url, typed);
 }
 
 void bc_tab_back_to_pinned_url(bc_id id) {
@@ -1905,9 +1982,9 @@ void bc_tab_back_to_pinned_url(bc_id id) {
   if (!url.is_valid() || !tab) {
     return;
   }
-  // A tab already there doesn't load it again.
-  if (tab->Url() != url) {
-    LoadInTab(id, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
+  // A tab already there, or where it redirects, doesn't load it again.
+  if (!tab->At(url)) {
+    LoadInTab(id, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK, /*typed_http=*/false);
   }
 }
 
@@ -2116,6 +2193,10 @@ void bc_tab_answer_permission(bc_id id, int answer) {
   browser_core::PermissionQuestion::Answer(id, answer);
 }
 
+bool bc_tab_permission_quiet(bc_id id) {
+  return browser_core::PermissionQuestion::Quiet(id);
+}
+
 void bc_tab_answer_dialog(bc_id tab,
                           bc_id dialog,
                           bool accept,
@@ -2262,6 +2343,34 @@ bool bc_tab_arrange(bc_id id, bool on, const bc_arrange_look* look) {
     }
   }
   return arrange->Start(marks);
+}
+
+int bc_tab_may_point(bc_id id, const char* agent) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  return contents ? browser_core::PagePoint::May(*contents, agent ? agent : "")
+                  : BC_POINT_NOT_WEB;
+}
+
+int bc_tab_point(bc_id id, const char* agent, bool on) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  browser_core::PagePoint* point =
+      contents ? browser_core::PagePoint::FromWebContents(contents) : nullptr;
+  if (!point) {
+    return BC_POINT_NOT_WEB;
+  }
+  if (!on) {
+    point->End(/*tell=*/false);
+    return BC_POINT_CAN;
+  }
+  return point->Start(agent ? agent : "");
+}
+
+void bc_tab_point_do(bc_id id, int action) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (browser_core::PagePoint* point =
+          contents ? browser_core::PagePoint::FromWebContents(contents) : nullptr) {
+    point->Do(action);
+  }
 }
 
 void bc_tab_arrange_do(bc_id id, int action) {
@@ -2500,6 +2609,17 @@ void bc_tab_rename(bc_id id, const char* name) {
 void bc_tab_set_icon(bc_id id, const char* icon) {
   if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
     tab->SetIcon(icon ? icon : "");
+  }
+}
+
+void bc_tab_set_page_may_close(bc_id id, bool may) {
+  // Never an agent's tab, which a page's close would take from under the agent.
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  if (may && space && space->agent()) {
+    return;
+  }
+  if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
+    tab->SetPageMayClose(may);
   }
 }
 

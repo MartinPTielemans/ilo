@@ -63,6 +63,17 @@ source_set("search_default") {
   ]
 }
 
+# The profile prefs that keep the sites the user turned ad blocking off on, and their carry-over
+# from uBlock Origin's extension prefs, apart so browser_core_unittests tests it alone.
+source_set("ad_block_off_sites") {
+  sources = [
+    "ad_block_off_sites.cc",
+    "ad_block_off_sites.h",
+  ]
+  deps = [ "//components/prefs" ]
+  public_deps = [ "//base" ]
+}
+
 # The site searches a new profile has, and the one a word typed starts (#1397).
 source_set("site_searches") {
   sources = [
@@ -195,6 +206,15 @@ source_set("arrangement") {
   ]
 }
 
+# Whether a pinned tab is at its pinned URL, apart so browser_core_unittests tests the rule alone.
+source_set("pinned_url") {
+  sources = [
+    "pinned_url.cc",
+    "pinned_url.h",
+  ]
+  deps = [ "//url" ]
+}
+
 # When auto-archive takes a Today tab, Never too, apart so browser_core_unittests tests the rule
 # alone.
 source_set("archive_rule") {
@@ -203,6 +223,29 @@ source_set("archive_rule") {
     "archive_rule.h",
   ]
   deps = [ "//base" ]
+}
+
+# When a tab may arrange and how giving one to an agent ends Arrange first, apart so
+# browser_core_unittests tests the rule alone.
+source_set("arrange_rule") {
+  sources = [
+    "arrange_rule.cc",
+    "arrange_rule.h",
+  ]
+  deps = [ "//base" ]
+}
+
+# Whether a load the user typed keeps its http:// (#2417), apart so browser_core_unittests tests
+# the rule alone.
+source_set("typed_http") {
+  sources = [
+    "typed_http.cc",
+    "typed_http.h",
+  ]
+  deps = [
+    "//base",
+    "//url",
+  ]
 }
 
 # How an agent's typing goes to a page as key events, apart so browser_core_unittests tests it alone.
@@ -219,6 +262,16 @@ source_set("idle_check") {
   sources = [
     "idle_check.cc",
     "idle_check.h",
+  ]
+  deps = [ "//base" ]
+}
+
+# A native select's choices as an agent's outline gives them, apart so browser_core_unittests tests
+# the rule alone.
+source_set("select_choices") {
+  sources = [
+    "select_choices.cc",
+    "select_choices.h",
   ]
   deps = [ "//base" ]
 }
@@ -294,6 +347,19 @@ source_set("window_frames") {
   deps = [
     "//base",
     "//ui/gfx/geometry",
+  ]
+}
+
+# A page's text as its accessibility tree has it, an element's too, with no field's value: what
+# bc_tab_read_text and Point read.
+source_set("ax_text") {
+  sources = [
+    "ax_text.cc",
+    "ax_text.h",
+  ]
+  deps = [
+    "//base",
+    "//ui/accessibility",
   ]
 }
 
@@ -428,6 +494,8 @@ source_set("browser_core") {
     "platform/playready.h",
     "platform/system_page.h",
     "platform/window_views.h",
+    "point.cc",
+    "point.h",
     "popular_sites.cc",
     "popular_sites.h",
     "profiles.cc",
@@ -473,14 +541,19 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":ad_block_off_sites",
     ":ad_block_page",
     ":archive_rule",
+    ":arrange_rule",
+    ":pinned_url",
     ":arrangement",
+    ":ax_text",
     ":drm_request",
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
     ":search_default",
+    ":select_choices",
     ":agent_download_hold",
     ":sidebar_backups",
     ":site_searches",
@@ -489,6 +562,7 @@ source_set("browser_core") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":typed_http",
     ":typing_keys",
     ":window_frames",
     ":withheld_fields",
@@ -634,6 +708,7 @@ source_set("browser_core") {
     "//mojo/public/cpp/system",
     "//net",
     "//services/media_session/public/mojom",
+    "//services/metrics/public/cpp:metrics_cpp",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//skia",
@@ -644,6 +719,7 @@ source_set("browser_core") {
     "//third_party/widevine/cdm:buildflags",
     "//ui/accessibility",
     "//ui/base",
+    "//ui/base/clipboard",
     "//ui/content_accelerators",
     "//ui/display",
     "//ui/events:dom_keycode_converter",
@@ -767,8 +843,12 @@ source_set("browser_core") {
 # engine's run runs them.
 test("browser_core_unittests") {
   sources = [
+    "ad_block_off_sites_unittest.cc",
     "archive_rule_unittest.cc",
+    "arrange_rule_unittest.cc",
+    "pinned_url_unittest.cc",
     "arrangement_unittest.cc",
+    "ax_text_unittest.cc",
     "agent_download_hold_unittest.cc",
     "boost_script_unittest.cc",
     "idle_check_unittest.cc",
@@ -782,6 +862,7 @@ test("browser_core_unittests") {
     "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
     "search_default_unittest.cc",
+    "select_choices_unittest.cc",
     "sidebar_backups_unittest.cc",
     "site_searches_unittest.cc",
 
@@ -794,19 +875,25 @@ test("browser_core_unittests") {
     "sync_pairing_unittest.cc",
     "sync_spaces_newer_unittest.cc",
     "sync_updates_unittest.cc",
+    "typed_http_unittest.cc",
     "typing_keys_unittest.cc",
     "window_frames_unittest.cc",
     "withheld_fields_unittest.cc",
   ]
   deps = [
+    ":ad_block_off_sites",
     ":archive_rule",
+    ":arrange_rule",
+    ":pinned_url",
     ":arrangement",
+    ":ax_text",
     ":agent_download_hold",
     ":boost_script",
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
     ":search_default",
+    ":select_choices",
     ":sidebar_backups",
     ":site_searches",
     ":space_default",
@@ -814,6 +901,7 @@ test("browser_core_unittests") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":typed_http",
     ":typing_keys",
     ":window_frames",
     ":withheld_fields",
@@ -824,6 +912,8 @@ test("browser_core_unittests") {
     "//components/history/core/test",
     "//components/omnibox/browser",
     "//components/omnibox/browser:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
     "//components/search_engines",
     "//components/sessions",
     "//components/download/public/common:test_support",

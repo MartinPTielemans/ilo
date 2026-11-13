@@ -1662,8 +1662,8 @@ impl Browser for Fake {
     // The preview leaves the clipboard alone, and shares nothing.
     fn copy(&self, _: &str, _: &mut App) {}
 
-    fn pasted(&self, _: &App) -> Option<String> {
-        None
+    fn pasted(&self, cx: &mut App, done: browser::clipboard::Done) {
+        cx.defer(move |cx| done(None, cx));
     }
 
     fn share_services(&self, _: &str) -> Vec<SharedString> {
@@ -1850,9 +1850,9 @@ impl command_bar::Host for PreviewBar {
         Some(format!("https://duckduckgo.com/?q={text}"))
     }
     fn page_favicon(&self, _: &str) {}
-    fn open_tab(&self, _: &str, _: bool) {}
-    fn open_window(&self, _: &str, _: &mut App) {}
-    fn navigate(&self, _: u64, _: &str) {}
+    fn open_tab(&self, _: &str, _: &str, _: bool) {}
+    fn open_window(&self, _: &str, _: &str, _: &mut App) {}
+    fn navigate(&self, _: u64, _: &str, _: &str) {}
     fn reload(&self, _: u64) {}
     fn select(&self, _: u64) {}
     fn tab_window(&self, _: u64) -> Option<u64> {
@@ -1860,7 +1860,7 @@ impl command_bar::Host for PreviewBar {
     }
     fn activate(&self, _: u64, _: u64, _: &mut App) {}
     fn split(&self, _: u64, _: u64, _: &mut App) {}
-    fn open_split(&self, _: &str, _: u64, _: &mut App) {}
+    fn open_split(&self, _: &str, _: &str, _: u64, _: &mut App) {}
     fn copy(&self, _: &str, _: &mut App) {}
     fn show(&self, _: bool, _: f32, _: f32, _: f32, _: f32, _: browser::elevation::Level) {}
     fn set_height(&self, _: f32) {}
