@@ -274,7 +274,10 @@ impl Shell {
             .as_ref()
             .filter(|opened| matches!(row, Row::Tab(tab) if opened.tabs.contains(&tab)));
         let (row_in, plate_in) = opened.map_or((1., 1.), |opened| {
-            let done = opened.done().unwrap_or(1.).clamp(0., 1.);
+            let done = opened
+                .done(self.since(opened.start))
+                .unwrap_or(1.)
+                .clamp(0., 1.);
             if opened.whole { (done, 1.) } else { (1., done) }
         });
         // A page Open sent from a task's plate shows as its flight lands on its row.
@@ -441,7 +444,7 @@ impl Shell {
     /// A closed tab's row where it was, without the selected fill it may have had, fading as the
     /// rows below slide over it.
     pub(super) fn closing_row(&self, row: &Closing, room: f32) -> impl IntoElement + use<> {
-        let done = row_spring(row.start.elapsed().as_secs_f32()).unwrap_or(1.);
+        let done = row_spring(self.since(row.start)).unwrap_or(1.);
         div()
             .absolute()
             .top(px(room + row.top))
@@ -3120,7 +3123,12 @@ mod tests {
         let (shell, cx, _host) =
             window_with(cx, vec![10, 11, 3, 6, 7], vec![4], 4, work_and_plans());
         let before = shell.read_with(cx, |shell, _| shell.layout());
-        shell.update(cx, |shell, cx| shell.set_selected(3, cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_selected(3, cx);
+            // A loaded runner's late first frame, longer than the slide: it holds, as the list's
+            // motion is on the test's clock (#2630).
+            std::thread::sleep(Duration::from_secs_f32(crate::shell::PEEK_IN + 0.05));
+        });
         shell.read_with(cx, |shell, _| {
             let after = shell.layout();
             let (folder, tab) = (after[&Slot::Tab(10)], after[&Slot::Tab(3)]);
