@@ -4,6 +4,6 @@
 # As on Windows, only the memory rows at 10 and 20 tabs fail perf's gate (check/perf.sh), and they
 # come out once ilo is within 10 % of Chrome's on Linux, uBlock Origin's process gone with #2111.
 perf #2138 2026-11-11 ilo took more than 10 % over Chrome on this runner: memory,
-# Under Wayland the restart into the new Flatpak build fails to start it: bwrap finds the app's
-# per-app /tmp gone (#2688).
-updates@wayland #2688 2026-11-13 the app exited with status 127
+# Under Wayland a click that moves the Library's icon picker to another card also picks the Space
+# it was over, so the escape after it closes the Library (#2689).
+spaces@wayland #2689 2026-11-13 escape in the card's icon picker closed the Library
