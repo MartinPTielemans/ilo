@@ -14,7 +14,7 @@ The lists come from check-linux.yml and check-windows.yml, and the results and l
 each, such as a nightly, its artifacts downloaded with gh:
 
   gh run download <check-linux run> -p check-linux -p 'results-*' -D <linux dir>
-  gh run download <check-windows run> -p check-windows -p 'results-*' -D <windows dir>
+  gh run download <check-windows run> -p 'check-windows*' -p 'results-*' -D <windows dir>
 
 Usage: python3 -I tools/runs-per-os.py [--linux <linux dir>] [--windows <windows dir>]
 Without a directory, a system's listed runs show as listed, with no result.
@@ -175,7 +175,13 @@ def main():
     def logs(directory, folder):
         if not directory:
             return lambda run: None
-        return lambda run: os.path.join(directory, folder, '%s.log' % run)
+
+        # A sharded run uploads each shard's logs as <folder>-<shard>.
+        def log(run):
+            found = glob.glob(os.path.join(directory, folder, '%s.log' % run)) + sorted(
+                glob.glob(os.path.join(directory, folder + '-*', '%s.log' % run)))
+            return found[0] if found else None
+        return log
 
     untracked = []
     untracked += [('X11',) + skip for skip in session('X11 (Xvfb)', runs, listed(linux['LINUX_RUNS']), linux_off,
