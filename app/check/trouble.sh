@@ -269,6 +269,14 @@ def receive():
 
 calls = 0
 events = []
+# [DEBUG-2676] each event, for the proof run.
+import time
+def log_event(event):
+    p = event.get("params", {})
+    r = p.get("request", {})
+    print(f"[DEBUG-2676] {time.time():.3f} {event['method']} {r.get('url', p.get('url', ''))}"
+          f" {p.get('resourceType', p.get('type', ''))} {p.get('errorText', '')} {p.get('reason', '')}",
+          file=sys.stderr, flush=True)
 def call(method, **params):
     global calls
     calls += 1
@@ -283,6 +291,7 @@ def call(method, **params):
                 sys.exit(f"{method}: {reply['error']}")
             return
         if "method" in reply:
+            log_event(reply)
             events.append(reply)
 
 def paused():
@@ -290,7 +299,9 @@ def paused():
         if events:
             events.pop(0)
         else:
-            events.append(json.loads(receive()))
+            event = json.loads(receive())
+            log_event(event)
+            events.append(event)
     return events.pop(0)["params"]["requestId"]
 
 call("Network.enable")
