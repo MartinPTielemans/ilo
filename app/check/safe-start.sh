@@ -94,16 +94,13 @@ crash_at_launch
 # The second crash at launch in a row starts the third launch safe.
 safe_launch safe-start-held
 launch_said 2 on
-await 'browser: safe start holds 2 extensions$' ||
-  fail "the core didn't hold Check Safe Start and the ad blocker: $(grep 'safe start holds' "$log")"
+held_log=$log
 await '^browser: safe start card shown$' || fail "the safe-start card didn't show"
 await '^browser: safe start button 0 at ' || fail "the safe-start card's Turn Back On wasn't drawn"
 await '^browser: boosts of profile [0-9]* read: 1$' || fail "the app didn't read the profile's Boost"
 in_log '^browser: boost shown ' && fail "a Boost showed in a safe start: $(grep '^browser: boost shown' "$log")"
 await '^browser: title [0-9]* body rgb(51, 51, 51)$' ||
   fail "the page wasn't its own in a safe start: $(grep '^browser: title' "$log" | tail -1)"
-grep '^browser: extensions menu' "$log" | grep -q '[a-p]' &&
-  fail "the Extensions menu listed an extension in a safe start: $(grep '^browser: extensions menu' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/safe-start.png" || fail "no window to capture"
 
 # Turn Back On restarts it, into a normal launch.
@@ -152,5 +149,13 @@ launch_said 0 off
 loaded_all
 exec 3>&-
 quit
+
+# What the safe launch held, checked last, from its whole log: the core holds none of the command
+# line's extensions, the run's and the ad blocker, until #2631 (#2629), and these steps are
+# quarantined on the Mac (quarantine.mac) while the rest of the run is checked as before.
+grep -q 'browser: safe start holds 2 extensions$' "$held_log" ||
+  fail "the core didn't hold Check Safe Start and the ad blocker: $(grep 'safe start holds' "$held_log")"
+grep '^browser: extensions menu' "$held_log" | grep -q '[a-p]' &&
+  fail "the Extensions menu listed an extension in a safe start: $(grep '^browser: extensions menu' "$held_log" | tail -1)"
 echo "ok: safe start held the extension, the ad blocker and the Boost after two crashes at launch," \
   "showed its card ($out/safe-start.png), and Turn Back On restarted into a normal launch"
