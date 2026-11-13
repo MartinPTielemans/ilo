@@ -161,6 +161,24 @@ jobs:
           export XDG_RUNTIME_DIR=$(mktemp -d)
           ../tools/parity.sh target/release/preview ../parity
 
+      # Proof only (#2344): the preview sorts Today by site 2 s after launch; film it on Xvfb.
+      - name: Film Sort Today Tabs by Site
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb ffmpeg mesa-vulkan-drivers > /dev/null
+          mkdir -p ../parity
+          for scheme in light dark; do
+            Xvfb :99 -screen 0 1280x800x24 -nolisten tcp &
+            xvfb=$!
+            sleep 1
+            env -u WAYLAND_DISPLAY DISPLAY=:99 PREVIEW_SIZE=1280x800 PREVIEW_SORT=slide \
+              PREVIEW_APPEARANCE=$scheme target/release/preview > ../parity/sort-$scheme.log 2>&1 &
+            app=$!
+            ffmpeg -loglevel error -f x11grab -framerate 60 -video_size 1280x800 -i :99 -t 6 \
+              -pix_fmt yuv420p ../parity/sort-by-site-$scheme.mp4
+            kill $app $xvfb; wait $app $xvfb 2> /dev/null || true
+          done
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

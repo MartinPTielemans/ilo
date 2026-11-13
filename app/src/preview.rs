@@ -114,6 +114,12 @@ enum Icon {
     Play,
     /// No favicon at all, which draws a globe.
     None,
+    /// Mock (#2344): a square tile of one colour.
+    Tile([f32; 3]),
+    /// Mock (#2344): a ring of one colour.
+    Ring([f32; 3]),
+    /// Mock (#2344): a diamond of one colour.
+    Diamond([f32; 3]),
 }
 
 impl Icon {
@@ -154,6 +160,20 @@ impl Icon {
                     } else {
                         [0.9, 0.1, 0.1, 1.]
                     }
+                }
+                Icon::Tile(colour) if rounded(fx, fy, 3., 3.) => {
+                    // A white bar, so it's two colours and keeps them.
+                    if (14.0..=17.0).contains(&fx) && (9.0..=22.0).contains(&fy) {
+                        [1., 1., 1., 1.]
+                    } else {
+                        [colour[0], colour[1], colour[2], 1.]
+                    }
+                }
+                Icon::Ring(colour) if ((fx - 15.5).hypot(fy - 15.5) - 10.5).abs() <= 2.6 => {
+                    [colour[0], colour[1], colour[2], 1.]
+                }
+                Icon::Diamond(colour) if (fx - 15.5).abs() + (fy - 15.5).abs() <= 14. => {
+                    [colour[0], colour[1], colour[2], 1.]
                 }
                 _ => [0.; 4],
             }
@@ -2569,6 +2589,11 @@ fn main() {
                         ..Split::default()
                     };
                     shell.set_tabs(first_space, pinned, today, vec![split], folders, cx);
+                    // Mock (#2344): PREVIEW_SORT=before or after, Today as opened, ten tabs of
+                    // four sites around the split view.
+                    if std::env::var_os("PREVIEW_SORT").is_some() {
+                        mock_sort(&mut shell, first_space, folder, cx);
+                    }
                     let reading: Vec<u64> = (folder + 1..).take(READING.len()).collect();
                     let (pinned, today) = (reading[..1].to_vec(), reading[1..].to_vec());
                     shell.set_tabs(
@@ -2659,6 +2684,21 @@ fn main() {
                         (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
                         (None, None) => shell.set_selected(1, cx),
+                    }
+                    // Mock (#2344): the tab shown is GitHub's second, and =after sorts by site
+                    // once the list is drawn, with the command the user runs.
+                    if let Ok(sort) = std::env::var("PREVIEW_SORT") {
+                        shell.set_selected(MOCK_SORT_FIRST + 3, cx);
+                        if sort == "after" {
+                            let shown = cx.weak_entity();
+                            window.on_next_frame(move |_, cx| {
+                                shown
+                                    .update(cx, |shell, cx| {
+                                        shell.run(Command::SortBySite, "preview", cx)
+                                    })
+                                    .ok();
+                            });
+                        }
                     }
                     // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
                     // so the URL field offers to translate them.
@@ -2898,6 +2938,21 @@ fn main() {
             }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
             // drawn the URL field they hang from.
+            // Mock (#2344): PREVIEW_SORT=slide sorts by site 2 s after launch, for a clip.
+            let slide = std::env::var("PREVIEW_SORT").is_ok_and(|sort| sort == "slide");
+            if let Some(shell) = shell_window.filter(|_| slide) {
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(2000))
+                        .await;
+                    shell
+                        .update(cx, |shell, _, cx| {
+                            shell.run(Command::SortBySite, "preview", cx)
+                        })
+                        .ok();
+                })
+                .detach();
+            }
             let site_controls = std::env::var_os("PREVIEW_SITE_CONTROLS").is_some();
             if let Some(shell) = shell_window.filter(|_| site_controls) {
                 cx.spawn(async move |cx| {
@@ -4791,4 +4846,88 @@ mod tests {
             "back on another tab"
         );
     }
+}
+
+// Mock (#2344): Today as opened, four sites, each with its own icon, around the split view.
+const MOCK_SORT_FIRST: u64 = 9000;
+const MOCK_SORT_TABS: [(&str, &str, Icon); 10] = [
+    (
+        "Pull requests · ilo",
+        "https://github.com/pulls",
+        Icon::Disc([0.12, 0.13, 0.16]),
+    ),
+    (
+        "Arc (web browser) - Wikipedia",
+        "https://en.wikipedia.org/wiki/Arc_(web_browser)",
+        Icon::Ring([0.45, 0.47, 0.5]),
+    ),
+    (
+        "Hacker News",
+        "https://news.ycombinator.com/",
+        Icon::Tile([1., 0.4, 0.]),
+    ),
+    (
+        "Issues · ilo",
+        "https://github.com/issues",
+        Icon::Disc([0.12, 0.13, 0.16]),
+    ),
+    (
+        "std::collections - Rust",
+        "https://doc.rust-lang.org/std/collections/",
+        Icon::Diamond([0.72, 0.29, 0.13]),
+    ),
+    (
+        "Chromium - Wikipedia",
+        "https://en.wikipedia.org/wiki/Chromium_(web_browser)",
+        Icon::Ring([0.45, 0.47, 0.5]),
+    ),
+    (
+        "Ask HN: What are you working on?",
+        "https://news.ycombinator.com/item?id=1",
+        Icon::Tile([1., 0.4, 0.]),
+    ),
+    (
+        "Iterator in std::iter - Rust",
+        "https://doc.rust-lang.org/std/iter/trait.Iterator.html",
+        Icon::Diamond([0.72, 0.29, 0.13]),
+    ),
+    (
+        "Actions · ilo",
+        "https://github.com/actions",
+        Icon::Disc([0.12, 0.13, 0.16]),
+    ),
+    (
+        "GPU - Wikipedia",
+        "https://en.wikipedia.org/wiki/Graphics_processing_unit",
+        Icon::Ring([0.45, 0.47, 0.5]),
+    ),
+];
+
+fn mock_sort(shell: &mut Shell, space: u64, folder: u64, cx: &mut gpui::Context<Shell>) {
+    let ids: Vec<u64> = (MOCK_SORT_FIRST..).take(MOCK_SORT_TABS.len()).collect();
+    for (&tab, (title, url, icon)) in ids.iter().zip(MOCK_SORT_TABS) {
+        shell.set_title(tab, title.into(), cx);
+        let page = Page {
+            url: url.into(),
+            ..Default::default()
+        };
+        shell.set_page(tab, page, cx);
+        let favicon =
+            (icon.png()).map(|png| Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png)));
+        shell.set_favicon(tab, favicon, cx);
+    }
+    // The preview's split view, Rust's site and example.com, sixth: it keeps its place.
+    let (left, right) = (TABS.len() as u64 - 1, TABS.len() as u64);
+    let mut today = ids.clone();
+    today.splice(6..6, [left, right]);
+    let split = Split {
+        tabs: vec![left, right],
+        ..Split::default()
+    };
+    let folders = Folders {
+        folders: [(folder, ("Docs".into(), true))].into(),
+        parents: [(2, folder)].into(),
+        ..Default::default()
+    };
+    shell.set_tabs(space, vec![1, folder, 2], today, vec![split], folders, cx);
 }
