@@ -1,4 +1,7 @@
 # check.sh runs this at 999.
+# Probe 5 for #2666, as probe 4 with the press's click count (its detail, after md and mu), the
+# pointer events (pd pu pc), a drag of the link (ds de) and a move over it with a button down
+# (mv<buttons>), to say why a press and release on the link fired no click.
 # Probe 4 for #2666, on a proof branch only: little's own link, a 40 by 40 empty anchor in the
 # page's top left, ⌥⌘-clicked with the keys down before the pointer comes onto it, and the click
 # left to open it. Each try says whether a Little ilo window opened and what the page saw: kd<key>
@@ -21,8 +24,15 @@ const add = (s) => {
 addEventListener("mousemove", (e) => { if (!link.contains(e.target)) armed = true; }, true);
 addEventListener("keydown", (e) => { if (!e.repeat) add("kd" + e.key); }, true);
 link.addEventListener("mouseover", () => add("ov"));
-addEventListener("mousedown", (e) => add("md" + at(e)), true);
-addEventListener("mouseup", (e) => add("mu" + at(e)), true);
+addEventListener("mousedown", (e) => add("md" + at(e) + e.detail), true);
+addEventListener("mouseup", (e) => add("mu" + at(e) + e.detail), true);
+addEventListener("pointerdown", (e) => add("pd" + at(e)), true);
+addEventListener("pointerup", (e) => add("pu" + at(e)), true);
+addEventListener("pointercancel", (e) => add("pc"), true);
+addEventListener("dragstart", (e) => add("ds"), true);
+addEventListener("dragend", (e) => add("de"), true);
+let buttons = 0;
+link.addEventListener("mousemove", (e) => { if (e.buttons != buttons) { buttons = e.buttons; add("mv" + buttons); } });
 addEventListener("click", (e) => add("ck" + at(e)), true);
 addEventListener("auxclick", (e) => add("ax" + at(e)), true);
 </script>' > "$out/site/probe2666.html"
@@ -49,7 +59,7 @@ y=${frame#*,}
 opens=0
 tries=0
 # As little's: a click into the page, a step, then ⌥⌘ down, the pointer onto the link and the press.
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+for _ in $(seq 20); do
   tries=$((tries + 1))
   send move $page_point
   send click $page_point
