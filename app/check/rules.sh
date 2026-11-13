@@ -477,7 +477,10 @@ done
 # after the hover card, the question's card included, so this step is quarantined under #2685 there.
 if [ "$driven" = 1 ] && [ "${BROWSER_DRIVE_REAL:-}" = 1 ] && [ -z "$missing" ]; then
   send move $(row 0)
-  expect '^browser: hover card drawn ' "resting on Today's first row drew no hover card"
+  expect '^browser: hover card shown ' "resting on Today's first row showed no hover card"
+  # A card shown and never drawn is #2685 too: the stall came before the card's own first frame.
+  expect '^browser: hover card drawn ' \
+    "the agent's own tab, asked with a tab's hover card shown: the card came on screen and was never drawn"
   denied "$own_tab" "the agent's own tab, asked with a tab's hover card shown: a PUT" \
     "[{\"method\":\"PUT\",\"path\":\"/api/rules-change-PUT\",\"body\":{}}]"
 fi
