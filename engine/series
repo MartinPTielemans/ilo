@@ -87,6 +87,7 @@ ours/chromium-agent-extension-listeners.patch <157
 ours/chromium-agent-extension-listeners-157.patch >=157
 ours/chromium-agent-field-sources.patch
 ours/chromium-shared-dictionary-wal.patch
+ours/chromium-scrollbar-thumb-fast-corner.patch
 # mac/: applied only to the Mac's tree (setup.sh and build.sh say so), after the rest.
 mac/chromium-crashpad-mac-handler.patch
 mac/chromium-crashpad-mac-async-start.patch
