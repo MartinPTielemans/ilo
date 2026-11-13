@@ -1417,6 +1417,14 @@ impl Browser for Engine {
         restart_browser(cx);
     }
 
+    fn safe_start(&self) -> bool {
+        crate::safe_start_host::held()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        unsafe { bc::bc_ad_blocking() }
+    }
+
     fn playready_needs(&self) -> shell::PlayReady {
         shell::PlayReady::from_core(unsafe { bc::bc_playready_needs() })
     }
@@ -1555,6 +1563,11 @@ impl Browser for Engine {
             }
             already
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn full_screen_now(&self) -> bool {
+        unsafe { platform::host_window_full_screen(self.ui_view) }
     }
 
     #[cfg(target_os = "macos")]
@@ -2043,6 +2056,8 @@ impl Browser for Engine {
                 return;
             };
             let space = little_home(space, main);
+            // The user's now, which no page closes away.
+            crate::sign_in_close::link_tab_left(tab);
             unsafe {
                 if bc::bc_window_space(main) != space {
                     bc::bc_window_show_space(main, space);

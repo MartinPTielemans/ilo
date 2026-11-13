@@ -223,6 +223,8 @@ pub(crate) unsafe extern "C" fn window_page_elsewhere(
 pub(crate) unsafe extern "C" fn tab_loaded(_: *mut c_void, tab: bc::bc_id, url: *const c_char) {
     let url = unsafe { CStr::from_ptr(url) }.to_string_lossy();
     log!("browser: loaded {tab} {url}");
+    let owned = url.to_string();
+    update_app_later(move |cx| crate::sign_in_close::tab_loaded(tab, &owned, cx));
     sample_foot_bar(tab);
 }
 
@@ -452,10 +454,12 @@ pub(crate) unsafe extern "C" fn tab_closed(_: *mut c_void, tab: bc::bc_id) {
             .spawn(async move {
                 // Outside the update, as closing the pop-up's window calls back into GPUI.
                 popup_closed(tab);
+                crate::sign_in_close::tab_closed(tab);
                 cx.update(|cx| {
                     site_controls::tab_closed(tab, cx);
                     capture::tab_closed(tab, cx);
                     link_preview::tab_closed(tab, cx);
+                    browser::agents::tab_closed(tab, cx);
                 })
             })
             .detach();

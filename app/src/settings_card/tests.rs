@@ -206,7 +206,8 @@ fn a_page_scrolled_and_then_grown_into_its_card_holds_nothing(cx: &mut TestAppCo
 }
 
 /// Settings at its smallest with a page taller than its window: thirty controls down the card,
-/// each a stop for ⇥, in a window that takes the keys as Settings does.
+/// each a stop for ⇥ that a press doesn't give the keyboard, as Settings' are, in a window that
+/// takes the keys as Settings does.
 struct Controls {
     card: Card,
     focus: gpui::FocusHandle,
@@ -227,14 +228,20 @@ impl Render for Controls {
         };
         let rows = self.controls.iter().enumerate().map(|(at, focus)| {
             let drawn = self.drawn.clone();
-            div().relative().h(px(ROW)).track_focus(focus).child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, _, _| drawn.borrow_mut()[at] = bounds,
+            div()
+                .id(at)
+                .relative()
+                .h(px(ROW))
+                .track_focus(focus)
+                .focus_from_keys_only()
+                .child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, _, _| drawn.borrow_mut()[at] = bounds,
+                    )
+                    .absolute()
+                    .inset_0(),
                 )
-                .absolute()
-                .inset_0(),
-            )
         });
         let page = div().flex().flex_col().children(rows);
         div()
@@ -397,6 +404,33 @@ fn a_wheel_takes_the_page_from_the_control_with_the_keyboard(cx: &mut TestAppCon
     cx.simulate_keystrokes("tab");
     settle(&view, cx);
     assert_eq!(focused(&view, cx), (Some(12), true));
+}
+
+/// A press on a control leaves the page where it is: the keyboard it leaves to the card itself
+/// is nothing in the page to scroll to, and following it moved the page from under the pointer by
+/// the held title's height (#2522).
+#[gpui::test]
+fn a_press_on_a_control_leaves_the_page_where_it_is(cx: &mut TestAppContext) {
+    let (view, cx) = controls(cx);
+    cx.update(|window, cx| {
+        let event = ScrollEvent {
+            position: point(px(400.), px(240.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-300.))),
+            ..Default::default()
+        };
+        window.dispatch_event(event.to_platform_input(), cx);
+    });
+    settle(&view, cx);
+    let scrolled = offset(&view, cx);
+    assert!(
+        scrolled < -HELD_TITLE,
+        "the wheel didn't scroll the page: {scrolled}"
+    );
+    let row = view.read_with(cx, |view, _| view.drawn.borrow()[10]);
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    settle(&view, cx);
+    assert_eq!(offset(&view, cx), scrolled, "a press moved the page");
+    assert_eq!(view.read_with(cx, |view, _| view.drawn.borrow()[10]), row);
 }
 
 /// Page Down and Page Up move the page by what the card shows, Home and End to its ends, and Space

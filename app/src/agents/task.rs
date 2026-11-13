@@ -1903,6 +1903,9 @@ impl Agents {
                     action: entry.action.to_string(),
                     site: entry.site.to_string(),
                     refused: entry.refused.to_string(),
+                    target: entry.target.to_string(),
+                    url: entry.url.to_string(),
+                    sent: entry.sent.clone(),
                 })
                 .collect();
             let over = steps.len().saturating_sub(crate::agent_history::STEPS);

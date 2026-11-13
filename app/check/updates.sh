@@ -1,3 +1,5 @@
+# check.sh runs this at 780, only when named.
+# It runs only when named until it passes on the Mac.
 # The Mac's updates (docs/ux-spec.md › Updates), on a check build with Sparkle (build.sh updates)
 # that checks a feed the run serves, for updates signed with a key the run makes and deletes after.
 # Neither is ever the product's: the run never reads branding/update-feed or the owner's key.
@@ -468,8 +470,10 @@ flatpak_updates_check() {
   kill -0 "$pid" 2> /dev/null && fail "Restart didn't quit the build running"
   local running= commit=
   for _ in $(seq 600); do
+    # flatpak ps lists a starting instance with PID 0 until bwrap's is known, and cleanup's kill of
+    # pid 0 would end the whole run, this script included (exit 143).
     running=$(flatpak ps --columns=application,commit,pid |
-      awk -v id="$id" '$1 == id { print $2, $3; exit }')
+      awk -v id="$id" '$1 == id && $3 > 0 { print $2, $3; exit }')
     [ -n "$running" ] && break
     sleep 0.1
   done

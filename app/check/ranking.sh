@@ -1,3 +1,4 @@
+# check.sh runs this at 400.
 # The command bar's order, on the signals Arc's ranks on (#1396), driven against pages of the run's
 # own. The row for the page shown goes last, after a page from history it outranked. Two GitHub
 # pages with one title, from history, list as one row, as Arc's bar keeps one row per title on the

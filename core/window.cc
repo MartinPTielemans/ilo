@@ -25,6 +25,7 @@
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/browser_window_stand_in.h"
+#include "browser_core/dialog_keys.h"
 #include "browser_core/extensions.h"
 #include "browser_core/favorites.h"
 #include "browser_core/host.h"
@@ -2761,6 +2762,17 @@ bool Window::ShouldConstrainDialogBoundsByHost() {
 
 void Window::AddObserver(web_modal::ModalDialogHostObserver* observer) {
   dialog_observers_.AddObserver(observer);
+  // A tab's dialog places itself through this as it's made, so its keys are asked about from its
+  // first, and again once it shows: the Mac lists a child window only once it's on screen.
+  dialog_keys::Watch(widget_.get());
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<Window> window) {
+                       if (window) {
+                         dialog_keys::Watch(window->widget());
+                       }
+                     },
+                     weak_factory_.GetWeakPtr()));
 }
 
 void Window::RemoveObserver(web_modal::ModalDialogHostObserver* observer) {

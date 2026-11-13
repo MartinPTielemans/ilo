@@ -39,7 +39,7 @@ use browser::theme::{Appearance, Theme};
 use browser::theme_picker;
 use gpui::{
     App, AppContext, Bounds, Focusable, Pixels, Point, SharedString, Size, TitlebarOptions,
-    WeakEntity, WindowBounds, WindowOptions, point, px, size,
+    TouchPhase, WeakEntity, WindowBounds, WindowOptions, point, px, size,
 };
 
 thread_local! {
@@ -888,6 +888,7 @@ impl Browser for Fake {
                                     action: action.into(),
                                     site: format!("example{n}.com"),
                                     refused: refused.into(),
+                                    ..Default::default()
                                 };
                             [
                                 step(at, "open_tab", ""),
@@ -901,6 +902,7 @@ impl Browser for Fake {
                             site: String::new(),
                             refused: "Agents never read passwords, cookies or autofill data."
                                 .into(),
+                            ..Default::default()
                         }])
                         .collect(),
                     answers: "claude-code".into(),
@@ -1051,6 +1053,16 @@ impl Browser for Fake {
     fn elsewhere(&self) -> Option<browser::shell::Elsewhere> {
         let default = || std::env::var("PREVIEW_DRM").is_ok_and(|drm| drm == "default");
         browser::shell::Elsewhere::on(self.os(), default)
+    }
+
+    // PREVIEW_SAFE_START=1 shows a safe start's card at the sidebar's foot, with Settings' ad
+    // blocking on, or =unblocked with it off.
+    fn safe_start(&self) -> bool {
+        std::env::var_os("PREVIEW_SAFE_START").is_some()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        std::env::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
     }
 
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
@@ -2183,6 +2195,8 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ];
             ("clear", rows)
         }
+        // The bar adds Open Library… itself, whose glyph the sidebar foot's button shares.
+        "library" => ("library", vec![search("library")]),
         "sites" => (
             "wik",
             vec![
@@ -2233,7 +2247,8 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ],
         ),
     };
-    let rows_shown = rows.len();
+    // The command the bar adds for what's typed takes a row too.
+    let rows_shown = rows.len() + usize::from(mode == "library");
     let bounds = Bounds::new(
         at,
         size(px(command_bar::WIDTH), px(command_bar::height(rows_shown))),
@@ -2761,8 +2776,8 @@ fn main() {
                     cx.quit();
                 }
             }
-            // PREVIEW_BAR=tabs, sites or commands shows the command bar over the window, with made-up
-            // suggestions.
+            // PREVIEW_BAR=tabs, sites, commands or library shows the command bar over the window, with
+            // made-up suggestions.
             if let Ok(mode) = std::env::var("PREVIEW_BAR") {
                 let left = x + (width - command_bar::WIDTH as f64) / 2.;
                 let top = y as f32 + command_bar::centered_top(height as f32);
@@ -2890,6 +2905,51 @@ fn main() {
                             shell.run(Command::SiteControls, "preview", cx)
                         })
                         .ok();
+                })
+                .detach();
+            }
+            // PREVIEW_SWIPE=1 brings the Library out with fingers going right on the first Space, and
+            // takes it back with them going left, through the gesture's own code, then does the
+            // same with clicks, for a recording of its motion (#2375).
+            if let Some(shell) =
+                shell_window.filter(|_| std::env::var_os("PREVIEW_SWIPE").is_some())
+            {
+                cx.spawn(async move |cx| {
+                    let executor = cx.background_executor().clone();
+                    let wait = |ms| executor.timer(Duration::from_millis(ms));
+                    wait(1000).await;
+                    // Fingers 1.2 Library widths each way in half a second, a frame at a time.
+                    for way in [1., -1.] {
+                        log!(
+                            "browser: preview swipe {}",
+                            if way > 0. { "in" } else { "out" }
+                        );
+                        let step = |phase, x| {
+                            move |shell: &mut Shell,
+                                  window: &mut gpui::Window,
+                                  cx: &mut gpui::Context<Shell>| {
+                                shell.preview_fingers(x, phase, window, cx)
+                            }
+                        };
+                        shell.update(cx, step(TouchPhase::Started, 0.)).ok();
+                        for _ in 0..30 {
+                            wait(16).await;
+                            let x = way * 1.2 * 417. / 30. / 0.5;
+                            shell.update(cx, step(TouchPhase::Moved, x)).ok();
+                        }
+                        shell.update(cx, step(TouchPhase::Ended, 0.)).ok();
+                        wait(2000).await;
+                    }
+                    for stage in ["in", "out"] {
+                        log!("browser: preview click {stage}");
+                        shell
+                            .update(cx, |shell, _, cx| {
+                                shell.run(Command::ViewLibrary, "preview", cx)
+                            })
+                            .ok();
+                        wait(2000).await;
+                    }
+                    log!("browser: preview swipe done");
                 })
                 .detach();
             }
@@ -3334,6 +3394,7 @@ fn preview_site() -> Site {
         logins: Vec::new(),
         devices: Vec::new(),
         ad_blocking: Some(true),
+        ad_blocked: "12".into(),
         developer_mode: Some(false),
         // PREVIEW_BOOST=on or off gives the site a Boost, which shows its row.
         boostable: true,

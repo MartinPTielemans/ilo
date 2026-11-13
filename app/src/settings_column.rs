@@ -40,6 +40,7 @@ pub enum Section {
     Profiles,
     Passwords,
     Privacy,
+    AdBlocking,
     Sync,
     ImportExport,
     About,
@@ -57,7 +58,12 @@ impl Section {
             Section::Links,
             Section::Shortcuts,
         ],
-        &[Section::Profiles, Section::Passwords, Section::Privacy],
+        &[
+            Section::Profiles,
+            Section::Passwords,
+            Section::Privacy,
+            Section::AdBlocking,
+        ],
         &[Section::Sync, Section::ImportExport, Section::About],
     ];
 
@@ -78,6 +84,7 @@ impl Section {
             Section::Profiles => "Profiles",
             Section::Passwords => "Passwords",
             Section::Privacy => "Privacy",
+            Section::AdBlocking => "Ad Blocking",
             Section::Sync => "Sync",
             Section::ImportExport => "Import & Export",
             Section::About => "About",
@@ -95,6 +102,7 @@ impl Section {
             Section::Profiles => "icons/users.svg",
             Section::Passwords => "icons/key-round.svg",
             Section::Privacy => "icons/shield.svg",
+            Section::AdBlocking => "icons/shield-ban.svg",
             Section::Sync => "icons/cloud.svg",
             Section::ImportExport => "icons/arrow-down-to-line.svg",
             Section::About => "icons/info.svg",

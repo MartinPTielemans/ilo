@@ -263,9 +263,7 @@ impl Shell {
             .zip(places)
             .map(|(tab, place)| {
                 let way = self.tile_slides.get(&tab).map_or(0., |&(_, start, curve)| {
-                    curve
-                        .at(start.elapsed().as_secs_f32())
-                        .map_or(0., |done| 1. - done)
+                    curve.at(self.since(start)).map_or(0., |done| 1. - done)
                 });
                 let from = self
                     .tile_slides
@@ -303,7 +301,7 @@ impl Shell {
         curve: Curve,
         cx: &gpui::App,
     ) {
-        let now = crate::motion::start(cx);
+        let now = crate::motion::start_at(self.clock.now(), cx);
         let tabs = self.tile_tabs();
         let places = self.tile_places(tabs.len());
         let slides: Vec<_> = tabs
@@ -316,8 +314,9 @@ impl Shell {
             })
             .collect();
         // As the rows' (move_rows): slides over stay for the next frame to say the tiles settled.
+        let clock = self.clock.clone();
         let over = |(_, start, curve): &([f32; 3], web_time::Instant, Curve)| {
-            curve.at(start.elapsed().as_secs_f32()).is_none()
+            curve.at(Self::since_on(&clock, *start)).is_none()
         };
         self.tile_slides.retain(|_, slide| over(slide));
         self.tile_slides.extend(slides);
@@ -344,7 +343,7 @@ impl Shell {
         self.list_top()
             + self.list_slide.map_or(0., |(from, start, curve)| {
                 curve
-                    .at(start.elapsed().as_secs_f32())
+                    .at(self.since(start))
                     .map_or(0., |done| from * (1. - done))
             })
     }
