@@ -4622,7 +4622,7 @@ mod web {
         }
         fn page_favicon(&self, _: &str) {}
         // A new tab at the top of Today, shown.
-        fn open_tab(&self, url: &str, behind: bool) {
+        fn open_tab(&self, url: &str, _: &str, behind: bool) {
             let (tab, url) = (self.next_tab.get(), url.to_string());
             self.next_tab.set(tab + 1);
             self.later_shell(move |shell, cx| {
@@ -4644,10 +4644,10 @@ mod web {
             });
         }
         // The demo has the one window.
-        fn open_window(&self, url: &str, _: &mut App) {
-            self.open_tab(url, false);
+        fn open_window(&self, url: &str, typed: &str, _: &mut App) {
+            self.open_tab(url, typed, false);
         }
-        fn navigate(&self, tab: u64, url: &str) {
+        fn navigate(&self, tab: u64, url: &str, _: &str) {
             let url = url.to_string();
             self.later_shell(move |shell, cx| {
                 shell.set_title(tab, title(&url), cx);
@@ -4670,8 +4670,8 @@ mod web {
         }
         fn activate(&self, _: u64, _: u64, _: &mut App) {}
         fn split(&self, _: u64, _: u64, _: &mut App) {}
-        fn open_split(&self, url: &str, _: u64, _: &mut App) {
-            self.open_tab(url, false);
+        fn open_split(&self, url: &str, typed: &str, _: u64, _: &mut App) {
+            self.open_tab(url, typed, false);
         }
         fn copy(&self, _: &str, _: &mut App) {}
         fn show(
