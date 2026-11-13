@@ -841,13 +841,52 @@ void SystemPage::DeleteStore(const std::string& id) {
     [WebKitClass(@"WKWebsiteDataStore")
         removeDataStoreForIdentifier:uuid
                    completionHandler:^(NSError* error) {
+                     // check.sh reads these lines. Never the store's id.
                      if (error) {
-                       VLOG(1) << "browser: system store " << base::SysNSStringToUTF8(key)
-                               << " not deleted: "
-                               << base::SysNSStringToUTF8(error.localizedDescription);
+                       fprintf(stderr, "browser: system store not deleted: %s\n",
+                               base::SysNSStringToUTF8(error.localizedDescription).c_str());
+                     } else {
+                       fprintf(stderr, "browser: system store deleted\n");
                      }
                    }];
   }
+}
+
+// The app's own defaults, where WebKit's stores outlive the data folders too, hold each folder's
+// ids under its path: a dev build's folders, each check run's among them, share one bundle id.
+NSString* const kGivenStores = @"BrowserSystemStores";
+
+// static
+std::vector<std::string> SystemPage::GivenStores(const base::FilePath& folder) {
+  NSDictionary* folders = [NSUserDefaults.standardUserDefaults dictionaryForKey:kGivenStores];
+  id ids = folders[base::SysUTF8ToNSString(folder.value())];
+  std::vector<std::string> given;
+  if ([ids isKindOfClass:[NSArray class]]) {
+    for (id each in ids) {
+      if ([each isKindOfClass:[NSString class]]) {
+        given.push_back(base::SysNSStringToUTF8(each));
+      }
+    }
+  }
+  return given;
+}
+
+// static
+void SystemPage::SetGivenStores(const base::FilePath& folder, const std::vector<std::string>& ids) {
+  NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+  NSMutableDictionary* folders = [[defaults dictionaryForKey:kGivenStores] mutableCopy]
+                                     ?: [NSMutableDictionary dictionary];
+  NSString* key = base::SysUTF8ToNSString(folder.value());
+  if (ids.empty()) {
+    [folders removeObjectForKey:key];
+  } else {
+    NSMutableArray* list = [NSMutableArray array];
+    for (const std::string& each : ids) {
+      [list addObject:base::SysUTF8ToNSString(each)];
+    }
+    folders[key] = list;
+  }
+  [defaults setObject:folders forKey:kGivenStores];
 }
 
 // static

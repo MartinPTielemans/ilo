@@ -286,6 +286,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
         g_host.started(g_host.context);
       }
       crash_reports::Started();
+      system_engine::SweepStores();
     }));
   }
 

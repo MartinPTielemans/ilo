@@ -847,7 +847,6 @@ bool Tab::UseSystemEngine(const GURL& url) {
     return false;
   }
   waiting_.reset();
-  system_engine::StoreMade(profile);
   // The tab has its page before Chromium's goes, so the renderer ending reads as the switch.
   system_page_ = std::move(page);
   if (web_contents()->IsAudioMuted()) {
