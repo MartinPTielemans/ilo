@@ -1,5 +1,5 @@
 # check.sh runs this at 999.
-# Probe 2 for #2666, on a proof branch only: what a page sees of a click whose keys go down before
+# Probe 3 for #2666, on a proof branch only: what a page sees of a click whose keys go down before
 # the pointer comes onto a link. The page's title says, for each try, the events in order: kd<key>
 # for a key down, ov for the pointer coming over the link, and md, mu and ck for the press, the
 # release and the click, each with the element it went to (L the link, B elsewhere) and the
@@ -46,20 +46,27 @@ frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layo
   grep -o 'WebContentsViewCocoa [0-9,]*' | head -1 | cut -d' ' -f2)
 x=${frame%%,*}
 y=${frame#*,}
-# The page counted the click that made it active as its first try.
-tries=1
-# Each try: a click off the link, then at once a click on it, its keys down first.
-for mods in "" "cmd" "alt" "alt cmd" "" "cmd" "alt" "alt cmd" "" "cmd" "alt" "alt cmd" \
-  "" "cmd" "alt" "alt cmd" "" "cmd" "alt" "alt cmd" "" "cmd" "alt" "alt cmd"; do
-  tries=$((tries + 1))
-  send move $((x + 500)) $((y + 300))
+loads=0
+# Each try is the first click on the link in a page just loaded and clicked into, as little's
+# ⌥⌘-click was: a fresh load from the command bar, a click on the page, a step, then the click.
+for mods in "alt cmd" "" "alt cmd" "cmd" "alt cmd" "alt" "alt cmd" "" "alt cmd" "cmd" "alt cmd" "alt"; do
+  loads=$((loads + 1))
+  send move $page_point
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+  send insert "${site}probe2666.html?$loads"
+  send key return
+  expect "^browser: loaded [0-9]* ${site}probe2666.html?$loads\$" "load $loads didn't load"
+  await "^browser: title [0-9]* probe\$" || true
   send click $page_point
+  send layout
   send click $((x + 150)) $((y + 100)) $mods
-  await "^browser: title [0-9]* $tries: .*muL" || echo "probe: after a click, ${mods:-plain} try $tries: no release on the link seen"
+  await "^browser: title [0-9]* 1: .*muL" || echo "probe: load $loads ${mods:-plain}: no release on the link seen"
   send state
-  title=$(grep "^browser: title [0-9]* $tries: " "$log" | tail -1 | cut -d' ' -f4-)
-  echo "probe: after a click, ${mods:-plain} | $title"
+  title=$(sed -n "/^browser: drive $((step - 4)): /,\$p" "$log" | grep "^browser: title [0-9]* 1: " | tail -1 | cut -d' ' -f4-)
+  echo "probe: first after load, ${mods:-plain} | $title"
 done
+tries=$loads
 send move $page_point
 exec 3>&-
 quit
