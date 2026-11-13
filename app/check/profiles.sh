@@ -1,3 +1,4 @@
+# check.sh runs this at 90.
 # The New Space form's Profile row makes a profile, asks for its name, and puts the Space in it, and its Choose a Theme
 # row colours the Space. The Space's tabs open in the new profile, without the first profile's
 # cookies, from a command bar opened in the first profile's Space too, which follows the Space shown. While it's empty the Space's menu moves it between profiles, and with a tab it keeps its
@@ -353,11 +354,9 @@ settings_drew General
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
 settings_drew 'Tabs & Sidebar'
-post clickkey $(drawn favorites)
-expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces (checked), In Each Space")\$" \
-  "a click on Share favorites didn't show the choices"
-send choose "$(cased 'In Every Space')"
-expect "^browser: favorites scope In Every Space\$" "choosing In Every Space in Settings didn't set it"
+in_sight "share favorites option In every Space" || fail "Settings didn't draw In Every Space's drawing"
+send clickkey $at
+expect "^browser: favorites scope In Every Space\$" "a click on In Every Space's drawing didn't set it"
 expect '^browser: favorites [0-9][0-9]*$' "the favorite has no twin in the other profile's Space"
 twin=$(grep '^browser: favorites' "$log" | tail -1 | cut -d' ' -f3)
 send key w cmd
@@ -405,12 +404,12 @@ expect "^browser: title $twin cookie none\$" \
 send menu Settings…
 expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
 settings_drew 'Tabs & Sidebar'
-post clickkey $(drawn favorites)
-expect "^browser: menu shown $(cased "In Every Space (checked), In Each Profile's Spaces, In Each Space")\$" \
-  "a click on Share favorites didn't show In Every Space chosen"
-send choose "$(cased "In Each Profile's Spaces")"
+in_sight "share favorites In Every Space" || fail "Share favorites didn't show In Every Space chosen"
+in_sight "share favorites option In each profile's Spaces" ||
+  fail "Settings didn't draw In Each Profile's Spaces' drawing"
+send clickkey $at
 expect "^browser: favorites scope In Each Profile's Spaces\$" \
-  "choosing In Each Profile's Spaces in Settings didn't set it"
+  "a click on In Each Profile's Spaces' drawing didn't set it"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 [ "$(grep '^browser: favorites' "$log" | tail -1)" = "browser: favorites $twin" ] ||
@@ -536,20 +535,20 @@ expect '^browser: settings tab Profiles$' "a click on Profiles didn't show its s
 settings_drew 'Profiles'
 # Rename, or a double-click on a name, puts it in a field, where escape leaves it and return
 # keeps a new one.
-send clickkey $(drawn "rename profile $work")
+click_in_sight "rename profile $work"
 expect "^browser: rename profile $work\$" "Rename on Profile 2 didn't put its name in a field"
 send type personal
 send key escape
 expect '^browser: rename cancelled$' "escape didn't cancel the renaming"
 none_since '^browser: renamed profile' || fail "escape renamed the profile"
-send doubleclickkey $(drawn "profile $work")
+click_in_sight "profile $work" doubleclickkey
 expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
 send type personal
 send key return
 expect "^browser: renamed profile $work personal\$" "return didn't rename the profile"
 # New Profile makes one, with its name in a field, which takes Japanese input. Its Delete asks
 # first, and Cancel keeps it.
-send clickkey $(drawn "new profile")
+click_in_sight "new profile"
 expect '^browser: create profile [0-9]* Profile 3$' "New Profile didn't make a profile"
 spare=$(sed -n 's/^browser: create profile \([0-9]*\) .*/\1/p' "$log" | tail -1)
 expect "^browser: rename profile $spare\$" "the new profile's name didn't take the keyboard"
@@ -602,7 +601,7 @@ done
 send clickkey $(drawn "toolbar Privacy")
 expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
 settings_drew Privacy
-send clickkey $(drawn "clear $default")
+click_in_sight "clear $default"
 expect "^browser: clear browsing data of profile $default in space $first\$" \
   "the first profile's Clear… didn't open Clear browsing data in its Space"
 expect '^browser: settings hidden$' "Clear… didn't hide Settings"
@@ -611,13 +610,20 @@ expect '^browser: loaded [0-9]* chrome://settings/clearBrowserData$' \
   "Clear… didn't open Clear browsing data: $(grep '^browser: loaded' "$log" | tail -1)"
 send key w cmd
 # The command bar searches with the engine of the profile shown: the first's DuckDuckGo, the
-# second's Bing. Neither search waits for its page, and ⌘W closes its tab.
+# second's Bing. Neither search waits for its page, and ⌘W closes its tab once it's shown: sent
+# before, on GitHub's hosted Mac, it closed the tab shown before it (#2205).
+search_shown() {
+  expect "^browser: page [0-9]* back 0 forward 0 loading 1 $1" "the search didn't open its tab"
+  searched=$(grep "^browser: page [0-9]* back 0 forward 0 loading 1 $1" "$log" | tail -1 | cut -d' ' -f3)
+  expect "^browser: selected $searched\( in .*\)\{0,1\}\$" "the search's tab $searched wasn't shown"
+}
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type ilo profiles
 send key return
 expect '^browser: command bar go https://duckduckgo\.com/?q=ilo' \
   "the first profile's Space didn't search with DuckDuckGo: $(grep '^browser: command bar go' "$log" | tail -1)"
+search_shown 'https://duckduckgo\.com/?q=ilo'
 send key w cmd
 send key 2 ctrl
 expect "^browser: space $second in " "⌃2 after ⌘W closed the first Space's search didn't show the second Space"
@@ -628,6 +634,7 @@ send type ilo profiles
 send key return
 expect '^browser: command bar go https://www\.bing\.com/search?q=ilo' \
   "the second profile's Space didn't search with Bing: $(grep '^browser: command bar go' "$log" | tail -1)"
+search_shown 'https://www\.bing\.com/search?q=ilo'
 send key w cmd
 expect "^browser: selected $d\( in .*\)\{0,1\}\$" "⌘W didn't show the second Space's tab again"
 # ⌃⇧N opens a new document in the second profile's service, Word, at the top of Today.
@@ -717,6 +724,43 @@ bar_runs "New Note Split"
 expect '^browser: new note https://notion\.new split$' "New Note Split didn't open a new Notion page"
 expect "^browser: splits\(.* \)\{0,1\}$shown+[0-9][0-9]*" "New Note Split's note isn't beside the page"
 ../tools/window-screenshot.sh "$pid" "$out/new-note-split.png" || fail "no window to capture"
+# Off in Settings › Features, as its neighbours can be, New Note leaves the + menu and ⌃⇧N does
+# nothing; on again, ⌃⇧N opens one (#1636). Its switch: Settings' Features section, then ⌘W.
+# Settings opens again on the section it showed last, so Features is clicked only the first time.
+new_note_switch() {
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings for New Note's switch"
+  if [ "$1" = off ]; then
+    send clickkey $(drawn "toolbar Features")
+    expect '^browser: settings tab Features$' "a click on Features didn't show its section"
+  fi
+  settings_drew Features
+  click_in_sight "switch new note"
+  expect "^browser: new note $1\$" "a click on New Note's switch didn't turn it $1"
+  [ "$1" = on ] || ../tools/window-screenshot.sh "$pid" "$out/settings-new-note-off.png" ||
+    fail "no window to capture"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+}
+new_note_switch off
+# The app takes keys in order, so ⌘T's bar says ⌃⇧N has been handled.
+pressed=$((step + 1))
+send key n ctrl shift
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar after ⌃⇧N"
+none_since '^browser: new note https' "$pressed" || fail "⌃⇧N opened a note with New Note off"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar"
+post click 204 $((height - 25))
+expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View'), " \
+  "the footer's + didn't show its menu with New Note off"
+grep '^browser: menu shown ' "$log" | tail -1 | grep -q "$(cased 'New Note')" &&
+  fail "the footer's + offered New Note while it's off: $(grep '^browser: menu shown ' "$log" | tail -1)"
+send key escape
+expect '^browser: menu closed$' "escape didn't close the footer's menu"
+new_note_switch on
+send key n ctrl shift
+expect '^browser: new note https://notion\.new$' "⌃⇧N didn't open a note once New Note was on again"
 exec 3>&-
 quit
-echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Clear Browsing Data from the command bar is a pick, kept in the profile's folder, which the dialog's Delete takes with the history; Settings › Profiles sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms, with what the app kept in its folder; a profile no Space is in is deleted from the menu, its favorite with it, once the user confirms; Little ilo's bar reopens its page in the other profile, without the first's cookie, and keeps that profile for the site, where a link from another app to the site then opens, in that profile's Space; each profile's New Note opens its own service's page, by ⌃⇧N, the command bar, the footer's + and New Note Split beside the page. Windows: $out/profile-popup.png, $out/little-profile.png, $out/little-kept-profile.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/clear-browsing-data-deleted.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png, $out/settings-new-note.png, $out/new-note-split.png"
+echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Clear Browsing Data from the command bar is a pick, kept in the profile's folder, which the dialog's Delete takes with the history; Settings › Profiles sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms, with what the app kept in its folder; a profile no Space is in is deleted from the menu, its favorite with it, once the user confirms; Little ilo's bar reopens its page in the other profile, without the first's cookie, and keeps that profile for the site, where a link from another app to the site then opens, in that profile's Space; each profile's New Note opens its own service's page, by ⌃⇧N, the command bar, the footer's + and New Note Split beside the page, and with its switch in Settings off, the + menu has no New Note and ⌃⇧N does nothing until it's on again. Windows: $out/profile-popup.png, $out/little-profile.png, $out/little-kept-profile.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/clear-browsing-data-deleted.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png, $out/settings-new-note.png, $out/new-note-split.png, $out/settings-new-note-off.png"

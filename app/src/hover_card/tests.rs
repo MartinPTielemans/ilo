@@ -42,6 +42,7 @@ fn row(tab: u64) -> Anchor {
     Anchor {
         row: Bounds::new(point(px(8.), px(top)), size(px(224.), px(34.))),
         window: window(),
+        left: false,
     }
 }
 
@@ -510,6 +511,26 @@ fn a_card_goes_beside_its_row_and_stays_inside_the_window() {
     assert_eq!(place(narrow, tall).0, 400. - WIDTH - EDGE);
 }
 
+/// With the sidebar on the right, a card opens on its row's left, toward the page, as far from it as
+/// on the left, and keeps EDGE from the window's left edge (#2375).
+#[test]
+fn a_card_opens_toward_the_page_from_a_sidebar_on_the_right() {
+    let tall = height(INNER * PICTURE_MOST);
+    let mirrored = Anchor {
+        row: Bounds::new(point(px(768.), px(136.)), size(px(224.), px(34.))),
+        left: true,
+        ..row(1)
+    };
+    let (left, top) = place(mirrored, tall);
+    assert_eq!((left, top), (768. - GAP - WIDTH, 136.));
+    let narrow = Anchor {
+        row: Bounds::new(point(px(176.), px(136.)), size(px(224.), px(34.))),
+        window: size(px(400.), px(700.)),
+        ..mirrored
+    };
+    assert_eq!(place(narrow, tall).0, EDGE);
+}
+
 /// Each button, clicked where the card draws it, as the pointer comes onto the card from the row,
 /// makes its call on that first click (#818).
 #[gpui::test]
@@ -575,4 +596,28 @@ fn a_card_after_a_click_doesn_t_take_the_pointer_left_on_a_button_for_its_own(
         "it stays while its row is rested on"
     );
     assert_eq!(*told.borrow(), ["shown 2"]);
+}
+
+#[gpui::test]
+fn a_picture_taken_before_the_cards_window_is_made_is_the_windows(cx: &mut TestAppContext) {
+    let kept = cx.update(|cx| asking(1, cx));
+    let dropped = cx.update(|cx| asking(2, cx));
+    cx.update(|cx| answered(kept, Some(picture(528, 352)), cx));
+    cx.update(|cx| answered(dropped, Some(picture(528, 352)), cx));
+    cx.update(|cx| forget(2, cx));
+    let late = cx.update(|cx| asking(3, cx));
+    open_card(cx);
+    cx.update(|cx| answered(late, Some(picture(528, 352)), cx));
+    let held = card_window(cx)
+        .read_with(cx, |card, _| {
+            let mut tabs: Vec<u64> = card.pictures.keys().copied().collect();
+            tabs.sort();
+            tabs
+        })
+        .unwrap();
+    assert_eq!(
+        held,
+        [1, 3],
+        "the window lost a picture taken early, or kept one forgotten"
+    );
 }

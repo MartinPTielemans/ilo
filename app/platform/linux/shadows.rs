@@ -212,7 +212,7 @@ fn open(overlay: c_int, cx: &mut App) {
         ..Default::default()
     };
     let Ok(window) = cx.open_window(options, |_, cx| cx.new(|_| Shadow(overlay))) else {
-        eprintln!("browser: couldn't open the shadow window of overlay {overlay}");
+        browser::log!("browser: couldn't open the shadow window of overlay {overlay}");
         return;
     };
     let Ok(view) = window.update(cx, |_, window, _| {

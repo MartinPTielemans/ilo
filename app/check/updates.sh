@@ -1,3 +1,5 @@
+# check.sh runs this at 780, only when named.
+# It runs only when named until it passes on the Mac.
 # The Mac's updates (docs/ux-spec.md › Updates), on a check build with Sparkle (build.sh updates)
 # that checks a feed the run serves, for updates signed with a key the run makes and deletes after.
 # Neither is ever the product's: the run never reads branding/update-feed or the owner's key.
@@ -409,6 +411,8 @@ flatpak_updates_check() {
   export FLATPAK_USER_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/flatpak"
   export HOME=$scratch/home
   mkdir "$HOME"
+  # The Flatpak's profile, where its XDG_CONFIG_HOME puts it (main.rs's profile_dir).
+  count_off "$HOME/.var/app/$id/config/$(cat branding/name)"
   local started
   started=$(env -u XDG_DATA_HOME dbus-daemon --session --fork --print-address=1 --print-pid=1 |
     tr '\n' ' ')
@@ -464,20 +468,26 @@ flatpak_updates_check() {
     sleep 0.1
   done
   kill -0 "$pid" 2> /dev/null && fail "Restart didn't quit the build running"
+  # The new build logs to the portal's output, which started it, and outlives it if it fails. No
+  # flatpak ps until its window is up: each one clears the per-app /tmp of the sandbox that quit
+  # unless a running one holds its lock, and the new sandbox lets go of it from flatpak run's exec
+  # of bwrap until bwrap has bound that /tmp, which it then finds gone (#2688).
+  pid=${buses##* }
+  log="$out/updates-portal.log"
+  await '^browser: UI shown' || {
+    grep -q "^bwrap: Can't get type of source .*/\.flatpak/$id/tmp" "$log" &&
+      fail "the new build's sandbox found its per-app /tmp gone: Flatpak's race (#2688)"
+    fail "the new build's window didn't come up"
+  }
   local running= commit=
-  for _ in $(seq 600); do
-    running=$(flatpak ps --columns=application,commit,pid |
-      awk -v id="$id" '$1 == id { print $2, $3; exit }')
-    [ -n "$running" ] && break
-    sleep 0.1
-  done
+  # flatpak ps lists a starting instance with PID 0 until bwrap's is known, and cleanup's kill of
+  # pid 0 would end the whole run, this script included (exit 143).
+  running=$(flatpak ps --columns=application,commit,pid |
+    awk -v id="$id" '$1 == id && $3 > 0 { print $2, $3; exit }')
   commit=${running%% *}
   [ -n "$commit" ] && [ "${next#"$commit"}" != "$next" ] ||
     fail "Restart didn't start build $next: running ${commit:-nothing}. $out/updates-portal.log"
-  # The new build logs to the portal's output, which started it.
   pid=${running##* }
-  log="$out/updates-portal.log"
-  await '^browser: UI shown' || fail "the new build's window didn't come up"
   ../tools/window-screenshot.sh "$pid" "$out/updates-restarted.png" || fail "no window to capture"
   flatpak kill "$id" 2> /dev/null || true
   # Gone before the run ends, which cleanup would otherwise race to kill.

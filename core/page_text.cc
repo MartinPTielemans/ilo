@@ -80,6 +80,11 @@ bool IsField(const ui::AXNodeData& node) {
   }
 }
 
+bool FromExtension(const ui::AXNodeData& node) {
+  return std::ranges::any_of(node.html_attributes,
+                             [](const auto& each) { return each.first == "fromExtension"; });
+}
+
 void NewLine(std::string& text) {
   while (!text.empty() && text.back() == ' ') {
     text.pop_back();
@@ -178,8 +183,11 @@ std::string TextOf(const ui::AXTreeUpdate& update,
         !IsReadable(node.GetStringAttribute(ax::mojom::StringAttribute::kUrl), readable)) {
       continue;
     }
-    // Hidden, or a field, a password field above all, whose value is the user's alone.
-    if (node.IsInvisible() || node.HasState(ax::mojom::State::kProtected) || IsField(node)) {
+    // Hidden, or a field, a password field above all, whose value is the user's alone. Or what an
+    // extension's content script made, which is the extension's, not the page's
+    // (engine/patches/ours/chromium-agent-extension-nodes.patch marks it, and each node inside it).
+    if (node.IsInvisible() || node.HasState(ax::mojom::State::kProtected) || IsField(node) ||
+        FromExtension(node)) {
       continue;
     }
     // An ignored node, such as a plain wrapper, has no text of its own, but its children may.

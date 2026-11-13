@@ -1,3 +1,6 @@
+# check.sh runs this at 710, only when named.
+# It installs the release ILO_OLD names as ilo's Flatpak, on Linux under Xvfb, so it runs only
+# when named.
 # An older ilo beside this one on one account (#2108): this build is A, and B is the release
 # ILO_OLD names, installed as ilo's Flatpak, app.ilo.browser, which the run drives in its sandbox,
 # on an ilo-server of the run's own (ilo-server.sh) and a throwaway address. A signs in first and
@@ -32,6 +35,7 @@ old_browser() {
   for name in $(env | sed -n 's/^\(BROWSER_[A-Z0-9_]*\)=.*/\1/p'); do
     eval "set -- \"--env=$name=\${$name}\" \"\$@\""
   done
+  count_off "$BROWSER_PROFILE_DIR"
   set -- flatpak run --user --cwd="$PWD" --filesystem="$PWD" \
     --filesystem="$BROWSER_PROFILE_DIR:create" "$@"
   # flatpak run proxies the session bus into the sandbox: the job's steps have none of their own.

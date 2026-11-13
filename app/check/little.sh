@@ -1,3 +1,4 @@
+# check.sh runs this at 240.
 # Little ilo, Arc's Little Arc. ⌥⌘N opens a Little ilo window for the Space the window shows, under
 # its bar, and ⌘L there opens the command bar inside it, whose URL loads in it. The bar's chevron
 # opens its Spaces menu under it. ⌘O moves its page, live, to that Space in the main window and
@@ -198,7 +199,15 @@ frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layo
   grep -o 'WebContentsViewCocoa [0-9,]*' | head -1 | cut -d' ' -f2)
 x=${frame%%,*}
 y=${frame#*,}
+# The pointer rests on the link until its bubble shows, then ⌥⌘ go down and it clicks. On Windows'
+# real input, with the keys down before the pointer came onto the link, the page opened nothing
+# about half the time (#2666).
+rest_on_link() {
+  send move $((x + 20)) $((y + 20))
+  expect '^browser: link target window shown$' "the pointer resting on the page's link showed no bubble"
+}
 send click $page_point
+rest_on_link
 # Grown in from under the pointer, which the driver's clicks leave where it was.
 record little-click-open 2
 send click $((x + 20)) $((y + 20)) alt cmd
@@ -298,6 +307,8 @@ if [ "$(uname)" = Darwin ]; then
   send window 1
   send fullscreen
   expect '^browser: window left full screen$' "the main window didn't leave full screen"
+else
+  echo "skip: ⌥⌘N over a window in full screen: only on the Mac is full screen a desktop of its own, which the Little ilo window has to open on."
 fi
 
 # The Dock's menu, the Mac's alone: ilo's New Window and New Incognito Window, File's, in place of
@@ -385,6 +396,8 @@ if [ "$(uname)" = Darwin ]; then
   send key w cmd
   expect "^browser: window closed $little\$" "⌘W didn't close the Dock's Little ilo window"
   send window 1
+else
+  echo "skip: the Dock's menu: the Dock is the Mac's."
 fi
 
 # The menu bar's button, and on Windows the notification area's icon: none until Settings ›
@@ -452,6 +465,8 @@ if [ "$(uname)" = Darwin ] || windows; then
   post clickkey $close
   expect '^browser: settings hidden$' "the close button didn't hide Settings"
   send window 1
+else
+  echo "skip: Little ilo's button in the menu bar or the notification area: Linux's host makes none yet."
 fi
 
 # The taskbar's jump list, Windows' alone: ilo writes its task, New Little ilo Window, which runs
@@ -781,7 +796,7 @@ expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
 send clickkey $(drawn "toolbar Features")
 settings_drew Features
-send clickkey $(drawn "switch little windows")
+click_in_sight "switch little windows"
 expect '^browser: little windows off$' "a click on Little ilo's switch didn't turn it off"
 ../tools/window-screenshot.sh "$pid" "$out/little-off.png" || fail "no window to capture"
 send key w cmd
@@ -799,6 +814,7 @@ frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layo
 x=${frame%%,*}
 y=${frame#*,}
 send click $page_point
+rest_on_link
 send click $((x + 20)) $((y + 20)) alt cmd
 expect '^browser: tab [0-9]* opened by [0-9]* in the background$' \
   "with Little ilo off, ⌥⌘-click on a link didn't open it behind"
@@ -807,7 +823,7 @@ expect '^browser: tab [0-9]* opened by [0-9]* in the background$' \
 send menu Settings…
 expect '^browser: settings shown Features$' "Settings… didn't show Features again"
 settings_drew Features
-send clickkey $(drawn "switch little windows")
+click_in_sight "switch little windows"
 expect '^browser: little windows on$' "a click on Little ilo's switch didn't turn it on again"
 send key w cmd
 exec 3>&-

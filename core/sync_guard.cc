@@ -12,6 +12,7 @@
 #include "components/sync/protocol/entity_data.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
 #include "components/sync/protocol/password_specifics.pb.h"
+#include "components/sync/protocol/sync_entity.pb.h"
 #include "crypto/hash.h"
 #include "crypto/hmac.h"
 #include "crypto/kdf.h"
@@ -20,6 +21,15 @@
 namespace browser_core {
 
 namespace {
+
+// Whether |specifics| are only |type|'s own field, empty, as Chromium leaves it beside the
+// ciphertext and the server gives its permanent folders, or nothing at all.
+bool Empty(syncer::DataType type, const sync_pb::EntitySpecifics& specifics) {
+  sync_pb::EntitySpecifics empty;
+  syncer::AddDefaultFieldValue(type, &empty);
+  return specifics.ByteSizeLong() == 0 ||
+         specifics.SerializeAsString() == empty.SerializeAsString();
+}
 
 // Whether |specifics| hold nothing but what the passphrase encrypted.
 bool Ciphertext(syncer::DataType type, const sync_pb::EntitySpecifics& specifics) {
@@ -40,9 +50,12 @@ bool Ciphertext(syncer::DataType type, const sync_pb::EntitySpecifics& specifics
     if (!specifics.has_encrypted()) {
       return false;
     }
+    if (specifics.encrypted().blob().empty()) {
+      return false;
+    }
     rest.clear_encrypted();
   }
-  return rest.ByteSizeLong() == 0;
+  return Empty(type, rest);
 }
 
 struct TagKey {
@@ -112,6 +125,16 @@ bool SyncCommitIsCiphertext(syncer::DataType type, const syncer::CommitRequestDa
     return (entity.name.empty() || entity.name == "encrypted") &&
            (entity.is_deleted() || Ciphertext(type, entity.specifics));
   });
+}
+
+bool KeepSyncUpdate(syncer::DataType type, bool encrypted, const sync_pb::SyncEntity& update) {
+  if (!encrypted || update.deleted()) {
+    return true;
+  }
+  if (!update.server_defined_unique_tag().empty() && Empty(type, update.specifics())) {
+    return true;
+  }
+  return Ciphertext(type, update.specifics());
 }
 
 void SetSyncPasswordTagKey(const std::optional<SyncSecret>& secret) {

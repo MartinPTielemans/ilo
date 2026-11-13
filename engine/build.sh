@@ -17,7 +17,7 @@ case ${1:-} in -*) echo "usage: build.sh [dev] [target ...]" >&2 && exit 2 ;; es
 # The checkout's series and core, whichever the tree had last: a switched checkout built without
 # setup.sh kept the patches of the series it left. Unchanged, this only compares the kept copies.
 . ./tree.sh
-apply_series .deps/src
+apply_series .deps/src mac
 # GN's scripts read the core count too, into every link command, so a BUILD.gn change is
 # regenerated before the cap below: under it, the commands differ from setup.sh's, the code
 # generators relink, and everything including their output recompiles.

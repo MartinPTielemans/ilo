@@ -374,6 +374,17 @@ impl Shell {
         };
         self.select(panes[next], cx);
     }
+
+    /// Focuses the split view's page at `index` from the left, if it has one there.
+    pub(super) fn focus_pane_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        let panes = self.panes(self.selected);
+        if panes.len() > 1
+            && let Some(&tab) = panes.get(index)
+            && tab != self.selected
+        {
+            self.select(tab, cx);
+        }
+    }
 }
 
 impl Shell {
@@ -600,6 +611,53 @@ mod tests {
         assert_eq!(host.toasts.take(), ["Cannot Add New Pane"; 3]);
         assert!(host.take_edits().is_empty());
         assert!(host.notes.borrow().is_empty());
+    }
+
+    /// Arc's ⌃⇧1–⌃⇧4 focus the split view's page at that place from the left, either way GPUI names
+    /// the key; one past its pages, or on a tab in no split view, does nothing.
+    #[gpui::test]
+    fn the_pane_keys_focus_the_page_at_their_place(cx: &mut TestAppContext) {
+        cx.update(crate::shell::commands::bind_keys);
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            let split = Split {
+                tabs: vec![10, 11, 12],
+                ..Default::default()
+            };
+            let today = vec![10, 11, 12, 13];
+            shell.set_tabs(1, Vec::new(), today, vec![split], Folders::default(), cx);
+        });
+        cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+        let press = |cx: &mut gpui::VisualTestContext, shown: u64, key: &str| {
+            shell.update(cx, |shell, cx| shell.set_selected(shown, cx));
+            cx.run_until_parked();
+            host.take();
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+            host.take()
+                .into_iter()
+                .filter(|call| call.starts_with("select "))
+                .collect::<Vec<_>>()
+        };
+        for (key, tab) in [
+            ("ctrl-shift-1", 10),
+            ("ctrl-shift-!", 10),
+            ("ctrl-shift-3", 12),
+            ("ctrl-shift-#", 12),
+        ] {
+            assert_eq!(press(cx, 11, key), [format!("select {tab}")], "{key}");
+        }
+        assert!(press(cx, 11, "ctrl-shift-4").is_empty(), "a fourth page");
+        assert!(press(cx, 11, "ctrl-shift-2").is_empty(), "the page focused");
+        assert!(
+            press(cx, 13, "ctrl-shift-1").is_empty(),
+            "a tab in no split"
+        );
     }
 
     /// The core reports the split with these `shares` and the tab that took the card.

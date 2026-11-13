@@ -6,7 +6,8 @@
 //! window of its own that the host shows over the browser window, as its child, with the keyboard,
 //! translucent over a blur in the shape drawn here. What it asks of its window goes through `Host`.
 
-use std::{ops::Range, rc::Rc, time::Instant};
+use std::{ops::Range, rc::Rc};
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, Context, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
@@ -276,6 +277,7 @@ pub fn show(
     picked: Picked,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<IconPicker>(cx);
     let Some(window) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) else {
         return;
     };

@@ -1,3 +1,4 @@
+# check.sh runs this at 810, only when named.
 # The profile survives a change of signing identity, as from Apple Development to Developer ID,
 # with no Keychain prompt (platform/mac/updates.mm, tools/requirement.sh). A copy of the prod build
 # signed with identity A and its own requirement, as Apple Development's names its certificate,
@@ -12,8 +13,8 @@
 # can't sign with a leaf whose authority isn't trusted (errSecInternalComponent), and trusting one
 # needs a user at the screen. The copies have a name of their own for each run, so the cookie key's item is the run's.
 # A team's identities share a Keychain partition, teamid:<team>, which identities with no team ID
-# don't, so with KEYCHAIN_PASSWORD, the VM user's login password, the run adds each copy's own to
-# the item's as a stand-in. Without it, a prompt the partition causes fails the run, and says so.
+# don't, so with KEYCHAIN_PASSWORD, the password of the default keychain the item is made in, the
+# VM user's login password, the run adds each copy's own to the item's as a stand-in. Without it, a prompt the partition causes fails the run, and says so.
 
 [ "$(uname)" = Darwin ] && [ "$(sysctl -n kern.hv_vmm_present)" = 1 ] || {
   echo "skip: keychain. It uses the real Keychain, so it runs only in a check VM."
@@ -32,10 +33,11 @@ service="$check_name Safe Storage"
 procs="$dir"
 log="$out/keychain-0.log"
 defaults delete "$check_id" > /dev/null 2>&1 || true
-# Over ssh the login keychain is locked, and Chromium then runs with no cookie key at all.
+# Over ssh the login keychain is locked, and Chromium then runs with no cookie key at all. The
+# default keychain, as GitHub's hosted Mac makes one of its own whose password it knows.
 if [ -n "${KEYCHAIN_PASSWORD:-}" ]; then
-  security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$HOME/Library/Keychains/login.keychain-db" ||
-    fail "the login keychain didn't unlock: is KEYCHAIN_PASSWORD the VM's login password?"
+  security unlock-keychain -p "$KEYCHAIN_PASSWORD" ||
+    fail "the default keychain didn't unlock: is KEYCHAIN_PASSWORD the VM's login password?"
 fi
 
 # A and B, for code signing, in the run's own keychain, which codesign may use without asking.
@@ -75,7 +77,8 @@ keychain_cleanup() {
     done
   done
 }
-trap 'keychain_cleanup; cleanup' EXIT
+# cleanup takes the run's status, which keychain_cleanup would otherwise replace with its own.
+trap 'status=$?; keychain_cleanup; cleanup "$status"' EXIT
 security create-keychain -p check "$identities"
 security set-keychain-settings "$identities"
 security unlock-keychain -p check "$identities"
@@ -120,6 +123,7 @@ run_copy() {
   since=$(($(wc -l < "$out/site.log") + 1))
   request="^GET chromium 127.0.0.1:$port/$3 cookie $4\$"
   sent() { tail -n "+$since" "$out/site.log" | grep -q "$request"; }
+  count_off "$dir/profile"
   BROWSER_PROFILE_DIR="$dir/profile" BROWSER_URL="$site$3" \
     "$dir/$1/$check_name.app/Contents/MacOS/Browser" < /dev/null > "$log" 2>&1 &
   pid=$!

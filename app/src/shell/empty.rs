@@ -4,7 +4,7 @@
 //! (`Window::ShowNothing`), so GPUI draws ilo's mark, the Space's name and one quiet line on it and
 //! takes its clicks. On the first run it shows the welcome instead, until a page shows.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{
     App, Context, FontWeight, MouseButton, Pixels, Point, Stateful, Window, div, prelude::*, px,

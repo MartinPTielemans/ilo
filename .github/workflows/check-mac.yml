@@ -13,6 +13,22 @@
 # active, window captures, IME, keys and focus work, but scrolling drew 35-41 frames a second: it
 # checks behaviour, never the performance gate (docs/roadmap.md), whose numbers come from the
 # owner's Mac.
+# Its default runs, the night's and a train's, are every run check.sh does unnamed but VM_RUNS, the
+# runs a release still needs from the owner's MacBook's check VM, each here with its reason (#2205):
+# - clear: in 2 of 5 runs here the tab Clear Browsing Data opened drew nothing in the page area,
+#   so its dialog never had the keyboard; the VM passes it (#2248).
+# switch-frames runs here: its empty page area through a switch, here in 3 of 4 runs, is on the VM
+# too, about half the time, and quarantined on the Mac under #2248 (check/quarantine.mac).
+# And one part of a run that passes here, which skips it, saying so:
+# - window's sidebar against Dia's composite: the runner's AppKit material is darker than the one
+#   Dia was measured over (#1554).
+# sync-devices runs here, in about 200 s, against the run's own ilo-server, its copies handing each
+# other the active app as each needs the keyboard (#589).
+# Of the runs check.sh does only when named, the runner passes store, sync-extensions, adblock-live,
+# adblock-parity, adblock-native, passwords-live, updates, nightly, update-checks, shots, and
+# keychain asked for alone, which builds the prod build it needs. perf and adblock-cost measure, so
+# they stay on the owner's Mac (here perf had ilo's memory 48 to 103 % over Chrome's); widevine and
+# tab-drag are Linux's.
 name: Check on macOS
 
 on:
@@ -28,6 +44,11 @@ on:
         description: Build the app, even if a check of this commit kept one
         type: boolean
         default: false
+      trace:
+        description: >-
+          The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
+          #2377's, latency among them; empty for latency alone in tabs and no traced switches
+        default: ''
 
 # Main's running check finishes, with only the newest dispatch or night waiting behind it; a branch's
 # dispatch replaces the one before it.
@@ -71,6 +92,7 @@ jobs:
       matrix:
         shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || '[0]') }}
     runs-on: macos-26
+    # The default runs take about 73 min here, after about 6 of setting up.
     timeout-minutes: 120
     permissions:
       contents: read
@@ -82,8 +104,9 @@ jobs:
       run:
         working-directory: app
     env:
-      # The runs to start with, whose parts the trial found working. A run joins once it passes here.
-      MAC_RUNS: load keys tabs quit scripting favorites links preview import notifications
+      # The runs a release still needs from the check VM, as the header says why: one leaves the
+      # list once it passes on the runner (#2248).
+      VM_RUNS: clear
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
@@ -124,7 +147,12 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: |
           case $RUNS in
-          '') runs=$MAC_RUNS ;;
+          '')
+            runs=
+            for run in $(sh check.sh --runs default); do
+              case " $VM_RUNS " in *" $run "*) ;; *) runs="$runs $run" ;; esac
+            done
+            ;;
           all) runs=$(../.github/scripts/runs.sh shard "$SHARD") ;;
           *) runs=$RUNS ;;
           esac
@@ -144,7 +172,8 @@ jobs:
           done
 
       # The app another check of this commit built, if one kept it (app-artifact.sh), unless a run
-      # asked for builds one of its own with build.sh updates, which needs the build's target/.
+      # asked for builds one of its own with build.sh updates, which needs the build's target/, or
+      # keychain, which needs the prod build.
       - id: kept
         env:
           GH_TOKEN: ${{ github.token }}
@@ -153,7 +182,7 @@ jobs:
         run: |
           run=
           case " $RUNS " in
-          *" all "* | *" updates "* | *" nightly "* | *" update-checks "*) ;;
+          *" all "* | *" updates "* | *" nightly "* | *" update-checks "* | *" keychain "*) ;;
           *) [ "$REBUILD" = true ] || run=$(../.github/scripts/app-artifact.sh find "app-mac-$GITHUB_SHA") ;;
           esac
           echo "run=$run" | tee -a "$GITHUB_OUTPUT"
@@ -184,14 +213,31 @@ jobs:
           key: check-mac-${{ hashFiles('app/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
           restore-keys: check-mac-
 
+      # The keychain run needs the prod build, on the Release engine the night publishes, as it uses
+      # the real Keychain: asked for alone, the job builds that.
       - id: build
         if: ${{ steps.kept.outputs.run == '' }}
-        run: ./setup.sh prebuilt && ./build.sh
+        run: ./setup.sh prebuilt && ./build.sh ${{ inputs.runs == 'keychain' && 'prod' || '' }}
+      # And it adds its copies to the cookie key's partition with KEYCHAIN_PASSWORD, the password of
+      # the default keychain the key is made in, the login keychain, whose password on the runner
+      # isn't known: the job makes a default keychain of its own with one it knows. securityd keeps
+      # the login keychain open, so one made anew in its place wouldn't unlock.
+      - if: ${{ steps.engine.outputs.found == 'true' && inputs.runs == 'keychain' }}
+        run: |
+          password=$(openssl rand -hex 16)
+          echo "::add-mask::$password"
+          keychain="$HOME/Library/Keychains/check.keychain-db"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -d user -s "$keychain"
+          echo "KEYCHAIN_PASSWORD=$password" >> "$GITHUB_ENV"
 
-      # For the next check of this commit, for 3 days.
-      - if: ${{ steps.build.outcome == 'success' }}
+      # For the next check of this commit, for 3 days, but never the prod build.
+      - if: ${{ steps.build.outcome == 'success' && inputs.runs != 'keychain' }}
         run: ../.github/scripts/app-artifact.sh pack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app.tar"
-      - if: ${{ steps.build.outcome == 'success' }}
+      - if: ${{ steps.build.outcome == 'success' && inputs.runs != 'keychain' }}
         uses: actions/upload-artifact@v4
         with:
           name: app-mac-${{ github.sha }}
@@ -210,7 +256,7 @@ jobs:
 
       # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
-      # at the commit check-linux.yml builds, when the runs include one.
+      # at the commit check-linux.yml builds, when the runs include one, as the default ones do.
       - id: server
         if: ${{ steps.engine.outputs.found == 'true' && (contains(steps.runs.outputs.list, ' sync-account ') || contains(steps.runs.outputs.list, ' sync-devices ') || contains(steps.runs.outputs.list, ' sync-extensions ')) }}
         uses: actions/checkout@v4
@@ -307,6 +353,7 @@ jobs:
           RUNS: ${{ steps.runs.outputs.list }}
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
+          CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
@@ -316,6 +363,36 @@ jobs:
             echo "| Run | Result |"
             echo "|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
+          # macOS asks whether the runner's agent, which it holds responsible for the app, may find
+          # devices on the local network, in UserNotificationCenter, at some point after anything the
+          # job started reaches the default route's address, as webrtc's STUN server is. It took the
+          # app's activation mid-run and the run's keys went nowhere: in webrtc, and in handback,
+          # which came later in the same job (#2205). Local Network can't be granted ahead like the
+          # others, a check VM answered once, and reaching that address from the job didn't make it
+          # ask, so through every run the job answers that question alone with Allow, through
+          # System Events with the Accessibility granted above, once the question has made
+          # UserNotificationCenter the active app, so the runs keep the runner's 3 cores between.
+          (
+            while :; do
+              sleep 0.5
+              case $(lsappinfo info -only bundleid "$(lsappinfo front)" 2> /dev/null) in
+              *UserNotificationCenter*) ;;
+              *) continue ;;
+              esac
+              asked=$(osascript -e 'tell application "System Events"
+                if not (exists process "UserNotificationCenter") then return ""
+                tell process "UserNotificationCenter"
+                  if (count of windows) is 0 then return ""
+                  set asked to (value of every static text of window 1) as text
+                  if asked does not contain "local network" then return ""
+                  click button "Allow" of window 1
+                  return asked
+                end tell
+              end tell' 2> /dev/null) || true
+              [ -z "$asked" ] || echo "$(date -u +%T) allowed: $asked" >> "$out/local-network.log"
+            done
+          ) &
+          answering=$!
           # GNU's timeout, which macOS doesn't have under that name, if the runner has it.
           limit=$(command -v timeout || command -v gtimeout || true)
           failed=0
@@ -324,13 +401,21 @@ jobs:
             *" $run "*)
               start=$SECONDS
               status=0
-              ${limit:+$limit 20m} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
+              # Perf measures Chrome beside the app.
+              minutes=20m
+              [ "$run" != perf ] || minutes=40m
+              ${limit:+$limit $minutes} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               [ ! -d build/check ] || mv build/check "$out/$run"
               pkill -9 -f "$PWD/build/Browser.app/" || true
               # A run that passes may have skipped steps, or all of itself, such as when the app
               # wasn't the active one.
               skipped=$(grep '^skip: ' "$out/$run.log" | cut -c7- | tr '|\n' '/;' | sed 's/;$//')
-              if [ "$status" = 0 ]; then
+              # A run that skips all of itself, as one whose build lacks what it checks, says why on a
+              # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
+              whole=$(grep -m1 '^skip all: ' "$out/$run.log" | cut -c11- | tr '|' '/') || true
+              if [ "$status" = 0 ] && [ -n "$whole" ]; then
+                result="skip: $whole"
+              elif [ "$status" = 0 ]; then
                 result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
               else
                 said=$(grep -m1 '^FAIL' "$out/$run.log" | cut -c7- | tr '|' '/') || true
@@ -345,11 +430,18 @@ jobs:
                 fi
               fi
               ;;
-            *) result="skipped: not in the runs the Mac runner passes yet" ;;
+            *)
+              case " $VM_RUNS " in
+              *" $run "*) result="skipped: the check VM does it, as the workflow's header says why" ;;
+              *) result="skipped: not asked for" ;;
+              esac
+              ;;
             esac
             printf '%s\t%s\n' "$run" "$result" >> "$RESULTS"
             echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
           done
+          kill "$answering" || true
+          [ ! -s "$out/local-network.log" ] || cat "$out/local-network.log"
           { echo; sh check/quarantine.sh list mac; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
 
@@ -357,7 +449,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: check-mac${{ matrix.shard != 0 && format('-{0}', matrix.shard) || '' }}
-          path: ${{ runner.temp }}/check
+          # Without the copies of the app keychain signs, 2.2 GB of them (#2205).
+          path: |
+            ${{ runner.temp }}/check
+            !${{ runner.temp }}/check/**/*.app
           if-no-files-found: ignore
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4

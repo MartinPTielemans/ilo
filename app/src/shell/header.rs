@@ -1,7 +1,8 @@
 //! The sidebar's header: the buttons to hide the sidebar and go back, forward and
 //! reload, and the URL field under them.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use web_time::Instant;
 
 use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::site_controls::Place;
@@ -279,7 +280,7 @@ impl Shell {
                     .collect();
                 let anchor = match side {
                     TipSide::Under => Anchor::under(frame, self.viewport),
-                    TipSide::Beside => Anchor::beside(frame, self.viewport),
+                    TipSide::Beside => Anchor::beside(frame, self.viewport, self.right),
                 };
                 (
                     Tip {
@@ -341,7 +342,8 @@ impl Shell {
             log!("browser: nav glyphs dimmed {dimmed}");
         }
         let page = self.page(self.field_tab());
-        let [sidebar, back, forward, reload_x] = nav_places(self.width(), self.full_screen);
+        let [sidebar, back, forward, reload_x] =
+            nav_places(self.width(), self.full_screen, self.right);
         let reload = match page.loading {
             true => (reload_x, reload_glyph(true), Command::Stop, true),
             false => (
@@ -366,7 +368,10 @@ impl Shell {
         let buttons = [
             (
                 sidebar,
-                "icons/nav-sidebar.svg",
+                match self.right {
+                    true => "icons/nav-sidebar-right.svg",
+                    false => "icons/nav-sidebar.svg",
+                },
                 Command::ToggleSidebar,
                 true,
             ),
@@ -421,7 +426,7 @@ impl Shell {
         let docked = !self.page_fullscreen && !self.sidebar_hidden && self.sidebar_motion.is_none();
         (docked && self.form().is_none() && self.library.is_none()).then(|| {
             Bounds::new(
-                point(px(PLATE_INSET), px(URL_FIELD_TOP)),
+                point(px(self.column_x() + PLATE_INSET), px(URL_FIELD_TOP)),
                 size(px(self.width() - 2. * PLATE_INSET), px(URL_FIELD_HEIGHT)),
             )
         })
@@ -453,11 +458,62 @@ impl Shell {
                 );
                 Place::Button { field, button }
             }
-            None => Place::Corner(point(px(self.card_left() + PLATE_INSET), px(PLATE_INSET))),
+            None => Place::Corner(point(px(self.card_corner() + PLATE_INSET), px(PLATE_INSET))),
         };
         let extensions = self.site_controls_extensions();
-        self.browser
-            .site_controls(self.field_tab(), place, self.viewport, extensions, cx);
+        let profiles = self.site_controls_profiles();
+        self.browser.site_controls(
+            self.field_tab(),
+            place,
+            self.viewport,
+            extensions,
+            profiles,
+            cx,
+        );
+    }
+
+    /// The tab's profile and the user's others, for the Site Controls' chip, while there's more
+    /// than one (#2339). A window with a Space of its own has none: a private one's session shares
+    /// none of the profile's logins, and Little ilo's bar has its own picker.
+    pub(super) fn site_controls_profiles(&self) -> Option<crate::site_controls::Profiles> {
+        if self.private || self.blank || self.little.is_some() || self.profiles.len() < 2 {
+            return None;
+        }
+        let current = self.shown_space()?.profile;
+        let name = (self.profiles.iter())
+            .find(|(id, _)| *id == current)?
+            .1
+            .clone();
+        let others = (self.profiles.iter())
+            .filter(|(id, _)| *id != current)
+            .map(|(id, name)| (*id, name.clone(), self.users_space_in(*id).is_some()))
+            .collect();
+        Some(crate::site_controls::Profiles { name, others })
+    }
+
+    /// The first of the user's Spaces in `profile`, in the sidebar's order: agents' aren't theirs.
+    fn users_space_in(&self, profile: u64) -> Option<u64> {
+        (self.spaces.iter())
+            .find(|space| space.profile == profile && space.agent.is_empty())
+            .map(|space| space.id)
+    }
+
+    /// Site Controls' Open in <profile> (#2339): the tab's page in a new tab of the first of the
+    /// user's Spaces in `profile`, shown, as Little ilo's picker goes to that profile's first
+    /// Space. It loads fresh there, as the profile's cookies are its own (decision 5).
+    pub fn open_in_profile(&mut self, tab: u64, profile: u64, cx: &mut Context<Self>) {
+        let url = self.page(tab).url;
+        let Some(space) = self.users_space_in(profile) else {
+            return;
+        };
+        self.show_space(space, cx);
+        self.browser.open_page(&url, cx);
+    }
+
+    /// Site Controls' New Space in <profile>…, for a profile none of the user's Spaces is in: New
+    /// Space's form, its Space in `profile`.
+    pub fn new_space_in_profile(&mut self, profile: u64, cx: &mut Context<Self>) {
+        self.new_space_from(None, Some(profile), cx);
     }
 
     /// A button at the URL field's end, `end` in from it, shown while the pointer is over the
@@ -966,8 +1022,10 @@ pub(super) fn reload_glyph(loading: bool) -> &'static str {
 /// lights, or starts near the sidebar's edge in full screen, where they're gone (Arc 1.171). The
 /// others keep to the sidebar's right edge, NAV_TRAIL in and NAV_PITCH apart (Arc 1.170), and a
 /// narrow sidebar loses reload, then forward, while back would come nearer the sidebar button than
-/// NAV_AFTER_SIDEBAR.
-pub(super) fn nav_places(width: f32, full_screen: bool) -> [Option<f32>; 4] {
+/// NAV_AFTER_SIDEBAR. With the sidebar on the `right` the row is mirrored, the sidebar button by the
+/// window's buttons at the right edge, but back, forward and reload keep their order, back NAV_TRAIL
+/// from the page (#2375).
+pub(super) fn nav_places(width: f32, full_screen: bool, right: bool) -> [Option<f32>; 4] {
     let sidebar = if full_screen {
         FULL_SCREEN_SIDEBAR_BUTTON_X
     } else {
@@ -981,8 +1039,14 @@ pub(super) fn nav_places(width: f32, full_screen: bool) -> [Option<f32>; 4] {
     let mut places = [Some(sidebar), None, None, None];
     if let Some(count) = count.filter(|&count| count > 0) {
         for index in 0..count {
-            places[1 + index] = Some(last - (count - 1 - index) as f32 * NAV_PITCH);
+            places[1 + index] = Some(match right {
+                true => NAV_TRAIL + index as f32 * NAV_PITCH,
+                false => last - (count - 1 - index) as f32 * NAV_PITCH,
+            });
         }
+    }
+    if right {
+        places[0] = Some(width - sidebar - NAV_SIZE);
     }
     places
 }

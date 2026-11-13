@@ -1894,6 +1894,15 @@ void Install() {
     CHECK(SyncCommitIsCiphertext(type, commit))
         << "plaintext in a commit of " << syncer::DataTypeToDebugString(type);
   };
+  g_browser_core_sync_keep_update = [](syncer::DataType type, bool encrypted,
+                                       const sync_pb::SyncEntity& update) {
+    if (KeepSyncUpdate(type, encrypted, update)) {
+      return true;
+    }
+    LOG(ERROR) << "browser: sync dropped an update of " << syncer::DataTypeToDebugString(type)
+               << " that isn't ciphertext";
+    return false;
+  };
   g_browser_core_sync_password_tag = &SyncPasswordTag;
   g_browser_core_sync_controllers = [](Profile* profile, syncer::SyncService*) {
     std::vector<std::unique_ptr<syncer::DataTypeController>> controllers;

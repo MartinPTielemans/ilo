@@ -17,6 +17,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/arrange.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/boosts.h"
 #include "browser_core/favorites.h"
@@ -378,6 +379,7 @@ void Tab::Attach(content::WebContents* contents) {
   // A press with a modifier held may be the app's, such as ⇧⌘-drag's capture.
   PagePresses::CreateForWebContents(contents, id_);
   Boosts::CreateForWebContents(contents, id_);
+  Arrange::CreateForWebContents(contents, id_);
   // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
   AutofillMenu::Watch(contents);
   // Its page's language, and the app's translation of it (#671).

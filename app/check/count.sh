@@ -1,3 +1,4 @@
+# check.sh runs this at 620.
 # The daily usage count (#1977) goes once a UTC day to the endpoint the build names, and nowhere
 # else, against an endpoint of the run's own, check/count-server.py, as only the prod build names
 # ilo's. On a profile of its own, which a launch finds new or not:
@@ -57,6 +58,7 @@ launch_count() {
   step=0
   if [ -n "$2" ]; then
     set -- "--daily-count-url=$2"
+    own_count_logs="$own_count_logs $log"
   else
     set --
   fi
@@ -130,7 +132,7 @@ first_count=$why
   fail "the date kept after the count was '$(cat "$last_file" 2>/dev/null)', not today's"
 # Its switch is in Privacy, on, and turned off there it keeps its file.
 privacy count-privacy.png
-send clickkey $(drawn "switch send a daily usage count")
+click_in_sight "switch send a daily usage count"
 expect '^browser: send a daily usage count off$' "a click on the switch didn't turn the count off"
 expect '^browser: daily count switch off$' "turning the switch off didn't reach the count"
 [ -e "$off_file" ] || fail "the switch turned off left no $off_file"
@@ -145,7 +147,7 @@ launch_count off "$endpoint/v1/daily"
 await '^browser: daily count not sent: off$' || fail "the launch with the count off didn't hold it"
 grep -q '^browser: daily count sending' "$log" && fail "the launch with the count off sent one"
 privacy count-privacy-off-launch.png
-send clickkey $(drawn "switch send a daily usage count")
+click_in_sight "switch send a daily usage count"
 expect '^browser: send a daily usage count on$' "a click on the switch didn't turn the count on"
 expect '^browser: daily count switch on$' "turning the switch on didn't reach the count"
 [ ! -e "$off_file" ] || fail "the switch turned on left $off_file"

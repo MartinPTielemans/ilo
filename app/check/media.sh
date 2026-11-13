@@ -1,3 +1,4 @@
+# check.sh runs this at 260.
 # A tab in a call says so on its row, as Chrome's tab strip does: the camera while its page uses the
 # camera, the microphone alone, or the screen while it shares a screen, a window or a tab, and the
 # tab it shares shows the screen too. While it shares a tab, another tab's menu has Share This Tab
@@ -38,7 +39,13 @@ answer_macos() {
   [ -x "$out/alert" ] ||
     clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
     fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
-  asked=$("$out/alert" 2>&1) || fail "ilo lost its activation $2, to no question: $asked"
+  # The job on GitHub's hosted Mac answers the local network's question as it comes
+  # (check-mac.yml), and ilo has its activation back.
+  asked=$("$out/alert" 2>&1) || {
+    send state
+    [ "$active" = 1 ] && return 0
+    fail "ilo lost its activation $2, to no question: $asked"
+  }
   echo "macOS asked $2, and the run answers Allow: $asked"
   "$out/alert" "" Allow > "$out/alert.txt" 2>&1 || true
   for _ in $(seq 50); do
@@ -348,8 +355,7 @@ send click $page_point
 # The call's Site Controls list the Automatic picture-in-picture it asked for. Blocked there, the
 # call stays in its tab as the tab hides, and allowed, it floats again. Back at Ask, Settings'
 # switch turns it off for every site the user hasn't allowed, and on again. The panel hangs from
-# the URL field's button at 206 64, its first row's middle at y 262, the rows 43 apart; Safari's
-# engine's row comes before the permissions.
+# the URL field's button at 206 64, and logs where it drew each line.
 # floats <value> [capture]: sets the call's Automatic picture-in-picture to <value> in its Site
 # Controls, capturing them first as <capture>.
 floats() {
@@ -362,11 +368,7 @@ floats() {
     "the floating call's Site Controls didn't list Automatic picture-in-picture"
   expect '^browser: site controls settled$' "the floating call's Site Controls didn't open"
   [ -z "${2:-}" ] || ../tools/window-screenshot.sh "$pid" "$out/$2" || fail "no window to capture"
-  line=$(grep '^browser: site controls .*Automatic picture-in-picture ' "$log" | tail -1)
-  i=$(echo "$line" | sed 's/^[^;]*; //;s/;.*//' | tr ',' '\n' | sed 's/^ //' |
-    grep -n '^Automatic picture-in-picture ' | cut -d: -f1)
-  case "$line" in *"; Safari's engine "*) i=$((i + 1)) ;; esac
-  post click 207 $((262 + 43 * (i - 1)))
+  click_placed post "line Automatic picture-in-picture"
   expect "^browser: menu shown .*$1" "Automatic picture-in-picture's menu didn't offer $1"
   send choose "$1"
   expect "^browser: site controls set Automatic picture-in-picture $1\$" "$1 in the menu didn't run"
@@ -386,7 +388,7 @@ mini_player() {
     expect '^browser: settings tab Features$' "a click on Features didn't show its section"
     settings_drew Features
   fi
-  send clickkey $(drawn "switch mini player")
+  click_in_sight "switch mini player"
   expect "^browser: mini player $1\$" "a click on the Mini Player's switch didn't turn it $1"
   [ "$1" = on ] || ../tools/window-screenshot.sh "$pid" "$out/settings-mini-player.png" ||
     fail "no window to capture"
@@ -891,6 +893,8 @@ second=$(grep -c '^browser: window opened ' "$log")
 if [ "$(uname)" != Linux ]; then
   opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
   expect "^browser: window $opened main true\$" "the window ⌘N opened didn't become the main one"
+else
+  echo "skip: the window ⌘N opened becoming the main one: Linux's host doesn't say which is."
 fi
 send window 1
 expect 'browser: mini player back in its tab$' \

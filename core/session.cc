@@ -608,6 +608,15 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("notification_prompts", saved.settings.notification_prompts)
                            .Set("appearance", saved.settings.appearance)
                            .Set("space_header", saved.settings.space_header));
+  base::DictValue lists;
+  for (const auto& [key, on] : saved.settings.ad_block_lists) {
+    lists.Set(key, on);
+  }
+  base::DictValue& settings = *root.FindDict("settings");
+  settings.Set("ad_block_lists", std::move(lists));
+  if (saved.settings.ad_block_filters) {
+    settings.Set("ad_block_filters", *saved.settings.ad_block_filters);
+  }
   return base::WriteJson(root);
 }
 
@@ -871,6 +880,16 @@ std::optional<Saved> Read(const base::FilePath& path) {
     }
     saved.settings.unload_idle_tabs = settings->FindBool("unload_idle_tabs").value_or(true);
     saved.settings.ad_blocking = settings->FindBool("ad_blocking").value_or(true);
+    if (const base::DictValue* lists = settings->FindDict("ad_block_lists")) {
+      for (const auto [key, on] : *lists) {
+        if (on.is_bool()) {
+          saved.settings.ad_block_lists[key] = on.GetBool();
+        }
+      }
+    }
+    if (const std::string* filters = settings->FindString("ad_block_filters")) {
+      saved.settings.ad_block_filters = *filters;
+    }
     saved.settings.send_crash_reports =
         settings->FindBool("send_crash_reports").value_or(false);
     saved.settings.relay_calls = settings->FindBool("relay_calls").value_or(false);

@@ -18,7 +18,8 @@ pub const SWITCH: &str = "--daily-count-url";
 /// A count's flags besides `daily`, which is always true.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Flags {
-    /// The copy's first run: the launch found no data of an earlier one.
+    /// The copy's first count: its first run, which found no data of an earlier one, before any
+    /// count of its own.
     pub first: bool,
     /// The copy's first count this ISO week.
     pub weekly: bool,
@@ -33,7 +34,9 @@ pub fn due(last: Option<NaiveDate>, today: NaiveDate, first_run: bool) -> Option
         return None;
     }
     Some(Flags {
-        first: first_run,
+        // Only the copy's first count: a first run left open past midnight counts the next day as
+        // any other copy does, and so does a launch whose profile lost its Local State (#2303).
+        first: first_run && last.is_none(),
         weekly: last.is_none_or(|last| last.iso_week() != today.iso_week()),
         monthly: last
             .is_none_or(|last| (last.year(), last.month()) != (today.year(), today.month())),
@@ -98,6 +101,18 @@ mod tests {
             monthly: true,
         };
         assert_eq!(due(None, today, true), Some(flags));
+    }
+
+    #[test]
+    fn only_the_copys_first_count_is_first() {
+        let today = day("2026-11-06");
+        // The first run, still open on the next day, or a profile that lost its Local State.
+        let flags = due(Some(day("2026-11-05")), today, true).unwrap();
+        assert!(!flags.first);
+        // A first count that never reached the server stays the first.
+        assert!(due(None, today, true).unwrap().first);
+        // A launch after the first, whose first count never went, isn't a new copy.
+        assert!(!due(None, today, false).unwrap().first);
     }
 
     #[test]

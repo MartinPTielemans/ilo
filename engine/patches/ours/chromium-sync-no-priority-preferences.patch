@@ -1,0 +1,17 @@
+Keeps Chromium's priority preferences out of sync. They're a few settings, among them whether to
+offer to save passwords, auto sign-in and automatic passkey upgrades, which Chromium syncs in
+plain text, so the account's server could write one and change what ilo does. Each device keeps
+its own. ilo's settings that follow the account sync as ILO_SETTING, under the passphrase.
+
+--- a/components/sync/base/data_type.h
++++ b/components/sync/base/data_type.h
+@@ -352,7 +352,8 @@
+           ACCOUNT_SETTING,
+           DEVICE_INFO,
+           USER_CONSENTS,
+-          PRIORITY_PREFERENCES,
++          // browser_core: not PRIORITY_PREFERENCES, which Chromium never
++          // encrypts, so the server could write a setting ilo acts on.
+           SECURITY_EVENTS,
+           SEND_TAB_TO_SELF,
+           SUPERVISED_USER_SETTINGS,
