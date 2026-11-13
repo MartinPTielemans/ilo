@@ -1,0 +1,80 @@
+Opens the shared dictionary store's database in WAL mode. With SQLite's rollback journal, each
+compression dictionary a page registers is a transaction whose commit waits for the disk, in a
+sequence the network service's shutdown waits for. Notion's page registers 8 to 24 a load, and on
+Windows' runner a quit as it loaded took 0.4 to 1.5 s, growing with the dictionaries kept, where
+0.2 s without them, and profiles' quit passed the browser's 10 s wait for the network service
+(#2439). In WAL mode sql::Database sets synchronous=NORMAL: a commit appends to the log without
+waiting for the disk, and only checkpoints and the close do. A power cut may lose the last commits,
+each a whole registration or deletion, but leaves the database uncorrupted, which the rollback
+journal without flush_to_media doesn't promise (sql/database.h). Each clear ends with a
+truncating checkpoint, so a power cut after Clear browsing data or a Clear-Site-Data header can't
+bring back what it cleared.
+
+--- a/net/extras/sqlite/sqlite_persistent_shared_dictionary_store.cc
++++ b/net/extras/sqlite/sqlite_persistent_shared_dictionary_store.cc
+@@ -329,6 +329,10 @@
+   SizeOrError GetTotalDictionaryCount();
+ 
+   // SQLitePersistentStoreBackendBase implementation
++  // browser_core: with a rollback journal each registration's commit waits for
++  // the disk, in a sequence quitting waits for, which took the network service
++  // past the browser's 10 s wait after pages that register dozens (#2439).
++  bool UseWALMode() const override { return true; }
+   bool CreateDatabaseSchema() override;
+   std::optional<int> DoMigrateDatabaseSchema() override;
+   void DoCommit() override;
+@@ -1065,6 +1069,10 @@
+   if (!transaction.Commit()) {
+     return base::unexpected(Error::kFailedToCommitTransaction);
+   }
++  // browser_core: in WAL mode a commit reaches the disk only at a checkpoint,
++  // so a power cut could bring back what was cleared. The checkpoint makes the
++  // clear durable, and truncating the log drops the cleared rows it held.
++  db()->CheckpointDatabase(/*truncate=*/true);
+   return base::ok(
+       std::set<base::UnguessableToken>(tokens.begin(), tokens.end()));
+ }
+@@ -1114,6 +1122,8 @@
+   }
+ 
+   transaction.Commit();
++  // browser_core: as in ClearAllDictionariesImpl.
++  db()->CheckpointDatabase(/*truncate=*/true);
+   return base::ok(
+       std::set<base::UnguessableToken>(tokens.begin(), tokens.end()));
+ }
+@@ -1281,6 +1291,8 @@
+     }
+   }
+   transaction.Commit();
++  // browser_core: as in ClearAllDictionariesImpl.
++  db()->CheckpointDatabase(/*truncate=*/true);
+   return base::ok(
+       std::set<base::UnguessableToken>(tokens.begin(), tokens.end()));
+ }
+--- a/net/extras/sqlite/sqlite_persistent_store_backend_base.cc
++++ b/net/extras/sqlite/sqlite_persistent_store_backend_base.cc
+@@ -103,7 +103,8 @@
+   db_ = std::make_unique<sql::Database>(
+       sql::DatabaseOptions()
+           .set_exclusive_locking(false)
+-          .set_exclusive_database_file_lock(enable_exclusive_access_),
++          .set_exclusive_database_file_lock(enable_exclusive_access_)
++          .set_wal_mode(UseWALMode()),
+       histogram_tag_);
+ 
+   // base::Unretained is safe because |this| owns (and therefore outlives) the
+--- a/net/extras/sqlite/sqlite_persistent_store_backend_base.h
++++ b/net/extras/sqlite/sqlite_persistent_store_backend_base.h
+@@ -98,6 +98,11 @@
+   virtual void RecordOpenDBProblem() {}
+   virtual void RecordDBMigrationProblem() {}
+ 
++  // browser_core: whether the database is opened in WAL mode, where a commit
++  // doesn't wait for the disk and a power cut loses the last commits but never
++  // corrupts the file (sql::DatabaseOptions::set_wal_mode).
++  virtual bool UseWALMode() const { return false; }
++
+   // Embedder-specific database upgrade statements. Returns the version number
+   // that the database ends up at, or returns nullopt on error. This is called
+   // during MigrateDatabaseSchema() which is called during InitializeDatabase(),

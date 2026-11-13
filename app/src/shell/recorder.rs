@@ -554,6 +554,19 @@ impl Browser for Recorder {
         self.record(format!("media {tab} {action:?}"));
     }
 
+    fn show_video(&self, tab: u64, frame: Option<Bounds<Pixels>>, radius: f32, _: &mut App) {
+        match frame {
+            Some(at) => self.record(format!(
+                "show video {tab} at {} {} {} {} round {radius}",
+                f32::from(at.origin.x),
+                f32::from(at.origin.y),
+                f32::from(at.size.width),
+                f32::from(at.size.height)
+            )),
+            None => self.record(format!("show video {tab} none")),
+        }
+    }
+
     fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
         self.record(format!("volume {tab} {volume:.2}"));
     }
@@ -1401,8 +1414,9 @@ impl Browser for Recorder {
     }
 
     /// The host's clipboard holds what was copied last.
-    fn pasted(&self, _: &App) -> Option<String> {
-        self.copied.borrow().last().cloned()
+    fn pasted(&self, cx: &mut App, done: crate::clipboard::Done) {
+        let text = self.copied.borrow().last().cloned();
+        cx.defer(move |cx| done(text, cx));
     }
 
     fn share_services(&self, _: &str) -> Vec<SharedString> {

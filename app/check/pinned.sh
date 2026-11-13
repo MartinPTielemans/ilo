@@ -23,7 +23,8 @@
 # but a link that isn't a web link doesn't open. A split made with a pinned tab is pinned, by ⌥-click
 # on its link or by dragging one pinned tab onto another. Away from
 # its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change its pinned URL,
-# which ⌘Z gives back, and ⌘-click on its favicon goes back keeping the page in a new tab. Pinned at
+# which ⌘Z gives back, and one that redirects is home where it lands. ⌘-click on its favicon goes
+# back keeping the page in a new tab. Pinned at
 # another host than its page's, its row names the page's host under its title. Export
 # Space as Markdown… saves the Space's folders, pinned tabs and Today tabs as a list of links. The
 # chevron after the Space's name collapses the pinned rows but the tab shown's, which the tabs'
@@ -373,6 +374,22 @@ expect "^browser: page $c left pinned host 1\$" "a pinned tab off its pinned URL
 ../tools/window-screenshot.sh "$pid" "$out/pinned-host.png" || fail "no window to capture"
 send key z cmd
 expect "^browser: page $c left pinned host 0\$" "⌘Z gave the pinned URL back but kept the host line"
+# A pinned URL the server redirects is home where the redirect lands, so the tab gone back there
+# isn't away from it: Edit… pins the server's /bounce to its first page, and ⌘↩ goes through it.
+post rightclick $(pinned_row 0)
+expect "^browser: menu shown $(cased 'Unpin Tab, ')" "a right-click on the pinned tab didn't show its menu"
+send choose "$(cased 'Pinned URL › Edit…')"
+expect "^browser: edit pinned url $c\$" "Edit… didn't show the pinned URL in a field"
+send type "${site}bounce?to=$site"
+send key return
+send click $page_point
+send key return cmd
+expect '^browser: command back-to-pinned-url via page$' "⌘↩ didn't run Back to Pinned URL"
+expect "^browser: loaded $c $site\$" "⌘↩ didn't land where the pinned URL redirects"
+expect "^browser: page $c away 0\$" "the pinned tab read as away where its pinned URL redirects"
+send key z cmd
+expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the redirecting pinned URL"
+link_away
 # ⌘-click on its favicon goes back too, keeping the page it's at in a new tab at the top of Today,
 # opened first, which shows (Arc).
 # Its row draws −, shown or not.

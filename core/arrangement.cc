@@ -21,8 +21,9 @@ namespace {
 // Each site's record: the SHA-256 of the arrangement turned on, in lowercase hex.
 constexpr char kRecords[] = "browser_core.arrangements";
 
-// The file, a change, a neighbour, its target and its fingerprint: deeper is never the schema.
-constexpr size_t kMaxDepth = 6;
+// The file, its list of changes, a change, a neighbour, its target and its fingerprint: deeper is
+// never the schema. JSONReader's depth counts the top level once more, so six containers take 7.
+constexpr size_t kMaxDepth = 7;
 // Further than any page is long or wide, in CSS pixels.
 constexpr double kMaxPlace = 1e6;
 

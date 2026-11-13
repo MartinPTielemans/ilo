@@ -13,7 +13,7 @@ Each principle has what was **seen**, with the spec section it comes from, our *
 ## Under the fingers, physics; otherwise, a fixed time
 
 - **Seen.** When the fingers lift, the Space pages settle on a spring that starts at the fingers' speed, ω ≈ 33 (Motion › Space settle). While a theme picker handle, its wave or its dial is dragged, the window takes the colours every frame, with no lag behind the pointer (Themes). The sidebar reveal springs about 4 pt past its rest. A key or a click moves things on fixed curves instead: ⌘S hides the sidebar in 110 ms, and the delete dialog moves 0.275 s, ease-in-out. Fingers in the Library's cards scroll them and stay theirs (Library › Spaces).
-- **Reading.** A dragged thing has to keep the speed the hand gave it, or it stops feeling held. A key press gives no speed to keep, so a fixed curve is the predictable choice.
+- **Reading.** A dragged thing must keep the speed the hand gave it, or it stops feeling held. A key press gives no speed to keep, so a fixed curve is the predictable choice.
 - **Applies.** Whatever a gesture moves hands its speed to a spring when the gesture ends. Whatever a key or a click starts runs on a short fixed curve. A swipe moves one thing, however far the fingers go: one Space, never on into the Library (the owner, over a recording read as one swipe carrying on), or the list it starts in.
 
 ## One change at a time, in an order you can follow
@@ -67,7 +67,7 @@ Each principle has what was **seen**, with the spec section it comes from, our *
 ## Delight on rare paths only
 
 - **Seen.** Making a Space plays an illustration for about 2 s, and the pull glows. Switching, closing and clearing tabs have no flourish. A press on a row shows its tab, and one on a folder opens or closes it, before the release, 100 to 300 ms sooner than a click would (Sidebar › Behavior › Showing a tab).
-- **Reading.** What you do a hundred times a day has to be instant. What you do once a month can be a moment.
+- **Reading.** What you do a hundred times a day must be instant. What you do once a month can be a moment.
 - **Applies.** Decoration goes on rare paths. Hot paths stay plain and fast (the performance gate in [roadmap.md](roadmap.md)), and act on the press when a drag that follows can carry what it did. We skip Arc's illustrations: the art is Arc's, and a 2 s wait isn't how we want it to feel.
 
 ## Pay when it's looked at

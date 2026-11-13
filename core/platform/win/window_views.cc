@@ -43,8 +43,12 @@
 #include "ui/base/win/shell.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size_conversions.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/views/focus/native_view_focus_manager.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/widget/native_widget_aura.h"
@@ -414,6 +418,13 @@ struct Slot {
   std::optional<double> corner_radius;
 };
 
+// How a link preview's page is drawn, for the motion of the app's card round it (DrawPageIn).
+struct Drawn {
+  float scale = 1;
+  gfx::PointF about;
+  float opacity = 1;
+};
+
 // The pages and DevTools a window shows once it changes, which move between its slots unhidden.
 using Staying = std::vector<aura::Window*>;
 
@@ -602,12 +613,18 @@ class WindowViews : public views::WidgetObserver,
     } else {
       slot.page->SetBounds(bounds);
     }
+    double radius = slot.corner_radius.value_or(corner_radius_);
+    gfx::Rect shown(pixels.size());
+    if (&slot == &preview_) {
+      shown = DrawnIn(frame, scale, shown);
+      radius *= preview_drawn_.scale;
+    }
     // shortcut: a window region's corners are aliased, unlike Core Animation's on the Mac; upgrade
     // to a DirectComposition clip if the edge shows.
-    const int diameter =
-        base::ClampRound(2 * slot.corner_radius.value_or(corner_radius_) * scale);
-    HRGN region = CreateRoundRectRgn(0, 0, pixels.width() + 1, pixels.height() + 1, diameter,
-                                     diameter);
+    const int diameter = base::ClampRound(2 * radius * scale);
+    HRGN region = shown.IsEmpty() ? CreateRectRgn(0, 0, 0, 0)
+                                  : CreateRoundRectRgn(shown.x(), shown.y(), shown.right() + 1,
+                                                       shown.bottom() + 1, diameter, diameter);
     if (slot.bottom_corners_only) {
       HRGN top = CreateRectRgn(0, 0, pixels.width(), pixels.height() / 2);
       CombineRgn(region, region, top, RGN_OR);
@@ -624,6 +641,7 @@ class WindowViews : public views::WidgetObserver,
     aura::Window* parent = holder->GetNativeView();
     if (preview_.page != page) {
       Empty(preview_);
+      preview_drawn_ = Drawn();
       if (page->parent()) {
         page->parent()->RemoveChild(page);
       }
@@ -635,6 +653,46 @@ class WindowViews : public views::WidgetObserver,
     preview_.insets = InsetsOf(frame, ContentSize());
     ShowInactive(holder);
     LayOut();
+  }
+
+  // Draws the link preview's page at |scale| of its frame about |about|, in the window's content,
+  // and at |opacity|, so it's never laid out again for it: its child window stays at its frame and
+  // shows only where the page is drawn, and the page blends with the window's background there,
+  // not with the page under it.
+  void DrawPreview(aura::Window* page, float scale, const gfx::PointF& about, float opacity) {
+    if (preview_.page != page) {
+      return;
+    }
+    preview_drawn_ = {scale, about, opacity};
+    LayOut(preview_, ContentSize(), Scale());
+  }
+
+  // As the preview's slot is laid out at |frame|, |pixels| in its child window: its content's
+  // transform and opacity, and where in the window it shows, in pixels.
+  gfx::Rect DrawnIn(const gfx::Rect& frame, float scale, const gfx::Rect& pixels) {
+    const Drawn& drawn = preview_drawn_;
+    aura::Window* content = preview_.widget->GetNativeView();
+    const float in_x = drawn.about.x() - frame.x();
+    const float in_y = drawn.about.y() - frame.y();
+    gfx::Transform transform;
+    if (drawn.scale != 1) {
+      transform.Translate(in_x, in_y);
+      transform.Scale(drawn.scale, drawn.scale);
+      transform.Translate(-in_x, -in_y);
+    }
+    if (content->transform() != transform) {
+      content->SetTransform(transform);
+    }
+    content->layer()->SetOpacity(drawn.opacity);
+    if (drawn.opacity <= 0) {
+      return gfx::Rect();
+    }
+    if (drawn.scale == 1) {
+      return pixels;
+    }
+    const gfx::RectF shown(in_x * (1 - drawn.scale), in_y * (1 - drawn.scale),
+                           frame.width() * drawn.scale, frame.height() * drawn.scale);
+    return gfx::ToEnclosingRect(gfx::ScaleRect(shown, scale));
   }
 
   // aura::WindowObserver: a page or DevTools a slot holds is going.
@@ -720,6 +778,13 @@ class WindowViews : public views::WidgetObserver,
         SetFocus(had);
       }
     } else if (message == WM_SIZE) {
+      // Windows activates a minimized window before it restores it, as the second Win+D does, and
+      // gives the keyboard to nothing then or as it restores it, so no WM_SETFOCUS comes and keys
+      // reached no view (#2635). The window takes it back as it's restored.
+      if (w_param != SIZE_MINIMIZED && !GetFocus() && GetActiveWindow() == hwnd) {
+        HWND had = std::exchange(had_keyboard_, nullptr);
+        SetFocus(had && IsChild(hwnd, had) && IsWindowVisible(had) ? had : hwnd);
+      }
       SizeChanged(w_param);
     } else if (message == WM_DPICHANGED) {
       // The pages go again at the new scale once Chromium has taken it and the window's new rect,
@@ -761,6 +826,8 @@ class WindowViews : public views::WidgetObserver,
   Slot side_panel_;
   // A link preview's page, over the panes.
   Slot preview_;
+  // How its page is drawn for the card's motion (DrawPreview).
+  Drawn preview_drawn_;
   // After the slots, so it leaves its holder before that goes.
   FocusRing ring_;
   double corner_radius_ = 0;
@@ -995,6 +1062,17 @@ void ShowPageIn(views::Widget* widget,
   }
 }
 
+void DrawPageIn(views::Widget* widget,
+                gfx::NativeView page,
+                float scale,
+                const gfx::PointF& about,
+                float opacity) {
+  WindowViews* views = widget ? ViewsOf(widget) : nullptr;
+  if (views && page) {
+    views->DrawPreview(page, scale, about, opacity);
+  }
+}
+
 std::optional<gfx::Rect> FocusRingFrame(views::Widget* widget) {
   WindowViews* views = ViewsOf(widget);
   if (!views) {
@@ -1040,6 +1118,44 @@ bool FocusSettledOnActivation() {
   // Windows activates a window inside SetForegroundWindow, which the core can call part way
   // through a change, and it hasn't been measured there: as before, from a posted task.
   return false;
+}
+
+namespace {
+
+// Answers |widget|'s hit test with HTTRANSPARENT, so the pointer goes to the window of the same
+// thread under it, the browser window, as views' accept_events doesn't for a popup. Goes with the
+// widget.
+class PassThrough : public ui::HWNDMessageFilter, public views::WidgetObserver {
+ public:
+  explicit PassThrough(views::Widget* widget) {
+    ui::HWNDSubclass::AddFilterToTarget(views::HWNDForWidget(widget), this);
+    observation_.Observe(widget);
+  }
+
+  // ui::HWNDMessageFilter:
+  bool FilterMessage(HWND, UINT message, WPARAM, LPARAM, LRESULT* result) override {
+    if (message != WM_NCHITTEST) {
+      return false;
+    }
+    *result = HTTRANSPARENT;
+    return true;
+  }
+
+  // views::WidgetObserver:
+  void OnWidgetDestroying(views::Widget*) override {
+    ui::HWNDSubclass::RemoveFilterFromAllTargets(this);
+    observation_.Reset();
+    delete this;
+  }
+
+ private:
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+};
+
+}  // namespace
+
+void PassPointerThrough(views::Widget* widget) {
+  new PassThrough(widget);
 }
 
 bool PageDialogsInOwnWindow() {
