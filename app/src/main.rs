@@ -880,8 +880,13 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // waking it: woken mid-task, the IO thread can wait out the UI thread's turn on its CPU,
         // which held a shown page's first message 0.4 ms on Linux's tab switch (#2377).
         format!(
-            "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval,\
-             MojoChannelAssociatedSendUsesRunOrPostTask{}",
+            "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval{}{}",
+            // Proof only (#2377): the A/B's other arm runs without it.
+            if std::env::var_os("ILO_PROBE_NO_SEND_DIRECT").is_some() {
+                ""
+            } else {
+                ",MojoChannelAssociatedSendUsesRunOrPostTask"
+            },
             if cfg!(target_os = "macos") {
                 ",AperitifHelpers"
             } else {
