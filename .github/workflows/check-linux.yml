@@ -53,7 +53,7 @@ env:
   # The runs that pass on X11 so far.
   LINUX_RUNS: >-
     tabs window find agents spaces crash profiles private blank quit mcp appearance access history
-    load preview import adblock adblock-lists adblock-cosmetic passkeys onboarding links relaunch
+    load preview import adblock adblock-lists adblock-cosmetic adblock-page passkeys onboarding links relaunch
     split extensions capture popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
