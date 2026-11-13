@@ -33,8 +33,9 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 tab=$(today | cut -d' ' -f1)
-expect "^browser: title $tab Page blocked\$" \
-  "the listed page didn't show the warning: $(grep "^browser: title $tab " "$log" | tail -1)"
+# No command is sent yet, so the wait reads the whole log.
+await "^browser: title $tab Page blocked\$" ||
+  fail "the listed page didn't show the warning: $(grep "^browser: title $tab " "$log" | tail -1)"
 grep -q '/blocked\.html' "$out/site.log" && fail "the listed page reached the server"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-page.png" || fail "no window to capture"
 
