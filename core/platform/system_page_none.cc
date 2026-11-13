@@ -19,12 +19,6 @@ std::unique_ptr<SystemPage> SystemPage::Create(const SystemStore&, const GURL&, 
 
 void SystemPage::DeleteStore(const std::string&) {}
 
-std::vector<std::string> SystemPage::GivenStores(const base::FilePath&) {
-  return {};
-}
-
-void SystemPage::SetGivenStores(const base::FilePath&, const std::vector<std::string>&) {}
-
 void SystemPage::ReleaseStore(const std::string&) {}
 
 void SystemPage::ClearSite(const SystemStore&,

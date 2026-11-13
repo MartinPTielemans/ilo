@@ -8,8 +8,32 @@
 #include "base/json/json_reader.h"
 #include "base/values.h"
 #include "chrome/common/chrome_constants.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
 
 namespace browser_core {
+
+void RegisterGivenStores(PrefRegistrySimple* registry) {
+  registry->RegisterListPref(kGivenStoresPref);
+}
+
+std::vector<std::string> GivenStores(const PrefService& local_state) {
+  std::vector<std::string> given;
+  for (const base::Value& each : local_state.GetList(kGivenStoresPref)) {
+    if (each.is_string()) {
+      given.push_back(each.GetString());
+    }
+  }
+  return given;
+}
+
+void SetGivenStores(PrefService& local_state, const std::vector<std::string>& ids) {
+  base::ListValue list;
+  for (const std::string& each : ids) {
+    list.Append(each);
+  }
+  local_state.SetList(kGivenStoresPref, std::move(list));
+}
 
 std::string StoreNamedOnDisk(const base::FilePath& path) {
   std::string json;

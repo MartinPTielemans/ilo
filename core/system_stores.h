@@ -10,10 +10,25 @@
 
 #include "base/files/file_path.h"
 
+class PrefRegistrySimple;
+class PrefService;
+
 namespace browser_core {
 
 // The profile pref that names the profile's store.
 inline constexpr char kSystemStorePref[] = "browser_core.system_engine.store";
+
+// The local state pref listing the stores given to the data folder's profiles. In the folder, so
+// it goes with it: a clean folder started at a moved-aside one's path lists none of the other's,
+// and deletes none of them (#2664). A data folder removed whole leaves its stores, never deletes a
+// live one.
+inline constexpr char kGivenStoresPref[] = "browser_core.system_engine.given_stores";
+
+void RegisterGivenStores(PrefRegistrySimple* registry);
+
+// The ids listed in |local_state|, and lists |ids| there.
+std::vector<std::string> GivenStores(const PrefService& local_state);
+void SetGivenStores(PrefService& local_state, const std::vector<std::string>& ids);
 
 // The id of the store the profile at |path| names in its Preferences on disk, for a profile that
 // isn't loaded. Empty for none.

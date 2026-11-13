@@ -33,6 +33,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/services/storage/public/mojom/local_storage_control.mojom.h"
@@ -139,10 +140,15 @@ class PrivateStore : public base::SupportsUserData::Data {
   const std::string id = base::Uuid::GenerateRandomV4().AsLowercaseString();
 };
 
-// The data folder the profiles are in, whose stores SystemPage lists.
+// The data folder the profiles are in.
 base::FilePath DataFolder() {
   ProfileManager* manager = g_browser_process->profile_manager();
   return manager ? manager->user_data_dir() : base::FilePath();
+}
+
+// The data folder's Local State, which lists the stores its profiles were given.
+PrefService& LocalState() {
+  return *g_browser_process->local_state();
 }
 
 void DeleteStoreOf(const std::string& id) {
@@ -150,16 +156,16 @@ void DeleteStoreOf(const std::string& id) {
     return;
   }
   platform::SystemPage::DeleteStore(id);
-  std::vector<std::string> given = platform::SystemPage::GivenStores(DataFolder());
+  std::vector<std::string> given = GivenStores(LocalState());
   if (std::erase(given, id)) {
-    platform::SystemPage::SetGivenStores(DataFolder(), given);
+    SetGivenStores(LocalState(), given);
   }
 }
 
-// Deletes the stores given to profiles in |folder| that no profile names any more, as when a
+// Deletes the stores given to the data folder's profiles that no profile names any more, as when a
 // profile's folder was removed by hand, and lists the ones named, such as a store an earlier
 // version gave.
-void Sweep(const base::FilePath& folder, std::set<std::string> named) {
+void Sweep(std::set<std::string> named) {
   ProfileManager* manager = g_browser_process->profile_manager();
   if (!manager) {
     return;
@@ -171,12 +177,12 @@ void Sweep(const base::FilePath& folder, std::set<std::string> named) {
       named.insert(std::move(id));
     }
   }
-  const std::vector<std::string> given = platform::SystemPage::GivenStores(folder);
+  const std::vector<std::string> given = GivenStores(LocalState());
   for (const std::string& id : StoresUnnamed(given, named)) {
     platform::SystemPage::DeleteStore(id);
   }
   if (std::set<std::string>(given.begin(), given.end()) != named) {
-    platform::SystemPage::SetGivenStores(folder, {named.begin(), named.end()});
+    SetGivenStores(LocalState(), {named.begin(), named.end()});
   }
 }
 
@@ -612,9 +618,9 @@ platform::SystemStore StoreOf(Profile* profile) {
     // so no store goes unnamed.
     id = base::Uuid::GenerateRandomV4().AsLowercaseString();
     prefs->SetString(kSystemStorePref, id);
-    std::vector<std::string> given = platform::SystemPage::GivenStores(DataFolder());
+    std::vector<std::string> given = GivenStores(LocalState());
     given.push_back(id);
-    platform::SystemPage::SetGivenStores(DataFolder(), given);
+    SetGivenStores(LocalState(), given);
   }
   return {id, true};
 }
@@ -742,6 +748,10 @@ void DeleteStore(const base::FilePath& path, base::OnceClosure then) {
           std::move(then)));
 }
 
+void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
+  RegisterGivenStores(registry);
+}
+
 void SweepStores() {
   if (!Available()) {
     return;
@@ -756,7 +766,7 @@ void SweepStores() {
                    }
                    base::ThreadPool::PostTaskAndReplyWithResult(
                        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-                       base::BindOnce(&StoresNamedOnDisk, folder), base::BindOnce(&Sweep, folder));
+                       base::BindOnce(&StoresNamedOnDisk, folder), base::BindOnce(&Sweep));
                  }));
 }
 

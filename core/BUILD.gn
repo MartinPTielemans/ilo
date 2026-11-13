@@ -321,6 +321,7 @@ source_set("system_stores") {
   deps = [
     "//base",
     "//chrome/common:constants",
+    "//components/prefs",
   ]
 }
 
@@ -840,6 +841,8 @@ test("browser_core_unittests") {
     "//components/history/core/test",
     "//components/omnibox/browser",
     "//components/omnibox/browser:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
     "//components/search_engines",
     "//components/sessions",
     "//components/download/public/common:test_support",
