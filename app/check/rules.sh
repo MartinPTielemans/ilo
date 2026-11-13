@@ -317,11 +317,6 @@ CARD
   # Deny, at the left of the card's last row.
   send click $((qx + qw / 4)) $((qy + qh - 26))
   await "^browser: agent mcp-client answered $q Dismiss\$" || fail "Deny didn't answer $2's question"
-  # On real input the pointer goes back to the page, as a hand's does once it has answered: one left
-  # where Deny was rests on a tab's row once the card has gone, and on Windows, with that row's hover
-  # card shown, the window drew nothing after it, the next question included. The fix for #2685
-  # takes this move out, and its repro at the end of the run with it.
-  [ "${BROWSER_DRIVE_REAL:-}" != 1 ] || send move $page_point
   got=$(next_answer | answered "$asked")
   case "$got" in
     "error: The user said no: you can't make "*) ;;
@@ -472,10 +467,15 @@ for secret in $secrets; do
   if grep -qF "$secret" "$answers"; then missed "an answer held $(echo "$secret" | cut -c1-12)…"; fi
 done
 
-# #2685's repro, on real input, last as it may stop the run: the pointer rests on Today's first row
-# until its tab's hover card is drawn, and then the agent asks. On Windows the window drew nothing
-# after the hover card, the question's card included, so this step is quarantined under #2685 there.
+# #2685's repro, on real input: the pointer rests on Today's first row until its tab's hover card is
+# drawn, and then the agent asks. On Windows the window drew nothing after the hover card, the
+# question's card included. The last Deny left the pointer where it clicked, which is that row once
+# the question's card has gone, so it leaves the row first, and its card hides if it showed.
 if [ "$driven" = 1 ] && [ "${BROWSER_DRIVE_REAL:-}" = 1 ] && [ -z "$missing" ]; then
+  send move $page_point
+  if grep '^browser: hover card \(shown \|hidden$\)' "$log" | tail -1 | grep -q shown; then
+    expect '^browser: hover card hidden$' "the hover card the last Deny left up didn't hide off its row"
+  fi
   send move $(row 0)
   expect '^browser: hover card shown ' "resting on Today's first row showed no hover card"
   # Its frame at rest, which each showing logs ("hover card drawn" is logged once a tab and picture,
