@@ -278,6 +278,10 @@ perf_launch() {
   [ "$3" != warm ] || crlset_await "$PWD/$perf_dir/crlset-warm.log" "$profile_dir" $((launched / 1000)) "ilo's"
   quit
 }
+# Proof only (#2377): with check/perf-rounds naming a count, only the traced switches, each
+# browser's that many times, in launches of their own with the order alternated (at the end).
+perf_rounds=$(cat check/perf-rounds 2> /dev/null || true)
+if [ -z "$perf_rounds" ]; then
 : > "$perf_dir/link"
 : > "$perf_dir/restore"
 : > "$perf_dir/on-screen"
@@ -364,6 +368,7 @@ pid=$!
 exec 3> "$out/drive"
 await "^browser: title [0-9]* p1 fcp " || fail "the session's first page didn't paint"
 send click $page_point
+fi
 
 # Opens page $1 from ⌘T's bar and keeps the ms from ↩ to its first paint in the file $2.
 perf_open() {
@@ -482,13 +487,15 @@ perf_session() {
   perf_row memory-closed "Memory, back to 1 tab after 20" "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" \
     "Ardia 358 MB, Chrome 406 MB"
 }
-if [ "$active" = 1 ]; then
-  perf_session
-else
-  echo "skip: perf's session. Browser wasn't the active app, so the page didn't get its keys."
+if [ -z "$perf_rounds" ]; then
+  if [ "$active" = 1 ]; then
+    perf_session
+  else
+    echo "skip: perf's session. Browser wasn't the active app, so the page didn't get its keys."
+  fi
+  exec 3>&-
+  quit
 fi
-exec 3>&-
-quit
 
 # With CHECK_TRACE_CATEGORIES, each browser's 16 switches again at 20 tabs, in a launch of their own,
 # as tracing slows what it times and the session's rows stay untraced. DevTools traces from just
@@ -584,7 +591,7 @@ perf_traced_rows() {
     "$(awk -F '\t' -v b="$3" '$1 == b && $2 == "loaded" { print $8 }' "$traced_tsv" | perf_stats '%.1f') ms" \
     "Chrome 8 ms (gate: 16 ms)"
 }
-if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
+if [ -z "$perf_rounds" ] && [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
   log="$perf_dir/traced.log"
   cdp_log="$perf_dir/traced-cdp.log"
   step=0
@@ -797,7 +804,7 @@ chrome_quit() {
   done
   fail "Chrome's processes outlived it: $(python3 -I check/usage.py kinds "$perf_dir/chrome-left.json")"
 }
-if [ "$active" != 1 ]; then
+if [ "$active" != 1 ] || [ -n "$perf_rounds" ]; then
   :
 elif [ ! -x "$chrome" ]; then
   if [ -n "${CI:-}" ] || [ -n "${CHECK_CHROME:-}" ]; then
@@ -978,6 +985,73 @@ for label, ilo, chrome, unit, fails, apart in [
 PY
   fi
   snap_procs=
+fi
+# Proof only (#2377): the traced switches alone, ilo's and Chrome's, each in $perf_rounds launches of
+# their own, the order alternated, after a warm launch of each. Rows and traces carry the round.
+perf_round_ilo() {
+  log="$perf_dir/traced-$1.log"
+  cdp_log="$perf_dir/traced-$1-cdp.log"
+  step=0
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  scratch=$(mktemp -d)
+  start_with_cdp "$page?t1" "$profile_dir" ""
+  await "^browser: title [0-9]* t1 fcp " || fail "round $1's first page didn't paint"
+  send click $page_point
+  [ "$active" = 1 ] || fail "Browser wasn't the active app for round $1's switches"
+  : > "$perf_dir/traced-newtab-$1"
+  for n in $(seq 2 20); do
+    perf_open "t$n" "traced-newtab-$1"
+  done
+  perf_until $((loaded + 15))
+  perf_trace "trace-ilo-$1.json" "$cdp_log" "ilo-$1" "traced-switch-$1-rows" "$log" \
+    perf_switches "traced-switch-$1" spaced
+  perf_traced_rows "traced-switch-$1" "Tab switch, round $1" "ilo-$1"
+  exec 3>&- 5>&-
+  quit
+  kill "$helper" 2> /dev/null || true
+  helper=
+  rm -rf "$scratch"
+  scratch=
+}
+perf_round_chrome() {
+  snap_procs=$chrome_procs
+  chrome_launch t1 || fail "Chrome didn't stay open for round $1: $(tail -3 "$perf_dir/chrome.log")"
+  chrome_await "^cdp: title [^ ]* t1 fcp " "Chrome's round $1 didn't paint its page"
+  : > "$perf_dir/chrome-traced-newtab-$1"
+  for n in $(seq 2 20); do
+    chrome_open "t$n" "chrome-traced-newtab-$1"
+    perf_until $((typed / 1000 + 2))
+  done
+  perf_until $((loaded + 15))
+  perf_trace "trace-chrome-$1.json" "$log" "chrome-$1" "chrome-traced-switch-$1-rows" "" \
+    chrome_switches t "chrome-traced-switch-$1" spaced
+  perf_traced_rows "chrome-traced-switch-$1" "Chrome here, tab switch, round $1" "chrome-$1"
+  chrome_quit
+  snap_procs=
+}
+if [ -n "$perf_rounds" ]; then
+  [ -n "${CHECK_TRACE_CATEGORIES:-}" ] || fail "perf-rounds needs CHECK_TRACE_CATEGORIES"
+  [ -x "$chrome" ] || fail "perf-rounds needs Chrome, which isn't at $chrome"
+  perf_launch "$page?warm" warm warm
+  snap_procs=$chrome_procs
+  : > "$perf_dir/chrome.log"
+  # shellcheck disable=SC2046 # the flags, a word each
+  chrome_launch warm $(crlset_flags "$PWD/$perf_dir/crlset-chrome-warm.log" fast) ||
+    fail "Chrome didn't stay open for its warm launch: $(tail -3 "$perf_dir/chrome.log")"
+  sleep 15
+  crlset_await "$PWD/$perf_dir/crlset-chrome-warm.log" "$chrome_dir" $((launched / 1000)) "Chrome's"
+  chrome_quit
+  snap_procs=
+  for round in $(seq "$perf_rounds"); do
+    if [ $((round % 2)) = 1 ]; then
+      perf_round_ilo "$round"
+      perf_round_chrome "$round"
+    else
+      perf_round_chrome "$round"
+      perf_round_ilo "$round"
+    fi
+    echo "perf: round $round done"
+  done
 fi
 missed=$(grep ', missed$' "$perf_dir/gate.txt" 2> /dev/null | sed 's/^perf: gate, //; s/: ilo .*(\(.*\)), missed$/ \1/' |
   tr '\n' ';' | sed 's/;$//; s/;/; /g')
