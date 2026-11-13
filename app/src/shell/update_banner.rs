@@ -9,7 +9,7 @@
 //! off, which makes every update a manual one, it offers under its button to turn them on, as
 //! Arc's does after a manual update.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{Context, MouseButton, SharedString, div, prelude::*, px, svg};
 

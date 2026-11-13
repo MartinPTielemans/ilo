@@ -96,6 +96,11 @@ impl Browser for Core {
         }
     }
 
+    fn space_of(&self, tab: u64, cx: &App) -> u64 {
+        let mut spaces = ids(bc::bc_spaces).into_iter();
+        (spaces.find(|&space| self.space_tab_ids(space, cx).contains(&tab))).unwrap_or(0)
+    }
+
     fn may_act(&self, agent: &str, tab: u64, action: &str, _: &mut App) -> Result<(), String> {
         let (Ok(agent), Ok(action)) = (CString::new(agent), CString::new(action)) else {
             return Err("The agent's name can't be used.".into());
@@ -232,6 +237,14 @@ impl Browser for Core {
 
     fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {
         unsafe { bc::bc_tab_set_pinned(tab, pinned) };
+    }
+
+    fn move_today(&self, tab: u64, index: usize, _: &mut App) {
+        unsafe { bc::bc_tab_move(tab, false, 0, index) };
+    }
+
+    fn url_site(&self, url: &str) -> Option<String> {
+        crate::url_site(url)
     }
 
     // The core has no call that removes a pinned tab, so it's the two the row's remove button

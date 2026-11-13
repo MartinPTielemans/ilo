@@ -1,10 +1,8 @@
 //! The browser's commands: their names, their keys and where the command bar offers
 //! them, and what each does, run from a key, a menu, the command bar or the page.
 
-use std::{
-    sync::{Arc, LazyLock},
-    time::Instant,
-};
+use std::sync::{Arc, LazyLock};
+use web_time::Instant;
 
 use gpui::{
     Action, App, Bounds, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
@@ -104,6 +102,9 @@ pub enum Command {
     Exit,
     /// Closes the Today tabs of the Space shown, but the one shown.
     Clear,
+    /// Brings each site's Today tabs in the Space shown together, at its first tab's place
+    /// (`crate::sort_by_site`).
+    SortBySite,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
     Undo,
     /// Does again what Undo undid.
@@ -474,6 +475,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ),
     ("Archive Tab", Command::CloseTab, &["close tab"]),
     ("Clear Today", Command::Clear, &["unpinned tabs"]),
+    (
+        "Sort Today Tabs by Site",
+        Command::SortBySite,
+        &["group tabs by site", "tidy tabs"],
+    ),
     (
         "Clear Cache and Refresh",
         Command::ClearCacheAndRefresh,
@@ -1226,6 +1232,7 @@ impl Command {
             Command::ToggleFullScreen => "toggle-full-screen",
             Command::Exit => "exit",
             Command::Clear => "clear",
+            Command::SortBySite => "sort-by-site",
             Command::Undo => "undo",
             Command::Redo => "redo",
             Command::CopyUrl => "copy-url",
@@ -1641,6 +1648,7 @@ impl Shell {
             Command::ToggleFullScreen => return self.browser.toggle_full_screen(cx),
             Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
+            Command::SortBySite => return self.sort_by_site(cx),
             Command::Undo => {
                 self.undo(cx);
                 return;
@@ -1723,11 +1731,11 @@ impl Shell {
             }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
-                let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
+                let url = BuildInfo::here(cx).issue_url(build_info::NEW_ISSUE);
                 return self.browser.open_page(&url, cx);
             }
             Command::CopyBuildInfo => {
-                return self.copy(&BuildInfo::here().text(), "Copied Build Info", cx);
+                return self.copy(&BuildInfo::here(cx).text(), "Copied Build Info", cx);
             }
             Command::HelpCenter => return self.browser.open_page(build_info::HELP_CENTER, cx),
             Command::WhatsNew => return self.browser.open_page(build_info::WHATS_NEW, cx),
@@ -2027,9 +2035,10 @@ impl Shell {
                 point(page.center().x, page.top())
             }
         };
-        let title = self.title(self.selected);
-        self.browser
-            .show_share_sheet(self.selected, &link, &title, at, cx);
+        let (tab, title) = (self.selected, self.title(self.selected));
+        // After this update, as finding the tab's window reads every Shell (#2459).
+        let browser = self.browser.clone();
+        cx.defer(move |cx| browser.show_share_sheet(tab, &link, &title, at, cx));
     }
 
     /// `tab`'s link to copy, as a Markdown link if `markdown`, and the toast to say so with.
@@ -2276,6 +2285,8 @@ impl Shell {
                     .any(|&folder| !space.is_open(folder))
             }),
             Command::Clear => !self.today().is_empty(),
+            // With every site's tabs together already, it would change nothing.
+            Command::SortBySite => self.sorted_by_site(self.space).is_some(),
             Command::FavoriteTab => {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)

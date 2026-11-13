@@ -85,6 +85,13 @@ pub(crate) fn url_for(
     (length > 0).then(|| String::from_utf8_lossy(&url).into_owned())
 }
 
+/// The site of the page at `url`, as the core gives it (bc_url_site), or None off the web.
+pub(crate) fn url_site(url: &str) -> Option<String> {
+    url_for(url, |url, site, capacity| unsafe {
+        bc::bc_url_site(url, site, capacity)
+    })
+}
+
 // The ⌃Tab walk and the file's drag were the user's in the window in front.
 pub(crate) extern "C" fn control_released() {
     update_window(front().0, |shell, cx| shell.control_released(cx));
@@ -223,6 +230,46 @@ pub(crate) unsafe extern "C" fn window_page_elsewhere(
 pub(crate) unsafe extern "C" fn tab_loaded(_: *mut c_void, tab: bc::bc_id, url: *const c_char) {
     let url = unsafe { CStr::from_ptr(url) }.to_string_lossy();
     log!("browser: loaded {tab} {url}");
+    let owned = url.to_string();
+    update_app_later(move |cx| crate::sign_in_close::tab_loaded(tab, &owned, cx));
+    sample_foot_bar(tab);
+}
+
+/// check.sh's foot-bar run: BROWSER_FOOT_BAR=arrange, =point or =long shows the foot bar with made-up
+/// words (`foot_bar::sample`) over the window of the first page that loads, as a mode will, so the
+/// host's window for it shows on each OS before a mode uses it.
+fn sample_foot_bar(tab: bc::bc_id) {
+    static KIND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    thread_local!(static SHOWN: Cell<bool> = const { Cell::new(false) });
+    let Some(kind) = KIND.get_or_init(|| std::env::var("BROWSER_FOOT_BAR").ok()) else {
+        return;
+    };
+    let Some(bar) = browser::foot_bar::sample(kind).filter(|_| !SHOWN.replace(true)) else {
+        return;
+    };
+    update_app(move |cx| {
+        let Some(window) = tab_window(tab, cx) else {
+            return;
+        };
+        let Some(shell) = window.shell.upgrade() else {
+            return;
+        };
+        let Ok(content) = window
+            .handle
+            .update(cx, |_, window, _| window.viewport_size())
+        else {
+            return;
+        };
+        let page = shell.read(cx).page_frame(content).0;
+        let id = window.id;
+        with_overlays(
+            move |cx| {
+                browser::foot_bar::show(id, page, content, bar, cx);
+                log!("browser: foot bar shown over {id}");
+            },
+            cx,
+        );
+    });
 }
 
 pub(crate) unsafe extern "C" fn tab_state_changed(
@@ -414,10 +461,12 @@ pub(crate) unsafe extern "C" fn tab_closed(_: *mut c_void, tab: bc::bc_id) {
             .spawn(async move {
                 // Outside the update, as closing the pop-up's window calls back into GPUI.
                 popup_closed(tab);
+                crate::sign_in_close::tab_closed(tab);
                 cx.update(|cx| {
                     site_controls::tab_closed(tab, cx);
                     capture::tab_closed(tab, cx);
                     link_preview::tab_closed(tab, cx);
+                    browser::agents::tab_closed(tab, cx);
                 })
             })
             .detach();

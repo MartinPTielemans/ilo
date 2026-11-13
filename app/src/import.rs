@@ -37,7 +37,8 @@ mod tiles;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use gpui::{
     App, Context, EventEmitter, FocusHandle, KeyDownEvent, SharedString, Task, div, prelude::*, px,
@@ -76,6 +77,8 @@ pub trait Host {
     ) -> Option<std::sync::Arc<gpui::RenderImage>> {
         None
     }
+    /// What the browser has. The core's reads each window's Shell for its Today tabs' URLs, so
+    /// it's never called inside a Shell's update (ImportView::press).
     fn existing(&self, cx: &App) -> Existing;
     /// Makes a profile, which loads afterwards, and returns it.
     fn create_profile(&self, name: &str) -> u64;
@@ -1007,8 +1010,17 @@ impl ImportView {
     }
 
     /// What the first launch's button does in the state shown: the list's brings the browser
-    /// picked, the choices' imports, and the wait for access's opens System Settings.
+    /// picked, the choices' imports, and the wait for access's opens System Settings. The Shell
+    /// presses it from inside its own update, and an import reads the Shell through its host
+    /// (Host::existing), so it acts once that update has returned (#2428).
     pub fn press(&mut self, cx: &mut Context<Self>) {
+        let view = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            view.update(cx, |view, cx| view.pressed(cx)).ok();
+        });
+    }
+
+    fn pressed(&mut self, cx: &mut Context<Self>) {
         match &self.step {
             Step::List if self.picked_row < self.sources.len() => self.pick(self.picked_row, cx),
             Step::Pick { .. } => self.import(cx),
@@ -3118,7 +3130,13 @@ fn stopped(made: usize) -> SharedString {
 /// "on 3 November".
 fn imported_when(at: SystemTime, now: SystemTime) -> String {
     use chrono::{DateTime, Local};
-    let (at, now): (DateTime<Local>, DateTime<Local>) = (at.into(), now.into());
+    // Through the epoch, as chrono takes std's time and not the web's.
+    let local = |time: SystemTime| {
+        let since = time.duration_since(UNIX_EPOCH).unwrap_or_default();
+        let utc = DateTime::from_timestamp(since.as_secs() as i64, since.subsec_nanos());
+        utc.unwrap_or_default().with_timezone(&Local)
+    };
+    let (at, now) = (local(at), local(now));
     let days = now
         .date_naive()
         .signed_duration_since(at.date_naive())

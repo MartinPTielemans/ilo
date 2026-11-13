@@ -1,3 +1,5 @@
+# check.sh runs this at 780, only when named.
+# It runs only when named until it passes on the Mac.
 # The Mac's updates (docs/ux-spec.md › Updates), on a check build with Sparkle (build.sh updates)
 # that checks a feed the run serves, for updates signed with a key the run makes and deletes after.
 # Neither is ever the product's: the run never reads branding/update-feed or the owner's key.

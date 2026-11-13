@@ -570,7 +570,7 @@ class SystemPageMac : public SystemPage {
 
   // The content process went: crashed, or killed for memory. WebKit shows nothing until a load.
   void Gone() {
-    // check.sh waits for this line, an error as Chromium's tab's is.
+    // An error, as Chromium's tab's is.
     LOG(ERROR) << "browser: system page gone at " << url().spec();
     [web_ reload];
   }
