@@ -166,7 +166,10 @@ yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset
  oninput="document.title=`yours typed `+f.value"></textarea>
 <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.title="yours"))</script>'
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
-  "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --load-extension="$(app_path "$extension")" \
+  --enable-tracing=navigation,loading,content,browser --enable-tracing-format=json \
+  --trace-startup-duration=15 --trace-startup-file="$out/startup-trace.json" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
