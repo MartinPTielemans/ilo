@@ -1164,6 +1164,12 @@ void bc_folder_delete(bc_id folder) {
   }
 }
 
+void bc_tab_forget_page(bc_id id) {
+  if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
+    tab->ForgetPage();
+  }
+}
+
 bc_id bc_tab_profile(bc_id id) {
   const browser_core::Tab* tab = browser_core::Tab::Get(id);
   const std::string dir = tab ? tab->profile_dir() : std::string();
