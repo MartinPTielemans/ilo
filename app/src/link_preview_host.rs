@@ -13,7 +13,10 @@ pub(crate) struct LinkPreviewHost {
 impl link_preview::Host for LinkPreviewHost {
     fn place(&self, tab: u64, page: Bounds<Pixels>, radius: f32) {
         // Proof only (#2640).
-        log!("browser: probe place {page:?}");
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0., |at| at.as_secs_f64() * 1000.);
+        log!("browser: probe place {ms:.1} {page:?}");
         unsafe { bc::bc_tab_show_in(tab, self.holder.get(), rect(page), f64::from(radius)) };
     }
 
