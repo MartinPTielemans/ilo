@@ -220,7 +220,8 @@ grep -q 'browser: tab [0-9]* game running$' "$log" && fail "Space started a game
 # Offline. A DevTools session on the tab, which DevTools' own Offline is, fails its loads with
 # ERR_INTERNET_DISCONNECTED until it says online. Its cache is off, as DevTools offers, since the
 # throttle sits under the HTTP cache and a fresh copy of a page loaded earlier would still load. It
-# takes "offline" or "online" on its input and says each back once Chromium has it.
+# takes "offline" or "online" on its input and says each back once Chromium has it. "hold" holds the
+# next request for the page $3 the tab loads, and says so once there is one; "online" lets it go.
 cat > "$out/network.py" <<'PY'
 import base64, json, os, socket, struct, sys, urllib.request
 
@@ -265,6 +266,7 @@ def receive():
                 return message
 
 calls = 0
+events = []
 def call(method, **params):
     global calls
     calls += 1
@@ -278,13 +280,33 @@ def call(method, **params):
             if "error" in reply:
                 sys.exit(f"{method}: {reply['error']}")
             return
+        if "method" in reply:
+            events.append(reply)
+
+def paused():
+    while not events or events[0]["method"] != "Fetch.requestPaused":
+        if events:
+            events.pop(0)
+        else:
+            events.append(json.loads(receive()))
+    return events.pop(0)["params"]["requestId"]
 
 call("Network.enable")
 call("Network.setCacheDisabled", cacheDisabled=True)
+held = None
 for line in sys.stdin:
     state = line.strip()
+    if state == "hold":
+        call("Fetch.enable", patterns=[{"urlPattern": sys.argv[3], "resourceType": "Document"}])
+        held = paused()
+        print(state, flush=True)
+        continue
     call("Network.emulateNetworkConditions", offline=state == "offline", latency=0,
          downloadThroughput=-1, uploadThroughput=-1)
+    if held:
+        call("Fetch.continueRequest", requestId=held)
+        call("Fetch.disable")
+        held = None
     print(state, flush=True)
 PY
 rm -f "$out/network"
@@ -293,14 +315,14 @@ mkfifo "$out/network"
 # as windows_bridge does (git-bash.sh); a plain pipe, as the Mac's bash 3.2 parses this file --posix.
 if windows; then
   cat "$out/network" | python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" \
-    > "$out/network.log" 2>&1 &
+    "${site}index.html" > "$out/network.log" 2>&1 &
 else
-  python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < "$out/network" \
-    > "$out/network.log" 2>&1 &
+  python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" "${site}index.html" \
+    < "$out/network" > "$out/network.log" 2>&1 &
 fi
 network=$!
 exec 4> "$out/network"
-# Takes the tab $1, offline or online.
+# Takes the tab $1, offline or online, or holds its page's next request; $2 says what a miss means.
 network() {
   echo "$1" >&4
   for _ in $(seq 100); do
@@ -308,7 +330,8 @@ network() {
     kill -0 "$network" 2>/dev/null || fail "DevTools didn't take the tab $1: $(cat "$out/network.log")"
     sleep 0.1
   done
-  fail "DevTools didn't take the tab $1"
+  [ -n "${2:-}" ] || set -- "$1" "DevTools didn't take the tab $1"
+  fail "$2"
 }
 network offline
 send key l cmd
@@ -316,19 +339,25 @@ expect '^browser: command bar shown$' "⌘L didn't open the command bar"
 send insert "${site}index.html"
 send key return
 expect "^browser: page $tab trouble network -106\$" "offline, a load wasn't ERR_INTERNET_DISCONNECTED"
+# Chromium's auto-reload, due a second after the page and every few after, is under way when the
+# run starts, as it is for someone who presses Space as the page shows (#2676): DevTools holds its
+# request.
+network hold "no auto-reload of the offline page came in 10 s for DevTools to hold"
 ../tools/window-screenshot.sh "$pid" "$out/offline.png" || fail "no window to capture"
 # A click focuses the page and starts nothing: the run comes in Space's step, not the click's.
 send click $page_point
 send key space
 expect "browser: tab $tab game running\$" "Space didn't start a run on the offline page"
-# The network comes back mid-run. Chromium's auto-reload, due a second after the page or every
-# few after, waits for the run, which ends at the first column with no more hops.
+# The network comes back mid-run and the reload gets the page, which waits for the run. The run ends
+# at the first column with no more hops.
 network online
 ../tools/window-screenshot.sh "$pid" "$out/offline-game.png" || fail "no window to capture"
-expect "browser: tab $tab game over\$" "the run didn't end at the first column"
+expect "browser: tab $tab game over\$\|^browser: loaded $tab ${site}index.html\$" \
+  "the run didn't end at the first column, and the page didn't come back"
 sed -n "/browser: tab $tab game running\$/,/browser: tab $tab game over\$/p" "$log" |
   grep -q "^browser: page $tab trouble fine\$\|^browser: loaded $tab ${site}index.html\$" &&
-  fail "the page came back mid-run"
+  fail "the page came back mid-run, which ended the run: the reload under way when it started didn't wait for it"
+expect "browser: tab $tab game over\$" "the run didn't end at the first column"
 expect "^browser: loaded $tab ${site}index.html\$" "the page didn't load once the run ended"
 expect "^browser: page $tab trouble fine\$" "the page that came back wasn't fine"
 exec 4>&-
