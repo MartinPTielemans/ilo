@@ -1,3 +1,4 @@
+# check.sh runs this at 660.
 # The sidebar on the window's right (#2375), on the Mac, where AppKit draws the window's buttons:
 # a click on Right's drawing in Settings › Tabs & Sidebar › Sidebar position (#2407) moves it to
 # the right while the app runs, and AppKit's buttons follow at once, close 20 points from the

@@ -1,3 +1,4 @@
+# check.sh runs this at 100.
 # Launched again after ⌘Q, and again after its window's close button, the app brings back the
 # Spaces: their names, colours and icons, their tabs with each tab's history, the tab each showed
 # and the Space it showed, and the sidebar's width. Only a tab shown loads; the others show their

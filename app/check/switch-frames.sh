@@ -1,3 +1,4 @@
+# check.sh runs this at 460.
 # Every Space switch, by ⌃1 and ⌃2 and by the switcher's dots, and every switch between a Space's
 # tabs by a click on its row, shows a page in the page area at every frame: the one it leaves until
 # the one it shows has drawn, and never the empty page area between them, for 60 to 230 ms on

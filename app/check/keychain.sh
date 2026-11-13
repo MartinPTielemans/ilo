@@ -1,3 +1,4 @@
+# check.sh runs this at 810, only when named.
 # The profile survives a change of signing identity, as from Apple Development to Developer ID,
 # with no Keychain prompt (platform/mac/updates.mm, tools/requirement.sh). A copy of the prod build
 # signed with identity A and its own requirement, as Apple Development's names its certificate,

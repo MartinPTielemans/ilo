@@ -1,3 +1,4 @@
+# check.sh runs this at 240.
 # Little ilo, Arc's Little Arc. ⌥⌘N opens a Little ilo window for the Space the window shows, under
 # its bar, and ⌘L there opens the command bar inside it, whose URL loads in it. The bar's chevron
 # opens its Spaces menu under it. ⌘O moves its page, live, to that Space in the main window and

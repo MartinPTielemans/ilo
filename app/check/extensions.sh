@@ -1,3 +1,4 @@
+# check.sh runs this at 180.
 # The menu bar's Extensions menu lists the turned-on extensions of the shown Space's profile, by
 # name, over Pin to URL Field and Manage Extensions…. Choosing one runs its action on the tab shown,
 # as a click on its toolbar button does in Chrome: one without a popup hears the click, and a

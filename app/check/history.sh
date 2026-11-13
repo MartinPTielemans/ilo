@@ -1,3 +1,4 @@
+# check.sh runs this at 60.
 # Back and forward go through the tab's history from keys, with the page or the UI focused, from
 # the header's buttons, which dim with nowhere to go, and from a swipe over the page. Reload loads
 # the page again, and while a page loads, reload is stop, which ⌘., escape and the button do. A
