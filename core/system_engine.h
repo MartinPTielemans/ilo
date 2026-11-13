@@ -79,11 +79,13 @@ void ReturnToChromium(Profile* profile, const GURL& url);
 // Deletes the store of the profile at |path|, if it made one, as the profile goes, then runs
 // |then|. The profile's directory must still be there: an unloaded profile's preferences say.
 void DeleteStore(const base::FilePath& path, base::OnceClosure then);
-// Registers the data folder's Local State prefs: the list of stores its profiles were given.
+// Registers the data folder's Local State prefs: the list of stores its profiles were given, and
+// whether the stores an old version gave were swept.
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 // After startup, deletes the stores given to profiles of the data folder that no profile names
 // any more, as when a profile's folder was removed by hand. The system's engine is only loaded if
-// there's one to delete.
+// there's one to delete, or once per folder to sweep the stores a version before #2664 gave
+// profiles that are gone.
 void SweepStores();
 
 // For ContentBrowserClient::CreateThrottlesForNavigation: a navigation of a tab's page in

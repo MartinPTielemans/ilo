@@ -1,7 +1,10 @@
 #include "browser_core/system_stores.h"
 
+#include <set>
 #include <string>
+#include <vector>
 
+#include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "components/prefs/testing_pref_service.h"
@@ -86,6 +89,69 @@ TEST(SystemStoresTest, AWholeDataFolderRemovedTakesItsList) {
   ASSERT_TRUE(base::CreateDirectory(folder));
   LocalState clean_state;
   EXPECT_TRUE(StoresUnnamed(GivenStores(clean_state), StoresNamedOnDisk(folder)).empty());
+}
+
+// The old ids of a data folder's profiles: Default and Profile 1 to 3, as Local State counts 4.
+class OldStoresTest : public testing::Test {
+ protected:
+  const base::FilePath folder{FILE_PATH_LITERAL("/Users/a/Library/Application Support/ilo")};
+  const int count = 4;
+  std::string Old(const char* name) const { return OldStoreIdFor(folder.AppendASCII(name)); }
+  std::vector<std::string> Gone(const std::vector<std::string>& listed,
+                                const std::set<std::string>& named = {},
+                                const std::set<base::FilePath>& present = {}) const {
+    return OldStoresUnnamed(listed, folder, count, named, present);
+  }
+};
+
+TEST_F(OldStoresTest, IdsAreTheOnesAnOldVersionGave) {
+  // StoreIdFor's before #2664, worked out apart from it: the SHA-1 of the path, as version 5.
+  EXPECT_EQ(OldStoreIdFor(base::FilePath(
+                FILE_PATH_LITERAL("/Users/a/Library/Application Support/ilo/Default"))),
+            "c1186153-1520-5a7b-beca-0bcc5edb8688");
+  EXPECT_NE(Old("Default"), Old("Profile 1"));
+  EXPECT_EQ(OldProfilePaths(folder, count),
+            (std::vector<base::FilePath>{
+                folder.AppendASCII("Default"), folder.AppendASCII("Profile 1"),
+                folder.AppendASCII("Profile 2"), folder.AppendASCII("Profile 3")}));
+  EXPECT_EQ(OldProfilePaths(folder, 1), std::vector<base::FilePath>{folder.AppendASCII("Default")});
+}
+
+// Rule 1: only a store on disk is asked for.
+TEST_F(OldStoresTest, AStoreNotListedIsntDeleted) {
+  EXPECT_TRUE(Gone({}).empty());
+  EXPECT_EQ(Gone({Old("Profile 2")}), std::vector<std::string>{Old("Profile 2")});
+}
+
+// Rule 2: only an old id of this folder's own profiles, up to Local State's count.
+TEST_F(OldStoresTest, OnlyThisFoldersOldIdsGo) {
+  const std::string other =
+      OldStoreIdFor(base::FilePath(FILE_PATH_LITERAL("/Users/a/ilo-dev")).AppendASCII("Profile 1"));
+  const std::string random = "3f2a8c1e-7b4d-4e9a-a1c2-5d6e7f8a9b0c";
+  EXPECT_EQ(Gone({other, random, Old("Profile 4"), Old("Profile 3")}),
+            std::vector<std::string>{Old("Profile 3")});
+  EXPECT_TRUE(OldStoresUnnamed({Old("Profile 1")}, folder, 1, {}, {}).empty());
+}
+
+// Rule 3: a store a profile names stays.
+TEST_F(OldStoresTest, ANamedStoreStays) {
+  EXPECT_EQ(Gone({Old("Profile 1"), Old("Profile 2")}, {Old("Profile 1")}),
+            std::vector<std::string>{Old("Profile 2")});
+}
+
+// Rule 4: a store whose path has a profile folder stays, even named by nothing, as a profile from
+// before #2664 whose Preferences were never written.
+TEST_F(OldStoresTest, AStoreWhosePathHasAFolderStays) {
+  EXPECT_EQ(Gone({Old("Default"), Old("Profile 1")}, {}, {folder.AppendASCII("Default")}),
+            std::vector<std::string>{Old("Profile 1")});
+}
+
+// A new data folder never had an old store, so it's marked and never swept: a folder set aside
+// and put back later keeps the stores of its profiles the new one hasn't.
+TEST(OldStoresSweepTest, ANewDataFolderIsMarkedWithoutASweep) {
+  EXPECT_EQ(OldStoresFor(/*new_local_state=*/true, /*swept=*/false), OldStores::kMark);
+  EXPECT_EQ(OldStoresFor(false, true), OldStores::kNothing);
+  EXPECT_EQ(OldStoresFor(false, false), OldStores::kSweep);
 }
 
 }  // namespace
