@@ -480,6 +480,9 @@ struct Preview {
     /// Whether the window's page is to have the keyboard back once a page under the window has
     /// left, as it's closing.
     releasing: bool,
+    /// Whether the hole has closed over a page under the window that's leaving, which it leaves
+    /// the frame after.
+    covered: bool,
     /// The frame check.sh last read the card holds the page at, in pixels, and the scale.
     logged: Option<([i32; 4], f32)>,
     /// Once it's leaving: when, how, and where the motion was.
@@ -668,6 +671,7 @@ pub fn show(
             placed: page_in(card(page)),
             cut: false,
             releasing: false,
+            covered: false,
             logged: None,
             leaving: None,
             _leave: None,
@@ -1010,10 +1014,19 @@ impl Render for LinkPreview {
                     }
                     (Some(Leave::Close), true) => {
                         shown.cut = false;
+                        shown.covered = false;
                         window.request_animation_frame();
                         (shown.placed, true)
                     }
                     (Some(Leave::Keep), true) => (page.intersect(&rest), false),
+                    // The page leaves the frame after the hole has closed over it: the hole closes
+                    // at once, and until the frame with the plate in it is on screen, the one
+                    // before shows there, clear where the page showed (#2640).
+                    (Some(Leave::Close), false) if shown.releasing && !shown.covered => {
+                        shown.covered = true;
+                        window.request_animation_frame();
+                        (none, false)
+                    }
                     _ => {
                         if how.is_none() || shown.releasing {
                             leave_to = Some(out_of_sight(rest));
