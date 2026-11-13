@@ -616,6 +616,10 @@ void host_show_link_target(void* ui_view, double left, double top, double fade);
 // Fades the link target's window out over |fade| seconds, then hides it.
 void host_hide_link_target(double fade);
 
+// Whether a mouse button is down now, over any window, the page's included, which the UI doesn't
+// hear the presses of. The link target's window waits for the release to show, move or hide.
+bool host_mouse_down(void);
+
 // Gives |view| the keyboard in its window, from the page if the page has it.
 void host_focus(void* view);
 

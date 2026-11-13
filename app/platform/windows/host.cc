@@ -4439,6 +4439,10 @@ void host_hide_link_target(double fade) {
   FadeOut(g_link_target, fade, MaybeStopWatchingPointer);
 }
 
+bool host_mouse_down(void) {
+  return Pressed();
+}
+
 void host_focus(void* view) {
   HWND hwnd = Hwnd(view);
   HWND root = GetAncestor(hwnd, GA_ROOT);

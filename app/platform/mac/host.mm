@@ -4834,6 +4834,10 @@ void host_hide_link_target(double fade) {
       completionHandler:gone];
 }
 
+bool host_mouse_down(void) {
+  return NSEvent.pressedMouseButtons != 0;
+}
+
 void host_show_window_buttons(void* ui_view, bool shown) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser) {
