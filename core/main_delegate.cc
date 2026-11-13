@@ -745,19 +745,32 @@ content::ContentClient* MainDelegate::CreateContentClient() {
   return content_client.get();
 }
 
+#if BUILDFLAG(IS_MAC)
+// The Mac hears launching before Chromium takes the profile's lock, about 20 ms sooner, as it has
+// no early thread to lose and only a hand-run binary makes a second process, whose launch window
+// shows until the running ilo answers (#2494).
+std::optional<int> MainDelegate::PreBrowserMain() {
+  std::optional<int> exit_code = ChromeMainDelegate::PreBrowserMain();
+  // Chrome's PreBrowserMain made NSApp, which the app can't make before it: Chrome's class reads
+  // the command line as it's made.
+  if (!exit_code && g_host.launching) {
+    g_host.launching(g_host.context);
+  }
+  return exit_code;
+}
+#else
 std::optional<int> MainDelegate::PostEarlyInitialization(InvokedIn invoked_in) {
   std::optional<int> exit_code = ChromeMainDelegate::PostEarlyInitialization(invoked_in);
   // In the browser process, once Chromium has the profile's lock: a launch that hands its links to
   // the browser running already has an exit code here and goes, so it puts nothing on screen and
-  // starts nothing the app would have to stop, even when two launch at once (#2494). Chrome's
-  // PreBrowserMain made NSApp before this, which the app can't make before it: Chrome's class
-  // reads the command line as it's made.
+  // starts nothing the app would have to stop, even when two launch at once (#2494).
   if (!exit_code && std::holds_alternative<InvokedInBrowserProcess>(invoked_in) &&
       g_host.launching) {
     g_host.launching(g_host.context);
   }
   return exit_code;
 }
+#endif
 
 content::ContentBrowserClient* MainDelegate::CreateContentBrowserClient() {
   // As ChromeMainDelegate's, with our client in place of Chrome's.
