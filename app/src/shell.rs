@@ -124,6 +124,7 @@ mod recent_downloads;
 mod recorder;
 mod return_mark;
 mod rows;
+mod safe_start;
 mod scripting;
 mod scroller;
 pub use scroller::{ScrollBarsShown, follow_scroll_bars};
@@ -1774,6 +1775,12 @@ pub struct Shell {
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     update_offer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
+    /// The safe-start card's words as last wrapped, while this launch is a safe start, and where it
+    /// and its button and link are drawn (safe_start.rs).
+    safe_start: Option<safe_start::Shape>,
+    safe_start_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    safe_start_button_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    safe_start_manage_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
     /// goes to another site.
     drm_notes: HashMap<u64, SharedString>,
@@ -2156,6 +2163,10 @@ impl Shell {
             update_drawn: Rc::default(),
             update_offer_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
+            safe_start: None,
+            safe_start_drawn: Rc::default(),
+            safe_start_button_drawn: Rc::default(),
+            safe_start_manage_drawn: Rc::default(),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
             page_languages: HashMap::new(),
@@ -4206,6 +4217,7 @@ impl Render for Shell {
             self.set_sidebar_right(right, cx);
         }
         self.full_screen_step("drawn", window.viewport_size());
+        self.shape_safe_start(cx);
         self.step_opening(window, cx);
         self.stop_videos(window, cx);
         // check.sh reads this line. It comes as the rows are drawn, so a click it sends next goes
@@ -4785,6 +4797,7 @@ impl Shell {
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
                     .children(self.update_banner(cx))
+                    .children(self.safe_start_card(cx))
                     .children(self.task_ghosts())
                     .children(self.drm_note_card(cx))
             }
