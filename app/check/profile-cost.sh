@@ -1,4 +1,5 @@
-# check.sh runs this at 850, only when named.
+# check.sh runs this at 860, only when named.
+# Only when named, as it takes 12 minutes.
 # What each profile costs at launch (#2138, #2500), for 1, 2 and 4 profiles, each with a Space, the
 # last session's tab in the first profile's Space and a Today tab in the second's. Two launches
 # each, measured 30 s and 60 s after launch, with the page restored (uBlock Origin's process is
