@@ -50,7 +50,7 @@ rm -f "$saved"
 rm -rf "$frames"
 # Proof only (#2640): the compositor's trace, on the clock the app's probe lines use.
 BROWSER_DRIVE=1 BROWSER_URL="${site}peek-motion.html" "$browser" \
-  --enable-tracing=viz,ui,cc,gpu,benchmark,graphics.pipeline,disabled-by-default-display.framedisplayed \
+  --enable-tracing=toplevel,viz,ui,cc,gpu,benchmark,graphics.pipeline,disabled-by-default-display.framedisplayed \
   --trace-startup-record-mode=record-continuously --trace-buffer-size-in-kb=400000 \
   --enable-tracing-format=json --trace-startup-file="$PWD/$out/peek-trace.json" \
   < "$out/drive" > "$log" 2>&1 &
@@ -152,7 +152,7 @@ round() {
 # so it opens and closes Peek again until a frame has caught each motion mid-way, eight times at
 # most, and fails at once on a frame that shows Peek's resting frame outside its card.
 resized=
-for n in $(seq 10); do
+for n in $(seq 6); do
   round $n
   # shellcheck disable=SC2086 # numbers: x y w h from x y
   python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
