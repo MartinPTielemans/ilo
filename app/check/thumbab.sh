@@ -24,7 +24,8 @@ const title = (t) => { document.title = `${id} ${t}`; performance.mark(document.
 let ticks = 0;
 setInterval(() => {
   clock.textContent = new Date().toLocaleTimeString();
-  if (++ticks == 5) title(`ticks ${Date.now()}`);
+  // A hidden tab's clock ticks too, so only the page shown says so.
+  if (++ticks == 5 && document.visibilityState == "visible") title(`ticks ${Date.now()}`);
 }, 1000);
 const twice = (f) => requestAnimationFrame(() => requestAnimationFrame(f));
 twice(() => title("ready"));
@@ -72,12 +73,15 @@ away_point="640 400"
 thumb_x=$(awk 'BEGIN { print 1261.5 / 1280 }')
 thumb_y=$(awk 'BEGIN { print 93.5 / 800 }')
 
-# Waits until the colour at the thumb's middle in a capture differs from "$1", for up to 5 s.
+# Waits until the colour at the thumb's middle in a capture differs from "$1" and then stays, the
+# hover's fade done, for up to 5 s.
 thumb_changed() {
+  last=$1
   for _ in $(seq 25); do
     ../tools/window-screenshot.sh "$pid" "$dir/poll.png" > /dev/null 2>&1 || continue
     now=$(pixel "$dir/poll.png" "$thumb_x" "$thumb_y")
-    [ "$now" != "$1" ] && return 0
+    [ "$now" != "$1" ] && [ "$now" = "$last" ] && return 0
+    last=$now
     sleep 0.2
   done
   return 1
@@ -97,7 +101,10 @@ thumb_looks() {
   thumb_changed "$idle" || echo "thumbab: $2 $1: the thumb's middle stayed $idle under the pointer"
   ../tools/window-screenshot.sh "$pid" "$dir/$2-$1-hovered.png" || fail "no window to capture"
   send press $thumb_point
-  send dragto 1261 293
+  # In steps, as a hand moves it.
+  for y in 113 153 193 243 293; do
+    send dragto 1261 $y
+  done
   expect_late "^browser: title [0-9]* $1 scrolled$" "a drag on $1's thumb didn't scroll it"
   ../tools/window-screenshot.sh "$pid" "$dir/$2-$1-dragged.png" || fail "no window to capture"
   send release 1261 293
