@@ -46,7 +46,7 @@ index a46c580fc1..453c70002e 100644
  uuid = { workspace = true, features = ["js"] }
  
 diff --git a/crates/gpui/src/app/test_context.rs b/crates/gpui/src/app/test_context.rs
-index 54b72a63ec..998ebbe45a 100644
+index 54b72a63ec..98a3325d1c 100644
 --- a/crates/gpui/src/app/test_context.rs
 +++ b/crates/gpui/src/app/test_context.rs
 @@ -223,6 +223,11 @@ impl TestAppContext {
@@ -61,6 +61,15 @@ index 54b72a63ec..998ebbe45a 100644
      /// Sets the delay for subsequent idle sleep prevention acquisitions.
      pub fn set_idle_sleep_prevention_delay(&self, delay: Duration) {
          self.test_platform.set_idle_sleep_prevention_delay(delay);
+@@ -658,7 +663,7 @@ impl TestAppContext {
+     }
+ 
+     /// Returns the `TestWindow` backing the given handle.
+-    pub(crate) fn test_window(&self, window: AnyWindowHandle) -> TestWindow {
++    pub fn test_window(&self, window: AnyWindowHandle) -> TestWindow {
+         self.app
+             .borrow_mut()
+             .windows
 @@ -1009,6 +1014,30 @@ impl VisualTestContext {
          })
      }
@@ -93,7 +102,7 @@ index 54b72a63ec..998ebbe45a 100644
      pub fn simulate_resize(&self, size: Size<Pixels>) {
          self.simulate_window_resize(self.window, size)
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index 11f0b72406..2ef38508b5 100644
+index 11f0b72406..6a1e603113 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -1565,6 +1565,13 @@ pub trait StatefulInteractiveElement: InteractiveElement {
@@ -143,6 +152,63 @@ index 11f0b72406..2ef38508b5 100644
              let hitbox = hitbox.clone();
              window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble
+@@ -3147,6 +3164,10 @@ impl Interactivity {
+                         // so that it happens even if another event handler stops
+                         // propagation.
+                         DispatchPhase::Capture => {
++                            // A press an inner element's click stopped short of this one's isn't
++                            // this release's: another release can come before the frame that
++                            // would drop this listener, and click this element with it.
++                            captured_mouse_down = None;
+                             let mut pending_mouse_down = pending_mouse_down.borrow_mut();
+                             if pending_mouse_down.is_some() && hitbox.is_hovered(window) {
+                                 captured_mouse_down = pending_mouse_down.take();
+diff --git a/crates/gpui/src/interactive.rs b/crates/gpui/src/interactive.rs
+index cfb1410c78..0aa8b9f3e3 100644
+--- a/crates/gpui/src/interactive.rs
++++ b/crates/gpui/src/interactive.rs
+@@ -895,6 +895,41 @@ impl PlatformInput {
+     }
+ }
+ 
++/// Input a window can't take yet, as it comes while the App is in an update or while the window's
++/// callback is out, which a nested event pump delivers (#2658). Dropped, a press or release makes a
++/// click do nothing, so it waits, and what the pointer does after it waits behind it, in order, to
++/// be handed on once the window can take it. Keys aren't held: whether one is handled decides
++/// where it goes next, which has to be answered now.
++#[derive(Default)]
++pub struct HeldInput(std::collections::VecDeque<PlatformInput>);
++
++impl HeldInput {
++    /// Holds `event` if it's a press or release, or anything but a key behind one held already;
++    /// otherwise gives it back.
++    pub fn hold(&mut self, event: PlatformInput) -> Option<PlatformInput> {
++        let held = match event {
++            PlatformInput::KeyDown(_) | PlatformInput::KeyUp(_) | PlatformInput::ModifiersChanged(_) => false,
++            PlatformInput::MouseDown(_) | PlatformInput::MouseUp(_) => true,
++            _ => !self.0.is_empty(),
++        };
++        if !held {
++            return Some(event);
++        }
++        self.0.push_back(event);
++        None
++    }
++
++    /// The input that came first of what's held.
++    pub fn next(&mut self) -> Option<PlatformInput> {
++        self.0.pop_front()
++    }
++
++    /// Whether anything waits.
++    pub fn is_empty(&self) -> bool {
++        self.0.is_empty()
++    }
++}
++
+ #[cfg(test)]
+ mod test {
+ 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
 index a875ee0f37..a86f2cf138 100644
 --- a/crates/gpui/src/platform.rs
@@ -494,7 +560,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..0b9c9f7500 100644
+index c559412e56..0b39bfa715 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
@@ -535,7 +601,7 @@ index c559412e56..0b9c9f7500 100644
  }
  
  /// Whether a window draw is currently in progress on this thread.
-@@ -360,6 +382,50 @@ thread_local! {
+@@ -360,6 +382,85 @@ thread_local! {
  /// arrive re-entrantly while a draw is already on the stack (e.g. via nested
  /// message pumping in the Windows window procedure), instead of running a
  /// nested draw or panicking on the already-borrowed App.
@@ -550,6 +616,41 @@ index c559412e56..0b9c9f7500 100644
 +fn dropped(kind: &str, cx: &crate::AsyncApp) {
 +    if app_busy(cx) {
 +        eprintln!("browser: gpui dropped {kind}");
++    }
++}
++
++/// Hands on what `held` holds once the update it came in is over, unless input that comes first
++/// hands it on (#2658).
++fn hand_on_held_after_update(
++    held: Rc<RefCell<crate::HeldInput>>,
++    handle: AnyWindowHandle,
++    cx: &crate::AsyncApp,
++) {
++    cx.spawn(async move |cx| {
++        // A nested event pump inside the update can run this before it's over.
++        while app_busy(cx) {
++            cx.background_executor()
++                .timer(std::time::Duration::from_millis(4))
++                .await;
++        }
++        hand_on_held(&held, handle, cx);
++    })
++    .detach();
++}
++
++/// Hands `handle` what `held` holds, in the order it came. It runs only once the update is over,
++/// so it fails only for a window closed meanwhile, whose input goes with it.
++fn hand_on_held(held: &RefCell<crate::HeldInput>, handle: AnyWindowHandle, cx: &mut crate::AsyncApp) {
++    loop {
++        // Taken off before it's handed on: input that comes as it's handled may hold more.
++        let Some(event) = held.borrow_mut().next() else {
++            return;
++        };
++        handle
++            .update(cx, |_, window, cx| {
++                window.dispatch_event(event, cx);
++            })
++            .ok();
 +    }
 +}
 +
@@ -586,7 +687,7 @@ index c559412e56..0b9c9f7500 100644
  fn draw_in_progress() -> bool {
      CURRENT_ELEMENT_ARENA.with(|current| current.get().is_some())
  }
-@@ -737,6 +803,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
+@@ -737,6 +838,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
  /// Emitted by implementers of [`ManagedView`] to indicate the view should be dismissed, such as when a view is presented as a modal.
  pub struct DismissEvent;
  
@@ -606,7 +707,7 @@ index c559412e56..0b9c9f7500 100644
  type FrameCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
  
  pub(crate) type AnyMouseListener =
-@@ -1065,6 +1144,8 @@ pub(crate) struct Frame {
+@@ -1065,6 +1179,8 @@ pub(crate) struct Frame {
      #[cfg(any(feature = "inspector", debug_assertions))]
      pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
      pub(crate) tab_stops: TabStopMap,
@@ -615,7 +716,7 @@ index c559412e56..0b9c9f7500 100644
  }
  
  #[derive(Clone, Default)]
-@@ -1124,6 +1205,7 @@ impl Frame {
+@@ -1124,6 +1240,7 @@ impl Frame {
              #[cfg(any(feature = "inspector", debug_assertions))]
              inspector_hitboxes: FxHashMap::default(),
              tab_stops: TabStopMap::default(),
@@ -623,7 +724,7 @@ index c559412e56..0b9c9f7500 100644
          }
      }
  
-@@ -1140,6 +1222,7 @@ impl Frame {
+@@ -1140,6 +1257,7 @@ impl Frame {
          self.window_control_hitboxes.clear();
          self.deferred_draws.clear();
          self.tab_stops.clear();
@@ -631,7 +732,7 @@ index c559412e56..0b9c9f7500 100644
          self.focus = None;
  
          #[cfg(any(test, feature = "test-support"))]
-@@ -1247,6 +1330,10 @@ pub struct Window {
+@@ -1247,6 +1365,10 @@ pub struct Window {
      pub(crate) rendered_entity_stack: Vec<EntityId>,
      pub(crate) element_offset_stack: Vec<Point<Pixels>>,
      pub(crate) element_opacity: f32,
@@ -642,7 +743,7 @@ index c559412e56..0b9c9f7500 100644
      pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
      pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
      /// The [`TextInputConfiguration`] most recently forwarded to the platform
-@@ -1664,6 +1751,7 @@ impl Window {
+@@ -1664,6 +1786,7 @@ impl Window {
          let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
          let input_rate_tracker = Rc::new(RefCell::new(InputRateTracker::default()));
          let last_frame_time = Rc::new(Cell::new(None));
@@ -650,7 +751,7 @@ index c559412e56..0b9c9f7500 100644
  
          platform_window
              .request_decorations(window_decorations.unwrap_or(WindowDecorations::Server));
-@@ -1770,9 +1858,12 @@ impl Window {
+@@ -1770,9 +1893,12 @@ impl Window {
              }
          }));
          platform_window.on_request_frame(Box::new({
@@ -663,7 +764,7 @@ index c559412e56..0b9c9f7500 100644
              let needs_present = needs_present.clone();
              let next_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
-@@ -1824,13 +1915,20 @@ impl Window {
+@@ -1824,13 +1950,20 @@ impl Window {
  
                  // Throttle frame rate based on conditions:
                  // - Thermal pressure (Serious/Critical): cap to ~60fps
@@ -686,7 +787,7 @@ index c559412e56..0b9c9f7500 100644
                      inactive_frame_interval.map(|interval| (interval, FrameRateLimit::Inactive))
                  } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
                      Some((Duration::from_micros(16667), FrameRateLimit::Thermal))
-@@ -1964,21 +2062,16 @@ impl Window {
+@@ -1964,21 +2097,16 @@ impl Window {
                      .log_err();
              }
          }));
@@ -713,27 +814,44 @@ index c559412e56..0b9c9f7500 100644
          }));
          platform_window.on_display_changed(Box::new({
              let cx = cx.to_async();
-@@ -2053,10 +2146,40 @@ impl Window {
+@@ -2052,11 +2180,57 @@ impl Window {
+         }));
          platform_window.on_input({
              let mut cx = cx.to_async();
++            // Input that comes while the App is in an update waits for it to end (`HeldInput`).
++            let held: Rc<RefCell<crate::HeldInput>> = Rc::default();
              Box::new(move |event| {
 -                handle
 -                    .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
 -                    .log_err()
 -                    .unwrap_or(DispatchEventResult::default())
-+                let modifiers = matches!(event, PlatformInput::ModifiersChanged(_));
-+                // A press or release lost to an update leaves no other trace (#2658).
-+                let button = match event {
-+                    PlatformInput::MouseDown(_) => Some("mouse down"),
-+                    PlatformInput::MouseUp(_) => Some("mouse up"),
-+                    _ => None,
++                // What waited goes first, so nothing overtakes it.
++                if !held.borrow().is_empty() && !app_busy(&cx) {
++                    hand_on_held(&held, handle, &mut cx);
++                }
++                let event = if held.borrow().is_empty() {
++                    event
++                } else {
++                    // Still the update the held input came in: behind it.
++                    let Some(event) = held.borrow_mut().hold(event) else {
++                        return DispatchEventResult::default();
++                    };
++                    event
 +                };
++                let modifiers = matches!(event, PlatformInput::ModifiersChanged(_));
++                let button = matches!(
++                    event,
++                    PlatformInput::MouseDown(_) | PlatformInput::MouseUp(_)
++                )
++                .then(|| event.clone());
 +                match handle.update(&mut cx, |_, window, cx| window.dispatch_event(event, cx)) {
 +                    Ok(result) => result,
++                    Err(_) if button.is_some() && app_busy(&cx) => {
++                        held.borrow_mut().hold(button.unwrap());
++                        hand_on_held_after_update(held.clone(), handle, &cx);
++                        DispatchEventResult::default()
++                    }
 +                    Err(_) => {
-+                        if let Some(button) = button {
-+                            dropped(button, &cx);
-+                        }
 +                        // A window activated inside an update tells its modifiers then: once it's
 +                        // over, the ones held by then, as a key may have gone up meanwhile.
 +                        if modifiers && app_busy(&cx) {
@@ -758,7 +876,7 @@ index c559412e56..0b9c9f7500 100644
              })
          });
          platform_window.on_hit_test_window_control({
-@@ -2156,6 +2279,9 @@ impl Window {
+@@ -2156,6 +2330,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -768,7 +886,7 @@ index c559412e56..0b9c9f7500 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -2884,7 +3010,14 @@ impl Window {
+@@ -2884,7 +3061,14 @@ impl Window {
      /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -784,7 +902,7 @@ index c559412e56..0b9c9f7500 100644
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3636,6 +3769,14 @@ impl Window {
+@@ -3636,6 +3820,14 @@ impl Window {
          profiling::finish_frame!();
      }
  
@@ -799,7 +917,7 @@ index c559412e56..0b9c9f7500 100644
      /// Presents the most recently drawn frame if it hasn't been presented yet.
      #[cfg(all(test, feature = "profiler"))]
      pub fn present_if_needed(&mut self) {
-@@ -3761,7 +3902,23 @@ impl Window {
+@@ -3761,7 +3953,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -824,7 +942,7 @@ index c559412e56..0b9c9f7500 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4384,40 @@ impl Window {
+@@ -4227,6 +4435,40 @@ impl Window {
          result
      }
  
@@ -865,7 +983,7 @@ index c559412e56..0b9c9f7500 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -4273,6 +4464,13 @@ impl Window {
+@@ -4273,6 +4515,13 @@ impl Window {
          result
      }
  
@@ -879,7 +997,7 @@ index c559412e56..0b9c9f7500 100644
      /// When you call this method during [`Element::prepaint`], containing elements will attempt to
      /// scroll to cause the specified bounds to become visible. When they decide to autoscroll, they will call
      /// [`Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
-@@ -5578,9 +5776,8 @@ impl Window {
+@@ -5578,9 +5827,8 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -891,7 +1009,7 @@ index c559412e56..0b9c9f7500 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7294,24 @@ impl Window {
+@@ -7097,18 +7345,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
@@ -919,7 +1037,7 @@ index c559412e56..0b9c9f7500 100644
                          position: center,
                          modifiers: Modifiers::default(),
                          click_count: 1,
-@@ -7908,11 +8111,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
+@@ -7908,11 +8162,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
          let arena_cell = unsafe { &*arena_pointer };
          callback(&mut arena_cell.borrow_mut());
          Ok(())
@@ -962,7 +1080,7 @@ index c559412e56..0b9c9f7500 100644
  #[cfg(test)]
  mod tests {
      use std::{
-@@ -8179,6 +8413,101 @@ mod tests {
+@@ -8179,6 +8464,101 @@ mod tests {
          }
      }
  
