@@ -317,6 +317,11 @@ CARD
   # Deny, at the left of the card's last row.
   send click $((qx + qw / 4)) $((qy + qh - 26))
   await "^browser: agent mcp-client answered $q Dismiss\$" || fail "Deny didn't answer $2's question"
+  # On real input the pointer goes back to the page, as a hand's does once it has answered: one left
+  # where Deny was rests on a tab's row once the card has gone, and on Windows, with that row's hover
+  # card shown, the window drew nothing after it, the next question included. The fix for #2685
+  # takes this move out, and its repro at the end of the run with it.
+  [ "${BROWSER_DRIVE_REAL:-}" != 1 ] || send move $page_point
   got=$(next_answer | answered "$asked")
   case "$got" in
     "error: The user said no: you can't make "*) ;;
@@ -466,6 +471,20 @@ done
 for secret in $secrets; do
   if grep -qF "$secret" "$answers"; then missed "an answer held $(echo "$secret" | cut -c1-12)…"; fi
 done
+
+# #2685's repro, on real input, last as it may stop the run: the pointer rests on Today's first row
+# until its tab's hover card is drawn, and then the agent asks. On Windows the window drew nothing
+# after the hover card, the question's card included, so this step is quarantined under #2685 there.
+if [ "$driven" = 1 ] && [ "${BROWSER_DRIVE_REAL:-}" = 1 ] && [ -z "$missing" ]; then
+  send move $(row 0)
+  expect '^browser: hover card shown ' "resting on Today's first row showed no hover card"
+  # Its frame at rest, which each showing logs ("hover card drawn" is logged once a tab and picture,
+  # and tab 4's card was drawn earlier in the run). In #2685's stall the card never settled.
+  expect '^browser: hover card settled$' \
+    "the agent's own tab, asked with a tab's hover card shown: the card came on screen and never settled"
+  denied "$own_tab" "the agent's own tab, asked with a tab's hover card shown: a PUT" \
+    "[{\"method\":\"PUT\",\"path\":\"/api/rules-change-PUT\",\"body\":{}}]"
+fi
 
 exec 4>&-
 for _ in $(seq 100); do kill -0 "$bridge_pid" 2> /dev/null || break; sleep 0.1; done

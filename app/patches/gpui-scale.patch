@@ -775,7 +775,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..b3a1cc30a8 100644
+index c559412e56..af067cbfec 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
@@ -996,7 +996,22 @@ index c559412e56..b3a1cc30a8 100644
              let needs_present = needs_present.clone();
              let next_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
-@@ -1824,13 +1960,20 @@ impl Window {
+@@ -1805,9 +1941,14 @@ impl Window {
+                 // but calling it would hit the App borrow panic above, and this
+                 // branch is unreachable there in practice: only Windows pumps
+                 // platform events (and thus requests frames) mid-draw.
++                //
++                // The draw on the stack may be another window's, and Windows
++                // validates this one once the request returns, so wake the frame
++                // source: a dirty window doesn't wake it again when it's notified.
+                 if draw_in_progress() {
+                     log::debug!("deferring re-entrant window draw request");
+                     deferred_force_render |= request_frame_options.force_render;
++                    invalidator.wake_platform();
+                     #[cfg(feature = "profiler")]
+                     profiler::journal::record_reentrant_frame_skipped(window_id, Instant::now());
+                     return;
+@@ -1824,13 +1965,20 @@ impl Window {
  
                  // Throttle frame rate based on conditions:
                  // - Thermal pressure (Serious/Critical): cap to ~60fps
@@ -1019,7 +1034,40 @@ index c559412e56..b3a1cc30a8 100644
                      inactive_frame_interval.map(|interval| (interval, FrameRateLimit::Inactive))
                  } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
                      Some((Duration::from_micros(16667), FrameRateLimit::Thermal))
-@@ -1964,21 +2107,16 @@ impl Window {
+@@ -1875,15 +2023,23 @@ impl Window {
+                 }
+                 last_frame_time.set(Some(now));
+ 
+-                let pending_next_frame_callbacks = next_frame_callbacks.take();
+-                if !pending_next_frame_callbacks.is_empty() {
+-                    handle
+-                        .update(&mut cx, |_, window, cx| {
+-                            for callback in pending_next_frame_callbacks {
+-                                callback(window, cx);
+-                            }
+-                        })
+-                        .log_err();
++                let mut pending_next_frame_callbacks = Some(next_frame_callbacks.take());
++                if pending_next_frame_callbacks.as_ref().is_some_and(|c| !c.is_empty()) {
++                    let ran = handle.update(&mut cx, |_, window, cx| {
++                        for callback in pending_next_frame_callbacks.take().into_iter().flatten() {
++                            callback(window, cx);
++                        }
++                    });
++                    // Requested while the App is in an update, as Windows does from a nested
++                    // message pump: they wait for the next frame, ahead of any queued since,
++                    // and the wake below asks for it. Dropped, they'd strand what they drive.
++                    if ran.is_err()
++                        && let Some(mut callbacks) = pending_next_frame_callbacks
++                    {
++                        let mut queued = next_frame_callbacks.borrow_mut();
++                        callbacks.append(&mut queued);
++                        *queued = callbacks;
++                    }
+                 }
+ 
+                 // Keep presenting if input was recently arriving at a high rate (>= 60fps).
+@@ -1964,21 +2120,16 @@ impl Window {
                      .log_err();
              }
          }));
@@ -1046,7 +1094,7 @@ index c559412e56..b3a1cc30a8 100644
          }));
          platform_window.on_display_changed(Box::new({
              let cx = cx.to_async();
-@@ -2050,13 +2188,73 @@ impl Window {
+@@ -2050,13 +2201,73 @@ impl Window {
                      .log_err();
              }
          }));
@@ -1124,7 +1172,7 @@ index c559412e56..b3a1cc30a8 100644
              })
          });
          platform_window.on_hit_test_window_control({
-@@ -2135,6 +2333,7 @@ impl Window {
+@@ -2135,6 +2346,7 @@ impl Window {
  
          Ok(Window {
              handle,
@@ -1132,7 +1180,7 @@ index c559412e56..b3a1cc30a8 100644
              invalidator,
              removed: false,
              platform_window,
-@@ -2156,6 +2355,9 @@ impl Window {
+@@ -2156,6 +2368,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -1142,7 +1190,7 @@ index c559412e56..b3a1cc30a8 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -2233,6 +2435,11 @@ impl Window {
+@@ -2233,6 +2448,11 @@ impl Window {
  pub struct DispatchEventResult {
      pub propagate: bool,
      pub default_prevented: bool,
@@ -1154,7 +1202,7 @@ index c559412e56..b3a1cc30a8 100644
  }
  
  /// Indicates which region of the window is visible. Content falling outside of this mask will not be
-@@ -2884,7 +3091,14 @@ impl Window {
+@@ -2884,7 +3104,14 @@ impl Window {
      /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -1170,7 +1218,7 @@ index c559412e56..b3a1cc30a8 100644
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3636,6 +3850,14 @@ impl Window {
+@@ -3636,6 +3863,14 @@ impl Window {
          profiling::finish_frame!();
      }
  
@@ -1185,7 +1233,7 @@ index c559412e56..b3a1cc30a8 100644
      /// Presents the most recently drawn frame if it hasn't been presented yet.
      #[cfg(all(test, feature = "profiler"))]
      pub fn present_if_needed(&mut self) {
-@@ -3761,7 +3983,23 @@ impl Window {
+@@ -3761,7 +3996,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -1210,7 +1258,7 @@ index c559412e56..b3a1cc30a8 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4465,40 @@ impl Window {
+@@ -4227,6 +4478,40 @@ impl Window {
          result
      }
  
@@ -1251,7 +1299,7 @@ index c559412e56..b3a1cc30a8 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -4273,6 +4545,13 @@ impl Window {
+@@ -4273,6 +4558,13 @@ impl Window {
          result
      }
  
@@ -1265,7 +1313,7 @@ index c559412e56..b3a1cc30a8 100644
      /// When you call this method during [`Element::prepaint`], containing elements will attempt to
      /// scroll to cause the specified bounds to become visible. When they decide to autoscroll, they will call
      /// [`Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
-@@ -5417,7 +5696,9 @@ impl Window {
+@@ -5417,7 +5709,9 @@ impl Window {
          if focus_handle.is_focused(self) {
              let cx = self.to_async(cx);
              self.next_frame.input_handlers.push(Some(
@@ -1276,7 +1324,7 @@ index c559412e56..b3a1cc30a8 100644
              ));
          }
      }
-@@ -5578,14 +5859,45 @@ impl Window {
+@@ -5578,14 +5872,45 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -1325,7 +1373,7 @@ index c559412e56..b3a1cc30a8 100644
      /// Dispatch a given keystroke as though the user had typed it.
      /// You can create a keystroke with Keystroke::parse("").
      pub fn dispatch_keystroke(&mut self, keystroke: Keystroke, cx: &mut App) -> bool {
-@@ -5801,6 +6113,7 @@ impl Window {
+@@ -5801,6 +6126,7 @@ impl Window {
          DispatchEventResult {
              propagate: cx.propagate_event,
              default_prevented: self.default_prevented,
@@ -1333,7 +1381,7 @@ index c559412e56..b3a1cc30a8 100644
          }
      }
  
-@@ -7097,18 +7410,24 @@ impl Window {
+@@ -7097,18 +7423,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
@@ -1361,7 +1409,7 @@ index c559412e56..b3a1cc30a8 100644
                          position: center,
                          modifiers: Modifiers::default(),
                          click_count: 1,
-@@ -7908,11 +8227,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
+@@ -7908,11 +8240,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
          let arena_cell = unsafe { &*arena_pointer };
          callback(&mut arena_cell.borrow_mut());
          Ok(())
@@ -1404,7 +1452,7 @@ index c559412e56..b3a1cc30a8 100644
  #[cfg(test)]
  mod tests {
      use std::{
-@@ -8179,6 +8529,101 @@ mod tests {
+@@ -8179,6 +8542,101 @@ mod tests {
          }
      }
  
@@ -1506,6 +1554,57 @@ index c559412e56..b3a1cc30a8 100644
      /// Visibility transitions reach observers exactly once each, with the new
      /// state already stored on the window, and never wake the platform for a
      /// frame: the platform requests one itself when it resumes presenting.
+@@ -8616,6 +9074,50 @@ mod tests {
+         );
+     }
+ 
++    /// Asks another window for a frame while this one draws, as a nested message pump on Windows
++    /// delivers one, and records that window's frame-source wakes before and after.
++    struct AsksForAFrameWhileDrawing {
++        other: crate::TestWindow,
++        wakes: Rc<Cell<Option<(usize, usize)>>>,
++    }
++
++    impl Render for AsksForAFrameWhileDrawing {
++        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
++            let before = self.other.frame_wake_count();
++            self.other
++                .simulate_frame_request(RequestFrameOptions::default());
++            self.wakes
++                .set(Some((before, self.other.frame_wake_count())));
++            div()
++        }
++    }
++
++    /// A frame request deferred because another window's draw is on the stack wakes the frame
++    /// source: Windows validates the window once the request returns, and a window that's already
++    /// dirty doesn't wake it again when it's notified, so nothing would ask for its frame (#2685).
++    #[gpui::test]
++    fn test_frame_request_deferred_during_another_draw_wakes_the_frame_source(
++        cx: &mut TestAppContext,
++    ) {
++        let other = cx.add_window(|_, _| EmptyView);
++        let other = cx.test_window(other.into());
++        let wakes = Rc::new(Cell::new(None));
++        let window = cx.add_window({
++            let wakes = wakes.clone();
++            move |_, _| AsksForAFrameWhileDrawing { other, wakes }
++        });
++        window
++            .update(cx, |_, window, _| window.refresh())
++            .unwrap();
++        cx.test_window(window.into())
++            .simulate_frame_request(RequestFrameOptions::default());
++        let (before, after) = wakes.get().expect("the window didn't draw");
++        assert!(
++            after > before,
++            "a frame request deferred mid-draw must wake the frame source"
++        );
++    }
++
+     #[gpui::test]
+     fn test_window_reports_no_raw_handle_instead_of_panicking(cx: &mut TestAppContext) {
+         use raw_window_handle::{HandleError, HasDisplayHandle as _, HasWindowHandle as _};
 diff --git a/crates/gpui/src/window/a11y.rs b/crates/gpui/src/window/a11y.rs
 index 5b63821232..cb7d8413de 100644
 --- a/crates/gpui/src/window/a11y.rs
