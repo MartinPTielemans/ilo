@@ -826,7 +826,11 @@ printf '%s' '<title>loading</title>
 <a id=l href="notes.txt" style="position:fixed;left:0;top:0;width:40px;height:40px"></a>
 <script>
 let entered = 0, rest;
-l.addEventListener("mouseenter", () => { entered++; clearTimeout(rest); });
+l.addEventListener("mouseenter", () => {
+  entered++;
+  clearTimeout(rest);
+  document.title = "on " + entered;
+});
 l.addEventListener("mouseleave", () => {
   clearTimeout(rest);
   rest = setTimeout(() => document.title = "rested " + entered, 600);
@@ -838,7 +842,11 @@ expect '^browser: command bar shown$' "⌘L didn't open the command bar for the 
 send insert "${site}little-held.html"
 send key return
 expect '^browser: title [0-9]* held ready$' "the held press's page didn't draw"
+# Real input sets the cursor, and two sets in a row make one move, so the page says when the
+# pointer reached its link before it leaves.
 send move $((x + 20)) $((y + 20))
+await '^browser: title [0-9]* on 1$' ||
+  fail "the held press's page didn't say the pointer reached its link"
 send move $page_point
 await '^browser: title [0-9]* rested 1$' ||
   fail "the held press's page didn't say the pointer had left its link 600 ms before"
