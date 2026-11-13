@@ -58,7 +58,8 @@ if [ -n "$other_engine" ] && [ "$other_engine" != "$this_engine" ]; then
   tar -xf "$dir/other.tar.xz" -C "$other_dir.part"
   rm "$dir/other.tar.xz"
   rm -rf build/BrowserOther
-  cp -al "$other_dir.part" build/BrowserOther
+  # The release holds the engine in a folder of its own, Chromium.
+  cp -al "$other_dir.part/Chromium" build/BrowserOther
   cp -R build/Browser/libBrowser.so build/Browser/mcp-bridge build/Browser/ublock build/BrowserOther/
   engines="$engines $other_engine"
 fi
