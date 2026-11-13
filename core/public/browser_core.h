@@ -1394,6 +1394,13 @@ typedef struct bc_host {
   // Point ended on the tab without the app asking: a new page, the tab moved into another agent's
   // Space or a private window, or it closed.
   void (*tab_point_ended)(void* context, bc_id tab);
+  // Linux, where the page bc_tab_show_in shows is under the app's window, which shows it through a
+  // hole: the first frame with the tab's page at the place bc_tab_show_in last gave is on screen.
+  // |frame| is the frame that call passed, bit for bit, never the bounds laid out from it, so the
+  // app can match it to the call. Once a call, unless the tab's next call comes first; then only
+  // that one's. Never on Windows, where the app opens and closes the hole without waiting for it,
+  // nor on the Mac, where the page is in the app's view, over what it draws.
+  void (*tab_shown_in)(void* context, bc_id tab, bc_rect frame);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2649,7 +2656,7 @@ BC_EXPORT bc_id bc_tab_open_preview(bc_id opener, const char* url, bc_rect frame
 // Shows the page of |tab|, which no window shows, such as bc_tab_open_preview's, in |view|, an
 // NSView of the app's on the Mac, which keeps it from then on: at |frame| in points from the view's
 // top-left, over what the view draws, with corners of |corner_radius|, and with the keyboard. Call
-// it again as the frame changes.
+// it again as the frame changes. tab_shown_in says when the page is on screen there.
 BC_EXPORT void bc_tab_show_in(bc_id tab, void* view, bc_rect frame, double corner_radius);
 
 // Draws the page bc_tab_show_in shows of |tab| at |scale| of its frame's size about (|about_x|,
