@@ -20,7 +20,7 @@
 #     run hid and some of which this run shows, as an ad's box the engine's hiding missed. Each
 #     selector is an element's tag, id and classes, read 8 s after the load (cdp.py's hidden);
 #   - a site this run breaks, or a wall uBlock Origin kept away: text under half the baseline's,
-#     where two loads of a page with the same engine differ by a tenth at most, or 90% of the
+#     where two loads of a page with the same engine differ by a seventh at most, or 90% of the
 #     viewport covered by an element fixed in place, a wall or a modal, where the baseline's page
 #     had nothing as large. A site's own banner covers half, and changes size from load to load.
 #     Both are read 8 s after the load (cdp.py's content), and the table says them, with the
