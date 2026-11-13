@@ -31,10 +31,10 @@ index a91818acd0..2d1de9aa21 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..2fa4080e4e 100644
+index a5390e77f8..5cbec0765f 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
-@@ -1,4 +1,25 @@
+@@ -1,4 +1,26 @@
  #![cfg(any(target_os = "linux", target_os = "freebsd"))]
  mod linux;
  
@@ -49,6 +49,7 @@ index a5390e77f8..2fa4080e4e 100644
 +    dispatch_embedded_after_read, embed, embed_wayland, embed_x11, embedded_fd, embedder_scale, embedder_size, embedder_windows_going,
 +    give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
 +    linux_platform, move_overlay, new_host_window, overlay_first_frame_scale, overlay_size, overlays_blend, overlays_blur,
++    pointer_pressed,
 +    set_overlay_blur, set_overlay_cursor, set_overlay_keyboard,
 +    set_overlay_menu, set_overlay_outline, set_overlay_outlines, set_overlay_panel,
 +    set_overlay_pointer, set_overlay_under,
@@ -62,7 +63,7 @@ index a5390e77f8..2fa4080e4e 100644
 +    open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..3e16b2807a 100644
+index e4da54b52b..ca5b025ee3 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -99,7 +100,7 @@ index e4da54b52b..3e16b2807a 100644
 +pub use overlay::{
 +    Corner, CursorPicture, answered_key, embedder_scale, embedder_size, embedder_windows_going, give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
 +    move_overlay, overlay_first_frame_scale, overlay_size, overlays_blend, overlays_blur,
-+    set_overlay_blur, set_overlay_cursor, set_overlay_keyboard, set_overlay_menu, set_overlay_outline,
++    pointer_pressed, set_overlay_blur, set_overlay_cursor, set_overlay_keyboard, set_overlay_menu, set_overlay_outline,
 +    set_overlay_outlines,
 +    set_overlay_panel, set_overlay_pointer, set_overlay_under, show_overlay, show_window,
 +    shown_keyboard_overlay,
@@ -243,10 +244,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..69f6f4d848
+index 0000000000..52d54118cd
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1276 @@
+@@ -0,0 +1,1318 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -614,6 +615,48 @@ index 0000000000..69f6f4d848
 +            }
 +        }
 +    });
++}
++
++thread_local! {
++    /// The buttons down under Wayland, a bit each, which GPUI's pointer hears over the embedder's
++    /// surfaces too (`wayland_button`).
++    static WAYLAND_BUTTONS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
++}
++
++/// A button of the Wayland pointer, by its evdev code, went down or up, over any surface.
++pub(crate) fn wayland_button(code: u32, down: bool) {
++    let bit = 1u32 << (code & 31);
++    WAYLAND_BUTTONS.set(match down {
++        true => WAYLAND_BUTTONS.get() | bit,
++        false => WAYLAND_BUTTONS.get() & !bit,
++    });
++}
++
++/// The pointer left our surfaces, which a release no longer reaches.
++pub(crate) fn wayland_buttons_gone() {
++    WAYLAND_BUTTONS.set(0);
++}
++
++/// Whether a mouse button is down, over the embedder's windows or GPUI's. On X11 the embedder's
++/// presses go to its own connection, so this asks the server.
++pub fn pointer_pressed() -> bool {
++    #[cfg(feature = "x11")]
++    if let Some(Some(pressed)) = super::platform::with_embedded_connection(|connection| {
++        let DisplayConnection::X11(x11) = connection else {
++            return None;
++        };
++        use x11rb::connection::Connection as _;
++        let x11 = x11.0.borrow();
++        let root = x11.xcb_connection.setup().roots[x11.x_root_index].root;
++        let pointer = x11.xcb_connection.query_pointer(root).ok()?.reply().ok()?;
++        let buttons = xproto::KeyButMask::BUTTON1
++            | xproto::KeyButMask::BUTTON2
++            | xproto::KeyButMask::BUTTON3;
++        Some(pointer.mask.intersects(buttons))
++    }) {
++        return pressed;
++    }
++    WAYLAND_BUTTONS.get() != 0
 +}
 +
 +/// The pointer is `at` over `surface`, the embedder's or GPUI's.
@@ -1952,7 +1995,7 @@ index cbc962bcff..46c3b3e249 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..df1a6fe36f 100644
+index 2d40cf7fa9..78e709800d 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -2295,12 +2338,12 @@ index 2d40cf7fa9..df1a6fe36f 100644
 +                    .collect();
 +                shm_buffer(self, picture.width, picture.height, &bgra).ok_or(())
 +            }
++        };
++        let Ok(buffer) = made else {
++            return false;
          };
 -        let scale = focused_window.primary_output_scale();
 -        self.cursor.set_icon(
-+        let Ok(buffer) = made else {
-+            return false;
-+        };
 +        let hot = |at: u32| (at / scale) as i32;
 +        self.cursor.set_buffer(
              &wl_pointer,
@@ -2867,10 +2910,13 @@ index 2d40cf7fa9..df1a6fe36f 100644
                      }
                      let modifiers = state.modifiers;
                      drop(state);
-@@ -2432,9 +2806,24 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2432,9 +2806,27 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  }
              }
              wl_pointer::Event::Leave { .. } => {
++                // A press holds the pointer in its surface until its release, so the pointer
++                // leaving our surfaces with a button down means the compositor took it.
++                crate::linux::overlay::wayland_buttons_gone();
 +                state.embedder_pointer = None;
 +                state.pointer_surface = 0;
                  if let Some(focused_window) = state.mouse_focused_window.clone() {
@@ -2893,7 +2939,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                          pressed_button: state.button_pressed,
                          modifiers: state.modifiers,
                      });
-@@ -2444,6 +2833,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2444,6 +2836,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      state.cursor_hidden_window = None;
  
                      drop(state);
@@ -2904,7 +2950,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                      focused_window.handle_input(input);
                      focused_window.set_hovered(false);
                  }
-@@ -2453,12 +2846,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2453,12 +2849,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  surface_y,
                  ..
              } => {
@@ -2935,8 +2981,14 @@ index 2d40cf7fa9..df1a6fe36f 100644
                  if let Some(window) = state.mouse_focused_window.clone() {
                      if window.is_blocked() {
                          let default_style = CursorStyle::Arrow;
-@@ -2514,11 +2924,42 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2512,13 +2925,48 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+                 if button_state == wl_pointer::ButtonState::Pressed {
+                     state.serial_tracker.update(SerialKind::MousePress, serial);
                  }
++                crate::linux::overlay::wayland_button(
++                    button,
++                    button_state == wl_pointer::ButtonState::Pressed,
++                );
                  let button = linux_button_to_gpui(button);
                  let Some(button) = button else { return };
 +                // A press anywhere but in an embedder's overlay leaves it, in the embedder's
@@ -2978,7 +3030,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                          if let Some(window) = state.keyboard_focused_window.clone() {
                              if state.composing && state.text_input.is_some() {
                                  drop(state);
-@@ -2574,10 +3015,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2574,10 +3022,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      wl_pointer::ButtonState::Released => {
                          state.button_pressed = None;
  
@@ -2996,7 +3048,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                                  modifiers: state.modifiers,
                                  click_count: state.click.current_count,
                              });
-@@ -2595,11 +3041,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2595,11 +3048,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
              } => {
                  state.axis_source = axis_source;
              }
@@ -3017,7 +3069,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                  if state.axis_source == AxisSource::Wheel {
                      return;
                  }
-@@ -2688,17 +3143,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2688,17 +3150,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      state.scroll_event_received = false;
                      let continuous = state.continuous_scroll_delta.take();
                      let discrete = state.discrete_scroll_delta.take();
@@ -3064,7 +3116,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                          }
                      } else if let Some(discrete) = discrete
                          && let Some(window) = state.mouse_focused_window.clone()
-@@ -2733,6 +3208,68 @@ impl Dispatch<zwp_pointer_gestures_v1::ZwpPointerGesturesV1, ()> for WaylandClie
+@@ -2733,6 +3215,68 @@ impl Dispatch<zwp_pointer_gestures_v1::ZwpPointerGesturesV1, ()> for WaylandClie
      }
  }
  
@@ -3133,7 +3185,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
  impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()>
      for WaylandClientStatePtr
  {
-@@ -2895,6 +3432,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2895,6 +3439,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                      let Some(drag_window) = get_window(&mut state, &surface.id()) else {
                          return;
                      };
@@ -3158,7 +3210,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                      let uri_read_generation = state.drag.begin_uri_read();
  
                      const ACTIONS: DndAction = DndAction::Copy;
-@@ -2968,6 +3523,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2968,6 +3530,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Motion { x, y, .. } => {
@@ -3171,7 +3223,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                  let Some(drag_window) = state.drag.window.clone() else {
                      return;
                  };
-@@ -2979,6 +3540,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2979,6 +3547,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  drag_window.handle_input(input);
              }
              wl_data_device::Event::Leave => {
@@ -3187,7 +3239,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                  let input = state.drag.handle_leave();
                  drop(state);
                  if let Some((drag_window, input)) = input {
-@@ -2986,6 +3556,22 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2986,6 +3563,22 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Drop => {
@@ -3210,7 +3262,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                  let input = state.drag.handle_drop();
                  drop(state);
                  if let Some((drag_window, input)) = input {
-@@ -3015,7 +3601,10 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
+@@ -3015,7 +3608,10 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
  
          if let wl_data_offer::Event::Offer { mime_type } = event {
              // Drag and drop
@@ -3222,7 +3274,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                  let serial = state.serial_tracker.get(SerialKind::DataDevice);
                  let mime_type = mime_type.clone();
                  data_offer.accept(serial.as_raw(), Some(mime_type));
-@@ -3050,6 +3639,7 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+@@ -3050,6 +3646,7 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
                  state.clipboard.send(mime_type, fd);
              }
              (DataSourceKind::Clipboard, wl_data_source::Event::Cancelled) => {
@@ -3230,7 +3282,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
                  data_source.destroy();
              }
              (DataSourceKind::Drag, wl_data_source::Event::Send { fd, .. }) => {
-@@ -3059,18 +3649,32 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+@@ -3059,18 +3656,32 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
                  let bytes = external_drag.bytes.clone();
                  state.clipboard.send_bytes(fd, bytes);
              }
@@ -3265,7 +3317,7 @@ index 2d40cf7fa9..df1a6fe36f 100644
              }
              _ => {}
          }
-@@ -3479,3 +4083,715 @@ mod tests {
+@@ -3479,3 +4090,715 @@ mod tests {
          );
      }
  }
