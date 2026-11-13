@@ -19,10 +19,12 @@
 #include "browser_core/host.h"
 #include "browser_core/native_ad_block.h"
 #include "browser_core/passwords.h"
+#include "browser_core/permission_question.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/certificate_viewer.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/page_info/chrome_page_info_delegate.h"
 #include "chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h"
@@ -231,10 +233,17 @@ void SiteControls::SetPermission(bc_id tab, int type, int value) {
                                             : value == BC_SITE_BLOCK ? CONTENT_SETTING_BLOCK
                                                                      : CONTENT_SETTING_ASK);
   }
+  // Allow or Block for a request held quietly answers it, as the card would have, so the page
+  // hears. The answer goes first, as listing the permissions again drops the held row.
+  const ContentSettingsType kind = permission->type;
+  const std::optional<url::Origin> origin = permission->requesting_origin;
+  if (kind == ContentSettingsType::NOTIFICATIONS && value != BC_SITE_ASK &&
+      PermissionQuestion::Quiet(tab)) {
+    PermissionQuestion::Answer(
+        tab, value == BC_SITE_ALLOW ? BC_PERMISSION_ALLOW : BC_PERMISSION_BLOCK);
+  }
   // PageInfo lists the permissions again, which reports them.
-  controls->page_info_->OnSitePermissionChanged(permission->type, setting,
-                                                permission->requesting_origin,
-                                                /*is_one_time=*/false);
+  controls->page_info_->OnSitePermissionChanged(kind, setting, origin, /*is_one_time=*/false);
 }
 
 void SiteControls::RemoveDevice(bc_id tab, size_t index) {
@@ -382,6 +391,19 @@ void SiteControls::Read() {
 void SiteControls::SetPermissionInfo(const PermissionInfoList& permission_info_list,
                                      ChosenObjectInfoList chosen_object_info_list) {
   permissions_ = permission_info_list;
+  // A page holding a request to show notifications quietly lists them, at the default, as
+  // Chrome's page info does on Android alone: the bell in the URL field opens the panel there.
+  if (PermissionQuestion::Quiet(tab_) &&
+      std::ranges::find(permissions_, ContentSettingsType::NOTIFICATIONS,
+                        &PageInfo::PermissionInfo::type) == permissions_.end()) {
+    PageInfo::PermissionInfo notifications;
+    notifications.type = ContentSettingsType::NOTIFICATIONS;
+    notifications.source = content_settings::SettingSource::kUser;
+    notifications.default_setting =
+        HostContentSettingsMapFactory::GetForProfile(web_contents()->GetBrowserContext())
+            ->GetDefaultPermissionSetting(ContentSettingsType::NOTIFICATIONS, nullptr);
+    permissions_.push_back(std::move(notifications));
+  }
   devices_ = std::move(chosen_object_info_list);
   Changed();
 }
