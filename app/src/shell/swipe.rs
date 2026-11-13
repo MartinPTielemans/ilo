@@ -149,6 +149,25 @@ impl Shell {
         nearest(&self.spaces, form, from, x, self.width())
     }
 
+    /// The preview's fingers (PREVIEW_SWIPE): `x` across the sidebar since the last, down with
+    /// `phase`, through the gesture's own code, so a recording shows what fingers do.
+    pub fn preview_fingers(
+        &mut self,
+        x: f32,
+        phase: TouchPhase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let event = ScrollEvent {
+            position: gpui::point(px(self.column_x() + self.width() / 2.), px(300.)),
+            delta: ScrollDelta::Pixels(gpui::point(px(x), px(0.))),
+            touch_phase: phase,
+            ..Default::default()
+        };
+        self.scroll(&event, window, cx);
+        cx.notify();
+    }
+
     /// Fingers or a wheel over the sidebar. Across it they page between Spaces, and along it they
     /// scroll the list. Over the Library's Spaces cards they scroll them across, if they don't
     /// fit. Returns whether paging, or the cards, took the event.
@@ -839,11 +858,13 @@ mod tests {
     };
 
     use super::{heading, nearest};
+    use crate::shell::sidebar::mirrored;
     use crate::shell::{
-        Folders, PLATE_INSET, SWIPE_TRACKING, Shell, Space, SpaceForm, WindowButtonGeometry,
-        recorder::Recorder,
+        Folders, PLATE_INSET, SWIPE_TRACKING, Shell, SidebarRight, Space, SpaceForm,
+        WindowButtonGeometry, recorder::Recorder,
     };
     use crate::text_input::TextInput;
+    use crate::tokens::shell::library::COLUMN_WIDTH;
 
     fn spaces(ids: &[u64]) -> Vec<Space> {
         let space = |&id| Space {
@@ -1078,6 +1099,81 @@ mod tests {
         });
     }
 
+    /// On the right, fingers going right still bring the Library out from the first Space, and
+    /// what they move goes with them: the sidebar's Space pages go right, out of the window, and
+    /// the Library follows them in from behind the card, its right edge on the sidebar's left all
+    /// the way, shown only from the card's edge. Past where it opens nothing goes further, and the
+    /// window's own buttons come up where the panel's copy has stopped on them, mirrored (#2375).
+    #[gpui::test]
+    fn on_the_right_the_library_follows_the_space_pages_in_from_the_page_side(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx) = older_sdk_window(cx);
+        cx.update(|_, cx| {
+            cx.set_global(SidebarRight(true));
+            cx.refresh_windows();
+        });
+        cx.run_until_parked();
+        shell.update_in(cx, |shell, window, cx| {
+            assert!(shell.right(), "the sidebar isn't on the right");
+            let across = shell.viewport.width;
+            let own = OLDER_SDK
+                .frames()
+                .map(|frame| mirrored(true, across, frame));
+            let (mut went, mut swapped) = (0., false);
+            let way = 1.2 * shell.library_width();
+            fingers_by_steps(shell, way, 600, window, cx, |shell| {
+                let shift = shell.sidebar_shift();
+                assert!(
+                    shift >= went,
+                    "the sidebar went left as the fingers went right"
+                );
+                went = shift;
+                let library_right = shell.library_x() + shell.library_width();
+                let sidebar_left = shell.column_x() + shift;
+                assert!(
+                    (library_right - sidebar_left).abs() < 0.01,
+                    "the Library's edge at {library_right}, the sidebar's at {sidebar_left}"
+                );
+                let (card, _) = shell.card_frames(shell.viewport);
+                let card_right = f32::from(card.right());
+                assert!(
+                    (shell.library_shown_from() - card_right).abs() < 0.01,
+                    "shown from {}, the card's edge at {card_right}",
+                    shell.library_shown_from()
+                );
+                if shell.window_buttons_shown() && !swapped {
+                    let copy = panel_copy_right(shell);
+                    assert!(
+                        same(copy, own, 0.5),
+                        "swapped off the window's own: {copy:?}"
+                    );
+                    swapped = true;
+                }
+            });
+            assert!(swapped, "the window's own never came up");
+            // Past where it opens, nothing has gone on.
+            let (library, card) = (shell.library_x(), shell.card_frames(shell.viewport).0);
+            let rest = f32::from(across) - shell.library_width();
+            assert_eq!(library, rest);
+            assert_eq!(f32::from(card.right()), rest);
+            assert_eq!(shell.sidebar_shift(), shell.card_left());
+        });
+    }
+
+    /// The copy the Library's panel draws of the window's buttons on the right, where it is in the
+    /// window: mirrored across its column, at the panel's right.
+    fn panel_copy_right(shell: &Shell) -> [Bounds<Pixels>; 3] {
+        let column = shell.library_x() + shell.library_width() - COLUMN_WIDTH;
+        shell.window_button_frames().map(|frame| {
+            let frame = mirrored(true, px(COLUMN_WIDTH), frame);
+            Bounds {
+                origin: frame.origin + point(px(column), px(0.)),
+                ..frame
+            }
+        })
+    }
+
     /// Back out of the Library, the panel's copy takes over on the window's own, at their size,
     /// and stays their size as it goes.
     #[gpui::test]
@@ -1154,6 +1250,50 @@ mod tests {
             assert!(shell.library_open, "the next swipe left the Library closed");
         });
         assert_eq!(*host.shown.borrow(), [1]);
+    }
+
+    /// On either side, one long swipe right from the second Space stops on the first and never
+    /// carries on into the Library, however far the fingers go, and the Library stays shut while
+    /// they're still down; the next swipe from the first brings it out (#2375).
+    #[gpui::test]
+    fn on_either_side_a_swipe_from_the_second_space_stops_on_the_first(cx: &mut TestAppContext) {
+        for right in [false, true] {
+            let (shell, host, cx) = three_spaces(cx, 2);
+            cx.update(|_, cx| {
+                cx.set_global(SidebarRight(right));
+                cx.refresh_windows();
+            });
+            cx.run_until_parked();
+            shell.update_in(cx, |shell, window, cx| {
+                assert_eq!(shell.right(), right);
+                let way = shell.width() + 2. * shell.library_width();
+                fingers(shell, way, false, window, cx);
+                assert_eq!(
+                    shell.library_out(),
+                    0.,
+                    "the Library came out, right {right}"
+                );
+                let lift = ScrollEvent {
+                    delta: ScrollDelta::Pixels(point(px(0.), px(0.))),
+                    touch_phase: TouchPhase::Ended,
+                    ..Default::default()
+                };
+                shell.scroll(&lift, window, cx);
+                assert!(
+                    !shell.library_open,
+                    "the swipe opened the Library, right {right}"
+                );
+                // The pages land on the first Space.
+                shell.set_space(1, cx);
+                shell.settle = None;
+                swipe(shell, 0.9 * shell.library_width(), window, cx);
+                assert!(
+                    shell.library_open,
+                    "the next swipe left it shut, right {right}"
+                );
+            });
+            assert_eq!(*host.shown.borrow(), [1], "right {right}");
+        }
     }
 
     /// A flick, fingers lifted while they're still going, goes on to the next Space though they

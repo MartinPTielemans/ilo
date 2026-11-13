@@ -4477,7 +4477,8 @@ impl Render for Shell {
         if self.window_button_geometry.is_none() && window_buttons {
             self.window_button_geometry = self.browser.window_button_geometry(cx);
         }
-        // The Library slides in from the left with the card's edge, over the sidebar receding.
+        // The Library slides in from the left with the card's edge, over the sidebar receding, or
+        // on the right from behind the card after the sidebar going right (`library_x`).
         let library = self.library.is_some() && !self.page_fullscreen;
         // Full screen has no window buttons, so the panel draws none.
         let buttons = self.library_buttons() && !window.is_fullscreen();
@@ -4503,8 +4504,9 @@ impl Render for Shell {
             && (!self.sidebar_hidden || self.sidebar_motion.is_some());
         let sidebar = sidebar_shown.then(|| {
             let scale = self.sidebar_scale();
+            let shift = self.sidebar_shift();
             let origin = point(
-                px(self.from_side(width + RECEDE_X)),
+                px(self.from_side(width + RECEDE_X) + shift),
                 self.viewport.height / 2.,
             );
             // Whole: the Library fades in over it rather than cutting it (`library_opacity`).
@@ -4516,8 +4518,13 @@ impl Render for Shell {
             // Its buttons recede with it, over the Library, as the window's do in Arc. Full screen
             // has none.
             let buttons = self.sidebar_buttons() && !window.is_fullscreen();
-            let buttons = buttons.then(|| self.window_buttons(Some(self.viewport.width), cx));
-            let receding = div().absolute().size_full().opacity(opacity);
+            let buttons = buttons.then(|| self.window_buttons(self.viewport.width, cx));
+            let receding = div()
+                .absolute()
+                .top_0()
+                .left(px(shift))
+                .size_full()
+                .opacity(opacity);
             scaled(receding.child(sidebar).children(buttons), scale, origin)
         });
         let docked = sidebar_shown
@@ -4527,7 +4534,7 @@ impl Render for Shell {
         let edge = docked.then(|| self.sidebar_edge(cx));
         let own_buttons = self
             .draws_own_window_buttons()
-            .then(|| self.window_buttons(Some(self.viewport.width), cx));
+            .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
         self.breath.arm(cx);
@@ -5241,7 +5248,7 @@ impl Shell {
                     .border(px(0.5))
                     .border_color(self.palette.faint(REVEAL_BORDER))
                     .bg(self.gradient(Some(self.palette.underlay.into())))
-                    .child(self.window_buttons(Some(px(self.width())), cx))
+                    .child(self.window_buttons(px(self.width()), cx))
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
@@ -5262,11 +5269,11 @@ impl Shell {
         self.window_button_geometry.unwrap_or_default().frames()
     }
 
-    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel. With the sidebar
-    /// on the right they're mirrored `across` what they're drawn in, so close is at its corner, as
-    /// AppKit's are; the Library's column draws them as they are.
-    fn window_buttons(&self, across: Option<Pixels>, cx: &mut Context<Self>) -> AnyElement {
-        let right = self.right && across.is_some();
+    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel, the sidebar or
+    /// the Library's column. With the sidebar on the right they're mirrored `across` what they're
+    /// drawn in, so close is at its corner, as AppKit's are.
+    fn window_buttons(&self, across: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        let right = self.right;
         if cfg!(target_os = "windows") {
             return self.windows_buttons(right, cx);
         }
@@ -5281,8 +5288,7 @@ impl Shell {
             (WindowButton::Zoom, zoom),
         ];
         let frames = self.window_button_frames();
-        let frames =
-            frames.map(|frame| sidebar::mirrored(right, across.unwrap_or_default(), frame));
+        let frames = frames.map(|frame| sidebar::mirrored(right, across, frame));
         let row = Bounds::from_corners(
             point(frames[0].left().min(frames[2].left()), frames[0].top()),
             point(frames[0].right().max(frames[2].right()), frames[2].bottom()),
