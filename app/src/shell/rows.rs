@@ -3047,6 +3047,36 @@ mod tests {
         assert!(calls.iter().any(|call| call == "select 4"), "{calls:?}");
     }
 
+    /// A press and release on a row that come while the App is in an update, as a nested event
+    /// pump delivers them, show the row once the update is over (#2658).
+    #[gpui::test]
+    fn a_click_that_comes_mid_update_still_selects_its_row(cx: &mut TestAppContext) {
+        use gpui::{MouseDownEvent, MouseUpEvent, PlatformInput};
+        let (shell, cx, host) = window(cx, vec![2], vec![3, 4, 5], 3);
+        let (x, y) = close_button(&shell, cx, 4);
+        let position = point(px(x - 100.), px(y));
+        let mut input = cx.test_window(gpui::VisualContext::window_handle(cx));
+        host.take();
+        shell.update(cx, |_, _| {
+            input.simulate_input(PlatformInput::MouseDown(MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Modifiers::none(),
+                click_count: 1,
+                first_mouse: false,
+            }));
+            input.simulate_input(PlatformInput::MouseUp(MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Modifiers::none(),
+                click_count: 1,
+            }));
+        });
+        cx.run_until_parked();
+        let calls = host.take();
+        assert!(calls.iter().any(|call| call == "select 4"), "{calls:?}");
+    }
+
     /// A press that becomes a drag has shown its tab, and still drags it: let go two rows up, the
     /// tab moves there, and nothing is shown again.
     #[gpui::test]
