@@ -55,7 +55,10 @@ no_thanks() {
 }
 # Answers the store's card with No thanks, from the open find that went to it, until the find no
 # longer finds it. The card can redraw under the find, and closing the find then focuses nothing,
-# so the return leaves the card up, and with it the ⌘F it keeps (#2520).
+# so the return leaves the card up, and with it the ⌘F it keeps (#2520). Since 2026-11-13 the store
+# can keep a No thanks in its page with no card on screen, under a "Switch to Chrome to install"
+# banner, which no answer takes away (#2684): three answers that leave it go on to the page, and an
+# Add to Chrome the card did hold up fails at its own wait.
 answer_card() {
   for _ in 1 2 3; do
     send key escape
@@ -69,7 +72,9 @@ answer_card() {
       return 0
     fi
   done
-  fail "No thanks didn't close the store's Switch to Chrome? card"
+  send key escape
+  expect '^browser: find [0-9]* closed$' "escape didn't close the find"
+  echo "store: the page still names No thanks after three answers, with no card it closes, so the run goes on"
 }
 # Gives the keyboard to the store page's button with the text $1, lowercase, as the user who finds
 # it and closes the find does: Chrome focuses the button the match is in. Its place on the page
