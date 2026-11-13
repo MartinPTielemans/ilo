@@ -1,14 +1,14 @@
 The Mac's Crashpad client starts its handler again: ungoogled-chromium-macos's
 disable-crashpad-handler.patch makes StartHandler a stub. Apart from
-chromium-crashpad-start.patch because only the Mac's tree has that stub: elsewhere the file is
-already as this patch leaves it, so the series skips it there.
+chromium-crashpad-start.patch, in the series' mac/ section, because only the Mac's tree has that
+stub.
 
 --- a/third_party/crashpad/crashpad/client/crashpad_client_mac.cc
 +++ b/third_party/crashpad/crashpad/client/crashpad_client_mac.cc
-@@ -142,7 +142,69 @@
-       bool restartable,
+@@ -143,7 +143,70 @@ class HandlerStarter final : public NotifyServer::DefaultInterface {
        const std::vector<base::FilePath>& attachments,
-       const std::set<FileHandle>& preserve_file_handles) {
+       const std::set<FileHandle>& preserve_file_handles,
+       base::apple::ScopedMachReceiveRight embedder_port) {
 -    return base::apple::ScopedMachSendRight();    
 +    base::apple::ScopedMachReceiveRight receive_right(
 +        NewMachPort(MACH_PORT_RIGHT_RECEIVE));
@@ -52,7 +52,8 @@ already as this patch leaves it, so the series skips it there.
 +                     handler_restarter.get(),
 +                     false,
 +                     attachments,
-+                     preserve_file_handles)) {
++                     preserve_file_handles,
++                     std::move(embedder_port))) {
 +      return base::apple::ScopedMachSendRight();
 +    }
 +
@@ -76,10 +77,10 @@ already as this patch leaves it, so the series skips it there.
    }
  
    // NotifyServer::DefaultInterface:
-@@ -424,7 +486,26 @@
-     bool asynchronous_start,
+@@ -432,7 +495,27 @@ bool CrashpadClient::StartHandler(
      const std::vector<base::FilePath>& attachments,
-     const std::set<FileHandle>& preserve_file_handles) {
+     const std::set<FileHandle>& preserve_file_handles,
+     base::apple::ScopedMachReceiveRight embedder_port) {
 -  return false;
 +  // The “restartable” behavior can only be selected on OS X 10.10 and later. In
 +  // previous OS versions, if the initial client were to crash while attempting
@@ -94,7 +95,8 @@ already as this patch leaves it, so the series skips it there.
 +      restartable && (__MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_10 ||
 +                      MacOSVersionNumber() >= 10'10'00),
 +      attachments,
-+      preserve_file_handles));
++      preserve_file_handles,
++      std::move(embedder_port)));
 +  if (!exception_port.is_valid()) {
 +    return false;
 +  }

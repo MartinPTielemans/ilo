@@ -5,11 +5,8 @@
 //! its window goes through `Host`; where it goes, what it says and when the pointer is near it are
 //! the shell's, which calls `plate` and `place`.
 
-use std::{
-    ops::Range,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{ops::Range, rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, FontWeight, Global, Hsla, Pixels, SharedString, Task, TitlebarOptions,
@@ -325,6 +322,7 @@ pub fn open(
 /// one timer that `hide` cancels, or at once if a plate shows or went less than GRACE ago. A call
 /// while the timer runs changes what it shows, and where.
 pub fn show(window: u64, plate: Plate, frame: Bounds<Pixels>, side: Side, cx: &mut App) {
+    crate::lazy_window::ready::<LinkTarget>(cx);
     let Some(target) = cx.try_global::<LinkTargetWindow>().map(|target| target.0) else {
         return;
     };

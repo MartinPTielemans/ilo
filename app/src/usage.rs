@@ -106,8 +106,8 @@ fn decayed(times: &[u64], now: u64) -> f32 {
 
 /// Now, in seconds since 1970.
 pub fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
 }
 

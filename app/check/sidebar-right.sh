@@ -1,12 +1,14 @@
+# check.sh runs this at 660.
 # The sidebar on the window's right (#2375), on the Mac, where AppKit draws the window's buttons:
-# Settings › Tabs & Sidebar › Sidebar position moves it to the right while the app runs, and
-# AppKit's buttons follow at once, close 20 points from the right edge as it is from the left,
-# through a resize, the sidebar hidden and revealed from the right edge, and full screen. From a
-# second Space, one long swipe right stops on the first, never past it into the Library; the next
-# brings the Library out on the sidebar's side, at the window's right edge, and one the other way
-# puts it back, recorded to sidebar-right-library.mp4. The command bar lists only the move that
-# acts, which brings it back, buttons and all, and the setting's file goes with it. Elsewhere the
-# UI draws the buttons, which the UI's tests and the parity screens check.
+# a click on Right's drawing in Settings › Tabs & Sidebar › Sidebar position (#2407) moves it to
+# the right while the app runs, and AppKit's buttons follow at once, close 20 points from the
+# right edge as it is from the left, through a resize, the sidebar hidden and revealed from the
+# right edge, and full screen. From a second Space, one long swipe right stops on the first, never
+# past it into the Library; the next brings the Library out on the sidebar's side, at the window's
+# right edge, and one the other way puts it back, recorded to sidebar-right-library.mp4. The
+# command bar lists only the move that acts, which brings it back, buttons and all, and the
+# setting's file goes with it. Elsewhere the UI draws the buttons, which the UI's tests and the
+# parity screens check.
 
 if [ "$(uname)" != Darwin ]; then
   echo "skip: sidebar-right checks AppKit's buttons, the Mac's alone."
@@ -50,10 +52,12 @@ if [ "$(sed -n 's/^browser: settings shown //p' "$log" | tail -1)" != "Tabs & Si
   expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its tab"
   settings_drew 'Tabs & Sidebar'
 fi
-send clickkey $(drawn "sidebar position")
-expect '^browser: menu shown ' "a click on Sidebar position didn't open its menu"
-post choose Right
-expect '^browser: sidebar on the right$' "choosing Right didn't move the sidebar"
+# Sidebar position is two drawings of the window (#2407): a click on Right's picks it. The picker
+# is at the pane's foot, under the card's edge where the screen is short, as on the Mac's check
+# VMs: in_sight scrolls it up (#2503).
+in_sight "sidebar position option Right" || fail "Settings didn't draw Right's drawing"
+send clickkey $at
+expect '^browser: sidebar on the right$' "a click on Right's drawing didn't move the sidebar"
 [ -e "$profile_dir/sidebar-right" ] || fail "Right isn't kept: no sidebar-right in the profile"
 expect '^browser: settings sidebar position Right at ' "Sidebar position didn't show Right"
 shot settings

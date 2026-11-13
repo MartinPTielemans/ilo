@@ -2,10 +2,8 @@
 //! it's made; and opening the pickers for a Space's or a tab's icon and a Space's theme.
 
 use crate::tokens::text;
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{App, Context, Focusable, Point, SharedString, Window, div, point, prelude::*, px};
 

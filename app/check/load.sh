@@ -1,3 +1,4 @@
+# check.sh runs this at 10.
 # A page loads in the browser window, over the GPUI sidebar drawn in it, and quitting through
 # AppKit closes the page and ends every Chromium process. The first run shows the welcome and no
 # page, so the page is given. On Windows the window's icons, which the taskbar's thumbnails and

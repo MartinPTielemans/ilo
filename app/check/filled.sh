@@ -1,3 +1,4 @@
+# check.sh runs this at 490.
 # A page's full screen in a window that fills its screen, so that full screen keeps its size, as
 # one zoomed on a notched Mac with the Dock hidden does, the menu bar beside the camera. The page
 # fills the window full screen and comes back to the card after, and the Library opened then has

@@ -1,3 +1,4 @@
+# check.sh runs this at 400.
 # The command bar's order, on the signals Arc's ranks on (#1396), driven against pages of the run's
 # own. The row for the page shown goes last, after a page from history it outranked. Two GitHub
 # pages with one title, from history, list as one row, as Arc's bar keeps one row per title on the
@@ -52,6 +53,11 @@ read -r tls_port < "$out/ranking-tls.port" || true
 log="$out/ranking.log"
 step=0
 rm -f "$saved"
+# The bar ranks history, where an earlier ranking's pages, from the check's server on another port,
+# match "ranking" as these do and fill the rows this run reads (#2391). So it starts with none: the
+# visits, and the index of them the bar's quick matches read until it's rebuilt.
+rm -f "$profile_dir/Default/History" "$profile_dir/Default/History-journal" \
+  "$profile_dir/Default/History Provider Cache"
 BROWSER_DRIVE=1 BROWSER_URL="${site}ranking-one.html" "$browser" \
   --host-resolver-rules="MAP github.com 127.0.0.1:$tls_port" \
   --ignore-certificate-errors-spki-list="$spki" \

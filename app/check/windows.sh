@@ -1,3 +1,4 @@
+# check.sh runs this at 210.
 # Stay On Top keeps a window over the others, and Don't Stay On Top lets it go back. ⌘N opens
 # another window on the same Spaces, showing the key window's Space with no page, with ⌘T's
 # command bar, which escape closes to its card and its one line, and a click on the card with ⌘T's
@@ -315,7 +316,7 @@ send window 1
 
 # A page in Safari's engine moves to a new window as Chromium's does, and the window it left draws
 # WebKit's picture of it. The drm page asks for Widevine, so its Site Controls offer Safari's
-# engine, whose row is their first, at y 262 (clear.sh), and On shows the page there.
+# engine with a switch, and On shows the page there.
 webkit_moved=
 if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   before=$(today)
@@ -330,8 +331,8 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: site controls http://127.0.0.1:$port: .*; Safari's engine off\$" \
     "the Site Controls didn't offer Safari's engine for the drm page: $(grep '^browser: site controls http' "$log" | tail -1)"
   expect '^browser: site controls settled$' "the Site Controls didn't open at the drm page"
-  post click 207 262
-  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's row didn't offer On"
+  click_placed post "switch Safari's engine"
+  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's switch didn't offer On"
   engine_from=$(date '+%Y-%m-%d %H:%M:%S')
   send choose On
   expect "^browser: site controls set Safari's engine On\$" "On in the menu didn't run"
@@ -716,6 +717,12 @@ if [ "$(uname)" = Darwin ] || windows || x11; then
   driven_seventh=$(grep -c '^browser: window opened ' "$log")
   # Under the pointer, at its point on the screen, as near as the screen lets it.
   send order
+  # In front of the window it left, as well as key, so a click where it shows lands in it (#2607).
+  order=$(grep '^browser: order ' "$log" | tail -1)
+  case "$order" in
+    "browser: order window $driven_seventh "*) ;;
+    *) fail "the window opened for the tab isn't in front of the one it left: ${order#browser: }" ;;
+  esac
   frame=$(grep "^browser: frame window $driven_seventh " "$log" | tail -1 | cut -d' ' -f5-)
   echo "$frame" | awk -v x=$((right + over)) '{ exit !($1 <= x && x <= $1 + $3 && $2 <= 440 && 440 <= $2 + $4) }' ||
     fail "the window opened for the tab isn't under the pointer: $frame"
