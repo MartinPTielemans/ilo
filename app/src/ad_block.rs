@@ -8,7 +8,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
 use adblock::Engine as Rules;
 use adblock::lists::{FilterFormat, FilterSet, ParseOptions};
@@ -16,6 +16,7 @@ use adblock::request::Request;
 use adblock::resources::{MimeType, PermissionMask, Resource, ResourceType};
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
+use web_time::Instant;
 
 mod scriptlets;
 
@@ -464,7 +465,8 @@ fn cache_name(setup: &Setup) -> String {
         let meta = fs::metadata(list).ok();
         meta.as_ref().map(|meta| meta.len()).hash(&mut hasher);
         (meta.and_then(|meta| meta.modified().ok()))
-            .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+            // A file's time is std's, as fs gives it, never read from a clock.
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
             .hash(&mut hasher);
     }
     format!("engine-{:016x}.dat", hasher.finish())
