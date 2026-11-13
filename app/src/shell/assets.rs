@@ -873,9 +873,11 @@ mod tests {
             ] {
                 assert!(svg.contains(want), "{name}: needs {want}");
             }
+            // The Library's books have one solid, as its Spaces' cards do, at the one stroke.
+            let fills = if name == "library.svg" { 2 } else { 1 };
             assert_eq!(
                 svg.matches("fill=").count(),
-                1,
+                fills,
                 "{name}: an outline has no fill"
             );
             checked += 1;

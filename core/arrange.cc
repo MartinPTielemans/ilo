@@ -11,9 +11,11 @@
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "browser_core/arrange_rule.h"
 #include "browser_core/arrangement.h"
 #include "browser_core/boosts.h"
 #include "browser_core/host.h"
+#include "browser_core/point.h"
 #include "browser_core/profiles.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -1372,9 +1374,12 @@ bool Arrange::Start(const Look& look) {
   }
   content::WebContents* contents = web_contents();
   Space* space = Space::Holding(tab_);
-  // The user's alone: never in an agent's Space or a private window, and only on a web page.
-  if (Site().empty() || contents->GetBrowserContext()->IsOffTheRecord() ||
-      (space && space->agent())) {
+  if (!arrange_rule::MayStart(Site(), contents->GetBrowserContext()->IsOffTheRecord(),
+                              space && space->agent())) {
+    return false;
+  }
+  // The user is pointing at the page for an agent, which ends first.
+  if (const PagePoint* point = PagePoint::FromWebContents(contents); point && point->on()) {
     return false;
   }
   // Zap takes the page's presses too.

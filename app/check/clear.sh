@@ -1,3 +1,4 @@
+# check.sh runs this at 140.
 # View › Clear Cache and Refresh and the command bar's Clear Cookies and Refresh delete the cache
 # and the cookies of the page's site, and load the page again. ⇧⌘C and ⌥⇧⌘C from the page and the UI
 # copy the tab's URL and a Markdown link to it, to a pasteboard of the run's own, without its
@@ -901,6 +902,8 @@ expect '^browser: site controls settled$' "the Site Controls didn't open from th
 send key escape
 expect '^browser: site controls closing (escape)$' "escape didn't close the Site Controls"
 expect '^browser: site controls hidden$' "the Site Controls didn't leave after escape"
+none_since '^browser: site controls takes the keyboard back from its window$' ||
+  fail "the Site Controls took the keyboard back from the browser window as they closed"
 # Reset permissions sets the site back to asking, and a click outside closes them. The button
 # shows only under the pointer, as it was last over the page.
 away
@@ -1023,15 +1026,18 @@ EOF
 # click, whose page can say it loaded WebKit before the next line runs.
 early=$(grep '^browser: system engine loaded for ' "$log" | grep -v ' for clearing a site' || true)
 # On Linux the note's button downloads Google's Widevine module from Google, which the widevine run
-# checks, so it isn't pressed here, and on Windows the note has none (drm_note.rs).
-[ "$(uname)" != Darwin ] || send click $((nx + nw / 2)) $((ny + nh - 26))
+# checks, so it isn't pressed here. On Windows it opens the default browser, which the runner's
+# isn't ilo, and a driven run only logs it.
+[ "$(uname)" = Linux ] || send click $((nx + nw / 2)) $((ny + nh - 26))
 # Safari's engine keeps a store for each profile from macOS 14; before it, the note offers Safari.
 if [ "$(uname)" = Linux ]; then
   drm_done="nothing, as on Linux it offers Google's Widevine module, the widevine run's"
   echo "skip: the note's button: on Linux it downloads Google's Widevine module (the widevine run)."
 elif windows; then
-  drm_done="nothing, as on Windows the note offers none"
-  echo "skip: the note's button: on Windows the note says why the PC can't play the video, and offers nothing."
+  drm_done="the default browser"
+  expect "^browser: open in default browser http://127.0.0.1:$port/drm.html\$" \
+    "the note's button didn't open the page in the default browser"
+  none_since "^browser: page $tab needs nothing\$" || fail "the button took the note away"
 elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   drm_done="Safari's engine"
   [ -z "$early" ] || fail "WebKit loaded before its first page: $early"

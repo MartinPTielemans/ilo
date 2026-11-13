@@ -157,6 +157,7 @@ use agent_events::*;
 mod links;
 use links::*;
 mod little_ilo;
+mod sign_in_close;
 use little_ilo::*;
 mod keys;
 use keys::*;
@@ -473,6 +474,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
             false => {
                 gpui_linux::embed_wayland(display, keyboard);
                 gpui_linux::watch_embedder_swipes(system::swiped);
+                browser::clipboard::read_through(system::read_through_core);
             }
         }
         !display.is_null()
@@ -676,6 +678,12 @@ unsafe extern "C" fn agent_request_done(
 
 unsafe extern "C" fn launching(_: *mut c_void) {
     safe_start_host::launching();
+    // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
+    // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
+    #[cfg(target_os = "linux")]
+    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+        gpui_wgpu::WgpuContext::make_instance_early();
+    }
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
@@ -893,6 +901,13 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         && let Ok(host) = std::env::var("BROWSER_STREAMING_TEST_HOST")
     {
         args.push(format!("{TEST_HOST}={host}"));
+    }
+    // A process that crashes prints its stack to the stderr the browser shares with its child
+    // processes, a piece at a time, so a line of the browser's written meanwhile lands in the
+    // middle of one, where the checks reading the log don't find it (#2496). check.sh keeps
+    // those stacks out with BROWSER_STACK_TRACES=off; a crash still ends the process as before.
+    if std::env::var("BROWSER_STACK_TRACES").is_ok_and(|traces| traces.trim() == "off") {
+        args.push("--disable-in-process-stack-traces".into());
     }
     // The checks' crash, which has Crashpad write a minidump (core/crash_reports.h).
     const CRASH_TEST: &str = "--crash-after-start";

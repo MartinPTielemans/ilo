@@ -1,3 +1,4 @@
+# check.sh runs this at 190.
 # The browser blocks ads and trackers from a new profile's first page, with nothing to install:
 # uBlock Origin, in the framework, loads into every profile, and no extension list shows it, as
 # Settings › Ad Blocking is all of its settings (#2107). Filters given for the check as My filters,
@@ -242,7 +243,7 @@ reload_until "$blocked" "turned on again in Settings' list, the page didn't bloc
 send menu Settings…
 expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking again"
 settings_drew "Ad Blocking"
-send clickkey $(drawn "switch ad blocking")
+click_in_sight "switch ad blocking"
 expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-settings.png" all || fail "no window to capture"
 send key w cmd
@@ -259,7 +260,7 @@ expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
 expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking a third time"
 settings_drew "Ad Blocking"
-send clickkey $(drawn "switch ad blocking")
+click_in_sight "switch ad blocking"
 expect '^browser: ad blocking on$' "a second click on the switch didn't turn it on"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"

@@ -1,3 +1,4 @@
+# check.sh runs this at 260.
 # A tab in a call says so on its row, as Chrome's tab strip does: the camera while its page uses the
 # camera, the microphone alone, or the screen while it shares a screen, a window or a tab, and the
 # tab it shares shows the screen too. While it shares a tab, another tab's menu has Share This Tab
@@ -15,6 +16,8 @@
 # ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
 # shows where it was left, after a relaunch too, and coming back to its tab's window from another
 # window, or from another app with a menu open, puts it back in the tab.
+# A page asks to share the screen only from a click or a key: asked with neither, its promise is
+# refused, and nothing is shared (decision 12).
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
 # Shared without its picker; the question for the camera is answered with Allow, as the user would,
 # since the fake question Chromium can put in its place never tells the browser what's captured.
@@ -55,7 +58,8 @@ answer_macos() {
     fail "ilo wasn't the active app after macOS asked $2: $asked; $(cat "$out/alert.txt")"
 }
 
-# "c" calls with the camera and microphone, "s" shares the tab titled Shared, "e" ends both, "o"
+# "c" calls with the camera and microphone, "s" shares the tab titled Shared, "u" asks to share it
+# once the key's activation has lapsed, as a page asking unasked would, "e" ends both, "o"
 # opens that tab, the same page with ?Shared, whose title is what follows the ?, "p" one titled
 # Other, and "m" plays ten seconds of silence over and over, as music titled Quiet with a previous
 # and a next track: long enough for Chrome to give it controls, and no sound. Asked to float in Picture in
@@ -73,6 +77,12 @@ onkeydown = async e => {
     } else if (e.key == "s") {
       streams.push(await navigator.mediaDevices.getDisplayMedia({video: true}));
       document.title = "sharing";
+    } else if (e.key == "u") {
+      while (navigator.userActivation.isActive) {
+        await new Promise(next => setTimeout(next, 100));
+      }
+      streams.push(await navigator.mediaDevices.getDisplayMedia({video: true}));
+      document.title = "shared unasked";
     } else if (e.key == "e") {
       streams.forEach(stream => stream.getTracks().forEach(track => track.stop()));
       streams = [];
@@ -198,6 +208,10 @@ expect "^browser: page $a camera 1 microphone 1 sharing 0 shared 0\$" \
 # Now and then a hosted Mac asks as the call starts (#968), before the share's key.
 answer_macos 20 "as the call started"
 
+send click $page_point
+send key u
+expect "^browser: title $a refused InvalidStateError\$" \
+  "a share asked for with no click or key wasn't refused"
 send click $page_point
 send key s
 expect "^browser: title $a sharing\$" "the call didn't share the tab titled Shared"
@@ -386,7 +400,7 @@ mini_player() {
     expect '^browser: settings tab Features$' "a click on Features didn't show its section"
     settings_drew Features
   fi
-  send clickkey $(drawn "switch mini player")
+  click_in_sight "switch mini player"
   expect "^browser: mini player $1\$" "a click on the Mini Player's switch didn't turn it $1"
   [ "$1" = on ] || ../tools/window-screenshot.sh "$pid" "$out/settings-mini-player.png" ||
     fail "no window to capture"

@@ -1,3 +1,4 @@
+# check.sh runs this at 760, only when named.
 # Ad blocking's cost against the performance gate (principle 1, docs/roadmap.md): adblock-parity's
 # sites, each in a new profile, first with Settings' Block ads and trackers on, as adblock-parity
 # loads them with uBlock Origin, then with it turned off there before the first site. It gives each

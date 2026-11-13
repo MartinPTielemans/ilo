@@ -464,6 +464,12 @@ impl TextInput {
         self.marked_range.is_some()
     }
 
+    /// The field's text if it isn't `last` and an input method has committed it: what Find
+    /// searches as the user types, as Chrome's does.
+    pub fn committed_change(&self, last: &str) -> Option<&str> {
+        (!self.composing() && self.content != last).then_some(self.text())
+    }
+
     /// The field's text without what an input method is still composing in it.
     pub fn committed(&self) -> String {
         match &self.marked_range {
@@ -899,16 +905,27 @@ impl TextInput {
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            let text = text.replace("\n", " ");
-            let text = if self.paste_and_go {
-                without_javascript(&text)
-            } else {
-                &text
-            };
-            self.replace_text_in_range(None, text, window, cx);
-            self.pasted = true;
-        }
+        let field = cx.entity().downgrade();
+        let window = window.window_handle();
+        crate::clipboard::read_text(cx, move |text, cx| {
+            let Some(text) = text else { return };
+            window
+                .update(cx, |_, window, cx| {
+                    field.update(cx, |field, cx| field.paste_text(&text, window, cx))
+                })
+                .ok();
+        });
+    }
+
+    fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let text = text.replace("\n", " ");
+        let text = if self.paste_and_go {
+            without_javascript(&text)
+        } else {
+            &text
+        };
+        self.replace_text_in_range(None, text, window, cx);
+        self.pasted = true;
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
@@ -1651,6 +1668,8 @@ impl Focusable for TextInput {
     }
 }
 
+#[cfg(test)]
+pub(crate) mod korean;
 #[cfg(test)]
 mod leave_tests;
 #[cfg(test)]

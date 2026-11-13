@@ -73,6 +73,8 @@ pub struct MenuEntry {
     pub favicon: Option<Arc<Image>>,
     /// Whether it heads the items after it, as Arc's Tab Options does, never to be chosen.
     pub header: bool,
+    /// Words after its title in the secondary ink, which say more of it, as Default's model.
+    pub detail: Option<SharedString>,
 }
 
 impl MenuEntry {
@@ -105,6 +107,7 @@ impl MenuEntry {
             page: false,
             favicon: None,
             header: false,
+            detail: None,
         }
     }
 
@@ -1015,11 +1018,10 @@ impl Shell {
     /// A folder's Paste URL as New Tab: the clipboard's web link as a tab at the folder's top,
     /// opened and shown, as ⌥⌘V opens one at the top of Today.
     fn paste_url_into(&mut self, folder: u64, cx: &mut Context<Self>) {
-        let Some(urls) = self.pasted_urls(cx) else {
-            return;
-        };
-        self.browser.set_folder_open(folder, true, cx);
-        self.browser.open_at(&urls, true, folder, 0, cx);
+        self.pasted_urls(cx, move |shell, urls, cx| {
+            shell.browser.set_folder_open(folder, true, cx);
+            shell.browser.open_at(&urls, true, folder, 0, cx);
+        });
     }
 
     /// A pinned tab's menu (ours: Arc's isn't recorded).
@@ -1135,7 +1137,9 @@ impl Shell {
                     placed(MenuEntry::new("Share…", !link.is_empty())),
                     "share",
                     Box::new(move |shell, cx| {
-                        shell.browser.show_share_sheet(tab, &link, &title, at, cx)
+                        // After this update, as finding the tab's window reads every Shell (#2459).
+                        let browser = shell.browser.clone();
+                        cx.defer(move |cx| browser.show_share_sheet(tab, &link, &title, at, cx));
                     }),
                 ));
             }
@@ -1903,6 +1907,15 @@ mod tests {
         }
     }
 
+    /// Share favorites' captions under its drawings are its menu titles in sentence case, on
+    /// every OS, so the two can't drift apart.
+    #[test]
+    fn share_favorites_captions_are_its_titles_in_sentence_case() {
+        for scope in crate::shell::FavoritesScope::ALL {
+            assert_eq!(sentence_case(scope.title()), scope.caption());
+        }
+    }
+
     fn titles(has_icon: bool, has_theme: bool) -> Vec<String> {
         let items = space_menu_head(1, has_icon, has_theme);
         items
@@ -2288,11 +2301,13 @@ mod tests {
     }
 
     /// Where the system lists none but has a share sheet, as Windows does, Share… is one item that
-    /// opens the sheet for the page, rather than an empty submenu.
+    /// opens the sheet for the page, rather than an empty submenu. It opens once the Shell's update
+    /// is over, as finding the tab's window reads every Shell (#2459).
     #[gpui::test]
     fn share_opens_the_systems_sheet_when_it_lists_no_services(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[1], &[10, 11], Folders::default());
         host.share_sheet.set(true);
+        host.reads_shell(shell.downgrade());
         let link = page("https://example.com/", false, false);
         shell.update(cx, |shell, cx| shell.set_page(10, link, cx));
         let menu = tab_menu(&shell, &host, cx, 10);
@@ -2666,6 +2681,8 @@ mod tests {
         assert!(offered(cx));
         let title = shell.read_with(cx, |shell, _| shell.title(10));
         host.take();
+        // Its sheet opens once the Shell's update is over, as it reads every Shell (#2459).
+        host.reads_shell(shell.downgrade());
         shell.update(cx, |shell, cx| shell.run(Command::Share, "ui", cx));
         assert_eq!(
             host.take(),

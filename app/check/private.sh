@@ -1,3 +1,4 @@
+# check.sh runs this at 220.
 # After ⌘N opens a window and ⇧⌘W closes it, ⇧⌘N opens a private window, and ⇧⌘W closes it before
 # it has a page, ending its session while the browser keeps running. ⇧⌘N opens another, titled as
 # one in the Window menu, whose pages load in the profile's off-the-record session: a cookie set

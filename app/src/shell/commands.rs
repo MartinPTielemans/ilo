@@ -1,10 +1,8 @@
 //! The browser's commands: their names, their keys and where the command bar offers
 //! them, and what each does, run from a key, a menu, the command bar or the page.
 
-use std::{
-    sync::{Arc, LazyLock},
-    time::Instant,
-};
+use std::sync::{Arc, LazyLock};
+use web_time::Instant;
 
 use gpui::{
     Action, App, Bounds, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
@@ -1723,11 +1721,11 @@ impl Shell {
             }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
-                let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
+                let url = BuildInfo::here(cx).issue_url(build_info::NEW_ISSUE);
                 return self.browser.open_page(&url, cx);
             }
             Command::CopyBuildInfo => {
-                return self.copy(&BuildInfo::here().text(), "Copied Build Info", cx);
+                return self.copy(&BuildInfo::here(cx).text(), "Copied Build Info", cx);
             }
             Command::HelpCenter => return self.browser.open_page(build_info::HELP_CENTER, cx),
             Command::WhatsNew => return self.browser.open_page(build_info::WHATS_NEW, cx),
@@ -1995,22 +1993,34 @@ impl Shell {
     /// does. The clipboard is read only now, and text that isn't one http(s) link opens nothing,
     /// as a drop of it doesn't. No agent path: the clipboard is the user's.
     fn paste_url_as_tab(&mut self, cx: &mut Context<Self>) {
-        if let Some(urls) = self.pasted_urls(cx) {
-            self.browser.open_at(&urls, false, 0, 0, cx);
-        }
+        self.pasted_urls(cx, |shell, urls, cx| {
+            shell.browser.open_at(&urls, false, 0, 0, cx);
+        });
     }
 
-    /// The clipboard's web link, read now, as one URL to open, or None for anything else.
-    pub(super) fn pasted_urls(&self, cx: &App) -> Option<Vec<String>> {
+    /// Hands `then` the clipboard's web link, read now, as one URL to open, and nothing for
+    /// anything else.
+    pub(super) fn pasted_urls(
+        &self,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, Vec<String>, &mut Context<Self>) + 'static,
+    ) {
+        let shell = cx.entity().downgrade();
         // From the host, where Copy Link put it: a driven Mac run's pasteboard is its own.
-        let text = self.browser.pasted(cx).unwrap_or_default();
-        // Text that isn't a web link opens nothing here, not a search, as Arc's ⌥⌘V does.
-        let urls = dropped_urls([(text.trim(), false)], |_| None);
-        if urls.is_empty() {
-            // check.sh reads this line.
-            log!("browser: pasted no URL");
-        }
-        Some(urls).filter(|urls| !urls.is_empty())
+        self.browser.pasted(
+            cx,
+            Box::new(move |text, cx| {
+                let text = text.unwrap_or_default();
+                // Text that isn't a web link opens nothing here, not a search, as Arc's ⌥⌘V does.
+                let urls = dropped_urls([(text.trim(), false)], |_| None);
+                if urls.is_empty() {
+                    // check.sh reads this line.
+                    log!("browser: pasted no URL");
+                    return;
+                }
+                shell.update(cx, |shell, cx| then(shell, urls, cx)).ok();
+            }),
+        );
     }
 
     /// File › Share… and the command bar's Share…: the system's share sheet for the page shown,
@@ -2027,9 +2037,10 @@ impl Shell {
                 point(page.center().x, page.top())
             }
         };
-        let title = self.title(self.selected);
-        self.browser
-            .show_share_sheet(self.selected, &link, &title, at, cx);
+        let (tab, title) = (self.selected, self.title(self.selected));
+        // After this update, as finding the tab's window reads every Shell (#2459).
+        let browser = self.browser.clone();
+        cx.defer(move |cx| browser.show_share_sheet(tab, &link, &title, at, cx));
     }
 
     /// `tab`'s link to copy, as a Markdown link if `markdown`, and the toast to say so with.

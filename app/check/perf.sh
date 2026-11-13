@@ -1,3 +1,5 @@
+# check.sh runs this at 840, only when named.
+# It takes 16 minutes, Chrome's measures beside ilo's, so it runs only when named.
 # Measures the browser against #456's targets, the way Ardia's bench measured Ardia, Chrome, Arc
 # and Helium (docs/perf/vs-browsers.md in Ardia's repo, its numbers of 2026-10-19 the targets), and
 # says each row's median of its samples, with their range, beside its target. Those targets are an
@@ -10,6 +12,11 @@
 # own site, which puts in its title when it first painted ("<id> fcp <ms>") and, each time it's
 # shown, two frames after it became visible ("<id> shown <n> <ms>"), both in Unix ms.
 #
+# - A new profile's first launch, 3 times, to the page painted with BROWSER_URL and how long uBlock
+#   Origin held it, as it compiles the lists it ships. The last is the profile every launch after
+#   uses, as a user's.
+# - Where uBlock Origin holds a launch's page, 5 launches with no selfie of its filters, then one
+#   that stays until it writes the selfie, so the launches after are on it, as a user's.
 # - Launch to the page painted, 5 times, with BROWSER_URL, as a link from another app opens it.
 # - Launch to the restored page painted, 5 times, with no URL, its last tab put back.
 # - The first window on screen, as each of those 10 launches logged it: the launch window, on the
@@ -220,8 +227,71 @@ perf_launch() {
 : > "$perf_dir/on-screen"
 : > "$perf_dir/browser-on-screen"
 : > "$perf_dir/held"
-# The first launch makes the profile, which the others find, as a user's, so it isn't counted.
-perf_launch "$page?warm" warm warm
+# A new profile's first launch, 3 times: uBlock Origin compiles the lists it ships. The last profile
+# is the one every launch after uses, as a user's.
+: > "$perf_dir/new"
+: > "$perf_dir/new-held"
+for n in 1 2 3; do
+  rm -rf "$profile_dir"
+  mkdir -p "$profile_dir"
+  perf_launch "$page?new$n" "new$n" "new$n"
+  echo "$painted" >> "$perf_dir/new"
+  echo "${held:-0}" >> "$perf_dir/new-held"
+done
+perf_row launch-new "Launch, a new profile's first, link to page painted" \
+  "$(perf_stats '%.0f' < "$perf_dir/new") ms, held $(perf_stats '%.0f' < "$perf_dir/new-held") ms" \
+  "none: once a profile"
+# uBlock Origin's selfie (#2381), all in this block, which goes whole with uBlock Origin (#2111).
+# A launch takes its filters in from its selfie, the filters it compiled, or with none from its
+# lists. It writes the selfie 53 s after its lists last changed, in the session then, and takes it
+# out as a list changes, so a launch after a list update has none, as has each launch while no
+# session has lasted the 53 s. Those are 5 launches that quit seconds in; then one stays until the
+# selfie is written, and the launches after it are on it, a user's.
+if [ -n "$held" ]; then
+  ublock=oghkpboejbohceocapipmnjifoklonij
+  # Whether uBlock Origin wrote its selfie: to its IndexedDB, whose keys are UTF-16, and to its
+  # extension storage, as adblock-live reads them. A key it takes out stays in their files until
+  # they compact, so this says only that one was written.
+  perf_selfie() {
+    for store in "$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb.leveldb" \
+      "$profile_dir/Default/Local Extension Settings/$ublock"; do
+      cat "$store"/*.log "$store"/*.ldb 2> /dev/null | LC_ALL=C tr -d '\000' |
+        grep -q 'selfie/staticNetFilteringEngine' || return 1
+    done
+  }
+  : > "$perf_dir/unselfied"
+  : > "$perf_dir/unselfied-held"
+  for n in 1 2 3 4 5; do
+    ! perf_selfie ||
+      fail "uBlock Origin wrote its selfie before launch unselfied$n, in one that quit seconds in"
+    rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+    perf_launch "$page?unselfied$n" "unselfied$n" "unselfied$n"
+    echo "$painted" >> "$perf_dir/unselfied"
+    echo "${held:-0}" >> "$perf_dir/unselfied-held"
+  done
+  unselfied=$(perf_stats '%.0f' < "$perf_dir/unselfied")
+  perf_row launch-unselfied "Launch with no uBlock Origin selfie, link to page painted" \
+    "$unselfied ms, held $(perf_stats '%.0f' < "$perf_dir/unselfied-held") ms" \
+    "none: after a list update, until a session lasts 53 s"
+  # The launch that stays, checking both stores each second, until both have the selfie.
+  log="$perf_dir/launch-selfie.log"
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  stayed=$(date +%s)
+  BROWSER_URL="$page?selfie" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" \
+    2>&1 &
+  pid=$!
+  selfie_at=
+  for _ in $(seq 180); do
+    perf_selfie && selfie_at=$(($(date +%s) - stayed)) && break
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 1
+  done
+  quit
+  [ -n "$selfie_at" ] || fail "uBlock Origin wrote no selfie in a launch that stayed 180 s"
+  echo "perf: uBlock Origin wrote its selfie $selfie_at s into a launch that stayed;" \
+    "the launches below are on it"
+  selfied=", on uBlock Origin's selfie"
+fi
 for n in 1 2 3 4 5; do
   rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
   perf_launch "$page?link$n" "link$n" "link$n"
@@ -237,15 +307,15 @@ for n in 1 2 3 4 5; do
   echo "$browser_on_screen" >> "$perf_dir/browser-on-screen"
   echo "${held:-0}" >> "$perf_dir/held"
 done
-perf_row launch-link "Launch, link to page painted" "$(perf_stats '%.0f' < "$perf_dir/link") ms" \
-  "Ardia 413 ms, Chrome 484 ms"
+perf_row launch-link "Launch, link to page painted${selfied:-}" \
+  "$(perf_stats '%.0f' < "$perf_dir/link") ms" "Ardia 413 ms, Chrome 484 ms"
 perf_row launch-window "Launch, window on screen" "$(perf_stats '%.0f' < "$perf_dir/on-screen") ms" \
   "Ardia 280 ms, Chrome 424 ms (gate: ≤ Chrome)"
 perf_row launch-browser-window "Launch, browser window on screen" \
   "$(perf_stats '%.0f' < "$perf_dir/browser-on-screen") ms" "none: on Linux it's the row above"
-perf_row launch-restore "Launch, restored page painted" \
+perf_row launch-restore "Launch, restored page painted${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/restore") ms" "Ardia 360 ms, Helium 355 ms, Chrome 438 ms"
-perf_row launch-held "Launch, the page held for uBlock Origin" \
+perf_row launch-held "Launch, the page held for uBlock Origin${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
 
 log="$perf_dir/session.log"
