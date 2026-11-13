@@ -113,6 +113,7 @@ post click $((bx + bw / 2)) $((by + bh / 2))
 expect '^browser: command turn-back-on via sidebar$' "Turn Back On didn't take the click"
 exec 3>&-
 old=$pid
+! windows || old_id=$(cat "/proc/$old/winpid")
 for _ in $(seq 300); do
   kill -0 "$old" 2> /dev/null || break
   sleep 0.1
@@ -120,11 +121,31 @@ done
 kill -0 "$old" 2> /dev/null && fail "Turn Back On didn't quit the browser"
 wait "$old" || fail "the browser Turn Back On quit exited with status $?"
 in_log '^browser: stopping$' || fail "Turn Back On ended the browser without quitting it"
+# The browser's own process the restart started, not a helper: on Linux and Windows a helper runs
+# the same file, with --type. On Windows its id is the system's, which the old one's isn't.
+restarted() {
+  if windows; then
+    windows_procs "^$procs(?!.*--type=)" | grep -vx "$old_id" | head -1
+    return
+  fi
+  for p in $(pgrep -f "^$browser( |\$)"); do
+    [ "$p" != "$old" ] || continue
+    [ -r "/proc/$p/cmdline" ] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -q -- ' --type=' && continue
+    echo "$p"
+    return
+  done
+}
+restarted_runs() {
+  if windows; then
+    windows_procs "^$procs(?!.*--type=)" | grep -qx "$relaunched"
+  else
+    kill -0 "$relaunched" 2> /dev/null
+  fi
+}
 relaunched=
 for _ in $(seq 300); do
-  relaunched=$(pgrep -n -f "^$browser" || true)
-  [ -n "$relaunched" ] && [ "$relaunched" != "$old" ] && break
-  relaunched=
+  relaunched=$(restarted)
+  [ -n "$relaunched" ] && break
   sleep 0.1
 done
 [ -n "$relaunched" ] || fail "the browser didn't come back after Turn Back On"
@@ -135,13 +156,17 @@ for _ in $(seq 300); do
 done
 [ "$(cat "$mark")" = "launching 0" ] ||
   fail "the launch Turn Back On started says \"$(cat "$mark")\", not launching 0"
-pid=$relaunched
-quit_app
+if windows; then
+  python3 -I check/app-windows.py close "$relaunched"
+else
+  pid=$relaunched
+  quit_app
+fi
 for _ in $(seq 100); do
-  kill -0 "$pid" 2> /dev/null || break
+  restarted_runs || break
   sleep 0.1
 done
-kill -0 "$pid" 2> /dev/null && fail "the browser Turn Back On started didn't quit"
+restarted_runs && fail "the browser Turn Back On started didn't quit"
 [ "$(cat "$mark")" = "quit" ] || fail "the quit left the mark \"$(cat "$mark")\""
 
 # The next launch loads them all again.
