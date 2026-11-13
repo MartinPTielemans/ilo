@@ -628,7 +628,9 @@ drawn_smaller() {
 # which has no compositor: the capture is the targets' window alone, black where it's clear.
 if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; then
   echo "skip: the pages drawn smaller, in pixels: under Xvfb the capture is the targets' window alone"
-elif ! windows && [ "$still" != on ]; then
+elif windows; then
+  echo "skip: the pages drawn smaller, in pixels: on Windows each page is a window of its own and keeps its size."
+elif [ "$still" != on ]; then
   # The app logs the scale as it tells the core, and the page draws at it a frame or more later,
   # so a capture taken at once can still show it at its size, as on Wayland in #2493's runs.
   for _ in $(seq 20); do

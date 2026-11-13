@@ -553,6 +553,8 @@ if [ "$(uname)" = Darwin ]; then
   settings_drew Passwords
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings after Edit › AutoFill"
+else
+  echo "skip: Edit › AutoFill: the menu bar is the Mac's alone."
 fi
 # Settings' Passwords tab, which ⌘, shows again, lists the saved address under the logins, and its
 # Remove asks first, as a login's does, and removes it, which Settings hears. The card declined
