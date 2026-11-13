@@ -240,7 +240,7 @@ index 4b48188131..b9b785975c 100644
          }
      }
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index f2208d35ec..86cce9f646 100644
+index f2208d35ec..51cb8fc248 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
 @@ -11,7 +11,7 @@ use dispatch2::DispatchQueue;
@@ -426,9 +426,9 @@ index f2208d35ec..86cce9f646 100644
      external_files_dragged: bool,
      // Whether the next left-mouse click is also the focusing click.
      first_mouse: bool,
-+    // Presses and releases that came while the event callback was out, as a nested event pump
-+    // delivers them, for it to take once it's back (#2658).
-+    held_presses: std::collections::VecDeque<PlatformInput>,
++    // Input that came while the event callback was out, as a nested event pump delivers it, for it
++    // to take once it's back (#2658).
++    held_input: gpui::HeldInput,
      // When true, the whole content view is reported as app-owned titlebar content via
      // `_opaqueRectForWindowMoveWhenInTitlebar`, so AppKit does not drag the window from
      // the titlebar or delay titlebar clicks (a delay first observed on macOS 27). Such
@@ -492,7 +492,7 @@ index f2208d35ec..86cce9f646 100644
 +            do_command_handled: None,
 +            external_files_dragged: false,
 +            first_mouse: false,
-+            held_presses: std::collections::VecDeque::new(),
++            held_input: gpui::HeldInput::default(),
 +            app_owns_titlebar_drag,
 +            fullscreen_restore_bounds: Bounds::default(),
 +            is_exiting_fullscreen: false,
@@ -979,23 +979,23 @@ index f2208d35ec..86cce9f646 100644
              callback(event);
 -            window_state.lock().event_callback = Some(callback);
 +            give_back_event_callback(&window_state, callback);
-+        } else if let PlatformInput::MouseDown(_) | PlatformInput::MouseUp(_) = event {
-+            // One that comes while the window handles another event, as a nested pump delivers
-+            // it, waits for that one: dropped, a click does nothing (#2658).
-+            lock.held_presses.push_back(event);
++        } else {
++            // Input that comes while the window handles another event, as a nested pump delivers
++            // it, waits for that one (`HeldInput`); what isn't held is dropped as before.
++            lock.held_input.hold(event);
          }
      }
  }
  
-+/// Puts the window's event callback back once it has taken the presses and releases that came while
-+/// it was out, in order (#2658).
++/// Puts the window's event callback back once it has taken the input held while it was out, in
++/// order (#2658).
 +fn give_back_event_callback(
 +    window_state: &Arc<Mutex<MacWindowState>>,
 +    mut callback: Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>,
 +) {
 +    loop {
 +        let mut lock = window_state.lock();
-+        let Some(held) = lock.held_presses.pop_front() else {
++        let Some(held) = lock.held_input.next() else {
 +            lock.event_callback = Some(callback);
 +            return;
 +        };
