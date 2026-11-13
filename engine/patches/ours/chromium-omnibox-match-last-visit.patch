@@ -1,0 +1,76 @@
+Gives an address bar match made from a history row that row's last visit, as a time, so the
+core's suggestions can say "Visited yesterday" (#2337). The two history providers hold the row
+and record the visit only as about:omnibox's debug text; nothing else changes. The core's
+omnibox_last_visit_unittest.cc fails if a rebase loses it.
+
+--- a/components/omnibox/browser/autocomplete_match.cc
++++ b/components/omnibox/browser/autocomplete_match.cc
+@@ -256,6 +256,7 @@
+     : provider(match.provider),
+       relevance(match.relevance),
+       typed_count(match.typed_count),
++      last_visit(match.last_visit),
+       deletable(match.deletable),
+       fill_into_edit(match.fill_into_edit),
+       additional_text(match.additional_text),
+@@ -330,6 +331,7 @@
+   provider = std::move(match.provider);
+   relevance = std::move(match.relevance);
+   typed_count = std::move(match.typed_count);
++  last_visit = std::move(match.last_visit);
+   deletable = std::move(match.deletable);
+   fill_into_edit = std::move(match.fill_into_edit);
+   additional_text = std::move(match.additional_text);
+@@ -411,6 +413,7 @@
+   provider = match.provider;
+   relevance = match.relevance;
+   typed_count = match.typed_count;
++  last_visit = match.last_visit;
+   deletable = match.deletable;
+   fill_into_edit = match.fill_into_edit;
+   additional_text = match.additional_text;
+--- a/components/omnibox/browser/autocomplete_match.h
++++ b/components/omnibox/browser/autocomplete_match.h
+@@ -21,6 +21,7 @@
+ #include "base/memory/scoped_refptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/strings/utf_offset_string_conversions.h"
++#include "base/time/time.h"
+ #include "base/uuid.h"
+ #include "build/build_config.h"
+ #include "components/omnibox/browser/actions/omnibox_action_concepts.h"
+@@ -863,6 +864,12 @@
+   // set for matches from HistoryURL and HistoryQuickProvider.
+   int typed_count = -1;
+ 
++  // browser_core: when the profile's history last saw a visit to the page,
++  // from the history row the match was made from: set by HistoryURL and
++  // HistoryQuickProvider, null for every other match. The address bar's rows
++  // say "Visited yesterday" from it.
++  base::Time last_visit;
++
+   // True if the user should be able to delete this match.
+   bool deletable = false;
+ 
+--- a/components/omnibox/browser/history_quick_provider.cc
++++ b/components/omnibox/browser/history_quick_provider.cc
+@@ -247,6 +247,8 @@
+                               ? omnibox::AutocompleteMatchType::kHistoryTitle
+                               : omnibox::AutocompleteMatchType::kHistoryUrl);
+   match.typed_count = info.typed_count();
++  // browser_core: the time the address bar's rows read.
++  match.last_visit = info.last_visit();
+   match.destination_url = info.url();
+   DCHECK(match.destination_url.is_valid());
+ 
+--- a/components/omnibox/browser/history_url_provider.cc
++++ b/components/omnibox/browser/history_url_provider.cc
+@@ -198,6 +198,8 @@
+   match->RecordAdditionalInfo("typed count", info.typed_count());
+   match->RecordAdditionalInfo("visit count", info.visit_count());
+   match->RecordAdditionalInfo("last visit", info.last_visit());
++  // browser_core: and as a time the address bar's rows read.
++  match->last_visit = info.last_visit();
+ }
+ 
+ // Ensures that `matches` contains an entry for `info`, creating a new such

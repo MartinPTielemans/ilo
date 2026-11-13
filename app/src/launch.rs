@@ -35,9 +35,84 @@ fn is_switch(arg: &str) -> bool {
         .any(|prefix| arg.len() > prefix.len() && arg.starts_with(prefix))
 }
 
+/// Whether this launch will exit as soon as Chromium has read the `profile`'s lock, as it reads it
+/// just after the app's `launching`: it hands its links to the ilo that holds the lock, or the
+/// lock is another computer's (ProcessSingleton::NotifyOtherProcessWithTimeout). Work the app
+/// starts for a window must not run then: the process exits under it (#2488).
+#[cfg(target_os = "linux")]
+pub fn exits_at_lock(profile: &std::path::Path) -> bool {
+    let Ok(lock) = std::fs::read_link(profile.join("SingletonLock")) else {
+        return false;
+    };
+    let host = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+    let this_program = std::fs::read_link("/proc/self/exe").ok();
+    lock_exits(
+        &lock.to_string_lossy(),
+        host.trim(),
+        std::process::id(),
+        |pid| {
+            this_program.is_some()
+                && std::fs::read_link(format!("/proc/{pid}/exe")).ok() == this_program
+        },
+    )
+}
+
+/// exits_at_lock for a lock reading `lock`, "<host>-<pid>", on `host` in process `own`, with
+/// `runs_this_program` saying whether a process is another copy of this program, as Chromium's
+/// IsChromeProcess does.
+#[cfg(target_os = "linux")]
+fn lock_exits(lock: &str, host: &str, own: u32, runs_this_program: impl Fn(u32) -> bool) -> bool {
+    let Some((lock_host, pid)) = lock.rsplit_once('-') else {
+        return false;
+    };
+    let Ok(pid) = pid.parse::<u32>() else {
+        return false;
+    };
+    // Chromium takes a lock it finds stale, whose process is gone or isn't ilo, or is this one.
+    let held = pid != own && runs_this_program(pid);
+    !lock_host.is_empty() && (held || lock_host != host)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_launch_exits_at_a_lock_a_running_ilo_or_another_computer_holds() {
+        let ilo = |pid| pid == 41;
+        assert!(lock_exits("desk-41", "desk", 50, ilo), "hands over to 41");
+        assert!(
+            lock_exits("my-desk-41", "my-desk", 50, ilo),
+            "a host with a dash"
+        );
+        assert!(
+            lock_exits("laptop-7", "desk", 50, ilo),
+            "another computer's"
+        );
+        assert!(
+            !lock_exits("desk-7", "desk", 50, ilo),
+            "7 is gone or isn't ilo"
+        );
+        assert!(!lock_exits("desk-50", "desk", 50, |_| true), "its own");
+        assert!(!lock_exits("-41", "desk", 50, ilo), "no host");
+        assert!(!lock_exits("desk", "desk", 50, ilo), "no pid");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_profile_with_no_lock_starts_the_browser() {
+        let dir = std::env::temp_dir().join(format!("ilo-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!exits_at_lock(&dir));
+        // A lock this test process holds is its own, which Chromium takes.
+        let host = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap();
+        let lock = dir.join("SingletonLock");
+        std::os::unix::fs::symlink(format!("{}-{}", host.trim(), std::process::id()), &lock)
+            .unwrap();
+        assert!(!exits_at_lock(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn strings(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| arg.to_string()).collect()

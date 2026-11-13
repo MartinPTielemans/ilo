@@ -1,3 +1,5 @@
+# check.sh runs this at 780, only when named.
+# It runs only when named until it passes on the Mac.
 # The Mac's updates (docs/ux-spec.md › Updates), on a check build with Sparkle (build.sh updates)
 # that checks a feed the run serves, for updates signed with a key the run makes and deletes after.
 # Neither is ever the product's: the run never reads branding/update-feed or the owner's key.
@@ -409,6 +411,8 @@ flatpak_updates_check() {
   export FLATPAK_USER_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/flatpak"
   export HOME=$scratch/home
   mkdir "$HOME"
+  # The Flatpak's profile, where its XDG_CONFIG_HOME puts it (main.rs's profile_dir).
+  count_off "$HOME/.var/app/$id/config/$(cat branding/name)"
   local started
   started=$(env -u XDG_DATA_HOME dbus-daemon --session --fork --print-address=1 --print-pid=1 |
     tr '\n' ' ')

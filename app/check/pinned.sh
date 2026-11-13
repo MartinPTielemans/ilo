@@ -1,3 +1,4 @@
+# check.sh runs this at 130.
 # ⌘D pins the tab shown, from the page and from the UI, at the bottom of the pinned tabs, and unpins
 # it to the top of Today. ⌘1–⌘9 count the pinned tabs first. ⌘W, the − under the pointer, on the
 # tab shown or not, or a middle-click on its row, unloads a pinned tab and keeps its row, and shows
@@ -781,7 +782,7 @@ hidden=$(sed -n "${shown:-1},\$p" "$log" | grep -n '^browser: toast hidden$' | h
 if [ -n "$hidden" ] && [ $((${shown:-1} + hidden - 1)) -lt "$section" ]; then
   echo "skip: the click on Import & Export with a toast up, as Copy All Links' toast had gone first (#1134)."
 fi
-send clickkey $(drawn "export spaces")
+click_in_sight "export spaces"
 expect '^browser: exported [0-9]* links to .*/spaces\.md$' "Export… didn't write the Spaces' links"
 grep -qx -- '- later' "$out/spaces.md" ||
   fail "the export didn't list the folder: $(cat "$out/spaces.md")"

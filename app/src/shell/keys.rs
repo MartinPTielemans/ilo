@@ -3,7 +3,8 @@
 //! bindings, the menus, the command bar and the keys the page hands back all ask this store, so a
 //! change reaches them at once.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     Action, App, Global, KeyBinding, KeyBindingContextPredicate, Keystroke, Modifiers, NoAction,
