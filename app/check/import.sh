@@ -1,3 +1,4 @@
+# check.sh runs this at 340.
 # Settings › Import finds the made-up Arc in src/import/fixture and a made-up Chrome and Firefox
 # beside it, never the machine's own browsers. From Arc it brings its two Spaces, one in a new profile
 # named Work as Arc's Local State names it, their pinned tabs and folders, Personal's Today tab, its

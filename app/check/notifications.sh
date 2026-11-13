@@ -1,3 +1,4 @@
+# check.sh runs this at 510.
 # A click on a site's notification brings up the tab that sent it, its Space and its window, as
 # Arc's does, whether or not the page's click handler focuses its tab (#685). On Linux the page's
 # notification goes to the desktop's notification server through Chromium's own bridge, and the

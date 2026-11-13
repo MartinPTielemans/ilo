@@ -1,3 +1,4 @@
+# check.sh runs this at 370.
 # Passkeys (#611): a local page registers a passkey and signs in with it, on a virtual security key
 # that DevTools' WebAuthn domain gives the page's tab (check/cdp.py), in a profile of the run's
 # own. Chrome's own dialog asks for the key while it waits for a touch: a child window of the

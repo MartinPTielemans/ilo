@@ -1,3 +1,4 @@
+# check.sh runs this at 720, only when named.
 # With the lists uBlock Origin ships and nothing given for the check, a page's script from Google's
 # ad network doesn't load, and an ad server's own page doesn't open: uBlock Origin shows its page
 # saying it blocked it instead. uBlock Origin fails the script's request, or answers it with a

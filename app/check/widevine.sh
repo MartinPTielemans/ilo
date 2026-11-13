@@ -1,3 +1,4 @@
+# check.sh runs this at 770, only when named.
 # Linux only: Google's Widevine module, offered by the protected-media note, downloads at its yes,
 # and after a restart a Widevine stream plays (#236). The page is Shaka Player's public Widevine
 # demo stream, with its no-account license server, served from the check's server, in a profile of

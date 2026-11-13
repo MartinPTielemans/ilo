@@ -1,3 +1,4 @@
+# check.sh runs this at 140.
 # View › Clear Cache and Refresh and the command bar's Clear Cookies and Refresh delete the cache
 # and the cookies of the page's site, and load the page again. ⇧⌘C and ⌥⇧⌘C from the page and the UI
 # copy the tab's URL and a Markdown link to it, to a pasteboard of the run's own, without its
@@ -894,6 +895,8 @@ expect '^browser: site controls settled$' "the Site Controls didn't open from th
 send key escape
 expect '^browser: site controls closing (escape)$' "escape didn't close the Site Controls"
 expect '^browser: site controls hidden$' "the Site Controls didn't leave after escape"
+none_since '^browser: site controls takes the keyboard back from its window$' ||
+  fail "the Site Controls took the keyboard back from the browser window as they closed"
 # Reset permissions sets the site back to asking, and a click outside closes them. The button
 # shows only under the pointer, as it was last over the page.
 away

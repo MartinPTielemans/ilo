@@ -1,3 +1,4 @@
+# check.sh runs this at 430.
 # A profile signed out of the account starts no sync traffic. Its sync service is there, disabled
 # for want of an account. Neither sync's engine nor the core asks anything of the sync server it's
 # given, the check's own, or of Google's, from launch past the 10 s sync's start waits for, until

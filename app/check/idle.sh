@@ -1,3 +1,4 @@
+# check.sh runs this at 570.
 # An idle window off Battery Saver is never woken to measure its pages (#686, #1773). Chrome
 # measures them on timers in resource_attribution's queries.cc, which Chromium's startup trace
 # records as tasks with their delay: its freezing policy each minute, which now measures only on

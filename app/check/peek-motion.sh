@@ -1,3 +1,4 @@
+# check.sh runs this at 580.
 # Peek grows from the link and shrinks back into it showing only the card: at a point inside its
 # resting frame, every frame shows the window's own page there until the card reaches it, and
 # again once the card has left it as it closes, never Peek's page laid out where it rests; inside

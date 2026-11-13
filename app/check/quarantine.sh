@@ -82,7 +82,7 @@ list)
 lint)
   status=0
   now=$(day "$(date -u +%Y-%m-%d)")
-  all=" $(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p; s/^named="\(.*\)"$/\1/p' "$dir/../check.sh" | tr '\n' ' ') "
+  all=" $(sh "$dir/../check.sh" --runs) "
   named=
   bad() { # <file> <line> <why>
     status=1
