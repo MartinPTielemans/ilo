@@ -484,6 +484,27 @@ if windows; then
   on_desktop=" On the runner's ${desktop#browser: } Portrait Mode's corner is $corner:"
   on_desktop="$on_desktop $out/capture-portrait-card-desktop.png, $out/capture-portrait-desktop.png."
   send click 600 400
+  # On a solid-colour desktop, the picture is that colour. Only on a CI runner, as it changes the
+  # session's desktop, which it puts back after; the card starts on Desktop Picture, as kept.
+  if [ -n "${CI:-}" ]; then
+    was=$(python3 -I check/desktop-windows.py colour 2d7d9a) ||
+      fail "the runner's desktop couldn't be made a solid colour"
+    bar_command capture-portrait "Capture in Portrait Mode" "portrait mode"
+    expect '^browser: portrait card [0-9]* at ' "Capture in Portrait Mode opened no card again"
+    send click $(sed -n 's/^browser: portrait card [0-9]* at //p' "$log" | tail -1 |
+      awk '{ printf "%.0f %.0f", $1 + $3 * 0.75, $2 + $4 - 26 }')
+    expect '^browser: desktop picture [0-9]*x[0-9]*, colour 2d7d9a$' \
+      "Portrait Mode on a desktop of solid 2d7d9a didn't read it as that colour"
+    expect '^browser: portrait desktop [0-9]*x[0-9]*$' "Portrait Mode didn't put the page on the colour"
+    expect "$copied" "Portrait Mode on the colour didn't copy the PNG to the clipboard"
+    corner=$(python3 -I check/clipboard-windows.py png "$out/capture-portrait-colour.png") ||
+      fail "the clipboard had no PNG after Portrait Mode copied one on the colour"
+    python3 -I check/desktop-windows.py back "$was" || fail "the runner's desktop wasn't put back"
+    [ "$corner" = 2d7d9a ] ||
+      fail "Portrait Mode's picture's corner is $corner, not the solid desktop's 2d7d9a"
+    on_desktop="$on_desktop On solid 2d7d9a: $out/capture-portrait-colour.png."
+    send click 600 400
+  fi
 fi
 
 # A drag takes the rectangle dragged, and its menu comes as a click's box's does. A click outside
