@@ -58,6 +58,10 @@ class Tab : public content::WebContentsObserver,
   static bc_id IdOf(content::WebContents* contents);
   // |contents|'s tab, or null if nothing asked for its id.
   static Tab* FromWebContents(content::WebContents* contents);
+  // |contents| has Chrome's tab helpers now, as its tab strip took it: its tab, if it has one yet,
+  // observes what they make. A tab made before them, as a pop-up an agent's page opens is
+  // (DidOpenRequestedURL), observes nothing of theirs until then.
+  static void HelpersArrived(content::WebContents* contents);
   // |id|'s tab, with its page or without, or null.
   static Tab* Get(bc_id id);
   // |id|'s page, or null, as for a tab without one.
@@ -252,6 +256,9 @@ class Tab : public content::WebContentsObserver,
 
   // Makes |contents| the tab's page.
   void Attach(content::WebContents* contents);
+  // Observes what Chrome's tab helpers made for its page, the favicon driver, sound, infobars,
+  // autofill and translate, those it doesn't yet.
+  void ObserveHelpers();
   // Tells the app the tab closed, as its page did or as Close closes it.
   void ReportClosed();
   // Finds the favicon the profile has for |url|, for a tab whose page hasn't loaded, as Chrome's
