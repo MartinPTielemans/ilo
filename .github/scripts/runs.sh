@@ -12,7 +12,7 @@
 set -euo pipefail
 check=$(dirname "$0")/../../app/check.sh
 all=$(sh "$check" --runs)
-long="adblock-parity adblock-cost perf"
+long="adblock-parity adblock-cost perf perf-native"
 second="load tabs history spaces profiles find pinned clear split cards extensions adblock adblock-lists
   windows little links trouble dialogs crash onboarding mcp appearance about sync filled notifications
   battery-os everyday count translate boosts sync-extensions adblock-live adblock-native widevine

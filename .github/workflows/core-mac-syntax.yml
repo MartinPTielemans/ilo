@@ -1,0 +1,84 @@
+# The core's Mac compile, checked in minutes on GitHub's hosted Mac rather than in the next Mac
+# engine build, a day later, where an error costs the build (#2668). Each finished Mac engine build
+# packs what a compile of //browser_core reads besides the core and the SDK: the tree's and the
+# build's headers, Chromium's clang and libc++, and the core's compile variables
+# (engine/core_syntax.py). This takes the newest pack of pins.ini's Chromium major and runs clang
+# -fsyntax-only, with the build's own flags, on each core file the engine compiled, as the branch
+# has it. A .mm the branch adds, or a .cc outside platform/, is checked with the core's flags.
+# Not checked: a file the branch adds in platform/, which may be another OS's, a changed .mojom or
+# .proto (the pack has the engine's generated headers), a BUILD.gn change to a target's flags, and
+# the link.
+name: Core Mac syntax
+
+on:
+  push:
+    # Main and the merge queue's branches were checked on the branch they came from.
+    branches-ignore: [main, 'gh-readonly-queue/**']
+    paths:
+      - core/**
+      - engine/core_syntax.py
+      - .github/workflows/core-mac-syntax.yml
+  # A push runs it only for commits new to the repo; this runs it on any ref.
+  workflow_dispatch:
+
+concurrency:
+  group: core-mac-syntax-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: macos-26
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # The pack, from an Engine on macOS run.
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            core
+            engine/core_syntax.py
+            engine/pins.ini
+
+      # The newest unexpired pack of pins.ini's major, from the newest Engine on macOS run that has
+      # one. None yet means no Mac engine has been built since the packs began: nothing to check.
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(git config -f engine/pins.ini chromium.version)
+          major=${version%%.*}
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/engine-mac.yml/runs?per_page=30" --jq '.workflow_runs[].id'); do
+            name=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" --jq \
+              ".artifacts[] | select((.expired | not) and (.name | startswith(\"engine-mac-core-$major.\"))) | .name" | tail -1)
+            if [ -n "$name" ]; then
+              printf 'run=%s\nname=%s\n' "$id" "$name" >> "$GITHUB_OUTPUT"
+              echo "Checking against run $id's $name." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done
+          echo "::notice::No Engine on macOS run has packed the core's headers for Chromium $major yet, so nothing is checked."
+      - if: steps.find.outputs.run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.find.outputs.name }}
+          path: ${{ runner.temp }}/pack
+          run-id: ${{ steps.find.outputs.run }}
+          github-token: ${{ github.token }}
+
+      # Each error also shows on the commit as an annotation at its line.
+      - if: steps.find.outputs.run != ''
+        name: Check
+        run: |
+          zstd -dc "$RUNNER_TEMP/pack/core-syntax.tar.zst" | tar -xf - -C "$RUNNER_TEMP/pack"
+          # The Xcode whose SDK the engine built with, where the runner has it.
+          sdk=$(grep -m1 -oE 'MacOSX[0-9.]+\.sdk' "$RUNNER_TEMP/pack/src/out/Release/obj/browser_core/browser_core.ninja")
+          sdk=${sdk#MacOSX}
+          sdk=${sdk%.sdk}
+          [ ! -d "/Applications/Xcode_$sdk.app" ] || sudo xcode-select --switch "/Applications/Xcode_$sdk.app"
+          python3 engine/core_syntax.py check "$RUNNER_TEMP/pack" "$GITHUB_WORKSPACE"
