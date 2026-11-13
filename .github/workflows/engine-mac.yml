@@ -388,8 +388,7 @@ jobs:
 
   # One kept tree of a major, the newest, so nightly builds don't hold 8 GB each for 90 days. Only
   # once this run kept its finished tree, and only trees of pins.ini's major, from other runs. The
-  # core's packs go the same way, once this run kept its own. The job holds GITHUB_TOKEN alone, with
-  # the one permission deleting an artifact needs.
+  # job holds GITHUB_TOKEN alone, with the one permission deleting an artifact needs.
   prune:
     needs: build-8
     if: needs.build-8.outputs.finished == 'true'
@@ -408,16 +407,13 @@ jobs:
         run: |
           version=$(git config -f engine/pins.ini chromium.version)
           major=${version%%.*}
-          kept=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '.artifacts[].name')
-          echo "$kept" | grep -qx "engine-mac-tree-$version" ||
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq \
+            '.artifacts[].name' | grep -qx "engine-mac-tree-$version" ||
             { echo "::error::This run kept no engine-mac-tree-$version, so no older tree is deleted."; exit 1; }
-          # Packing the core's headers can fail alone, and then the older packs stay.
-          kinds=tree
-          ! echo "$kept" | grep -qx "engine-mac-core-$version" || kinds='tree|core'
           for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/engine-mac.yml/runs?per_page=100" --jq '.workflow_runs[].id'); do
             [ "$id" != "$GITHUB_RUN_ID" ] || continue
             gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" --jq \
-              ".artifacts[] | select((.expired | not) and (.name | test(\"^engine-mac-($kinds)-$major[.]\"))) | \"\\(.id) \\(.name)\"" |
+              ".artifacts[] | select((.expired | not) and (.name | startswith(\"engine-mac-tree-$major.\"))) | \"\\(.id) \\(.name)\"" |
               while read -r artifact name; do
                 gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact"
                 echo "Deleted run $id's $name, older than this run's." | tee -a "$GITHUB_STEP_SUMMARY"
