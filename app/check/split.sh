@@ -331,7 +331,17 @@ send key 2 cmd
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" \
   "⌘2 didn't show the split with its pane focused last"
 expect "^browser: panes $a $b\$" "⌘2 didn't show both panes"
-send click 205 $(row 1 | cut -d' ' -f2)
+if windows; then
+  # The driver's pointer is real there (#2544), heard before the press as a hand's is, so a frame
+  # draws the row's ✕ under it first and the right favicon sits left of the ✕'s room, as a hand
+  # finds it.
+  send move 205 $(row 1 | cut -d' ' -f2)
+  expect '^browser: hover tab [0-9]* close 1 ' \
+    "resting on the split's row at 205 didn't show its ✕ (wanted a \"hover tab … close 1\" line): $(grep '^browser: hover ' "$log" | tail -3 | tr '\n' ';')"
+  send click 170 $(row 1 | cut -d' ' -f2)
+else
+  send click 205 $(row 1 | cut -d' ' -f2)
+fi
 expect "^browser: selected $b\( in .*\)\{0,1\}\$" \
   "a click on the split's right segment didn't focus it"
 read_keyboard
