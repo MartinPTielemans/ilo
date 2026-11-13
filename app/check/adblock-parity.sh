@@ -20,9 +20,10 @@
 #     run hid and some of which this run shows, as an ad's box the engine's hiding missed. Each
 #     selector is an element's tag, id and classes, read 8 s after the load (cdp.py's hidden);
 #   - a site this run breaks, or a wall uBlock Origin kept away: text under half the baseline's,
-#     where two loads of a page with the same engine differ by a seventh at most, or 90% of the
+#     where two loads of a page with the same engine differ by a seventh at most, or 70% of the
 #     viewport covered by an element fixed in place, a wall or a modal, where the baseline's page
-#     had nothing as large. A site's own banner covers half, and changes size from load to load.
+#     had nothing as large. A site's own banner covers half at most, in every run so far; a wall
+#     73% to all of it, as it draws in.
 #     Both are read 8 s after the load (cdp.py's content), and the table says them, with the
 #     page's pictures, which vary too much between loads to hold a run to, a site's count from 4
 #     to 38. A watch page's text is as far as its player and comments got, so the video says
@@ -433,7 +434,7 @@ if baseline:
             if not s["video"] and page["text"] < int(page_was["text"]) / 2:
                 worse.append(f"{s['url']} showed {page['text']} characters of text, where the "
                              f"baseline's showed {page_was['text']}")
-            if page["cover"] >= 90 > int(page_was["cover"]):
+            if page["cover"] >= 70 > int(page_was["cover"]):
                 worse.append(f"{s['url']} was {page['cover']}% covered by something fixed in place, "
                              f"where the baseline's was {page_was['cover']}%")
         if through:
