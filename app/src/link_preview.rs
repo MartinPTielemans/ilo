@@ -1054,6 +1054,10 @@ impl LinkPreview {
 
 impl Render for LinkPreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Proof only (#2640): each of Peek's frames, on the trace's clock.
+        if self.preview.is_some() {
+            log!("browser: probe render {}", mono());
+        }
         let root = div()
             .key_context("LinkPreview")
             .track_focus(&self.focus)
