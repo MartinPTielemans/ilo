@@ -799,9 +799,13 @@ printf "<?xml version='1.0' encoding='UTF-8'?>
 # Its next version, asking for more, from the page over the one added: Chrome asks again with the
 # browser's dialog, listing the new warnings (extension-update.png), and return updates it. Installed,
 # it asks the browser to check for its updates, as Chrome checks on its own only every 5 hours and
-# ignores --extensions-update-frequency.
+# ignores --extensions-update-frequency. Chrome holds an update that comes while the extension has a
+# process until that process ends, which this worker's can outlast the check by; a reload puts the
+# held update in at once.
 cat > "$crx/source/worker.js" << 'EOF'
-chrome.runtime.onInstalled.addListener(() => chrome.runtime.requestUpdateCheck(() => {}));
+chrome.runtime.onInstalled.addListener(() => chrome.runtime.requestUpdateCheck((result) => {
+  if ((result && result.status) === "update_available") chrome.runtime.reload();
+}));
 EOF
 cat > "$crx/source/manifest.json" << EOF
 {"manifest_version": 3, "name": "Check Install", "version": "2", "permissions": ["tabs", "history"],
