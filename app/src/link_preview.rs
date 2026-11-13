@@ -46,6 +46,11 @@ const FADE_IN: f32 = 0.135;
 const FROM_SCALE: f32 = 0.5;
 pub(crate) const CLOSE: f32 = 0.2;
 const KEEP: f32 = 0.275;
+/// How long a page under the window is waited for, at most, to be on screen where it was laid out
+/// (page_shown): far past the 26–37 ms it took on Wayland's runner, so it runs out only when the
+/// core can't say, such as for a window with nothing on screen, and the preview goes on as if it
+/// had (#2640).
+const SHOWN_WAIT: Duration = Duration::from_millis(150);
 
 /// What the preview asks of its window and the core.
 pub trait Host {
@@ -483,9 +488,19 @@ struct Preview {
     placed: Bounds<Pixels>,
     /// Whether a page under the window shows through its hole.
     cut: bool,
+    /// Whether the core has said a page under the window is on screen where it was laid out last,
+    /// or the wait for that ran out.
+    there: bool,
+    /// That wait's limit, a one-shot dropped as the core says.
+    _wait: Option<Task<()>>,
     /// Whether the window's page is to have the keyboard back once a page under the window has
     /// left, as it's closing.
     releasing: bool,
+    /// Whether the hole has closed over a page under the window that's leaving, which it leaves
+    /// the frame after.
+    covered: bool,
+    /// Whether the card holds at rest as it closes, until a page under the window has left.
+    held: bool,
     /// The frame check.sh last read the card holds the page at, in pixels, and the scale.
     logged: Option<([i32; 4], f32)>,
     /// Once it's leaving: when, how, and where the motion was.
@@ -496,6 +511,7 @@ struct Preview {
 impl Preview {
     fn pose(&self) -> Pose {
         match self.leaving {
+            Some((_, Leave::Close, from)) if self.held => from.closing(0.),
             Some((at, Leave::Close, from)) => from.closing(at.elapsed().as_secs_f32()),
             Some((at, Leave::Keep, from)) => from.keeping(at.elapsed().as_secs_f32()),
             None => Pose::arriving(self.shown.map_or(0., |shown| shown.elapsed().as_secs_f32())),
@@ -521,8 +537,35 @@ impl Preview {
     fn lay_out(&mut self, host: &dyn Host, at: Bounds<Pixels>) {
         if self.placed != at {
             self.placed = at;
+            self.there = false;
+            self._wait = None;
             host.place(self.tab, at, RADIUS);
         }
+    }
+
+    /// Waits for the core to say a page under the window is on screen where it was laid out last,
+    /// for SHOWN_WAIT at most, and draws again once it has.
+    fn wait(&mut self, cx: &mut Context<LinkPreview>) {
+        if self.there || self._wait.is_some() {
+            return;
+        }
+        let (tab, at) = (self.tab, self.placed);
+        self._wait = Some(cx.spawn(async move |preview, cx| {
+            cx.background_executor().timer(SHOWN_WAIT).await;
+            preview
+                .update(cx, |preview, cx| {
+                    let waited = preview.preview.as_mut();
+                    let Some(shown) = waited.filter(|shown| (shown.tab, shown.placed) == (tab, at))
+                    else {
+                        return;
+                    };
+                    // check.sh reads this line.
+                    log!("browser: link preview page not shown in 150 ms");
+                    shown.there = true;
+                    cx.notify();
+                })
+                .ok();
+        }));
     }
 
     fn moving(&self) -> bool {
@@ -673,7 +716,11 @@ pub fn show(
             settled: false,
             placed: page_in(card(page)),
             cut: false,
+            there: false,
+            _wait: None,
             releasing: false,
+            covered: false,
+            held: false,
             logged: None,
             leaving: None,
             _leave: None,
@@ -711,6 +758,19 @@ pub fn page_moved(window: u64, (page, radius): (Bounds<Pixels>, f32), cx: &mut A
             host.place(shown.tab, page_in(card(page)), RADIUS);
         }
         cx.notify();
+    });
+}
+
+/// The core says `tab`'s page, under the window, is on screen at `page`, where the preview laid it
+/// out.
+pub fn page_shown(tab: u64, page: Bounds<Pixels>, cx: &mut App) {
+    update(cx, |preview, _, cx| {
+        let shown = preview.preview.as_mut();
+        if let Some(shown) = shown.filter(|shown| (shown.tab, shown.placed) == (tab, page)) {
+            shown.there = true;
+            shown._wait = None;
+            cx.notify();
+        }
     });
 }
 
@@ -840,28 +900,14 @@ impl LinkPreview {
         // A page under the window that shows leaves in the card's frames first (render), while it
         // still has the keyboard, as laying it out takes it.
         shown.releasing = how == Leave::Close && shown.cut && why != "dismissed";
+        // And the card holds at rest until it has, as shrinking would show it round the card.
+        shown.held = shown.releasing;
         if !shown.releasing {
             self.host.release();
         }
-        let tab = shown.tab;
-        shown._leave = Some(cx.spawn(async move |preview, cx| {
-            cx.background_executor()
-                .timer(Duration::from_secs_f32(seconds))
-                .await;
-            preview
-                .update(cx, |preview, cx| {
-                    // Unless another preview took its place meanwhile.
-                    if preview
-                        .preview
-                        .as_ref()
-                        .is_some_and(|shown| shown.tab == tab)
-                    {
-                        preview.finish(cx);
-                        cx.notify();
-                    }
-                })
-                .ok();
-        }));
+        if !shown.held {
+            shown._leave = Some(finish_after(shown.tab, seconds, cx));
+        }
         cx.notify();
         true
     }
@@ -903,6 +949,27 @@ impl LinkPreview {
             }
         }
     }
+}
+
+/// Ends `tab`'s preview after `seconds`, as its leaving does, unless another took its place.
+fn finish_after(tab: u64, seconds: f32, cx: &mut Context<LinkPreview>) -> Task<()> {
+    cx.spawn(async move |preview, cx| {
+        cx.background_executor()
+            .timer(Duration::from_secs_f32(seconds))
+            .await;
+        preview
+            .update(cx, |preview, cx| {
+                if preview
+                    .preview
+                    .as_ref()
+                    .is_some_and(|shown| shown.tab == tab)
+                {
+                    preview.finish(cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+    })
 }
 
 impl LinkPreview {
@@ -979,9 +1046,6 @@ impl Render for LinkPreview {
         let moving = shown.moving();
         let settling = !moving && !shown.settled;
         shown.settled |= settling;
-        if moving {
-            window.request_animation_frame();
-        }
         let (card_frame, about, page) = frames(pose, shown.page, shown.link);
         let under = self.host.page_under();
         let page_radius = shown.page_radius(pose.kept);
@@ -989,11 +1053,12 @@ impl Render for LinkPreview {
         // window's draws over it, and the host hears again as that moves. It can't scale or fade,
         // and isn't resized for the motion, as a page reads its size as it loads (#2519): it waits
         // out of sight while the card grows with a plate where it will show, comes in under the
-        // plate the frame after the card first draws at rest, and shows through the hole from the
-        // frame after that. As it closes, the plate is in the hole the frame before the hole
-        // closes and the page leaves, and the card shrinks back with it. The page and the hole
-        // move at once, and a frame reaches the screen later, so each waits a frame for the one
-        // that covers it to be there.
+        // plate the frame after the card first draws at rest, and shows through the hole once the
+        // core says it's on screen there. As it closes, the plate is in the hole the frame before
+        // the hole closes, the page leaves the frame after, and the card shrinks back once the
+        // core says the page has gone. The hole changes at once, and the frames of the page and
+        // the window reach the screen later, each in its own time, so each step waits for the
+        // frame that covers it to be there (#2640).
         let mut leave_to = None;
         let (page, plate) = match under {
             false => (page, false),
@@ -1008,10 +1073,13 @@ impl Render for LinkPreview {
                     }
                     (None, false) if !moving => {
                         if !settling {
-                            shown.cut = shown.placed == rest;
+                            shown.cut = shown.placed == rest && shown.there;
                             shown.lay_out(&*self.host, rest);
+                            shown.wait(cx);
                         }
-                        window.request_animation_frame();
+                        if shown._wait.is_none() {
+                            window.request_animation_frame();
+                        }
                         (if shown.cut { rest } else { none }, false)
                     }
                     (Some(Leave::Close), true) => {
@@ -1020,6 +1088,14 @@ impl Render for LinkPreview {
                         (shown.placed, true)
                     }
                     (Some(Leave::Keep), true) => (page.intersect(&rest), false),
+                    // The page leaves the frame after the hole has closed over it: the hole closes
+                    // at once, and until the frame with the plate in it is on screen, the one
+                    // before shows there, clear where the page showed.
+                    (Some(Leave::Close), false) if shown.releasing && !shown.covered => {
+                        shown.covered = true;
+                        window.request_animation_frame();
+                        (none, false)
+                    }
                     _ => {
                         if how.is_none() || shown.releasing {
                             leave_to = Some(out_of_sight(rest));
@@ -1038,6 +1114,21 @@ impl Render for LinkPreview {
             if std::mem::take(&mut shown.releasing) {
                 self.host.release();
             }
+        }
+        // And the card shrinks back once it has left.
+        if shown.held && !shown.releasing {
+            shown.wait(cx);
+            if shown.there {
+                shown.held = false;
+                if let Some((at, ..)) = shown.leaving.as_mut() {
+                    *at = Instant::now();
+                }
+                shown._leave = Some(finish_after(shown.tab, CLOSE, cx));
+            }
+        }
+        // Nothing moves while it waits for the core, which draws it again once the page is there.
+        if moving && shown._wait.is_none() {
+            window.request_animation_frame();
         }
         if settling {
             // check.sh reads these lines, the button's before it waits on the other, to rest on it.
