@@ -6,6 +6,10 @@ passed, it prints the steps the run skipped and why, from that run's log. The ta
 on these systems means: every run and step not proven on a system is in it with a reason. A tick
 in docs/ux-parity/ is the Mac's.
 
+Each skip's reason is one of three kinds. One that cites an issue (#N) is open and tracked; one that
+says "yet" or "so far" with none is open and untracked, listed again at the end, as each needs an
+issue or a better reason; the rest are the system's nature, the only kind that's done.
+
 The lists come from check-linux.yml and check-windows.yml, and the results and logs from one run of
 each, such as a nightly, its artifacts downloaded with gh:
 
@@ -22,6 +26,19 @@ import re
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 FIRST_LINE = re.compile(r'^# check\.sh runs this at ([0-9]+)(, only when named)?\.$')
+ISSUE = re.compile(r'#[0-9]+')
+# "So far" says the same as "yet".
+YET = re.compile(r'\byet\b|\bso far\b', re.IGNORECASE)
+
+
+def kind(reason):
+    """A skip's reason: tracked when it cites an issue, untracked when it says "yet" without one,
+    and otherwise the system's nature. Only the last is done."""
+    if ISSUE.search(reason):
+        return 'tracked'
+    if YET.search(reason):
+        return 'untracked'
+    return 'nature'
 
 
 def default_runs():
@@ -95,6 +112,7 @@ def skip_lines(log):
 
 
 def session(name, runs, on, off, found, log_of):
+    """Prints the session's table and gives its untracked skips, each as (run, reason)."""
     rows, counts = [], {'pass': 0, 'fail': 0, 'skipped': 0, 'not listed': 0, 'no result': 0,
                     'listed': 0}
     for run in runs:
@@ -122,14 +140,26 @@ def session(name, runs, on, off, found, log_of):
             state = 'not listed, no reason given'
             counts['not listed'] += 1
         rows.append((run, state, steps))
+    kinds = {'nature': 0, 'tracked': 0, 'untracked': 0}
+    untracked = []
+    for run, state, steps in rows:
+        reasons = [state[9:]] if state.startswith('skipped: ') else []
+        reasons += [step[6:] for step in steps]
+        for reason in reasons:
+            kinds[kind(reason)] += 1
+            if kind(reason) == 'untracked':
+                untracked.append((run, reason))
     said = ', '.join('%d %s' % (n, what) for what, n in counts.items() if n)
     print('%s: %d default runs: %s' % (name, len(runs), said))
+    print('  skips, runs and steps: %d for the system\'s nature, %d open with an issue, %d open with'
+          ' none' % (kinds['nature'], kinds['tracked'], kinds['untracked']))
     width = max(len(run) for run in runs)
     for run, state, steps in rows:
         print('  %-*s  %s' % (width, run, state))
         for step in steps:
             print('  %-*s    %s' % (width, '', step))
     print()
+    return untracked
 
 
 def main():
@@ -147,12 +177,17 @@ def main():
             return lambda run: None
         return lambda run: os.path.join(directory, folder, '%s.log' % run)
 
-    session('X11 (Xvfb)', runs, listed(linux['LINUX_RUNS']), linux_off,
-            results(args.linux, 'xvfb'), logs(args.linux, 'check-linux'))
-    session('Wayland (sway)', runs, listed(linux['WAYLAND_RUNS']), linux_off,
-            results(args.linux, 'wayland'), logs(args.linux, os.path.join('check-linux', 'wayland')))
-    session('Windows', runs, listed(windows['WINDOWS_RUNS']), skips(windows['WINDOWS_SKIPS']),
-            results(args.windows, 'windows'), logs(args.windows, 'check-windows'))
+    untracked = []
+    untracked += [('X11',) + skip for skip in session('X11 (Xvfb)', runs, listed(linux['LINUX_RUNS']), linux_off,
+            results(args.linux, 'xvfb'), logs(args.linux, 'check-linux'))]
+    untracked += [('Wayland',) + skip for skip in session('Wayland (sway)', runs, listed(linux['WAYLAND_RUNS']), linux_off,
+            results(args.linux, 'wayland'), logs(args.linux, os.path.join('check-linux', 'wayland')))]
+    untracked += [('Windows',) + skip for skip in session('Windows', runs, listed(windows['WINDOWS_RUNS']), skips(windows['WINDOWS_SKIPS']),
+            results(args.windows, 'windows'), logs(args.windows, 'check-windows'))]
+    # Each needs an issue, or a reason that's the system's nature.
+    print('Open with no issue, each needing one or a better reason: %d' % len(untracked))
+    for system, run, reason in untracked:
+        print('  %s, %s: %s' % (system, run, reason))
 
 
 main()
