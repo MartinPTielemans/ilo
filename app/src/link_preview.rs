@@ -1121,6 +1121,10 @@ impl Render for LinkPreview {
                                     .map_or(0., |at| at.elapsed().as_secs_f64() * 1000.);
                                 log!("browser: probe open {ms:.1} ms");
                                 log!("browser: probe hole {}", mono());
+                                let epoch = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map_or(0., |d| d.as_secs_f64());
+                                log!("browser: probe hole-epoch {epoch:.3}");
                             }
                             shown.lay_out(&*self.host, rest);
                             shown.wait(cx);
@@ -1182,6 +1186,7 @@ impl Render for LinkPreview {
             window.request_animation_frame();
         }
         if settling {
+            log!("browser: probe rest {}", mono());
             // check.sh reads these lines, the button's before it waits on the other, to rest on it.
             let [keep, _] = buttons_in(controls_over(card(shown.page)));
             let (x, y) = (f32::from(keep.center().x), f32::from(keep.center().y));

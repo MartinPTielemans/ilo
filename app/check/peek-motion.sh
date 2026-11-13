@@ -50,7 +50,7 @@ rm -f "$saved"
 rm -rf "$frames"
 # Proof only (#2640): the compositor's trace, on the clock the app's probe lines use.
 BROWSER_DRIVE=1 BROWSER_URL="${site}peek-motion.html" "$browser" \
-  --enable-tracing=toplevel,viz,ui,cc,gpu,benchmark,graphics.pipeline,disabled-by-default-display.framedisplayed \
+  --enable-tracing=viz,ui,cc,gpu,benchmark,graphics.pipeline,disabled-by-default-display.framedisplayed \
   --trace-startup-record-mode=record-continuously --trace-buffer-size-in-kb=400000 \
   --enable-tracing-format=json --trace-startup-file="$PWD/$out/peek-trace.json" \
   < "$out/drive" > "$log" 2>&1 &
@@ -124,8 +124,8 @@ round() {
   p=$(grep "^browser: link preview [1-9][0-9]* $target\$" "$log" | tail -1 | cut -d' ' -f4)
   expect '^browser: link preview shown$' "Peek's window didn't show"
   expect '^browser: link preview settled$' "Peek didn't settle"
-  stop_film
   expect "^browser: title $p peek ready " "Peek's page didn't draw"
+  stop_film
   rest=$(grep '^browser: link preview page at ' "$log" | tail -1 | sed 's/^browser: link preview page at //')
   [ -n "$rest" ] || fail "Peek didn't say where its page rests"
   # Its sizes against its resting size. The motion never resizes it, so it ends at its resting
