@@ -84,8 +84,7 @@ std::vector<base::FilePath> OldProfilePaths(const base::FilePath& folder, int pr
   // chrome::kInitialProfile, and ProfileManager::GenerateNextProfileDirectoryPath's names.
   std::vector<base::FilePath> paths = {folder.AppendASCII(chrome::kInitialProfile)};
   for (int n = 1; n < profiles_created; ++n) {
-    paths.push_back(
-        folder.AppendASCII(chrome::kMultiProfileDirPrefix + base::NumberToString(n)));
+    paths.push_back(folder.AppendASCII(chrome::kMultiProfileDirPrefix + base::NumberToString(n)));
   }
   return paths;
 }

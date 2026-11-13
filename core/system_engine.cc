@@ -14,7 +14,9 @@
 #include "base/barrier_callback.h"
 #include "base/command_line.h"
 #include "base/containers/fixed_flat_set.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
@@ -31,6 +33,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/common/pref_names.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -155,11 +158,107 @@ void DeleteStoreOf(const std::string& id) {
   if (id.empty()) {
     return;
   }
-  platform::SystemPage::DeleteStore(id);
+  platform::SystemPage::DeleteStore(id, base::DoNothing());
   std::vector<std::string> given = GivenStores(LocalState());
   if (std::erase(given, id)) {
     SetGivenStores(LocalState(), given);
   }
+}
+
+// Adds the stores the loaded profiles name to |named|. Read on the UI thread, where a profile takes
+// a store: one loaded since the disk was read, or whose Preferences aren't written yet, names its
+// store here.
+void NameLoadedStores(ProfileManager& manager, std::set<std::string>& named) {
+  for (Profile* profile : manager.GetLoadedProfiles()) {
+    if (std::string id = profile->GetPrefs()->GetString(kSystemStorePref); !id.empty()) {
+      named.insert(std::move(id));
+    }
+  }
+}
+
+// What the disk says about the stores an old version gave a data folder's profiles (#2701).
+struct OldStoresOnDisk {
+  // The stores the profiles on disk name.
+  std::set<std::string> named;
+  // Those of the paths the folder's profiles could have had that have a folder.
+  std::set<base::FilePath> present;
+};
+
+OldStoresOnDisk ReadOldStores(const base::FilePath& folder, int profiles_created) {
+  OldStoresOnDisk disk{StoresNamedOnDisk(folder), {}};
+  for (const base::FilePath& path : OldProfilePaths(folder, profiles_created)) {
+    if (base::DirectoryExists(path)) {
+      disk.present.insert(path);
+    }
+  }
+  return disk;
+}
+
+// Marks the data folder's old stores swept, written at once: a crash right after a first run must
+// not leave a new folder to sweep a set-aside one's stores later.
+void MarkOldStoresSwept() {
+  LocalState().SetBoolean(kOldStoresSweptPref, true);
+  LocalState().CommitPendingWrite();
+}
+
+void OldStoresDeleted(std::vector<bool> deleted) {
+  // One that failed stays unmarked, and is tried again at the next launch, never sooner.
+  if (std::ranges::all_of(deleted, [](bool each) { return each; })) {
+    MarkOldStoresSwept();
+    // check.sh reads this line.
+    fprintf(stderr, "browser: old system stores swept\n");
+  }
+}
+
+void DeleteOldStores(const std::vector<std::string>& listed,
+                     const base::FilePath& folder,
+                     int profiles_created,
+                     OldStoresOnDisk disk) {
+  ProfileManager* manager = g_browser_process->profile_manager();
+  if (!manager) {
+    return;
+  }
+  NameLoadedStores(*manager, disk.named);
+  for (std::string& id : GivenStores(LocalState())) {
+    disk.named.insert(std::move(id));
+  }
+  const std::vector<std::string> gone =
+      OldStoresUnnamed(listed, folder, profiles_created, disk.named, disk.present);
+  if (gone.empty()) {
+    OldStoresDeleted({});
+    return;
+  }
+  const auto deleted = base::BarrierCallback<bool>(gone.size(), base::BindOnce(&OldStoresDeleted));
+  for (const std::string& id : gone) {
+    platform::SystemPage::DeleteStore(id, deleted);
+  }
+}
+
+// Deletes, once per data folder, the stores a version before #2664 gave profiles that are gone,
+// whose ids came from their paths (#2701). A new folder never had one, so it's only marked.
+void SweepOldStores() {
+  PrefService& local_state = LocalState();
+  const bool created = local_state.GetInitializationStatus() ==
+                       PrefService::INITIALIZATION_STATUS_CREATED_NEW_PREF_STORE;
+  switch (OldStoresFor(created, local_state.GetBoolean(kOldStoresSweptPref))) {
+    case OldStores::kNothing:
+      return;
+    case OldStores::kMark:
+      MarkOldStoresSwept();
+      return;
+    case OldStores::kSweep:
+      break;
+  }
+  const base::FilePath folder = DataFolder();
+  const int profiles_created = local_state.GetInteger(prefs::kProfilesNumCreated);
+  platform::SystemPage::ListStores(base::BindOnce(
+      [](const base::FilePath& in, int count, std::vector<std::string> listed) {
+        base::ThreadPool::PostTaskAndReplyWithResult(
+            FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+            base::BindOnce(&ReadOldStores, in, count),
+            base::BindOnce(&DeleteOldStores, std::move(listed), in, count));
+      },
+      folder, profiles_created));
 }
 
 // Deletes the stores given to the data folder's profiles that no profile names any more, as when a
@@ -170,20 +269,15 @@ void Sweep(std::set<std::string> named) {
   if (!manager) {
     return;
   }
-  // Read again here, on the UI thread, where a profile takes a store: one loaded since the disk was
-  // read, or whose Preferences aren't written yet, names its store here.
-  for (Profile* profile : manager->GetLoadedProfiles()) {
-    if (std::string id = profile->GetPrefs()->GetString(kSystemStorePref); !id.empty()) {
-      named.insert(std::move(id));
-    }
-  }
+  NameLoadedStores(*manager, named);
   const std::vector<std::string> given = GivenStores(LocalState());
   for (const std::string& id : StoresUnnamed(given, named)) {
-    platform::SystemPage::DeleteStore(id);
+    platform::SystemPage::DeleteStore(id, base::DoNothing());
   }
   if (std::set<std::string>(given.begin(), given.end()) != named) {
     SetGivenStores(LocalState(), {named.begin(), named.end()});
   }
+  SweepOldStores();
 }
 
 // localStorage as Blink keeps it, which the browser can't include (cached_storage_area.cc in
@@ -750,6 +844,7 @@ void DeleteStore(const base::FilePath& path, base::OnceClosure then) {
 
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
   RegisterGivenStores(registry);
+  registry->RegisterBooleanPref(kOldStoresSweptPref, false);
 }
 
 void SweepStores() {
