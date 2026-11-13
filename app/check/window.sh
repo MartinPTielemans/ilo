@@ -125,6 +125,17 @@ motion=
 if [ "$(uname)" = Darwin ] || windows; then
   motion=full
 fi
+# The sidebar's rests below measure what the browser takes while nothing draws. On a new profile
+# uBlock Origin writes its selfie about 80 s in, which took 0.8 s of the browser's pool on the Mac,
+# in whichever rest the run had reached (#2502). A user's launches after the first are on it, so on
+# a profile with none a launch first stays until it's written, and quits, which also ends what the
+# write leaves for its store to compact.
+if ublock_selfie; then
+  echo "window: the profile has uBlock Origin's selfie"
+else
+  selfie_launch "$url" "$out/window-selfie.log"
+  echo "window: uBlock Origin wrote its selfie $selfie_at s into a launch before the run's"
+fi
 BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -1199,13 +1210,7 @@ rest_cpu() {
       for (i = 1; i <= n; i++) if (kinds[i] in to)
         printf "%s%s %.2f s", (said++ ? ", " : ""), names[i], to[kinds[i]] - from[kinds[i]] }')
 }
-# On the Mac the docked rest is measured once without the sampling and once with it, and the out
-# rest is held against the second: the two say what the sampling adds to the browser's CPU.
-unsampled=
-if [ "$(uname)" = Darwin ]; then
-  rest_cpu
-  unsampled="; sampled, docked read $rest s without the sampling"
-fi
+# The sampling adds nothing the rest reads: sampled, docked read 0.00 s on the Mac (#2632).
 rest_cpu docked
 docked_cpu=$rest docked_kinds=$rest_kinds
 send key s cmd
@@ -1217,9 +1222,9 @@ hover_out "the sidebar out by the edge"
 rest_cpu out
 out_cpu=$rest
 echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU" \
-  "with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)$unsampled"
+  "with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)"
 if awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }'; then
-  # Its age, as uBlock Origin writes its selfie about 80 s after a new profile's launch (#2502).
+  # Its age, for work that comes at a time after launch, as uBlock Origin's selfie did (#2502).
   up=$(ps -o etime= -p "$pid" | tr -d ' ')
   sampled=
   [ ! -s "$out/window-rest-out-sample.txt" ] ||
