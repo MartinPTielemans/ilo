@@ -30,7 +30,7 @@
 # size shows the page's own background. In a check VM, the sidebar over grey backdrops is Dia's composite,
 # dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
 # and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
-# in Settings › General off.
+# in Settings › General off; on Windows, the taskbar button's switch turns off and on.
 
 # A long page that times its frames while it scrolls and puts the numbers in its title.
 page=$(base64 << 'HTML' | tr -d '\n'
@@ -1500,6 +1500,24 @@ if [ "$(uname)" = Darwin ]; then
     dock="dot $black in a black Space, $plain with its switch off, $again on again"
     dock_shots=", $out/dock-icon-black.png, $out/dock-icon-off.png, $out/dock-icon-on.png"
   fi
+elif windows; then
+  # The taskbar button carries the same dot, and Settings names its switch for it (#2681). The
+  # taskbar's overlay isn't read back, so this proves the switch is there and turns off and on.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings for the taskbar button's switch"
+  send clickkey $(drawn "toolbar General")
+  settings_drew General
+  in_sight "switch dock icon color" || fail "Settings didn't draw the taskbar button's switch"
+  send clickkey $at
+  expect '^browser: dock icon color off$' "a click on the taskbar button's switch didn't turn it off"
+  ../tools/window-screenshot.sh "$pid" "$out/taskbar-dot-switch.png" all || fail "no window to capture"
+  send clickkey $at
+  expect '^browser: dock icon color on$' \
+    "a click on the taskbar button's switch didn't turn it on again"
+  send key w cmd
+  expect '^browser: settings hidden$' "Ctrl+W didn't hide Settings"
+  dock="the taskbar button's switch off and on again in Settings"
+  dock_shots=", $out/taskbar-dot-switch.png"
 fi
 
 # Esc in full screen goes to the page first, so a page that keeps it stays full screen on one

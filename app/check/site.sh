@@ -51,6 +51,15 @@ printf '%s' '<title>loading</title><link rel="icon" href="icon.png">
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 text.oninput = () => document.title = "value " + text.value;
+// Probe 6 for #2666: each event at the top-left link, sent to the server, whose log has it.
+const ev = (s) => { new Image().src = "ev?" + encodeURIComponent(s) + "&" + performance.now().toFixed(0); };
+const at = (e) => ((e.target.getAttribute && (e.target.getAttribute("style") || "").startsWith("position:fixed;left:0;top:0")) ? "L" : "B") + (e.ctrlKey ? "c" : "") + (e.altKey ? "a" : "");
+addEventListener("keydown", (e) => { if (!e.repeat) ev("kd" + e.key); }, true);
+addEventListener("keyup", (e) => ev("ku" + e.key), true);
+addEventListener("mouseover", (e) => { if (at(e)[0] == "L") ev("ov" + at(e)); }, true);
+for (const [t, tag] of [["mousedown", "md"], ["mouseup", "mu"], ["click", "ck"], ["auxclick", "ax"]]) addEventListener(t, (e) => ev(tag + at(e) + e.detail + "b" + e.buttons), true);
+for (const t of ["pointerdown", "pointerup", "pointercancel", "dragstart", "dragend", "contextmenu", "blur", "focus"]) addEventListener(t, (e) => ev(t + (e.target && e.target.getAttribute ? at(e) : "")), true);
+document.addEventListener("visibilitychange", () => ev("vis" + document.visibilityState));
 // A click in the page's top right 480 by 140, where the toast's window falls, says so.
 onclick = e => {
   if (e.clientX > innerWidth - 480 && e.clientY < 140) {

@@ -102,7 +102,7 @@ index 54b72a63ec..98a3325d1c 100644
      pub fn simulate_resize(&self, size: Size<Pixels>) {
          self.simulate_window_resize(self.window, size)
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index 11f0b72406..2ef38508b5 100644
+index 11f0b72406..6a1e603113 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -1565,6 +1565,13 @@ pub trait StatefulInteractiveElement: InteractiveElement {
@@ -152,6 +152,17 @@ index 11f0b72406..2ef38508b5 100644
              let hitbox = hitbox.clone();
              window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble
+@@ -3147,6 +3164,10 @@ impl Interactivity {
+                         // so that it happens even if another event handler stops
+                         // propagation.
+                         DispatchPhase::Capture => {
++                            // A press an inner element's click stopped short of this one's isn't
++                            // this release's: another release can come before the frame that
++                            // would drop this listener, and click this element with it.
++                            captured_mouse_down = None;
+                             let mut pending_mouse_down = pending_mouse_down.borrow_mut();
+                             if pending_mouse_down.is_some() && hitbox.is_hovered(window) {
+                                 captured_mouse_down = pending_mouse_down.take();
 diff --git a/crates/gpui/src/interactive.rs b/crates/gpui/src/interactive.rs
 index cfb1410c78..0aa8b9f3e3 100644
 --- a/crates/gpui/src/interactive.rs
@@ -549,7 +560,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..673bfaa86f 100644
+index c559412e56..0b39bfa715 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
@@ -590,7 +601,7 @@ index c559412e56..673bfaa86f 100644
  }
  
  /// Whether a window draw is currently in progress on this thread.
-@@ -360,6 +382,89 @@ thread_local! {
+@@ -360,6 +382,85 @@ thread_local! {
  /// arrive re-entrantly while a draw is already on the stack (e.g. via nested
  /// message pumping in the Windows window procedure), instead of running a
  /// nested draw or panicking on the already-borrowed App.
@@ -627,23 +638,19 @@ index c559412e56..673bfaa86f 100644
 +    .detach();
 +}
 +
-+/// Hands `handle` what `held` holds, in the order it came.
++/// Hands `handle` what `held` holds, in the order it came. It runs only once the update is over,
++/// so it fails only for a window closed meanwhile, whose input goes with it.
 +fn hand_on_held(held: &RefCell<crate::HeldInput>, handle: AnyWindowHandle, cx: &mut crate::AsyncApp) {
 +    loop {
++        // Taken off before it's handed on: input that comes as it's handled may hold more.
 +        let Some(event) = held.borrow_mut().next() else {
 +            return;
 +        };
-+        let kind = match event {
-+            PlatformInput::MouseDown(_) => "mouse down",
-+            PlatformInput::MouseUp(_) => "mouse up",
-+            _ => "pointer input",
-+        };
-+        let handed = handle.update(cx, |_, window, cx| {
-+            window.dispatch_event(event, cx);
-+        });
-+        if handed.is_err() {
-+            dropped(kind, cx);
-+        }
++        handle
++            .update(cx, |_, window, cx| {
++                window.dispatch_event(event, cx);
++            })
++            .ok();
 +    }
 +}
 +
@@ -680,7 +687,7 @@ index c559412e56..673bfaa86f 100644
  fn draw_in_progress() -> bool {
      CURRENT_ELEMENT_ARENA.with(|current| current.get().is_some())
  }
-@@ -737,6 +842,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
+@@ -737,6 +838,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
  /// Emitted by implementers of [`ManagedView`] to indicate the view should be dismissed, such as when a view is presented as a modal.
  pub struct DismissEvent;
  
@@ -700,7 +707,7 @@ index c559412e56..673bfaa86f 100644
  type FrameCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
  
  pub(crate) type AnyMouseListener =
-@@ -1065,6 +1183,8 @@ pub(crate) struct Frame {
+@@ -1065,6 +1179,8 @@ pub(crate) struct Frame {
      #[cfg(any(feature = "inspector", debug_assertions))]
      pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
      pub(crate) tab_stops: TabStopMap,
@@ -709,7 +716,7 @@ index c559412e56..673bfaa86f 100644
  }
  
  #[derive(Clone, Default)]
-@@ -1124,6 +1244,7 @@ impl Frame {
+@@ -1124,6 +1240,7 @@ impl Frame {
              #[cfg(any(feature = "inspector", debug_assertions))]
              inspector_hitboxes: FxHashMap::default(),
              tab_stops: TabStopMap::default(),
@@ -717,7 +724,7 @@ index c559412e56..673bfaa86f 100644
          }
      }
  
-@@ -1140,6 +1261,7 @@ impl Frame {
+@@ -1140,6 +1257,7 @@ impl Frame {
          self.window_control_hitboxes.clear();
          self.deferred_draws.clear();
          self.tab_stops.clear();
@@ -725,7 +732,7 @@ index c559412e56..673bfaa86f 100644
          self.focus = None;
  
          #[cfg(any(test, feature = "test-support"))]
-@@ -1247,6 +1369,10 @@ pub struct Window {
+@@ -1247,6 +1365,10 @@ pub struct Window {
      pub(crate) rendered_entity_stack: Vec<EntityId>,
      pub(crate) element_offset_stack: Vec<Point<Pixels>>,
      pub(crate) element_opacity: f32,
@@ -736,7 +743,7 @@ index c559412e56..673bfaa86f 100644
      pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
      pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
      /// The [`TextInputConfiguration`] most recently forwarded to the platform
-@@ -1664,6 +1790,7 @@ impl Window {
+@@ -1664,6 +1786,7 @@ impl Window {
          let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
          let input_rate_tracker = Rc::new(RefCell::new(InputRateTracker::default()));
          let last_frame_time = Rc::new(Cell::new(None));
@@ -744,7 +751,7 @@ index c559412e56..673bfaa86f 100644
  
          platform_window
              .request_decorations(window_decorations.unwrap_or(WindowDecorations::Server));
-@@ -1770,9 +1897,12 @@ impl Window {
+@@ -1770,9 +1893,12 @@ impl Window {
              }
          }));
          platform_window.on_request_frame(Box::new({
@@ -757,7 +764,7 @@ index c559412e56..673bfaa86f 100644
              let needs_present = needs_present.clone();
              let next_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
-@@ -1824,13 +1954,20 @@ impl Window {
+@@ -1824,13 +1950,20 @@ impl Window {
  
                  // Throttle frame rate based on conditions:
                  // - Thermal pressure (Serious/Critical): cap to ~60fps
@@ -780,7 +787,7 @@ index c559412e56..673bfaa86f 100644
                      inactive_frame_interval.map(|interval| (interval, FrameRateLimit::Inactive))
                  } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
                      Some((Duration::from_micros(16667), FrameRateLimit::Thermal))
-@@ -1964,21 +2101,16 @@ impl Window {
+@@ -1964,21 +2097,16 @@ impl Window {
                      .log_err();
              }
          }));
@@ -807,7 +814,7 @@ index c559412e56..673bfaa86f 100644
          }));
          platform_window.on_display_changed(Box::new({
              let cx = cx.to_async();
-@@ -2052,11 +2184,57 @@ impl Window {
+@@ -2052,11 +2180,57 @@ impl Window {
          }));
          platform_window.on_input({
              let mut cx = cx.to_async();
@@ -869,7 +876,7 @@ index c559412e56..673bfaa86f 100644
              })
          });
          platform_window.on_hit_test_window_control({
-@@ -2156,6 +2334,9 @@ impl Window {
+@@ -2156,6 +2330,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -879,7 +886,7 @@ index c559412e56..673bfaa86f 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -2884,7 +3065,14 @@ impl Window {
+@@ -2884,7 +3061,14 @@ impl Window {
      /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -895,7 +902,7 @@ index c559412e56..673bfaa86f 100644
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3636,6 +3824,14 @@ impl Window {
+@@ -3636,6 +3820,14 @@ impl Window {
          profiling::finish_frame!();
      }
  
@@ -910,7 +917,7 @@ index c559412e56..673bfaa86f 100644
      /// Presents the most recently drawn frame if it hasn't been presented yet.
      #[cfg(all(test, feature = "profiler"))]
      pub fn present_if_needed(&mut self) {
-@@ -3761,7 +3957,23 @@ impl Window {
+@@ -3761,7 +3953,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -935,7 +942,7 @@ index c559412e56..673bfaa86f 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4439,40 @@ impl Window {
+@@ -4227,6 +4435,40 @@ impl Window {
          result
      }
  
@@ -976,7 +983,7 @@ index c559412e56..673bfaa86f 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -4273,6 +4519,13 @@ impl Window {
+@@ -4273,6 +4515,13 @@ impl Window {
          result
      }
  
@@ -990,7 +997,7 @@ index c559412e56..673bfaa86f 100644
      /// When you call this method during [`Element::prepaint`], containing elements will attempt to
      /// scroll to cause the specified bounds to become visible. When they decide to autoscroll, they will call
      /// [`Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
-@@ -5578,9 +5831,8 @@ impl Window {
+@@ -5578,9 +5827,8 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -1002,7 +1009,7 @@ index c559412e56..673bfaa86f 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7349,24 @@ impl Window {
+@@ -7097,18 +7345,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
@@ -1030,7 +1037,7 @@ index c559412e56..673bfaa86f 100644
                          position: center,
                          modifiers: Modifiers::default(),
                          click_count: 1,
-@@ -7908,11 +8166,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
+@@ -7908,11 +8162,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
          let arena_cell = unsafe { &*arena_pointer };
          callback(&mut arena_cell.borrow_mut());
          Ok(())
@@ -1073,7 +1080,7 @@ index c559412e56..673bfaa86f 100644
  #[cfg(test)]
  mod tests {
      use std::{
-@@ -8179,6 +8468,101 @@ mod tests {
+@@ -8179,6 +8464,101 @@ mod tests {
          }
      }
  

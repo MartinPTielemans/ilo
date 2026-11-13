@@ -136,7 +136,7 @@ jobs:
         mcp keys sync sync-account sync-devices split trouble window clear handback restore little
         battery-os adblock adblock-lists battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
-        pictures boosts foot-bar peek-motion rules probe2666
+        pictures boosts foot-bar peek-motion rules
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
