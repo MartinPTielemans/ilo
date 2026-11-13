@@ -133,9 +133,10 @@ thumb_round() {
   since=$(wc -l < "$cdp_log")
   echo "trace start $trace_categories" >&5
   perf_wait "$since" '^cdp: tracing$' "DevTools didn't start tracing"
-  for key in 1 2 3 4 1 2 3 4; do
-    send key "$key" cmd
-    expect_late "^browser: title [0-9]* t[0-9] shown " "⌘$key showed no page"
+  # ⌘1 is the newest tab, t4, which shows, so each key goes to another.
+  for n in 2 3 4 1 2 3 4 1; do
+    send key "$n" cmd
+    expect_late "^browser: title [0-9]* t[0-9] shown " "⌘$n showed no page"
     sleep 1
   done
   expect_late "^browser: title [0-9]* t[0-9] ticks " "the page's clock didn't tick 5 times"
