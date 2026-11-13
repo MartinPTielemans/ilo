@@ -43,10 +43,10 @@ index 2328e954df..936315173d 100644
 +#[cfg(not(target_os = "linux"))]
 +pub fn launch_mark(_: &str) {}
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index a56dd63fc9..c5b787b627 100644
+index 061ba3b490..963d3d96fb 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -1864,7 +1864,20 @@ impl Window {
+@@ -1868,7 +1868,20 @@ impl Window {
              let next_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
              let mut deferred_force_render = false;
@@ -67,7 +67,7 @@ index a56dd63fc9..c5b787b627 100644
                  #[cfg(feature = "profiler")]
                  let (_foreground_turn, window_id) = {
                      let foreground_turn = profiler::journal::foreground_turn();
-@@ -1940,6 +1953,9 @@ impl Window {
+@@ -1944,6 +1957,9 @@ impl Window {
                      {
                          // Don't lose a pending forced render to throttling.
                          deferred_force_render |= force_render;
@@ -77,7 +77,7 @@ index a56dd63fc9..c5b787b627 100644
                          // Deferred by throttling: ask demand-driven platforms to retry.
                          handle
                              .update(&mut cx, |_, window, _| {
-@@ -2001,8 +2017,17 @@ impl Window {
+@@ -2005,8 +2021,17 @@ impl Window {
                                      // atlas tile references after a GPU device recovery.
                                      window.refresh();
                                  }
@@ -124,10 +124,10 @@ index 169b781c62..06ea279153 100644
              // Set max window size hints based on the GPU's maximum texture dimension.
              // This prevents the window from being resized larger than what the GPU can render.
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
-index 9551a45d9e..424ce41761 100644
+index 770ceb1ad3..7e173b4910 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs
 +++ b/crates/gpui_wgpu/src/wgpu_context.rs
-@@ -186,8 +186,10 @@ impl WgpuContext {
+@@ -187,8 +187,10 @@ impl WgpuContext {
          if !reject_software
              && let Some(early) = Self::take_early_device(&instance, compositor_gpu)
          {
@@ -135,10 +135,10 @@ index 9551a45d9e..424ce41761 100644
              match gpui::block_on(Self::test_surface(&early.adapter, &early.device, surface)) {
                  Ok(()) => {
 +                    gpui::launch_mark("context early device's surface tested");
-                     return Ok(Self::from_native_adapter_and_device(
+                     let mut context = Self::from_native_adapter_and_device(
                          instance,
                          early.adapter,
-@@ -204,6 +206,7 @@ impl WgpuContext {
+@@ -207,6 +209,7 @@ impl WgpuContext {
              }
          }
  
@@ -146,7 +146,7 @@ index 9551a45d9e..424ce41761 100644
          let device_id_filter = Self::device_id_filter();
  
          // Select an adapter by actually testing surface configuration with the real device.
-@@ -538,8 +541,11 @@ impl WgpuContext {
+@@ -541,8 +544,11 @@ impl WgpuContext {
              *early = std::thread::Builder::new()
                  .name("wgpu instance".into())
                  .spawn(move || {
@@ -158,7 +158,7 @@ index 9551a45d9e..424ce41761 100644
                      (instance, device)
                  })
                  .ok()
-@@ -558,6 +564,10 @@ impl WgpuContext {
+@@ -561,6 +567,10 @@ impl WgpuContext {
          instance: &wgpu::Instance,
          compositor_gpu: Option<CompositorGpuHint>,
      ) -> Option<EarlyDevice> {
@@ -169,7 +169,7 @@ index 9551a45d9e..424ce41761 100644
          let mut adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
          Self::sort_adapters(&mut adapters, Self::device_id_filter(), compositor_gpu.as_ref());
          let adapter = adapters.into_iter().next()?;
-@@ -596,9 +606,11 @@ impl WgpuContext {
+@@ -604,9 +614,11 @@ impl WgpuContext {
      pub fn instance(display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>) -> wgpu::Instance {
          // The one made early serves once: after a lost device, the next is made here.
          let mut early = EARLY.lock();
@@ -181,7 +181,7 @@ index 9551a45d9e..424ce41761 100644
              *early = device.map(Early::Device);
              return instance;
          }
-@@ -650,7 +662,9 @@ impl WgpuContext {
+@@ -658,7 +670,9 @@ impl WgpuContext {
          bool,
          TextureFormat,
      )> {
@@ -191,7 +191,7 @@ index 9551a45d9e..424ce41761 100644
  
          if adapters.is_empty() {
              anyhow::bail!("No GPU adapters found");
-@@ -691,8 +705,10 @@ impl WgpuContext {
+@@ -699,8 +713,10 @@ impl WgpuContext {
  
              log::info!("Testing adapter: {} ({:?})...", info.name, info.backend);
  
@@ -203,26 +203,26 @@ index 9551a45d9e..424ce41761 100644
                          "Selected GPU (passed configuration test): {} ({:?})",
                          info.name,
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index bb264118f7..6126052ae6 100644
+index b87f131ac3..cd9661d3c7 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
-@@ -405,6 +405,7 @@ impl PipelineCache {
+@@ -449,6 +449,7 @@ impl PipelineCache {
          if let Some((_, shared)) = pipelines.iter().find(|(built, _)| *built == key) {
              return shared.clone();
          }
 +        gpui::launch_mark("pipelines building");
+         let shaders = self.shaders(device, key.dual_source_blending, uses_webgl_instance_data);
          let built = Arc::new(WgpuRendererCore::create_pipelines(
              device,
-             layouts,
-@@ -414,6 +415,7 @@ impl PipelineCache {
-             key.dual_source_blending,
-             uses_webgl_instance_data,
+@@ -458,6 +459,7 @@ impl PipelineCache {
+             key.alpha_mode,
+             key.path_sample_count,
          ));
 +        gpui::launch_mark("pipelines built");
          pipelines.push((key, built.clone()));
          built
      }
-@@ -539,6 +541,7 @@ impl WgpuRenderer {
+@@ -583,6 +585,7 @@ impl WgpuRenderer {
      where
          W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
      {
@@ -230,7 +230,7 @@ index bb264118f7..6126052ae6 100644
          let window_handle = window
              .window_handle()
              .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
-@@ -561,6 +564,7 @@ impl WgpuRenderer {
+@@ -605,6 +608,7 @@ impl WgpuRenderer {
              .as_ref()
              .map(|ctx| ctx.instance.clone())
              .unwrap_or_else(|| WgpuContext::instance(Some(Box::new(window.clone()))));
@@ -238,7 +238,7 @@ index bb264118f7..6126052ae6 100644
  
          // Safety: The caller guarantees that the window handle is valid for the
          // lifetime of this renderer. In practice, the RawWindow struct is created
-@@ -571,6 +575,7 @@ impl WgpuRenderer {
+@@ -615,6 +619,7 @@ impl WgpuRenderer {
                  .map_err(|e| anyhow::anyhow!("Failed to create surface: {e}"))?
          };
  
@@ -246,7 +246,7 @@ index bb264118f7..6126052ae6 100644
          let mut ctx_ref = gpu_context.borrow_mut();
          let context = match ctx_ref.as_mut() {
              Some(context) => {
-@@ -581,15 +586,18 @@ impl WgpuRenderer {
+@@ -625,15 +630,18 @@ impl WgpuRenderer {
          };
  
          let atlas = Arc::new(WgpuAtlas::from_context(context));
