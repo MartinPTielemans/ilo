@@ -563,6 +563,10 @@ if [ -n "$mac" ]; then
   corner=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4,5)
   send place $((${corner% *} + 40)) $((${corner#* } + 60)) 900 560
   expect '^browser: drawn at 900x560$' "the window didn't draw at 900 by 560"
+elif windows; then
+  echo "skip: the sidebar's picture ⌘Q keeps, shown by the launches after: Windows' isn't checked yet."
+else
+  echo "skip: the sidebar's picture ⌘Q keeps, shown by the launches after: Linux has no launch picture."
 fi
 quit_by_key
 [ -z "$mac" ] || grep -q '^browser: launch picture taken$' "$log" ||
@@ -695,6 +699,8 @@ if [ -n "$mac" ]; then
     fail "the update's notes opened as a link from another app"
   ! defaults read "$app_id" UpdateNotes > /dev/null 2>&1 ||
     fail "the update's notes were kept for the next launch too"
+else
+  echo "skip: an update's notes opening as What's New: off the Mac no updater keeps notes."
 fi
 await '^browser: restored in ' || fail "the Spaces didn't come back under the link"
 await "$(little_line "?little" "[0-9]*")" ||

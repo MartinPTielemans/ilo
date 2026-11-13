@@ -63,6 +63,8 @@ if [ "$(uname)" = Darwin ]; then
   made="a Space made for an agent with the Spaces menu open stays out of the menu bar"
   post openmenu Spaces
   expect '^browser: menu tracked New Space…' "the Spaces menu didn't open"
+else
+  echo "skip: an agent's Space made with the Spaces menu open, and the menu bar not put up under it: AppKit's main menu, replaced under an open menu, is the Mac's."
 fi
 post agentspace claude-code Claude Code
 expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"

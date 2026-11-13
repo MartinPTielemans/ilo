@@ -476,6 +476,8 @@ if [ "$(uname)" = Darwin ]; then
   echo "$info" | grep -q '^Apple ' || fail "Copy Build Info has no chip: $info"
   echo "ok: Help lists Help Center, What's New, the shortcuts, Report a Problem… and" \
     "Troubleshooting, $out/help-menu.png. Copy Build Info copied: $(echo "$info" | sed 's/^browser: copied //' | tr '\n' ';')"
+else
+  echo "skip: Help's items and Troubleshooting › Copy Build Info: what it reads, the macOS version and the Apple chip, is the Mac's, and off the Mac it isn't checked yet."
 fi
 # Archive Tabs Below shows the tab right-clicked first, so none below it loads on the way out.
 post rightclick $(row 1)
@@ -765,6 +767,8 @@ none_since '^browser: site controls run certificate' "$lock" || fail "the lock r
 if [ "$(uname)" = Darwin ] || windows; then
   send menu 'Share…'
   expect "^browser: share http://localhost:$port/index.html\$" "File › Share… didn't share the page"
+else
+  echo "skip: File › Share…: Linux has no share sheet."
 fi
 # Hover still works once they've closed: the pointer out to the page hides the URL field's buttons,
 # and back over the sidebar shows them. While they were open the buttons stayed, as the pointer

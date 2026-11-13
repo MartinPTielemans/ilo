@@ -174,6 +174,8 @@ expect '^browser: front driven, main driven, key driven, ax focused driven, ax m
 send window 1
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: desktop space changed$' "the first window's full-screen Space didn't come forward"
+else
+  echo "skip: the full-screen window's Space coming forward, and the desktop's coming back: elsewhere full screen is no Space of its own."
 fi
 # Sway takes a full-screen window out of it as another on its workspace takes the focus, so there
 # the first left as the second came forward.

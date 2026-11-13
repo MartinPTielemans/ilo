@@ -345,6 +345,10 @@ if [ "$(uname)" != Linux ] && ! windows; then
   expect '^browser: command bar hidden$' "escape didn't commit the Korean and close the command bar"
   send ime off
   in_browser RenderWidgetHostViewCocoa "after the command bar closed"
+elif windows; then
+  echo "skip: Korean composing right after Ctrl+L: Microsoft's IME composes in the page the keys the host holds for the bar (#1784)."
+else
+  echo "skip: Korean composing right after ⌘L: the Linux driver's input method composes Japanese alone."
 fi
 send click $sidebar_point
 in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"

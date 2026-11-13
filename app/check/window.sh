@@ -1500,6 +1500,12 @@ if [ "$(uname)" = Darwin ]; then
     dock="dot $black in a black Space, $plain with its switch off, $again on again"
     dock_shots=", $out/dock-icon-black.png, $out/dock-icon-off.png, $out/dock-icon-on.png"
   fi
+else
+  if windows; then
+    echo "skip: the taskbar button's dot in the Space's color: it isn't checked on Windows yet, and the Settings switch that turns it off is the Mac's alone."
+  else
+    echo "skip: the Dock icon's dot in the Space's color: Linux's host draws none."
+  fi
 fi
 
 # Esc in full screen goes to the page first, so a page that keeps it stays full screen on one
