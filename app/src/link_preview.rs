@@ -1002,8 +1002,10 @@ impl Render for LinkPreview {
                     }
                     (None, false) if !moving => {
                         if !settling {
-                            shown.cut = shown.placed == rest;
+                            // Proof only (#2640): the hole opens in the frame the page moves in, so
+                            // the probe times the page's first frame at its place.
                             shown.lay_out(&*self.host, rest);
+                            shown.cut = shown.placed == rest;
                         }
                         window.request_animation_frame();
                         (if shown.cut { rest } else { none }, false)
