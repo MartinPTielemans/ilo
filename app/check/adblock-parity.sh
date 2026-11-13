@@ -15,8 +15,8 @@
 #   - a host blocked on a site there that this run let through on that site.
 # A host neither run requested counts for neither, as the ads a site serves change from load to
 # load. A site that's still Cloudflare's bot check 8 s after it loads gets one more go. If the check
-# still stands in either run, the site isn't compared, and the result names it, as a bot check has
-# no ads to block. On a YouTube watch page the run reads the player from the load on, to say
+# still stands in either run, or DataDome's captcha loaded over the page, the site isn't compared,
+# and the result names it, as a bot check has no ads to block. On a YouTube watch page the run reads the player from the load on, to say
 # whether an ad showed before the video played 5 s, and it fails where the baseline's played with
 # no ad and this run's showed one or didn't play. It needs the network and the sites, so it runs
 # only when named: ./check.sh adblock-parity.
@@ -318,6 +318,9 @@ for i, s in enumerate(sites):
     s["allowed"] = sorted({host(r) for r in mine if r["how"] == "allowed"})
     s["blocked_n"] = sum(r["how"] == "blocked" for r in mine)
     s["standin_n"] = sum(r["how"] == "stand-in" for r in mine)
+    # DataDome's captcha, which a site shows a runner it takes for a bot, over the page in place:
+    # a bot check as Cloudflare's is, with no title to tell it by (#2111).
+    s["bot"] = s["bot"] or any(h.endswith("captcha-delivery.com") for h in s["allowed"])
 
 def video_cell(video):
     if not video:
@@ -348,7 +351,7 @@ with open(table, "w", encoding="utf-8") as out:
                             + content_cells(contents.get(s["url"]))) + "\n")
 
 worse = []
-# A site that was Cloudflare's bot check in this run or the baseline's, which an older table
+# A site that was a bot check in this run or the baseline's, which an older table
 # doesn't say.
 unchecked = [s["url"] for s in sites if s["bot"]]
 if baseline:
@@ -378,7 +381,9 @@ if baseline:
         # What the page showed, against the baseline's, where both runs read it.
         page_was, page = named[s["url"]], contents.get(s["url"])
         if page and page_was.get("text"):
-            if page["text"] < int(page_was["text"]) / 2:
+            # A watch page's text is as far as its player and comments got, and its video says
+            # whether it works.
+            if not s["video"] and page["text"] < int(page_was["text"]) / 2:
                 worse.append(f"{s['url']} showed {page['text']} characters of text, where the "
                              f"baseline's showed {page_was['text']}")
             if page["cover"] >= 90 > int(page_was["cover"]):
@@ -397,7 +402,7 @@ print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median
       f"{sum(s['blocked_n'] for s in sites)} requests blocked and "
       f"{sum(s['standin_n'] for s in sites)} given a stand-in, of {sum(s['requests'] for s in sites)}"
       + "".join(f"; {s['url']}'s video {video_said(s['video'])}" for s in sites if s["video"])
-      + (f"; not compared, as Cloudflare's bot check stood in: {', '.join(unchecked)}" if unchecked else ""))
+      + (f"; not compared, as a bot check stood in: {', '.join(unchecked)}" if unchecked else ""))
 if worse:
     sys.exit(1)
 PY
