@@ -147,6 +147,13 @@ round() {
 # so it opens and closes Peek again until a frame has caught each motion mid-way, eight times at
 # most, and fails at once on a frame that shows Peek's resting frame outside its card.
 resized=
+# Proof only (#2640): three busy loops take CPU beside the app, as a full check run's load would.
+burners=
+for _ in 1 2 3; do
+  # Each stops by itself after 10 minutes, should the check end before the kill below.
+  (end=$((SECONDS + 600)); while [ $SECONDS -lt $end ]; do :; done) &
+  burners="$burners $!"
+done
 for n in $(seq 24); do
   round $n
   # shellcheck disable=SC2086 # numbers: x y w h from x y
@@ -155,6 +162,8 @@ for n in $(seq 24); do
   # Proof only (#2640): every round, each one's verdict kept.
   cp "$out/peek-motion.txt" "$out/peek-motion-$n.txt"
 done
+# shellcheck disable=SC2086 # the burners' pids
+kill $burners 2> /dev/null || true
 [ "$(today)" = "$a" ] || fail "Peek opened a tab: Today is \"$(today)\""
 exec 3>&-
 quit
