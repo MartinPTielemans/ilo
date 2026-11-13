@@ -9,12 +9,8 @@
 //! that hides it, at most twice the card's size, and held here in memory alone, by tab, until the
 //! tab unloads or closes or the system is short of memory.
 
-use std::{
-    collections::HashMap,
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, FontWeight, Global, Hsla, Image, ImageSource,
@@ -208,6 +204,8 @@ pub struct Card {
 pub struct Anchor {
     pub row: Bounds<Pixels>,
     pub window: Size<Pixels>,
+    /// Whether it opens on the row's left, toward the page from a sidebar on the right (#2375).
+    pub left: bool,
 }
 
 /// What the card tells the shell that asked for it.
@@ -283,14 +281,18 @@ pub fn height(picture: f32) -> f32 {
     }
 }
 
-/// Where a card `height` tall has its top left: GAP right of its row, its top at the row's, and
-/// EDGE inside the window, the top and left first if it can't be both.
+/// Where a card `height` tall has its top left: GAP right of its row, or left of it toward a page on
+/// the left, its top at the row's, and EDGE inside the window, the top and left first if it can't be
+/// both.
 pub fn place(anchor: Anchor, height: f32) -> (f32, f32) {
     let (width, tall) = (
         f32::from(anchor.window.width),
         f32::from(anchor.window.height),
     );
-    let left = f32::from(anchor.row.right()) + GAP;
+    let left = match anchor.left {
+        true => f32::from(anchor.row.left()) - GAP - WIDTH,
+        false => f32::from(anchor.row.right()) + GAP,
+    };
     let top = f32::from(anchor.row.top());
     (
         left.min(width - WIDTH - EDGE).max(EDGE),
@@ -339,6 +341,16 @@ struct CardWindow(WindowHandle<HoverCard>);
 
 impl Global for CardWindow {}
 
+/// The pictures, and the requests out for them, from before the card's window is made the first
+/// time a card shows (lazy_window). The window takes them.
+#[derive(Default)]
+struct Early {
+    pictures: HashMap<u64, PagePicture>,
+    asked: HashMap<u64, u64>,
+}
+
+impl Global for Early {}
+
 /// Opens the card's window, hidden, for `host` to show over the browser window, ahead of time as
 /// the tooltip's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<HoverCard>> {
@@ -361,6 +373,10 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<HoverCard>>
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
+    let early = match cx.has_global::<Early>() {
+        true => cx.remove_global::<Early>(),
+        false => Early::default(),
+    };
     let window = cx.open_window(options, |_, cx| {
         cx.new(|_| HoverCard {
             host,
@@ -372,8 +388,8 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<HoverCard>>
             appeared: None,
             going: None,
             settled: false,
-            pictures: HashMap::new(),
-            asked: HashMap::new(),
+            pictures: early.pictures,
+            asked: early.asked,
             painted: Vec::new(),
             stale: Vec::new(),
             logged: None,
@@ -405,6 +421,9 @@ fn update(cx: &mut App, f: impl FnOnce(&mut HoverCard, &mut Context<HoverCard>))
 /// after LEAVE unless it's onto the card; what a tab's card shows, as it changes; or the card's
 /// end.
 pub fn hover(hover: Hover, cx: &mut App) {
+    if matches!(hover, Hover::Rest(_)) {
+        crate::lazy_window::ready::<HoverCard>(cx);
+    }
     update(cx, |card, cx| match hover {
         Hover::Rest(rest) => card.rest(rest, cx),
         Hover::Left(tab) => card.left(tab, cx),
@@ -431,34 +450,56 @@ pub fn is_card_request(request: u64) -> bool {
 /// The card asks the core for a picture of `tab` with `request`, which this returns.
 pub fn asking(tab: u64, cx: &mut App) -> u64 {
     let request = crate::shell::next_request() | CARD_REQUEST;
-    update(cx, |card, _| {
-        card.asked.insert(request, tab);
-    });
+    match cx.has_global::<CardWindow>() {
+        true => update(cx, |card, _| {
+            card.asked.insert(request, tab);
+        }),
+        false => {
+            cx.default_global::<Early>().asked.insert(request, tab);
+        }
+    }
     request
 }
 
 /// The core's answer to the card's `request`. A picture replaces the tab's last; none keeps it.
 pub fn answered(request: u64, picture: Option<PagePicture>, cx: &mut App) {
+    if !cx.has_global::<CardWindow>() {
+        let early = cx.default_global::<Early>();
+        keep(&mut early.asked, &mut early.pictures, request, picture);
+        return;
+    }
     update(cx, |card, cx| {
-        let Some(tab) = card.asked.remove(&request) else {
-            return;
-        };
-        let Some(picture) = picture else {
-            // check.sh reads this line.
-            log!("browser: hover card not pictured {tab}");
-            return;
-        };
-        card.pictures.insert(tab, picture);
-        // check.sh reads this line.
-        log!("browser: hover card pictured {tab}");
-        if card.shown.as_ref().is_some_and(|rest| rest.card.tab == tab) {
+        let tab = keep(&mut card.asked, &mut card.pictures, request, picture);
+        if tab.is_some_and(|tab| card.shown.as_ref().is_some_and(|rest| rest.card.tab == tab)) {
             card.draw(cx);
         }
     });
 }
 
+/// Keeps the picture that answers `request`, returning the tab it's of.
+fn keep(
+    asked: &mut HashMap<u64, u64>,
+    pictures: &mut HashMap<u64, PagePicture>,
+    request: u64,
+    picture: Option<PagePicture>,
+) -> Option<u64> {
+    let tab = asked.remove(&request)?;
+    let Some(picture) = picture else {
+        // check.sh reads this line.
+        log!("browser: hover card not pictured {tab}");
+        return None;
+    };
+    pictures.insert(tab, picture);
+    // check.sh reads this line.
+    log!("browser: hover card pictured {tab}");
+    Some(tab)
+}
+
 /// `tab`'s page unloaded or closed: its picture goes.
 pub fn forget(tab: u64, cx: &mut App) {
+    if cx.has_global::<Early>() {
+        cx.global_mut::<Early>().pictures.remove(&tab);
+    }
     update(cx, |card, cx| {
         if card.pictures.remove(&tab).is_some() {
             card.let_go(cx);
@@ -468,6 +509,12 @@ pub fn forget(tab: u64, cx: &mut App) {
 
 /// The system is short of memory: every picture goes.
 pub fn forget_all(cx: &mut App) {
+    if cx.has_global::<Early>() {
+        let early = cx.global_mut::<Early>();
+        let count = early.pictures.len();
+        early.pictures.clear();
+        log!("browser: hover card pictures dropped {count}");
+    }
     update(cx, |card, cx| {
         let count = card.pictures.len();
         card.pictures.clear();

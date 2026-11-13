@@ -28,6 +28,7 @@ fn past(id: &str, ended: u64) -> Past {
             action: "click".into(),
             site: "taberna.example".into(),
             refused: String::new(),
+            ..Default::default()
         }],
         answers: "claude-code".into(),
     }
@@ -200,6 +201,7 @@ fn a_past_tasks_page_lists_its_steps_and_sites_with_revoke(cx: &mut TestAppConte
             action: "read_page".into(),
             site: "menu.example".into(),
             refused: String::new(),
+            ..Default::default()
         });
         let entries = shell.agent_history.clone();
         shell.browser.set_agent_history(0, &write(&entries));
@@ -242,4 +244,68 @@ fn a_past_tasks_page_lists_its_steps_and_sites_with_revoke(cx: &mut TestAppConte
     });
     cx.run_until_parked();
     assert_eq!(listed(&shell, cx), ["clear", "2", "1"]);
+}
+
+/// The node with `role` named `label` in what the window last told VoiceOver, if there's one.
+fn named(
+    cx: &mut VisualTestContext,
+    role: gpui::accesskit::Role,
+    label: &str,
+) -> Option<(gpui::accesskit::NodeId, gpui::accesskit::Node)> {
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    (tree.nodes.into_iter()).find(|(_, node)| node.role() == role && node.label() == Some(label))
+}
+
+/// A request among a past task's steps opens, as in Settings › Agents, to show where it went and
+/// what it sent, eight lines at most until Show all, and closes again; a step that sent nothing
+/// doesn't open (#2326).
+#[gpui::test]
+fn a_past_request_opens_to_what_it_sent(cx: &mut TestAppContext) {
+    use crate::agents::request::Sent;
+    use gpui::accesskit::{Action, Role};
+    let (shell, _, cx) = agents(cx);
+    let sent = (1..=10).map(|n| Sent {
+        depth: 0,
+        name: format!("field{n}"),
+        value: n.to_string(),
+    });
+    shell.update(cx, |shell, cx| {
+        let past = &mut shell.agent_history[0];
+        past.steps.push(Step {
+            at: past.ended - 10,
+            action: "request".into(),
+            site: "httpbin.org".into(),
+            target: "POST /anything".into(),
+            url: "https://httpbin.org/anything".into(),
+            sent: sent.collect(),
+            ..Default::default()
+        });
+        let entries = shell.agent_history.clone();
+        shell.browser.set_agent_history(0, &write(&entries));
+        shell.open_past_task("2", cx);
+    });
+    cx.simulate_a11y_activation();
+    cx.run_until_parked();
+    let title = "Sent POST /anything to httpbin.org";
+    let (request, node) = named(cx, Role::Button, title).expect("the request is a button");
+    assert_eq!(node.is_expanded(), Some(false));
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let opens = tree
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.is_expanded().is_some());
+    assert_eq!(opens.count(), 1, "a step that sent nothing opens");
+    cx.simulate_a11y_action(request, Action::Click);
+    cx.run_until_parked();
+    let (_, node) = named(cx, Role::Button, title).expect("the request is a button");
+    assert_eq!(node.is_expanded(), Some(true));
+    let (all, _) = named(cx, Role::Button, "Show all 10 lines").expect("ten lines take Show all");
+    cx.simulate_a11y_action(all, Action::Click);
+    cx.run_until_parked();
+    assert!(named(cx, Role::Button, "Show all 10 lines").is_none());
+    let (request, _) = named(cx, Role::Button, title).expect("the request is a button");
+    cx.simulate_a11y_action(request, Action::Click);
+    cx.run_until_parked();
+    let (_, node) = named(cx, Role::Button, title).expect("the request is a button");
+    assert_eq!(node.is_expanded(), Some(false));
 }

@@ -75,6 +75,12 @@ pub(crate) unsafe extern "C" fn tab_key_before_page(
     }
     let (kept, route) = key_before_page(tab, key);
     log_key(key, "before the page", route);
+    // Under Wayland GPUI reads this press next, and with the UI given the keyboard by the answer,
+    // as when ⌘W closed the tab that had it, it would run the shortcut again (#2442).
+    #[cfg(target_os = "linux")]
+    if kept {
+        gpui_linux::answered_key(&held_keystroke(unsafe { &*key }));
+    }
     #[cfg(target_os = "linux")]
     drive::page_key_answered();
     kept

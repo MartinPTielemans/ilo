@@ -1,3 +1,4 @@
+# check.sh runs this at 600.
 # A desktop app's sign-in in the browser hands back to the app (#1914), as Chrome's does, with
 # stand-ins for the app and its sign-in, never a real account or launcher. A stand-in handler for
 # the ilohandback scheme writes each URL it's given to a file the run reads: an xdg desktop entry on

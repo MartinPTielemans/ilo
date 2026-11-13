@@ -20,7 +20,8 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     AnyElement, Bounds, Context, FontWeight, HighlightStyle, Hsla, MouseButton, Pixels,
@@ -874,7 +875,7 @@ impl Shell {
 
     /// Where the media players end, over Restart to Update, the foot's plates over them.
     pub(super) fn media_top(&self) -> f32 {
-        FOOTER_HEIGHT + self.update_banner_room() + self.media_room()
+        self.over_safe_start() + self.update_banner_room() + self.media_room()
     }
 
     /// The most room the opened foot takes before it scrolls: the closed foot never does.
@@ -1116,7 +1117,7 @@ impl Shell {
         );
         self.closed_preview = None;
         self.closed_pinned = None;
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH);
         self.closed_task = Some((agent, now.unwrap_or_default().as_secs_f64() * 1000.));
     }
 

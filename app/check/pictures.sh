@@ -1,3 +1,4 @@
+# check.sh runs this at 640.
 # The picture of a page in the window it left follows the page's loads, from the core's reports and
 # never on a timer (#359). A still page moves from the first window into a second, and the first
 # window draws its picture. A same-page navigation in the second window (a click pushes a URL and
