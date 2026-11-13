@@ -101,21 +101,19 @@ thumb_looks() {
   thumb_changed "$idle" || echo "thumbab: $2 $1: the thumb's middle stayed $idle under the pointer"
   ../tools/window-screenshot.sh "$pid" "$dir/$2-$1-hovered.png" || fail "no window to capture"
   hovered=$(pixel "$dir/$2-$1-hovered.png" "$thumb_x" "$thumb_y")
-  send press $thumb_point
+  # Under X11 a sent motion doesn't move a held thumb, so there the display's own pointer drags it.
+  hand=hand
+  [ -z "${BROWSER_WAYLAND:-}" ] || hand=
+  send ${hand}press $thumb_point
   thumb_changed "$hovered" || echo "thumbab: $2 $1: the thumb's middle stayed $hovered pressed"
-  # In steps, as a hand moves it. Under X11 the driver's sent motion doesn't move a held thumb, so
-  # the capture is of it held where it was pressed, which the run says.
+  # In steps, as a hand moves it.
   for y in 113 153 193 243 293; do
-    send dragto 1261 $y
+    send ${hand}dragto 1261 $y
   done
-  for _ in $(seq 30); do
-    grep -q "^browser: title [0-9]* $1 scrolled$" "$log" && break
-    sleep 0.1
-  done
-  grep -q "^browser: title [0-9]* $1 scrolled$" "$log" ||
-    echo "thumbab: $2 $1: the drag didn't scroll the page; captured held where pressed"
+  expect_late "^browser: title [0-9]* $1 scrolled$" "a drag on $1's thumb didn't scroll it"
   ../tools/window-screenshot.sh "$pid" "$dir/$2-$1-dragged.png" || fail "no window to capture"
-  send release 1261 293
+  send ${hand}release 1261 293
+  [ -z "$hand" ] || send handdragto $away_point
   send move $away_point
 }
 

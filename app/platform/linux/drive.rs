@@ -2264,6 +2264,25 @@ fn run_command(line: &str) -> Option<()> {
             fake(xproto::BUTTON_PRESS_EVENT, 1, (at.root_x, at.root_y))?;
             fake(xproto::BUTTON_RELEASE_EVENT, 1, (at.root_x, at.root_y))
         }
+        // Proof only (#2671): handpress, handdragto and handrelease <x> <y>, the display's own
+        // pointer through XTest, as handclick, for a drag a sent motion doesn't make.
+        "handpress" | "handdragto" | "handrelease" => {
+            let (x, y) = point(&mut words)?;
+            let at = target_in(driven()?.window, x, y)?;
+            let server = server()?;
+            let (connection, root) = &*server;
+            let fake = |kind: u8, button: u8| {
+                (connection.xtest_fake_input(kind, button, x11rb::CURRENT_TIME, *root, at.root_x, at.root_y, 0))
+                    .ok()?;
+                connection.get_input_focus().ok()?.reply().ok().map(drop)
+            };
+            fake(xproto::MOTION_NOTIFY_EVENT, 0)?;
+            match action {
+                "handpress" => fake(xproto::BUTTON_PRESS_EVENT, 1),
+                "handrelease" => fake(xproto::BUTTON_RELEASE_EVENT, 1),
+                _ => Some(()),
+            }
+        }
         "clickkey" | "rightclickkey" | "doubleclickkey" => {
             let (x, y) = point(&mut words)?;
             // Settings' close button is the window manager's off the Mac, in its title bar.
