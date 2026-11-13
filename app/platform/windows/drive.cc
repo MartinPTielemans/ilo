@@ -123,6 +123,8 @@ namespace {
 UINT const kCommand = WM_APP + 1;
 UINT const kStep = WM_APP + 2;
 UINT_PTR const kStepTimer = 1;
+// The step timer's backstop, posted from a pool thread (StepLate).
+UINT const kStepLate = WM_APP + 3;
 // Marks the pointer leaving that the driver posts, which its hook lets through.
 LPARAM const kDriverLeave = 0x44524956;
 
@@ -2591,6 +2593,48 @@ bool Run(const std::string& line) {
   return false;
 }
 
+// A step's timer's backstop. Windows makes a WM_TIMER only once the thread has no message, input or
+// paint waiting, and in window's run on real input (#2556's 43347302182) the step timer never came
+// again after an escape closed a menu, while the UI thread went on with its other work. A step
+// whose timer is 2 s past its time runs from here, and the driver says what the thread's queue
+// held then. One at a time, and only while a step waits, so an idle app wakes for nothing.
+HANDLE g_step_backstop = nullptr;
+// The step timer set last, numbered, or 0 once it has come.
+WPARAM g_step_timer = 0;
+
+void CALLBACK StepLate(PVOID timer, BOOLEAN) {
+  PostMessageW(g_driver, kStepLate, reinterpret_cast<WPARAM>(timer), 0);
+}
+
+void SetStepTimer(UINT wait) {
+  static WPARAM timers = 0;
+  SetTimer(g_driver, kStepTimer, wait, nullptr);
+  if (g_step_backstop) {
+    DeleteTimerQueueTimer(nullptr, g_step_backstop, nullptr);
+    g_step_backstop = nullptr;
+  }
+  g_step_timer = ++timers;
+  CreateTimerQueueTimer(&g_step_backstop, nullptr, StepLate, reinterpret_cast<PVOID>(g_step_timer),
+                        wait + 2000, 0, WT_EXECUTEONLYONCE);
+}
+
+// What the UI thread's queue holds, for a step whose timer didn't come.
+std::string Queued() {
+  static constexpr std::pair<DWORD, const char*> kinds[] = {{QS_POSTMESSAGE, "posted"},
+                                                             {QS_SENDMESSAGE, "sent"},
+                                                             {QS_INPUT, "input"},
+                                                             {QS_PAINT, "paint"},
+                                                             {QS_TIMER, "timer"}};
+  const DWORD queued = HIWORD(GetQueueStatus(QS_ALLINPUT));
+  std::string said;
+  for (const auto& [flag, name] : kinds) {
+    if (queued & flag) {
+      said += said.empty() ? name : std::string(", ") + name;
+    }
+  }
+  return said.empty() ? "nothing" : said;
+}
+
 // Runs the next step, or the next command once the last one's are done.
 void Next() {
   if (g_steps.empty()) {
@@ -2626,7 +2670,7 @@ void Next() {
     step.wait = 1;
   }
   if (step.wait) {
-    SetTimer(g_driver, kStepTimer, step.wait, nullptr);
+    SetStepTimer(step.wait);
   } else {
     PostMessageW(g_driver, kStep, 0, 0);
   }
@@ -2649,6 +2693,17 @@ LRESULT CALLBACK DriverProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     case WM_TIMER:
       if (wparam == kStepTimer) {
         KillTimer(hwnd, kStepTimer);
+        g_step_timer = 0;
+        Next();
+      }
+      return 0;
+    case kStepLate:
+      if (wparam && wparam == g_step_timer) {
+        KillTimer(hwnd, kStepTimer);
+        g_step_timer = 0;
+        // check.sh shows this line when a step's wait ran out.
+        fprintf(stderr, "browser: drive: the step's timer didn't come 2 s past its time, the queue "
+                        "holding %s\n", Queued().c_str());
         Next();
       }
       return 0;
