@@ -178,8 +178,9 @@ pub use favorites::FavoritesScope;
 use fly_in::Flight;
 pub use history::HistoryPage;
 pub use keys::{
-    Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, page_keystroke, rebindable,
-    recorded, reserved, shortcut_found, user_keys, view_binding, web_keystroke, written_as,
+    Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, page_key_answer,
+    page_keystroke, rebindable, recorded, reserved, shortcut_found, user_keys, view_binding,
+    web_keystroke, written_as,
 };
 pub(crate) use library::bytes;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
