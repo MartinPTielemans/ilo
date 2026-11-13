@@ -177,6 +177,9 @@ peek_frame() { # <when>
   send dpis
   expect '^browser: dpis ' "$1: the driver named no DPIs"
   dpis=$(grep '^browser: dpis ' "$log" | tail -1 | cut -d' ' -f3-)
+  send lives
+  expect '^browser: lives ' "$1: the driver listed no lives"
+  echo "$1: lives $(grep '^browser: lives ' "$log" | tail -1 | cut -d' ' -f3-)" >> "$out/preview-frames.txt"
   page=${page:-$(grep '^browser: peek page ' "$log" | tail -1 | cut -d' ' -f4-)}
   echo "$1: the card holds the page at $card, and the page is at $page; DPIs: $dpis" >> "$out/preview-frames.txt"
   echo "$card $page" | awk '{ for (i = 1; i <= 4; i++) { d = $i - $(i + 7); if (i > 2) d += $(i - 2) - $(i + 5); if (d > 3 || d < -3) exit 1 } }' ||
