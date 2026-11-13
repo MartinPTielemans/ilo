@@ -1544,7 +1544,8 @@ fi
 # it does for any window that takes them; without a shell KWin shows nothing, so the driver maps
 # one. EWMH's _NET_SHOWING_DESKTOP asks either, as openbox's Super+D, KWin's Ctrl+F12 and a
 # pager's button do. sway has no desktop to show and hides a window on another workspace: under
-# Wayland the bar is part of the window's surface and goes with it. On sway's Xwayland nothing
+# Wayland the bar is part of the window's surface and goes with it, and closes as the app goes
+# inactive, as on leaving it for another app's window. On sway's Xwayland nothing
 # tells an X client its window left the screen (#2720), so the step doesn't run there.
 if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; }; then
   # The share, in thousandths, of the capture's most common colour: the empty screen's, with the
@@ -1558,6 +1559,7 @@ if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${BROWSER_HEA
   if [ -n "${WAYLAND_DISPLAY:-}" ]; then
     send key t cmd
     expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    opened=$step
     swaymsg workspace 9 > /dev/null || fail "sway didn't go to another workspace"
     for _ in $(seq 50); do
       [ "$(plain "$out/workspace-away.png")" -ge 995 ] && break
@@ -1565,14 +1567,18 @@ if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${BROWSER_HEA
     done
     [ "$(plain "$out/workspace-away.png")" -ge 995 ] ||
       fail "another workspace still showed the bar or its window: $out/workspace-away.png"
+    expect '^browser: command bar hidden$' "the bar stayed open with its window off screen" "$opened"
+    expect '^browser: app active 0$' "the app stayed active with its window off screen" "$opened"
+    active=$(grep -c '^browser: app active 1$' "$log")
     swaymsg workspace 1 > /dev/null || fail "sway didn't go back to the window's workspace"
-    send type g
-    expect '^browser: command bar drew "g"$' \
-      "a key typed once the bar's workspace showed again didn't reach the bar"
+    for _ in $(seq 100); do
+      [ "$(grep -c '^browser: app active 1$' "$log")" -gt "$active" ] && break
+      sleep 0.1
+    done
+    [ "$(grep -c '^browser: app active 1$' "$log")" -gt "$active" ] ||
+      fail "the app didn't log \"browser: app active 1\" in 10 s back on its window's workspace"
     ../tools/window-screenshot.sh "$pid" "$out/workspace-back.png" all || fail "no screen to capture"
-    send key escape
-    expect '^browser: command bar hidden$' "Esc didn't close the bar once its window was back"
-    desktop="on another workspace the window and its bar are off screen, and back with the keys"
+    desktop="on another workspace the window and its bar are off screen, and the bar closes as the app does on leaving it"
   else
     # What the X server shows, as "window <0|1>, overlays <on screen> of <shown>, keyboard <whose>".
     onscreen() {
