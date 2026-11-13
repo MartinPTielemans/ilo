@@ -274,13 +274,19 @@ EOF
 close() {
   case "$1" in
     'command bar' | 'find bar' | 'theme picker' | 'site controls' | capture | 'link preview' | \
-      'boost editor' | offer)
+      'boost editor')
       send key escape
       expect "^browser: $1 hidden\$" "$2: Escape didn't close the $1"
       ;;
     menu)
       send key escape
       expect '^browser: menu window hidden$' "$2: Escape didn't close the menu"
+      ;;
+    # The offer doesn't take the keyboard, so Escape would go to the page: another tab shown
+    # closes it, as passwords' does.
+    offer)
+      send click $(pinned_row 0)
+      expect '^browser: offer hidden$' "$2: showing the pinned page didn't close the offer"
       ;;
     hud)
       send key 0 cmd
