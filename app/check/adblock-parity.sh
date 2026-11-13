@@ -143,10 +143,11 @@ for list in $(sed 1d "$lists/snapshot.txt"); do
   # Copied now, so younger than any list's updateAfter: the core's update finds none due.
   cp "$lists/$list.txt" "$dir/profile/Ad Blocking/Lists/"
 done
-engine_switch="$engine_switch --ad-block-lists=${site}parity-lists/assets.json"
+# Its own switch: a set engine_switch is what says this run asked for an engine of the browser's.
+lists_switch="--ad-block-lists=${site}parity-lists/assets.json"
 # A site's ask to show notifications or the like would hold the keyboard from the next ⌘L, so
 # Chrome answers each with no; without uBlock Origin's lists, sites' scripts ask (nypost.com).
-start_with_cdp "${site}parity.html" "$PWD/$dir/profile" /parity.html --deny-permission-prompts $engine_switch
+start_with_cdp "${site}parity.html" "$PWD/$dir/profile" /parity.html --deny-permission-prompts $engine_switch "$lists_switch"
 await_load
 tab=$(today | cut -d' ' -f1)
 await "^browser: title $tab ad script " || fail "the probe didn't say whether the ad script loaded"
