@@ -708,7 +708,7 @@ fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
     );
     press("enter", cx);
     assert_eq!(view.read_with(cx, |view, _| view.shown), Section::About);
-    for _ in 0..11 {
+    for _ in 1..Section::all().count() {
         cx.simulate_keystrokes("up");
     }
     settle(cx);
