@@ -316,8 +316,9 @@ jobs:
           packages: kwin-x11 x11-utils dbus-bin
 
       # The updates run builds ilo's Flatpak (tools/flatpak.sh) and updates it through Flatpak's
-      # portal and permission store, which only it needs.
-      - if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' updates ')) && contains(format(' {0} ', matrix.runs), ' updates ') }}
+      # portal and permission store, which only it needs. The leg's runs alone decide, so main's
+      # nightly check, which names no runs, installs them too; before, updates skipped there as passed.
+      - if: ${{ steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' updates ') }}
         uses: ./.github/actions/apt-install
         with:
           packages: flatpak flatpak-builder ostree xdg-desktop-portal
