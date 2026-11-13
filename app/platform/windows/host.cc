@@ -4047,6 +4047,60 @@ void host_link_preview_drew(double left,
              static_cast<LONG>(std::lround((top + height) * scale))},
         static_cast<int>(std::lround(2 * radius * scale))};
   }
+  // Proof only (#2640): each frame's time, and as the hole opens, the windows under its middle
+  // and what the screen shows there from just before the region changes.
+  {
+    LARGE_INTEGER now{}, freq{};
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    const double ms = now.QuadPart * 1000.0 / freq.QuadPart;
+    fprintf(stderr, "browser: probe drew %.1f %s\n", ms, hole ? "hole" : "none");
+    if (hole && !g_link_preview.hole) {
+      POINT origin{0, 0};
+      ClientToScreen(g_link_preview.root, &origin);
+      const POINT in_root{(hole->rect.left + hole->rect.right) / 2,
+                          (hole->rect.top + hole->rect.bottom) / 2};
+      const POINT at{origin.x + in_root.x, origin.y + in_root.y};
+      int z = 0;
+      for (HWND child = GetWindow(g_link_preview.root, GW_CHILD); child;
+           child = GetWindow(child, GW_HWNDNEXT), ++z) {
+        RECT rect{};
+        GetWindowRect(child, &rect);
+        if (!PtInRect(&rect, at)) {
+          continue;
+        }
+        wchar_t name[128] = L"";
+        GetClassNameW(child, name, 128);
+        fprintf(stderr, "browser: probe under z%d %ls visible %d rect %ld %ld %ld %ld\n", z, name,
+                IsWindowVisible(child) ? 1 : 0, rect.left, rect.top, rect.right, rect.bottom);
+      }
+      HWND top = WindowFromPoint(at);
+      wchar_t name[128] = L"";
+      GetClassNameW(top, name, 128);
+      fprintf(stderr, "browser: probe hole at %ld %ld, the point's window %ls\n", at.x, at.y, name);
+      std::thread([at, start = now.QuadPart, f = freq.QuadPart] {
+        HDC dc = GetDC(nullptr);
+        COLORREF last = CLR_INVALID;
+        for (;;) {
+          LARGE_INTEGER t{};
+          QueryPerformanceCounter(&t);
+          const double after = (t.QuadPart - start) * 1000.0 / f;
+          if (after > 400) {
+            break;
+          }
+          const COLORREF c = GetPixel(dc, at.x, at.y);
+          if (c != last) {
+            fprintf(stderr, "browser: probe hole %.1f ms (%d, %d, %d)\n", after, GetRValue(c),
+                    GetGValue(c), GetBValue(c));
+            last = c;
+          }
+          Sleep(1);
+        }
+        ReleaseDC(nullptr, dc);
+        fprintf(stderr, "browser: probe hole sampled\n");
+      }).detach();
+    }
+  }
   if (!(hole == g_link_preview.hole)) {
     g_link_preview.hole = hole;
     ShapeLinkPreview();

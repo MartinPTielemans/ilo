@@ -151,7 +151,8 @@ for n in 1 2 3 4 5 6 7 8; do
   # shellcheck disable=SC2086 # numbers: x y w h from x y
   python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
     > "$out/peek-motion.txt" 2>&1 && status=0 || status=$?
-  [ $status = 2 ] && ! grep -q "isn't drawn blended" "$out/peek-motion.txt" || break
+  # Proof only (#2640): every round, each one's verdict kept.
+  cp "$out/peek-motion.txt" "$out/peek-motion-$n.txt"
 done
 [ "$(today)" = "$a" ] || fail "Peek opened a tab: Today is \"$(today)\""
 exec 3>&-

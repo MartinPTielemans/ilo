@@ -12,6 +12,8 @@ pub(crate) struct LinkPreviewHost {
 
 impl link_preview::Host for LinkPreviewHost {
     fn place(&self, tab: u64, page: Bounds<Pixels>, radius: f32) {
+        // Proof only (#2640).
+        log!("browser: probe place {page:?}");
         unsafe { bc::bc_tab_show_in(tab, self.holder.get(), rect(page), f64::from(radius)) };
     }
 
