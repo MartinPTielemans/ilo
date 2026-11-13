@@ -27,11 +27,11 @@ clipboard, clock, cloud, cloudy, code, columns-2, command, compass, cookie, copy
 contrast, credit-card, database, download, dumbbell, egg, eighth-note, ellipsis, external-link, eye, file,
 flag, flame, fold-vertical, folder-open, folder-plus, folder, gallery-vertical-end, gamepad-2, gift,
 glasses, globe, grid-2x2, grip, hand, heart, image, inbox, info, key-round, keyboard, layers, leaf,
-library, lightbulb, link, lock-open, lock, mail, map-pin, map, maximize, megaphone,
+lightbulb, link, lock-open, lock, mail, map-pin, map, maximize, megaphone,
 message-circle-more, message-circle, mic, minus, moon-star, moon, mouse-pointer-2, network, nfc,
-paintbrush, palette, panel-left, paw-print, pencil, piano, picture-in-picture-2, pin, pizza, plane,
+paintbrush, palette, panel-left, panel-right, paw-print, pencil, piano, picture-in-picture-2, pin, pizza, plane,
 plus, printer, puzzle, receipt, rotate-ccw-clock, rotate-ccw, rotate-cw, rows-2, save, search,
-settings, shapes, share, shield, shopping-basket, shuffle, skip-back, skip-forward, skull,
+settings, shapes, share, shield, shield-off, shopping-basket, shuffle, skip-back, skip-forward, skull,
 sliders-horizontal, sparkles, speaker, square-check, square-mouse-pointer, square-terminal, square,
 star, sun, terminal, text-align-start,
 text-search, thumbs-up, train-front, trash, triangle, type, undo-2, ungroup, usb, user, users,
@@ -223,8 +223,11 @@ release 4.1's static instances (extras/ttf in Inter-4.1.zip, at commit
 e3a3d4c57d5ecc01453a575621882a384c1995a3), subset with fontTools 4.68's pyftsubset, keeping every
 name record and the hinting, to U+0000-024F, U+02B0-036F, U+0370-03FF, U+0400-052F, U+1E00-1EFF,
 U+2000-206F, U+20A0-20CF, U+2100-214F, U+2190-21FF, U+2200-22FF, U+2300-23FF, U+25A0-25FF, U+FEFF
-and U+FFFD, and built into the app on Linux and Windows. The license's full text is next to them,
-in app/assets/fonts/Inter-OFL.txt, and at the end of this file.
+and U+FFFD, and built into the app on Linux and Windows. The site's demo uses
+app/assets/fonts/web/Inter-*.ttf, made from those four by the same pyftsubset with its default
+layout features, to U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC,
+U+2122, U+2190-23FF, U+2715, U+FEFF and U+FFFD. The license's full text is next to them, in
+app/assets/fonts/Inter-OFL.txt, and at the end of this file.
 
   Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
 

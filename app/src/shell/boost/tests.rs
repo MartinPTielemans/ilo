@@ -22,6 +22,10 @@ impl Folder {
     fn boost(&self, site: &str) -> Option<String> {
         std::fs::read_to_string(self.0.join("Boosts").join(format!("{site}.css"))).ok()
     }
+
+    fn script(&self, site: &str) -> Option<String> {
+        std::fs::read_to_string(self.0.join("Boosts").join(format!("{site}.js"))).ok()
+    }
 }
 
 impl Drop for Folder {
@@ -205,6 +209,79 @@ fn edit_css_opens_the_sites_file(cx: &mut TestAppContext) {
     assert!(start.starts_with("/* example.com: "), "{start}");
 }
 
+/// The card has no Edit Script…: a site with a script and no CSS shows the new Boost's card, whose
+/// Customize… opens the editor, whose footer's Edit Script… opens the script as it is (#2297).
+#[gpui::test]
+fn a_script_without_css_is_reached_through_customize(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    cx.update(|_, cx| crate::boost_editor::open(Rc::new(Unseen), cx))
+        .expect("no window for the editor");
+    let boosts = folder.0.join("Boosts");
+    std::fs::create_dir_all(&boosts).unwrap();
+    std::fs::write(boosts.join("example.com.js"), "mine();\n").unwrap();
+    shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
+    press(&shell, 0.5, LAST, cx);
+    assert_eq!(card(&shell, cx), None, "Customize… left the card open");
+    assert_eq!(
+        cx.update(|_, cx| crate::boost_editor::open_for(cx))
+            .as_deref(),
+        Some("example.com")
+    );
+    host.take();
+    shell.update(cx, |shell, cx| {
+        let request = crate::boost_editor::Request::EditScript;
+        shell.boost_requested(1, "example.com", request, cx);
+    });
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("edit example.com.js")
+    );
+    assert_eq!(folder.script("example.com").as_deref(), Some("mine();\n"));
+}
+
+/// Library › Boosts' row menu has Edit Script… under Edit CSS…, and each entry after it still does
+/// its own thing.
+#[gpui::test]
+fn the_library_row_edits_the_script(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::NewBoost, "ui", cx);
+        shell.start_zap(cx);
+        shell.boost_zapped(10, Some("#ad"), cx);
+        shell.stop_zap(cx);
+        shell.run(Command::ViewBoosts, "ui", cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    let menu = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.boost_menu("example.com".into(), point(px(40.), px(40.)), cx)
+        });
+    };
+    menu(&shell, cx);
+    let titles: Vec<String> = host
+        .menus
+        .borrow()
+        .last()
+        .unwrap()
+        .iter()
+        .map(|(title, _)| title.to_string())
+        .collect();
+    assert_eq!(&titles[..3], ["Edit CSS…", "Edit Script…", "Turn Off"]);
+    cx.update(|_, cx| host.choose("Edit Script…", cx));
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("edit example.com.js")
+    );
+    assert!(folder.script("example.com").is_some());
+
+    menu(&shell, cx);
+    cx.update(|_, cx| host.choose("Turn Off", cx));
+    cx.run_until_parked();
+    let on = crate::boosts::with(|boosts| boosts.get(1, "example.com")).map(|boost| boost.on);
+    assert_eq!(on, Some(false), "Turn Off moved and did something else");
+}
+
 /// Neither a private window nor an agent's Space makes a Boost.
 #[gpui::test]
 fn no_boost_in_an_agents_space(cx: &mut TestAppContext) {
@@ -361,6 +438,7 @@ struct Unseen;
 
 impl crate::boost_editor::Host for Unseen {
     fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+    fn resize(&self, _: f32, _: &[(f32, f32, f32)]) {}
     fn hide(&self) {}
 }
 

@@ -2,16 +2,15 @@
 //! it's made; and opening the pickers for a Space's or a tab's icon and a Space's theme.
 
 use crate::tokens::text;
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{App, Context, Focusable, Point, SharedString, Window, div, point, prelude::*, px};
 
 use super::{
     CancelName, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_PLACEHOLDER, FORM_TEXT, KeepName,
     NEW_FOLDER, Naming, PLATE_INSET, Pending, Renaming, SPACE_ICON_SLOT, SPACE_ICON_X, Shell,
+    field_opens,
     undo::{Prop, Value},
 };
 use crate::{
@@ -54,6 +53,7 @@ impl Shell {
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming: Naming::Space(space),
             name,
             in_library: false,
@@ -100,6 +100,7 @@ impl Shell {
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming: Naming::Space(space),
             name,
             in_library: true,
@@ -128,6 +129,7 @@ impl Shell {
                 .with_text(text)
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming,
             name,
             in_library: false,
@@ -151,6 +153,7 @@ impl Shell {
                 .with_text(url.into())
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming: Naming::PinnedUrl(tab),
             name: field,
             in_library: false,
@@ -251,7 +254,8 @@ impl Shell {
             return;
         };
         let anchor = point(f32::from(brush.right()), f32::from(brush.center().y));
-        self.show_theme_picker(space, theme_picker::At::Row(anchor), cx);
+        // The Library stays as it is on either side until it moves with the sidebar.
+        self.show_theme_picker(space, theme_picker::At::Row(anchor), false, cx);
         self.light_card_while_picking(space, cx);
     }
 
@@ -365,7 +369,8 @@ impl Shell {
             }
             Pending::Icon(subject) => subject,
             Pending::Theme(space) => {
-                return self.show_theme_picker(space, theme_picker::At::Edge(self.width()), cx);
+                let edge = theme_picker::At::Edge(self.page_edge_x());
+                return self.show_theme_picker(space, edge, self.right, cx);
             }
         };
         let shell = cx.weak_entity();
@@ -497,6 +502,7 @@ impl Shell {
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming: Naming::Folder(folder),
             name,
             in_library: false,
@@ -535,6 +541,7 @@ impl Shell {
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
+            opened: field_opens(),
             naming: Naming::Profile(profile),
             name,
             in_library: false,
@@ -624,8 +631,14 @@ impl Shell {
 
     /// The window's keyboard went from its UI, to its page or elsewhere, which GPUI's focus doesn't
     /// see. The field's own menu takes it only for a moment, and gives it back to the field.
-    pub fn keyboard_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// `opened` is how many fields had opened as the press that gave the page the keyboard came.
+    pub fn keyboard_left(&mut self, opened: u64, window: &mut Window, cx: &mut Context<Self>) {
         let renaming = self.renaming.as_ref();
+        if renaming.is_some_and(|renaming| renaming.opened > opened) {
+            // For a run's log, where the field would otherwise have closed at once.
+            log!("browser: field opened after the page's press stays");
+            return;
+        }
         if !renaming.is_some_and(|renaming| renaming.name.read(cx).menu_shown()) {
             if renaming.is_some() {
                 log!("browser: field lost the keyboard to the page");

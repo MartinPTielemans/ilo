@@ -1,3 +1,4 @@
+# check.sh runs this at 210.
 # Stay On Top keeps a window over the others, and Don't Stay On Top lets it go back. ⌘N opens
 # another window on the same Spaces, showing the key window's Space with no page, with ⌘T's
 # command bar, which escape closes to its card and its one line, and a click on the card with ⌘T's
@@ -15,7 +16,8 @@
 # second for the window in front once the user is in it. From macOS 14, a page in Safari's engine,
 # which the Site Controls turn on for a page that asks for Widevine, moves to another window the
 # same way, and the window it left draws WebKit's picture of it, which the core gives from a task of
-# its own (#364: an answer inside the call that asked aborted the browser). A heavy page and a light
+# its own (#364: an answer inside the call that asked aborted the browser). Its page asks Apple's
+# site-safety service about no site, as Chromium's ask none. A heavy page and a light
 # one move between two windows every way a page moves, and the run says how long each stage of a
 # move takes.
 
@@ -314,7 +316,7 @@ send window 1
 
 # A page in Safari's engine moves to a new window as Chromium's does, and the window it left draws
 # WebKit's picture of it. The drm page asks for Widevine, so its Site Controls offer Safari's
-# engine, whose row is their first, at y 262 (clear.sh), and On shows the page there.
+# engine with a switch, and On shows the page there.
 webkit_moved=
 if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   before=$(today)
@@ -329,13 +331,22 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: site controls http://127.0.0.1:$port: .*; Safari's engine off\$" \
     "the Site Controls didn't offer Safari's engine for the drm page: $(grep '^browser: site controls http' "$log" | tail -1)"
   expect '^browser: site controls settled$' "the Site Controls didn't open at the drm page"
-  post click 207 262
-  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's row didn't offer On"
+  click_placed post "switch Safari's engine"
+  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's switch didn't offer On"
+  engine_from=$(date '+%Y-%m-%d %H:%M:%S')
   send choose On
   expect "^browser: site controls set Safari's engine On\$" "On in the menu didn't run"
   expect "^browser: system engine $d on\$" "On didn't show the drm page in Safari's engine"
   expect "^browser: loaded $d http://127.0.0.1:$port/drm.html\$" "Safari's engine didn't load the drm page"
   expect_late "^browser: title $d drm asked\$" "Safari's engine didn't answer the drm page's request"
+  # Its page asks Apple's site-safety service about no site, as Chromium's pages ask none (#2322).
+  # WebKit's check logs in the app's own process as it looks a URL up, at 127.0.0.1 too.
+  if engine_has ../core/platform/mac/system_page.mm; then
+    looked=$(log show --start "$engine_from" --style compact --info --predicate \
+      "processID == $pid AND (subsystem == \"com.apple.Safari.SafeBrowsing\" OR eventMessage CONTAINS \"beginSafeBrowsingCheck\")" |
+      grep -e 'SafeBrowsing' | head -3)
+    [ -z "$looked" ] || fail "Safari's engine's page asked the site-safety service: $looked"
+  fi
   # Safari's engine's page, taking the pane, may have closed them already.
   if none_since '^browser: site controls hidden$'; then
     send key escape
@@ -706,6 +717,12 @@ if [ "$(uname)" = Darwin ] || windows || x11; then
   driven_seventh=$(grep -c '^browser: window opened ' "$log")
   # Under the pointer, at its point on the screen, as near as the screen lets it.
   send order
+  # In front of the window it left, as well as key, so a click where it shows lands in it (#2607).
+  order=$(grep '^browser: order ' "$log" | tail -1)
+  case "$order" in
+    "browser: order window $driven_seventh "*) ;;
+    *) fail "the window opened for the tab isn't in front of the one it left: ${order#browser: }" ;;
+  esac
   frame=$(grep "^browser: frame window $driven_seventh " "$log" | tail -1 | cut -d' ' -f5-)
   echo "$frame" | awk -v x=$((right + over)) '{ exit !($1 <= x && x <= $1 + $3 && $2 <= 440 && 440 <= $2 + $4) }' ||
     fail "the window opened for the tab isn't under the pointer: $frame"

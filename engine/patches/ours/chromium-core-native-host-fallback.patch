@@ -20,8 +20,7 @@ extensions may connect.
  namespace extensions {
  
  namespace {
-@@ -143,6 +148,12 @@
-   std::string error_message;
+@@ -144,4 +149,10 @@
    base::FilePath manifest_path =
        FindManifest(native_host_name, allow_user_level_hosts, error_message);
 +  // browser_core: those folders are the user's, as the browser's own user
@@ -32,4 +31,3 @@ extensions may connect.
 +  }
  
    if (manifest_path.empty()) {
-     LOG(WARNING) << "Can't find manifest for native messaging host "

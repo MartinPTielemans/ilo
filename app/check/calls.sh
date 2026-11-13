@@ -1,3 +1,4 @@
+# check.sh runs this at 520.
 # A tab in a call keeps its page however long it's unseen, as Arc never puts one to sleep (#686):
 # one using the camera and microphone, answered with Allow as the user would, and one holding a
 # WebRTC connection that takes nothing and makes no sound, two peers of its page on a data channel.
@@ -23,10 +24,13 @@ onkeydown = async e => {
       held.push(await navigator.mediaDevices.getUserMedia({video: true, audio: true}));
       document.title = "in a call";
     } else if (e.key == "w") {
+      // Each peer makes the channel, so neither is handed it by the other: Blink takes a channel
+      // the other peer made as open before WebRTC has opened it, opens it again when WebRTC does,
+      // and an engine with DCHECKs aborts the renderer on that (#2395).
       const a = new RTCPeerConnection(), b = new RTCPeerConnection();
-      const channel = a.createDataChannel("check");
+      const channel = a.createDataChannel("check", {negotiated: true, id: 0});
       channel.onopen = () => document.title = "connected";
-      held.push(a, b, channel);
+      held.push(a, b, channel, b.createDataChannel("check", {negotiated: true, id: 0}));
       await a.setLocalDescription();
       await gathered(a);
       await b.setRemoteDescription(a.localDescription);

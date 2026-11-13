@@ -10,6 +10,11 @@ name: Engine on Linux
 
 on:
   workflow_dispatch:
+    inputs:
+      yielded:
+        description: Set by tools/engine-yield.sh on a lane's retry after it gave the runner to a release.
+        type: boolean
+        default: false
   # Main's core, at 00:30 UTC, before Check on Linux takes the engine at 03:23 (check-linux.yml) and
   # before the Windows engine's night at 02:00 on the same runners.
   schedule:
@@ -44,12 +49,23 @@ jobs:
     name: Changes
     if: github.repository == 'MartinPTielemans/ilo'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # A retry may wait for a release for up to 5 hours (tools/engine-yield.sh).
+    timeout-minutes: ${{ inputs.yielded && 310 || 10 }}
     permissions:
+      actions: read
       contents: read
     outputs:
       build: ${{ steps.decide.outputs.build }}
     steps:
+      # A lane's retry after it gave the runner to a release waits here, on GitHub's runner, until the
+      # release has the runner, so it gives way once for each release (tools/engine-yield.sh).
+      - if: inputs.yielded
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/engine-yield.sh?ref=$GITHUB_SHA" \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/engine-yield.sh" || exit 0
+          bash "$RUNNER_TEMP/engine-yield.sh" wait
       - if: github.event_name == 'schedule'
         uses: actions/checkout@v4
         with:
@@ -71,11 +87,21 @@ jobs:
     # much less.
     timeout-minutes: 1440
     permissions:
+      actions: write
       contents: read
     env:
       # A job per 3 GB of the job's 22 GB.
       BUILD_JOBS: 7
     steps:
+      # A lane's build that gets the runner while a release's waits gives it back, before any checkout,
+      # so that costs the runner seconds (tools/engine-yield.sh, #2332).
+      - if: ${{ !startsWith(github.ref, 'refs/heads/engine-build/batch-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/engine-yield.sh?ref=$GITHUB_SHA" \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/engine-yield.sh" || exit 0
+          bash "$RUNNER_TEMP/engine-yield.sh" yield
       # With its history, where tree.sh finds the versions of our patches a kept tree from before it
       # kept copies has in it.
       - uses: actions/checkout@v4
@@ -133,7 +159,9 @@ jobs:
           repo=$(git config -f engine/prebuilt.ini prebuilt.repository)
           repo=${repo#https://github.com/}
           tag=engine-linux-${GITHUB_SHA::12}
-          tag_ucl=$(git config -f engine/pins.ini ungoogled-chromium-portablelinux.tag)
+          # With ilo's rebase of its patches, it names the ungoogled-chromium tag it's on too.
+          tag_ucl=$(. engine/tree.sh && platform_stamp ungoogled-chromium-portablelinux \
+            "$(git config -f engine/pins.ini ungoogled-chromium-portablelinux.tag)")
           # Never GitHub's Latest, which releases/latest/download/<name> links mean as a release of
           # its repository's own (#804). The tag is on that repository's main, which hasn't this
           # commit: the name carries it.

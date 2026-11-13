@@ -1,3 +1,4 @@
+# check.sh runs this at 600.
 # A desktop app's sign-in in the browser hands back to the app (#1914), as Chrome's does, with
 # stand-ins for the app and its sign-in, never a real account or launcher. A stand-in handler for
 # the ilohandback scheme writes each URL it's given to a file the run reads: an xdg desktop entry on
@@ -9,6 +10,10 @@
 # - click: a click on the page goes to ilohandback://click.
 # - popup: a click opens a pop-up, as a sign-in's, which goes to ilohandback://popup and stays.
 # - popup-closes: the same pop-up closes itself 0.3 s after, before anyone could answer.
+# - newtab: a click on a link to ilohandback://newtab that opens in a new tab, as a meeting link
+#   that only starts its app does (#685). Only in the main window's tab, where the window has
+#   another tab: once Open gives the stand-in the URL, the tab the link opened closes, as Chrome's
+#   does, and the page with the link stays.
 # - local: a public page, https on a host of its own that the run calls public, fetches the
 #   stand-in app's own server on 127.0.0.1, which logs each request it gets.
 # For each scheme case, the open-app dialog shows over the window that shows the page, and Open
@@ -18,6 +23,10 @@
 # reference, ungoogled-chromium 156's under Xvfb: a pop-up that stays shows Chrome's dialog over
 # it, and one that closes itself 0.3 s on is gone before Chrome asks, so nothing opens. So
 # popup-closes asks only that nothing opens, and that the app lives through it.
+# Chrome closes a tab whose first page was the app's link once the app has it, only where its
+# window keeps another (ExternalProtocolHandler's LaunchUrlWithoutSecurityCheck), so newtab asks it
+# of ilo. A page that loads first and then opens the app, as Zoom's join page does, stays, as in
+# Chrome.
 
 serve
 log="$out/handback.log"
@@ -216,6 +225,9 @@ printf '<title>loading</title><p style="font:16px system-ui">Click to sign in in
 <script>%s
 addEventListener("click", () => open("handback-popup-closes-child.html", "signin", "width=500,height=600"));
 </script>' "$ready" > "$out/site/handback-popup-closes.html"
+printf '<title>loading</title><a href="%s://newtab" target="_blank"
+  style="position:fixed;inset:0;font:16px system-ui">Join the meeting in its app.</a>
+<script>%s</script>' "$scheme" "$ready" > "$out/site/handback-newtab.html"
 printf '<title>signing in</title><script>
 location.href = "%s://popup-closes";
 setTimeout(() => close(), 300);
@@ -375,7 +387,17 @@ by_scheme() {
     sleep 0.1
   done
   if grep -q "^$scheme://$2" "$handled"; then
-    record "$1" "$2" ok
+    if [ "$2" != newtab ]; then
+      record "$1" "$2" ok
+    elif [ "$asked" = "$tab" ]; then
+      record "$1" "$2" "the link went to the app from tab $tab itself, not a new tab"
+    elif ! seen "^browser: tab $asked closed\$" 5 "$started"; then
+      record "$1" "$2" "Open gave the app the URL, and tab $asked, which the link opened, stayed"
+    elif grep -q "^browser: tab $tab closed\$" "$log"; then
+      record "$1" "$2" "the page with the link, tab $tab, closed too"
+    else
+      record "$1" "$2" ok
+    fi
     back_from_standin
   else
     record "$1" "$2" "Open answered, and the stand-in got nothing"
@@ -423,7 +445,8 @@ if [ -z "$standin" ]; then
     "computer's own handlers; a runner or a check VM registers one."
 else
   for context in little tab; do
-    for case in delay click popup popup-closes; do
+    for case in delay click popup popup-closes newtab; do
+      [ "$context $case" != "little newtab" ] || continue
       by_scheme "$context" "$case"
     done
   done
@@ -436,4 +459,4 @@ exec 3>&-
 quit
 echo "handback: $results"
 [ -z "$failed" ] || fail "these didn't hand back as Chrome does: $failed"
-echo "ok: a desktop app's sign-in hands back: the open-app dialog shows over the window showing the page, in Little ilo and in a tab, for a redirect with no gesture, a click and a pop-up, and Open gives the app the URL, while a pop-up that closes itself at once opens nothing, as in Chrome; a public page's request to the app's own server on 127.0.0.1 asks for Local Network Access over the window, and Allow lets it through. $results"
+echo "ok: a desktop app's sign-in hands back: the open-app dialog shows over the window showing the page, in Little ilo and in a tab, for a redirect with no gesture, a click and a pop-up, and Open gives the app the URL, while a pop-up that closes itself at once opens nothing, as in Chrome, and a tab a link opened only for the app closes once the app has it; a public page's request to the app's own server on 127.0.0.1 asks for Local Network Access over the window, and Allow lets it through. $results"

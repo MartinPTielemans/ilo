@@ -1,3 +1,4 @@
+# check.sh runs this at 510.
 # A click on a site's notification brings up the tab that sent it, its Space and its window, as
 # Arc's does, whether or not the page's click handler focuses its tab (#685). On Linux the page's
 # notification goes to the desktop's notification server through Chromium's own bridge, and the
@@ -13,7 +14,28 @@
 # Chrome hands to the browser running, as in links.sh (#1426). Windows shows a toast only for an
 # installed copy, which the run's isn't, so the run sends that launch for the click.
 
+# What macOS keeps of the leave to notify of the app and of its alert helper, the two that post, as
+# "<id> allowed|refused <flags>" lines. On macOS 26 it's in usernoted's own preferences, by bundle
+# id, where bit 25 of an app's flags is Settings' Allow Notifications; ncprefs holds none (#2396).
+kept_answers() {
+  python3 -I -c '
+import os, plistlib, sys
+path = os.path.expanduser("~/Library/Group Containers/group.com.apple.usernoted/Library/Preferences/group.com.apple.usernoted.plist")
+try:
+    with open(path, "rb") as f:
+        apps = plistlib.load(f).get("apps", [])
+except (OSError, plistlib.InvalidFileException):
+    sys.exit()
+for each in apps:
+    if each.get("bundle-id") in sys.argv[1:]:
+        flags = each.get("flags", 0)
+        print(each["bundle-id"], "allowed" if flags & 1 << 25 else "refused", flags)
+' "$app_id" "$app_id.framework.AlertNotificationService"
+}
+
 notify=
+allowed=0
+kept_note=
 if [ "$(uname)" = Darwin ]; then
   if [ "$(sysctl -n kern.hv_vmm_present)" != 1 ] || ! csrutil status | grep -q disabled; then
     echo "skip: notifications, which presses macOS's banners only in a check VM with System Integrity Protection off."
@@ -23,6 +45,11 @@ if [ "$(uname)" = Darwin ]; then
     codesign --verify --deep --strict --verbose=2 "$app"/Contents/Frameworks/*Framework.framework \
       > "$out/notifications-codesign.txt" 2>&1 ||
       fail "the framework's signature doesn't hold: $(tail -3 "$out/notifications-codesign.txt")"
+    # macOS asks only an app it has no answer for, and keeps that answer, so one allowed before,
+    # as on a VM that ran this check, is asked no more. The run never changes what macOS keeps, as
+    # it runs on real Macs too; a check VM clears it before the run to be asked as a new app is
+    # (#2396).
+    allowed=$(kept_answers | grep -c ' allowed ' || true)
     clang++ -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
       fail "check/banner.mm didn't build: $(cat "$out/banner-build.log")"
     # The hosted runner's image turns Notification Center's agent off, which draws the banners:
@@ -128,11 +155,31 @@ PY
   # app, never Chromium (#2126). The banner's log is in $notes.
   allow() {
     [ "$notify" = mac ] || return 0
+    if [ "$allowed" = 2 ]; then
+      echo "kept: allowed" > "$out/notifications-asked.txt"
+      kept_note=", macOS having kept its answer, allowed, for the app and its alert helper"
+      return
+    fi
     for _ in 1 2; do
       "$out/banner" Notifications Allow >> "$notes" 2>&1 || break
     done
-    grep -q '^pressed .* with Name:Allow: done$' "$notes" ||
-      fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
+    if ! grep -q '^pressed .* with Name:Allow: done$' "$notes"; then
+      # usernoted writes an answer to its file some seconds after it's given, as a new entry
+      # without leave first, so a run close behind one that pressed Allow reads that until then.
+      for _ in $(seq 20); do
+        kept=$(kept_answers)
+        [ "$(echo "$kept" | grep -c ' allowed ' || true)" = 2 ] && break
+        sleep 0.5
+      done
+      refused=$(echo "$kept" | awk '$2 == "refused" { printf "%s%s, flags %s", sep, $1, $3; sep = "; " }')
+      [ -z "$refused" ] ||
+        fail "macOS didn't ask whether the app may notify, and keeps an earlier answer for it as not allowed: $refused"
+      [ "$(echo "$kept" | grep -c ' allowed ' || true)" = 2 ] ||
+        fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
+      echo "kept: allowed" > "$out/notifications-asked.txt"
+      kept_note=", macOS having kept its answer, allowed, for the app and its alert helper"
+      return
+    fi
     asked=$(grep '^pressed .* with Name:Allow' "$notes" | sed 's/^pressed \(“[^”]*”\) Notifications.*/\1/')
     while read -r each; do
       # Braced: bash 3.2 on the Mac reads the quote's first byte as a letter of the name.
@@ -191,8 +238,8 @@ EOF
       echo "usernoted:"
       log show --last 3m --style compact --predicate \
         'process == "usernoted" OR subsystem == "com.apple.UserNotifications"' 2>&1 | tail -80
-      echo "ncprefs:"
-      defaults read com.apple.ncprefs apps 2>&1 | grep -B3 -A8 "$app_id" || true
+      echo "kept answers:"
+      kept_answers
     } > "$out/notifications-macos.txt"
   }
   # Waits for more lines matching $1 in the app's log than the $2 there were, for up to 10 s.
@@ -289,7 +336,7 @@ EOF
       windows) notifier="Windows' toast, as a launch with its id," ;;
       *) notifier="the desktop's notification server" ;;
     esac
-    echo "ok: a click on a site's notification, which $notifier sends through Chromium's bridge, shows its tab's Space and the tab in its window, brought in front of another, whether or not the page's handler focuses it, and a page that does switches once. Window: $out/notification-clicked.png"
+    echo "ok: a click on a site's notification, which $notifier sends through Chromium's bridge, shows its tab's Space and the tab in its window, brought in front of another, whether or not the page's handler focuses it, and a page that does switches once${kept_note}. Window: $out/notification-clicked.png"
   fi
   site_notifications take-back
   kill $buses 2> /dev/null || true
