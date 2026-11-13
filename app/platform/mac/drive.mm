@@ -2367,25 +2367,6 @@ void drive_start(void) {
     return nil;
   };
   [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskApplicationDefined handler:report_done];
-  // Each press as AppKit takes it up, before it handles it: the key window, the view with the
-  // keyboard and the view the press goes to. A press lost before the app's handlers leaves no
-  // other trace (#2658).
-  [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
-                                        handler:^NSEvent*(NSEvent* event) {
-                                          NSWindow* key = NSApp.keyWindow;
-                                          NSView* frame = event.window.contentView.superview;
-                                          NSView* hit = [frame hitTest:event.locationInWindow];
-                                          auto name = [](id object) {
-                                            return object ? NSStringFromClass([object class])
-                                                                .UTF8String
-                                                          : "none";
-                                          };
-                                          fprintf(stderr,
-                                                  "browser: drive press, key %s, focus %s, "
-                                                  "hits %s\n",
-                                                  name(key), name(key.firstResponder), name(hit));
-                                          return event;
-                                        }];
   method_setImplementation(class_getInstanceMethod(NSApplication.class,
                                                    @selector(orderFrontCharacterPalette:)),
                            (IMP)OrderFrontCharacterPalette);
