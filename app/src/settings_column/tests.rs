@@ -12,6 +12,7 @@ use crate::tokens::shell::library::SEARCH_HEIGHT;
 
 /// The column alone, showing what it last picked.
 struct Shown {
+    sections: Sections,
     shown: Section,
     logged: Rc<RefCell<Vec<String>>>,
     picked: Rc<RefCell<Vec<Section>>>,
@@ -33,6 +34,7 @@ impl Render for Shown {
         let foot = self.foot.clone();
         let foot: Foot = Rc::new(move |_, _| foot.set(foot.get() + 1));
         div().size_full().child(column(
+            &self.sections,
             self.shown,
             true,
             self.logged.clone(),
@@ -47,6 +49,7 @@ impl Render for Shown {
 
 fn shown(cx: &mut TestAppContext) -> (gpui::Entity<Shown>, &mut VisualTestContext) {
     let (view, cx) = cx.add_window_view(|_, _| Shown {
+        sections: Sections::default(),
         shown: Section::General,
         logged: Rc::default(),
         picked: Rc::default(),
@@ -277,6 +280,7 @@ impl Render for Stops {
             .size_full()
             .flex()
             .child(column(
+                &Sections::default(),
                 Section::General,
                 true,
                 Rc::default(),
@@ -356,6 +360,7 @@ struct Keyed {
     focus: gpui::FocusHandle,
     input: gpui::Entity<crate::text_input::TextInput>,
     card: crate::settings_card::Card,
+    sections: Sections,
     shown: Section,
     pressed: Rc<Cell<usize>>,
 }
@@ -396,6 +401,7 @@ impl Render for Keyed {
             .size_full()
             .flex()
             .child(column(
+                &self.sections,
                 self.shown,
                 true,
                 Rc::default(),
@@ -435,6 +441,7 @@ fn the_keyboard_goes_through_settings_in_reading_order(cx: &mut TestAppContext) 
             focus: cx.focus_handle(),
             input,
             card: Default::default(),
+            sections: Default::default(),
             shown: Section::General,
             pressed: Rc::default(),
         }
@@ -641,4 +648,71 @@ fn after_a_control_goes_cmd_w_reaches_settings(cx: &mut TestAppContext) {
         1,
         "⌘W didn't reach Settings"
     );
+}
+
+/// At Settings' least height the sections scroll above the foot, and the keys keep the one they
+/// move to in sight: ⇧⇥ from the field to About, the last, scrolls the list to it, and ↑ back to
+/// General scrolls it back (#2506).
+#[gpui::test]
+fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        crate::text_input::bind_keys(cx);
+        crate::settings_search::bind_keys(cx);
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let input = cx.new(|cx| crate::text_input::TextInput::new("Search", cx));
+        let _ = input.read(cx).focus_handle(cx).tab_stop(true);
+        Keyed {
+            focus: cx.focus_handle(),
+            input,
+            card: Default::default(),
+            sections: Default::default(),
+            shown: Section::General,
+            pressed: Rc::default(),
+        }
+    });
+    cx.simulate_resize(size(px(720.), px(480.)));
+    cx.update(|window, cx| {
+        window.activate_window();
+        let field = view.read(cx).input.read(cx).focus_handle(cx);
+        window.focus(&field, cx);
+    });
+    let settle = |cx: &mut VisualTestContext| {
+        for _ in 0..3 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+    };
+    settle(cx);
+    let scroll = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            let scroll = &view.sections.scroll;
+            (
+                f32::from(scroll.offset().y),
+                f32::from(scroll.max_offset().y),
+            )
+        })
+    };
+    let (offset, most) = scroll(cx);
+    assert_eq!(offset, 0.);
+    assert!(
+        most > PLATE_HEIGHT,
+        "the sections fit at the least height: {most}"
+    );
+    cx.simulate_keystrokes("shift-tab");
+    settle(cx);
+    let (offset, _) = scroll(cx);
+    assert!(
+        offset <= PLATE_GAP - most,
+        "⇧⇥ to About left it under the foot: {offset} of {most}"
+    );
+    press("enter", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::About);
+    for _ in 1..Section::all().count() {
+        cx.simulate_keystrokes("up");
+    }
+    settle(cx);
+    assert_eq!(scroll(cx).0, 0., "↑ to General left it above the list");
+    press("enter", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::General);
 }

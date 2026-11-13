@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, BoxShadow, MouseButton, Rgba, Window,
+    AnyElement, App, BoxShadow, MouseButton, Rgba, ScrollHandle, Window,
     accesskit::{Orientation, Role},
     div, point,
     prelude::*,
@@ -14,6 +14,7 @@ use gpui::{
 };
 
 use crate::palette::{INK, PAPER};
+use crate::settings_card::Follow;
 use crate::settings_rows::{drawn, named_button, ring};
 use crate::tokens::radius;
 use crate::tokens::settings::{
@@ -109,6 +110,14 @@ impl Section {
     }
 }
 
+/// What the column's sections hold between frames: their scroll, at the window's least height, and
+/// the section the keys move to kept in sight.
+#[derive(Default)]
+pub struct Sections {
+    pub scroll: ScrollHandle,
+    follow: Follow,
+}
+
 /// What the column does with a click: shows a section, or opens Chromium's settings.
 pub type Pick = Rc<dyn Fn(Section, &mut Window, &mut App)>;
 pub type Foot = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -118,8 +127,10 @@ pub type Foot = Rc<dyn Fn(&mut Window, &mut App)>;
 /// nothing found dim. Each section logs where it's drawn as "toolbar {name}", as the toolbar's
 /// tabs did, for check.sh to click, with `logged`. A press on the column's ground moves the
 /// window, as a title bar does. While an assistive app asks, `a11y`, the sections are a tab list, the one shown
-/// selected, and Chromium settings a button (#1381).
+/// selected, and Chromium settings a button (#1381). `sections` keeps the list's scroll.
+#[allow(clippy::too_many_arguments)]
 pub fn column(
+    sections: &Sections,
     shown: Section,
     dark: bool,
     logged: Rc<RefCell<Vec<String>>>,
@@ -204,6 +215,20 @@ pub fn column(
             base.opacity(FOOT_GLYPH_ALPHA),
         ))
         .child("Chromium settings");
+    let list = div()
+        .id("sections")
+        .when(a11y, |sections| {
+            let sections = sections.role(Role::TabList).aria_label("Sections");
+            sections.aria_orientation(Orientation::Vertical)
+        })
+        .tab_group()
+        .tab_index(0)
+        // Its sections are the stops, not the list that scrolls them.
+        .tab_stop(false)
+        .size_full()
+        .overflow_y_scroll()
+        .track_scroll(&sections.scroll)
+        .children(groups);
     div()
         .flex_none()
         .relative()
@@ -226,19 +251,12 @@ pub fn column(
         // At the window's least height the sections scroll above the foot, not under it.
         .child(
             div()
-                .id("sections")
-                .when(a11y, |sections| {
-                    let sections = sections.role(Role::TabList).aria_label("Sections");
-                    sections.aria_orientation(Orientation::Vertical)
-                })
-                .tab_group()
-                .tab_index(0)
-                // Its sections are the stops, not the list that scrolls them.
-                .tab_stop(false)
+                .relative()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
-                .children(groups),
+                .child(sections.follow.before())
+                .child(list)
+                .child(sections.follow.after(sections.scroll.clone(), 0., 0.)),
         )
         .child(
             div()

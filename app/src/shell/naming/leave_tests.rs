@@ -16,7 +16,7 @@ use crate::{
         Folders, NAME_HEIGHT, Naming, ROW_HEIGHT, Shell, Slot, commands::bind_keys, fields_opened,
         recorder::Recorder,
     },
-    text_input::{self, Chosen, FieldMenu},
+    text_input::{self, Chosen, FieldMenu, korean},
 };
 
 /// How the field loses the keyboard.
@@ -202,6 +202,56 @@ fn a_name_being_composed_is_kept_whole(cx: &mut TestAppContext) {
             host.take_edits(),
             [format!("rename tab 3 {typed}")],
             "{way:?}"
+        );
+        shell.update(cx, |shell, cx| shell.set_selected(3, cx));
+    }
+}
+
+/// A name typed in Korean from a 2-set keyboard, where one key can commit a syllable and start the
+/// next, is kept whole (#2457): at ↩, which the input method passes on once it's committed the last
+/// syllable, and when the field loses the keyboard with that syllable still composing. Each way
+/// types a name of its own, as a name the tab already has changes nothing.
+#[gpui::test]
+fn a_name_typed_in_korean_is_kept_whole(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    let both = [
+        korean::HANGEUL,
+        &[korean::Ime::Commit("글")],
+        korean::ANNYEONG,
+    ]
+    .concat();
+    for (leaving, calls, name) in [
+        (None, korean::ANNYEONG, "안녕하세요"),
+        (Some(Way::Page), korean::HANGEUL, "한글"),
+        (Some(Way::AnotherRow), &both[..], "한글안녕하세요"),
+    ] {
+        rename(&shell, cx, &host, 3);
+        let field = shell.read_with(cx, |shell, _| {
+            shell.renaming.as_ref().map(|r| r.name.clone())
+        });
+        let field = field.expect("no field");
+        for call in calls {
+            field.update_in(cx, |input, window, cx| call.apply(input, window, cx));
+            cx.run_until_parked();
+        }
+        match leaving {
+            None => {
+                field.update_in(cx, |input, window, cx| {
+                    input.replace_text_in_range(None, "요", window, cx)
+                });
+                cx.simulate_keystrokes("enter");
+                cx.run_until_parked();
+            }
+            Some(way) => leave(&shell, cx, way),
+        }
+        assert!(
+            naming(&shell, cx).is_none(),
+            "{leaving:?} left the field open"
+        );
+        assert_eq!(
+            host.take_edits(),
+            [format!("rename tab 3 {name}")],
+            "{leaving:?}"
         );
         shell.update(cx, |shell, cx| shell.set_selected(3, cx));
     }

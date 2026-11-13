@@ -1,3 +1,4 @@
+# check.sh runs this at 120.
 # ⌘F opens the find bar over the page with the keyboard, and what's typed right after it lands
 # there. Typing finds in the page, with "n/m", once Japanese input has committed, and return,
 # shift-return, ⌘G and ⇧⌘G and the bar's arrows go through the matches, from the bar and from the

@@ -7,6 +7,9 @@
   out. One that stands in for a wait on the app passes on a fast machine and fails on a slow one.
 - A `none_since` straight after a `send` of input follows an `expect` that the app handled it:
   without one it can pass because the app hasn't got to the input yet.
+- A file in app/check/ that check.sh runs starts with its place among the runs, in the form
+  check.sh reads (#2562). A file without one is a helper or a script of its own, which another
+  file names as check/<file>; a run whose line is missing or misspelt would never run, unsaid.
 
 Run from anywhere in the checkout. Prints each finding and exits 1 if there are any.
 """
@@ -25,14 +28,6 @@ MARKER = re.compile(r"(//|#).*\b(reads|waits for|can wait for) this line")
 STRING = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
 # Rust's {...} and C's %s and the like.
 PLACEHOLDER = re.compile(r"\{[^{}]*\}|%[-+ #0-9.*]*(?:ll|l|z|h|j)?[a-zA-Z@]")
-# The core's stale markers, which go with its next change: a change to core/ alone builds the
-# engine on Linux and Windows. The file and the words its line's marker is over.
-CORE_LATER = {
-    ("core/browser_window_stand_in.cc", "page full screen ended, its display gone"),
-    ("core/held_keys.cc", "keys went to the page"),
-    ("core/main_delegate.cc", "terminating,"),
-    ("core/platform/mac/system_page.mm", "system page gone at"),
-}
 # The driver's commands that ask it something rather than send the app input.
 QUERIES = {"state", "layout", "screen", "order", "title", "pasteboard", "pip", "front", "stack",
            "menubar"}
@@ -134,7 +129,7 @@ def unread_markers():
         p for p, variable in read_by
         if variable or sum(bool(p.match(line)) for line in logged.values()) <= 3
     ]
-    found, later = [], set()
+    found = []
     for path, n, text in marked:
         if text is None:
             found.append((path, n, "a marker over no log line"))
@@ -144,12 +139,7 @@ def unread_markers():
             continue
         if any(matches(p, logged[path, n], readers) for p in read_by):
             continue
-        if (path, words) in CORE_LATER:
-            later.add((path, words))
-            continue
         found.append((path, n, f"no run reads this line ({words!r}): take its marker away"))
-    for path, words in sorted(CORE_LATER - later):
-        found.append((SELF, 1, f"CORE_LATER lists {path}'s {words!r}, whose marker is gone or read"))
     return found
 
 
@@ -211,8 +201,33 @@ def quiet_after_send():
     return found
 
 
+# --- Each run's place ------------------------------------------------------------------------
+
+PLACE = re.compile(r"# check\.sh runs this at [0-9]+(, only when named)?\.")
+
+
+def run_places():
+    found = []
+    others = {path: read(path) for path in tracked(*READERS)}
+    for path in tracked("app/check/*.sh"):
+        lines = read(path).splitlines()
+        said = [n for n, line in enumerate(lines) if line.startswith("# check.sh runs this")]
+        if said:
+            for n in said:
+                if n != 0 or not PLACE.fullmatch(lines[n]):
+                    found.append((path, n + 1, "a run's place is its first line, as \"# check.sh "
+                                  "runs this at 120.\" or \"# check.sh runs this at 700, only when "
+                                  "named.\", or check.sh never runs it"))
+            continue
+        name = "check/" + path.rsplit("/", 1)[1]
+        if not any(name in text for other, text in others.items() if other != path):
+            found.append((path, 1, "no first line \"# check.sh runs this at <n>.\", so check.sh "
+                          "never runs it, and no other file names " + name + " to run it"))
+    return found
+
+
 def main():
-    found = unread_markers() + bare_sleeps() + quiet_after_send()
+    found = unread_markers() + bare_sleeps() + quiet_after_send() + run_places()
     for path, line, message in found:
         print(f"::error file={path},line={line}::{message}")
     print(f"{len(found)} found")
