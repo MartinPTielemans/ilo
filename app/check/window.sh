@@ -1168,16 +1168,26 @@ drawing_cpu() {
     n++; t += $1; by[kind] += $1 }
     END { printf "%.2f %d", t, n; for (k in by) printf " %s=%.2f", k, by[k]; print "" }'
 }
-# rest_cpu: $rest, the CPU in seconds what draws takes in 4 s with the pointer still, below the
-# rows, $rest_procs the processes it counts, and $rest_kinds each kind's share, such as "browser
-# 0.02 s, GPU 0.01 s". Not in a subshell, which would lose send's step.
+# rest_cpu [name]: $rest, the CPU in seconds what draws takes in 4 s with the pointer still, below
+# the rows, $rest_procs the processes it counts, and $rest_kinds each kind's share, such as
+# "browser 0.02 s, GPU 0.01 s". With a name, on the Mac, whose ps counts no threads apart, the
+# browser's stacks over the same 4 s go in window-rest-<name>-sample.txt, every 10 ms: a burst
+# inside the 4 s was over by the time a sample after the step could see it (#2502). Not in a
+# subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
   sleep 1 # the hover's fade out, before the window measured
-  local from to
+  local from to sampler=
+  if [ -n "${1:-}" ] && [ "$(uname)" = Darwin ]; then
+    sample "$pid" 4 10 -file "$out/window-rest-$1-sample.txt" \
+      > "$out/window-rest-$1-sample.log" 2>&1 &
+    sampler=$!
+  fi
   from=$(drawing_cpu)
   sleep 4 # the window measured
   to=$(drawing_cpu)
+  [ -z "$sampler" ] || wait "$sampler" ||
+    echo "window: the $1 rest's sample failed: $(tail -1 "$out/window-rest-$1-sample.log")"
   rest=$(printf '%s\n%s\n' "$from" "$to" | awk 'NR == 1 { from = $1 } NR == 2 { printf "%.2f", $1 - from }')
   rest_procs=$(echo "$to" | cut -d' ' -f2)
   rest_kinds=$(printf '%s\n%s\n' "$from" "$to" | awk '{
@@ -1188,7 +1198,14 @@ rest_cpu() {
       for (i = 1; i <= n; i++) if (kinds[i] in to)
         printf "%s%s %.2f s", (said++ ? ", " : ""), names[i], to[kinds[i]] - from[kinds[i]] }')
 }
-rest_cpu
+# On the Mac the docked rest is measured once without the sampling and once with it, and the out
+# rest is held against the second: the two say what the sampling adds to the browser's CPU.
+unsampled=
+if [ "$(uname)" = Darwin ]; then
+  rest_cpu
+  unsampled="; sampled, docked read $rest s without the sampling"
+fi
+rest_cpu docked
 docked_cpu=$rest docked_kinds=$rest_kinds
 send key s cmd
 toggle page hidden "⌘S from the page before the sidebar out is hovered"
@@ -1196,19 +1213,16 @@ send move 400 300
 reveal_at_edge "the pointer at the edge didn't bring the sidebar out after ⌘S from the page"
 hover_out "the sidebar out by the edge"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
-rest_cpu
+rest_cpu out
 out_cpu=$rest
-echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)"
+echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU" \
+  "with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)$unsampled"
 if awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }'; then
-  # What the browser was doing, so the next red names it rather than a guess (#2502): its age, as
-  # uBlock Origin writes its selfie about 80 s after a new profile's launch, and on the Mac, whose
-  # ps counts no threads apart, 3 s of its stacks.
+  # Its age, as uBlock Origin writes its selfie about 80 s after a new profile's launch (#2502).
   up=$(ps -o etime= -p "$pid" | tr -d ' ')
   sampled=
-  if [ "$(uname)" = Darwin ] &&
-    sample "$pid" 3 -file "$out/window-rest-sample.txt" > "$out/window-rest-sample.log" 2>&1; then
-    sampled=", the browser's stacks for 3 s after it in window-rest-sample.txt"
-  fi
+  [ ! -s "$out/window-rest-out-sample.txt" ] ||
+    sampled=", the browser's stacks over the rest in window-rest-out-sample.txt"
   fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds), against ${docked_cpu} s docked ($docked_kinds), the browser up $up$sampled"
 fi
 send move 600 300
