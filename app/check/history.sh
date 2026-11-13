@@ -275,6 +275,18 @@ expect '^browser: command clear-site-data via sidebar$' "Clear Site Data and Rel
 stored 127.0.0.1 "0 0 0" "Clear Site Data and Reload kept 127.0.0.1's cookie, localStorage or IndexedDB"
 go_from_bar "http://$nearby:$port/stored.html?$stored_key"
 stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's data"
+# Where Chrome's warning before http is, from the window's top-left corner, and the window's height.
+warning_box() {
+  send layout
+  warning=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: layout child //p' |
+    head -1)
+  [ -n "$warning" ] || fail "Chrome's warning before http wasn't a dialog over the page"
+  warning_x=${warning%%,*} warning_y=${warning#*,}
+  warning_y=${warning_y%% *} warning_size=${warning#* }
+  warning_width=${warning_size%%x*} warning_height=${warning_size#*x}
+  window_height=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+    sed -n 's/^browser: layout content [0-9]*x\([0-9]*\).*/\1/p' | head -1)
+}
 # With Chrome's warning up, ⌘T opens the command bar for a new tab and escape closes it, and ⌘W
 # closes the tab, as from a page (#2416). Where the warning has the keyboard is said, since only
 # Wayland gives it one without a click: elsewhere the UI keeps the keyboard it had since the click
@@ -289,13 +301,8 @@ warned() {
   send state
   echo "note: with Chrome's warning before http up, the keyboard is in $key, on $focus"
   [ "$key" != NativeWidgetMacNSWindow ] || return 0
-  send layout
-  warning=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: layout child //p' |
-    head -1)
-  [ -n "$warning" ] || fail "Chrome's warning before http wasn't a dialog over the page"
-  warning_x=${warning%%,*} warning_y=${warning#*,}
-  warning_y=${warning_y%% *} warning_width=${warning#* }
-  send click $((warning_x + ${warning_width%%x*} / 2)) $((warning_y + 8))
+  warning_box
+  send click $((warning_x + warning_width / 2)) $((warning_y + 8))
   [ "$key" = NativeWidgetMacNSWindow ] ||
     fail "a click on Chrome's warning before http at $warning didn't give it the keyboard: $key, $focus"
 }
@@ -332,11 +339,19 @@ if [ "$major" -ge 157 ]; then
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "the command bar closing over Chrome's warning before http gave the keyboard to $key, on $focus, not back to the warning"
   fi
+  # A click on the page beside the warning: the page drops it, but on the Mac AppKit gives the
+  # page's view the keyboard all the same, where every key is dropped. The core gives it back to
+  # the warning (dialog_keys.cc), so the second ⌘T, next, still opens the bar (#2625).
+  warning_box
+  below=$((warning_y + warning_height + 40))
+  [ "$below" -lt $((window_height - 30)) ] ||
+    fail "no page showed below Chrome's warning before http, at $warning in a window $window_height high, to click"
+  send click $((warning_x + warning_width / 2)) "$below"
   # The warning's in a second tab, so one ⌘W on it is seen to close that tab alone: under Wayland
   # the UI, which the closed tab gives the keyboard, read the press again and ran it twice (#2442).
   kept=$tab
   send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar for a second tab"
+  expect '^browser: command bar shown$' "⌘T after a click on the page beside Chrome's warning before http didn't open the command bar for a second tab"
   send type "$nearby:$port"
   send key return
   expect "^browser: today [0-9][0-9]* $kept\$" "the second tab didn't open over $kept: Today is \"$(today)\""

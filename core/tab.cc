@@ -20,6 +20,7 @@
 #include "browser_core/arrange.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/boosts.h"
+#include "browser_core/dialog_keys.h"
 #include "browser_core/favorites.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/host.h"
@@ -1535,6 +1536,10 @@ void Tab::OnVisibilityChanged(content::Visibility visibility) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Tab::LoadWaiting, weak_factory_.GetWeakPtr()));
   }
+}
+
+void Tab::OnWebContentsFocused(content::RenderWidgetHost* render_widget_host) {
+  dialog_keys::PageFocused(web_contents());
 }
 
 // The page's renderer went away, crashed, killed or ended on purpose. check.sh waits for this line,

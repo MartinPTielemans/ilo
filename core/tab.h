@@ -299,6 +299,7 @@ class Tab : public content::WebContentsObserver,
   void DidUpdateAudioMutingState(bool muted) override;
   void DidGetUserInteraction(const blink::WebInputEvent& event) override;
   void OnVisibilityChanged(content::Visibility visibility) override;
+  void OnWebContentsFocused(content::RenderWidgetHost* render_widget_host) override;
   void MediaStartedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id) override;
   void WebContentsDestroyed() override;
 
