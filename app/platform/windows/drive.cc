@@ -17,7 +17,8 @@
 // dpi <percent>, which tells the browser window it moved to a display of that scale as Windows does
 // (WM_DPICHANGED), keeping its size in pixels, and placement, which logs the window's maximized
 // state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the windows
-// on screen over the app's browser windows; stack, which lists every app's windows over the driven
+// on screen over the app's browser windows; lives, which lists every window the host floats over
+// them and where each is in its life; stack, which lists every app's windows over the driven
 // one, front first; and reshow, which shows those of the UI's that are hidden again, as Windows
 // does. window <n> behind drives a window without bringing it forward, as drive.mm's does. The
 // Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with
@@ -91,6 +92,8 @@ bool host_drive_pointer(unsigned message, long x, long y);
 bool host_drive_key(unsigned vk, long lparam);
 uint64_t host_browser_window_id(size_t index);
 const char* host_floating_name(void* hwnd);
+void host_floating_lives(void (*each)(void* context, const char* name, void* hwnd, int life),
+                         void* context);
 bool host_save_dialog_answer(const char* path);
 // The app's (src/main.rs), on GPUI's window |hwnd|, for the scripted input method.
 bool browser_drive_compose(void* hwnd, const char* text, size_t start, size_t end, bool selected);
@@ -1505,6 +1508,39 @@ bool Run(const std::string& line) {
       }
     }
     fprintf(stderr, "browser: overlays shown %s\n", shown.empty() ? "none" : shown.c_str());
+    return true;
+  }
+  // Each window the host floats over a browser window, made so far, and the menu, as the host's
+  // overlay machine has it and as Windows does, for a check that puts each through what made a
+  // hidden one go stale (#2563): "browser: lives command bar key on screen active focus,
+  // tooltip hidden, menu shown on screen capture dpi 96 over 120". Its life is the host's (Life),
+  // and the rest Windows': whether it's visible, the active window, the one with the keyboard's
+  // focus or the pointer's capture on its thread, and its DPI where it isn't its window's.
+  if (action == "lives") {
+    std::string line;
+    host_floating_lives(
+        [](void* context, const char* name, void* hwnd_pointer, int life) {
+          static const char* const kLives[] = {"hidden", "placed", "shown", "key", "hiding"};
+          const HWND hwnd = static_cast<HWND>(hwnd_pointer);
+          std::string& out = *static_cast<std::string*>(context);
+          out += out.empty() ? "" : ", ";
+          out += name ? name : "unnamed";
+          out += " ";
+          out += life >= 0 && life < static_cast<int>(std::size(kLives)) ? kLives[life] : "?";
+          GUITHREADINFO thread{sizeof(GUITHREADINFO)};
+          GetGUIThreadInfo(GetWindowThreadProcessId(hwnd, nullptr), &thread);
+          out += IsWindowVisible(hwnd) ? " on screen" : "";
+          out += thread.hwndActive == hwnd ? " active" : "";
+          out += thread.hwndFocus == hwnd ? " focus" : "";
+          out += thread.hwndCapture == hwnd ? " capture" : "";
+          HWND owner = GetWindow(hwnd, GW_OWNER);
+          const UINT dpi = GetDpiForWindow(hwnd), over = owner ? GetDpiForWindow(owner) : dpi;
+          if (dpi != over) {
+            out += " dpi " + std::to_string(dpi) + " over " + std::to_string(over);
+          }
+        },
+        &line);
+    fprintf(stderr, "browser: lives %s\n", line.empty() ? "none" : line.c_str());
     return true;
   }
   // The DPI Windows gives the driven browser window and each window the host floats over one,
