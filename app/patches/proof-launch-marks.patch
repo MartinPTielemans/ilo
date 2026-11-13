@@ -95,6 +95,37 @@ index 061ba3b490..963d3d96fb 100644
                                  arena_clear_needed.clear(cx);
                              })
                              .log_err();
+diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+index 4b9faab43d..4362a79c17 100644
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
+@@ -817,6 +817,10 @@ impl X11Client {
+                     Ok(Some(event)) => {
+                         match event {
+                             Event::Expose(expose_event) => {
++                                static EXPOSES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
++                                if EXPOSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 4 {
++                                    gpui::launch_mark(&format!("x11 expose {:#x} count {}", expose_event.window, expose_event.count));
++                                }
+                                 windows_to_refresh.insert(expose_event.window);
+                             }
+                             Event::KeyRelease(_) => {
+@@ -1218,6 +1222,7 @@ impl X11Client {
+                 handle_visibility_changed(state, event.window);
+             }
+             Event::MapNotify(event) => {
++                gpui::launch_mark(&format!("x11 map notify {:#x}", event.window));
+                 let mut state = self.0.borrow_mut();
+                 let window = (state.windows.get_mut(&event.window)).map(|window_ref| {
+                     window_ref.is_mapped = true;
+@@ -2560,6 +2565,7 @@ impl X11ClientState {
+         x_window: xproto::Window,
+         refresh_rate: Duration,
+     ) -> RegistrationToken {
++        gpui::launch_mark(&format!("x11 refresh loop starting for {x_window:#x}, {refresh_rate:?}"));
+         if crate::linux::is_embedded() {
+             return self.start_embedded_refresh_loop(x_window, refresh_rate);
+         }
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
 index 169b781c62..06ea279153 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
@@ -203,10 +234,33 @@ index 770ceb1ad3..7e173b4910 100644
                          "Selected GPU (passed configuration test): {} ({:?})",
                          info.name,
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index b87f131ac3..cd9661d3c7 100644
+index b87f131ac3..504ad50ddf 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
-@@ -449,6 +449,7 @@ impl PipelineCache {
+@@ -154,6 +154,22 @@ impl WgpuPipelines {
+         color_target: wgpu::ColorTargetState,
+         sample_count: u32,
+         module: &wgpu::ShaderModule,
++    ) -> wgpu::RenderPipeline {
++        let built_at = std::time::Instant::now();
++        let built = self.build_unmarked(name, entry, texture_layout, topology, color_target, sample_count, module);
++        gpui::launch_mark(&format!("pipeline {name} built in {:.1} ms", built_at.elapsed().as_secs_f64() * 1e3));
++        built
++    }
++
++    fn build_unmarked(
++        &self,
++        name: &str,
++        entry: &str,
++        texture_layout: Option<&wgpu::BindGroupLayout>,
++        topology: wgpu::PrimitiveTopology,
++        color_target: wgpu::ColorTargetState,
++        sample_count: u32,
++        module: &wgpu::ShaderModule,
+     ) -> wgpu::RenderPipeline {
+         let mut bind_group_layouts =
+             vec![Some(&self.layouts.globals), Some(&self.layouts.instances)];
+@@ -449,6 +465,7 @@ impl PipelineCache {
          if let Some((_, shared)) = pipelines.iter().find(|(built, _)| *built == key) {
              return shared.clone();
          }
@@ -214,7 +268,7 @@ index b87f131ac3..cd9661d3c7 100644
          let shaders = self.shaders(device, key.dual_source_blending, uses_webgl_instance_data);
          let built = Arc::new(WgpuRendererCore::create_pipelines(
              device,
-@@ -458,6 +459,7 @@ impl PipelineCache {
+@@ -458,6 +475,7 @@ impl PipelineCache {
              key.alpha_mode,
              key.path_sample_count,
          ));
@@ -222,7 +276,7 @@ index b87f131ac3..cd9661d3c7 100644
          pipelines.push((key, built.clone()));
          built
      }
-@@ -583,6 +585,7 @@ impl WgpuRenderer {
+@@ -583,6 +601,7 @@ impl WgpuRenderer {
      where
          W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
      {
@@ -230,7 +284,7 @@ index b87f131ac3..cd9661d3c7 100644
          let window_handle = window
              .window_handle()
              .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
-@@ -605,6 +608,7 @@ impl WgpuRenderer {
+@@ -605,6 +624,7 @@ impl WgpuRenderer {
              .as_ref()
              .map(|ctx| ctx.instance.clone())
              .unwrap_or_else(|| WgpuContext::instance(Some(Box::new(window.clone()))));
@@ -238,7 +292,7 @@ index b87f131ac3..cd9661d3c7 100644
  
          // Safety: The caller guarantees that the window handle is valid for the
          // lifetime of this renderer. In practice, the RawWindow struct is created
-@@ -615,6 +619,7 @@ impl WgpuRenderer {
+@@ -615,6 +635,7 @@ impl WgpuRenderer {
                  .map_err(|e| anyhow::anyhow!("Failed to create surface: {e}"))?
          };
  
@@ -246,7 +300,7 @@ index b87f131ac3..cd9661d3c7 100644
          let mut ctx_ref = gpu_context.borrow_mut();
          let context = match ctx_ref.as_mut() {
              Some(context) => {
-@@ -625,15 +630,18 @@ impl WgpuRenderer {
+@@ -625,15 +646,18 @@ impl WgpuRenderer {
          };
  
          let atlas = Arc::new(WgpuAtlas::from_context(context));
@@ -267,3 +321,37 @@ index b87f131ac3..cd9661d3c7 100644
      }
  
      #[cfg(target_family = "wasm")]
+@@ -1316,6 +1340,14 @@ impl WgpuRenderer {
+             self.failed_frame_count = 0;
+         }
+ 
++        static DRAWS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
++        let draw_mark = DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
++        let mark = |what: &str| {
++            if draw_mark <= 4 {
++                gpui::launch_mark(&format!("renderer draw {draw_mark} {what}"));
++            }
++        };
++        mark("acquiring");
+         let frame = match surface.get_current_texture() {
+             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+@@ -1339,6 +1371,7 @@ impl WgpuRenderer {
+ 
+         // The acquired texture is the authority on frame dimensions; the surface
+         // configuration is only a request.
++        mark("texture acquired");
+         let size = Size {
+             width: DevicePixels(frame.texture.width() as i32),
+             height: DevicePixels(frame.texture.height() as i32),
+@@ -1358,8 +1391,10 @@ impl WgpuRenderer {
+             log::error!("{error:#}");
+             return false;
+         }
++        mark("rendered and submitted");
+ 
+         core.resources.queue.present(frame);
++        mark("queue presented");
+         true
+     }
+ }
