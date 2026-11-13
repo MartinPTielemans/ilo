@@ -13,10 +13,10 @@ use std::{collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 use web_time::Instant;
 
 use gpui::{
-    App, Bounds, Context, DispatchPhase, FontWeight, Global, Hsla, Image, ImageSource,
-    MouseExitEvent, MouseMoveEvent, ObjectFit, Pixels, RenderImage, Role, SharedString, Size, Task,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, canvas, div, img, point, prelude::*, px, size, svg,
+    App, BackgroundExecutor, Bounds, Context, DispatchPhase, FontWeight, Global, Hsla, Image,
+    ImageSource, MouseExitEvent, MouseMoveEvent, ObjectFit, Pixels, RenderImage, Role,
+    SharedString, Size, Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, canvas, div, img, point, prelude::*, px, size, svg,
 };
 
 use crate::elevation::{Level, WINDOW_MARGIN};
@@ -335,6 +335,9 @@ pub struct HoverCard {
     stale: Vec<Arc<RenderImage>>,
     /// What it logged as drawn last, for check.sh.
     logged: Option<(u64, &'static str)>,
+    /// GPUI's clock, which the card's motion is timed by: the real one in the app, and in a test
+    /// one only the test moves.
+    clock: BackgroundExecutor,
 }
 
 struct CardWindow(WindowHandle<HoverCard>);
@@ -378,7 +381,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<HoverCard>>
         false => Early::default(),
     };
     let window = cx.open_window(options, |_, cx| {
-        cx.new(|_| HoverCard {
+        cx.new(|cx| HoverCard {
             host,
             shown: None,
             resting: None,
@@ -393,6 +396,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<HoverCard>>
             painted: Vec::new(),
             stale: Vec::new(),
             logged: None,
+            clock: cx.background_executor().clone(),
         })
     });
     match window {
@@ -702,7 +706,7 @@ impl HoverCard {
             card.update(cx, |card, cx| card.hide(cx)).ok();
         });
         self.going = Some(Going {
-            at: Instant::now(),
+            at: self.clock.now(),
             from,
             _hide: hide,
         });
@@ -719,10 +723,15 @@ impl HoverCard {
         cx.notify();
     }
 
+    /// Seconds since `at` on the card's clock.
+    fn since(&self, at: Instant) -> f32 {
+        self.clock.now().saturating_duration_since(at).as_secs_f32()
+    }
+
     fn pose(&self) -> Pose {
         match &self.going {
-            Some(going) => going.from.going(going.at.elapsed().as_secs_f32()),
-            None => Pose::arriving(self.appeared.map_or(0., |at| at.elapsed().as_secs_f32())),
+            Some(going) => going.from.going(self.since(going.at)),
+            None => Pose::arriving(self.appeared.map_or(0., |at| self.since(at))),
         }
     }
 
@@ -733,9 +742,7 @@ impl HoverCard {
             (Some(_), _) => true,
             (None, _) if self.shown.is_none() => false,
             (None, None) => true,
-            (None, Some(at)) => {
-                spring(at.elapsed().as_secs_f32(), IN_RESPONSE, IN_DAMPING).is_some()
-            }
+            (None, Some(at)) => spring(self.since(at), IN_RESPONSE, IN_DAMPING).is_some(),
         }
     }
 
@@ -804,7 +811,7 @@ impl Render for HoverCard {
         // GPUI draw it, so the motion starts there rather than skip its start. Until then it's
         // drawn faded out, so the host's drawing before it shows has nothing of the last card.
         if self.shown.is_some() && self.appeared.is_none() && window.is_visible() {
-            self.appeared = Some(Instant::now());
+            self.appeared = Some(self.clock.now());
         }
         if self.moving() {
             window.request_animation_frame();
