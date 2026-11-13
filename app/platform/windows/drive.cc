@@ -408,6 +408,20 @@ LRESULT CALLBACK HearRealPointer(int code, WPARAM wparam, LPARAM lparam) {
       case WM_NCRBUTTONDOWN:
         fprintf(stderr, "browser: drive: real press in %s\n", Landed(hook->hwnd).c_str());
         break;
+      case WM_LBUTTONUP: {
+        // With the keys the page reads the click's from, as the thread's input has them then: a
+        // link clicked with ⌥ or ⌘ opens where they say only if they're still held (#2544).
+        std::string held;
+        for (const auto& [vk, name] : {std::pair{VK_CONTROL, "ctrl"}, std::pair{VK_SHIFT, "shift"},
+                                       std::pair{VK_MENU, "alt"}}) {
+          if (GetKeyState(vk) & 0x8000) {
+            held += held.empty() ? name : std::string(" ") + name;
+          }
+        }
+        fprintf(stderr, "browser: drive: real release in %s, holding %s\n",
+                Landed(hook->hwnd).c_str(), held.empty() ? "nothing" : held.c_str());
+        break;
+      }
       case WM_MOUSEWHEEL:
       case WM_MOUSEHWHEEL: {
         // Once for each window a run of the wheel's events lands in.
@@ -2137,6 +2151,16 @@ bool Run(const std::string& line) {
     Target target;
     if (count < 1 || !(in_key ? TargetInKey(x, y, &target) : TargetAt(x, y, &target))) {
       return false;
+    }
+    // A hand's touchpad scrolls the window under the pointer, which after a relaunch is the
+    // runner's console in front of the app; the posted stand-ins bring the app in front first, as a
+    // press or a real wheel's notch does (#2544).
+    if (g_real && action != "wheel") {
+      g_steps.push_back({[] {
+        if (!OursInFront()) {
+          BringInFront();
+        }
+      }});
     }
     // Two fingers over GPUI's view reach it as Direct Manipulation hands it a precision
     // touchpad's: a touch, its moves and its lift, which no wheel message carries (#1212). At
