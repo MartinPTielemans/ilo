@@ -243,10 +243,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..f787574820
+index 0000000000..3ac5adf6d5
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1300 @@
+@@ -0,0 +1,1341 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -1545,6 +1545,47 @@ index 0000000000..f787574820
 +        }
 +        #[allow(unreachable_patterns)]
 +        _ => {}
++    }
++}
++
++#[cfg(all(test, feature = "x11"))]
++mod tests {
++    use super::*;
++
++    thread_local! {
++        static TOLD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
++    }
++
++    fn told(_: *mut c_void) {
++        TOLD.set(TOLD.get() + 1);
++    }
++
++    #[test]
++    fn the_keys_leaving_an_overlay_away_with_its_window_is_not_the_user_leaving() {
++        let (view, showing) = (7, 1);
++        SHOWN.with_borrow_mut(|all| {
++            all.push(Shown {
++                view,
++                keyboard: true,
++                ready: true,
++                left: Some(told),
++                showing,
++                away: false,
++            })
++        });
++        // The window manager hid its window, and the keyboard went with it (#2711).
++        assert!(
++            set_away(view, true),
++            "an overlay with the keys takes them back on return"
++        );
++        assert!(is_away(view));
++        run_op(Op::Left(view, showing));
++        assert_eq!(TOLD.get(), 0);
++        // Back on screen, the keyboard leaving it is the user leaving it, told once.
++        set_away(view, false);
++        run_op(Op::Left(view, showing));
++        run_op(Op::Left(view, showing));
++        assert_eq!(TOLD.get(), 1);
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/platform.rs b/crates/gpui_linux/src/linux/platform.rs
