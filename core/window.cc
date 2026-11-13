@@ -470,6 +470,13 @@ void MakeHeldBy(Space& space, NavigateParams& params) {
   }
   create.opened_by_another_window = params.opened_by_another_window;
   create.initially_hidden = params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
+#if defined(USE_AURA)
+  // In the window's compositor, which draws its page out of sight while an agent acts on it, as
+  // Chrome's tabs are. A page in none draws no frame, and its input waits for one.
+  if (params.browser->GetWindow() && params.browser->GetWindow()->GetNativeWindow()) {
+    create.context = params.browser->GetWindow()->GetNativeWindow();
+  }
+#endif
   std::unique_ptr<content::WebContents> made = content::WebContents::Create(create);
   HeldLoad::CreateForWebContents(made.get(), space.id(), params);
   // A tab strip no window watches still loads it, once Navigate has inserted it.
