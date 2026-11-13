@@ -1055,6 +1055,16 @@ impl Browser for Fake {
         browser::shell::Elsewhere::on(self.os(), default)
     }
 
+    // PREVIEW_SAFE_START=1 shows a safe start's card at the sidebar's foot, with Settings' ad
+    // blocking on, or =unblocked with it off.
+    fn safe_start(&self) -> bool {
+        std::env::var_os("PREVIEW_SAFE_START").is_some()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        std::env::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
+    }
+
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
         self.later(cx, move |shell, cx| {
             shell.set_media_unsupported(tab, "", cx);
@@ -1652,8 +1662,8 @@ impl Browser for Fake {
     // The preview leaves the clipboard alone, and shares nothing.
     fn copy(&self, _: &str, _: &mut App) {}
 
-    fn pasted(&self, _: &App) -> Option<String> {
-        None
+    fn pasted(&self, cx: &mut App, done: browser::clipboard::Done) {
+        cx.defer(move |cx| done(None, cx));
     }
 
     fn share_services(&self, _: &str) -> Vec<SharedString> {
@@ -1840,9 +1850,9 @@ impl command_bar::Host for PreviewBar {
         Some(format!("https://duckduckgo.com/?q={text}"))
     }
     fn page_favicon(&self, _: &str) {}
-    fn open_tab(&self, _: &str, _: bool) {}
-    fn open_window(&self, _: &str, _: &mut App) {}
-    fn navigate(&self, _: u64, _: &str) {}
+    fn open_tab(&self, _: &str, _: &str, _: bool) {}
+    fn open_window(&self, _: &str, _: &str, _: &mut App) {}
+    fn navigate(&self, _: u64, _: &str, _: &str) {}
     fn reload(&self, _: u64) {}
     fn select(&self, _: u64) {}
     fn tab_window(&self, _: u64) -> Option<u64> {
@@ -1850,7 +1860,7 @@ impl command_bar::Host for PreviewBar {
     }
     fn activate(&self, _: u64, _: u64, _: &mut App) {}
     fn split(&self, _: u64, _: u64, _: &mut App) {}
-    fn open_split(&self, _: &str, _: u64, _: &mut App) {}
+    fn open_split(&self, _: &str, _: &str, _: u64, _: &mut App) {}
     fn copy(&self, _: &str, _: &mut App) {}
     fn show(&self, _: bool, _: f32, _: f32, _: f32, _: f32, _: browser::elevation::Level) {}
     fn set_height(&self, _: f32) {}
@@ -3339,6 +3349,7 @@ fn preview_site() -> Site {
         logins: Vec::new(),
         devices: Vec::new(),
         ad_blocking: Some(true),
+        ad_blocked: "12".into(),
         developer_mode: Some(false),
         // PREVIEW_BOOST=on or off gives the site a Boost, which shows its row.
         boostable: true,

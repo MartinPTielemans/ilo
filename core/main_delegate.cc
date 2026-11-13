@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "base/base_switches.h"
@@ -24,6 +25,7 @@
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/arrange.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
 #include "browser_core/cast_dialog.h"
@@ -72,6 +74,7 @@
 #include "chrome/browser/ui/startup/features.h"
 #include "chrome/browser/ui/startup/startup_tab.h"
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -85,6 +88,7 @@
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_LINUX)
@@ -242,6 +246,8 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     RegisterDownloadPrefs();
     developer_mode::RegisterProfilePrefs();
     notes::RegisterProfilePrefs();
+    Arrange::RegisterProfilePrefs();
+    RegisterAdBlockPrefs();
     RegisterWebRtc();
     widevine::Start();
   }
@@ -400,6 +406,44 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     if (!in_memory && relative_partition_path.empty() &&
         network_context_params->persist_session_cookies) {
       network_context_params->restore_old_session_cookies = true;
+    }
+  }
+
+  // Chrome's, and the browser's own ad blocker where it blocks (ad_block.h).
+  void WillCreateURLLoaderFactory(
+      content::BrowserContext* browser_context,
+      content::RenderFrameHost* frame,
+      int render_process_id,
+      URLLoaderFactoryType type,
+      const url::Origin& request_initiator,
+      const net::IsolationInfo& isolation_info,
+      std::optional<int64_t> navigation_id,
+      ukm::SourceIdObj ukm_source_id,
+      network::URLLoaderFactoryBuilder& factory_builder,
+      mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>* header_client,
+      bool* bypass_redirect_checks,
+      bool* disable_secure_dns,
+      network::mojom::URLLoaderFactoryOverridePtr* factory_override,
+      scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner,
+      bool is_for_network_service) override {
+    ChromeContentBrowserClient::WillCreateURLLoaderFactory(
+        browser_context, frame, render_process_id, type, request_initiator, isolation_info,
+        navigation_id, ukm_source_id, factory_builder, header_client, bypass_redirect_checks,
+        disable_secure_dns, factory_override, navigation_response_task_runner,
+        is_for_network_service);
+    ProxyForAdBlock(browser_context, frame, type, request_initiator, isolation_info, ukm_source_id,
+                    factory_builder);
+  }
+
+  // Chrome's, but a tab the UI lets close itself (bc_tab_set_page_may_close) may, as Blink refuses
+  // window.close() to a page its own script didn't open once it has more than one history entry.
+  void OverrideWebPreferences(content::WebContents* web_contents,
+                              content::SiteInstance& main_frame_site,
+                              blink::web_pref::WebPreferences* prefs) override {
+    ChromeContentBrowserClient::OverrideWebPreferences(web_contents, main_frame_site, prefs);
+    const Tab* tab = Tab::FromWebContents(web_contents);
+    if (tab && tab->page_may_close()) {
+      prefs->allow_scripts_to_close_windows = true;
     }
   }
 
@@ -617,9 +661,12 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     // as the profile starts, ilo having no startup preference for it to read (#1934).
     std::string disabled = command_line->GetSwitchValueASCII(switches::kDisableFeatures);
     disabled += disabled.empty() ? "" : ",";
+    // And a new extension isn't pinned, as on 156, unless the browser imported from pinned it (the
+    // app's import/extensions.rs): Chromium 157 pins each one as it's installed.
     command_line->AppendSwitchASCII(
         switches::kDisableFeatures,
-        disabled + features::kClearSessionStorageDiskStateOnStartup.name);
+        disabled + features::kClearSessionStorageDiskStateOnStartup.name + "," +
+            features::kExtensionsPinnedByDefault.name);
     // Blink's eye in a password field, Chrome's on Windows: it shows only once the user types into
     // the empty field, and goes, masking it again, as the field loses focus or is filled in or set
     // by the page, so a saved password is never shown. The core blurs a tab's page each time the
@@ -627,9 +674,12 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     std::string blink = command_line->GetSwitchValueASCII(switches::kEnableBlinkFeatures);
     blink += blink.empty() ? "" : ",";
     // And ⌥-click on a link opens it in a split view, as Arc's does, not Chrome's download
-    // (chromium-core-alt-click-split.patch).
-    command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures,
-                                    blink + "PasswordReveal,AltClickSplitView");
+    // (chromium-core-alt-click-split.patch). And a page asks to share the screen only from a click
+    // or a key, as the spec and the other two engines have it, so none puts the picker up unasked;
+    // the promise it gets otherwise is refused, with no UI of ours (decision 12, #2456).
+    command_line->AppendSwitchASCII(
+        switches::kEnableBlinkFeatures,
+        blink + "PasswordReveal,AltClickSplitView,GetDisplayMediaRequiresUserActivation");
 #if BUILDFLAG(IS_MAC)
     platform::NameKeychainItem();
 #endif
@@ -672,11 +722,15 @@ content::ContentClient* MainDelegate::CreateContentClient() {
   return content_client.get();
 }
 
-std::optional<int> MainDelegate::PreBrowserMain() {
-  std::optional<int> exit_code = ChromeMainDelegate::PreBrowserMain();
-  // Chrome's PreBrowserMain made NSApp, which the app can't make before it: Chrome's class reads
-  // the command line as it's made.
-  if (!exit_code && g_host.launching) {
+std::optional<int> MainDelegate::PostEarlyInitialization(InvokedIn invoked_in) {
+  std::optional<int> exit_code = ChromeMainDelegate::PostEarlyInitialization(invoked_in);
+  // In the browser process, once Chromium has the profile's lock: a launch that hands its links to
+  // the browser running already has an exit code here and goes, so it puts nothing on screen and
+  // starts nothing the app would have to stop, even when two launch at once (#2494). Chrome's
+  // PreBrowserMain made NSApp before this, which the app can't make before it: Chrome's class
+  // reads the command line as it's made.
+  if (!exit_code && std::holds_alternative<InvokedInBrowserProcess>(invoked_in) &&
+      g_host.launching) {
     g_host.launching(g_host.context);
   }
   return exit_code;

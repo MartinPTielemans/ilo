@@ -313,10 +313,10 @@ bc_id AnyInstanceOf(const State& state, int site) {
   return 0;
 }
 
-// The directory of |tab|'s profile, with its page or without, or empty.
+// The directory of |tab|'s profile, with its page or without, or of the one it waits for, or empty.
 std::string ProfileDirOf(bc_id tab) {
   const Tab* of = Tab::Get(tab);
-  return of && of->profile() ? DirOf(of->profile()) : std::string();
+  return of ? of->profile_dir() : std::string();
 }
 
 // What a new tab for a site is made from.

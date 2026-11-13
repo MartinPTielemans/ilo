@@ -4,20 +4,21 @@ tabs (//browser_core/hooks.h).
 
 --- a/chrome/browser/renderer_context_menu/render_view_context_menu.cc
 +++ b/chrome/browser/renderer_context_menu/render_view_context_menu.cc
-@@ -5938,6 +5938,18 @@
+@@ -5938,6 +5938,19 @@
    BrowserWindowInterface* const browser = GetBrowser();
    CHECK(browser);
    CHECK(browser->GetType() == BrowserWindowInterface::TYPE_NORMAL);
 +
 +  // browser_core: the core's windows don't use Chrome's split tabs. It makes its own split view
-+  // from a navigation opening in one (//browser_core/hooks.h).
++  // from a navigation opening in one (//browser_core/hooks.h). No callback tags the navigation
++  // for page load metrics, whose helper 157 renamed, so the patch builds on 156 and 157 alike.
 +  if (g_browser_core_supplies_windows) {
 +    source_web_contents_->OpenURL(
 +        GetOpenURLParamsWithExtraHeaders(
 +            params_.link_url, params_.frame_url, params_.frame_origin,
 +            WindowOpenDisposition::NEW_SPLIT_VIEW, ui::PAGE_TRANSITION_LINK,
 +            /*extra_headers=*/std::string(), /*started_from_context_menu=*/true),
-+        base::BindOnce(&AttachContextMenuOpenLinkNavigationHandleUserData));
++        /*navigation_handle_callback=*/{});
 +    return;
 +  }
  

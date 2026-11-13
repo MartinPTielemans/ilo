@@ -135,3 +135,12 @@ Once a UTC day a copy sends one count, unless Settings › Privacy › Send a Da
 - **How:** about 30 s after launch or on coming back on a new day, with no timer after; through the core and Chromium's network stack, without credentials, to the one endpoint the build names (`app/branding/daily-count`, prod only), never a general fetch. A build naming none sends nothing.
 
 Revisit if the totals stop telling releases apart without telling copies apart.
+
+## 12. Web defaults: stricter than upstream's where the spec is
+
+Where a page's web platform default differs from Chrome's, it's listed here, each stricter than upstream rather than behind it. A site written to the spec works in ilo as in the other engines.
+
+| Default | Chrome's | ilo's | Why | Revisit if |
+|---|---|---|---|---|
+| Screen sharing needs a gesture | A page calls `getDisplayMedia()` whenever it likes, and the picker comes up unasked | Only within a click's or a key's activation, as the spec and the other two engines have it. Otherwise the page's promise is refused with `InvalidStateError`, and ilo shows nothing. An administrator's `ScreenCaptureWithoutGestureAllowedForOrigins` exempts an origin (the orchestrator's call, listed for the owner, 2026-11-12, #2456) | No page can put a share picker in front of the user they didn't ask for | Chrome turns `GetDisplayMediaRequiresUserActivation` on, or a named site breaks on it |
+| WebRTC addresses | `default` | `default_public_interface_only` | Decision 10 | Decision 10 |

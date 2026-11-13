@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -9,20 +10,25 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
 #include "browser_core/host.h"
+#include "browser_core/native_ad_block.h"
 #include "browser_core/passwords.h"
+#include "browser_core/permission_question.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/certificate_viewer.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/page_info/chrome_page_info_delegate.h"
 #include "chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h"
+#include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/browser/website_settings_info.h"
 #include "components/content_settings/core/browser/website_settings_registry.h"
@@ -36,6 +42,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/extension_action.h"
 #include "net/cert/x509_certificate.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -111,6 +118,23 @@ bool Resettable(ChromePageInfoUiDelegate& ui_delegate, const PageInfo::Permissio
   return permission.source == SettingSource::kUser && permission.setting &&
          (ui_delegate.ShouldShowAllow(permission.type) ||
           ui_delegate.ShouldShowAsk(permission.type));
+}
+
+// What Site Controls list of Chrome's page info rows: what differs for the site (#2334). Chrome also
+// lists every type whose profile default stopped asking, which says nothing about this site; that
+// row shows here only once the site has its own value, a policy or an extension sets it, the
+// user changed it here since the page loaded (so a line doesn't vanish under their hand), or the
+// tab used it: played sound, registered for automatic Picture in Picture, or holds files open.
+bool Differs(content::WebContents* contents, const PageInfo::PermissionInfo& permission) {
+  if (permission.setting || permission.source != SettingSource::kUser ||
+      permission.type == ContentSettingsType::SOUND ||
+      permission.type == ContentSettingsType::AUTO_PICTURE_IN_PICTURE ||
+      permission.type == ContentSettingsType::FILE_SYSTEM_WRITE_GUARD) {
+    return true;
+  }
+  const auto* settings =
+      content_settings::PageSpecificContentSettings::GetForFrame(contents->GetPrimaryMainFrame());
+  return settings && settings->HasContentSettingChangedViaPageInfo(permission.type);
 }
 
 // The system page a tab shows in place of Chromium's, else null.
@@ -209,10 +233,17 @@ void SiteControls::SetPermission(bc_id tab, int type, int value) {
                                             : value == BC_SITE_BLOCK ? CONTENT_SETTING_BLOCK
                                                                      : CONTENT_SETTING_ASK);
   }
+  // Allow or Block for a request held quietly answers it, as the card would have, so the page
+  // hears. The answer goes first, as listing the permissions again drops the held row.
+  const ContentSettingsType kind = permission->type;
+  const std::optional<url::Origin> origin = permission->requesting_origin;
+  if (kind == ContentSettingsType::NOTIFICATIONS && value != BC_SITE_ASK &&
+      PermissionQuestion::Quiet(tab)) {
+    PermissionQuestion::Answer(
+        tab, value == BC_SITE_ALLOW ? BC_PERMISSION_ALLOW : BC_PERMISSION_BLOCK);
+  }
   // PageInfo lists the permissions again, which reports them.
-  controls->page_info_->OnSitePermissionChanged(permission->type, setting,
-                                                permission->requesting_origin,
-                                                /*is_one_time=*/false);
+  controls->page_info_->OnSitePermissionChanged(kind, setting, origin, /*is_one_time=*/false);
 }
 
 void SiteControls::RemoveDevice(bc_id tab, size_t index) {
@@ -299,10 +330,15 @@ SiteControls::SiteControls(content::WebContents* contents)
     window_ = window->id();
     window->ShowEveryExtensionAction(true);
   }
+  // Its private windows' too, as the dispatcher is the profile's.
+  actions_.Observe(extensions::ExtensionActionDispatcher::Get(contents->GetBrowserContext()));
   Read();
 }
 
 SiteControls::~SiteControls() {
+  if (NativeAdBlock()) {
+    StopWatchingNativeAdBlocked();
+  }
   if (Window* window = Window::FromId(window_)) {
     window->ShowEveryExtensionAction(false);
   }
@@ -343,12 +379,31 @@ void SiteControls::Read() {
     // doesn't show.
     page_info_->InitializeUiState(this, base::DoNothing());
   }
+  // The browser's own ad blocker counts what it blocked on the page, which comes a moment later.
+  if (NativeAdBlock()) {
+    native_blocked_ = -1;
+    WatchNativeAdBlocked(web_contents(), base::BindRepeating(&SiteControls::NativeAdBlocked,
+                                                             weak_factory_.GetWeakPtr()));
+  }
   Changed();
 }
 
 void SiteControls::SetPermissionInfo(const PermissionInfoList& permission_info_list,
                                      ChosenObjectInfoList chosen_object_info_list) {
   permissions_ = permission_info_list;
+  // A page holding a request to show notifications quietly lists them, at the default, as
+  // Chrome's page info does on Android alone: the bell in the URL field opens the panel there.
+  if (PermissionQuestion::Quiet(tab_) &&
+      std::ranges::find(permissions_, ContentSettingsType::NOTIFICATIONS,
+                        &PageInfo::PermissionInfo::type) == permissions_.end()) {
+    PageInfo::PermissionInfo notifications;
+    notifications.type = ContentSettingsType::NOTIFICATIONS;
+    notifications.source = content_settings::SettingSource::kUser;
+    notifications.default_setting =
+        HostContentSettingsMapFactory::GetForProfile(web_contents()->GetBrowserContext())
+            ->GetDefaultPermissionSetting(ContentSettingsType::NOTIFICATIONS, nullptr);
+    permissions_.push_back(std::move(notifications));
+  }
   devices_ = std::move(chosen_object_info_list);
   Changed();
 }
@@ -391,6 +446,23 @@ void SiteControls::WebContentsDestroyed() {
   Close();
 }
 
+void SiteControls::OnExtensionActionUpdated(extensions::ExtensionAction* action,
+                                            content::WebContents* contents,
+                                            content::BrowserContext* context) {
+  if (contents == web_contents() && IsAdBlocker(action->extension_id())) {
+    Changed();
+  }
+}
+
+void SiteControls::NativeAdBlocked(int blocked) {
+  native_blocked_ = blocked;
+  Changed();
+}
+
+void SiteControls::OnShuttingDown() {
+  actions_.Reset();
+}
+
 void SiteControls::Changed() {
   if (reporting_) {
     return;
@@ -412,6 +484,13 @@ void SiteControls::Report() {
   if (passwords && !passwords->ready()) {
     return;
   }
+  // uBlock Origin never sees the pages the system's engine shows.
+  const int ad_blocking =
+      SystemPageOf(web_contents()) ? BC_AD_BLOCKING_NONE : AdBlockingOf(web_contents());
+  // It waits for the browser's own ad blocker's count too, which reports again.
+  if (ad_blocking == BC_AD_BLOCKING_ON && NativeAdBlock() && native_blocked_ < 0) {
+    return;
+  }
   const std::vector<Passwords::Login> logins =
       passwords ? passwords->ForPage(url_) : std::vector<Passwords::Login>();
   const std::vector<bc_login> c_logins = Passwords::ToC(logins);
@@ -421,7 +500,7 @@ void SiteControls::Report() {
   bool resettable = false;
   for (const PageInfo::PermissionInfo& permission : permissions_) {
     const auto* delegate = DelegateFor(permission.type);
-    if (!delegate) {
+    if (!delegate || !Differs(web_contents(), permission)) {
       continue;
     }
     names.push_back(base::UTF16ToUTF8(PageInfoUI::PermissionTypeToUIString(permission.type)));
@@ -460,10 +539,16 @@ void SiteControls::Report() {
     devices[i].kind = device_kinds[i].c_str();
   }
   const std::string connection = base::UTF16ToUTF8(connection_summary_);
-  // Chrome counts every row it lists in its button's words.
+  std::string ad_blocked;
+  if (ad_blocking == BC_AD_BLOCKING_ON) {
+    ad_blocked = !NativeAdBlock()      ? AdBlockedOn(web_contents())
+                 : native_blocked_ > 0 ? base::NumberToString(native_blocked_)
+                                       : std::string();
+  }
+  // Chrome counts every row it lists in its button's words; these are the lines the panel shows.
   const std::string reset =
       resettable ? base::UTF16ToUTF8(l10n_util::GetPluralStringFUTF16(
-                       IDS_PAGE_INFO_RESET_PERMISSIONS, static_cast<int>(permissions_.size())))
+                       IDS_PAGE_INFO_RESET_PERMISSIONS, static_cast<int>(permissions.size())))
                  : std::string();
   const bc_site_controls controls = {
       .site = site_.c_str(),
@@ -478,9 +563,8 @@ void SiteControls::Report() {
       .system_engine_offered = system_engine_offered_,
       .logins = c_logins.data(),
       .login_count = c_logins.size(),
-      // uBlock Origin never sees the pages the system's engine shows.
-      .ad_blocking = SystemPageOf(web_contents()) ? BC_AD_BLOCKING_NONE
-                                                  : AdBlockingOf(web_contents()),
+      .ad_blocking = ad_blocking,
+      .ad_blocked = ad_blocked.c_str(),
       .developer_mode = DeveloperModeOf(web_contents()),
       .devices = devices.data(),
       .device_count = devices.size(),

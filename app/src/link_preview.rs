@@ -180,6 +180,12 @@ fn out_of_sight(rest: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(point(rest.left() - px(by), rest.top()), rest.size)
 }
 
+/// Where a preview's page rests over a window's page at `page`: the core makes it that size before
+/// it loads, so its first script reads the size it's shown at (#2539).
+pub fn resting(page: Bounds<Pixels>) -> Bounds<Pixels> {
+    page_in(card(page))
+}
+
 /// The card with its page at `page`.
 fn card_around(page: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(

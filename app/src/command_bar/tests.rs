@@ -18,6 +18,8 @@ use crate::text_input::{self, Chosen, FieldMenu, korean};
 #[derive(Default)]
 struct Recorder {
     calls: RefCell<Vec<String>>,
+    /// What the user typed for each load, which the core reads for an http address written out.
+    typed: RefCell<Vec<String>>,
     /// What the core was asked to suggest for, the text and whether it may complete it.
     asked: RefCell<Vec<(String, bool)>>,
     shown: RefCell<Vec<String>>,
@@ -87,15 +89,18 @@ impl Host for Recorder {
 
     fn page_favicon(&self, _: &str) {}
 
-    fn open_tab(&self, url: &str, behind: bool) {
+    fn open_tab(&self, url: &str, typed: &str, behind: bool) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("open {url}{}", if behind { " behind" } else { "" }));
     }
 
-    fn open_window(&self, url: &str, _: &mut App) {
+    fn open_window(&self, url: &str, typed: &str, _: &mut App) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("window {url}"));
     }
 
-    fn navigate(&self, tab: u64, url: &str) {
+    fn navigate(&self, tab: u64, url: &str, typed: &str) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("navigate {tab} {url}"));
     }
 
@@ -119,7 +124,8 @@ impl Host for Recorder {
         self.record(format!("split {tab} with {with}"));
     }
 
-    fn open_split(&self, url: &str, with: u64, _: &mut App) {
+    fn open_split(&self, url: &str, typed: &str, with: u64, _: &mut App) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("open {url} beside {with}"));
     }
 
@@ -411,6 +417,11 @@ impl Bar {
     /// What the bar asked of the host since the last time.
     fn calls(&self) -> Vec<String> {
         self.host.calls.take()
+    }
+
+    /// What the user typed for each load since the last time.
+    fn typed(&self) -> Vec<String> {
+        self.host.typed.take()
     }
 
     /// The tooltips asked for and ended since the last time.
@@ -2336,6 +2347,34 @@ fn the_bar_is_closed_as_it_asks_to_go(cx: &mut TestAppContext) {
         !bar.follow(Vec::new()),
         "a Space shown since opens no new tab"
     );
+}
+
+/// Each load from the bar says what the user typed for it, from which the core keeps an http
+/// address written out over http, as Chrome's bar does (#2417).
+#[gpui::test]
+fn each_load_says_what_was_typed(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.com/", None);
+    bar.type_text("http://example.org");
+    bar.keys("enter");
+    assert_eq!(bar.typed(), ["http://example.org"], "↩ in the tab");
+    let mut bar = Bar::new(cx);
+    bar.type_text("http://example.net");
+    bar.keys("enter");
+    assert_eq!(bar.typed(), ["http://example.net"], "↩ in a new tab");
+    let mut bar = Bar::new(cx);
+    bar.type_text("http://example.net");
+    bar.keys("cmd-enter");
+    assert_eq!(bar.typed(), ["http://example.net"], "⌘↩'s tab behind");
+    // What the bar completed isn't typed, so the core reads the completed page as a suggestion.
+    let mut bar = Bar::new(cx);
+    bar.type_text("http://exa");
+    bar.suggest(
+        "http://exa",
+        vec![completing("http://example.com/", "mple.com")],
+    );
+    bar.keys("enter");
+    assert_eq!(bar.typed(), ["http://exa"], "↩ on a completion");
 }
 
 /// ↩ on the URL ⌘L opened the bar on loads the page again, as Arc's does; typed over, it goes

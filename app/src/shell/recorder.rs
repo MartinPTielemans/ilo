@@ -72,6 +72,10 @@ pub(super) struct Recorder {
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
+    /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
+    /// answer.
+    pub(super) safe_start: Cell<bool>,
+    pub(super) ad_blocking: Cell<bool>,
     /// The build updates itself, as `updates` answers, and how often Check for Updates ran.
     pub(super) updates: Cell<bool>,
     pub(super) checked_for_updates: Cell<usize>,
@@ -881,6 +885,14 @@ impl Browser for Recorder {
         self.record("restart".into())
     }
 
+    fn safe_start(&self) -> bool {
+        self.safe_start.get()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        self.ad_blocking.get()
+    }
+
     fn show_page_dialog(&self, shown: Option<ShownPageDialog>, _: &mut App) {
         match shown {
             Some((tab, dialog, _)) => self.record(format!("page dialog {tab} {}", dialog.id)),
@@ -1389,8 +1401,9 @@ impl Browser for Recorder {
     }
 
     /// The host's clipboard holds what was copied last.
-    fn pasted(&self, _: &App) -> Option<String> {
-        self.copied.borrow().last().cloned()
+    fn pasted(&self, cx: &mut App, done: crate::clipboard::Done) {
+        let text = self.copied.borrow().last().cloned();
+        cx.defer(move |cx| done(text, cx));
     }
 
     fn share_services(&self, _: &str) -> Vec<SharedString> {
