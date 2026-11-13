@@ -217,7 +217,7 @@ index cfb1410c78..1e34d82e6b 100644
  mod test {
  
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index a875ee0f37..c3b5e41544 100644
+index a875ee0f37..555e75dfc6 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -399,6 +399,12 @@ pub trait Platform: 'static {
@@ -233,7 +233,7 @@ index a875ee0f37..c3b5e41544 100644
      fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
          None
      }
-@@ -1271,6 +1277,17 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+@@ -1271,6 +1277,24 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
      }
      fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
      fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
@@ -248,10 +248,17 @@ index a875ee0f37..c3b5e41544 100644
 +    /// they came in is over and what GPUI held, which came before them, is handed on. Called in an
 +    /// update.
 +    fn hand_on_later(&self) {}
++    /// What a key down GPUI held (`DispatchEventResult::later`) types if nothing takes it once it's
++    /// handed on, as the platform would have typed it then. Asked once for each such key, in order.
++    /// By default its character, if its modifiers are shift at most, as Wayland and X11 type one.
++    fn held_key_text(&self, keystroke: &Keystroke) -> Option<String> {
++        let typed = keystroke.modifiers.is_subset_of(&Modifiers::shift());
++        (keystroke.key_char.clone()).filter(|text| typed && !text.chars().any(char::is_control))
++    }
      fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
      /// Registers the callback invoked when [`Self::visibility`] changes. Only
      /// transitions are reported; the callback runs on the main thread outside
-@@ -1415,8 +1432,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+@@ -1415,8 +1439,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
      /// Renders the given scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -267,7 +274,7 @@ index a875ee0f37..c3b5e41544 100644
          anyhow::bail!("render_to_image not implemented for this platform")
      }
  }
-@@ -1934,6 +1956,54 @@ impl<T> AtlasTextureList<T> {
+@@ -1934,6 +1963,54 @@ impl<T> AtlasTextureList<T> {
      pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> {
          self.textures.iter_mut().flatten()
      }
@@ -322,7 +329,7 @@ index a875ee0f37..c3b5e41544 100644
  }
  
  #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-@@ -1994,11 +2064,47 @@ impl From<TileId> for etagere::AllocId {
+@@ -1994,11 +2071,47 @@ impl From<TileId> for etagere::AllocId {
      }
  }
  
@@ -370,14 +377,14 @@ index a875ee0f37..c3b5e41544 100644
  }
  
  #[expect(missing_docs)]
-@@ -2015,9 +2121,60 @@ impl PlatformInputHandler {
+@@ -2015,7 +2128,58 @@ impl PlatformInputHandler {
              cx,
              handler,
              focus_id: None,
 +            held: None,
-         }
-     }
- 
++        }
++    }
++
 +    /// Text the input method sends while the App is in an update, or while input waits behind one,
 +    /// waits in `held` with that input (#2672).
 +    pub(crate) fn with_held(mut self, held: std::rc::Rc<std::cell::RefCell<crate::HeldInput>>) -> Self {
@@ -396,7 +403,7 @@ index a875ee0f37..c3b5e41544 100644
 +        if crate::window::app_busy(&self.cx) {
 +            crate::window::hand_on_held_after_update(held, handle, &self.cx);
 +            return true;
-+        }
+         }
 +        if !held.borrow().is_empty() {
 +            crate::window::hand_on_held(&held, handle, &mut self.cx);
 +        }
@@ -426,12 +433,10 @@ index a875ee0f37..c3b5e41544 100644
 +    /// Changes the field's text as `input` says, in an update.
 +    pub(crate) fn apply(&mut self, input: TextInput, window: &mut Window, cx: &mut App) {
 +        apply_text(self.handler.as_mut(), input, window, cx);
-+    }
-+
+     }
+ 
      pub(crate) fn with_focus(mut self, focus_id: crate::FocusId) -> Self {
-         self.focus_id = Some(focus_id);
-         self
-@@ -2068,12 +2225,10 @@ impl PlatformInputHandler {
+@@ -2068,12 +2232,10 @@ impl PlatformInputHandler {
      }
  
      pub fn replace_text_in_range(&mut self, replacement_range: Option<Range<usize>>, text: &str) {
@@ -448,7 +453,7 @@ index a875ee0f37..c3b5e41544 100644
      }
  
      pub fn replace_and_mark_text_in_range(
-@@ -2082,24 +2237,16 @@ impl PlatformInputHandler {
+@@ -2082,24 +2244,16 @@ impl PlatformInputHandler {
          new_text: &str,
          new_selected_range: Option<Range<usize>>,
      ) {
@@ -479,7 +484,7 @@ index a875ee0f37..c3b5e41544 100644
      }
  
      pub fn paste(&mut self, item: ClipboardItem) {
-@@ -2596,7 +2743,8 @@ pub struct WindowOptions {
+@@ -2596,7 +2750,8 @@ pub struct WindowOptions {
      /// Leave this `false` for windows that rely on AppKit's native titlebar dragging.
      pub app_owns_titlebar_drag: bool,
  
@@ -742,7 +747,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..52a205d8d1 100644
+index c559412e56..3cb89af871 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
@@ -1013,7 +1018,7 @@ index c559412e56..52a205d8d1 100644
          }));
          platform_window.on_display_changed(Box::new({
              let cx = cx.to_async();
-@@ -2050,13 +2188,72 @@ impl Window {
+@@ -2050,13 +2188,73 @@ impl Window {
                      .log_err();
              }
          }));
@@ -1023,7 +1028,8 @@ index c559412e56..52a205d8d1 100644
              let mut cx = cx.to_async();
 +            let held = held_input.clone();
 +            let holds_keys = platform_window.holds_keys();
-+            // The platform keeps a key GPUI can't take now (`PlatformWindow::holds_keys`).
++            // A key GPUI can't take now goes later: the platform keeps it if it holds keys, and
++            // otherwise GPUI does (`PlatformWindow::holds_keys`, `held_key_text`).
 +            let later = DispatchEventResult {
 +                later: true,
 +                ..Default::default()
@@ -1047,7 +1053,7 @@ index c559412e56..52a205d8d1 100644
 +                } else {
 +                    // Still the update the held input came in: behind it.
 +                    let Some(event) = held.borrow_mut().hold(event) else {
-+                        return DispatchEventResult::default();
++                        return if key { later.clone() } else { Default::default() };
 +                    };
 +                    event
 +                };
@@ -1063,7 +1069,7 @@ index c559412e56..52a205d8d1 100644
 +                    Err(_) if kept.is_some() && app_busy(&cx) => {
 +                        held.borrow_mut().hold(kept.unwrap());
 +                        hand_on_held_after_update(held.clone(), handle, &cx);
-+                        DispatchEventResult::default()
++                        if key { later.clone() } else { Default::default() }
 +                    }
 +                    Err(_) => {
 +                        // A window activated inside an update tells its modifiers then: once it's
@@ -1090,7 +1096,7 @@ index c559412e56..52a205d8d1 100644
              })
          });
          platform_window.on_hit_test_window_control({
-@@ -2135,6 +2332,7 @@ impl Window {
+@@ -2135,6 +2333,7 @@ impl Window {
  
          Ok(Window {
              handle,
@@ -1098,7 +1104,7 @@ index c559412e56..52a205d8d1 100644
              invalidator,
              removed: false,
              platform_window,
-@@ -2156,6 +2354,9 @@ impl Window {
+@@ -2156,6 +2355,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -1108,18 +1114,19 @@ index c559412e56..52a205d8d1 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -2233,6 +2434,10 @@ impl Window {
+@@ -2233,6 +2435,11 @@ impl Window {
  pub struct DispatchEventResult {
      pub propagate: bool,
      pub default_prevented: bool,
-+    /// The key came while the App was in an update, so the platform keeps it, to go its whole way
-+    /// again once it's over (`PlatformWindow::holds_keys`), and AppKit or the like is told it was
-+    /// taken meanwhile.
++    /// The key came while the App was in an update and goes once it's over, so it isn't taken now.
++    /// A platform that holds keys keeps it, to go its whole way again then, and tells AppKit or the
++    /// like it was taken meanwhile (`PlatformWindow::holds_keys`). Otherwise GPUI keeps it, and
++    /// asks the platform what it types then (`PlatformWindow::held_key_text`).
 +    pub later: bool,
  }
  
  /// Indicates which region of the window is visible. Content falling outside of this mask will not be
-@@ -2884,7 +3089,14 @@ impl Window {
+@@ -2884,7 +3091,14 @@ impl Window {
      /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -1135,7 +1142,7 @@ index c559412e56..52a205d8d1 100644
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3636,6 +3848,14 @@ impl Window {
+@@ -3636,6 +3850,14 @@ impl Window {
          profiling::finish_frame!();
      }
  
@@ -1150,7 +1157,7 @@ index c559412e56..52a205d8d1 100644
      /// Presents the most recently drawn frame if it hasn't been presented yet.
      #[cfg(all(test, feature = "profiler"))]
      pub fn present_if_needed(&mut self) {
-@@ -3761,7 +3981,23 @@ impl Window {
+@@ -3761,7 +3983,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -1175,7 +1182,7 @@ index c559412e56..52a205d8d1 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4463,40 @@ impl Window {
+@@ -4227,6 +4465,40 @@ impl Window {
          result
      }
  
@@ -1216,7 +1223,7 @@ index c559412e56..52a205d8d1 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -4273,6 +4543,13 @@ impl Window {
+@@ -4273,6 +4545,13 @@ impl Window {
          result
      }
  
@@ -1230,7 +1237,7 @@ index c559412e56..52a205d8d1 100644
      /// When you call this method during [`Element::prepaint`], containing elements will attempt to
      /// scroll to cause the specified bounds to become visible. When they decide to autoscroll, they will call
      /// [`Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
-@@ -5417,7 +5694,9 @@ impl Window {
+@@ -5417,7 +5696,9 @@ impl Window {
          if focus_handle.is_focused(self) {
              let cx = self.to_async(cx);
              self.next_frame.input_handlers.push(Some(
@@ -1241,7 +1248,7 @@ index c559412e56..52a205d8d1 100644
              ));
          }
      }
-@@ -5578,14 +5857,52 @@ impl Window {
+@@ -5578,14 +5859,45 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -1259,14 +1266,7 @@ index c559412e56..52a205d8d1 100644
 +    /// its text, as the platform does with one that comes when GPUI can take it.
 +    fn dispatch_held(&mut self, event: PlatformInput, cx: &mut App) {
 +        let text = match &event {
-+            PlatformInput::KeyDown(key) => key.keystroke.key_char.clone().filter(|text| {
-+                let modifiers = key.keystroke.modifiers;
-+                // AltGr is control and alt on Windows; either alone makes a shortcut.
-+                !modifiers.platform
-+                    && !modifiers.function
-+                    && modifiers.control == modifiers.alt
-+                    && !text.chars().any(char::is_control)
-+            }),
++            PlatformInput::KeyDown(key) => self.platform_window.held_key_text(&key.keystroke),
 +            _ => None,
 +        };
 +        if self.dispatch_event(event, cx).propagate
@@ -1297,7 +1297,7 @@ index c559412e56..52a205d8d1 100644
      /// Dispatch a given keystroke as though the user had typed it.
      /// You can create a keystroke with Keystroke::parse("").
      pub fn dispatch_keystroke(&mut self, keystroke: Keystroke, cx: &mut App) -> bool {
-@@ -5801,6 +6118,7 @@ impl Window {
+@@ -5801,6 +6113,7 @@ impl Window {
          DispatchEventResult {
              propagate: cx.propagate_event,
              default_prevented: self.default_prevented,
@@ -1305,7 +1305,7 @@ index c559412e56..52a205d8d1 100644
          }
      }
  
-@@ -7097,18 +7415,24 @@ impl Window {
+@@ -7097,18 +7410,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
@@ -1333,7 +1333,7 @@ index c559412e56..52a205d8d1 100644
                          position: center,
                          modifiers: Modifiers::default(),
                          click_count: 1,
-@@ -7908,11 +8232,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
+@@ -7908,11 +8227,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
          let arena_cell = unsafe { &*arena_pointer };
          callback(&mut arena_cell.borrow_mut());
          Ok(())
@@ -1376,7 +1376,7 @@ index c559412e56..52a205d8d1 100644
  #[cfg(test)]
  mod tests {
      use std::{
-@@ -8179,6 +8534,101 @@ mod tests {
+@@ -8179,6 +8529,101 @@ mod tests {
          }
      }
  
