@@ -64,7 +64,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
   done
   send state
   title=$(sed -n "/^browser: drive $clicked: /,\$p" "$log" | grep "^browser: title [0-9]* [0-9]*: " | tail -1 | cut -d' ' -f4-)
-  bubble=$(sed -n "/^browser: drive $clicked: /,/^browser: drive $clicked done/p" "$log" | grep -c '^browser: link target window shown$')
+  bubble=$(sed -n "/^browser: drive $clicked: /,/^browser: drive $clicked done/p" "$log" | grep -c '^browser: link target window shown$' || true)
   if [ -n "$opened" ]; then
     opens=$((opens + 1))
     echo "probe: try $tries opened little window $opened, bubble before release $bubble | $title"
