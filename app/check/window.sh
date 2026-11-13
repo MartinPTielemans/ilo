@@ -1601,7 +1601,12 @@ else
   sed -n "/^browser: drive $behind: /,/^browser: drive $step: /p" "$log" |
     grep -q '^browser: reveal \(waits\|shown\)$' &&
     fail "the pointer at the edge of the window behind brought its sidebar out"
-  reveal_at_edge "the pointer at the edge of the first window, in front, didn't bring its sidebar out"
+  # Windows' pointer is real: it rests at the edge as the window comes in front, which hears it
+  # there as a hand's, so the sidebar can come out with the step that brings the window forward.
+  in_front=$((step + 1))
+  windows && in_front=$step
+  reveal_at_edge "the pointer at the edge of the first window, in front, didn't bring its sidebar out" \
+    "$in_front"
   check_reveal "with the first window's sidebar out in front of the second" shown
   send move 400 300
   expect '^browser: reveal hidden$' "the pointer past the first window's sidebar out didn't send it away"

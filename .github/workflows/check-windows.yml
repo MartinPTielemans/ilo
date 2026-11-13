@@ -123,6 +123,10 @@ jobs:
     env:
       # The areas of the app's debug log a dispatch asks for, on stderr, so in each run's log.
       BROWSER_LOG: ${{ inputs.log }}
+      # The driver sends the pointer and the keys as real input, as a hand's go through Windows'
+      # capture, foreground and hit test (platform/windows/drive.cc, #2544). The runner's desktop is
+      # the check's own, which the driver asks before it takes it.
+      BROWSER_DRIVE_REAL: 1
       # How many jobs the runs are dealt across, for runs.sh shard.
       SHARDS: ${{ inputs.runs == 'all' && 3 || 2 }}
       # The runs the Windows driver (platform/windows/drive.cc) is meant to pass so far.
