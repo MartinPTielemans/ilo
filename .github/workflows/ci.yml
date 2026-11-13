@@ -36,6 +36,7 @@ jobs:
       app_linux: ${{ steps.detect.outputs.app_linux }}
       app_mac: ${{ steps.proven.outputs.app_mac }}
       engine_windows: ${{ steps.detect.outputs.engine_windows }}
+      app_windows: ${{ steps.proven.outputs.app_windows }}
     steps:
       # History without file contents, for the merge base, and only the files the decision reads.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,6 +72,8 @@ jobs:
           TREE: ${{ github.event.head_commit.tree_id }}
           CORE_LINUX: ${{ steps.detect.outputs.core_linux }}
           APP_MAC: ${{ steps.detect.outputs.app_mac }}
+          APP_WINDOWS: ${{ steps.detect.outputs.app_windows }}
+          BRANCH_PUSH: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
         run: |
           for job in core_linux app_mac; do
             needed=$CORE_LINUX
@@ -81,6 +84,10 @@ jobs:
             fi
             echo "$job=$needed" >> "$GITHUB_OUTPUT"
           done
+          # app-windows.yml runs by itself on main, on a fork's pull request and once a pull
+          # request is labelled queue:ready, so here only a branch's push calls it.
+          [ "$BRANCH_PUSH" = true ] || APP_WINDOWS=false
+          echo "app_windows=$APP_WINDOWS" >> "$GITHUB_OUTPUT"
 
   core_linux:
     name: Core on Linux
@@ -98,6 +105,20 @@ jobs:
       contents: read
     uses: ./.github/workflows/app-mac.yml
 
+  # What only Windows compiles, before the pull request's queue:ready (#2556's link error reached
+  # the integrator's trial, with every check green). actions: read is its proven job's, which a
+  # called workflow can't have unless the caller grants it, though it runs only on main.
+  app_windows:
+    name: UI on Windows
+    needs: changes
+    if: needs.changes.outputs.app_windows == 'true'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/app-windows.yml
+    with:
+      from_ci: true
+
   # To hook in app-linux.yml or engine-windows.yml: replace its push and pull_request triggers with
   # `on: workflow_call`, add a job like core_linux gated on needs.changes.outputs.app_linux (or
   # engine_windows), and add the job to Check's needs. The job's key must match its output's name.
@@ -105,7 +126,7 @@ jobs:
   check:
     name: Check
     if: always() && needs.changes.result != 'skipped'
-    needs: [changes, core_linux, app_mac]
+    needs: [changes, core_linux, app_mac, app_windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}

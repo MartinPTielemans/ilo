@@ -11,6 +11,8 @@ outputs:
     value: ${{ steps.detect.outputs.app_mac }}
   engine_windows:
     value: ${{ steps.detect.outputs.engine_windows }}
+  app_windows:
+    value: ${{ steps.detect.outputs.app_windows }}
 runs:
   using: composite
   steps:
