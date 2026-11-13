@@ -1,3 +1,4 @@
+# check.sh runs this at 620.
 # The daily usage count (#1977) goes once a UTC day to the endpoint the build names, and nowhere
 # else, against an endpoint of the run's own, check/count-server.py, as only the prod build names
 # ilo's. On a profile of its own, which a launch finds new or not:

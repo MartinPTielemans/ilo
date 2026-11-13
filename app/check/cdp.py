@@ -41,6 +41,13 @@ takes a command a line on its standard input:
                   side, and the percent of the viewport the largest element fixed in place over
                   its middle covers, as a wall asking the user to turn their ad blocker off does,
                   or a site's own banner
+  hidden FILE [BASE]
+                  writes to FILE, as JSON, the attached page's elements at display: none from a
+                  style sheet, as the ad blocker's hiding would be, each as the selector its tag,
+                  id and classes make, with the elements that selector takes in the page and
+                  those of them shown; and with BASE, an earlier run's FILE for the same site, its
+                  selectors none of whose elements were shown then and some are now.
+                  Logs "cdp: hidden SELECTORS ELEMENTS SHOWN missed SELECTORS ELEMENTS in MS ms"
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, "failed"
@@ -480,6 +487,71 @@ def content():
     return value or "none"
 
 
+# The selectors, of tag, id and classes, of the elements the page has at display: none from a
+# style sheet, where an ad blocker's hiding would be: not those with neither id nor class, as
+# their selector would take in the page's every such element, nor those under one, nor those the
+# page hides itself with an inline style or the hidden attribute. Which of them the ad blocker
+# hid can't be told here: an extension's injected sheets and the browser's user ones never come
+# to DevTools, not even as rules a node matches, so a run is held to another's on the same site.
+HIDDEN_NOW = """(() => {
+  const kept = new Set(["SCRIPT", "STYLE", "TEMPLATE", "HEAD", "META", "LINK", "TITLE",
+                        "NOSCRIPT", "BR", "PARAM", "SOURCE", "TRACK"]);
+  const found = new Set();
+  for (const element of document.querySelectorAll("body *")) {
+    if (kept.has(element.tagName) || element.hidden || element.style.display === "none") continue;
+    if (!element.id && !element.classList.length) continue;
+    if (getComputedStyle(element).display !== "none") continue;
+    const parent = element.parentElement;
+    if (parent && getComputedStyle(parent).display === "none") continue;
+    found.add(element.localName + (element.id ? "#" + CSS.escape(element.id) : "") +
+              [...element.classList].map((name) => "." + CSS.escape(name)).join(""));
+    if (found.size === 2000) break;
+  }
+  return [...found];
+})()"""
+# Each selector's elements in the page and those of them shown, a box with an area.
+COUNT = """((selectors) => {
+  const counted = {};
+  for (const selector of selectors) {
+    let found;
+    try { found = document.querySelectorAll(selector); } catch (e) { continue; }
+    let shown = 0;
+    for (const element of found) {
+      const box = element.getBoundingClientRect();
+      if (box.width > 0 && box.height > 0 && getComputedStyle(element).visibility !== "hidden") shown++;
+    }
+    counted[selector] = [found.length, shown];
+  }
+  return JSON.stringify(counted);
+})"""
+
+
+def evaluate(expression):
+    return call("Runtime.evaluate", {"expression": expression, "returnByValue": True},
+                session).get("result", {}).get("value")
+
+
+def count(selectors):
+    return json.loads(evaluate("%s(%s)" % (COUNT, json.dumps(selectors))) or "{}")
+
+
+def hidden(path, base):
+    began = time.monotonic()
+    found = {"hidden": count(evaluate(HIDDEN_NOW) or [])}
+    before = json.load(open(base, encoding="utf-8"))["hidden"] if base else {}
+    # What the earlier run hid all of and this one shows some of. A selector whose elements were
+    # partly shown then, as a column's, is the page's own layout, which changes from load to load.
+    found["missed"] = {selector: shown for selector, (_, shown) in count(list(before)).items()
+                       if shown and not before[selector][1]}
+    found["ms"] = int((time.monotonic() - began) * 1000)
+    with open(path, "w", encoding="utf-8") as out:
+        json.dump(found, out)
+    return "%d %d %d missed %d %d in %d ms" % (
+        len(found["hidden"]), sum(n for n, _ in found["hidden"].values()),
+        sum(shown for _, shown in found["hidden"].values()),
+        len(found["missed"]), sum(found["missed"].values()), found["ms"])
+
+
 for line in sys.stdin:
     words = line.split()
     if words[:1] == ["attach"] and len(words) == 2:
@@ -514,6 +586,8 @@ for line in sys.stdin:
         log("content " + content())
     elif words[:1] == ["video"] and len(words) == 2:
         log("video " + video(words[1]))
+    elif words[:1] == ["hidden"] and len(words) in (2, 3) and session:
+        log("hidden " + hidden(words[1], words[2] if len(words) == 3 else None))
     elif words[:1] == ["requests"] and len(words) == 2 and session and not recording:
         recording = open(words[1], "w", encoding="utf-8", buffering=1)
         call("Network.enable", {}, session)

@@ -4,7 +4,7 @@
 top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI), or with front the
 one in front alone. `end-session PID` ends the session for the process as Windows does when the
 user signs out: each of its top-level windows is asked WM_QUERYENDSESSION, and once all agree,
-told WM_ENDSESSION, and it fails if one refuses (#1990). `list PID` prints each top-level window of the process, with its class, title,
+told WM_ENDSESSION, the hidden ones first, and it fails if one refuses (#1990). `list PID` prints each top-level window of the process, with its class, title,
 state and whether it's a browser window, minimized (IsIconic) or the one in front
 (GetForegroundWindow). `icon PID ICO` checks that each window of the process the taskbar and
 Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads them, and
@@ -177,7 +177,9 @@ def end_session(pid):
     end, and the windows left then answer nothing."""
     user32.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT, w.UINT,
                                            ctypes.POINTER(ctypes.c_size_t)]
-    found = windows(pid)
+    # Windows promises no order, and its stacking put GPUI's hidden window first only while ilo was
+    # behind another app's, which exited the process under Chromium (#2617): the hidden ones first.
+    found = sorted(windows(pid), key=lambda hwnd: bool(user32.IsWindowVisible(hwnd)))
     for hwnd in found:
         answer = ctypes.c_size_t()
         sent = user32.SendMessageTimeoutW(hwnd, WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF,

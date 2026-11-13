@@ -7,6 +7,9 @@
   out. One that stands in for a wait on the app passes on a fast machine and fails on a slow one.
 - A `none_since` straight after a `send` of input follows an `expect` that the app handled it:
   without one it can pass because the app hasn't got to the input yet.
+- A file in app/check/ that check.sh runs starts with its place among the runs, in the form
+  check.sh reads (#2562). A file without one is a helper or a script of its own, which another
+  file names as check/<file>; a run whose line is missing or misspelt would never run, unsaid.
 
 Run from anywhere in the checkout. Prints each finding and exits 1 if there are any.
 """
@@ -198,8 +201,33 @@ def quiet_after_send():
     return found
 
 
+# --- Each run's place ------------------------------------------------------------------------
+
+PLACE = re.compile(r"# check\.sh runs this at [0-9]+(, only when named)?\.")
+
+
+def run_places():
+    found = []
+    others = {path: read(path) for path in tracked(*READERS)}
+    for path in tracked("app/check/*.sh"):
+        lines = read(path).splitlines()
+        said = [n for n, line in enumerate(lines) if line.startswith("# check.sh runs this")]
+        if said:
+            for n in said:
+                if n != 0 or not PLACE.fullmatch(lines[n]):
+                    found.append((path, n + 1, "a run's place is its first line, as \"# check.sh "
+                                  "runs this at 120.\" or \"# check.sh runs this at 700, only when "
+                                  "named.\", or check.sh never runs it"))
+            continue
+        name = "check/" + path.rsplit("/", 1)[1]
+        if not any(name in text for other, text in others.items() if other != path):
+            found.append((path, 1, "no first line \"# check.sh runs this at <n>.\", so check.sh "
+                          "never runs it, and no other file names " + name + " to run it"))
+    return found
+
+
 def main():
-    found = unread_markers() + bare_sleeps() + quiet_after_send()
+    found = unread_markers() + bare_sleeps() + quiet_after_send() + run_places()
     for path, line, message in found:
         print(f"::error file={path},line={line}::{message}")
     print(f"{len(found)} found")

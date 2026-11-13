@@ -1,3 +1,4 @@
+# check.sh runs this at 20.
 # Clicks move keyboard focus between the page and the UI, and typing goes where the focus is. With
 # the page focused, the browser's reserved shortcuts reach the UI and never the page, and the others
 # reach the page first, which can keep them. ⌘N, from the page and the UI, opens a window whose UI

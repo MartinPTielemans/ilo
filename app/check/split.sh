@@ -1,3 +1,4 @@
+# check.sh runs this at 150.
 # Add Split View, from the menu, ⌃+ from the page, ⌥-click on "+ New Tab" and the tab menu, narrows
 # the page at once for a pane on its right, with the command bar over it, which takes typing and
 # escape takes back. ⌥-click on a link, and the link menu's Open Link in Split View, open it in a

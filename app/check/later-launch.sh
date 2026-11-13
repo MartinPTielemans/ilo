@@ -1,3 +1,4 @@
+# check.sh runs this at 680.
 # Keys typed in a launch that follows another on the same X server reach the UI as typed (#2511).
 # The first launch's last key goes with ⌘, which Linux's driver has the server's keyboard hold, as
 # a lock, while it does, and the launch quits holding it. The second types a search in Settings,
