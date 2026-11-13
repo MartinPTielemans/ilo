@@ -468,6 +468,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/wait":
             time.sleep(3600)
             return
+        # Proof only (#2640): a page that answers late, as one that loads after Peek has settled.
+        if path.startswith("/late/"):
+            time.sleep(2)
+            body = open(sys.argv[1] + path[len("/late"):], "rb").read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/slow":
             time.sleep(1)
             body = b"slow"

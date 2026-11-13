@@ -47,6 +47,10 @@ const FROM_SCALE: f32 = 0.5;
 pub(crate) const CLOSE: f32 = 0.2;
 const KEEP: f32 = 0.275;
 
+thread_local! {
+    static PROBE_LEFT: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
 /// What the preview asks of its window and the core.
 pub trait Host {
     /// Puts `tab`'s page in the preview's window at `page`, from its top left, with corners of
@@ -831,6 +835,7 @@ impl LinkPreview {
             "closing"
         };
         log!("browser: link preview {what} ({why})");
+        PROBE_LEFT.set(Some(Instant::now()));
         // A page under the window that shows leaves in the card's frames first (render), while it
         // still has the keyboard, as laying it out takes it.
         shown.releasing = how == Leave::Close && shown.cut && why != "dismissed";
@@ -867,6 +872,11 @@ impl LinkPreview {
         let Some(shown) = self.preview.take() else {
             return;
         };
+        // Proof only (#2640): when it ended, from the key or click that closed or kept it.
+        if let Some(at) = PROBE_LEFT.take() {
+            let ms = at.elapsed().as_secs_f64() * 1000.;
+            log!("browser: probe close {ms:.1} ms");
+        }
         match shown.leaving {
             Some((_, Leave::Keep, _)) => {
                 self.host.keep(shown.window, shown.tab, shown.archived);
@@ -1003,6 +1013,13 @@ impl Render for LinkPreview {
                     (None, false) if !moving => {
                         if !settling {
                             shown.cut = shown.placed == rest;
+                            // Proof only (#2640): when the hole opens, from the motion's start.
+                            if shown.cut {
+                                let ms = shown
+                                    .shown
+                                    .map_or(0., |at| at.elapsed().as_secs_f64() * 1000.);
+                                log!("browser: probe open {ms:.1} ms");
+                            }
                             shown.lay_out(&*self.host, rest);
                         }
                         window.request_animation_frame();
