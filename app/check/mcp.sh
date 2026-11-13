@@ -338,16 +338,16 @@ opened=$(call open_tab "{\"url\":\"localhost:$port/documents.html\"}")
 documents=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
 ref=$(printf '%s\n' "$opened" | sed -n 's/.*- link "Report" \[\(e[0-9]*\)\].*/\1/p' | head -1)
 clicked=$(call click "{\"tab\":$documents,\"ref\":\"$ref\"}")
-case "$clicked" in
-  "error: That link opens "*"(ms-word:), outside the browser"*"The tab stayed on “Documents”."*) ;;
-  *) fail "clicking a link to an app answered: $clicked" ;;
-esac
 # Proof only: the startup trace is written once its 12 s end, after the click above.
 for _ in $(seq 120); do
   [ -s "$out/startup-trace.json" ] && tail -c 64 "$out/startup-trace.json" | grep -q '}' && break
   sleep 0.5
 done
-echo "startup trace: $(wc -c < "$out/startup-trace.json" 2>/dev/null || echo none) bytes"
+echo "startup trace: $(wc -c < "$out/startup-trace.json" 2>/dev/null || echo none) bytes" >&2
+case "$clicked" in
+  "error: That link opens "*"(ms-word:), outside the browser"*"The tab stayed on “Documents”."*) ;;
+  *) fail "clicking a link to an app answered: $clicked" ;;
+esac
 listed=$(call list_tabs '{}')
 printf '%s\n' "$listed" | grep -q "^. $documents  Documents  .*/documents\.html\$" ||
   fail "the link to an app took the tab off its page: $listed"
