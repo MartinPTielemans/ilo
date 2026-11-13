@@ -5,9 +5,9 @@
 # tab's row shows its page's favicon, and keeps it until the next page has loaded without one. A
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
 # warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
-# and stays as escape closes the command bar over it, and a local one over http. A right-click on reload lists Reload, Hard Reload
-# and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache, not
-# another site's, before the page loads again.
+# and stays as escape closes the command bar over it, and a local one over http. A right-click on
+# reload lists Reload, Hard Reload and Clear Site Data and Reload, the last deleting the site's
+# cookies, storage and cache, not another site's, before the page loads again.
 
 # Back, forward, reload and stop. stuck.test leads to a server that takes connections and never
 # answers, so its page keeps loading until it's stopped, and $plain to the check's own, which has no
