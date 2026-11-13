@@ -983,9 +983,11 @@ impl Render for LinkPreview {
         // window's draws over it, and the host hears again as that moves. It can't scale or fade,
         // and isn't resized for the motion, as a page reads its size as it loads (#2519): it waits
         // out of sight while the card grows with a plate where it will show, comes in under the
-        // plate as the card comes to rest, and shows through the hole from the next frame. As it
-        // closes, the plate is in the hole the frame before the hole closes and the page leaves,
-        // and the card shrinks back with it.
+        // plate the frame after the card first draws at rest, and shows through the hole from the
+        // frame after that. As it closes, the plate is in the hole the frame before the hole
+        // closes and the page leaves, and the card shrinks back with it. The page and the hole
+        // move at once, and a frame reaches the screen later, so each waits a frame for the one
+        // that covers it to be there.
         let mut leave_to = None;
         let (page, plate) = match under {
             false => (page, false),
@@ -999,8 +1001,10 @@ impl Render for LinkPreview {
                         (rest, false)
                     }
                     (None, false) if !moving => {
-                        shown.cut = shown.placed == rest;
-                        shown.lay_out(&*self.host, rest);
+                        if !settling {
+                            shown.cut = shown.placed == rest;
+                            shown.lay_out(&*self.host, rest);
+                        }
                         window.request_animation_frame();
                         (if shown.cut { rest } else { none }, false)
                     }
