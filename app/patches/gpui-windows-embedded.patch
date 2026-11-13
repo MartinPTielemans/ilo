@@ -83,6 +83,34 @@ index 4ad4cc77b3..48291220e4 100644
          if current == DIRECTMANIPULATION_READY {
              self.end_gesture();
  
+diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
+index 622c1cb604..697ce244f7 100644
+--- a/crates/gpui_windows/src/directx_atlas.rs
++++ b/crates/gpui_windows/src/directx_atlas.rs
+@@ -161,17 +161,18 @@ impl DirectXAtlasTextures {
+         min_size: Size<DevicePixels>,
+         kind: AtlasTextureKind,
+     ) -> Option<&mut DirectXAtlasTexture> {
+-        const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
+-            width: DevicePixels(1024),
+-            height: DevicePixels(1024),
+-        };
+         // Max texture size for DirectX. See:
+         // https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-resources-limits
+         const MAX_ATLAS_SIZE: Size<DevicePixels> = Size {
+             width: DevicePixels(16384),
+             height: DevicePixels(16384),
+         };
+-        let size = min_size.min(&MAX_ATLAS_SIZE).max(&DEFAULT_ATLAS_SIZE);
++        let size = match kind {
++            AtlasTextureKind::Monochrome => &self.monochrome_textures,
++            AtlasTextureKind::Polychrome => &self.polychrome_textures,
++            AtlasTextureKind::Subpixel => &self.subpixel_textures,
++        }
++        .next_size(min_size, MAX_ATLAS_SIZE);
+         let pixel_format;
+         let bind_flag;
+         let bytes_per_pixel;
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
 index 98a13f304c..6cfbd572ae 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
@@ -287,7 +315,7 @@ index 98a13f304c..6cfbd572ae 100644
  
  #[inline]
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..cb0838e0bb 100644
+index 08f91bd626..37c28be9ee 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -103,13 +103,14 @@ impl WindowsWindowInner {
@@ -469,7 +497,7 @@ index 08f91bd626..cb0838e0bb 100644
      fn handle_ime_composition(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          let ctx = ImeContext::get(handle)?;
          self.handle_ime_composition_inner(*ctx, lparam)
-@@ -933,7 +1052,30 @@ impl WindowsWindowInner {
+@@ -933,7 +1052,35 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -498,10 +526,15 @@ index 08f91bd626..cb0838e0bb 100644
 +    }
 +
 +    fn handle_display_change_msg(self: &Rc<Self>, handle: HWND) -> Option<isize> {
++        // What the window showed may be gone with the change: after the display adapter restarts
++        // it shows nothing until it presents again, which removes the device the restart left
++        // stale, and the device's removal has GPUI recover (#2536). So it draws all of it again.
++        self.state.force_render_pending.set(true);
++        self.state.frame_want.wake();
          let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
          if new_monitor.is_invalid() {
              log::error!("No monitor detected!");
-@@ -944,12 +1086,21 @@ impl WindowsWindowInner {
+@@ -944,12 +1091,21 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -528,7 +561,7 @@ index 08f91bd626..cb0838e0bb 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1021,6 +1172,12 @@ impl WindowsWindowInner {
+@@ -1021,6 +1177,12 @@ impl WindowsWindowInner {
      }
  
      fn handle_nc_mouse_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
@@ -541,7 +574,7 @@ index 08f91bd626..cb0838e0bb 100644
          self.start_tracking_mouse(handle, TME_LEAVE | TME_NONCLIENT);
          self.restore_cursor_after_hide();
  
-@@ -1335,6 +1492,8 @@ impl WindowsWindowInner {
+@@ -1335,6 +1497,8 @@ impl WindowsWindowInner {
  
      fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {
          self.state.direct_manipulation.on_pointer_hit_test(wparam);
@@ -550,7 +583,7 @@ index 08f91bd626..cb0838e0bb 100644
          None
      }
  
-@@ -1347,16 +1506,20 @@ impl WindowsWindowInner {
+@@ -1347,16 +1511,20 @@ impl WindowsWindowInner {
              }
              // Validate the region so a nested message pump doesn't keep
              // re-dispatching WM_PAINT for the still-invalid region in a busy
@@ -573,7 +606,7 @@ index 08f91bd626..cb0838e0bb 100644
  
          let events = self.state.direct_manipulation.drain_events();
          if !events.is_empty() {
-@@ -1823,3 +1986,70 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +1991,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -779,10 +812,34 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..b1932b27fb 100644
+index 095e009e23..ca96f169ff 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
-@@ -42,6 +42,7 @@ use gpui::*;
+@@ -20,7 +20,10 @@ use windows::{
+     UI::ViewManagement::UISettings,
+     Win32::{
+         Foundation::*,
+-        Graphics::{Direct3D11::ID3D11Device, Gdi::*},
++        Graphics::{
++            Direct3D11::{ID3D11Device, ID3D11Device4},
++            Gdi::*,
++        },
+         Security::Credentials::*,
+         System::{
+             Com::*,
+@@ -29,7 +32,10 @@ use windows::{
+             Power::*,
+             SystemInformation::*,
+             SystemServices::POWER_REQUEST_CONTEXT_VERSION,
+-            Threading::{POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0},
++            Threading::{
++                CreateEventW, INFINITE, POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT,
++                REASON_CONTEXT_0, RegisterWaitForSingleObject, UnregisterWaitEx, WT_EXECUTEDEFAULT,
++            },
+         },
+         UI::{Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
+     },
+@@ -42,6 +48,7 @@ use gpui::*;
  struct TrackedWindow {
      handle: SafeHwnd,
      frame_signal: Arc<PlatformFrameSignal>,
@@ -790,7 +847,7 @@ index 095e009e23..b1932b27fb 100644
  }
  
  impl TrackedWindow {
-@@ -372,10 +373,17 @@ impl WindowsPlatform {
+@@ -372,10 +379,17 @@ impl WindowsPlatform {
          if active_window_hwnd.is_invalid() {
              return None;
          }
@@ -810,7 +867,7 @@ index 095e009e23..b1932b27fb 100644
              .map(|hwnd| hwnd.as_raw())
      }
  
-@@ -422,7 +430,7 @@ impl WindowsPlatform {
+@@ -422,7 +436,7 @@ impl WindowsPlatform {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
              // Not joined: the thread can be sending this thread a message. It exits after its
              // next vsync, and drops its reference to the devices then.
@@ -819,7 +876,7 @@ index 095e009e23..b1932b27fb 100644
          }
          if let Some(text_system) = &self.direct_write_text_system {
              text_system.release_gpu();
-@@ -449,8 +457,25 @@ impl WindowsPlatform {
+@@ -449,10 +463,18 @@ impl WindowsPlatform {
          std::thread::Builder::new()
              .name("VSyncProvider".to_owned())
              .spawn(move || {
@@ -827,9 +884,26 @@ index 095e009e23..b1932b27fb 100644
 +                // either finds this to wake or is seen wanting one.
 +                *VSYNC_THREAD.lock().unwrap() = Some(std::thread::current());
                  let vsync_provider = VSyncProvider::new();
++                // Windows takes the device away as its adapter restarts or resets. While no
++                // window wants a frame this thread is parked, and the windows show nothing until
++                // the next input asks for one (#2536), so the removal wakes it to recover.
++                let mut device_removed = DeviceRemovedWake::new();
++                if let Some(wake) = &mut device_removed {
++                    wake.watch(&directx_device.device);
++                }
                  loop {
-+                    if stop.load(Ordering::Acquire) {
-+                        break;
+-                    let signal_source = vsync_provider.wait_for_vsync();
+-                    let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
+                     if stop.load(Ordering::Acquire) {
+                         break;
+                     }
+@@ -468,11 +490,33 @@ impl WindowsPlatform {
+                         ) {
+                             panic!("Device lost: {err}");
+                         }
++                        if let Some(wake) = &mut device_removed {
++                            wake.watch(&directx_device.device);
++                        }
 +                    }
 +                    let Some(windows) = all_windows.upgrade() else {
 +                        break;
@@ -842,10 +916,12 @@ index 095e009e23..b1932b27fb 100644
 +                        std::thread::park();
 +                        continue;
 +                    }
-                     let signal_source = vsync_provider.wait_for_vsync();
-                     let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
-                     if stop.load(Ordering::Acquire) {
-@@ -473,6 +498,9 @@ impl WindowsPlatform {
++                    let signal_source = vsync_provider.wait_for_vsync();
++                    let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
++                    if stop.load(Ordering::Acquire) {
++                        break;
+                     }
+                     let Some(all_windows) = all_windows.upgrade() else {
                          break;
                      };
                      for hwnd in all_windows.read().iter() {
@@ -855,10 +931,80 @@ index 095e009e23..b1932b27fb 100644
                          unsafe {
                              if let Some(signal_at) = signal_at {
                                  if IsWindowVisible(hwnd.as_raw()).as_bool()
-@@ -495,6 +523,14 @@ impl WindowsPlatform {
+@@ -495,6 +539,84 @@ impl WindowsPlatform {
      }
  }
  
++/// Wakes the vsync thread when Windows removes its D3D device, by the event Direct3D signals then,
++/// so a removal while the thread is parked is recovered from before the next input.
++struct DeviceRemovedWake {
++    event: HANDLE,
++    wait: HANDLE,
++    watched: Option<(ID3D11Device4, u32)>,
++}
++
++impl DeviceRemovedWake {
++    fn new() -> Option<Self> {
++        unsafe {
++            let event = CreateEventW(None, false, false, None).log_err()?;
++            let mut wait = HANDLE::default();
++            if RegisterWaitForSingleObject(
++                &mut wait,
++                event,
++                Some(wake_vsync_thread),
++                None,
++                INFINITE,
++                WT_EXECUTEDEFAULT,
++            )
++            .log_err()
++            .is_none()
++            {
++                CloseHandle(event).log_err();
++                return None;
++            }
++            Some(Self {
++                event,
++                wait,
++                watched: None,
++            })
++        }
++    }
++
++    /// Watches `device` in place of the one before, which a recovery replaced.
++    fn watch(&mut self, device: &ID3D11Device) {
++        self.unwatch();
++        let Some(device) = device.cast::<ID3D11Device4>().log_err() else {
++            return;
++        };
++        if let Some(cookie) = unsafe { device.RegisterDeviceRemovedEvent(self.event) }.log_err() {
++            self.watched = Some((device, cookie));
++        }
++    }
++
++    fn unwatch(&mut self) {
++        if let Some((device, cookie)) = self.watched.take() {
++            unsafe { device.UnregisterDeviceRemoved(cookie) };
++        }
++    }
++}
++
++impl Drop for DeviceRemovedWake {
++    fn drop(&mut self) {
++        self.unwatch();
++        unsafe {
++            // Waits for a callback that's running, so the event outlives it.
++            UnregisterWaitEx(self.wait, Some(INVALID_HANDLE_VALUE)).log_err();
++            CloseHandle(self.event).log_err();
++        }
++    }
++}
++
++unsafe extern "system" fn wake_vsync_thread(_: *mut std::ffi::c_void, _: bool) {
++    if let Some(thread) = VSYNC_THREAD.lock().unwrap().as_ref() {
++        thread.unpark();
++    }
++}
++
 +/// Stops the vsync thread, which may be parked waiting for a window to want a frame.
 +fn stop_vsync(stop: &AtomicBool) {
 +    stop.store(true, Ordering::Release);
@@ -870,7 +1016,7 @@ index 095e009e23..b1932b27fb 100644
  fn encode_restart_arguments(arguments: &[OsString]) -> OsString {
      // `Start-Process` accepts a single native command line, so quote each argument according to
      // the Windows argv parsing rules before passing the complete string through the environment.
-@@ -587,6 +623,11 @@ impl Platform for WindowsPlatform {
+@@ -587,6 +709,11 @@ impl Platform for WindowsPlatform {
          }
          on_finish_launching();
  
@@ -882,7 +1028,7 @@ index 095e009e23..b1932b27fb 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -748,6 +789,14 @@ impl Platform for WindowsPlatform {
+@@ -748,6 +875,14 @@ impl Platform for WindowsPlatform {
              .map(|inner| inner.handle)
      }
  
@@ -897,7 +1043,7 @@ index 095e009e23..b1932b27fb 100644
      fn open_window(
          &self,
          handle: AnyWindowHandle,
-@@ -761,6 +810,7 @@ impl Platform for WindowsPlatform {
+@@ -761,6 +896,7 @@ impl Platform for WindowsPlatform {
          self.raw_window_handles.write().push(TrackedWindow {
              handle: handle.into(),
              frame_signal: window.state.frame_signal.clone(),
@@ -905,7 +1051,33 @@ index 095e009e23..b1932b27fb 100644
          });
  
          Ok(Box::new(window))
-@@ -1409,7 +1459,7 @@ impl WindowsPlatformInner {
+@@ -1253,21 +1389,11 @@ impl WindowsPlatformInner {
+         Some(0)
+     }
+ 
++    // In Chromium the process is the core's to end. The browser windows hear the session end too, in
++    // whatever order Windows tells the app's windows, and end it through Chrome once it has written
++    // what must be kept (#1990). Exiting here first, as ilo behind another app's window did, ran
++    // chrome.dll's teardown under its running threads, which Chrome makes a crash (#2617).
+     fn handle_end_session(&self) -> Option<isize> {
+-        let mut shutdown_completed = false;
+-        self.with_callback(
+-            |callbacks| &callbacks.quit,
+-            |callback| shutdown_completed = callback(),
+-        );
+-        log::logger().flush();
+-        if shutdown_completed {
+-            std::process::exit(0);
+-        }
+-
+-        // Shutdown couldn't run synchronously, since the AppCell is already borrowed.
+-        // Windows may terminate the application as soon as we return from this handler, but if we post a WM_QUIT message now,
+-        // we may get to gracefully shut down the app before we're terminated by the OS.
+-        unsafe { PostQuitMessage(0) };
+         Some(0)
+     }
+ 
+@@ -1409,7 +1535,7 @@ impl WindowsPlatformInner {
  impl Drop for WindowsPlatform {
      fn drop(&mut self) {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
@@ -914,7 +1086,7 @@ index 095e009e23..b1932b27fb 100644
          }
          unsafe {
              if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
-@@ -1637,10 +1687,43 @@ fn file_save_dialog(
+@@ -1637,10 +1763,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -959,7 +1131,16 @@ index 095e009e23..b1932b27fb 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1980,3 +2063,12 @@ mod tests {
+@@ -1763,6 +1922,8 @@ fn handle_gpu_device_lost(
+             }
+         }
+     }
++    // check.sh reads this: each window has drawn on the new device, as the message is sent.
++    eprintln!("browser: gpui redrew its windows on a new device");
+     Ok(())
+ }
+ 
+@@ -1980,3 +2141,12 @@ mod tests {
          );
      }
  }
@@ -1051,7 +1232,7 @@ index 5121c41b61..3d7c019c33 100644
      fn successful_compositor_wait_reports_native_callback() {
          let provider = VSyncProvider {
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index c467101fc8..be358bd26e 100644
+index c467101fc8..4f9f9dda90 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -32,6 +32,18 @@ use crate::direct_manipulation::DirectManipulationHandler;
@@ -1089,7 +1270,7 @@ index c467101fc8..be358bd26e 100644
              input_handler: Cell::new(input_handler),
              ime_enabled: Cell::new(true),
              pending_surrogate: Cell::new(pending_surrogate),
-@@ -489,7 +503,19 @@ impl WindowsWindow {
+@@ -489,7 +503,18 @@ impl WindowsWindow {
                  .unwrap_or(""),
          );
  
@@ -1097,7 +1278,6 @@ index c467101fc8..be358bd26e 100644
 +        let host_window = Some(NEXT_HOST_WINDOW.replace(0))
 +            .filter(|&host| host != 0)
 +            .map(|host| HWND(host as _));
-+        let parent_hwnd = host_window.or(parent_hwnd);
 +        // A child window leaves its frame, and moving and sizing it, to its host.
 +        let hide_title_bar = hide_title_bar && host_window.is_none();
 +        let (is_movable, is_resizable, is_minimizable) = if host_window.is_some() {
@@ -1110,7 +1290,7 @@ index c467101fc8..be358bd26e 100644
              (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
          } else {
              let mut dwstyle = WS_SYSMENU;
-@@ -510,6 +536,11 @@ impl WindowsWindow {
+@@ -510,6 +535,11 @@ impl WindowsWindow {
  
              (dwexstyle, dwstyle)
          };
@@ -1122,7 +1302,7 @@ index c467101fc8..be358bd26e 100644
          if !disable_direct_composition {
              dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
          }
-@@ -528,9 +559,9 @@ impl WindowsWindow {
+@@ -528,9 +558,9 @@ impl WindowsWindow {
              handle,
              hide_title_bar,
              display,
@@ -1135,7 +1315,7 @@ index c467101fc8..be358bd26e 100644
              min_size: params.window_min_size,
              executor,
              current_cursor,
-@@ -546,16 +577,25 @@ impl WindowsWindow {
+@@ -546,17 +576,29 @@ impl WindowsWindow {
              draw_coordinator,
              parent_hwnd,
          };
@@ -1158,14 +1338,19 @@ index c467101fc8..be358bd26e 100644
 -                CW_USEDEFAULT,
 -                CW_USEDEFAULT,
 -                CW_USEDEFAULT,
+-                parent_hwnd,
 +                x,
 +                y,
 +                width,
 +                height,
-                 parent_hwnd,
++                // A host isn't the window's GPUI parent, a modal dialog's, which takes the foreground
++                // back as the window is destroyed and would bring the host's window in front of the
++                // app the user moved on to (#2216).
++                host_window.or(parent_hwnd),
                  None,
                  Some(hinstance.into()),
-@@ -569,6 +609,14 @@ impl WindowsWindow {
+                 Some(&context as *const _ as *const _),
+@@ -569,6 +611,14 @@ impl WindowsWindow {
          let hwnd = creation_result?;
          let this = this.unwrap();
  
@@ -1180,7 +1365,7 @@ index c467101fc8..be358bd26e 100644
          register_drag_drop(&this)?;
          set_non_rude_hwnd(hwnd, true);
          configure_dwm_dark_mode(hwnd, appearance);
-@@ -582,6 +630,11 @@ impl WindowsWindow {
+@@ -582,6 +632,11 @@ impl WindowsWindow {
              }
              unsafe { SetWindowPlacement(hwnd, &placement)? };
          } else {
@@ -1192,7 +1377,7 @@ index c467101fc8..be358bd26e 100644
              this.state.initial_placement.set(Some(WindowOpenStatus {
                  placement,
                  state: WindowOpenState::Windowed,
-@@ -623,7 +676,8 @@ impl Drop for WindowsWindow {
+@@ -623,7 +678,8 @@ impl Drop for WindowsWindow {
                  this.dialog_owner.when_idle().await;
                  let handle = this.hwnd;
                  unsafe {
@@ -1202,7 +1387,7 @@ index c467101fc8..be358bd26e 100644
                      DestroyWindow(handle).log_err();
                  }
              })
-@@ -924,7 +978,12 @@ impl PlatformWindow for WindowsWindow {
+@@ -924,7 +980,12 @@ impl PlatformWindow for WindowsWindow {
                  set_window_composition_attribute(hwnd, None, 0);
              }
              WindowBackgroundAppearance::Transparent => {
@@ -1216,7 +1401,7 @@ index c467101fc8..be358bd26e 100644
              }
              WindowBackgroundAppearance::Blurred => {
                  set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
-@@ -968,7 +1027,14 @@ impl PlatformWindow for WindowsWindow {
+@@ -968,7 +1029,14 @@ impl PlatformWindow for WindowsWindow {
          self.state.is_fullscreen()
      }
  
@@ -1232,7 +1417,7 @@ index c467101fc8..be358bd26e 100644
          self.state.callbacks.request_frame.set(Some(callback));
      }
  
-@@ -1041,7 +1107,6 @@ impl PlatformWindow for WindowsWindow {
+@@ -1041,7 +1109,6 @@ impl PlatformWindow for WindowsWindow {
              .log_err();
      }
  

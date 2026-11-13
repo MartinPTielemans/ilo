@@ -313,6 +313,9 @@ struct Browser {
   void (*reveal_pointer)(void* ui_view, double x);
   double reveal_width = 0;
   id reveal_monitor;
+  // Whether the sidebar is on the window's right, with the window's buttons and the reveal there
+  // too (host_set_sidebar_right).
+  bool sidebar_right = false;
 
   // A Little ilo window's, and whether it grows in as it first comes on screen
   // (host_set_window_little). Its opening, held small until its UI draws and then growing, the
@@ -402,6 +405,9 @@ struct Overlay {
   HostBlurView* blur = nil;
   // The browser it shows over.
   Browser* over = nullptr;
+  // The window of Chromium's over the page that had the keyboard as it showed, such as a tab's
+  // dialog, which gets it back as the overlay hides.
+  __weak NSWindow* keyboard_from = nil;
   bool shown = false;
   void (*dismissed)(void) = nullptr;
   double radius = 0;
@@ -439,6 +445,8 @@ struct Overlay {
   double grow_time = kOverlayGrow;
   double grow_fade = kOverlayGrowFade;
   double fade_out = 0;
+  // From the driver's makekey: its window is made key at its next hide, as its fade out starts.
+  bool key_at_hide = false;
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
@@ -517,6 +525,29 @@ Browser* g_toast_over;
 NSWindow* g_toast;
 NSView* g_toast_view;
 bool g_toast_shown = false;
+
+// The foot bar, the browser window it shows over, and where: its size, centred between its insets
+// from the content's left and right edges, its bottom over the content's (host_show_foot_bar).
+Browser* g_foot_bar_over;
+NSWindow* g_foot_bar;
+NSView* g_foot_bar_view;
+bool g_foot_bar_shown = false;
+unsigned g_foot_bar_changes = 0;
+double g_foot_bar_left = 0;
+double g_foot_bar_right = 0;
+double g_foot_bar_bottom = 0;
+NSSize g_foot_bar_size;
+
+void PlaceFootBar() {
+  NSWindow* window = g_foot_bar_over->window;
+  NSRect content = [window contentRectForFrameRect:window.frame];
+  const double across = NSWidth(content) - g_foot_bar_left - g_foot_bar_right;
+  [g_foot_bar setFrame:NSMakeRect(NSMinX(content) + g_foot_bar_left +
+                                      (across - g_foot_bar_size.width) / 2,
+                                  NSMinY(content) + g_foot_bar_bottom, g_foot_bar_size.width,
+                                  g_foot_bar_size.height)
+               display:NO];
+}
 // Whether the toast has buttons, so its plate takes clicks; its window's margin, where its shadow
 // falls, never does. The plate, from the window's top left, and the monitor that hears the pointer
 // move on and off it, since a window is all or nothing for the mouse.
@@ -889,6 +920,17 @@ NSWindow* KeyWindowOver(Browser* browser) {
   return browser->window;
 }
 
+// The window that gets the keyboard back as |overlay| hides: the window of Chromium's that had it
+// as the overlay showed, while it's still over the page, else as KeyWindowOver. A tab's dialog,
+// such as Chrome's warning before http, blocks its page's input, which drops ilo's shortcuts too
+// before the core can ask about them, so with the page's view given the keyboard they'd be lost
+// (#2625).
+NSWindow* KeyWindowAfter(Overlay& overlay, Browser* browser) {
+  NSWindow* back = overlay.keyboard_from;
+  overlay.keyboard_from = nil;
+  return back.visible && back.parentWindow == browser->window ? back : KeyWindowOver(browser);
+}
+
 // The dialog's frame over |browser|'s window, by its insets.
 NSRect DialogFrame(Browser* browser) {
   NSWindow* window = browser->window;
@@ -1185,11 +1227,13 @@ void PlaceHud() {
                             NSMaxY(content) - browser->page_top - top - size.height)];
 }
 
-// At the browser window's left edge and as tall as its content, so a point is at the same place in
-// both windows.
+// At the browser window's edge on the sidebar's side and as tall as its content, so a point is at
+// the same height in both windows.
 void PlaceReveal(Browser* browser) {
   NSRect content = [browser->window contentRectForFrameRect:browser->window.frame];
-  [browser->reveal setFrame:NSMakeRect(NSMinX(content), NSMinY(content), browser->reveal_width,
+  const CGFloat x = browser->sidebar_right ? NSMaxX(content) - browser->reveal_width
+                                           : NSMinX(content);
+  [browser->reveal setFrame:NSMakeRect(x, NSMinY(content), browser->reveal_width,
                                        NSHeight(content))
                     display:NO];
 }
@@ -1881,7 +1925,7 @@ static void OrderLittleOut(NSWindow* self, SEL selector, id sender) {
 // windows all share it, so it's added once, and it passes the others on.
 static void WatchLittleOrderingOut(NSWindow* window) {
   const SEL selector = @selector(orderOut:);
-  Class kind = object_getClass(window);
+  Class kind = window.class;
   if (class_getMethodImplementation(kind, selector) == (IMP)OrderLittleOut) {
     return;
   }
@@ -2055,6 +2099,10 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                                 }
                                                 if (g_toast_shown && g_toast_over == browser) {
                                                   PlaceToast();
+                                                }
+                                                if (g_foot_bar_shown &&
+                                                    g_foot_bar_over == browser) {
+                                                  PlaceFootBar();
                                                 }
                                                 if (g_site_controls_shown &&
                                                     g_site_controls_over == browser) {
@@ -2625,6 +2673,9 @@ void host_forget_window(void* ui_view) {
   if (g_toast_shown && g_toast_over == browser) {
     host_hide_toast();
   }
+  if (g_foot_bar_shown && g_foot_bar_over == browser) {
+    host_hide_foot_bar();
+  }
   if (g_tooltip_over == browser) {
     host_hide_tooltip(0);
   }
@@ -2695,6 +2746,8 @@ void host_set_overlay_elevation(int index,
   [overlay->shadow setFrame:NSZeroRect display:NO];
 }
 
+static void KeyboardFromHidden(const Overlay& overlay);
+
 void host_add_overlay(int index, void* overlay_view, double radius, void (*dismissed)(void)) {
   if (index < 0 || index >= int(std::size(g_overlays))) {
     return;
@@ -2733,6 +2786,11 @@ void host_add_overlay(int index, void* overlay_view, double radius, void (*dismi
                     Browser* browser = BrowserOf(window);
                     if (each->shown && window == each->window) {
                       KeepFirstResponder(*each);
+                    } else if (window == each->window) {
+                      // Hidden, or fading out after the UI hid it, and AppKit made it key anyway:
+                      // its panel class can become key, and what the user types would go to it
+                      // unseen. Its browser window takes the keyboard back, as on Windows (#2594).
+                      KeyboardFromHidden(*each);
                     } else if (each->shown) {
                       // What took the keyboard, for the next time an overlay is shown and deaf
                       // (#1314): the release build's log is stderr alone.
@@ -2756,6 +2814,31 @@ void host_add_overlay(int index, void* overlay_view, double radius, void (*dismi
                       }
                     }
                   }];
+}
+
+// A hidden overlay made key gives the keyboard to the browser window it showed over, if that's still
+// open, as host_hide_overlay does.
+static void KeyboardFromHidden(const Overlay& overlay) {
+  Browser* over = overlay.over;
+  if (!over || std::none_of(g_browsers.begin(), g_browsers.end(),
+                            [over](const auto& browser) { return browser.get() == over; })) {
+    return;
+  }
+  fprintf(stderr, "browser: %s hidden, its browser window takes the keyboard\n", overlay.name);
+  [KeyWindowOver(over) makeKeyWindow];
+}
+
+// For the driver: overlay |name|'s window is made key at its next hide, in the turn its fade out
+// starts, as AppKit can make a fading one key. A fade can be 110 ms, too short for a driver command
+// to land in it every time. Says whether there is one.
+bool HostMakeOverlayKey(const char* name) {
+  for (Overlay& overlay : g_overlays) {
+    if (overlay.window && strcmp(overlay.name, name) == 0) {
+      overlay.key_at_hide = true;
+      return true;
+    }
+  }
+  return false;
 }
 
 void host_set_overlay_shape(int index, const double* corners, size_t count) {
@@ -2957,6 +3040,9 @@ void host_show_overlay(int index,
     host_hide_overlay(index);
     overlay->shown = true;
     overlay->over = browser;
+    NSWindow* key = NSApp.keyWindow;
+    const bool chromium = [key isKindOfClass:NSClassFromString(@"NativeWidgetMacNSWindow")];
+    overlay->keyboard_from = chromium && key.parentWindow == browser->window ? key : nil;
     HoldKeys(overlay->window);
   }
   // The window still holds what it drew when it last closed, such as the previous query. It goes
@@ -3041,6 +3127,11 @@ void host_set_overlay_height(int index, double height) {
     [overlay->window
         setFrame:NSMakeRect(NSMinX(frame), NSMaxY(frame) - height, NSWidth(frame), height)
          display:NO];
+    // A shaped overlay's mask is drawn at the window's size, so a taller one, such as the Boost
+    // editor's with Advanced open, would stretch the old one over it.
+    if (!overlay->corners.empty()) {
+      MaskOverlayBlur(*overlay);
+    }
     [overlay->view.layer setNeedsDisplay];
     [overlay->view.layer displayIfNeeded];
     PlaceOverlayShadow(*overlay);
@@ -3069,8 +3160,13 @@ void host_hide_overlay(int index) {
     [overlay->window orderOut:nil];
     overlay->shadow.alphaValue = 0;
   }
-  [KeyWindowOver(browser) makeKeyWindow];
+  [KeyWindowAfter(*overlay, browser) makeKeyWindow];
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
+  if (overlay->key_at_hide) {
+    overlay->key_at_hide = false;
+    fprintf(stderr, "browser: made %s key\n", overlay->name);
+    [overlay->window makeKeyWindow];
+  }
 }
 
 void host_dismiss_overlay(int index) {
@@ -3231,7 +3327,7 @@ bool host_fold_overlay(int index,
         window.alphaValue = 1;
         window.ignoresMouseEvents = NO;
       }];
-  [KeyWindowOver(browser) makeKeyWindow];
+  [KeyWindowAfter(*overlay, browser) makeKeyWindow];
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
   return true;
 }
@@ -4265,6 +4361,69 @@ void host_hide_toast(void) {
   [g_toast orderOut:nil];
 }
 
+void host_add_foot_bar(void* foot_bar_view) {
+  g_foot_bar_view = (__bridge NSView*)foot_bar_view;
+  g_foot_bar = g_foot_bar_view.window;
+  MakeOverlay(g_foot_bar);
+  // The UI draws the bar's rounded shape, which a borderless window's shadow takes, as the find
+  // bar's does.
+  g_foot_bar.styleMask = NSWindowStyleMaskBorderless;
+  g_foot_bar.hasShadow = YES;
+  // Its buttons take clicks, and the keyboard stays with the browser window, where the page has
+  // the mode's keys.
+  NeverKey(g_foot_bar);
+}
+
+void host_show_foot_bar(void* ui_view,
+                        double left,
+                        double right,
+                        double bottom,
+                        double width,
+                        double height) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!g_foot_bar || !browser || !browser->window) {
+    return;
+  }
+  if (g_foot_bar_shown && g_foot_bar_over != browser) {
+    host_hide_foot_bar();
+  }
+  g_foot_bar_shown = true;
+  g_foot_bar_over = browser;
+  g_foot_bar_left = left;
+  g_foot_bar_right = right;
+  g_foot_bar_bottom = bottom;
+  g_foot_bar_size = NSMakeSize(width, height);
+  const unsigned change = ++g_foot_bar_changes;
+  // After the UI's update that asked, as the find bar does: it goes on screen once it has drawn
+  // what it shows now, since a hidden window keeps the last frame it drew.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (change != g_foot_bar_changes) {
+      return;
+    }
+    PlaceFootBar();
+    [g_foot_bar_view.layer setNeedsDisplay];
+    [g_foot_bar_view.layer displayIfNeeded];
+    [g_foot_bar invalidateShadow];
+    if (g_foot_bar.parentWindow != browser->window) {
+      AddOver(browser->window, g_foot_bar);
+      RaiseOverlays(browser, g_foot_bar);
+      fprintf(stderr, "browser: foot bar shown\n");
+    }
+  });
+}
+
+void host_hide_foot_bar(void) {
+  if (!g_foot_bar_shown) {
+    return;
+  }
+  g_foot_bar_shown = false;
+  // Cancels a show still waiting for the bar to draw.
+  ++g_foot_bar_changes;
+  [g_foot_bar.parentWindow removeChildWindow:g_foot_bar];
+  [g_foot_bar orderOut:nil];
+  fprintf(stderr, "browser: foot bar hidden\n");
+}
+
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
   g_tooltip_margin = margin;
   g_tooltip_view = (__bridge NSView*)tooltip_view;
@@ -4686,6 +4845,63 @@ void host_show_window_buttons(void* ui_view, bool shown) {
   }
 }
 
+// The browser windows whose sidebar is on the right lay their title bar out right to left, so AppKit
+// puts zoom, minimize and close at the window's right, close at the corner, and the core's inset
+// for them from that edge. AppKit's windowTitlebarLayoutDirection is read-only, so the windows'
+// class answers it for each window, and the rest of the window keeps its direction: the title,
+// which is hidden, and the Window menu and Mission Control, which read the title, not this.
+static char kSidebarRight;
+static IMP g_titlebar_direction;
+
+static NSUserInterfaceLayoutDirection TitlebarDirection(NSWindow* self, SEL selector) {
+  if ([objc_getAssociatedObject(self, &kSidebarRight) boolValue]) {
+    return NSUserInterfaceLayoutDirectionRightToLeft;
+  }
+  return ((NSUserInterfaceLayoutDirection (*)(id, SEL))g_titlebar_direction)(self, selector);
+}
+
+static bool AnswerTitlebarDirection(NSWindow* window) {
+  if (g_titlebar_direction) {
+    return true;
+  }
+  Class kind = window.class;
+  SEL selector = @selector(windowTitlebarLayoutDirection);
+  Method own = class_getInstanceMethod(kind, selector);
+  if (!own) {
+    return false;
+  }
+  g_titlebar_direction = method_getImplementation(own);
+  if (!class_addMethod(kind, selector, (IMP)TitlebarDirection, method_getTypeEncoding(own))) {
+    method_setImplementation(own, (IMP)TitlebarDirection);
+  }
+  return true;
+}
+
+void host_set_sidebar_right(void* ui_view, bool right) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || browser->sidebar_right == right) {
+    return;
+  }
+  browser->sidebar_right = right;
+  NSWindow* window = browser->window;
+  if (!AnswerTitlebarDirection(window)) {
+    fprintf(stderr, "browser: the title bar's direction can't be answered\n");
+    return;
+  }
+  objc_setAssociatedObject(window, &kSidebarRight, right ? @YES : nil,
+                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  // AppKit places the buttons as the window's frame view changes size, and not when its layout is
+  // only marked or the style mask set again (check/titlebar-right.sh on a hosted Mac, run
+  // 42943383202), so the frame view grows by a point and back. The window's frame stays as it is.
+  NSView* frame = window.contentView.superview;
+  const NSSize size = frame.frame.size;
+  [frame setFrameSize:NSMakeSize(size.width + 1, size.height)];
+  [frame setFrameSize:size];
+  if (browser->reveal_monitor) {
+    PlaceReveal(browser);
+  }
+}
+
 // The diameter of the circle |button| draws, from the middle row of a picture of it: macOS 26
 // draws a larger one for an app built with its SDK than for one built with an older SDK, in a
 // frame of the same width (#1310). A pixel counts once it's half as covered as the most covered.
@@ -4723,9 +4939,10 @@ bool host_window_buttons(void* ui_view, double centres[3], double* y, double* di
       if (!button || button.hidden) {
         return false;
       }
-      // As drive.mm's layout line gives them: points from the window's top-left corner.
+      // As drive.mm's layout line gives them: points from the window's top-left corner, or from
+      // its top-right one, mirrored, in a window with the sidebar there.
       NSRect frame = [button convertRect:button.bounds toView:nil];
-      read[i] = NSMidX(frame);
+      read[i] = browser->sidebar_right ? NSWidth(window.frame) - NSMidX(frame) : NSMidX(frame);
       row = NSHeight(window.frame) - NSMidY(frame);
     }
     const CGFloat drawn = DrawnDiameter([window standardWindowButton:NSWindowCloseButton]);
@@ -5129,7 +5346,7 @@ void host_open_full_disk_access(void) {
                                    @"Privacy_AllFiles"]];
 }
 
-void host_open_in_safari(const char* url) {
+void host_open_elsewhere(const char* url) {
   NSURL* page = [NSURL URLWithString:@(url)];
   // Only web pages go to another app.
   if (![page.scheme isEqualToString:@"http"] && ![page.scheme isEqualToString:@"https"]) {
@@ -5260,6 +5477,12 @@ void host_day_starts(double starts[4]) {
 bool host_window_on_active_space(void* ui_view) {
   Browser* browser = BrowserWithView(ui_view);
   return !browser || !browser->window || browser->window.onActiveSpace;
+}
+
+bool host_window_full_screen(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  // AppKit sets the mask as the transition starts.
+  return browser && browser->window && (browser->window.styleMask & NSWindowStyleMaskFullScreen);
 }
 
 bool host_enter_full_screen(void* ui_view) {

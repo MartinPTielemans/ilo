@@ -1,0 +1,26 @@
+module browser_core.mojom;
+
+// The generic rules of the browser's own ad blocker (#2111) that hide by a class or an id, such as
+// `##.ad`, for one document: the frame's agent sends the classes and ids the document has as they
+// appear, and the browser answers with the rules that hide them. The agent holds it for as long as
+// the document is shown.
+interface AdBlockHide {
+  // |css|, the rules that hide the elements with any of |classes| or |ids|, which the agent adds
+  // as the user's style sheet. Empty for none.
+  Hide(array<string> classes, array<string> ids) => (string css);
+};
+
+// What the browser's own ad blocker hides on a frame's next document and runs in it, from the
+// browser to the frame's agent (ad_block_page_agent.h). The browser sends it as the document is
+// ready to commit, on the frame's own channel, so it arrives before the commit, and the agent
+// applies it as the document starts, before the page's own scripts run. Associated with the frame,
+// so it's ordered with the commit.
+interface AdBlockPage {
+  // For the document at |url|, which the agent checks the one that starts is: |css|, the rules that
+  // hide what the page's filters hide, as the user's style sheet, and |script|, the scriptlets'
+  // code, to run in the page's main world, and |isolated|, its procedural filters' code, to run in
+  // the agent's isolated world, where the page can't change what it does. Any may be empty.
+  // |hide|, where the page's generic rules apply, for those that hide by a class or an id.
+  UseForNextDocument(string url, string css, string script, string isolated,
+                     pending_remote<AdBlockHide>? hide);
+};
