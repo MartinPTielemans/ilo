@@ -3047,6 +3047,155 @@ mod tests {
         assert!(calls.iter().any(|call| call == "select 4"), "{calls:?}");
     }
 
+    fn pressed(position: gpui::Point<gpui::Pixels>) -> gpui::PlatformInput {
+        gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::none(),
+            click_count: 1,
+            first_mouse: false,
+        })
+    }
+
+    fn released(position: gpui::Point<gpui::Pixels>) -> gpui::PlatformInput {
+        gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::none(),
+            click_count: 1,
+        })
+    }
+
+    fn moved(
+        position: gpui::Point<gpui::Pixels>,
+        button: Option<MouseButton>,
+    ) -> gpui::PlatformInput {
+        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+            position,
+            pressed_button: button,
+            modifiers: Modifiers::none(),
+        })
+    }
+
+    /// Row 4's resting place in today's three rows.
+    fn row_four(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<Shell>,
+        &mut VisualTestContext,
+        Rc<Recorder>,
+        gpui::Point<gpui::Pixels>,
+    ) {
+        let (shell, cx, host) = window(cx, Vec::new(), vec![2, 3, 4], 2);
+        let (x, y) = close_button(&shell, cx, 4);
+        host.take();
+        (shell, cx, host, point(px(x - 100.), px(y)))
+    }
+
+    /// A press and release on a row that come while the App is in an update, as a nested event
+    /// pump delivers them, show the row once, as a click at rest does, once the update is over
+    /// (#2658).
+    #[gpui::test]
+    fn a_click_that_comes_mid_update_still_selects_its_row(cx: &mut TestAppContext) {
+        let (shell, cx, host, at) = row_four(cx);
+        let mut input = cx.test_window(gpui::VisualContext::window_handle(cx));
+        shell.update(cx, |_, _| {
+            input.simulate_input(pressed(at));
+            input.simulate_input(released(at));
+        });
+        cx.run_until_parked();
+        assert_eq!(host.take(), ["card close", "select 4", "focus page"]);
+    }
+
+    /// A press held for the update it came in goes ahead of input that comes once it's over: the
+    /// release after it lands and ends the press, so a move then drags nothing.
+    #[gpui::test]
+    fn a_press_held_mid_update_lands_before_the_release_after_it(cx: &mut TestAppContext) {
+        let (shell, cx, host, at) = row_four(cx);
+        let mut input = cx.test_window(gpui::VisualContext::window_handle(cx));
+        shell.update(cx, |_, _| {
+            input.simulate_input(pressed(at));
+        });
+        input.simulate_input(released(at));
+        input.simulate_input(moved(point(at.x, at.y - px(2. * ROW_PITCH)), None));
+        cx.run_until_parked();
+        // The move leaves the row, so its hover card goes.
+        assert_eq!(
+            host.take(),
+            ["card close", "select 4", "focus page", "card left 4"]
+        );
+        assert!(shell.read_with(cx, |shell, _| shell.dragging().is_none()));
+        assert_eq!(host.moves.get(), 0);
+    }
+
+    /// A drag begun mid-update keeps its moves behind its press, so it moves the tab as a drag at
+    /// rest does, whether it ends in the update or after.
+    #[gpui::test]
+    fn a_drag_begun_mid_update_still_drags(cx: &mut TestAppContext) {
+        for release_after in [false, true] {
+            let (shell, cx, host, at) = row_four(cx);
+            let mut input = cx.test_window(gpui::VisualContext::window_handle(cx));
+            let to = point(at.x, at.y - px(2. * ROW_PITCH));
+            shell.update(cx, |_, _| {
+                input.simulate_input(pressed(at));
+                input.simulate_input(moved(
+                    point(at.x, at.y - px(ROW_PITCH)),
+                    Some(MouseButton::Left),
+                ));
+                input.simulate_input(moved(to, Some(MouseButton::Left)));
+                if !release_after {
+                    input.simulate_input(released(to));
+                }
+            });
+            if release_after {
+                input.simulate_input(released(to));
+            }
+            cx.run_until_parked();
+            assert_eq!(host.moves.get(), 1, "release after: {release_after}");
+            let calls = host.take();
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.starts_with("select"))
+                    .count(),
+                1,
+                "{calls:?}"
+            );
+        }
+    }
+
+    /// What a window holds while its callback is out (the Mac's, when a nested event pump delivers
+    /// input inside another event) or the App is in an update: presses and releases, and the
+    /// pointer's input behind them, in the order it came; never a key, which is answered at once,
+    /// nor a lone move, which the next one replaces.
+    #[test]
+    fn held_input_keeps_a_press_and_what_follows_it_in_order() {
+        let at = point(px(10.), px(10.));
+        let key = gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+            keystroke: gpui::Keystroke::parse("a").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        let mut held = gpui::HeldInput::default();
+        assert!(held.hold(moved(at, None)).is_some());
+        assert!(held.hold(key.clone()).is_some());
+        assert!(held.is_empty());
+        assert!(held.hold(pressed(at)).is_none());
+        assert!(held.hold(moved(at, Some(MouseButton::Left))).is_none());
+        assert!(held.hold(key).is_some());
+        assert!(held.hold(released(at)).is_none());
+        let order: Vec<_> = std::iter::from_fn(|| held.next())
+            .map(|event| match event {
+                gpui::PlatformInput::MouseDown(_) => "down",
+                gpui::PlatformInput::MouseMove(_) => "move",
+                gpui::PlatformInput::MouseUp(_) => "up",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(order, ["down", "move", "up"]);
+        assert!(held.is_empty());
+    }
+
     /// A press that becomes a drag has shown its tab, and still drags it: let go two rows up, the
     /// tab moves there, and nothing is shown again.
     #[gpui::test]
