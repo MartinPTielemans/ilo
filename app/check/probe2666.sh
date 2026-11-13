@@ -1,5 +1,5 @@
 # check.sh runs this at 999.
-# Probe for #2666, on a proof branch only: what a page sees of a click whose keys go down before
+# Probe 2 for #2666, on a proof branch only: what a page sees of a click whose keys go down before
 # the pointer comes onto a link. The page's title says, for each try, the events in order: kd<key>
 # for a key down, ov for the pointer coming over the link, and md, mu and ck for the press, the
 # release and the click, each with the element it went to (L the link, B elsewhere) and the
@@ -46,29 +46,19 @@ frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layo
   grep -o 'WebContentsViewCocoa [0-9,]*' | head -1 | cut -d' ' -f2)
 x=${frame%%,*}
 y=${frame#*,}
-tries=0
-for mods in "alt cmd" "cmd" "alt" "alt cmd" "cmd" "alt" "alt cmd" "cmd" "alt" "alt cmd" "cmd" "alt" \
-  "alt cmd" "cmd" "alt" "alt cmd" "cmd" "alt" "alt cmd" "cmd" "alt" "alt cmd" "cmd" "alt"; do
+# The page counted the click that made it active as its first try.
+tries=1
+# Each try: a click off the link, then at once a click on it, its keys down first.
+for mods in "" "cmd" "alt" "alt cmd" "" "cmd" "alt" "alt cmd" "" "cmd" "alt" "alt cmd" \
+  "" "cmd" "alt" "alt cmd" "" "cmd" "alt" "alt cmd" "" "cmd" "alt" "alt cmd"; do
   tries=$((tries + 1))
-  # Off the link, which arms the page for the next try, with no keys held.
-  send move $page_point
+  send move $((x + 500)) $((y + 300))
+  send click $page_point
   send click $((x + 150)) $((y + 100)) $mods
-  await "^browser: title [0-9]* $tries: .*mu" || echo "probe: $mods try $tries: no release seen"
+  await "^browser: title [0-9]* $tries: .*muL" || echo "probe: after a click, ${mods:-plain} try $tries: no release on the link seen"
   send state
   title=$(grep "^browser: title [0-9]* $tries: " "$log" | tail -1 | cut -d' ' -f4-)
-  echo "probe: $mods | $title"
-done
-send move $page_point
-# The same, the pointer resting on the link before the keys, as a control.
-for mods in "alt cmd" "cmd" "alt"; do
-  tries=$((tries + 1))
-  send move $page_point
-  send move $((x + 150)) $((y + 100))
-  send click $((x + 150)) $((y + 100)) $mods
-  await "^browser: title [0-9]* $tries: .*mu" || echo "probe: rested $mods try $tries: no release seen"
-  send state
-  title=$(grep "^browser: title [0-9]* $tries: " "$log" | tail -1 | cut -d' ' -f4-)
-  echo "probe: rested $mods | $title"
+  echo "probe: after a click, ${mods:-plain} | $title"
 done
 send move $page_point
 exec 3>&-
