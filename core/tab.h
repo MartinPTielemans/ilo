@@ -114,6 +114,9 @@ class Tab : public content::WebContentsObserver,
   Profile* profile() const { return profile_.get(); }
   // The URL of the page it's at, loaded or not, else of the one it's loading.
   GURL Url() const;
+  // Keeps nothing of the page it's at (bc_tab_forget_page): its URL leaves the profile's history,
+  // and it isn't archived or reopenable if it closes while still there.
+  void ForgetPage();
   // Its history, with its name, icon and mute, as the session keeps it.
   SavedTab Save() const;
   // The id of its page's sessionStorage in its profile, loaded or not, which the session file keeps

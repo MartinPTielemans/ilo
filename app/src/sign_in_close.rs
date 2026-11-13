@@ -3,6 +3,8 @@
 //! a loopback address carrying a `code`, from another site, as a CLI's or an MCP client's login
 //! ends. The page's own window.close() would be the other signal, once the core lets it through for
 //! such a tab (`bc_tab_set_page_may_close`, in the next core batch).
+//! The callback page's address carries a single-use authorization code, so the browser keeps
+//! nothing of it: not in history, nor among the closed tabs ⇧⌘T reopens (#2527).
 
 use super::*;
 
@@ -83,8 +85,14 @@ pub(crate) fn tab_loaded(tab: u64, url: &str, cx: &mut App) {
     let Some((window, before)) = before else {
         return;
     };
+    let signed_in = sign_in_done(&before, url);
+    if signed_in {
+        // check.sh reads this line.
+        log!("browser: tab {tab} page forgotten");
+        unsafe { bc::bc_tab_forget_page(tab) };
+    }
     // The bar says the window's closing for as long as this page shows.
-    let done = sign_in_close() && sign_in_done(&before, url);
+    let done = sign_in_close() && signed_in;
     update_window_in(window, cx, |shell, cx| shell.set_little_closing(done, cx));
     if !done {
         return;

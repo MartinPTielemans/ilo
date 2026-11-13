@@ -165,6 +165,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Closes |tab| as the user does: its page gets its unload handlers, which may keep it open. With
   // |discard|, they don't run, so nothing asks, and it's gone before this returns.
   static void CloseTab(bc_id tab, bool discard = false);
+  // Keeps nothing of |tab|'s page, |url|, as it closes while still there: it isn't archived or
+  // among the tabs ReopenClosedTab reopens (bc_tab_forget_page).
+  static void ForgetPage(bc_id tab, const GURL& url);
   // Closes the Today tabs below |tab| as the user does, bottom up, so ⇧⌘T reopens each at its
   // place. A window showing one shows |tab| first, so none shows or loads on the way out.
   static void CloseBelow(bc_id tab);

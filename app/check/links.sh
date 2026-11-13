@@ -9,7 +9,7 @@
 # running, one opens in a Little ilo window of its own for the Space the window in front shows, and
 # loads there, as Settings › Links sends everything else there until the user picks another, and
 # the same link again brings that window back to the front, and a sign-in's page there closes it
-# once done (#2327). On Windows one sent to the Store's MSIX,
+# once done (#2327), leaving nothing to reopen (#2527). On Windows one sent to the Store's MSIX,
 # which Windows activates for it, opens the same way, once (#1427). Sent
 # instead to the Space in front, one opens as a new tab in the Space the window in front shows. With
 # a private window in front, it goes in the regular window, which comes to the front. Settings › Links
@@ -227,9 +227,10 @@ await "^browser: window closed $little\$" || fail "⌘W didn't close the link's 
 # A sign-in another app's link opened in Little ilo closes its window by itself once it's done
 # (#2327), on a signal that isn't the page's words: a load onto a loopback address carrying a code,
 # from another site. The provider here is localhost, another site than the callback's 127.0.0.1, as
-# a CLI's or an MCP client's login ends at its own server. The bar says it's closing, the window
-# closes 2 s on, and ⇧⌘T brings it back as any closed Little ilo window. One carrying an error
-# stays, and the same page in a tab the user opened stays.
+# a CLI's or an MCP client's login ends at its own server. The bar says it's closing and the window
+# closes 2 s on. Its address carries a single-use code, so the browser keeps nothing of it (#2527):
+# ⇧⌘T brings back the Little ilo window closed before it instead. One carrying an error stays, and
+# the same page in a tab the user opened stays.
 printf '%s' '<title>sign-in</title><script>
 addEventListener("load", () => setTimeout(() => location = "/bounce?to=" +
   encodeURIComponent("http://127.0.0.1:" + location.port + "/signed-in.html" + location.search), 100));
@@ -250,6 +251,7 @@ sign_in_link "$provider/signin.html?code=abc"
 await "^browser: loaded $tab $callback?code=abc\$" || fail "the sign-in didn't come back to its callback"
 await "^browser: little window $little sign-in done at $callback?code=abc\$" ||
   fail "the callback with a code didn't end the sign-in"
+grep -q "^browser: tab $tab page forgotten\$" "$log" || fail "the sign-in's callback page wasn't forgotten"
 await "^browser: little bar closing true\$" || fail "the sign-in's Little ilo bar didn't say it was closing"
 # The bar's words, for the PR: the window has the 2 s of its pause to be caught in.
 ../tools/window-screenshot.sh "$pid" "$out/links-sign-in-closing.png" all ||
@@ -260,10 +262,12 @@ await "^browser: window closed $little\$" || fail "the sign-in's Little ilo wind
 send window 1
 send key t cmd shift
 expect "^browser: little window [0-9]* reopened [0-9]* as [0-9]*\$" \
-  "⇧⌘T didn't bring back the sign-in's Little ilo window: $(grep '^browser: little window' "$log" | tail -1)"
+  "⇧⌘T didn't bring back the Little ilo window closed before the sign-in's: $(grep '^browser: little window' "$log" | tail -1)"
+grep '^browser: little window [0-9]* reopened ' "$log" | tail -1 | grep -q " reopened $tab as " &&
+  fail "⇧⌘T brought back the sign-in's callback page, whose code the browser keeps nowhere"
 send window "$(grep -c '^browser: window opened ' "$log")"
 send key w cmd
-expect "^browser: window closed [0-9]*\$" "⌘W didn't close the sign-in's reopened Little ilo window"
+expect "^browser: window closed [0-9]*\$" "⌘W didn't close the reopened Little ilo window"
 sign_in_link "$provider/signin.html?error=denied"
 await "^browser: loaded $tab $callback?error=denied\$" || fail "the failed sign-in didn't come back to its callback"
 # The user's ⌘W closes it, and only then: the load decided it, before the key was sent.

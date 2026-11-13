@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iterator>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <set>
@@ -234,9 +235,21 @@ std::vector<DeletedSpace>& DeletedSpaces() {
   return *deleted;
 }
 
+// The pages Window::ForgetPage named, by their tab, until it closes.
+std::map<bc_id, GURL>& ForgottenPages() {
+  static base::NoDestructor<std::map<bc_id, GURL>> forgotten;
+  return *forgotten;
+}
+
 // Keeps |id|, a tab closing, for ReopenClosedTab, and archives it.
 void KeepClosed(bc_id id) {
   Tab* tab = Tab::Get(id);
+  // A sign-in's callback page, whose address carries a single-use code, leaves nothing to reopen
+  // (#2527); a tab that has gone on from it closes as any does.
+  if (auto forgotten = ForgottenPages().extract(id);
+      forgotten && tab && tab->Url() == forgotten.mapped()) {
+    return;
+  }
   Space* space = Space::Holding(id);
   // One not in a Space never showed, a pinned tab closes only when its page closes itself, and a
   // private window's leaves nothing behind. An agent's pages aren't the user's to find again
@@ -1159,6 +1172,11 @@ void Window::HiddenFavoritesGone() {
       window->ShowNothing();
     }
   }
+}
+
+// static
+void Window::ForgetPage(bc_id tab, const GURL& url) {
+  ForgottenPages()[tab] = url;
 }
 
 // static

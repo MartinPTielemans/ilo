@@ -504,6 +504,23 @@ GURL Tab::Url() const {
   return unloaded_ ? unloaded_->history[unloaded_->current].virtual_url() : GURL();
 }
 
+void Tab::ForgetPage() {
+  const GURL url = Url();
+  if (!url.is_valid()) {
+    return;
+  }
+  Window::ForgetPage(id_, url);
+  // Each visit to it, as the command bar's ⇧⌦ takes a page out; a private window's has none.
+  Profile* profile = this->profile();
+  if (!profile || profile->IsOffTheRecord()) {
+    return;
+  }
+  if (history::HistoryService* history =
+          HistoryServiceFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS)) {
+    history->DeleteURLs({url});
+  }
+}
+
 std::string Tab::SessionStorageId() const {
   if (content::WebContents* contents = web_contents()) {
     return contents->GetController().GetDefaultSessionStorageNamespace()->id();
