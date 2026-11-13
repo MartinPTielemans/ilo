@@ -459,6 +459,7 @@ pub(crate) unsafe extern "C" fn tab_closed(_: *mut c_void, tab: bc::bc_id) {
                     site_controls::tab_closed(tab, cx);
                     capture::tab_closed(tab, cx);
                     link_preview::tab_closed(tab, cx);
+                    browser::agents::tab_closed(tab, cx);
                 })
             })
             .detach();

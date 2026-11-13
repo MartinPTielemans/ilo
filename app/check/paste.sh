@@ -1,3 +1,5 @@
+# check.sh runs this at 850, only when named.
+# Only when named, as the clipboard it pastes from is the session's.
 # Linux only: what another app copies pastes into the UI's fields, the command bar from ⌘T and the
 # address field's from ⌘L, as it does into a page's, so does what a page copies, and what the UI
 # copies and cuts reaches the other apps (#2463). Another app copies with wl-copy in sway's sessions, Wayland's and Xwayland's,

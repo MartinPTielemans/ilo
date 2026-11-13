@@ -1,3 +1,4 @@
+# check.sh runs this at 670.
 # The foot bar, the window over the page's bottom centre that Arrange and pointing show (#2380),
 # drawn by each OS's host: BROWSER_FOOT_BAR shows it with made-up words over the first page that
 # loads, with one line (arrange), two (point), and a question past its two lines (long), and each is
