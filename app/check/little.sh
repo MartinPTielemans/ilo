@@ -814,12 +814,35 @@ rest_on_link
 send click $((x + 20)) $((y + 20)) alt cmd
 expect '^browser: tab [0-9]* opened by [0-9]* in the background$' \
   "with Little ilo off, ⌥⌘-click on a link didn't open it behind"
-# ⌥⌘ and the press as the pointer comes onto the link, held until the plate is due, eight times
+# ⌥⌘ and the press as the pointer comes onto a link, held until the plate is due, eight times
 # (#2666). Its window waits for the release, then shows: on Windows a window showing makes a move
 # at the pointer, which with the button down Blink takes as a drag, so an Alt-press on a link was a
-# selection and lost its click. Only real input holds the button where the plate can ask.
+# selection and lost its click. Within 400 ms of a plate going the next shows at once, as the
+# pointer arrives and before the press, so the page says when 600 ms have passed since the pointer
+# left its link, and each press waits for that. Only real input holds the button where the plate
+# can ask.
+printf '%s' '<title>loading</title>
+<body style="margin:0;height:100vh">
+<a id=l href="notes.txt" style="position:fixed;left:0;top:0;width:40px;height:40px"></a>
+<script>
+let entered = 0, rest;
+l.addEventListener("mouseenter", () => { entered++; clearTimeout(rest); });
+l.addEventListener("mouseleave", () => {
+  clearTimeout(rest);
+  rest = setTimeout(() => document.title = "rested " + entered, 600);
+});
+requestAnimationFrame(() => setTimeout(() => document.title = "held ready"));
+</script>' > "$out/site/little-held.html"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar for the held press's page"
+send insert "${site}little-held.html"
+send key return
+expect '^browser: title [0-9]* held ready$' "the held press's page didn't draw"
+send move $((x + 20)) $((y + 20))
+send move $page_point
+await '^browser: title [0-9]* rested 1$' ||
+  fail "the held press's page didn't say the pointer had left its link 600 ms before"
 for try in 1 2 3 4 5 6 7 8; do
-  send move $page_point
   send press $((x + 20)) $((y + 20)) alt cmd
   # Elsewhere the driver posts the press to the window, which neither moves the pointer onto the
   # link nor holds a button the plate can ask about.
@@ -832,6 +855,9 @@ for try in 1 2 3 4 5 6 7 8; do
     "press $try: ⌥⌘ and the press as the pointer came onto a link, held past the plate's delay, opened nothing behind"
   [ $real = 0 ] || expect '^browser: link target window shown$' \
     "press $try: the plate didn't show at the release with the pointer still on the link"
+  send move $page_point
+  await "^browser: title [0-9]* rested $((try + 1))\$" ||
+    fail "press $try: the held press's page didn't say the pointer had left its link 600 ms before"
 done
 ! sed -n "/^browser: drive $off_from: /,\$p" "$log" | grep -q '^browser: little window opened ' ||
   fail "with Little ilo off, ⌥⌘N or ⌥⌘-click opened a Little ilo window"
