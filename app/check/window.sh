@@ -1200,8 +1200,18 @@ hover_out "the sidebar out by the edge"
 rest_cpu
 out_cpu=$rest
 echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)"
-awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }' &&
-  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds), against ${docked_cpu} s docked ($docked_kinds)"
+if awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }'; then
+  # What the browser was doing, so the next red names it rather than a guess (#2502): its age, as
+  # uBlock Origin writes its selfie about 80 s after a new profile's launch, and on the Mac, whose
+  # ps counts no threads apart, 3 s of its stacks.
+  up=$(ps -o etime= -p "$pid" | tr -d ' ')
+  sampled=
+  if [ "$(uname)" = Darwin ] &&
+    sample "$pid" 3 -file "$out/window-rest-sample.txt" > "$out/window-rest-sample.log" 2>&1; then
+    sampled=", the browser's stacks for 3 s after it in window-rest-sample.txt"
+  fi
+  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds), against ${docked_cpu} s docked ($docked_kinds), the browser up $up$sampled"
+fi
 send move 600 300
 expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
 send key s cmd
