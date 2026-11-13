@@ -30,7 +30,7 @@
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
-#include "components/viz/common/frame_timings/frame_timing_details.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/client/window_types.h"

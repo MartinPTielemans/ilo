@@ -31,7 +31,7 @@
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/native_widget_factory.h"
 #include "components/input/native_web_keyboard_event.h"
-#include "components/viz/common/frame_timings/frame_timing_details.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
