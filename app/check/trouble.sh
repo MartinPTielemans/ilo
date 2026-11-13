@@ -260,6 +260,8 @@ def receive():
         elif size == 127:
             size = struct.unpack(">Q", read(8))[0]
         data = read(size)
+        if first & 0x0F == 8:
+            sys.exit(f"DevTools closed the session: {data[2:].decode(errors='replace')}")
         if first & 0x0F in (0, 1, 2):
             message += data
             if first & 0x80:
@@ -331,7 +333,8 @@ network() {
     sleep 0.1
   done
   [ -n "${2:-}" ] || set -- "$1" "DevTools didn't take the tab $1"
-  fail "$2"
+  fail "$2. The DevTools session's last lines:
+$(tail -3 "$out/network.log")"
 }
 network offline
 send key l cmd
