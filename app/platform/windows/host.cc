@@ -54,13 +54,6 @@ extern "C" void browser_fade_none(void*, double, double, double) {}
 #pragma comment(linker, "/alternatename:browser_fade=browser_fade_none")
 // What check.sh calls a window the host floats over a browser window (below).
 extern "C" const char* host_floating_name(void* hwnd);
-// drive.cc's: whether the driver sends real input (#2544). The preview links no driver, as the
-// core calls it makes can't link there, so the linker takes this instead, as for browser_fade.
-extern "C" bool drive_real_input(void);
-extern "C" bool drive_real_input_none(void) {
-  return false;
-}
-#pragma comment(linker, "/alternatename:drive_real_input=drive_real_input_none")
 // The app's (src/logging.rs), in the browser and the preview: whether BROWSER_LOG turns on |area|.
 extern "C" bool browser_log_on(const char* area);
 // The app's (src/overlay_life.rs): an overlay's next life, in the low byte, and what the host does.
@@ -1519,9 +1512,12 @@ HHOOK g_mouse_hook = nullptr;
 // its windows. The thread's mouse hooks hear the desktop's before that, and Windows moves it over a
 // window as one shows, so a menu opening where it rests would hover its row (#1125). Unless the
 // driver's input is the desktop's own, real as a hand's (#2544).
+// Set by the driver (host_drive_real_input), which the host doesn't call: the preview links no
+// driver, whose core calls it couldn't link.
+bool g_drive_real = false;
 bool DesktopPointerHeard() {
   static const bool driven = GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0;
-  return !driven || drive_real_input();
+  return !driven || g_drive_real;
 }
 
 // The pointer at |point| on screen, for the link target and the reveals.
@@ -5000,6 +4996,11 @@ void* host_drop_target(void* hwnd) {
 // The driver's: carries the app's own drags in place of DoDragDrop (g_drive_drag).
 void host_drive_drags(HRESULT (*drag)(IDataObject*, DWORD, DWORD*, POINT*)) {
   g_drive_drag = drag;
+}
+
+// The driver's: its input is real, which the menu hooks then hear as a hand's (#2544).
+void host_drive_real_input(void) {
+  g_drive_real = true;
 }
 
 bool host_trash(const char* path) {

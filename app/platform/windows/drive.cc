@@ -114,6 +114,7 @@ bool browser_drive_marked(void* hwnd, size_t* start, size_t* length);
 bool browser_drive_fingers(void* hwnd, float x, float y, float dx, float dy, int phase);
 void* host_drop_target(void* hwnd);
 void host_drive_drags(HRESULT (*drag)(IDataObject*, DWORD, DWORD*, POINT*));
+void host_drive_real_input(void);
 bool host_drive_window_part(void* hwnd, double x, double y, double width, double height,
                             const char* path, long* pixels_wide, long* pixels_high);
 void* host_drive_little_tray(void);
@@ -2814,11 +2815,6 @@ LRESULT CALLBACK WatchZoom(int code, WPARAM wparam, LPARAM lparam) {
 
 extern "C" {
 
-// Whether the driver sends real input, which the host's hooks then hear as a hand's.
-bool drive_real_input(void) {
-  return g_real;
-}
-
 void drive_watch_menus(bool (*menus)(void* ui_view, const char* title, bool bar),
                        bool (*dialog)(const char* label)) {
   g_menus = menus;
@@ -2835,6 +2831,9 @@ void drive_start(void) {
                              nullptr, window_class.hInstance, nullptr);
   if (EnvIs(L"BROWSER_DRIVE_REAL", L"1")) {
     g_real = OwnDesktop();
+    if (g_real) {
+      host_drive_real_input();
+    }
     fprintf(stderr, g_real ? "browser: drive: real input\n"
                            : "browser: drive: real input refused, this desktop isn't the check's "
                              "own: BROWSER_DRIVE_OWN_DESKTOP=1 says one is\n");
