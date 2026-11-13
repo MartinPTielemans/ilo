@@ -697,14 +697,16 @@ void LoadInto(Profile* profile) {
     return;
   }
   // uBlock Origin, unless the browser's own blocks, which reads the lists uBlock Origin comes with.
-  if (!NativeAdBlock()) {
+  // A safe start holds it by not loading it, so no page waits for it.
+  const bool uses_ublock = !NativeAdBlock();
+  const bool held = uses_ublock && SafeStart();
+  if (uses_ublock && !held) {
     Followers()[profile] = std::make_unique<Follower>(profile);
     Load(profile);
   }
   ReadListsOnce();
-  // Here, as the last of the profile's extensions has loaded and none has run yet, with either
-  // ad blocker.
-  HoldExtensionsForSafeStart(profile);
+  // Here, as the profile's saved extensions have loaded and none has run yet.
+  HoldExtensionsForSafeStart(profile, held ? 1 : 0);
 }
 
 }  // namespace
