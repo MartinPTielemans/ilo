@@ -16,6 +16,8 @@
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
 //! agentopen, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
+//! desktop on and off, Linux's own, shows the desktop and the windows again as a pager asks, and
+//! onscreen logs what the X server shows of the driven window and the app's overlays over it.
 //! The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
 //! and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt
 //! with Alt. flags presses and lets go of those keys, the last key's among them, and the keys after
@@ -2517,6 +2519,53 @@ fn run_command(line: &str) -> Option<()> {
             let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
             connection.send_event(false, *root, mask, message).ok()?;
             connection.flush().ok()
+        }
+        // As a pager's show-desktop button or openbox's Super+D, Linux's own: the window manager
+        // hides every window to show the desktop, or shows them again, asked through the root
+        // window (EWMH's _NET_SHOWING_DESKTOP), as wmctrl -k asks.
+        "desktop" => {
+            let on = match words.next()? {
+                "on" => 1,
+                "off" => 0,
+                _ => return None,
+            };
+            let showing = atom("_NET_SHOWING_DESKTOP")?;
+            let x = server()?;
+            let (connection, root) = &*x;
+            let message = xproto::ClientMessageEvent::new(32, *root, showing, [on, 0, 0, 0, 0]);
+            let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+            connection.send_event(false, *root, mask, message).ok()?;
+            connection.flush().ok()
+        }
+        // What the X server shows of the driven window and the app's windows over it, Linux's own:
+        // "browser: onscreen window <0|1>, overlays <on screen> of <shown>, keyboard
+        // <overlay|window|none>", the window that has the X input focus.
+        "onscreen" => {
+            let browser = driven()?;
+            let x = server()?;
+            let (connection, _) = &*x;
+            let viewable = |window: xproto::Window| {
+                connection
+                    .get_window_attributes(window)
+                    .ok()
+                    .and_then(|cookie| cookie.reply().ok())
+                    .is_some_and(|a| a.map_state == xproto::MapState::VIEWABLE)
+            };
+            let views = overlay_views();
+            let on = (views.iter())
+                .filter(|&&view| viewable(view as usize as u32))
+                .count();
+            let keyboard = match keyboard_window() {
+                Some(Keyboard::Overlay(_)) => "overlay",
+                Some(Keyboard::Browser(..) | Keyboard::Settings(..)) => "window",
+                None => "none",
+            };
+            log!(
+                "browser: onscreen window {}, overlays {on} of {}, keyboard {keyboard}",
+                u8::from(viewable(browser.window)),
+                views.len()
+            );
+            Some(())
         }
         // The driven window's state as the window manager has it and its frame now, as Windows'
         // driver logs its placement: "browser: placement <maximized|normal> <x> <y> <width>
