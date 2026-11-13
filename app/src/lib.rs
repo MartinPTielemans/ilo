@@ -110,6 +110,7 @@ pub fn log_handover(stage: &str, detail: &str) {
 }
 
 pub mod account;
+pub mod ad_block;
 pub mod agent_history;
 pub mod agents;
 pub mod boost_editor;
@@ -149,6 +150,7 @@ pub mod offer;
 pub mod overlay_life;
 pub mod palette;
 pub mod passwords;
+pub mod safe_start;
 pub mod settings_card;
 pub mod settings_column;
 pub mod settings_pictures;

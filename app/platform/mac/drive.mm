@@ -87,7 +87,9 @@
 //                                         display or with BROWSER_DISPLAY=builtin the Mac's own
 //                                         (host_screens), as "browser: screen at <x> <y> <width>
 //                                         <height>" in place's terms, so a check places windows
-//                                         there and not on the main display it may be kept off
+//                                         there and not on the main display it may be kept off,
+//                                         after "browser: screen visible <x> <y> <width> <height>",
+//                                         its visible area in the same terms
 //   order                                 logs the browser windows on screen front to back and
 //                                         the key one, as "browser: order window <n> window <m>
 //                                         …, key window <n>|none", numbered as window numbers
@@ -1777,6 +1779,9 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (host_screens(visible, 1) < 1) {
       return false;
     }
+    // What the app's own AppKit leaves of the screen, which a zoom fills (#2633).
+    fprintf(stderr, "browser: screen visible %.0f %.0f %.0f %.0f\n", visible[0], visible[1],
+            visible[2], visible[3]);
     // host_screens gives the screen's visible area, from the main display's top-left; the screen
     // holding its middle is the one.
     const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
@@ -2362,6 +2367,25 @@ void drive_start(void) {
     return nil;
   };
   [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskApplicationDefined handler:report_done];
+  // Each press as AppKit takes it up, before it handles it: the key window, the view with the
+  // keyboard and the view the press goes to. A press lost before the app's handlers leaves no
+  // other trace (#2658).
+  [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
+                                        handler:^NSEvent*(NSEvent* event) {
+                                          NSWindow* key = NSApp.keyWindow;
+                                          NSView* frame = event.window.contentView.superview;
+                                          NSView* hit = [frame hitTest:event.locationInWindow];
+                                          auto name = [](id object) {
+                                            return object ? NSStringFromClass([object class])
+                                                                .UTF8String
+                                                          : "none";
+                                          };
+                                          fprintf(stderr,
+                                                  "browser: drive press, key %s, focus %s, "
+                                                  "hits %s\n",
+                                                  name(key), name(key.firstResponder), name(hit));
+                                          return event;
+                                        }];
   method_setImplementation(class_getInstanceMethod(NSApplication.class,
                                                    @selector(orderFrontCharacterPalette:)),
                            (IMP)OrderFrontCharacterPalette);

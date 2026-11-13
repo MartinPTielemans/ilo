@@ -354,8 +354,7 @@ send click $page_point
 # The call's Site Controls list the Automatic picture-in-picture it asked for. Blocked there, the
 # call stays in its tab as the tab hides, and allowed, it floats again. Back at Ask, Settings'
 # switch turns it off for every site the user hasn't allowed, and on again. The panel hangs from
-# the URL field's button at 206 64, its first row's middle at y 262, the rows 43 apart; Safari's
-# engine's row comes before the permissions.
+# the URL field's button at 206 64, and logs where it drew each line.
 # floats <value> [capture]: sets the call's Automatic picture-in-picture to <value> in its Site
 # Controls, capturing them first as <capture>.
 floats() {
@@ -368,11 +367,7 @@ floats() {
     "the floating call's Site Controls didn't list Automatic picture-in-picture"
   expect '^browser: site controls settled$' "the floating call's Site Controls didn't open"
   [ -z "${2:-}" ] || ../tools/window-screenshot.sh "$pid" "$out/$2" || fail "no window to capture"
-  line=$(grep '^browser: site controls .*Automatic picture-in-picture ' "$log" | tail -1)
-  i=$(echo "$line" | sed 's/^[^;]*; //;s/;.*//' | tr ',' '\n' | sed 's/^ //' |
-    grep -n '^Automatic picture-in-picture ' | cut -d: -f1)
-  case "$line" in *"; Safari's engine "*) i=$((i + 1)) ;; esac
-  post click 207 $((262 + 43 * (i - 1)))
+  click_placed post "line Automatic picture-in-picture"
   expect "^browser: menu shown .*$1" "Automatic picture-in-picture's menu didn't offer $1"
   send choose "$1"
   expect "^browser: site controls set Automatic picture-in-picture $1\$" "$1 in the menu didn't run"

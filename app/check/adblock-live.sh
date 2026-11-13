@@ -124,17 +124,13 @@ expect "^browser: loaded $tab chrome-extension://$ublock/document-blocked\.html"
 if [ -n "${ublock_sampler:-}" ]; then
   # 53 s after its lists last changed it writes its filters' selfie into its cache, the largest
   # value it writes, which ran its process out of memory on Windows (#2069). It writes each value
-  # to its IndexedDB, whose keys are UTF-16, and to its extension storage, and the peaks are read
-  # once both have the selfie, or 180 s on.
+  # to its IndexedDB and to its extension storage, and the peaks are read once both have the
+  # selfie (lib.sh's ublock_selfie), or 180 s on.
   idb="$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb"
   local_storage="$profile_dir/Default/Local Extension Settings/$ublock"
-  has_selfie() {
-    cat "$1"/*.log "$1"/*.ldb 2> /dev/null | LC_ALL=C tr -d '\000' |
-      grep -q 'selfie/staticNetFilteringEngine'
-  }
   selfie="no selfie within 180 s"
   for _ in $(seq 180); do
-    if has_selfie "$idb.leveldb" && has_selfie "$local_storage"; then
+    if ublock_selfie; then
       selfie="its selfie in its cache $(($(date +%s) - loaded)) s after it loaded"
       break
     fi

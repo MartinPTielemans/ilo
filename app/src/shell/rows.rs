@@ -274,7 +274,10 @@ impl Shell {
             .as_ref()
             .filter(|opened| matches!(row, Row::Tab(tab) if opened.tabs.contains(&tab)));
         let (row_in, plate_in) = opened.map_or((1., 1.), |opened| {
-            let done = opened.done().unwrap_or(1.).clamp(0., 1.);
+            let done = opened
+                .done(self.since(opened.start))
+                .unwrap_or(1.)
+                .clamp(0., 1.);
             if opened.whole { (done, 1.) } else { (1., done) }
         });
         // A page Open sent from a task's plate shows as its flight lands on its row.
@@ -441,7 +444,7 @@ impl Shell {
     /// A closed tab's row where it was, without the selected fill it may have had, fading as the
     /// rows below slide over it.
     pub(super) fn closing_row(&self, row: &Closing, room: f32) -> impl IntoElement + use<> {
-        let done = row_spring(row.start.elapsed().as_secs_f32()).unwrap_or(1.);
+        let done = row_spring(self.since(row.start)).unwrap_or(1.);
         div()
             .absolute()
             .top(px(room + row.top))
@@ -3020,6 +3023,30 @@ mod tests {
         );
     }
 
+    /// A click on a row while the rows still slide, as they do once a link opens a tab under its
+    /// opener, selects the row resting under it, pressed and let go before a frame as the Mac
+    /// check's driver does (#2658).
+    #[gpui::test]
+    fn a_click_on_settling_rows_selects_the_row_resting_there(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, vec![2], vec![3, 4, 5], 3);
+        shell.update(cx, |shell, cx| {
+            let today = vec![3, 6, 4, 5];
+            shell.set_tabs(1, vec![2], today, Vec::new(), Folders::default(), cx);
+            shell.set_selected(6, cx);
+        });
+        cx.run_until_parked();
+        let moving = shell.read_with(cx, |shell, _| shell.slide(Slot::Tab(4)));
+        assert!(moving < 0., "4 is still on its way down: {moving}");
+        let (x, y) = close_button(&shell, cx, 4);
+        let at = point(px(x - 100.), px(y));
+        host.take();
+        cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        let calls = host.take();
+        assert!(calls.iter().any(|call| call == "select 4"), "{calls:?}");
+    }
+
     /// A press that becomes a drag has shown its tab, and still drags it: let go two rows up, the
     /// tab moves there, and nothing is shown again.
     #[gpui::test]
@@ -3120,7 +3147,12 @@ mod tests {
         let (shell, cx, _host) =
             window_with(cx, vec![10, 11, 3, 6, 7], vec![4], 4, work_and_plans());
         let before = shell.read_with(cx, |shell, _| shell.layout());
-        shell.update(cx, |shell, cx| shell.set_selected(3, cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_selected(3, cx);
+            // A loaded runner's late first frame, longer than the slide: it holds, as the list's
+            // motion is on the test's clock (#2630).
+            std::thread::sleep(Duration::from_secs_f32(crate::shell::PEEK_IN + 0.05));
+        });
         shell.read_with(cx, |shell, _| {
             let after = shell.layout();
             let (folder, tab) = (after[&Slot::Tab(10)], after[&Slot::Tab(3)]);
