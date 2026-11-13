@@ -1478,6 +1478,12 @@ bool Run(const std::string& line, void (^done)(void)) {
               frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
     }
     Convert(window, target, &x, &y);
+    // A click a page or another view takes from the app's UI leaves no other trace (#2658).
+    NSView* frame = target.contentView.superview;
+    NSView* hit = [frame hitTest:NSMakePoint(x, NSHeight(target.frame) - y)];
+    if (hit && ![NSStringFromClass([hit class]) containsString:@"GPUIView"]) {
+      fprintf(stderr, "browser: drive click hits %s\n", NSStringFromClass([hit class]).UTF8String);
+    }
     Click(target, x, y, 1, Modifiers(words));
     done();
     return true;

@@ -3023,6 +3023,30 @@ mod tests {
         );
     }
 
+    /// A click on a row while the rows still slide, as they do once a link opens a tab under its
+    /// opener, selects the row resting under it, pressed and let go before a frame as the Mac
+    /// check's driver does (#2658).
+    #[gpui::test]
+    fn a_click_on_settling_rows_selects_the_row_resting_there(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, vec![2], vec![3, 4, 5], 3);
+        shell.update(cx, |shell, cx| {
+            let today = vec![3, 6, 4, 5];
+            shell.set_tabs(1, vec![2], today, Vec::new(), Folders::default(), cx);
+            shell.set_selected(6, cx);
+        });
+        cx.run_until_parked();
+        let moving = shell.read_with(cx, |shell, _| shell.slide(Slot::Tab(4)));
+        assert!(moving < 0., "4 is still on its way down: {moving}");
+        let (x, y) = close_button(&shell, cx, 4);
+        let at = point(px(x - 100.), px(y));
+        host.take();
+        cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        let calls = host.take();
+        assert!(calls.iter().any(|call| call == "select 4"), "{calls:?}");
+    }
+
     /// A press that becomes a drag has shown its tab, and still drags it: let go two rows up, the
     /// tab moves there, and nothing is shown again.
     #[gpui::test]
