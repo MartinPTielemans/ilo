@@ -1914,17 +1914,7 @@ LRESULT CALLBACK OwnerProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     if (~flags & SWP_NOSIZE) {
       CaptureWindowSized(hwnd);
     }
-  } else if ((message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) ||
-             (message == WM_ACTIVATEAPP && wparam)) {
-    // The app comes in front with this window still its thread's active one, as after a dialog
-    // shown while another app was in front: Windows sends it no WM_ACTIVATE then, and its
-    // WM_ACTIVATEAPP comes before it's the active window again, so the dialog is asked on either.
-    // KeepKeyboard waits until the window is in front (#2544).
-    if (Shows(g_dialog.life) && GetWindow(g_dialog.hwnd, GW_OWNER) == hwnd) {
-      // check.sh shows this line when the dialog didn't get the keys.
-      fprintf(stderr, "browser: dialog's window %s\n",
-              message == WM_ACTIVATE ? "activated" : "comes in front with its app");
-    }
+  } else if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) {
     KeepKeyboard(hwnd);
   } else if (message == WM_DPICHANGED) {
     ScaleChanged(hwnd);
@@ -3907,9 +3897,16 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
     ContentSize(Root(ui_view), &width, &height);
   }
   Show(g_dialog, ui_view, x, y, width, height, true);
+  HWND root = Root(ui_view);
+  // Shown with another app in front, it's its thread's active window meanwhile, as a modal dialog
+  // of Windows' own is, without coming in front. The taskbar button and Alt+Tab bring an app back
+  // with that window, so it comes back with the keyboard: its browser window, active before it,
+  // hears nothing of the app coming back to take the keyboard back for it with (#2544).
+  if (g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) && !AppInFront()) {
+    SetActiveWindow(g_dialog.hwnd);
+  }
   // Shown with another app in front, it asks for the user by its window's taskbar button, until
   // they come to that window, as Chrome's dialogs do (#1365).
-  HWND root = Root(ui_view);
   if (root && root != g_dialog_asking && g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) &&
       !AppInFront()) {
     FLASHWINFO flash{sizeof flash, root, FLASHW_TRAY | FLASHW_TIMERNOFG, 0, 0};
