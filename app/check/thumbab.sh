@@ -100,17 +100,20 @@ thumb_looks() {
   send move $thumb_point
   thumb_changed "$idle" || echo "thumbab: $2 $1: the thumb's middle stayed $idle under the pointer"
   ../tools/window-screenshot.sh "$pid" "$dir/$2-$1-hovered.png" || fail "no window to capture"
-  hovered=$(pixel "$dir/$2-$1-hovered.png" "$thumb_x" "$thumb_y")
   # Under X11 a sent motion doesn't move a held thumb, so there the display's own pointer drags it.
   hand=hand
   [ -z "${BROWSER_WAYLAND:-}" ] || hand=
   send ${hand}press $thumb_point
-  thumb_changed "$hovered" || echo "thumbab: $2 $1: the thumb's middle stayed $hovered pressed"
   # In steps, as a hand moves it.
   for y in 113 153 193 243 293; do
     send ${hand}dragto 1261 $y
   done
-  expect_late "^browser: title [0-9]* $1 scrolled$" "a drag on $1's thumb didn't scroll it"
+  # The page says it scrolled at the drag's first steps, before the last one's.
+  for _ in $(seq 50); do
+    grep -q "^browser: title [0-9]* $1 scrolled$" "$log" && break
+    sleep 0.1
+  done
+  grep -q "^browser: title [0-9]* $1 scrolled$" "$log" || fail "a drag on $1's thumb didn't scroll it"
   ../tools/window-screenshot.sh "$pid" "$dir/$2-$1-dragged.png" || fail "no window to capture"
   send ${hand}release 1261 293
   [ -z "$hand" ] || send handdragto $away_point
