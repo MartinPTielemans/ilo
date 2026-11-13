@@ -1,3 +1,4 @@
+# check.sh runs this at 450.
 # An account's devices, each a copy of the app with a profile of its own, on an ilo-server of the
 # run's own (ilo-server.sh). A signs in first and copies its recovery words, which the clipboard
 # holds marked for clipboard managers to skip (#641). B signs in and asks the account's devices

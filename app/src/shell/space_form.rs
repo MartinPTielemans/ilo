@@ -2,7 +2,7 @@
 //! its profile and its theme (docs/ux-spec.md › Spaces).
 
 use crate::tokens::text;
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{
     AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, Pixels, Point, Window,
@@ -33,6 +33,16 @@ impl Shell {
     /// New Space…, and with `tab` Move to › New Space… in a tab's menu, which moves the tab into
     /// the Space once the form makes it, so Cancel leaves the tab where it was.
     pub(super) fn new_space_with(&mut self, tab: Option<u64>, cx: &mut Context<Self>) {
+        self.new_space_from(tab, None, cx)
+    }
+
+    /// New Space's form, its Space in `profile`, else in the profile of the Space it's made from.
+    pub(super) fn new_space_from(
+        &mut self,
+        tab: Option<u64>,
+        profile: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
         if self.one_space() {
             return;
         }
@@ -47,7 +57,7 @@ impl Shell {
                 // In the profile of the Space it's made from, and right after it (Arc), but
                 // after the others from an agent's.
                 let shown = self.shown_space();
-                let profile = shown.map_or(0, |space| space.profile);
+                let profile = profile.unwrap_or_else(|| shown.map_or(0, |space| space.profile));
                 let after = shown
                     .filter(|space| space.agent.is_empty())
                     .map_or(0, |space| space.id);
