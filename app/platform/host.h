@@ -499,9 +499,9 @@ void host_hide_capture(void);
 // in a driven run.
 void host_copy_png(const uint8_t* png, size_t size);
 
-// Calls |png| with the main display's desktop picture as a PNG, at most the display's size in
-// pixels, before it returns, for Portrait Mode (#673), and says whether it did: false where the
-// system gives none, as off the Mac for now.
+// Calls |png| with the desktop picture of the display the browser is on as a PNG, at most the
+// display's size in pixels, before it returns, for Portrait Mode (#673), and says whether it did:
+// false where the system gives none, as on Linux, whose sandbox can't read it (#2682).
 bool host_desktop_picture(void* context,
                           void (*png)(void* context, const uint8_t* data, size_t size));
 
@@ -709,7 +709,8 @@ void host_show_settings(void);
 void host_hide_settings(void);
 
 // Closes the window with the keyboard if it's one of Chrome's with a close button, such as its
-// Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did.
+// Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did. A tab's dialog
+// isn't one: ⌘W on it closes its tab.
 bool host_close_other_window(void);
 
 // A detent on the trackpad, as a swipe's nearest Space changes.

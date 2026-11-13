@@ -73,17 +73,20 @@ pub(crate) unsafe extern "C" fn tab_key_before_page(
     if browser::agents::pressing_key() {
         return false;
     }
-    let (kept, route) = key_before_page(tab, key);
-    log_key(key, "before the page", route);
-    // Under Wayland GPUI reads this press next, and with the UI given the keyboard by the answer,
-    // as when ⌘W closed the tab that had it, it would run the shortcut again (#2442).
-    #[cfg(target_os = "linux")]
-    if kept {
-        gpui_linux::answered_key(&held_keystroke(unsafe { &*key }));
-    }
-    #[cfg(target_os = "linux")]
-    drive::page_key_answered();
-    kept
+    let cx = CX.with_borrow(Clone::clone);
+    shell::page_key_answer(cx.as_ref(), || {
+        let (kept, route) = key_before_page(tab, key);
+        log_key(key, "before the page", route);
+        // Under Wayland GPUI reads this press next, and with the UI given the keyboard by the
+        // answer, as when ⌘W closed the tab that had it, it would run the shortcut again (#2442).
+        #[cfg(target_os = "linux")]
+        if kept {
+            gpui_linux::answered_key(&held_keystroke(unsafe { &*key }));
+        }
+        #[cfg(target_os = "linux")]
+        drive::page_key_answered();
+        kept
+    })
 }
 
 /// The keystroke GPUI has for `key`, one typed in a page.
@@ -162,14 +165,17 @@ pub(crate) unsafe extern "C" fn tab_key_unhandled(
     if browser::agents::pressing_key() {
         return false;
     }
-    SECOND_PRESS.with_borrow_mut(|second| second.declined(&keystroke(unsafe { &*key })));
-    let (taken, route) = match link_preview_key(tab, key, false) {
-        Some(lost) => (lost, "link preview"),
-        None if run_page_shortcut(tab, key, false) => (true, "shortcut"),
-        None => (false, "nothing"),
-    };
-    log_key(key, "the page didn't keep", route);
-    taken
+    let cx = CX.with_borrow(Clone::clone);
+    shell::page_key_answer(cx.as_ref(), || {
+        SECOND_PRESS.with_borrow_mut(|second| second.declined(&keystroke(unsafe { &*key })));
+        let (taken, route) = match link_preview_key(tab, key, false) {
+            Some(lost) => (lost, "link preview"),
+            None if run_page_shortcut(tab, key, false) => (true, "shortcut"),
+            None => (false, "nothing"),
+        };
+        log_key(key, "the page didn't keep", route);
+        taken
+    })
 }
 
 /// Under Wayland the window's input method composes `text` in the UI's text field that has the keys.

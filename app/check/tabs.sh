@@ -1537,6 +1537,90 @@ FRAME
   bar_gone "Esc in the command bar after the display adapter restarted"
 fi
 
+# Showing the desktop with the command bar open (#2711). On X11 the bar is a window of its own that
+# no window manager takes, so it has to leave the screen as its window does: openbox hides every
+# window, and the bar goes with the browser window and comes back with it, with the keys. KWin
+# raises the desktop shell's window over the others and gives it the keys, and the bar closes as
+# it does for any window that takes them; without a shell KWin shows nothing, so the driver maps
+# one. EWMH's _NET_SHOWING_DESKTOP asks either, as openbox's Super+D, KWin's Ctrl+F12 and a
+# pager's button do. sway has no desktop to show and hides a window on another workspace: under
+# Wayland the bar is part of the window's surface and goes with it, and closes as the app goes
+# inactive, as on leaving it for another app's window. On sway's Xwayland nothing
+# tells an X client its window left the screen (#2720), so the step doesn't run there.
+if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; }; then
+  # The share, in thousandths, of the capture's most common colour: the empty screen's, with the
+  # pointer the only other thing on it.
+  plain() {
+    ../tools/window-screenshot.sh "$pid" "$1" all || fail "no screen to capture"
+    convert "$1" -format %c histogram:info:- |
+      awk -v all="$(identify -format '%[fx:w*h]' "$1")" \
+        '{ n = $1 + 0; if (n > top) top = n } END { printf "%d\n", top * 1000 / all }'
+  }
+  if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    opened=$step
+    swaymsg workspace 9 > /dev/null || fail "sway didn't go to another workspace"
+    for _ in $(seq 50); do
+      [ "$(plain "$out/workspace-away.png")" -ge 995 ] && break
+      sleep 0.1
+    done
+    [ "$(plain "$out/workspace-away.png")" -ge 995 ] ||
+      fail "another workspace still showed the bar or its window: $out/workspace-away.png"
+    expect '^browser: command bar hidden$' "the bar stayed open with its window off screen" "$opened"
+    expect '^browser: app active 0$' "the app stayed active with its window off screen" "$opened"
+    active=$(grep -c '^browser: app active 1$' "$log")
+    swaymsg workspace 1 > /dev/null || fail "sway didn't go back to the window's workspace"
+    for _ in $(seq 100); do
+      [ "$(grep -c '^browser: app active 1$' "$log")" -gt "$active" ] && break
+      sleep 0.1
+    done
+    [ "$(grep -c '^browser: app active 1$' "$log")" -gt "$active" ] ||
+      fail "the app didn't log \"browser: app active 1\" in 10 s back on its window's workspace"
+    ../tools/window-screenshot.sh "$pid" "$out/workspace-back.png" all || fail "no screen to capture"
+    desktop="on another workspace the window and its bar are off screen, and the bar closes as the app does on leaving it"
+  else
+    # What the X server shows, as "window <0|1>, overlays <on screen> of <shown>, keyboard <whose>".
+    onscreen() {
+      for _ in $(seq 50); do
+        send onscreen
+        seen=$(grep '^browser: onscreen ' "$log" | tail -1)
+        printf '%s\n' "$seen" | grep -q "^browser: onscreen $1\$" && return 0
+        sleep 0.1
+      done
+      fail "$2: $seen"
+    }
+    send desktop shell
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    onscreen 'window 1, overlays \([1-9][0-9]*\) of \1, keyboard overlay' \
+      "the bar didn't show over its window with the keys"
+    send desktop on
+    shown=$step
+    onscreen 'window [01], overlays 0 of [0-9][0-9]*, keyboard none' \
+      "showing the desktop left the bar on screen, or the keys with the app"
+    [ "$(plain "$out/desktop-shown.png")" -ge 995 ] ||
+      fail "the desktop showed more than itself: $out/desktop-shown.png"
+    send desktop off
+    onscreen 'window 1, overlays \(\([1-9][0-9]*\) of \2, keyboard overlay\|0 of 0, keyboard window\)' \
+      "the window didn't come back with the keys once the windows showed again"
+    if [ "${seen##*keyboard }" = overlay ]; then
+      send type g
+      expect '^browser: command bar drew "g"$' \
+        "a key typed once the windows showed again didn't reach the bar"
+      ../tools/window-screenshot.sh "$pid" "$out/desktop-back.png" all || fail "no screen to capture"
+      send key escape
+      expect '^browser: command bar hidden$' "Esc didn't close the bar once its window was back"
+      desktop="showing the desktop takes the window and its bar off screen, and back with the keys"
+    else
+      expect '^browser: command bar hidden$' "the bar was off screen but not closed" "$shown"
+      ../tools/window-screenshot.sh "$pid" "$out/desktop-back.png" all || fail "no screen to capture"
+      desktop="showing the desktop closes the bar as the desktop takes the keys, and the window comes back with them"
+    fi
+    send desktop shell off
+  fi
+fi
+
 # Arc's bar commands that call what the menus do: Mute All Tabs mutes every tab, and Unmute All
 # Tabs, listed while one is muted, unmutes them; Enter Full Screen puts the window full screen and
 # reads Exit Full Screen there, which takes it out; and there Exit, View › Exit's, with ⎋'s key,
@@ -1651,7 +1735,7 @@ else
   exec 3>&-
   quit
 fi
-echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, a pick of View Media… lists it above View Archive…, its equal for \"view\", back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized${adapter:-}."
+echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, a pick of View Media… lists it above View Archive…, its equal for \"view\", back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized${adapter:-}.${desktop:+ On Linux $desktop.}"
 [ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
   "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \

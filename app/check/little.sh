@@ -309,6 +309,8 @@ if [ "$(uname)" = Darwin ]; then
   send window 1
   send fullscreen
   expect '^browser: window left full screen$' "the main window didn't leave full screen"
+else
+  echo "skip: ⌥⌘N over a window in full screen: only on the Mac is full screen a desktop of its own, which the Little ilo window has to open on."
 fi
 
 # The Dock's menu, the Mac's alone: ilo's New Window and New Incognito Window, File's, in place of
@@ -396,6 +398,8 @@ if [ "$(uname)" = Darwin ]; then
   send key w cmd
   expect "^browser: window closed $little\$" "⌘W didn't close the Dock's Little ilo window"
   send window 1
+else
+  echo "skip: the Dock's menu: the Dock is the Mac's."
 fi
 
 # The menu bar's button, and on Windows the notification area's icon: none until Settings ›
@@ -463,6 +467,8 @@ if [ "$(uname)" = Darwin ] || windows; then
   post clickkey $close
   expect '^browser: settings hidden$' "the close button didn't hide Settings"
   send window 1
+else
+  echo "skip: Little ilo's button in the menu bar or the notification area: Linux's host makes none yet."
 fi
 
 # The taskbar's jump list, Windows' alone: ilo writes its task, New Little ilo Window, which runs

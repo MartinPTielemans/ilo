@@ -1992,6 +1992,8 @@ if [ "$driven" = 1 ]; then
       await_log "^browser: needs you $needing while active\$" "the need with ilo active wasn't held back"
       if [ "$(uname)" = Darwin ]; then
         await_more '^browser: dock badge 1$' "$badges" || fail "the Dock's badge didn't count the need"
+      else
+        echo "skip: the need with ilo in the background, and its count on a badge: here no other app's window takes the keyboard from ilo, or no notification server takes the notification, which X11's run has, and Linux has no badge every desktop reads."
       fi
       ;;
   esac
