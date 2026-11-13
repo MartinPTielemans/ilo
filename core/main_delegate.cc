@@ -676,7 +676,7 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     // engines have it, so none puts the picker up unasked; the promise it gets otherwise is refused,
     // with no UI of ours (decision 12, #2456). As a feature, not a Blink one: the browser reads it to
     // tell the page whether a call needs the click (capture_policy_utils.cc), and Blink's own follows
-    // it. Blink's alone was refused nothing, as the browser said no click was needed.
+    // it. Blink's alone refused nothing, as the browser said no click was needed.
     command_line->AppendSwitchASCII(
         switches::kEnableFeatures,
         features + features::kWebContentsDiscard.name + "," +
