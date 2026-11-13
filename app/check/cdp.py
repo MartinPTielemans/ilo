@@ -36,6 +36,11 @@ takes a command a line on its standard input:
                   opened last at an address starting with PREFIX has played, whether it's paused,
                   whether its player shows an ad, and refused where Chrome kept it from starting,
                   as YouTube's player says
+  content         logs "cdp: content TEXT IMAGES COVER", or "cdp: content none" for no page: the
+                  attached page's shown text, in characters, its shown pictures at least 50 px a
+                  side, and the percent of the viewport the largest element fixed in place over
+                  its middle covers, as a wall asking the user to turn their ad blocker off does,
+                  or a site's own banner
   hidden FILE [BASE]
                   writes to FILE, as JSON, the attached page's elements at display: none from a
                   style sheet, as the ad blocker's hiding would be, each as the selector its tag,
@@ -453,6 +458,35 @@ def video(prefix):
     return value or "none"
 
 
+# What a page shows: its text, its pictures and whether something covers it, which a page broken
+# by a blocked script, or a wall, changes.
+CONTENT = """(() => {
+  if (!document.body) return "";
+  const shown = (e) => {
+    const box = e.getBoundingClientRect();
+    return box.width >= 50 && box.height >= 50 && getComputedStyle(e).visibility !== "hidden";
+  };
+  const images = [...document.querySelectorAll("img, picture, video, canvas, svg")]
+    .filter((e) => (e.tagName !== "IMG" || e.naturalWidth > 0) && shown(e)).length;
+  let cover = 0;
+  for (let e = document.elementFromPoint(innerWidth / 2, innerHeight / 2); e; e = e.parentElement) {
+    if (getComputedStyle(e).position !== "fixed") continue;
+    const box = e.getBoundingClientRect();
+    const width = Math.min(box.right, innerWidth) - Math.max(box.left, 0);
+    const height = Math.min(box.bottom, innerHeight) - Math.max(box.top, 0);
+    cover = Math.max(cover, Math.round(100 * Math.max(width, 0) * Math.max(height, 0) /
+                                       (innerWidth * innerHeight)));
+  }
+  return document.body.innerText.length + " " + images + " " + cover;
+})()"""
+
+
+def content():
+    value = session and call("Runtime.evaluate", {"expression": CONTENT, "returnByValue": True},
+                             session).get("result", {}).get("value")
+    return value or "none"
+
+
 # The selectors, of tag, id and classes, of the elements the page has at display: none from a
 # style sheet, where an ad blocker's hiding would be: not those with neither id nor class, as
 # their selector would take in the page's every such element, nor those under one, nor those the
@@ -548,6 +582,8 @@ for line in sys.stdin:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:
         log("focus " + focus(words[1]))
+    elif words == ["content"]:
+        log("content " + content())
     elif words[:1] == ["video"] and len(words) == 2:
         log("video " + video(words[1]))
     elif words[:1] == ["hidden"] and len(words) in (2, 3) and session:
