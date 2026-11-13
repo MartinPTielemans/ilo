@@ -221,7 +221,8 @@ grep -q 'browser: tab [0-9]* game running$' "$log" && fail "Space started a game
 # ERR_INTERNET_DISCONNECTED until it says online. Its cache is off, as DevTools offers, since the
 # throttle sits under the HTTP cache and a fresh copy of a page loaded earlier would still load. It
 # takes "offline" or "online" on its input and says each back once Chromium has it. "hold" holds the
-# next request for the page $3 the tab loads, and says so once there is one; "online" lets it go.
+# next request for the page $3 the tab loads, and says so once there is one; "online" answers it
+# with the page first, as Chromium answers no change of network while a request is held.
 cat > "$out/network.py" <<'PY'
 import base64, json, os, socket, struct, sys, urllib.request
 
@@ -303,12 +304,14 @@ for line in sys.stdin:
         held = paused()
         print(state, flush=True)
         continue
-    call("Network.emulateNetworkConditions", offline=state == "offline", latency=0,
-         downloadThroughput=-1, uploadThroughput=-1)
     if held:
-        call("Fetch.continueRequest", requestId=held)
+        page = base64.b64encode(urllib.request.urlopen(sys.argv[3]).read()).decode()
+        call("Fetch.fulfillRequest", requestId=held, responseCode=200, body=page,
+             responseHeaders=[{"name": "Content-Type", "value": "text/html"}])
         call("Fetch.disable")
         held = None
+    call("Network.emulateNetworkConditions", offline=state == "offline", latency=0,
+         downloadThroughput=-1, uploadThroughput=-1)
     print(state, flush=True)
 PY
 rm -f "$out/network"
