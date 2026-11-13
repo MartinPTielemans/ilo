@@ -359,10 +359,12 @@ if engine_has ../core/space.cc ../core/window.cc ../core/tab.cc ../core/main_del
   grep -q "browser: agent tab $documents refused ms-word\$" "$log" ||
     fail "the agent's own tab didn't refuse the link to an app; its last agent tab line:
 $(grep 'browser: agent tab ' "$log" | tail -1)"
+  # window.open by name: a handler's bare open() is the document's, which with one argument
+  # replaces the page and opens nothing.
   printf '%s' '<!doctype html><title>Opens</title>
 <a href="maps:?q=check" target="_blank">Link</a>
 <a href="bounce?to=maps%3A%3Fq%3Dcheck" target="_blank">Redirect</a>
-<button onclick="open(&quot;maps:?q=check&quot;)">Pop up</button>' > "$out/site/opens.html"
+<button onclick="window.open(&quot;maps:?q=check&quot;)">Pop up</button>' > "$out/site/opens.html"
   opened=$(call open_tab "{\"url\":\"localhost:$port/opens.html\"}")
   opens=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   # The core's line carries Chromium's prefix.
@@ -1951,23 +1953,20 @@ CARD
   done
   [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] ||
     fail "the refused download left a file: $(ls -A "$out/downloads" | tr '\n' ' ')"
-  # As does one a tab the agent's tab opened starts (#2660).
+  # As does one a tab the agent's tab opened starts (#2660): the user's Never for the site just
+  # above refuses it without asking again.
   if [ -n "$opened_said" ]; then
     printf '%s' "<!doctype html><title>Files</title><a href=\"//files.localhost:$port/report.docx\" target=\"_blank\">Report</a>" \
       > "$out/site/files.html"
     opened=$(call open_tab "{\"url\":\"localhost:$port/files.html\"}")
     files=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
     ref=$(printf '%s\n' "$opened" | sed -n 's/.*- link "Report" \[\(e[0-9]*\)\].*/\1/p' | head -1)
-    before=$(grep -c "$wants" "$log" || true)
+    never='^browser: agent logged mcp-client download files\.localhost refused: You said never on this site\.$'
+    before=$(grep -c "$never" "$log" || true)
     call click "{\"tab\":$files,\"ref\":\"$ref\"}" > /dev/null
-    await_more "$wants" "$before" || fail "a download a tab the agent's tab opened started didn't ask first"
-    q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-    await_log "^browser: agent question $q at " "the opened tab's download question wasn't drawn"
-    read -r qx qy qw qh <<CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-    send click $((qx + qw / 4)) $((qy + qh - 26 - 36))
-    await_log "^browser: agent mcp-client answered $q Never\$" "Never didn't answer the opened tab's download"
+    await_more "$never" "$before" ||
+      fail "a download a tab the agent's tab opened started wasn't refused by the user's Never for its site; the last download lines:
+$(grep 'browser: agent .*download' "$log" | tail -3)"
     for _ in $(seq 50); do
       [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] && break
       sleep 0.1
