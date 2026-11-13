@@ -91,6 +91,7 @@
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "url/gurl.h"
 
@@ -671,8 +672,15 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     // Chrome's own discards, under memory pressure, then keep theirs too.
     std::string features = command_line->GetSwitchValueASCII(switches::kEnableFeatures);
     features += features.empty() ? "" : ",";
-    command_line->AppendSwitchASCII(switches::kEnableFeatures,
-                                    features + features::kWebContentsDiscard.name);
+    // And a page asks to share the screen only from a click or a key, as the spec and the other two
+    // engines have it, so none puts the picker up unasked; the promise it gets otherwise is refused,
+    // with no UI of ours (decision 12, #2456). As a feature, not a Blink one: the browser reads it to
+    // tell the page whether a call needs the click (capture_policy_utils.cc), and Blink's own follows
+    // it. Blink's alone refused nothing, as the browser said no click was needed.
+    command_line->AppendSwitchASCII(
+        switches::kEnableFeatures,
+        features + features::kWebContentsDiscard.name + "," +
+            blink::features::kGetDisplayMediaRequiresUserActivation.name);
     // A profile's sessionStorage stays on disk across a launch, as Chrome keeps it when it restores
     // the last session, for the tabs the Spaces bring back to find theirs again; the core deletes
     // what no tab came back for once they're back (RestoreSession). Chrome otherwise clears it all
@@ -692,12 +700,9 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     std::string blink = command_line->GetSwitchValueASCII(switches::kEnableBlinkFeatures);
     blink += blink.empty() ? "" : ",";
     // And ⌥-click on a link opens it in a split view, as Arc's does, not Chrome's download
-    // (chromium-core-alt-click-split.patch). And a page asks to share the screen only from a click
-    // or a key, as the spec and the other two engines have it, so none puts the picker up unasked;
-    // the promise it gets otherwise is refused, with no UI of ours (decision 12, #2456).
-    command_line->AppendSwitchASCII(
-        switches::kEnableBlinkFeatures,
-        blink + "PasswordReveal,AltClickSplitView,GetDisplayMediaRequiresUserActivation");
+    // (chromium-core-alt-click-split.patch).
+    command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures,
+                                    blink + "PasswordReveal,AltClickSplitView");
 #if BUILDFLAG(IS_MAC)
     platform::NameKeychainItem();
 #endif
