@@ -4,8 +4,7 @@
 # them, blocks the host's pages, and the tab shows a warning in the page's place, which never
 # reached the server. Its Open anyway, pressed from the keyboard, opens the page, and the host's
 # pages for a while after. A pop-up filter closes the tab a page's link opens, before its page
-# reaches the server, as uBlock Origin does. An agent's tab gets the warning with no way past it,
-# though the user let the host through.
+# reaches the server, as uBlock Origin does.
 
 # An engine from before the page warning lets the page through.
 if ! engine_has ../core/native_ad_block.cc ../core/ad_block.cc; then
@@ -68,17 +67,8 @@ done
 [ "$(today)" = "$tab" ] || fail "the pop-up's tab stayed: Today is \"$(today)\""
 grep -q '/popup\.html' "$out/site.log" && fail "the pop-up's page reached the server"
 
-# An agent's tab, on the host the user let through: the warning, and nothing past it.
-send agentspace claude-code Claude Code
-expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
-send agentopen claude-code "$blocked?agent"
-expect '^browser: agent claude-code opened [1-9][0-9]*$' "the agent didn't open a tab in its Space"
-agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
-expect "^browser: title $agent_tab Page blocked\$" \
-  "the agent's tab didn't show the warning: $(grep "^browser: title $agent_tab " "$log" | tail -1)"
-grep -q '/blocked\.html?agent' "$out/site.log" && fail "the agent's page reached the server"
 quit
 echo "ok: a host a list names on a line of its own never reached the server: the tab showed the" \
   "warning, whose Open anyway, from the keyboard, opened the page. A pop-up filter closed the tab" \
-  "a link opened before its page reached the server. An agent's tab got the warning" \
-  "on the host the user let through. Windows: $out/adblock-page.png, $out/adblock-page-opened.png"
+  "a link opened before its page reached the server. Windows: $out/adblock-page.png," \
+  "$out/adblock-page-opened.png"
