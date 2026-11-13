@@ -4085,7 +4085,7 @@ void host_link_preview_drew(double left,
           LARGE_INTEGER t{};
           QueryPerformanceCounter(&t);
           const double after = (t.QuadPart - start) * 1000.0 / f;
-          if (after > 400) {
+          if (after > 2500) {
             break;
           }
           const COLORREF c = GetPixel(dc, at.x, at.y);
