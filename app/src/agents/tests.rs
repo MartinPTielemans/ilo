@@ -6027,3 +6027,23 @@ mod sessions {
 }
 
 mod holds;
+
+/// A page's request to show notifications that the browser holds behind the URL field's bell is
+/// named in what the agent reads of the tab, as only the user can answer it; once it's answered or
+/// gone, it isn't (#2323).
+#[gpui::test]
+fn a_request_held_behind_the_bell_is_named(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let held = "example.com asked to send notifications. Only the user can answer it";
+    agents.update(cx, |agents, cx| {
+        agents.held_notifications(20, Some("example.com"), cx)
+    });
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    let read = page_done(&agents, &browser, answer, shop_tree(), cx);
+    assert!(read.text.contains(held), "{}", read.text);
+
+    agents.update(cx, |agents, cx| agents.held_notifications(20, None, cx));
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    let read = page_done(&agents, &browser, answer, shop_tree(), cx);
+    assert!(!read.text.contains(held), "{}", read.text);
+}

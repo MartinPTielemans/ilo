@@ -237,6 +237,7 @@ fn the_card_is_its_tab_s_after_the_page_s_question(cx: &mut TestAppContext) {
             Some(Question {
                 site: "example.com".into(),
                 permissions,
+                quiet: false,
             }),
             cx,
         );

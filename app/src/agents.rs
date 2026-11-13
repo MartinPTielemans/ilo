@@ -536,6 +536,9 @@ pub fn entry_id() -> u64 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Why an agent's log has a page's request to show notifications as not done.
+const HELD_FOR_YOU: &str = "Only you can answer it, from the bell in the URL field.";
+
 /// An agent the user connected.
 #[derive(Clone, Debug)]
 pub struct Agent {
@@ -607,6 +610,9 @@ pub struct Agents {
     /// Each tab's latest outline, and the last one an agent had, which its next answer gives the
     /// changes since.
     outlines: HashMap<u64, page::Outline>,
+    /// The tabs whose page's request to show notifications the browser holds behind the bell, by
+    /// the site that asked, so an agent's answers about the tab say only the user can answer it.
+    bells: HashMap<u64, String>,
     had: HashMap<u64, (String, page::Outline)>,
     /// The actions waiting on the user, the first asked now.
     asking: Vec<Asking>,
@@ -701,6 +707,10 @@ const BUSY: &str = "The page was still busy after 5 s, so it may change yet.";
 /// What it starts with when only requests the page made were still open then, as a page that polls
 /// keeps one, while what it shows held still: no reason to wait for it (#2355).
 const REQUESTS: &str = "The page held still, with requests it made still open after 5 s.";
+/// What an agent's answer about a tab says, after the site, while its page's request to show
+/// notifications waits behind the bell, which no tool answers (#2323).
+const HELD: &str = "asked to send notifications. Only the user can answer it, from the bell in \
+                    the URL field.";
 
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
@@ -778,6 +788,7 @@ impl Agents {
             sending: HashMap::new(),
             refs: HashMap::new(),
             outlines: HashMap::new(),
+            bells: HashMap::new(),
             had: HashMap::new(),
             asking: Vec::new(),
             downloading: HashMap::new(),
@@ -2962,6 +2973,13 @@ impl Agents {
         if let Some(did) = did {
             self.counted(&agent, call, did);
         }
+        if let Some(site) = self.bells.get(&tab) {
+            let held = format!("{site} {HELD}");
+            note = match note.is_empty() {
+                true => held,
+                false => format!("{note} {held}"),
+            };
+        }
         if !text.starts_with('{') {
             _ = reply.send(ToolResult::image(text));
             return;
@@ -3101,6 +3119,40 @@ impl Agents {
             }
         };
         _ = reply.send(ToolResult::text(answer));
+    }
+
+    /// Whether `tab`'s page has a request to show notifications held behind the bell, from
+    /// `site`, or none any more (#2323). The agent's answers about the tab say so while it does.
+    pub fn held_notifications(&mut self, tab: u64, site: Option<&str>, cx: &App) {
+        match site {
+            Some(site) => {
+                self.bells.insert(tab, site.to_string());
+                self.page_held_notifications(tab, site, cx);
+            }
+            None => _ = self.bells.remove(&tab),
+        }
+    }
+
+    /// `tab`'s page asks `site` to show notifications with no click behind it, which the browser
+    /// holds quietly for the user (#2323). In an agent's Space it goes in the agent's log, as a
+    /// question only the user answers: the agent gets no answer to give, as with the card. Once
+    /// for each time the page asks, as Chrome asks again when its tab is shown again.
+    fn page_held_notifications(&mut self, tab: u64, site: &str, cx: &App) {
+        let ids: Vec<String> = (self.agents.iter())
+            .map(|agent| agent.client.id().to_string())
+            .collect();
+        for agent in ids {
+            let space = self.browser.agent_space(&agent);
+            if space == 0 || !self.browser.space_tab_ids(space, cx).contains(&tab) {
+                continue;
+            }
+            let last = self.activity(&agent).next();
+            if last.is_some_and(|entry| entry.action == "notifications" && entry.site == site) {
+                return;
+            }
+            self.note(&agent, "notifications", site, HELD_FOR_YOU);
+            return;
+        }
     }
 
     /// The user pinned, unpinned or moved `tab`, which makes its pin theirs.
