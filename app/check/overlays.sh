@@ -327,10 +327,11 @@ close() {
 }
 offers=0
 # Logs in on the login page, its username field with the keyboard, with password $1, as
-# passwords' does.
+# passwords' does, as a username of its own: Chrome counts the offers ignored for a site and
+# username, and stops offering once there have been a few.
 log_in() {
   send key a cmd
-  send type check@example.test
+  send type "check-$1@example.test"
   send key tab
   send key a cmd
   send type "$1"
