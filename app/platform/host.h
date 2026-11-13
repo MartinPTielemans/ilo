@@ -499,9 +499,9 @@ void host_hide_capture(void);
 // in a driven run.
 void host_copy_png(const uint8_t* png, size_t size);
 
-// Calls |png| with the main display's desktop picture as a PNG, at most the display's size in
-// pixels, before it returns, for Portrait Mode (#673), and says whether it did: false where the
-// system gives none, as off the Mac for now.
+// Calls |png| with the desktop picture of the display the browser is on as a PNG, at most the
+// display's size in pixels, before it returns, for Portrait Mode (#673), and says whether it did:
+// false where the system gives none, as on Linux, whose sandbox can't read it (#2682).
 bool host_desktop_picture(void* context,
                           void (*png)(void* context, const uint8_t* data, size_t size));
 
