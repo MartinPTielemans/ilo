@@ -35,6 +35,10 @@ fi
 send screen
 screen=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: screen at ' |
   cut -d' ' -f6- | tr ' ' x)
+# What a zoom will fill, as the app sees it and as a new process does, for when it doesn't (#2633).
+visible=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: screen visible ' |
+  cut -d' ' -f4-)
+echo "note: before the zoom, the app's visible area (x, y down from the top, w, h) is $visible, and a new process's screen and visible area (x, y up from the bottom, w, h) are $(screen_areas)"
 # Zoomed by a double-click on its header, unless System Settings sets that to something else, and
 # else placed over the screen.
 if [ "$(defaults read -g AppleActionOnDoubleClick 2>/dev/null || echo Maximize)" = Maximize ]; then
