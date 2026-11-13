@@ -26,7 +26,8 @@ serve
 # one magenta, so a frame says whose page shows at a point. The titles say "ready" once drawn, and
 # Peek's its size as its first script read it, at its first frame and now, and how many times it
 # was resized before that frame and after: the motion never resizes it (#2519).
-target="http://localhost:$port/peek-motion-target.html"
+# Proof only (#2640): Peek's page answers 2 s late, after the card has settled.
+target="http://localhost:$port/late/peek-motion-target.html"
 printf '%s' "<title>loading</title>
 <body style=\"margin:0;height:100vh;background:rgb(0,176,0)\">
 <a href=\"$target\" style=\"position:fixed;left:0;top:0;width:100%;height:40%;font:24px system-ui;color:rgb(0,90,0)\">
@@ -146,12 +147,13 @@ round() {
 # so it opens and closes Peek again until a frame has caught each motion mid-way, eight times at
 # most, and fails at once on a frame that shows Peek's resting frame outside its card.
 resized=
-for n in 1 2 3 4 5 6 7 8; do
+for n in $(seq 72); do
   round $n
   # shellcheck disable=SC2086 # numbers: x y w h from x y
   python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
     > "$out/peek-motion.txt" 2>&1 && status=0 || status=$?
-  [ $status = 2 ] && ! grep -q "isn't drawn blended" "$out/peek-motion.txt" || break
+  # Proof only (#2640): every round, each one's verdict kept.
+  cp "$out/peek-motion.txt" "$out/peek-motion-$n.txt"
 done
 [ "$(today)" = "$a" ] || fail "Peek opened a tab: Today is \"$(today)\""
 exec 3>&-
