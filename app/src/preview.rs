@@ -967,6 +967,9 @@ impl Browser for Fake {
     // The made-up pages share nothing.
     fn share_instead(&self, _: u64, _: &mut App) {}
 
+    // The made-up pages have no video.
+    fn show_video(&self, _: u64, _: Option<Bounds<Pixels>>, _: f32, _: &mut App) {}
+
     fn set_volume(&self, tab: u64, volume: f32, cx: &mut App) {
         self.later(cx, move |shell, cx| {
             let page = Page {

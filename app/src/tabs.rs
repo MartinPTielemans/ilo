@@ -324,6 +324,7 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
         media_previous: state.media_previous,
         media_next: state.media_next,
         media_picture_in_picture: state.media_picture_in_picture,
+        media_video: state.media_video,
         developer_mode: state.developer_mode,
     };
     if unsafe { bc::bc_tab_window(tab) } == 0 {

@@ -20,6 +20,7 @@
 #include "browser_core/arrange.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/boosts.h"
+#include "browser_core/card_video.h"
 #include "browser_core/dialog_keys.h"
 #include "browser_core/favorites.h"
 #include "browser_core/held_keys.h"
@@ -1294,13 +1295,16 @@ void Tab::ReportState() {
       .media_next = controllable &&
                     std::ranges::contains(session->GetMediaSessionActionsSync(),
                                           media_session::mojom::MediaSessionAction::kNextTrack),
-      // Chrome offers the action while the page floats too, where the player has nothing to do.
+      // Chrome offers the action while the page floats too, where the player has nothing to do,
+      // but a video in its card floats from there (FloatCardVideo).
       .media_picture_in_picture =
           controllable &&
-          media->picture_in_picture_state !=
-              media_session::mojom::MediaPictureInPictureState::kInPictureInPicture &&
+          (media->picture_in_picture_state !=
+               media_session::mojom::MediaPictureInPictureState::kInPictureInPicture ||
+           CardShowsVideo(contents)) &&
           std::ranges::contains(session->GetMediaSessionActionsSync(),
                                 media_session::mojom::MediaSessionAction::kEnterPictureInPicture),
+      .media_video = controllable && CardCanShowVideo(contents),
       .developer_mode = developer_mode::On(profile(), GURL(url)),
   };
   Host().tab_state_changed(Host().context, id_, &state);
@@ -1734,8 +1738,11 @@ void Tab::Media(int action) {
       session->PreviousTrack();
       break;
     case BC_MEDIA_PICTURE_IN_PICTURE:
-      // The page's own handler if it has one, else its one video, as Chrome's media controls do.
-      session->EnterPictureInPicture();
+      // From its card to Chrome's window, if its card shows it, else the page's own handler if it
+      // has one, or its one video, as Chrome's media controls do.
+      if (!FloatCardVideo(web_contents())) {
+        session->EnterPictureInPicture();
+      }
       break;
   }
 }

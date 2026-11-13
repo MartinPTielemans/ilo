@@ -579,6 +579,10 @@ bool FocusSettledOnActivation() {
   return false;
 }
 
+void PassPointerThrough(views::Widget*) {
+  // Views' accept_events makes the window ignore mouse events.
+}
+
 bool PageDialogsInOwnWindow() {
   // A child NSWindow either way.
   return false;
