@@ -26,7 +26,8 @@ serve
 # one magenta, so a frame says whose page shows at a point. The titles say "ready" once drawn, and
 # Peek's its size as its first script read it, at its first frame and now, and how many times it
 # was resized before that frame and after: the motion never resizes it (#2519).
-target="http://localhost:$port/peek-motion-target.html"
+# Proof only (#2640): Peek's page answers 2 s late, after the card has settled.
+target="http://localhost:$port/late/peek-motion-target.html"
 printf '%s' "<title>loading</title>
 <body style=\"margin:0;height:100vh;background:rgb(0,176,0)\">
 <a href=\"$target\" style=\"position:fixed;left:0;top:0;width:100%;height:40%;font:24px system-ui;color:rgb(0,90,0)\">
