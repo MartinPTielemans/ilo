@@ -53,6 +53,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/tab_list/tab_removed_reason.h"
 #include "chrome/browser/ui/browser_active_state_manager/browser_active_state_manager.h"
 #include "chrome/browser/ui/browser_tabrestore.h"
@@ -370,6 +371,28 @@ gfx::Size g_left_size;
 std::string Handing(bc_id window, bc_id tab) {
   return base::StrCat(
       {"window ", base::NumberToString(window), ", tab ", base::NumberToString(tab)});
+}
+
+// Makes the new tab |params| asks for as Chrome's Navigate makes it (CreateTargetContents) and
+// starts its page, held by |space| first, and leaves it to Navigate to insert. Chrome would start
+// the page before its tab strip had the tab, and the window places a tab a task after that, so a
+// tab an agent opens would be in no Space as its first request starts (#2660).
+void MakeHeldBy(Space& space, NavigateParams& params) {
+  Profile* profile = params.browser->GetProfile();
+  scoped_refptr<content::SiteInstance> site =
+      params.opener ? scoped_refptr<content::SiteInstance>(params.opener->GetSiteInstance())
+                    : tab_util::GetSiteInstanceForNewTab(profile, params.url);
+  content::WebContents::CreateParams create(profile, std::move(site));
+  create.main_frame_name = params.frame_name;
+  if (params.opener) {
+    create.opener_id = params.opener->GetGlobalId();
+  }
+  create.opened_by_another_window = params.opened_by_another_window;
+  create.initially_hidden = params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  std::unique_ptr<content::WebContents> made = content::WebContents::Create(create);
+  space.Expect(Tab::IdOf(made.get()));
+  made->GetController().LoadURLWithParams(LoadURLParamsFromNavigateParams(made.get(), &params));
+  params.contents_to_insert = std::move(made);
 }
 
 }  // namespace
@@ -895,6 +918,16 @@ void Window::AdjustNavigate(NavigateParams& params) {
                          }
                        },
                        window->weak_factory_.GetWeakPtr()));
+  }
+  // A tab an agent's tab opens, which goes in the agent's Space, is the agent's before its page
+  // starts, as every rule for an agent's page asks of it then (#2660). A pop-up's page, which
+  // content made, the opener's Tab held as content made it (Tab::DidOpenRequestedURL).
+  if (source_space && source_space->agent() && !params.contents_to_insert &&
+      (params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
+       params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB) &&
+      !params.url.is_empty() && !params.url.SchemeIs(url::kAboutScheme) &&
+      !params.url.SchemeIs(content::kChromeUIScheme)) {
+    MakeHeldBy(*Space::Holding(source_id), params);
   }
 }
 
@@ -1536,6 +1569,20 @@ content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool wh
   if (when_shown && url.SchemeIsHTTPOrHTTPS()) {
     return OpenBehind(params);
   }
+  // The app hears only of the tabs it didn't open.
+  base::AutoReset<bool> opening(&opening_tab_, true);
+  Navigate(&params);
+  return params.navigated_or_inserted_contents;
+}
+
+content::WebContents* Window::OpenHeld(Space& space, Profile* profile, const GURL& url) {
+  BrowserWindowInterface* browser = BrowserFor(profile);
+  if (!browser) {
+    return nullptr;
+  }
+  NavigateParams params(browser, url, ui::PAGE_TRANSITION_TYPED);
+  params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  MakeHeldBy(space, params);
   // The app hears only of the tabs it didn't open.
   base::AutoReset<bool> opening(&opening_tab_, true);
   Navigate(&params);
