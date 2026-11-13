@@ -332,8 +332,8 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
   }
 
   void OnAppTerminating() {
-    // check.sh reads this line. It names the way a quit came, whatever started it: the app's
-    // own (bc_quit) logs its reason before this, and the system's Apple Event on the Mac too.
+    // The line names the way a quit came, whatever started it: the app's own (bc_quit) logs its
+    // reason before this, and the system's Apple Event on the Mac too.
     fprintf(stderr, "browser: terminating, %s\n",
             ShutdownName(browser_shutdown::GetShutdownType()));
     keep_alive_.reset();

@@ -2,8 +2,8 @@
 # Gives the one engine runner to a release batch's engine runs ahead of lanes' (#2332). The runner
 # takes any queued job its labels match, not the oldest, and GitHub has no priority for self-hosted
 # jobs. So a lane's build job that gets the runner while a release waits hands the runner back.
-# engine-linux.yml and engine-windows-cross.yml fetch this through the contents API before any
-# checkout, so asking costs the runner seconds.
+# engine-linux.yml, engine-windows-cross.yml and core-tests.yml fetch this through the contents API
+# before any checkout, so asking costs the runner seconds.
 # Usage:
 #   engine-yield.sh yield: the first step of a lane's build job. With a release waiting, it
 #     dispatches the run's workflow again on its ref with yielded=true, and cancels its own run.
@@ -36,7 +36,15 @@ yield)
   workflow=${GITHUB_WORKFLOW_REF%@*}
   workflow=${workflow##*/}
   # Without the retry it builds now, rather than leave the ref with no build at all.
-  gh workflow run "$workflow" -R "$repo" --ref "$GITHUB_REF_NAME" -f yielded=true || exit 0
+  # The run's other inputs go to the retry too, as name=value lines in ENGINE_YIELD_INPUTS, such as
+  # core-tests.yml's filter.
+  inputs=(-f yielded=true)
+  while IFS= read -r input; do
+    [ -z "$input" ] || inputs+=(-f "$input")
+  done <<EOF
+${ENGINE_YIELD_INPUTS:-}
+EOF
+  gh workflow run "$workflow" -R "$repo" --ref "$GITHUB_REF_NAME" "${inputs[@]}" || exit 0
   echo "Gave the engine runner to release run [$release]($GITHUB_SERVER_URL/$repo/actions/runs/$release), and dispatched $workflow on $GITHUB_REF_NAME again, which builds once the release has the runner." |
     tee -a "$GITHUB_STEP_SUMMARY"
   gh run cancel "$GITHUB_RUN_ID" -R "$repo"

@@ -1,10 +1,8 @@
 //! The browser's commands: their names, their keys and where the command bar offers
 //! them, and what each does, run from a key, a menu, the command bar or the page.
 
-use std::{
-    sync::{Arc, LazyLock},
-    time::Instant,
-};
+use std::sync::{Arc, LazyLock};
+use web_time::Instant;
 
 use gpui::{
     Action, App, Bounds, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
@@ -1733,11 +1731,11 @@ impl Shell {
             }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
-                let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
+                let url = BuildInfo::here(cx).issue_url(build_info::NEW_ISSUE);
                 return self.browser.open_page(&url, cx);
             }
             Command::CopyBuildInfo => {
-                return self.copy(&BuildInfo::here().text(), "Copied Build Info", cx);
+                return self.copy(&BuildInfo::here(cx).text(), "Copied Build Info", cx);
             }
             Command::HelpCenter => return self.browser.open_page(build_info::HELP_CENTER, cx),
             Command::WhatsNew => return self.browser.open_page(build_info::WHATS_NEW, cx),
@@ -2037,9 +2035,10 @@ impl Shell {
                 point(page.center().x, page.top())
             }
         };
-        let title = self.title(self.selected);
-        self.browser
-            .show_share_sheet(self.selected, &link, &title, at, cx);
+        let (tab, title) = (self.selected, self.title(self.selected));
+        // After this update, as finding the tab's window reads every Shell (#2459).
+        let browser = self.browser.clone();
+        cx.defer(move |cx| browser.show_share_sheet(tab, &link, &title, at, cx));
     }
 
     /// `tab`'s link to copy, as a Markdown link if `markdown`, and the toast to say so with.
