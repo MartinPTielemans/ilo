@@ -202,9 +202,9 @@ y=${frame#*,}
 # The pointer rests on the link until its bubble shows, then ⌥⌘ go down and it clicks. On Windows'
 # real input, with the keys down before the pointer came onto the link, the page opened nothing
 # about half the time (#2666).
-# Probe 6 for #2666: keys first again, as before #2556.
 rest_on_link() {
-  :
+  send move $((x + 20)) $((y + 20))
+  expect '^browser: link target window shown$' "the pointer resting on the page's link showed no bubble"
 }
 send click $page_point
 rest_on_link
