@@ -124,6 +124,8 @@ if [ "$(uname)" = Darwin ]; then
   done
   [ "$keyed" = "$sign_in_key" ] && [ "$focus" = RenderWidgetHostViewCocoa ] ||
     fail "with Chrome's passkey dialog gone, the keyboard is in $keyed on $focus, not the page's"
+else
+  echo "skip: the keyboard back in the sign-in window's page once Chrome's passkey dialog is gone: it's read from AppKit's key window, and off the Mac it isn't checked yet."
 fi
 # Touched, the key adds the passkey. The page blurred Add a Passkey as it went disabled, so the
 # next tab is from it, to Not Now, and shift-tab comes back to it.
@@ -156,6 +158,8 @@ if [ "$(uname)" = Darwin ]; then
     sleep 0.1
   done
   expect "$words" "Copy didn't put the 24 recovery words on the run's pasteboard"
+else
+  echo "skip: Copy putting the 24 recovery words on the pasteboard, and their leaving it 90 s after: off the Mac it isn't tried yet."
 fi
 send clickkey $(drawn_after "sync done" "$on")
 await 'browser: sync service active$' ||

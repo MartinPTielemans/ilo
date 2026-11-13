@@ -18,6 +18,8 @@ if [ "$(uname)" != Linux ]; then
   [ "$(echo "$first" | cut -d" " -f7-8)" = "1280 800" ] ||
     fail "the first window didn't open 1280 by 800: ${first:-no frame logged}"
   sized=" The first window opened at $(echo "$first" | cut -d" " -f5-)."
+else
+  echo "skip: the first window at 1280 by 800: Linux leaves the window manager to place and size it."
 fi
 ../tools/window-screenshot.sh "$pid" "$out/load.png" || fail "no window to capture"
 icons=

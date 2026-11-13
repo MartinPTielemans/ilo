@@ -1516,8 +1516,11 @@ elif windows; then
     "a click on the taskbar button's switch didn't turn it on again"
   send key w cmd
   expect '^browser: settings hidden$' "Ctrl+W didn't hide Settings"
+  echo "skip: the taskbar button's dot in the Space's color: the taskbar's overlay isn't read back yet, so only its switch is checked."
   dock="the taskbar button's switch off and on again in Settings"
   dock_shots=", $out/taskbar-dot-switch.png"
+else
+  echo "skip: the Dock icon's dot in the Space's color: Linux's host draws none."
 fi
 
 # Esc in full screen goes to the page first, so a page that keeps it stays full screen on one
