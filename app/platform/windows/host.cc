@@ -4985,11 +4985,12 @@ bool host_close_other_window(void) {
   }
   DWORD process = 0;
   GetWindowThreadProcessId(window, &process);
-  // Our own, but neither a browser window (Ctrl+W closes its tab) nor one of the UI's floating
-  // windows: a Chrome window of its own, such as the Task Manager or undocked DevTools, which carry
+  // Our own, but neither a browser window (Ctrl+W closes its tab), one of the UI's floating windows
+  // nor a window another owns, such as a tab's dialog, whose Ctrl+W closes its tab as in Chrome
+  // (#2651): a Chrome window of its own, such as the Task Manager or undocked DevTools, which carry
   // a system close button. Closing it is that button's click.
   if (process != GetCurrentProcessId() || UiViewOf(window) || FloatingByHwnd().count(window) ||
-      !(GetWindowLongPtrW(window, GWL_STYLE) & WS_SYSMENU)) {
+      GetWindow(window, GW_OWNER) || !(GetWindowLongPtrW(window, GWL_STYLE) & WS_SYSMENU)) {
     return false;
   }
   PostMessageW(window, WM_CLOSE, 0, 0);
