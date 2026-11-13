@@ -24,7 +24,7 @@ ungoogled-chromium built as Chrome's framework from `engine/series`, with embedd
 
 Sidebar, Spaces (with the Agent Space kind in the data model), command bar, split view, archive, profiles, extensions (including install prompts and popups), ad blocking on from the first page, passwords and autofill, downloads, find in page, DevTools, import from Arc and Chrome, Sparkle updates, signing and notarization.
 
-**Done when** the parity checklist's MVP items pass and the performance gate holds. **Partly met:** everything ships in 0.1.13, signed and notarized, and Sparkle updates it. 454 of 477 MVP rows pass, and #2178 lists the open rows no other issue tracks. The gate doesn't hold.
+**Done when** the parity checklist's MVP items pass and the performance gate holds. **Partly met:** everything ships in 0.1.13, signed and notarized, and Sparkle updates it. 454 of 480 MVP rows pass, and #2178 lists the open rows no other issue tracks. The gate doesn't hold.
 
 ## Phase 4: polish, parity and agents
 
@@ -43,10 +43,10 @@ Open: sync (#589, #1235, #2098) and Widevine (#649).
 
 Per platform: the platform layer, packaging, updater, signing. Linux runs on X11 and on native Wayland (decision 3). On wlroots' Xwayland its panels can't keep the keys, so use Wayland there (#1646).
 
-**Done when** each platform's build passes the parity checklist's MVP items and the performance gate, and on Linux that holds on native Wayland as well as X11. **Partly met:**
+**Done when** each OS holds the performance gate and every default check run and step passes or says why not (`tools/runs-per-os.py`), Linux on Wayland and X11. **Partly met:**
 
 - Both ship, with updates, from 0.1.0 (#454), but Windows is unsigned (#2180).
-- Of 61 check runs, 55 pass on X11, 40 on Wayland and 38 on Windows (#2179).
+- Of 71 default runs, 64 pass on X11, 62 on Wayland, 60 on Windows (#2179).
 - The gate doesn't hold.
 
 ## Performance gate
