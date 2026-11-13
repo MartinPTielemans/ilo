@@ -320,6 +320,16 @@ close() {
   esac
 }
 offers=0
+# Logs in on the login page, its username field with the keyboard, with password $1, as
+# passwords' does.
+log_in() {
+  send key a cmd
+  send type check@example.test
+  send key tab
+  send key a cmd
+  send type "$1"
+  send key return
+}
 # Opens and closes each overlay after the event $1, named $2 in its captures. With $3, each hidden
 # one made so far is told the scale $3 first.
 walk() {
