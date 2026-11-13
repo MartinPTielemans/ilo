@@ -6,7 +6,7 @@ use web_time::Instant;
 
 use gpui::{
     Context, DispatchPhase, Point, ScrollDelta, ScrollEvent, TouchPhase, Window, canvas, div,
-    prelude::*, px,
+    point, prelude::*, px,
 };
 
 use super::{
@@ -417,15 +417,22 @@ impl Shell {
             .as_ref()
             .is_none_or(|swipe| swipe.across.is_none());
         // Until the lift is found, momentum moves the pages as fingers would, on past the Space they
-        // take. There only fingers going faster than they have yet move them further: one swipe
-        // takes one Space, and past it fingers only stretch the band.
-        let held = !self.web_wheel.fastest()
-            && self
-                .swipe
-                .as_ref()
-                .is_some_and(|swipe| self.past_next(swipe));
+        // take. Only fingers going faster than they have yet take them past it: one swipe takes one
+        // Space, and past it fingers only stretch the band. A slower event goes as far as that
+        // Space and no further, or at 60 Hz the one that crosses it, two summed, ran on past it.
+        let fastest = self.web_wheel.fastest();
         let took = moved.is_none_or(|delta| {
-            held || self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx)
+            let delta = match (delta, self.swipe.as_ref()) {
+                (ScrollDelta::Pixels(delta), Some(swipe)) if !fastest && delta.x != px(0.) => {
+                    let x = self.short_of_next(swipe, f32::from(delta.x));
+                    if x == 0. {
+                        return true;
+                    }
+                    ScrollDelta::Pixels(point(px(x), delta.y))
+                }
+                (delta, _) => delta,
+            };
+            self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx)
         });
         if deciding && let Some(across) = self.swipe.as_ref().and_then(|swipe| swipe.across) {
             self.note("axis", if across { "across" } else { "along" });
@@ -445,10 +452,18 @@ impl Shell {
         took
     }
 
-    /// Whether `swipe` has taken the pages past the Space beside the one it began on.
-    fn past_next(&self, swipe: &Swipe) -> bool {
+    /// How much of `dx` moves `swipe`'s pages no further than the Space beside the one it began
+    /// on: all of it short of that Space or back toward it, as far as it of one that crosses it,
+    /// and none further past it.
+    fn short_of_next(&self, swipe: &Swipe, dx: f32) -> f32 {
         let across = swipe.across == Some(true) && swipe.cards.is_none() && !swipe.library;
-        across && self.swiped_to(swipe).abs() > self.width()
+        let width = self.width();
+        let way = swipe.way + SWIPE_TRACKING * dx;
+        if !across || way.abs() <= width || way.abs() < swipe.way.abs() {
+            return dx;
+        }
+        let room = (width.copysign(way) - swipe.way) / SWIPE_TRACKING;
+        if room * dx > 0. { room } else { 0. }
     }
 
     /// No wheel event since the last, at `now`: fingers still down lift, as `lift`.
