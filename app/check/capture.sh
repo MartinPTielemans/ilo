@@ -448,6 +448,40 @@ expect "^browser: toast shown Screenshot Copied to Clipboard \\[$buttons\\]\$" \
 # The card's buttons left the keyboard with the UI; the page takes it back.
 send click 600 400
 
+# Windows: the card offers the desktop's picture too, which Capture reads from the runner's desktop
+# and puts the page on (#2682). A solid-colour desktop fills the picture with its colour, so the
+# picture's corner is that colour; Windows Spotlight gives none, and the page goes on white.
+if windows; then
+  bar_command capture-portrait "Capture in Portrait Mode" "portrait mode"
+  expect '^browser: portrait swatch desktop [0-9]* at ' \
+    "Portrait Mode's card on Windows drew no Desktop Picture swatch"
+  ../tools/window-screenshot.sh "$pid" "$out/capture-portrait-card-desktop.png" ||
+    fail "no window to capture"
+  send click $(sed -n 's/^browser: portrait swatch desktop [0-9]* at //p' "$log" | tail -1 |
+    awk '{ printf "%.0f %.0f", $1 + $3 / 2, $2 + $4 / 2 }')
+  expect '^browser: portrait chose desktop$' "Desktop Picture on Portrait Mode's card didn't choose it"
+  send click $(sed -n 's/^browser: portrait card [0-9]* at //p' "$log" | tail -1 |
+    awk '{ printf "%.0f %.0f", $1 + $3 * 0.75, $2 + $4 - 26 }')
+  expect '^browser: desktop picture ' \
+    "Portrait Mode's Capture on Desktop Picture didn't read the desktop (browser: desktop picture)"
+  desktop=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: desktop picture ')
+  echo "the runner's ${desktop#browser: }"
+  expect '^browser: portrait desktop [0-9]*x[0-9]*$' "Portrait Mode didn't put the page on Desktop Picture"
+  expect "$copied" "Portrait Mode on Desktop Picture didn't copy the PNG to the clipboard"
+  corner=$(python3 -I check/clipboard-windows.py png "$out/capture-portrait-desktop.png") ||
+    fail "the clipboard had no PNG after Portrait Mode copied one on Desktop Picture"
+  case "$desktop" in
+    *', colour '*) want=${desktop##*, colour } ;;
+    *'none, '*) want=ffffff ;;
+    *) want= ;;
+  esac
+  [ -z "$want" ] || [ "$corner" = "$want" ] ||
+    fail "Portrait Mode's picture's corner is $corner, not $want, for the runner's ${desktop#browser: }"
+  on_desktop=" On the runner's ${desktop#browser: } Portrait Mode's corner is $corner:"
+  on_desktop="$on_desktop $out/capture-portrait-card-desktop.png, $out/capture-portrait-desktop.png."
+  send click 600 400
+fi
+
 # A drag takes the rectangle dragged, and its menu comes as a click's box's does. A click outside
 # capture mode, on the sidebar, leaves it, and so does a resize of the window.
 capture_mode page
@@ -495,5 +529,5 @@ echo "ok: capture. The box's picture is $size, the full page's $full, Portrait M
   "$out/media-empty-narrow-dark.png, $out/media-empty-wide-light.png," \
   "$out/media-empty-wide-dark.png, $out/capture-pill-light.png, $out/capture-menu-light.png," \
   "$out/capture-pill-dark.png, $out/capture-menu-dark.png, $out/capture-dragged.png, $out/capture-cmd-dragged.png," \
-  "$out/capture-portrait-card.png." \
+  "$out/capture-portrait-card.png.${on_desktop:-}" \
   "A drag took a rectangle, and a click outside and a resize left capture mode."

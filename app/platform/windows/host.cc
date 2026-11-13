@@ -4066,9 +4066,180 @@ void host_hide_capture(void) {
   fprintf(stderr, "browser: capture hidden\n");
 }
 
+namespace {
+
+// What the desktop shows behind the window in front, which is ours when the user asks to capture:
+// its picture's file, or none for a solid colour, filled with |colour|, at |screen|'s size in
+// pixels. Windows Spotlight's pictures aren't a file the system names, so it gives no answer, and
+// Portrait Mode puts the page on white. The caller has CoInitialized this thread.
+bool DesktopShown(std::wstring* file, COLORREF* colour, RECT* screen) {
+  HMONITOR monitor = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY);
+  MONITORINFO info{sizeof info};
+  if (!GetMonitorInfoW(monitor, &info)) {
+    return false;
+  }
+  *screen = info.rcMonitor;
+  // Settings › Personalization › Background's choice: 3 is Spotlight.
+  DWORD type = 0, size = sizeof type;
+  RegGetValueW(HKEY_CURRENT_USER,
+               L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers",
+               L"BackgroundType", RRF_RT_REG_DWORD, nullptr, &type, &size);
+  if (type == 3) {
+    fprintf(stderr, "browser: desktop picture none, Spotlight\n");
+    return false;
+  }
+  *colour = GetSysColor(COLOR_DESKTOP);
+  ComPtr<IDesktopWallpaper> wallpaper;
+  if (SUCCEEDED(CoCreateInstance(CLSID_DesktopWallpaper, nullptr, CLSCTX_ALL,
+                                 IID_PPV_ARGS(&wallpaper)))) {
+    COLORREF background = 0;
+    if (SUCCEEDED(wallpaper->GetBackgroundColor(&background))) {
+      *colour = background;
+    }
+    // Its monitors are named by device path; the one whose rectangle is this monitor's.
+    UINT count = 0;
+    wallpaper->GetMonitorDevicePathCount(&count);
+    for (UINT index = 0; index < count; ++index) {
+      LPWSTR id = nullptr;
+      RECT rect{};
+      LPWSTR path = nullptr;
+      if (SUCCEEDED(wallpaper->GetMonitorDevicePathAt(index, &id)) &&
+          SUCCEEDED(wallpaper->GetMonitorRECT(id, &rect)) && EqualRect(&rect, screen) &&
+          SUCCEEDED(wallpaper->GetWallpaper(id, &path)) && path) {
+        *file = path;
+      }
+      CoTaskMemFree(path);
+      CoTaskMemFree(id);
+      if (!file->empty()) {
+        return true;
+      }
+    }
+  }
+  // Before Windows 8, or a desktop the interface doesn't answer for: the primary monitor's.
+  wchar_t path[MAX_PATH] = {};
+  if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0)) {
+    *file = path;
+  }
+  return true;
+}
+
+// The desktop's picture drawn at |width| by |height|, filling it and centred as the desktop's
+// Fill does, else |colour| alone, as top-down BGRA. The caller has CoInitialized this thread.
+bool DesktopPixels(const std::wstring& file, COLORREF colour, UINT width, UINT height,
+                   std::vector<uint8_t>* pixels) {
+  pixels->assign(static_cast<size_t>(width) * height * 4, 0xff);
+  if (file.empty()) {
+    for (size_t at = 0; at < pixels->size(); at += 4) {
+      (*pixels)[at] = GetBValue(colour);
+      (*pixels)[at + 1] = GetGValue(colour);
+      (*pixels)[at + 2] = GetRValue(colour);
+    }
+    return true;
+  }
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IWICBitmapDecoder> decoder;
+  ComPtr<IWICBitmapFrameDecode> frame;
+  ComPtr<IWICFormatConverter> converter;
+  ComPtr<IWICBitmapScaler> scaler;
+  UINT pictured_width = 0, pictured_height = 0;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&wic))) ||
+      FAILED(wic->CreateDecoderFromFilename(file.c_str(), nullptr, GENERIC_READ,
+                                            WICDecodeMetadataCacheOnDemand, &decoder)) ||
+      FAILED(decoder->GetFrame(0, &frame)) ||
+      FAILED(frame->GetSize(&pictured_width, &pictured_height)) || !pictured_width ||
+      !pictured_height || FAILED(wic->CreateFormatConverter(&converter)) ||
+      FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA,
+                                   WICBitmapDitherTypeNone, nullptr, 0,
+                                   WICBitmapPaletteTypeCustom))) {
+    return false;
+  }
+  const double fill = (std::max)(static_cast<double>(width) / pictured_width,
+                                 static_cast<double>(height) / pictured_height);
+  const UINT drawn_width = (std::max)(width, static_cast<UINT>(std::ceil(pictured_width * fill)));
+  const UINT drawn_height =
+      (std::max)(height, static_cast<UINT>(std::ceil(pictured_height * fill)));
+  const WICRect middle{static_cast<INT>((drawn_width - width) / 2),
+                       static_cast<INT>((drawn_height - height) / 2), static_cast<INT>(width),
+                       static_cast<INT>(height)};
+  return SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
+         SUCCEEDED(scaler->Initialize(converter.Get(), drawn_width, drawn_height,
+                                      WICBitmapInterpolationModeHighQualityCubic)) &&
+         SUCCEEDED(scaler->CopyPixels(&middle, width * 4, static_cast<UINT>(pixels->size()),
+                                      pixels->data()));
+}
+
+// |pixels|, |width| by |height| top-down BGRA, as a PNG. The caller has CoInitialized this thread.
+bool EncodePng(const std::vector<uint8_t>& pixels, UINT width, UINT height,
+               std::vector<uint8_t>* png) {
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IWICBitmap> source;
+  ComPtr<IStream> stream;
+  ComPtr<IWICBitmapEncoder> encoder;
+  ComPtr<IWICBitmapFrameEncode> frame;
+  ComPtr<IPropertyBag2> options;
+  WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+  STATSTG stat{};
+  HGLOBAL global = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&wic))) ||
+      FAILED(wic->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppBGRA, width * 4,
+                                         static_cast<UINT>(pixels.size()),
+                                         const_cast<BYTE*>(pixels.data()), &source)) ||
+      FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) ||
+      FAILED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) ||
+      FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
+      FAILED(encoder->CreateNewFrame(&frame, &options)) ||
+      FAILED(frame->Initialize(options.Get())) || FAILED(frame->SetSize(width, height)) ||
+      FAILED(frame->SetPixelFormat(&format)) ||
+      FAILED(frame->WriteSource(source.Get(), nullptr)) || FAILED(frame->Commit()) ||
+      FAILED(encoder->Commit()) || FAILED(stream->Stat(&stat, STATFLAG_NONAME)) ||
+      FAILED(GetHGlobalFromStream(stream.Get(), &global)) || !global) {
+    return false;
+  }
+  void* data = GlobalLock(global);
+  if (!data) {
+    return false;
+  }
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  png->assign(bytes, bytes + static_cast<size_t>(stat.cbSize.QuadPart));
+  GlobalUnlock(global);
+  return !png->empty();
+}
+
+}  // namespace
+
 bool host_desktop_picture(void* context,
                           void (*png)(void* context, const uint8_t* data, size_t size)) {
-  return false;
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  std::wstring file;
+  COLORREF colour = RGB(0, 0, 0);
+  RECT screen{};
+  std::vector<uint8_t> pixels, encoded;
+  const bool shown = DesktopShown(&file, &colour, &screen);
+  const UINT width = static_cast<UINT>(screen.right - screen.left);
+  const UINT height = static_cast<UINT>(screen.bottom - screen.top);
+  const bool found = shown && width && height &&
+                     DesktopPixels(file, colour, width, height, &pixels) &&
+                     EncodePng(pixels, width, height, &encoded);
+  if (SUCCEEDED(com)) {
+    CoUninitialize();
+  }
+  if (!found) {
+    if (shown) {
+      fprintf(stderr, "browser: desktop picture none, unread\n");
+    }
+    return false;
+  }
+  // check.sh reads this line: the picture's size, and whether it's a file's or a colour.
+  if (file.empty()) {
+    fprintf(stderr, "browser: desktop picture %ux%u, colour %02x%02x%02x\n", width, height,
+            GetRValue(colour), GetGValue(colour), GetBValue(colour));
+  } else {
+    fprintf(stderr, "browser: desktop picture %ux%u, a picture\n", width, height);
+  }
+  png(context, encoded.data(), encoded.size());
+  return true;
 }
 
 void host_copy_png(const uint8_t* png, size_t size) {
