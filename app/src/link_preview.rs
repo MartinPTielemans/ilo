@@ -52,6 +52,21 @@ const KEEP: f32 = 0.275;
 /// had (#2640).
 const SHOWN_WAIT: Duration = Duration::from_millis(150);
 
+/// Proof only (#2640): now on CLOCK_MONOTONIC, in microseconds, the clock Chromium's trace uses.
+fn mono() -> i64 {
+    #[cfg(target_os = "linux")]
+    {
+        let mut t = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t) };
+        t.tv_sec as i64 * 1_000_000 + t.tv_nsec as i64 / 1000
+    }
+    #[cfg(not(target_os = "linux"))]
+    0
+}
+
 thread_local! {
     static PROBE_LEFT: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
 }
@@ -544,6 +559,14 @@ impl Preview {
             self.there = false;
             self._wait = None;
             host.place(self.tab, at, RADIUS);
+            log!(
+                "browser: probe place {} {} {} {} {}",
+                mono(),
+                f32::from(at.origin.x),
+                f32::from(at.origin.y),
+                f32::from(at.size.width),
+                f32::from(at.size.height)
+            );
         }
     }
 
@@ -554,6 +577,7 @@ impl Preview {
             return;
         }
         let (tab, at) = (self.tab, self.placed);
+        log!("browser: probe wait {}", mono());
         self._wait = Some(cx.spawn(async move |preview, cx| {
             cx.background_executor().timer(SHOWN_WAIT).await;
             preview
@@ -768,6 +792,7 @@ pub fn page_moved(window: u64, (page, radius): (Bounds<Pixels>, f32), cx: &mut A
 /// The core says `tab`'s page, under the window, is on screen at `page`, where the preview laid it
 /// out.
 pub fn page_shown(tab: u64, page: Bounds<Pixels>, cx: &mut App) {
+    log!("browser: probe shown {}", mono());
     update(cx, |preview, _, cx| {
         let shown = preview.preview.as_mut();
         if let Some(shown) = shown.filter(|shown| (shown.tab, shown.placed) == (tab, page)) {
@@ -902,6 +927,7 @@ impl LinkPreview {
         };
         log!("browser: link preview {what} ({why})");
         PROBE_LEFT.set(Some(Instant::now()));
+        log!("browser: probe key {}", mono());
         // A page under the window that shows leaves in the card's frames first (render), while it
         // still has the keyboard, as laying it out takes it.
         shown.releasing = how == Leave::Close && shown.cut && why != "dismissed";
@@ -1090,6 +1116,7 @@ impl Render for LinkPreview {
                                     .shown
                                     .map_or(0., |at| at.elapsed().as_secs_f64() * 1000.);
                                 log!("browser: probe open {ms:.1} ms");
+                                log!("browser: probe hole {}", mono());
                             }
                             shown.lay_out(&*self.host, rest);
                             shown.wait(cx);
@@ -1100,6 +1127,7 @@ impl Render for LinkPreview {
                         (if shown.cut { rest } else { none }, false)
                     }
                     (Some(Leave::Close), true) => {
+                        log!("browser: probe plate {}", mono());
                         shown.cut = false;
                         window.request_animation_frame();
                         (shown.placed, true)
@@ -1110,6 +1138,7 @@ impl Render for LinkPreview {
                     // before shows there, clear where the page showed.
                     (Some(Leave::Close), false) if shown.releasing && !shown.covered => {
                         shown.covered = true;
+                        log!("browser: probe covered {}", mono());
                         window.request_animation_frame();
                         (none, false)
                     }
@@ -1136,6 +1165,7 @@ impl Render for LinkPreview {
         if shown.held && !shown.releasing {
             shown.wait(cx);
             if shown.there {
+                log!("browser: probe shrink {}", mono());
                 shown.held = false;
                 if let Some((at, ..)) = shown.leaving.as_mut() {
                     *at = Instant::now();
