@@ -47,6 +47,21 @@ const FROM_SCALE: f32 = 0.5;
 pub(crate) const CLOSE: f32 = 0.2;
 const KEEP: f32 = 0.275;
 
+/// Proof only (#2640): now on CLOCK_MONOTONIC, in microseconds, the clock Chromium's trace uses.
+fn mono() -> i64 {
+    #[cfg(target_os = "linux")]
+    {
+        let mut t = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t) };
+        t.tv_sec as i64 * 1_000_000 + t.tv_nsec as i64 / 1000
+    }
+    #[cfg(not(target_os = "linux"))]
+    0
+}
+
 thread_local! {
     static PROBE_LEFT: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
 }
@@ -520,6 +535,7 @@ impl Preview {
         if self.placed != at {
             self.placed = at;
             host.place(self.tab, at, RADIUS);
+            log!("browser: probe place {} {}", mono(), f32::from(at.origin.x));
         }
     }
 
@@ -836,6 +852,7 @@ impl LinkPreview {
         };
         log!("browser: link preview {what} ({why})");
         PROBE_LEFT.set(Some(Instant::now()));
+        log!("browser: probe key {}", mono());
         // A page under the window that shows leaves in the card's frames first (render), while it
         // still has the keyboard, as laying it out takes it.
         shown.releasing = how == Leave::Close && shown.cut && why != "dismissed";
@@ -955,6 +972,10 @@ impl LinkPreview {
 
 impl Render for LinkPreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Proof only (#2640): each of Peek's frames, on the trace's clock.
+        if self.preview.is_some() {
+            log!("browser: probe render {}", mono());
+        }
         let root = div()
             .key_context("LinkPreview")
             .track_focus(&self.focus)
@@ -1019,6 +1040,11 @@ impl Render for LinkPreview {
                                     .shown
                                     .map_or(0., |at| at.elapsed().as_secs_f64() * 1000.);
                                 log!("browser: probe open {ms:.1} ms");
+                                log!("browser: probe hole {}", mono());
+                                let epoch = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map_or(0., |d| d.as_secs_f64());
+                                log!("browser: probe hole-epoch {epoch:.3}");
                             }
                             shown.lay_out(&*self.host, rest);
                         }
@@ -1026,6 +1052,7 @@ impl Render for LinkPreview {
                         (if shown.cut { rest } else { none }, false)
                     }
                     (Some(Leave::Close), true) => {
+                        log!("browser: probe plate {}", mono());
                         shown.cut = false;
                         window.request_animation_frame();
                         (shown.placed, true)
@@ -1051,6 +1078,7 @@ impl Render for LinkPreview {
             }
         }
         if settling {
+            log!("browser: probe rest {}", mono());
             // check.sh reads these lines, the button's before it waits on the other, to rest on it.
             let [keep, _] = buttons_in(controls_over(card(shown.page)));
             let (x, y) = (f32::from(keep.center().x), f32::from(keep.center().y));
