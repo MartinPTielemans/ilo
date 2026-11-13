@@ -102,7 +102,7 @@ index 54b72a63ec..98a3325d1c 100644
      pub fn simulate_resize(&self, size: Size<Pixels>) {
          self.simulate_window_resize(self.window, size)
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index 11f0b72406..2ef38508b5 100644
+index 11f0b72406..6a1e603113 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -1565,6 +1565,13 @@ pub trait StatefulInteractiveElement: InteractiveElement {
@@ -152,6 +152,17 @@ index 11f0b72406..2ef38508b5 100644
              let hitbox = hitbox.clone();
              window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble
+@@ -3147,6 +3164,10 @@ impl Interactivity {
+                         // so that it happens even if another event handler stops
+                         // propagation.
+                         DispatchPhase::Capture => {
++                            // A press an inner element's click stopped short of this one's isn't
++                            // this release's: another release can come before the frame that
++                            // would drop this listener, and click this element with it.
++                            captured_mouse_down = None;
+                             let mut pending_mouse_down = pending_mouse_down.borrow_mut();
+                             if pending_mouse_down.is_some() && hitbox.is_hovered(window) {
+                                 captured_mouse_down = pending_mouse_down.take();
 diff --git a/crates/gpui/src/interactive.rs b/crates/gpui/src/interactive.rs
 index cfb1410c78..0aa8b9f3e3 100644
 --- a/crates/gpui/src/interactive.rs
