@@ -18,6 +18,35 @@ pub const QUIET: Duration = Duration::from_millis(400);
 
 pub use crate::tokens::dock_dot::GREEN;
 
+/// Settings › General's switch for the dot, where the host draws one: the Dock icon's on the Mac
+/// and the taskbar button's on Windows (#2681). Linux's host draws none, so it has no switch.
+pub struct Switch {
+    pub name: &'static str,
+    pub line: &'static str,
+}
+
+pub const SWITCH: Option<Switch> = if cfg!(target_os = "macos") {
+    Some(Switch {
+        name: "Dock icon takes the Space's color",
+        line: concat!(
+            "Its dot shows the Space in front. Off, the icon stays ",
+            env!("APP_NAME"),
+            " green."
+        ),
+    })
+} else if cfg!(target_os = "windows") {
+    Some(Switch {
+        name: "Taskbar button takes the Space's color",
+        line: concat!(
+            "Its dot shows the Space in front. Off, the dot stays ",
+            env!("APP_NAME"),
+            " green."
+        ),
+    })
+} else {
+    None
+};
+
 struct DockDot {
     host: Rc<dyn Host>,
     wait: Option<Task<()>>,
@@ -145,6 +174,46 @@ mod tests {
         );
         cx.update(|cx| set_plain(false, cx));
         assert_eq!(host.0.take(), [Some(0xE0475B)]);
+    }
+
+    /// Where the host colours a dot, Settings offers the way back to green, named for where the
+    /// dot is; Linux's host draws none, so nothing needs turning off there.
+    #[gpui::test]
+    fn the_switch_is_where_the_dot_is_and_turns_it_green(cx: &mut TestAppContext) {
+        let Some(switch) = SWITCH else {
+            assert!(
+                cfg!(target_os = "linux"),
+                "a system that draws the dot has no switch"
+            );
+            return;
+        };
+        let place = if cfg!(target_os = "windows") {
+            "taskbar dot"
+        } else {
+            "dock dot"
+        };
+        let row = crate::settings_search::Entry {
+            section: crate::settings_column::Section::General,
+            under: None,
+            name: switch.name.into(),
+            line: Some(switch.line.into()),
+            keys: None,
+        };
+        assert_eq!(
+            crate::settings_search::find(place, &[row]),
+            [0],
+            "Settings' search for {place:?} didn't find {:?}",
+            switch.name
+        );
+        let host = opened(cx);
+        cx.update(|cx| follow(Some(0x8655BF), cx));
+        assert_eq!(after(cx, &host, QUIET), [Some(0x8655BF)]);
+        cx.update(|cx| set_plain(true, cx));
+        assert_eq!(
+            host.0.take(),
+            [None],
+            "the switch off didn't turn the dot green"
+        );
     }
 
     #[gpui::test]

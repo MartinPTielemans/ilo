@@ -1970,12 +1970,12 @@ impl Settings {
                 ],
             ),
         ];
-        // The Dock's, which the Mac alone has.
-        if cfg!(target_os = "macos") {
+        // Where the host draws the dot: the Dock icon's, or Windows' taskbar button's.
+        if let Some(switch) = browser::dock_dot::SWITCH {
             let colored = !off(DOCK_ICON_PLAIN);
             let colored = self.toggle(
                 "dock icon color",
-                "Dock icon takes the Space's color",
+                switch.name,
                 colored,
                 set_dock_icon_color,
                 accent,
@@ -1983,15 +1983,8 @@ impl Settings {
             );
             looks.push(setting(
                 look,
-                "Dock icon takes the Space's color",
-                Some(
-                    concat!(
-                        "Its dot shows the Space in front. Off, the icon stays ",
-                        env!("APP_NAME"),
-                        " green."
-                    )
-                    .into(),
-                ),
+                switch.name,
+                Some(switch.line.into()),
                 vec![colored],
             ));
         }
