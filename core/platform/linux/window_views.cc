@@ -564,10 +564,6 @@ class WindowViews : public views::WidgetObserver,
     const float r = slot.corner_radius.value_or(corner_radius_);
     slot.holder->layer()->SetRoundedCornerRadius(
         slot.bottom_corners_only ? gfx::RoundedCornersF(0, 0, r, r) : gfx::RoundedCornersF(r));
-    // Clipped quad by quad, as Chrome's NativeViewHostAura rounds a page's: otherwise the corners
-    // draw the pane into a render pass of its own each frame, which with software compositing
-    // made a page's frame twice Chrome's and a clock's tick ten times (#2377).
-    slot.holder->layer()->SetIsFastRoundedCorner(true);
   }
 
   // Lets the UI show, and take the clicks, but where the pages shown are and in the band at the
