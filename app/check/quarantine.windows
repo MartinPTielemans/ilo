@@ -5,6 +5,5 @@
 perf #2138 2026-11-10 ilo took more than 10 % over Chrome on this runner: memory,
 tabs #2616 2026-11-12 the window back from Win+D left its hidden command bar with the keyboard
 peek-motion #2640 2026-11-13 a frame shows Peek's resting frame outside its card, or the window's page undimmed inside it
-adblock-live #2650 2026-11-13 uBlock Origin wasn't loaded
 history #2651 2026-11-13 a click on Chrome's warning before http
 rules #2685 2026-11-13 the agent's own tab, asked with a tab's hover card shown
