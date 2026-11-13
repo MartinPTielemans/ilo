@@ -108,6 +108,17 @@ impl link_preview::Host for LinkPreviewHost {
     }
 }
 
+/// The core says the preview's page is on screen where the preview laid it out, under its window,
+/// on Windows and Linux. Never on the Mac.
+pub(crate) extern "C" fn tab_shown_in(_: *mut c_void, tab: bc::bc_id, frame: bc::bc_rect) {
+    // The frame the preview passed, as it was, so it matches.
+    let page = Bounds::new(
+        point(px(frame.x as f32), px(frame.y as f32)),
+        size(px(frame.width as f32), px(frame.height as f32)),
+    );
+    update_app_later(move |cx| link_preview::page_shown(tab, page, cx));
+}
+
 pub(crate) extern "C" fn link_preview_dismissed() {
     LINK_PREVIEW_LEFT.set(true);
     update_app(link_preview::dismissed);
