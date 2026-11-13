@@ -52,6 +52,12 @@ serve
 # (#2385), so the display stays on.
 ! windows || powercfg -change -monitor-timeout-ac 0 || echo "perf: the display's timeout stays"
 perf_dir="$out/perf"
+engine_switch=
+# perf-native sets engine=native for the browser's own ad blocker (#2111), which holds no page.
+if [ -n "${engine:-}" ] && [ "$engine" != ublock ]; then
+  perf_dir="$out/perf-$engine"
+  engine_switch=--ad-block-engine=$engine
+fi
 rm -rf "$perf_dir"
 mkdir -p "$perf_dir"
 profile_dir="$PWD/$perf_dir/profile"
@@ -243,12 +249,12 @@ perf_launch() {
   perf_stamp
   launched=$stamp
   if [ -n "$1" ]; then
-    # shellcheck disable=SC2046 # the flags, a word each
-    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
+    # shellcheck disable=SC2046,SC2086 # the flags, a word each
+    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch \
       $([ "$3" != warm ] || crlset_flags "$PWD/$perf_dir/crlset-warm.log" fast) \
       < /dev/null > "$log" 2>&1 &
   else
-    BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+    BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch < /dev/null > "$log" 2>&1 &
   fi
   pid=$!
   # A tab put back has its last title, an earlier launch's paint, until its page loads.
@@ -351,8 +357,8 @@ started=$(date +%s)
 crlset_log="$PWD/$perf_dir/crlset-session.log"
 crlset_dir=$profile_dir
 crlset_who="ilo's"
-# shellcheck disable=SC2046 # the flags, a word each
-BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
+# shellcheck disable=SC2046,SC2086 # the flags, a word each
+BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch \
   $(crlset_flags "$crlset_log") < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"

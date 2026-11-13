@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
 };
 
-use browser::log;
+use browser::{bc, clipboard::Done, log};
 use gpui::{App, AppContext as _, ClipboardItem, Context, Image, ImageFormat, Window};
 
 use crate::platform;
@@ -18,9 +18,19 @@ pub fn copy(text: &str, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
 }
 
-/// The clipboard's text, as host_paste reads it on the Mac.
-pub fn pasted(cx: &App) -> Option<String> {
-    cx.read_from_clipboard()?.text()
+/// Reads the clipboard's text through Chromium's clipboard and hands it to `done`, for the UI's
+/// reads under Wayland (browser::clipboard says why).
+pub fn read_through_core(done: Done) {
+    unsafe extern "C" fn read(context: *mut c_void, text: *const c_char) {
+        let done = unsafe { Box::from_raw(context.cast::<Done>()) };
+        let text = unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned();
+        // From a task of its own, never during the read, so not inside an update.
+        crate::update_app(move |cx| done(Some(text).filter(|text| !text.is_empty()), cx));
+    }
+    let context = Box::into_raw(Box::new(done));
+    unsafe { bc::bc_clipboard_read_text(Some(read), context.cast()) };
 }
 
 /// Puts the capture on the clipboard, as host_copy_png does on the Mac.
