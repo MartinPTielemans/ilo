@@ -354,6 +354,11 @@ case "$closed" in "Closed tab $documents."*) ;; *) fail "closing the documents t
 # A tab an agent's tab opens follows the agent's rules from when it's made, as the agent's own tab
 # does, whether a link, a page's window.open or a redirect in it leads there (#2660).
 if engine_has ../core/space.cc ../core/window.cc ../core/tab.cc ../core/main_delegate.cc; then
+  # The tab open_tab made refused the link to an app above where the core decides, as it's the
+  # agent's from its first request: open_tab makes it so before its page starts.
+  grep -q "browser: agent tab $documents refused ms-word\$" "$log" ||
+    fail "the agent's own tab didn't refuse the link to an app; its last agent tab line:
+$(grep 'browser: agent tab ' "$log" | tail -1)"
   printf '%s' '<!doctype html><title>Opens</title>
 <a href="maps:?q=check" target="_blank">Link</a>
 <a href="bounce?to=maps%3A%3Fq%3Dcheck" target="_blank">Redirect</a>

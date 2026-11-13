@@ -38,6 +38,9 @@ class PageTranslate : public content::WebContentsObserver,
   // A tab with nothing to read is told so, from a task of its own.
   static void ReportNoTexts(bc_id tab, uint64_t request);
 
+  // Hears the languages Chrome's translate client finds, once the tab's helpers have made it.
+  void ObserveDriver();
+
  private:
   friend class content::WebContentsUserData<PageTranslate>;
 
