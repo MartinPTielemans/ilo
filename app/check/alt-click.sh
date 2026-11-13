@@ -1,4 +1,4 @@
-# check.sh runs this at 245.
+# check.sh runs this at 245, only when named.
 # With Alt held, a press on a link and a move of a pixel and back with the button down still
 # click it, and only a drag past Blink's drag distance selects the link's text instead (#2717).
 # The engine's patch for it holds the selection back until the pointer is that far. ilo's ⌥-click
@@ -9,6 +9,8 @@
 # the press. Only real input holds keys down before a press, which the Mac's and Linux's drivers
 # can't. There the run says it skipped: the Mac's case rests on the source, which has no platform
 # branch on this path but the drag distance's size.
+# It runs only when named until a Windows engine with the patch is out: the engines before it
+# lose the click by design, and a default run would turn main's Windows Check red.
 
 serve
 printf '%s' '<title>alt-click</title>
