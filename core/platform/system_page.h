@@ -14,7 +14,6 @@
 #include <string_view>
 #include <vector>
 
-#include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "net/cookies/canonical_cookie.h"
 #include "ui/gfx/native_ui_types.h"
@@ -104,11 +103,6 @@ class SystemPage {
   // Deletes |id|'s persistent store from the disk, as its profile goes. Loads the system's engine:
   // call it only for a store a page made.
   static void DeleteStore(const std::string& id);
-  // The ids of the persistent stores given to the profiles of the data folder |folder|, and sets
-  // them. Kept outside the folder, so they outlast one removed by hand, and a later launch can
-  // delete the stores its profiles took no name of with them. Never loads the system's engine.
-  static std::vector<std::string> GivenStores(const base::FilePath& folder);
-  static void SetGivenStores(const base::FilePath& folder, const std::vector<std::string>& ids);
   // Lets a private session's store go. Never loads the system's engine.
   static void ReleaseStore(const std::string& id);
   // Deletes |domain|'s |what| from |store|, then runs |done|. Loads the system's engine, as

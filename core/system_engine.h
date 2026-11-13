@@ -9,6 +9,7 @@
 #include "browser_core/public/browser_core.h"
 #include "url/gurl.h"
 
+class PrefRegistrySimple;
 class Profile;
 
 namespace content {
@@ -78,6 +79,8 @@ void ReturnToChromium(Profile* profile, const GURL& url);
 // Deletes the store of the profile at |path|, if it made one, as the profile goes, then runs
 // |then|. The profile's directory must still be there: an unloaded profile's preferences say.
 void DeleteStore(const base::FilePath& path, base::OnceClosure then);
+// Registers the data folder's Local State prefs: the list of stores its profiles were given.
+void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 // After startup, deletes the stores given to profiles of the data folder that no profile names
 // any more, as when a profile's folder was removed by hand. The system's engine is only loaded if
 // there's one to delete.

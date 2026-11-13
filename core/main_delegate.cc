@@ -214,6 +214,12 @@ base::FilePath FindNativeHost(const std::string& name) {
   return manifest;
 }
 
+// The core's app-wide prefs, beside Chrome's in the data folder's Local State.
+void RegisterLocalState(PrefRegistrySimple* registry) {
+  RegisterMiniPlayerPrefs(registry);
+  system_engine::RegisterLocalStatePrefs(registry);
+}
+
 // Keeps the browser process up while it has no windows, which Chrome would otherwise quit at, and
 // tells the app when it can call in and when it has to stop. After that it logs the stages of
 // Chrome's teardown as each starts, with the time since the stop, so a slow quit says which it
@@ -577,6 +583,7 @@ void Install(const bc_host& host) {
   sync::Install();
   SetUpAdBlock();
   SetUpMiniPlayer();
+  g_browser_core_register_local_state = &RegisterLocalState;
   g_browser_core_component_allowed = &widevine::MayUpdate;
   g_browser_core_no_passwords = &IsAgentTab;
   g_browser_core_no_autofill = &IsAgentTab;

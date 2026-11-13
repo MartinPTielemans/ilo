@@ -423,6 +423,7 @@ source_set("system_stores") {
   deps = [
     "//base",
     "//chrome/common:constants",
+    "//components/prefs",
   ]
 }
 
