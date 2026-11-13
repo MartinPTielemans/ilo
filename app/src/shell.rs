@@ -3347,6 +3347,10 @@ impl Shell {
     /// The window became the one in front: the browser's shortcuts and menus act on this shell,
     /// and the menu bar lists its Space's extensions.
     pub fn became_key(&mut self, cx: &mut Context<Self>) {
+        // A window made key or opened in front since, before this shell heard.
+        if commands::key_moved_on(&cx.weak_entity()) {
+            return;
+        }
         cx.set_global(ShellHandle(cx.weak_entity()));
         commands::heard_key(&cx.weak_entity());
         // Its tab's dialog goes over its card again, as another window's may have shown since, and
