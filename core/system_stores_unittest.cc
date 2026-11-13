@@ -106,13 +106,14 @@ class OldStoresTest : public testing::Test {
 
 TEST_F(OldStoresTest, IdsAreTheOnesAnOldVersionGave) {
   // StoreIdFor's before #2664, worked out apart from it: the SHA-1 of the path, as version 5.
-  EXPECT_EQ(Old("Default"), "c1186153-1520-5a7b-beca-0bcc5edb8688");
+  EXPECT_EQ(OldStoreIdFor(base::FilePath(
+                FILE_PATH_LITERAL("/Users/a/Library/Application Support/ilo/Default"))),
+            "c1186153-1520-5a7b-beca-0bcc5edb8688");
   EXPECT_NE(Old("Default"), Old("Profile 1"));
   EXPECT_EQ(OldProfilePaths(folder, count),
-            (std::vector<base::FilePath>{folder.AppendASCII("Default"),
-                                         folder.AppendASCII("Profile 1"),
-                                         folder.AppendASCII("Profile 2"),
-                                         folder.AppendASCII("Profile 3")}));
+            (std::vector<base::FilePath>{
+                folder.AppendASCII("Default"), folder.AppendASCII("Profile 1"),
+                folder.AppendASCII("Profile 2"), folder.AppendASCII("Profile 3")}));
   EXPECT_EQ(OldProfilePaths(folder, 1), std::vector<base::FilePath>{folder.AppendASCII("Default")});
 }
 
