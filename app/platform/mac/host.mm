@@ -5304,20 +5304,28 @@ bool host_copy_secret(const char* text, uint32_t seconds) {
   [pasteboard setData:[NSData data] forType:@"org.nspasteboard.ConcealedType"];
   [pasteboard setData:[NSData data] forType:@"org.nspasteboard.TransientType"];
   NSDate* copied = [NSDate date];
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)seconds * NSEC_PER_SEC),
-                 dispatch_get_main_queue(), ^{
-                   // Only if it's still the words: anything copied since changed the count.
-                   const NSInteger now = pasteboard.changeCount;
-                   if (now == count) {
-                     [pasteboard clearContents];
-                   }
-                   // When it ran and what it did, as check/sync-devices.sh can't see either.
-                   fprintf(
-                       stderr,
-                       "browser: secret clear %.0f ms after the copy, %s (count %ld, now %ld)\n",
-                       -copied.timeIntervalSinceNow * 1000, now == count ? "cleared" : "kept",
-                       (long)count, (long)now);
-                 });
+  // A strict timer, as dispatch_after may run a 90 s one up to 9 s late (a tenth of its delay) in
+  // an app idle in the background, past the time Settings gives the words; it fires once, within
+  // 100 ms, and is cancelled, so it wakes an idle browser only then.
+  dispatch_source_t clear = dispatch_source_create(
+      DISPATCH_SOURCE_TYPE_TIMER, 0, DISPATCH_TIMER_STRICT, dispatch_get_main_queue());
+  dispatch_source_set_timer(clear,
+                            dispatch_time(DISPATCH_TIME_NOW, (int64_t)seconds * NSEC_PER_SEC),
+                            DISPATCH_TIME_FOREVER, 100 * NSEC_PER_MSEC);
+  dispatch_source_set_event_handler(clear, ^{
+    // Lets go of this handler, and with it the timer it holds.
+    dispatch_source_cancel(clear);
+    // Only if it's still the words: anything copied since changed the count.
+    const NSInteger now = pasteboard.changeCount;
+    if (now == count) {
+      [pasteboard clearContents];
+    }
+    // When it ran and what it did, as check/sync-devices.sh can't see either.
+    fprintf(stderr, "browser: secret clear %.0f ms after the copy, %s (count %ld, now %ld)\n",
+            -copied.timeIntervalSinceNow * 1000, now == count ? "cleared" : "kept", (long)count,
+            (long)now);
+  });
+  dispatch_resume(clear);
   return true;
 }
 
