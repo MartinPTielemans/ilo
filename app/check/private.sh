@@ -1,3 +1,4 @@
+# check.sh runs this at 220.
 # After ⌘N opens a window and ⇧⌘W closes it, ⇧⌘N opens a private window, and ⇧⌘W closes it before
 # it has a page, ending its session while the browser keeps running. ⇧⌘N opens another, titled as
 # one in the Window menu, whose pages load in the profile's off-the-record session: a cookie set
@@ -234,8 +235,8 @@ quit
 echo "ok: ⇧⌘N opens a private window titled Incognito, whose cookie the regular window doesn't see and the profile's other private window does, whose download its Library lists and the regular window's doesn't, closing the last one ends the session, the next starts without its cookie and refuses Customize Chrome's page, and neither the Spaces file, the history, the cookies nor a relaunch has any of it. Windows: $out/private.png, $out/private-library.png"
 
 # In a private window, the extensions allowed in Incognito run as in Chrome, and the others don't:
-# the Extensions menu lists only the allowed one and uBlock Origin, the browser's own, allowed
-# there too, and the allowed one pins at the URL field and has its Site Controls tile. Two
+# the Extensions menu lists only the allowed one, never uBlock Origin, the browser's own, which
+# blocks there as Settings' Ad Blocking (#2107), and the allowed one pins at the URL field and has its Site Controls tile. Two
 # extensions in a profile of the block's own: a first launch has Chrome list them, and Chrome's
 # preferences then allow one in Incognito and not the other, as chrome://extensions' Allow in
 # Incognito sets them, before the launch the block checks.
@@ -246,7 +247,6 @@ echo '{"manifest_version": 3, "name": "Check Allowed", "version": "1", "action":
   > "$incognito/allowed/manifest.json"
 echo '{"manifest_version": 3, "name": "Check Not Allowed", "version": "1", "action": {}}' \
   > "$incognito/not/manifest.json"
-ublock=oghkpboejbohceocapipmnjifoklonij
 # Launches the app on the block's profile with both, logging to $1.
 incognito_launch() {
   log="$out/$1.log"
@@ -257,12 +257,12 @@ incognito_launch() {
   pid=$!
   exec 3> "$out/drive"
   await_load
-  await "^browser: extensions menu [a-p]* [a-p]* $ublock\$" ||
+  await "^browser: extensions menu [a-p]* [a-p]*\$" ||
     fail "the Extensions menu didn't list both extensions: $(grep '^browser: extensions menu' "$log")"
 }
 incognito_launch private-extensions-first
 # By name: Check Allowed, then Check Not Allowed.
-ids=$(grep -m1 "^browser: extensions menu [a-p]* [a-p]* $ublock\$" "$log" | cut -d' ' -f4-5)
+ids=$(grep -m1 "^browser: extensions menu [a-p]* [a-p]*\$" "$log" | cut -d' ' -f4-5)
 allowed=${ids% *}
 not_allowed=${ids#* }
 exec 3>&-
@@ -296,16 +296,18 @@ send menubar Extensions
 expect '^browser: menu bar Extensions: ' "the private window's Extensions menu didn't list"
 menu=$(grep '^browser: menu bar Extensions: ' "$log" | tail -1)
 case "$menu" in
-  *"Check Allowed, uBlock Origin,"*) ;;
-  *) fail "the private window's Extensions menu didn't list Check Allowed and uBlock Origin alone: $menu" ;;
+  *"uBlock Origin"* | *"Check Not Allowed"*)
+    fail "the private window's Extensions menu didn't list Check Allowed alone: $menu" ;;
+  *": Check Allowed, "*) ;;
+  *) fail "the private window's Extensions menu didn't list Check Allowed alone: $menu" ;;
 esac
 send menu "Pin to URL Field › Check Allowed"
 expect "^browser: pin extension $allowed\$" "Pin to URL Field › Check Allowed didn't reach the UI"
 expect "^browser: extension actions $allowed\$" "the pinned Check Allowed didn't show in the URL field"
 ../tools/window-screenshot.sh "$pid" "$out/private-extensions.png" || fail "no window to capture"
 bar_command site-controls "Site Controls" "site controls"
-expect "^browser: site controls extensions $allowed $ublock\$" \
-  "the private window's Site Controls didn't list Check Allowed and uBlock Origin alone: $(grep \
+expect "^browser: site controls extensions $allowed\$" \
+  "the private window's Site Controls didn't list Check Allowed alone: $(grep \
     '^browser: site controls extensions' "$log" | tail -1)"
 expect '^browser: site controls settled$' "the Site Controls didn't open in the private window"
 ../tools/window-screenshot.sh "$pid" "$out/private-site-controls.png" || fail "no window to capture"
@@ -313,4 +315,4 @@ send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 exec 3>&-
 quit
-echo "ok: a private window runs the extension allowed in Incognito, listed in its Extensions menu with uBlock Origin, pinned at its URL field and in its Site Controls, and not the other. Windows: $out/private-extensions.png, $out/private-site-controls.png"
+echo "ok: a private window runs the extension allowed in Incognito, listed alone in its Extensions menu, pinned at its URL field and in its Site Controls, and not the other. Windows: $out/private-extensions.png, $out/private-site-controls.png"

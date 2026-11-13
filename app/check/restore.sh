@@ -1,3 +1,4 @@
+# check.sh runs this at 100.
 # Launched again after ⌘Q, and again after its window's close button, the app brings back the
 # Spaces: their names, colours and icons, their tabs with each tab's history, the tab each showed
 # and the Space it showed, and the sidebar's width. Only a tab shown loads; the others show their
@@ -53,7 +54,7 @@ rm -f "$saved" "$launch_frame"
 history_db="$(dirname "$saved")/Default/History"
 if command -v sqlite3 > /dev/null && [ -f "$history_db" ]; then
   sqlite3 "$history_db" "delete from downloads; delete from downloads_url_chains;
-    delete from downloads_slices;" || { echo "FAIL: the downloads wouldn't clear" >&2; exit 1; }
+    delete from downloads_slices;" || { failed=1; echo "FAIL: the downloads wouldn't clear" >&2; exit 1; }
 fi
 # With the motion GitHub's hosted Mac and Windows reduce, for the download's flight recorded below.
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
@@ -462,10 +463,13 @@ expect "^browser: menu shown $(cased 'Images (checked), Videos (checked), Other 
   "the Library button's menu didn't untick Other Files"
 choose_drawn "$(cased 'Other Files')"
 expect '^browser: hover kinds images, videos, other files, captures$' "Other Files didn't turn on"
-# A finished download's menu, with Chrome's word off the Mac for the file manager there.
+# A finished download's menu, with Chrome's word off the Mac for the file manager there, and on
+# Windows its name for the Trash.
 file_manager=Finder
 [ "$(uname)" = Darwin ] || file_manager=Folder
-finished_menu=$(cased "Open, Show in $file_manager, Move to Trash, Remove from List, Clear List")
+trash='Move to Trash'
+! windows || trash='Move to Recycle Bin'
+finished_menu=$(cased "Open, Show in $file_manager, $trash, Remove from List, Clear List")
 # Remove from List in the cancelled download's menu takes it off the list, and Clear List in the
 # finished one's takes off every download that isn't running and keeps their files.
 send key j cmd shift
@@ -541,7 +545,7 @@ expect '^browser: recent downloads shown 1$' \
 post rightclick 120 $((height - 78))
 expect "^browser: menu shown $finished_menu\$" \
   "a right-click on the recent download's row didn't show its menu"
-choose_drawn "$(cased 'Move to Trash')"
+choose_drawn "$(cased "$trash")"
 expect "^browser: download $t Trash via download menu\$" "Move to Trash didn't reach the download"
 expect '^browser: downloads 0$' "Move to Trash didn't take the download off the list"
 expect '^browser: recent downloads hidden$' "the recent downloads stayed with none left"
@@ -617,7 +621,8 @@ expect "^browser: selected $p\( in .*\)\{0,1\}\$" "the tab kept from the preview
 expect '^browser: archive 0 tabs$' "the tab kept from the preview in the second Space stayed in the archive"
 expect '^browser: library hidden$' "keeping the archived tab's preview didn't close the Library"
 ../tools/window-screenshot.sh "$pid" "$out/archive-kept-to-space.png" || fail "no window to capture"
-grep -q "^browser: loaded $p https://example.org/\$" "$log" ||
+# The preview may still be loading as it's kept, so this waits for its load.
+await "^browser: loaded $p https://example.org/\$" ||
   fail "the tab kept from the preview in the second Space isn't at its page"
 send key w cmd
 expect_tabs "$c $a" "$c" "after closing the tab kept in its Space"

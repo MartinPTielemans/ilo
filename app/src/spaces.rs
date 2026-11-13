@@ -189,9 +189,16 @@ pub(crate) unsafe extern "C" fn space_changed(_: *mut c_void, space: bc::bc_id) 
             folder => _ = folders.parents.insert(row, folder),
         }
     }
-    update_shells(|shell, cx| {
-        let (pinned, today) = (pinned.clone(), today.clone());
-        shell.set_tabs(space, pinned, today, splits.clone(), folders.clone(), cx)
+    let Some(cx) = CX.with_borrow(Clone::clone) else {
+        return;
+    };
+    cx.update(|cx| {
+        update_shells_in(cx, |shell, cx| {
+            let (pinned, today) = (pinned.clone(), today.clone());
+            shell.set_tabs(space, pinned, today, splits.clone(), folders.clone(), cx)
+        });
+        // A tab the user held from an agent that left its Space ends its hold.
+        browser::agents::space_changed(space, cx);
     });
 }
 

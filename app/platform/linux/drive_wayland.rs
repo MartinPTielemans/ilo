@@ -1041,6 +1041,26 @@ fn popups(id: bc::bc_id) -> Vec<bc::bc_rect> {
     frames
 }
 
+/// The driven browser window's scale, and the one each overlay that shows drew its first frame at
+/// since it showed, in the order the driver lists them (`drive::overlay_views`): "browser: scales
+/// window 2, overlays 2 2" (#2592). An overlay over another window may have that one's.
+fn scales() -> Option<()> {
+    let (id, _) = driven()?;
+    let ui_view =
+        WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.ui_view))?;
+    let window = gpui_linux::embedder_scale(ui_view)?;
+    let drawn: Vec<String> = (drive::overlay_views().into_iter())
+        .filter_map(gpui_linux::overlay_first_frame_scale)
+        .map(|scale| scale.to_string())
+        .collect();
+    let drawn = match drawn.is_empty() {
+        true => "none".to_string(),
+        false => drawn.join(" "),
+    };
+    log!("browser: scales window {window}, overlays {drawn}");
+    Some(())
+}
+
 fn layout() -> Option<()> {
     let (id, node) = driven()?;
     let (mut width, mut height) = (0., 0.);
@@ -1399,6 +1419,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             })
         })(),
         "layout" => layout(),
+        "scales" => scales(),
         _ => return None,
     })
 }

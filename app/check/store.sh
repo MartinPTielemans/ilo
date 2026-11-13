@@ -1,3 +1,4 @@
+# check.sh runs this at 690, only when named.
 # The Chrome Web Store installs, updates and removes an extension through its own page. Its "Add to
 # Chrome" asks with the browser's dialog, listing Chrome's warnings, and return adds the extension
 # to the Extensions menu. At the next launch, the extension's update check asks Google's store and
