@@ -362,7 +362,7 @@ $(grep 'browser: agent tab ' "$log" | tail -1)"
   printf '%s' '<!doctype html><title>Opens</title>
 <a href="maps:?q=check" target="_blank">Link</a>
 <a href="bounce?to=maps%3A%3Fq%3Dcheck" target="_blank">Redirect</a>
-<button onclick="const a = navigator.userActivation.isActive; const w = open(&quot;maps:?q=check&quot;); document.title = &quot;probe-2667 activation &quot; + a + &quot; window &quot; + !!w">Pop up</button>' > "$out/site/opens.html"
+<button onclick="const a = navigator.userActivation.isActive; const w = window.open(&quot;maps:?q=check&quot;); document.title = &quot;probe-2667 activation &quot; + a + &quot; window &quot; + !!w">Pop up</button>' > "$out/site/opens.html"
   opened=$(call open_tab "{\"url\":\"localhost:$port/opens.html\"}")
   opens=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   # The core's line carries Chromium's prefix.
