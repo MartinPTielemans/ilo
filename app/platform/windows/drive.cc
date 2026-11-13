@@ -1493,7 +1493,12 @@ bool Run(const std::string& line) {
   if (action == "overlays") {
     std::string shown;
     for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
-      if (Ours(top) && GetWindow(top, GW_OWNER) && IsWindowVisible(top)) {
+      // One the host cloaked in place of hiding it, while Win+D had the shell cloak every window,
+      // stays off screen as the shell puts the rest back (#2616).
+      DWORD cloaked = 0;
+      DwmGetWindowAttribute(top, DWMWA_CLOAKED, &cloaked, sizeof cloaked);
+      if (Ours(top) && GetWindow(top, GW_OWNER) && IsWindowVisible(top) &&
+          !(cloaked & DWM_CLOAKED_APP)) {
         RECT rect;
         GetWindowRect(top, &rect);
         const double scale = Scale(top);
