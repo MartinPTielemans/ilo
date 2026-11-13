@@ -41,11 +41,11 @@ Open: sync (#589, #1235, #2098) and Widevine (#649).
 
 ## Phase 5: Windows, then Linux
 
-Per platform: the platform layer, packaging, updater, signing. Linux runs on X11 and on native Wayland (decision 3). On wlroots' Xwayland its panels can't keep the keys, so use Wayland there (#1646).
+Per platform: the platform layer, packaging, updater, signing. Linux runs on X11 and native Wayland (decision 3). On wlroots' Xwayland its panels can't keep the keys, so use Wayland there (#1646).
 
-**Done when** each OS holds the performance gate and every default check run and step passes or says why not (`tools/runs-per-os.py`), Linux on Wayland and X11. **Partly met:**
+**Done when** Windows, X11 and Wayland each hold the gate and every run and step passes or skips by the system's nature, not a "yet" or issue (`tools/runs-per-os.py`). **Partly met:**
 
-- Both ship, with updates, from 0.1.0 (#454), but Windows is unsigned (#2180).
+- Both ship, with updates, from 0.1.0 (#454); Windows is unsigned (#2180).
 - Of 71 default runs, 64 pass on X11, 62 on Wayland, 60 on Windows (#2179).
 - The gate doesn't hold.
 
