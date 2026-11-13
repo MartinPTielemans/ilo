@@ -842,8 +842,10 @@ expect '^browser: command bar shown$' "⌘L didn't open the command bar for the 
 send insert "${site}little-held.html"
 send key return
 expect '^browser: title [0-9]* held ready$' "the held press's page didn't draw"
-# Real input sets the cursor, and two sets in a row make one move, so the page says when the
-# pointer reached its link before it leaves.
+# Real input sets the cursor: the ⌥⌘-click above left it on the link, where the page loaded under
+# it with no move to enter by, and two sets in a row make one move. So it starts off the link, and
+# the page says when the pointer reached its link before it leaves.
+send move $page_point
 send move $((x + 20)) $((y + 20))
 await '^browser: title [0-9]* on 1$' ||
   fail "the held press's page didn't say the pointer reached its link"
