@@ -698,6 +698,9 @@ const LOOK_EVERY: Duration = Duration::from_millis(500);
 
 /// What an answer starts with when the core stopped waiting for its page to settle.
 const BUSY: &str = "The page was still busy after 5 s, so it may change yet.";
+/// What it starts with when only requests the page made were still open then, as a page that polls
+/// keeps one, while what it shows held still: no reason to wait for it (#2355).
+const REQUESTS: &str = "The page held still, with requests it made still open after 5 s.";
 
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
@@ -1751,6 +1754,11 @@ impl Agents {
                 return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
             }
             WaitFor::Quiet => match answer.text.starts_with(BUSY) {
+                // What it shows held still, though a poll's request may never end.
+                false if answer.text.starts_with(REQUESTS) => {
+                    let note = REQUESTS.to_string();
+                    return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
+                }
                 false => {
                     let note = "The page settled.".to_string();
                     return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
@@ -2963,10 +2971,15 @@ impl Agents {
             .as_array()
             .map(Vec::as_slice)
             .unwrap_or_default();
-        if tree["busy"].as_bool() == Some(true) {
+        let unsettled = match (tree["busy"].as_bool(), tree["requests"].as_bool()) {
+            (Some(true), _) => Some(BUSY),
+            (_, Some(true)) => Some(REQUESTS),
+            _ => None,
+        };
+        if let Some(unsettled) = unsettled {
             note = match note.is_empty() {
-                true => BUSY.into(),
-                false => format!("{note} {BUSY}"),
+                true => unsettled.into(),
+                false => format!("{note} {unsettled}"),
             };
         }
         // A choice answers with what the field holds once it shows the option, as the core

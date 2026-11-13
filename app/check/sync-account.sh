@@ -378,6 +378,14 @@ exec 3>&- 5>&-
 quit
 # The runs after start signed out.
 rm -f "$profile_dir/Account"
+# The sign-in window has an off-the-record profile of its own, where uBlock Origin's page never
+# starts, so a page held for it there waits out the whole hold, 10 s a page (#2619). Once signing
+# in starts the window's pages are the run's only http(s) ones, as its own tab's is a data: page.
+held=$(sed -n '/^browser: account SigningIn /,$p' "$log" | grep -A1 '^browser: ad blocking held a page' |
+  grep -v '^--$' || true)
+[ -z "$held" ] ||
+  fail "the sign-in window's pages were held for an ad blocker that never gets ready in its" \
+    "profile: $(printf '%s\n' "$held" | tr '\n' ' ')"
 [ -s "$netlog" ] || fail "Chromium wrote no net log"
 urls=$(grep -o '"url":"[a-z]*://[^"]*"' "$netlog" | cut -d'"' -f4 | sort -u)
 # Google's servers, but the security components' updates, which a run as long as the Mac's, with

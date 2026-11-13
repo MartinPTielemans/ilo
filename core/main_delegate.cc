@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "base/base_switches.h"
@@ -87,6 +88,7 @@
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_LINUX)
@@ -245,6 +247,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     developer_mode::RegisterProfilePrefs();
     notes::RegisterProfilePrefs();
     Arrange::RegisterProfilePrefs();
+    RegisterAdBlockPrefs();
     RegisterWebRtc();
     widevine::Start();
   }
@@ -428,8 +431,20 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
         navigation_id, ukm_source_id, factory_builder, header_client, bypass_redirect_checks,
         disable_secure_dns, factory_override, navigation_response_task_runner,
         is_for_network_service);
-    ProxyForAdBlock(browser_context, frame, type, request_initiator, isolation_info,
+    ProxyForAdBlock(browser_context, frame, type, request_initiator, isolation_info, ukm_source_id,
                     factory_builder);
+  }
+
+  // Chrome's, but a tab the UI lets close itself (bc_tab_set_page_may_close) may, as Blink refuses
+  // window.close() to a page its own script didn't open once it has more than one history entry.
+  void OverrideWebPreferences(content::WebContents* web_contents,
+                              content::SiteInstance& main_frame_site,
+                              blink::web_pref::WebPreferences* prefs) override {
+    ChromeContentBrowserClient::OverrideWebPreferences(web_contents, main_frame_site, prefs);
+    const Tab* tab = Tab::FromWebContents(web_contents);
+    if (tab && tab->page_may_close()) {
+      prefs->allow_scripts_to_close_windows = true;
+    }
   }
 
   void CreateThrottlesForNavigation(content::NavigationThrottleRegistry& registry) override {
@@ -659,9 +674,12 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     std::string blink = command_line->GetSwitchValueASCII(switches::kEnableBlinkFeatures);
     blink += blink.empty() ? "" : ",";
     // And ⌥-click on a link opens it in a split view, as Arc's does, not Chrome's download
-    // (chromium-core-alt-click-split.patch).
-    command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures,
-                                    blink + "PasswordReveal,AltClickSplitView");
+    // (chromium-core-alt-click-split.patch). And a page asks to share the screen only from a click
+    // or a key, as the spec and the other two engines have it, so none puts the picker up unasked;
+    // the promise it gets otherwise is refused, with no UI of ours (decision 12, #2456).
+    command_line->AppendSwitchASCII(
+        switches::kEnableBlinkFeatures,
+        blink + "PasswordReveal,AltClickSplitView,GetDisplayMediaRequiresUserActivation");
 #if BUILDFLAG(IS_MAC)
     platform::NameKeychainItem();
 #endif
@@ -704,11 +722,15 @@ content::ContentClient* MainDelegate::CreateContentClient() {
   return content_client.get();
 }
 
-std::optional<int> MainDelegate::PreBrowserMain() {
-  std::optional<int> exit_code = ChromeMainDelegate::PreBrowserMain();
-  // Chrome's PreBrowserMain made NSApp, which the app can't make before it: Chrome's class reads
-  // the command line as it's made.
-  if (!exit_code && g_host.launching) {
+std::optional<int> MainDelegate::PostEarlyInitialization(InvokedIn invoked_in) {
+  std::optional<int> exit_code = ChromeMainDelegate::PostEarlyInitialization(invoked_in);
+  // In the browser process, once Chromium has the profile's lock: a launch that hands its links to
+  // the browser running already has an exit code here and goes, so it puts nothing on screen and
+  // starts nothing the app would have to stop, even when two launch at once (#2494). Chrome's
+  // PreBrowserMain made NSApp before this, which the app can't make before it: Chrome's class
+  // reads the command line as it's made.
+  if (!exit_code && std::holds_alternative<InvokedInBrowserProcess>(invoked_in) &&
+      g_host.launching) {
     g_host.launching(g_host.context);
   }
   return exit_code;
