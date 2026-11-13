@@ -419,6 +419,9 @@ expect "^browser: toast shown Screenshot Copied to Clipboard \\[$buttons\\]\$" \
 bar_command capture-portrait "Capture in Portrait Mode" "portrait mode"
 expect '^browser: portrait card [0-9]* at ' "Capture in Portrait Mode opened no card"
 expect '^browser: portrait swatch white [0-9]* at ' "Portrait Mode's card drew no White"
+# Windows reads the desktop's picture too, so its card offers it first (#2682).
+! windows || expect '^browser: portrait swatch desktop [0-9]* at ' \
+  "Portrait Mode's card on Windows drew no Desktop Picture swatch"
 ../tools/window-screenshot.sh "$pid" "$out/capture-portrait-card.png" || fail "no window to capture"
 send click $(sed -n 's/^browser: portrait swatch white [0-9]* at //p' "$log" | tail -1 |
   awk '{ printf "%.0f %.0f", $1 + $3 / 2, $2 + $4 / 2 }')
@@ -452,14 +455,15 @@ send click 600 400
 # and puts the page on (#2682). A solid-colour desktop fills the picture with its colour, so the
 # picture's corner is that colour; Windows Spotlight gives none, and the page goes on white.
 if windows; then
+  # The card opens where it was, its swatches drawn where they were, which the app logs only when
+  # they move: the swatch is where it last said.
   bar_command capture-portrait "Capture in Portrait Mode" "portrait mode"
-  expect '^browser: portrait swatch desktop [0-9]* at ' \
-    "Portrait Mode's card on Windows drew no Desktop Picture swatch"
-  ../tools/window-screenshot.sh "$pid" "$out/capture-portrait-card-desktop.png" ||
-    fail "no window to capture"
+  expect '^browser: portrait card [0-9]* at ' "Capture in Portrait Mode opened no card again"
   send click $(sed -n 's/^browser: portrait swatch desktop [0-9]* at //p' "$log" | tail -1 |
     awk '{ printf "%.0f %.0f", $1 + $3 / 2, $2 + $4 / 2 }')
   expect '^browser: portrait chose desktop$' "Desktop Picture on Portrait Mode's card didn't choose it"
+  ../tools/window-screenshot.sh "$pid" "$out/capture-portrait-card-desktop.png" ||
+    fail "no window to capture"
   send click $(sed -n 's/^browser: portrait card [0-9]* at //p' "$log" | tail -1 |
     awk '{ printf "%.0f %.0f", $1 + $3 * 0.75, $2 + $4 - 26 }')
   expect '^browser: desktop picture ' \
