@@ -778,6 +778,13 @@ class WindowViews : public views::WidgetObserver,
         SetFocus(had);
       }
     } else if (message == WM_SIZE) {
+      // Windows activates a minimized window before it restores it, as the second Win+D does, and
+      // gives the keyboard to nothing then or as it restores it, so no WM_SETFOCUS comes and keys
+      // reached no view (#2635). The window takes it back as it's restored.
+      if (w_param != SIZE_MINIMIZED && !GetFocus() && GetActiveWindow() == hwnd) {
+        HWND had = std::exchange(had_keyboard_, nullptr);
+        SetFocus(had && IsChild(hwnd, had) && IsWindowVisible(had) ? had : hwnd);
+      }
       SizeChanged(w_param);
     } else if (message == WM_DPICHANGED) {
       // The pages go again at the new scale once Chromium has taken it and the window's new rect,
