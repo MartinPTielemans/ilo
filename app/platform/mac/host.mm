@@ -5303,12 +5303,20 @@ bool host_copy_secret(const char* text, uint32_t seconds) {
   // as 1Password marks a password it copies.
   [pasteboard setData:[NSData data] forType:@"org.nspasteboard.ConcealedType"];
   [pasteboard setData:[NSData data] forType:@"org.nspasteboard.TransientType"];
+  NSDate* copied = [NSDate date];
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)seconds * NSEC_PER_SEC),
                  dispatch_get_main_queue(), ^{
                    // Only if it's still the words: anything copied since changed the count.
-                   if (pasteboard.changeCount == count) {
+                   const NSInteger now = pasteboard.changeCount;
+                   if (now == count) {
                      [pasteboard clearContents];
                    }
+                   // When it ran and what it did, as check/sync-devices.sh can't see either.
+                   fprintf(
+                       stderr,
+                       "browser: secret clear %.0f ms after the copy, %s (count %ld, now %ld)\n",
+                       -copied.timeIntervalSinceNow * 1000, now == count ? "cleared" : "kept",
+                       (long)count, (long)now);
                  });
   return true;
 }
