@@ -33,9 +33,9 @@ log="$out/battery.log"
 step=0
 rm -f "$saved" "$launch_frame"
 # A page out of sight for 5 s and silent for 5 s may freeze, not Chrome's 5 minutes, with the app's
-# own feature beside them, as this switch would otherwise replace it.
+# own features beside them, as this switch would otherwise replace them.
 BROWSER_DRIVE=1 BROWSER_URL="${site}battery.html" "$browser" --battery-for-testing \
-  --enable-features=PartitionAllocAdaptiveMemoryReclaimInterval,AperitifHelpers,CPUMeasurementInFreezingPolicy:freezing_visible_protection_time/5s/freezing_audio_protection_time/5s \
+  --enable-features=PartitionAllocAdaptiveMemoryReclaimInterval,MojoChannelAssociatedSendUsesRunOrPostTask,AperitifHelpers,CPUMeasurementInFreezingPolicy:freezing_visible_protection_time/5s/freezing_audio_protection_time/5s \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"

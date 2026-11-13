@@ -876,8 +876,12 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // On the Mac, child processes start from Apéritif helpers, as Chrome's field trial has
         // them: those link the framework at launch, so the kernel binds its constant data clean
         // and shared, where the other helpers load it late and dyld dirties 11.7 MiB of it in each.
+        // And the UI thread sends a page's IPC itself while the IO thread is idle, rather than
+        // waking it: woken mid-task, the IO thread can wait out the UI thread's turn on its CPU,
+        // which held a shown page's first message 0.4 ms on Linux's tab switch (#2377).
         format!(
-            "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval{}",
+            "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval,\
+             MojoChannelAssociatedSendUsesRunOrPostTask{}",
             if cfg!(target_os = "macos") {
                 ",AperitifHelpers"
             } else {
