@@ -198,8 +198,11 @@ def bring_forward(pid, title):
     window command can't: it activates a window within its own app alone, and the runs with several
     copies of the app need the one they drive in front (#2114). Windows lets a process take the
     foreground only while it shares the input of the thread that has it, so this one attaches to
-    that thread for the moment. Fails if the window doesn't have the foreground 2 s later."""
+    that thread for the moment. Fails if neither the window nor one it owns has the foreground 2 s
+    later: a dialog the window owns, such as sync's question whether to add a device, takes the
+    keyboard from it as soon as it's in front, as the app means it to."""
     user32.GetForegroundWindow.restype = w.HWND
+    user32.GetWindow.restype = w.HWND
     kernel32 = ctypes.windll.kernel32
     found = [hwnd for hwnd in windows(pid) if user32.IsWindowVisible(hwnd) and
              (text(user32.GetWindowTextW, hwnd) == title if title else holds_ui(hwnd))]
@@ -207,7 +210,14 @@ def bring_forward(pid, title):
         sys.exit("process %d has no %s on screen" % (pid, "window %r" % title if title else
                                                      "browser window"))
     target = found[0]
-    if user32.GetForegroundWindow() != target:
+
+    def in_front():
+        hwnd = user32.GetForegroundWindow()
+        while hwnd and hwnd != target:
+            hwnd = user32.GetWindow(w.HWND(hwnd), GW_OWNER)
+        return hwnd
+
+    if not in_front():
         held = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
         ours = kernel32.GetCurrentThreadId()
         attached = held and held != ours and user32.AttachThreadInput(ours, held, True)
@@ -216,11 +226,14 @@ def bring_forward(pid, title):
         if attached:
             user32.AttachThreadInput(ours, held, False)
     for _ in range(20):
-        if user32.GetForegroundWindow() == target:
-            print("foreground %#x" % target)
+        if in_front():
+            print("foreground %#x" % user32.GetForegroundWindow())
             return
         time.sleep(0.1)
-    sys.exit("window %#x of %d didn't take the foreground" % (target, pid))
+    front = user32.GetForegroundWindow()
+    sys.exit("neither window %#x of %d nor one it owns took the foreground; %s has it" %
+             (target, pid, "%#x of %s" % (front, text(user32.GetClassNameW, front)) if front
+              else "no window"))
 
 
 def cover(pid, foreground, front_file):
