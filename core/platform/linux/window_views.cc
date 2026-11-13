@@ -48,6 +48,7 @@
 #include "ui/compositor/layer_solid_color.h"
 #include "ui/events/event.h"
 #include "ui/events/event_handler.h"
+#include "ui/events/event_target.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
@@ -227,6 +228,13 @@ struct Slot {
   gfx::PointF scaled_about;
 };
 
+// How a link preview's page is drawn, for the motion of the app's card round it (DrawPageIn).
+struct Drawn {
+  float scale = 1;
+  gfx::PointF about;
+  float opacity = 1;
+};
+
 // Where |slot| shows in the window's content, drawn at its scale.
 gfx::RectF ShownFrame(const Slot& slot) {
   const gfx::Rect frame = slot.holder->bounds();
@@ -318,6 +326,9 @@ class WindowViews : public views::WidgetObserver,
       : widget_(widget), ui_(ui), ui_text_input_(widget) {
     observation_.Observe(widget);
     content()->AddPreTargetHandler(this);
+    if (OnWayland()) {
+      content()->AddPreTargetHandler(&keys_kept_, ui::EventTarget::Priority::kSystem);
+    }
     if (auto* client = aura::client::GetFocusClient(content())) {
       focus_observation_.Observe(client);
     }
@@ -442,6 +453,7 @@ class WindowViews : public views::WidgetObserver,
     aura::Window* holder = HolderFor(preview_);
     if (preview_.page != page) {
       Empty(preview_);
+      preview_drawn_ = Drawn();
       if (page->parent()) {
         page->parent()->RemoveChild(page);
       }
@@ -457,6 +469,7 @@ class WindowViews : public views::WidgetObserver,
     content()->StackChildAtTop(holder);
     holder->Show();
     LayOut(preview_, size);
+    DrawPreview();
     ShowThrough();
     WhenPreviewShown(holder->layer()->GetCompositor(), std::move(shown));
   }
@@ -479,6 +492,39 @@ class WindowViews : public views::WidgetObserver,
         weak_factory_.GetWeakPtr(), placed, std::move(shown)));
   }
 
+  // Draws the link preview's page at |scale| of its frame about |about|, in the window's content,
+  // and at |opacity|, by its holder's transform and opacity, so it's never laid out again for it.
+  // The window's shape and input region keep its frame: the app's overlay covers all but the
+  // card's hole, and under that is the page, or the window's own.
+  void DrawPreview(aura::Window* page, float scale, const gfx::PointF& about, float opacity) {
+    if (preview_.page != page) {
+      return;
+    }
+    preview_drawn_ = {scale, about, opacity};
+    DrawPreview();
+  }
+
+  void DrawPreview() {
+    aura::Window* holder = preview_.holder.get();
+    if (!holder) {
+      return;
+    }
+    const Drawn& drawn = preview_drawn_;
+    gfx::Transform transform;
+    if (drawn.scale != 1) {
+      // A layer's transform is about its own top-left.
+      const float in_x = drawn.about.x() - holder->bounds().x();
+      const float in_y = drawn.about.y() - holder->bounds().y();
+      transform.Translate(in_x, in_y);
+      transform.Scale(drawn.scale, drawn.scale);
+      transform.Translate(-in_x, -in_y);
+    }
+    if (holder->transform() != transform) {
+      holder->SetTransform(transform);
+    }
+    holder->layer()->SetOpacity(drawn.opacity);
+  }
+
   // Sizes each slot to its insets.
   void LayOut() {
     const gfx::Size size = ContentSizeOf(widget_);
@@ -487,6 +533,7 @@ class WindowViews : public views::WidgetObserver,
     }
     LayOut(side_panel_, size);
     LayOut(preview_, size);
+    DrawPreview();
     ring_.Fit();
     ScalePanes();
   }
@@ -852,6 +899,9 @@ class WindowViews : public views::WidgetObserver,
     children_events_ = x11::ScopedEventSelector();
     focus_observation_.Reset();
     content()->RemovePreTargetHandler(this);
+    if (OnWayland()) {
+      content()->RemovePreTargetHandler(&keys_kept_);
+    }
     ring_.Hide();
     for (Slot& slot : panes_) {
       Empty(slot);
@@ -1171,6 +1221,23 @@ class WindowViews : public views::WidgetObserver,
   }
 
  private:
+  // On Wayland the UI's and an overlay's keys reach the window too, and views' focus manager, whose
+  // handler on the root window comes before this one's, runs the window's accelerators with them:
+  // a tab dialog's escape sent Chrome's warning before http back as it closed the command bar over
+  // it (#2443). At system priority this one hears them before every default handler, and ends them.
+  class KeysKept : public ui::EventHandler {
+   public:
+    explicit KeysKept(const WindowViews* views) : views_(views) {}
+    void OnKeyEvent(ui::KeyEvent* event) override {
+      if (views_->ui_has_keyboard_ || views_->overlay_has_keyboard_) {
+        event->StopPropagation();
+      }
+    }
+
+   private:
+    const raw_ptr<const WindowViews> views_;
+  };
+
   // The page a window of Chromium's took the keyboard from has it back, if it's still shown and the
   // window still has it.
   void PageTakesBackKeyboard() {
@@ -1221,6 +1288,8 @@ class WindowViews : public views::WidgetObserver,
   SkColor4f preview_color_ = SkColors::kWhite;
   // How many times the preview's page has been placed, for WhenPreviewShown to tell the last.
   uint64_t preview_placed_ = 0;
+  // How its page is drawn for the card's motion (DrawPreview).
+  Drawn preview_drawn_;
   // After the slots, so it leaves its holder before that goes.
   FocusRing ring_;
   double corner_radius_ = 0;
@@ -1237,6 +1306,8 @@ class WindowViews : public views::WidgetObserver,
   bool window_manager_full_screen_ = false;
   bool ui_has_keyboard_ = false;
   bool overlay_has_keyboard_ = false;
+  // Ahead of views' focus manager on the window (KeysKept).
+  KeysKept keys_kept_{this};
   // What runs as the overlay that has the keyboard lets it go (platform::WhenOverlayLetsGo).
   std::vector<base::OnceClosure> overlay_let_go_;
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
@@ -1505,6 +1576,17 @@ void ShowPageIn(views::Widget* widget,
   }
 }
 
+void DrawPageIn(views::Widget* widget,
+                gfx::NativeView page,
+                float scale,
+                const gfx::PointF& about,
+                float opacity) {
+  WindowViews* views = widget ? ViewsOf(widget) : nullptr;
+  if (views && page) {
+    views->DrawPreview(page, scale, about, opacity);
+  }
+}
+
 std::optional<gfx::Rect> FocusRingFrame(views::Widget* widget) {
   WindowViews* views = ViewsOf(widget);
   if (!views) {
@@ -1516,6 +1598,14 @@ std::optional<gfx::Rect> FocusRingFrame(views::Widget* widget) {
     }
   }
   return std::nullopt;
+}
+
+void PassPointerThrough(views::Widget* widget) {
+  // A Wayland bubble takes no input without accept_events; X11's window needs an empty input
+  // shape.
+  if (!OnWayland()) {
+    PlatformWindowOf(widget)->SetInputRegion(std::vector<gfx::Rect>{gfx::Rect()});
+  }
 }
 
 bool PageDialogsInOwnWindow() {
