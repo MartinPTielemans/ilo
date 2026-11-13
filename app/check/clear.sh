@@ -1055,7 +1055,9 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   items=$(grep "$copied" "$log" | tail -1 | cut -d' ' -f6)
   [ "$cookies" -ge 2 ] && [ "$items" -ge 1 ] ||
     fail "the switch copied $cookies cookies and $items storage items, not the session page's"
-  served "^GET safari 127.0.0.1:$port/drm.html cookie .*h=$port; n=$port" \
+  # The cookies are logged sorted, and Safari's engine may hold its own from a run before: the
+  # store is named after the profile's path, which a check's wiped profile comes back at (#2396).
+  served "^GET safari 127.0.0.1:$port/drm.html cookie .*h=$port;.* n=$port" \
     "Safari's engine's first request didn't carry the site's cookies from Chromium" "^GET safari "
   served "^GET safari 127.0.0.1:$port/seen?item=chromium " \
     "Safari's engine's page didn't find the item from Chromium as its script ran"
