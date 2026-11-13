@@ -132,6 +132,11 @@ class PopupLog : public views::NativeViewFocusChangeListener,
 // shown inactive (HWNDMessageHandler::SetInitialFocus), and focusing it activates its window: that
 // closed the command bar over it and brought a window restored behind to the front (#872).
 void ShowInactive(views::Widget* holder) {
+  // A tab switch shows the pane it's already in: showing it again sends its window the style and
+  // show messages for nothing, about 0.2 ms of the switch (#2377).
+  if (holder->IsVisible()) {
+    return;
+  }
   HWND hwnd = views::HWNDForWidget(holder);
   const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
   SetWindowLongPtr(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE);
@@ -630,8 +635,18 @@ class WindowViews : public views::WidgetObserver,
       CombineRgn(region, region, top, RGN_OR);
       DeleteObject(top);
     }
-    // The window owns the region from here.
-    SetWindowRgn(hwnd, region, TRUE);
+    // Only a region that changed: each tab switch lays the pane out again at the same size, and
+    // setting an equal region still makes Windows send the pane its frame's messages and redraw it,
+    // about 0.4 ms of each switch before its frame (#2377).
+    HRGN current = CreateRectRgn(0, 0, 0, 0);
+    const bool same = GetWindowRgn(hwnd, current) != ERROR && EqualRgn(current, region);
+    DeleteObject(current);
+    if (same) {
+      DeleteObject(region);
+    } else {
+      // The window owns the region from here.
+      SetWindowRgn(hwnd, region, TRUE);
+    }
   }
 
   // Shows |page|, a link preview's, at |frame| over the pages shown, in place of the preview it
