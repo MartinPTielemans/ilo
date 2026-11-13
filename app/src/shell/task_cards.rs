@@ -875,7 +875,7 @@ impl Shell {
 
     /// Where the media players end, over Restart to Update, the foot's plates over them.
     pub(super) fn media_top(&self) -> f32 {
-        FOOTER_HEIGHT + self.update_banner_room() + self.media_room()
+        self.over_safe_start() + self.update_banner_room() + self.media_room()
     }
 
     /// The most room the opened foot takes before it scrolls: the closed foot never does.

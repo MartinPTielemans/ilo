@@ -104,7 +104,7 @@ jobs:
           SESSION: ${{ inputs.session || 'xvfb' }}
         run: |
           # check.sh's own list, the runs it does with no names and the ones it does only when named.
-          all=$(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p; s/^named="\(.*\)"$/\1/p' app/check.sh | tr '\n' ' ')
+          all=$(sh app/check.sh --runs)
           # X11's runs, then Wayland's, unless runs are named or Wayland's alone are asked for.
           case $SESSION in
           wayland) sessions=wayland ;;

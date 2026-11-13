@@ -1,3 +1,4 @@
+# check.sh runs this at 470.
 # A page asking for a device, with a click, gets ilo's chooser in its question card (#1649), and
 # the browser lives through it, as it didn't Chrome's bubble (#1640). The HID, USB and serial
 # requests each show the card, whose × ends them as Chrome's Cancel does: HID's with no device, USB's

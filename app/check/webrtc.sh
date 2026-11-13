@@ -1,3 +1,4 @@
+# check.sh runs this at 610.
 # A page's WebRTC tells it no address its HTTP doesn't (decision 10, #1774), read from getStats.
 # With no setting and no proxy, it gathers only server-reflexive UDP candidates, on the default
 # route's interface, none of the computer's own, and two peers of the page connect through STUN

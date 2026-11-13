@@ -126,6 +126,7 @@ mod recent_downloads;
 mod recorder;
 mod return_mark;
 mod rows;
+mod safe_start;
 mod scripting;
 mod scroller;
 pub use scroller::{ScrollBarsShown, follow_scroll_bars};
@@ -986,9 +987,9 @@ struct Opened {
 }
 
 impl Opened {
-    /// How far they've faded in, or None once they have.
-    fn done(&self) -> Option<f32> {
-        self.curve.at(self.start.elapsed().as_secs_f32())
+    /// How far they've faded in at `t` seconds into the list's motion, or None once they have.
+    fn done(&self, t: f32) -> Option<f32> {
+        self.curve.at(t)
     }
 }
 
@@ -1336,6 +1337,10 @@ pub struct Shell {
     held_row: Option<HeldRow>,
     /// The header button the pointer pressed, for its shrinking and growing back.
     held_nav: Option<HeldNav>,
+    /// GPUI's clock, which the list's motion is timed by (`since`): the real one in the app, and
+    /// in a test one only the test moves, so a slide holds on a slow runner until the test moves
+    /// it on, as the Space's settle does (#2265, #2630).
+    clock: BackgroundExecutor,
     /// Rows on their way to their place: how far from it each started, and when.
     slides: HashMap<Slot, (f32, Instant, Curve)>,
     /// Where the frame last drawn had each tab's row in the list, which the pointer's presses hit
@@ -1785,6 +1790,12 @@ pub struct Shell {
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     update_offer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
+    /// The safe-start card's words as last wrapped, while this launch is a safe start, and where it
+    /// and its button and link are drawn (safe_start.rs).
+    safe_start: Option<safe_start::Shape>,
+    safe_start_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    safe_start_button_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    safe_start_manage_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
     /// goes to another site.
     drm_notes: HashMap<u64, SharedString>,
@@ -1953,6 +1964,7 @@ impl Shell {
             unhovered: Vec::new(),
             held_row: None,
             held_nav: None,
+            clock: cx.background_executor().clone(),
             slides: HashMap::new(),
             drawn_rows: RefCell::default(),
             drawn_top: RefCell::default(),
@@ -2169,6 +2181,10 @@ impl Shell {
             update_drawn: Rc::default(),
             update_offer_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
+            safe_start: None,
+            safe_start_drawn: Rc::default(),
+            safe_start_button_drawn: Rc::default(),
+            safe_start_manage_drawn: Rc::default(),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
             page_languages: HashMap::new(),
@@ -4131,11 +4147,22 @@ impl Shell {
         }
     }
 
+    /// Seconds since `start` on the list's clock.
+    pub(super) fn since(&self, start: Instant) -> f32 {
+        Self::since_on(&self.clock, start)
+    }
+
+    fn since_on(clock: &BackgroundExecutor, start: Instant) -> f32 {
+        clock.now().saturating_duration_since(start).as_secs_f32()
+    }
+
     /// Drops the list's and the pages' motion that's done, and returns whether any is left.
     fn list_moving(&mut self) -> bool {
+        let clock = self.clock.clone();
+        let since = |start: Instant| Self::since_on(&clock, start);
         let sliding = !self.slides.is_empty();
         self.slides
-            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_some());
+            .retain(|_, (_, start, curve)| curve.at(since(*start)).is_some());
         if sliding && self.slides.is_empty() {
             // check.sh waits for this line before it presses a row that moved, or scrolls the
             // list: a row sliding in from above leaves the list short until it settles.
@@ -4143,19 +4170,20 @@ impl Shell {
         }
         let tiling = !self.tile_slides.is_empty();
         self.tile_slides
-            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_some());
+            .retain(|_, (_, start, curve)| curve.at(since(*start)).is_some());
         if tiling && self.tile_slides.is_empty() {
             // check.sh waits for this line before it presses a tile that moved.
             log!("browser: tiles settled");
         }
         self.list_slide
-            .take_if(|(_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_none());
+            .take_if(|(_, start, curve)| curve.at(since(*start)).is_none());
         self.closing
-            .retain(|row| row_spring(row.start.elapsed().as_secs_f32()).is_some());
+            .retain(|row| row_spring(since(row.start)).is_some());
         self.unhovered
             .retain(|(_, start)| start.elapsed().as_secs_f32() < SELECTED_UNHOVER);
         if self.slides.is_empty() {
-            self.opened.take_if(|opened| opened.done().is_none());
+            self.opened
+                .take_if(|opened| opened.done(since(opened.start)).is_none());
         }
         if let Some(settle) = self.settle.take_if(|settle| settle.offset().is_none()) {
             // check.sh reads these lines.
@@ -4219,6 +4247,7 @@ impl Render for Shell {
             self.set_sidebar_right(right, cx);
         }
         self.full_screen_step("drawn", window.viewport_size());
+        self.shape_safe_start(cx);
         self.step_opening(window, cx);
         self.stop_videos(window, cx);
         // check.sh reads this line. It comes as the rows are drawn, so a click it sends next goes
@@ -4800,6 +4829,7 @@ impl Shell {
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
                     .children(self.update_banner(cx))
+                    .children(self.safe_start_card(cx))
                     .children(self.task_ghosts())
                     .children(self.drm_note_card(cx))
             }

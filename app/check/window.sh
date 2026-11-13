@@ -1,3 +1,4 @@
+# check.sh runs this at 40.
 # The page view keeps its margins and GPUI's view fills the window through a resize and full screen,
 # and the window's buttons stay in the header row. A page that goes full screen takes the window
 # with it, and escape or the page leaving brings both back, the page resized once each way, straight
