@@ -301,6 +301,10 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # The runner has no sound card, so a page's audio would fail to open ALSA's default, which
+          # ALSA reports on the shared standard error in pieces, and a browser: line written between
+          # them is lost to a check's wait (#2734). Its null device opens and plays to nothing.
+          printf 'pcm.!default { type null }\n' > ~/.asoundrc
           rustup update stable --no-self-update
           mkdir -p "$RUNNER_TEMP/bin"
           # ImageMagick 6 has a tool for each of 7's magick subcommands, such as headless.sh's
