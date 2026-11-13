@@ -837,16 +837,16 @@ l.addEventListener("mouseleave", () => {
 });
 requestAnimationFrame(() => setTimeout(() => document.title = "held ready"));
 </script>' > "$out/site/little-held.html"
-# The ⌥⌘-click above left the real cursor on the link, and a page that loads under a still pointer
-# hears no move to enter its link by.
-send move $page_point
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar for the held press's page"
 send insert "${site}little-held.html"
 send key return
 expect '^browser: title [0-9]* held ready$' "the held press's page didn't draw"
-# Real input sets the cursor, and two sets in a row make one move, so the page says when the
-# pointer reached its link before it leaves.
+# A click on the page first, as before the hovers above: with Windows' real input, a move onto a
+# link in a page loaded from the command bar reached neither the page nor the link target. Real
+# input sets the cursor, and two sets in a row make one move, so the page says when the pointer
+# reached its link before it leaves.
+send click $page_point
 send move $((x + 20)) $((y + 20))
 await '^browser: title [0-9]* on 1$' ||
   fail "the held press's page didn't say the pointer reached its link"
