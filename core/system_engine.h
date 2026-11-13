@@ -53,12 +53,11 @@ bool NoteClosed(Profile* profile, const GURL& url);
 void CloseNote(Profile* profile, const GURL& url);
 
 // Where |profile|'s system pages keep their cookies: a store of its own, apart from Chromium's and
-// Safari's, or for a private window's profile one that keeps nothing.
+// Safari's, or for a private window's profile one that keeps nothing. A profile's store has a
+// random id the profile keeps from the first time it's asked for, just before the store is made.
 platform::SystemStore StoreOf(Profile* profile);
-// Has |profile| keep its store's id, as a page of it made the store.
-void StoreMade(Profile* profile);
-// Whether |profile| ever made its store, in this run or an earlier one, so it has anything to
-// clear. Asks without loading the system's engine, which only a store made needs.
+// Whether |profile| has a store, from this run or an earlier one, so it has anything to clear.
+// Asks without loading the system's engine, which only a store made needs.
 bool StoreUsed(Profile* profile);
 
 // The user's session with a site goes with the tab from one engine to the other, inside the
@@ -79,6 +78,10 @@ void ReturnToChromium(Profile* profile, const GURL& url);
 // Deletes the store of the profile at |path|, if it made one, as the profile goes, then runs
 // |then|. The profile's directory must still be there: an unloaded profile's preferences say.
 void DeleteStore(const base::FilePath& path, base::OnceClosure then);
+// After startup, deletes the stores given to profiles of the data folder that no profile names
+// any more, as when a profile's folder was removed by hand. The system's engine is only loaded if
+// there's one to delete.
+void SweepStores();
 
 // For ContentBrowserClient::CreateThrottlesForNavigation: a navigation of a tab's page in
 // Chromium to a site its profile keeps for the system's engine loads there instead, and a tab
