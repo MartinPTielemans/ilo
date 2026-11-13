@@ -202,22 +202,26 @@ count_children() {
   children=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
     grep -c '^browser: layout child' || true)
 }
-# Waits for the browser window to have more child windows than $shown, or fails with $1.
+# Waits up to 10 s, as expect does, by the clock wait_begins reads, for the browser window to have
+# more child windows than $shown, or fails with $1. Chrome shows its dropdown after reading the
+# saved logins, so a count of layouts would be over sooner on a quick driver.
 dropdown_shown() {
-  for _ in $(seq 30); do
-    count_children
-    [ "$children" -gt "$shown" ] && return
+  began=${SECONDS:-$(date +%s)}
+  until count_children; [ "$children" -gt "$shown" ]; do
+    [ "$((${SECONDS:-$(date +%s)} - began))" -lt 10 ] ||
+      fail "$1: $children child windows, as before it"
+    sleep 0.1
   done
-  fail "$1: $children child windows, as before it"
 }
-# Waits for Chrome's dropdown to close, after escape, or fails with $1.
+# Waits up to 10 s for Chrome's dropdown to close, after escape, or fails with $1.
 dropdown_gone() {
   send key escape
-  for _ in $(seq 30); do
-    count_children
-    [ "$children" = "$shown" ] && return
+  began=${SECONDS:-$(date +%s)}
+  until count_children; [ "$children" = "$shown" ]; do
+    [ "$((${SECONDS:-$(date +%s)} - began))" -lt 10 ] ||
+      fail "$1: $children child windows, where there were $shown"
+    sleep 0.1
   done
-  fail "$1: $children child windows, where there were $shown"
 }
 # With the password cleared, a click in the username field shows Chrome's dropdown under it, where
 # down previews the saved login and return fills it in again. Chrome shows it a moment after the
