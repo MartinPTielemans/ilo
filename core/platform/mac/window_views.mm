@@ -571,11 +571,18 @@ void ShowPageIn(views::Widget*,
   UpdateOcclusion(holder.window);
 }
 
+// The page is in the app's view, which scales and fades it with the card.
+void DrawPageIn(views::Widget*, gfx::NativeView, float, const gfx::PointF&, float) {}
+
 bool FocusSettledOnActivation() {
   // AppKit can be part way through moving the keyboard, as when a committing page hides the view
   // that had it and Chromium makes the window key: a page view focused inside that move believes
   // it has the keyboard after AppKit has given it elsewhere.
   return false;
+}
+
+void PassPointerThrough(views::Widget*) {
+  // Views' accept_events makes the window ignore mouse events.
 }
 
 bool PageDialogsInOwnWindow() {
