@@ -1659,6 +1659,13 @@ sort_item() {
   expect "^browser: menu bar Tabs: .*, Sort Today Tabs by Site$1, " \
     "the Tabs menu's Sort Today Tabs by Site wasn't ${2:-there}"
 }
+# Waits for Today as $1, with $s3 still shown, $2 saying what went wrong. A sort and its undo and
+# redo move rows but never the tab shown, which logs no new selected line, so that one is read.
+expect_order() {
+  expect "^browser: today $1\$" "$2: Today is \"$(today)\", not \"$1\""
+  [ "$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)" = "$s3" ] ||
+    fail "$2: tab $s3 isn't shown: $(grep '^browser: selected ' "$log" | tail -1)"
+}
 # Sorts with the command bar in appearance $1, recording the rows sliding, and captures the window
 # and, on the Mac, the Tabs menu open with the command dimmed.
 sort_in() {
@@ -1672,7 +1679,7 @@ sort_in() {
   record "sort-by-site-$scheme" 3
   bar_command sort-by-site "Sort Today Tabs by Site" "sort today"
   expect '^browser: sorted by site ' "Sort Today Tabs by Site didn't sort"
-  expect_tabs "$after" "$s3" "after Sort Today Tabs by Site, $scheme"
+  expect_order "$after" "after Sort Today Tabs by Site, $scheme"
   recorded
   ../tools/window-screenshot.sh "$pid" "$out/sorted-by-site-$scheme.png" || fail "no window to capture"
   sort_item " (disabled)" "dimmed with every site together"
@@ -1717,11 +1724,11 @@ else
   after="$s3 $s2 $first $l2 $l1"
   sort_in Light
   send key z cmd
-  expect_tabs "$before" "$s3" "after ⌘Z undid Sort Today Tabs by Site"
+  expect_order "$before" "after ⌘Z undid Sort Today Tabs by Site"
   send key z cmd shift
-  expect_tabs "$after" "$s3" "after ⇧⌘Z sorted again"
+  expect_order "$after" "after ⇧⌘Z sorted again"
   send key z cmd
-  expect_tabs "$before" "$s3" "after ⌘Z undid it again"
+  expect_order "$before" "after ⌘Z undid it again"
   sort_in Dark
   send menu "Appearance › Automatic"
   exec 3>&-
