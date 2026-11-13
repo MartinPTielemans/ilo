@@ -16,7 +16,8 @@
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
 //! agentopen, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
-//! desktop on and off, Linux's own, shows the desktop and the windows again as a pager asks, and
+//! desktop on and off, Linux's own, shows the desktop and the windows again as a pager asks,
+//! desktop shell maps a desktop window as a desktop shell does and desktop shell off takes it away, and
 //! onscreen logs what the X server shows of the driven window and the app's overlays over it.
 //! The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
 //! and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt
@@ -80,6 +81,7 @@ use x11rb::{
         xtest::ConnectionExt as _,
     },
     rust_connection::RustConnection,
+    wrapper::ConnectionExt as _,
 };
 
 use crate::{
@@ -1820,6 +1822,51 @@ fn atom(name: &str) -> Option<xproto::Atom> {
     )
 }
 
+/// Maps a desktop window over the whole screen, as a desktop shell (Plasma's, xfdesktop) does, or
+/// takes it away: KWin shows the desktop by raising that window over the others and giving it the
+/// keyboard, and without one it shows nothing.
+fn desktop_shell(on: bool) -> Option<()> {
+    thread_local! {
+        static SHELL: Cell<Option<xproto::Window>> = const { Cell::new(None) };
+    }
+    let x = server()?;
+    let (connection, root) = &*x;
+    if let Some(window) = SHELL.take() {
+        connection.destroy_window(window).ok()?;
+    }
+    if on {
+        let screen = (connection.setup().roots.iter()).find(|screen| screen.root == *root)?;
+        let window = connection.generate_id().ok()?;
+        (connection.create_window(
+            x11rb::COPY_DEPTH_FROM_PARENT,
+            window,
+            *root,
+            0,
+            0,
+            screen.width_in_pixels,
+            screen.height_in_pixels,
+            0,
+            xproto::WindowClass::INPUT_OUTPUT,
+            x11rb::COPY_FROM_PARENT,
+            &xproto::CreateWindowAux::new().background_pixel(screen.black_pixel),
+        ))
+        .ok()?;
+        let kind = atom("_NET_WM_WINDOW_TYPE")?;
+        let desktop = atom("_NET_WM_WINDOW_TYPE_DESKTOP")?;
+        (connection.change_property32(
+            xproto::PropMode::REPLACE,
+            window,
+            kind,
+            xproto::AtomEnum::ATOM,
+            &[desktop],
+        ))
+        .ok()?;
+        connection.map_window(window).ok()?;
+        SHELL.set(Some(window));
+    }
+    connection.flush().ok()
+}
+
 /// The driver's own window, on its connection, which nobody sees.
 fn driver_window() -> Option<xproto::Window> {
     if let Some(window) = DRIVER_WINDOW.get() {
@@ -2527,6 +2574,7 @@ fn run_command(line: &str) -> Option<()> {
             let on = match words.next()? {
                 "on" => 1,
                 "off" => 0,
+                "shell" => return desktop_shell(words.next() != Some("off")),
                 _ => return None,
             };
             let showing = atom("_NET_SHOWING_DESKTOP")?;

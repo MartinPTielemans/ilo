@@ -1537,33 +1537,41 @@ FRAME
   bar_gone "Esc in the command bar after the display adapter restarted"
 fi
 
-# Showing the desktop with the command bar open (#2711). On X11 the window manager hides the
-# browser window, and the bar, a window of its own that no window manager takes, goes off screen
-# with it; showing the windows again brings both back, and the bar has the keys again. EWMH's
-# _NET_SHOWING_DESKTOP asks it, as openbox's Super+D, KWin's Ctrl+F12 and a pager's button do.
-# sway has no desktop to show, and hides a window on another workspace: under Wayland, where the
-# bar is part of the window's surface, and on its Xwayland.
-if [ "$(uname)" = Linux ]; then
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-  if [ -n "${BROWSER_HEADLESS:-}" ] && [ "$BROWSER_HEADLESS" != xvfb ]; then
-    # The capture of the output with every window of the app's gone: one colour, sway's own.
-    colours() {
-      ../tools/window-screenshot.sh "$pid" "$1" all || fail "no screen to capture"
-      identify -format '%k' "$1"
-    }
+# Showing the desktop with the command bar open (#2711). On X11 the bar is a window of its own that
+# no window manager takes, so it has to leave the screen as its window does: openbox hides every
+# window, and the bar goes with the browser window and comes back with it, with the keys. KWin
+# raises the desktop shell's window over the others and gives it the keys, and the bar closes as
+# it does for any window that takes them; without a shell KWin shows nothing, so the driver maps
+# one. EWMH's _NET_SHOWING_DESKTOP asks either, as openbox's Super+D, KWin's Ctrl+F12 and a
+# pager's button do. sway has no desktop to show and hides a window on another workspace: under
+# Wayland the bar is part of the window's surface and goes with it. On sway's Xwayland nothing
+# tells an X client its window left the screen (#2720), so the step doesn't run there.
+if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; }; then
+  # The share, in thousandths, of the capture's most common colour: the empty screen's, with the
+  # pointer the only other thing on it.
+  plain() {
+    ../tools/window-screenshot.sh "$pid" "$1" all || fail "no screen to capture"
+    convert "$1" -format %c histogram:info:- |
+      awk -v all="$(identify -format '%[fx:w*h]' "$1")" \
+        '{ n = $1 + 0; if (n > top) top = n } END { printf "%d\n", top * 1000 / all }'
+  }
+  if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
     swaymsg workspace 9 > /dev/null || fail "sway didn't go to another workspace"
     for _ in $(seq 50); do
-      [ "$(colours "$out/workspace-away.png")" = 1 ] && break
+      [ "$(plain "$out/workspace-away.png")" -ge 995 ] && break
       sleep 0.1
     done
-    [ "$(colours "$out/workspace-away.png")" = 1 ] ||
+    [ "$(plain "$out/workspace-away.png")" -ge 995 ] ||
       fail "another workspace still showed the bar or its window: $out/workspace-away.png"
     swaymsg workspace 1 > /dev/null || fail "sway didn't go back to the window's workspace"
     send type g
     expect '^browser: command bar drew "g"$' \
       "a key typed once the bar's workspace showed again didn't reach the bar"
     ../tools/window-screenshot.sh "$pid" "$out/workspace-back.png" all || fail "no screen to capture"
+    send key escape
+    expect '^browser: command bar hidden$' "Esc didn't close the bar once its window was back"
     desktop="on another workspace the window and its bar are off screen, and back with the keys"
   else
     # What the X server shows, as "window <0|1>, overlays <on screen> of <shown>, keyboard <whose>".
@@ -1576,23 +1584,35 @@ if [ "$(uname)" = Linux ]; then
       done
       fail "$2: $seen"
     }
+    send desktop shell
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
     onscreen 'window 1, overlays \([1-9][0-9]*\) of \1, keyboard overlay' \
       "the bar didn't show over its window with the keys"
     send desktop on
-    onscreen 'window 0, overlays 0 of [1-9][0-9]*, keyboard none' \
-      "showing the desktop left the bar on screen without its window, or the keys with it"
-    ../tools/window-screenshot.sh "$pid" "$out/desktop-shown.png" all || fail "no screen to capture"
+    shown=$step
+    onscreen 'window [01], overlays 0 of [0-9][0-9]*, keyboard none' \
+      "showing the desktop left the bar on screen, or the keys with the app"
+    [ "$(plain "$out/desktop-shown.png")" -ge 995 ] ||
+      fail "the desktop showed more than itself: $out/desktop-shown.png"
     send desktop off
-    onscreen 'window 1, overlays \([1-9][0-9]*\) of \1, keyboard overlay' \
-      "the bar didn't come back with its window and the keys once the windows showed again"
-    send type g
-    expect '^browser: command bar drew "g"$' \
-      "a key typed once the windows showed again didn't reach the bar"
-    ../tools/window-screenshot.sh "$pid" "$out/desktop-back.png" all || fail "no screen to capture"
-    desktop="showing the desktop takes the window and its bar off screen, and back with the keys"
+    onscreen 'window 1, overlays \(\([1-9][0-9]*\) of \2, keyboard overlay\|0 of 0, keyboard window\)' \
+      "the window didn't come back with the keys once the windows showed again"
+    if [ "${seen##*keyboard }" = overlay ]; then
+      send type g
+      expect '^browser: command bar drew "g"$' \
+        "a key typed once the windows showed again didn't reach the bar"
+      ../tools/window-screenshot.sh "$pid" "$out/desktop-back.png" all || fail "no screen to capture"
+      send key escape
+      expect '^browser: command bar hidden$' "Esc didn't close the bar once its window was back"
+      desktop="showing the desktop takes the window and its bar off screen, and back with the keys"
+    else
+      expect '^browser: command bar hidden$' "the bar was off screen but not closed" "$shown"
+      ../tools/window-screenshot.sh "$pid" "$out/desktop-back.png" all || fail "no screen to capture"
+      desktop="showing the desktop closes the bar as the desktop takes the keys, and the window comes back with them"
+    fi
+    send desktop shell off
   fi
-  send key escape
-  expect '^browser: command bar hidden$' "Esc didn't close the bar once its window was back"
 fi
 
 # Arc's bar commands that call what the menus do: Mute All Tabs mutes every tab, and Unmute All
