@@ -166,7 +166,10 @@ yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset
  oninput="document.title=`yours typed `+f.value"></textarea>
 <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.title="yours"))</script>'
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
-  "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --load-extension="$(app_path "$extension")" \
+  --enable-tracing=navigation,loading,content,browser,blink,input,devtools.timeline --enable-tracing-format=json \
+  --trace-startup-duration=12 --trace-startup-file="$out/startup-trace.json" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -335,6 +338,12 @@ opened=$(call open_tab "{\"url\":\"localhost:$port/documents.html\"}")
 documents=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
 ref=$(printf '%s\n' "$opened" | sed -n 's/.*- link "Report" \[\(e[0-9]*\)\].*/\1/p' | head -1)
 clicked=$(call click "{\"tab\":$documents,\"ref\":\"$ref\"}")
+# Proof only: the startup trace is written once its 12 s end, after the click above.
+for _ in $(seq 120); do
+  [ -s "$out/startup-trace.json" ] && tail -c 64 "$out/startup-trace.json" | grep -q '}' && break
+  sleep 0.5
+done
+echo "startup trace: $(wc -c < "$out/startup-trace.json" 2>/dev/null || echo none) bytes" >&2
 case "$clicked" in
   "error: That link opens "*"(ms-word:), outside the browser"*"The tab stayed on “Documents”."*) ;;
   *) fail "clicking a link to an app answered: $clicked" ;;
