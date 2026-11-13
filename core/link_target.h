@@ -23,6 +23,10 @@ struct LinkTarget {
 // |url| as the app shows a link the pointer is on.
 LinkTarget FormatLinkTarget(const GURL& url);
 
+// The site of the page at |url|, ASCII: the registrable domain the plate emphasizes, or the host if
+// it has none. Empty if it isn't http(s).
+std::string SiteOf(const GURL& url);
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_LINK_TARGET_H_
