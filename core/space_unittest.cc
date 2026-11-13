@@ -72,6 +72,29 @@ class SpaceTest : public testing::Test {
 };
 
 // What an archived tab goes back to: the user's Space it closed in, while there's one.
+// A tab made for a Space whose window places it a task later, as one an agent's tab opens, is that
+// Space's from when it's made, so its page's first request finds it there, and only until it's
+// placed or gone (#2660).
+TEST_F(SpaceTest, AnExpectedTabIsTheSpacesFromWhenItsMadeUntilItsPlacedOrGone) {
+  work_->Expect(7);
+  EXPECT_EQ(Space::Holding(7), work_);
+  EXPECT_FALSE(work_->Has(7));
+  EXPECT_EQ(work_->today(), Rows{});
+  work_->Add(7, /*opener=*/0, /*foreground=*/false);
+  EXPECT_EQ(Space::Holding(7), work_);
+  EXPECT_EQ(work_->today(), Rows{7});
+  work_->Remove(7);
+  EXPECT_EQ(Space::Holding(7), nullptr);
+  // One that closes before its window placed it.
+  work_->Expect(8);
+  work_->Remove(8);
+  EXPECT_EQ(Space::Holding(8), nullptr);
+  // A Space holding a tab is where it is, whichever expected it.
+  home_->Expect(9);
+  work_->Add(9, /*opener=*/0, /*foreground=*/false);
+  EXPECT_EQ(Space::Holding(9), work_);
+}
+
 TEST_F(SpaceTest, ASpaceIsFoundByItsNodeWhileItIsTheUsers) {
   const base::Uuid work = work_->node().id;
   ASSERT_TRUE(work.is_valid());

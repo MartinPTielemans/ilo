@@ -200,6 +200,11 @@ Space* Space::Holding(bc_id tab) {
       return space.get();
     }
   }
+  for (auto& [id, space] : Spaces()) {
+    if (space->expected_.contains(tab)) {
+      return space.get();
+    }
+  }
   return nullptr;
 }
 
@@ -328,6 +333,7 @@ void Space::SetProfile(std::string profile) {
 }
 
 void Space::Add(bc_id tab, bc_id opener, bool foreground) {
+  expected_.erase(tab);
   const bool pinned_opener = opener && IsPinned(opener);
   // A pinned opener sits above the Today tabs.
   auto at = pinned_opener ? today_.begin() : std::ranges::find(today_, opener);
@@ -357,11 +363,13 @@ void Space::Add(bc_id tab, bc_id opener, bool foreground) {
 }
 
 void Space::AddAt(bc_id tab, size_t index) {
+  expected_.erase(tab);
   today_.insert(today_.begin() + OutsideSplits(today_, index), tab);
   ReportChanged();
 }
 
 void Space::AddPinned(bc_id tab, bc_id folder, size_t index, GURL url) {
+  expected_.erase(tab);
   if (!IsFolder(folder)) {
     folder = 0;
   }
@@ -454,7 +462,12 @@ void Space::Move(bc_id tab,
   ReportChanged();
 }
 
+void Space::Expect(bc_id tab) {
+  expected_.insert(tab);
+}
+
 void Space::Remove(bc_id tab) {
+  expected_.erase(tab);
   if (IsFolder(tab) || (std::erase(today_, tab) == 0 && std::erase(pinned_, tab) == 0)) {
     return;
   }

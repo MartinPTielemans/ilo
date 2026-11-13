@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -84,7 +85,7 @@ class Space {
   // The user's Space with the node |node|, not an agent's or a window's own, or null if there's
   // none, as for an invalid |node|.
   static Space* WithNode(const base::Uuid& node);
-  // The Space holding |tab|, pinned or in Today, if any.
+  // The Space holding |tab|, pinned or in Today, if any, else the one expecting it (Expect).
   static Space* Holding(bc_id tab);
   // The Space holding |folder|, if any.
   static Space* HoldingFolder(bc_id folder);
@@ -199,6 +200,11 @@ class Space {
             base::FunctionRef<GURL(bc_id)> url_of);
   // Takes |tab| out of the Space, and out of its split.
   void Remove(bc_id tab);
+  // Holds |tab|, a tab just made for this Space whose window places it later, from now until it's
+  // placed (Add, AddAt, AddPinned) or removed: a tab an agent opens, or an agent's tab opens, is
+  // the agent's before its page's first request starts, so nothing that request asks finds it in
+  // no Space or in the user's (#2660).
+  void Expect(bc_id tab);
 
   // Makes an open folder named |name| at |index| in |folder|, else in the pinned tabs, counted as
   // Move counts. Returns it.
@@ -315,6 +321,8 @@ class Space {
   // Each pinned tab or folder inside a folder, to the folder.
   std::map<bc_id, bc_id> folder_of_;
   std::vector<bc_id> today_;
+  // The tabs Expect holds until they're placed.
+  std::set<bc_id> expected_;
   // Each tab a page opened, to the tab it came from.
   std::map<bc_id, bc_id> openers_;
   std::vector<SplitView> splits_;
