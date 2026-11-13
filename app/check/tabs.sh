@@ -1665,7 +1665,9 @@ sort_in() {
   send menu "Appearance › $1"
   scheme=$(echo "$1" | tr A-Z a-z)
   expect "^browser: appearance $scheme\$" "View › Appearance › $1 didn't change the appearance"
-  expect_tabs "$before" "$s3" "before Sort Today Tabs by Site, $scheme"
+  # Read, not waited for: the appearance changes nothing in Today, which logs no new line.
+  [ "$(today)" = "$before" ] ||
+    fail "before Sort Today Tabs by Site, $scheme: Today is \"$(today)\", not \"$before\""
   sort_item "" "offered with the sites apart"
   record "sort-by-site-$scheme" 3
   bar_command sort-by-site "Sort Today Tabs by Site" "sort today"
