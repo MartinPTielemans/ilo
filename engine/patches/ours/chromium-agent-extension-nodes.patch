@@ -1,0 +1,168 @@
+Marks the nodes an extension's content script makes, for the core's agent (//browser_core/
+agent_page.cc): Blink sets a node's last free flag when it's made while script runs in an
+extension's isolated world, as a password manager's in-page button and menu are. DevTools'
+accessibility tree gives such a node, and every node inside it, the property fromExtension, and an
+accessibility snapshot, which the core's read of a page takes, the HTML attribute fromExtension. An
+agent's outline and text leave them out, and the core refuses an agent's click that would land on
+one, so an agent never acts on an extension's controls as if they were the page's (#2355). Only a
+node made while script runs is checked, and only once a world other than the page's exists; the
+parser's never are.
+
+--- a/third_party/blink/renderer/platform/bindings/dom_wrapper_world.h
++++ b/third_party/blink/renderer/platform/bindings/dom_wrapper_world.h
+@@ -186,6 +186,12 @@
+   scoped_refptr<const SecurityOrigin> IsolatedWorldSecurityOrigin(
+       const base::UnguessableToken& cluster_id) const;
+ 
++  // browser_core: whether this is the world of an extension's content scripts,
++  // by its security origin in |cluster_id|'s agent cluster. What it makes and
++  // listens to is the extension's, which an agent may not act on
++  // (//browser_core/agent_page.cc).
++  bool IsExtensionWorld(const base::UnguessableToken& cluster_id) const;
++
+   bool IsMainWorld() const { return world_type_ == WorldType::kMain; }
+   bool IsWorkerOrWorkletWorld() const {
+     return world_type_ == WorldType::kWorkerOrWorklet;
+--- a/third_party/blink/renderer/platform/bindings/dom_wrapper_world.cc
++++ b/third_party/blink/renderer/platform/bindings/dom_wrapper_world.cc
+@@ -219,6 +219,16 @@
+   return GetIsolatedWorldSecurityOrigin(GetWorldId(), cluster_id);
+ }
+ 
++bool DOMWrapperWorld::IsExtensionWorld(
++    const base::UnguessableToken& cluster_id) const {
++  if (world_type_ != WorldType::kIsolated || !IsMainThread()) {
++    return false;
++  }
++  scoped_refptr<const SecurityOrigin> origin =
++      GetIsolatedWorldSecurityOrigin(GetWorldId(), cluster_id);
++  return origin && origin->Protocol() == "chrome-extension";
++}
++
+ void DOMWrapperWorld::SetIsolatedWorldSecurityOrigin(
+     int32_t world_id,
+     scoped_refptr<SecurityOrigin> security_origin) {
+--- a/third_party/blink/renderer/core/dom/node.h
++++ b/third_party/blink/renderer/core/dom/node.h
+@@ -653,6 +653,12 @@
+     return GetFlag(kChildNeedsStyleRecalcFlag);
+   }
+   bool IsLink() const { return GetFlag(kIsLinkFlag); }
++
++  // browser_core: whether this node, or the node or shadow host it's in, was
++  // made while an extension's content script ran, as a password manager's
++  // in-page button and menu are. An agent is offered none of it.
++  bool IsMadeByExtension() const;
++
+   bool IsEditingText() const {
+     DCHECK(IsTextNode());
+     return GetFlag(kHasNameOrIsEditingTextFlag);
+@@ -1288,9 +1294,12 @@
+     // GetShadowRoot() can be inlined by the compiler; see crbug.com/465839474.
+     kHasShadowRootFlag = 1u << 30,
+ 
++    // browser_core: made while an extension's content script ran.
++    kMadeByExtensionFlag = 1u << 31,
++
+     kDefaultNodeFlags = kIsFinishedParsingChildrenFlag,
+ 
+-    // 1 bit(s) remaining.
++    // 0 bit(s) remaining.
+   };
+ 
+   ALWAYS_INLINE bool GetFlag(NodeFlags mask) const {
+--- a/third_party/blink/renderer/core/dom/node.cc
++++ b/third_party/blink/renderer/core/dom/node.cc
+@@ -147,6 +147,12 @@
+ #include "third_party/blink/renderer/platform/bindings/dom_data_store.h"
+ #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+ #include "third_party/blink/renderer/platform/bindings/v8_dom_wrapper.h"
++// browser_core: for the world a node is made in.
++#include "third_party/blink/renderer/core/execution_context/execution_context.h"
++#include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
++#include "third_party/blink/renderer/platform/bindings/script_state.h"
++#include "third_party/blink/renderer/platform/wtf/threading.h"
++#include "v8/include/v8-isolate.h"
+ #include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
+ #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+ #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+@@ -344,6 +350,24 @@
+   LiveNodeSet().insert(this);
+ #endif
+   InstanceCounters::IncrementCounter(InstanceCounters::kNodeCounter);
++  // browser_core: a node an extension's content script makes is the
++  // extension's. Only a node made while script runs is checked, and only once
++  // a world other than the page's exists; the parser's nodes never are.
++  if (DOMWrapperWorld::NonMainWorldsExistInMainThread() && IsMainThread()) {
++    v8::Isolate* isolate = v8::Isolate::TryGetCurrent();
++    ScriptState* script_state =
++        isolate && isolate->InContext()
++            ? ScriptState::MaybeFrom(isolate, isolate->GetCurrentContext())
++            : nullptr;
++    if (script_state && script_state->World().GetWorldType() ==
++                            DOMWrapperWorld::WorldType::kIsolated) {
++      ExecutionContext* execution_context = ExecutionContext::From(script_state);
++      if (execution_context && script_state->World().IsExtensionWorld(
++                                   execution_context->GetAgentClusterID())) {
++        SetFlag(kMadeByExtensionFlag);
++      }
++    }
++  }
+   // Document is required for probe sink.
+   if (tree_scope_)
+     probe::NodeCreated(this);
+@@ -353,6 +377,15 @@
+   InstanceCounters::DecrementCounter(InstanceCounters::kNodeCounter);
+ }
+ 
++bool Node::IsMadeByExtension() const {
++  for (const Node* node = this; node; node = node->ParentOrShadowHostNode()) {
++    if (node->GetFlag(kMadeByExtensionFlag)) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ DOMNodeId Node::GetDomNodeId() {
+   return DOMNodeIds::IdForNode(this);
+ }
+--- a/third_party/blink/renderer/modules/accessibility/inspector_type_builder_helper.cc
++++ b/third_party/blink/renderer/modules/accessibility/inspector_type_builder_helper.cc
+@@ -810,6 +810,18 @@
+   if (node) {
+     protocol_node->setBackendDOMNodeId(IdentifiersFactory::IntIdForNode(node));
+   }
++  // browser_core: what an extension's content script made, which an agent's
++  // outline and text leave out and its clicks refuse (//browser_core/
++  // agent_page.cc). A name of its own, outside the protocol's list, which
++  // DevTools' own front end, built from its copy of the protocol, never sees.
++  if (node && node->IsMadeByExtension()) {
++    if (!protocol_node->hasProperties()) {
++      protocol_node->setProperties(
++          std::make_unique<protocol::Array<AXProperty>>());
++    }
++    protocol_node->getProperties(nullptr)->emplace_back(
++        CreateProperty("fromExtension", CreateBooleanValue(true)));
++  }
+ 
+   const AXObject* parent = ax_object.ParentObjectIncludedInTree();
+   if (parent) {
+--- a/third_party/blink/renderer/modules/accessibility/ax_object.cc
++++ b/third_party/blink/renderer/modules/accessibility/ax_object.cc
+@@ -1194,6 +1194,15 @@
+   }
+   node_data->id = AXObjectID();
+ 
++  // ilo: what an extension's content script made is the extension's, not the page's, and an
++  // agent's read of the page leaves it out (#2355). Only a snapshot, which is what that read
++  // takes, carries the mark, so assistive technology's tree is as it was.
++  if (is_snapshot) {
++    if (const Node* node = GetNode(); node && node->IsMadeByExtension()) {
++      node_data->html_attributes.emplace_back("fromExtension", "");
++    }
++  }
++
+   PreSerializationConsistencyCheck();
+ 
+   if (node_data->role == ax::mojom::blink::Role::kInlineTextBox) {

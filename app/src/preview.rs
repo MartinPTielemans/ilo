@@ -1055,6 +1055,16 @@ impl Browser for Fake {
         browser::shell::Elsewhere::on(self.os(), default)
     }
 
+    // PREVIEW_SAFE_START=1 shows a safe start's card at the sidebar's foot, with Settings' ad
+    // blocking on, or =unblocked with it off.
+    fn safe_start(&self) -> bool {
+        std::env::var_os("PREVIEW_SAFE_START").is_some()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        std::env::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
+    }
+
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
         self.later(cx, move |shell, cx| {
             shell.set_media_unsupported(tab, "", cx);
@@ -3339,6 +3349,7 @@ fn preview_site() -> Site {
         logins: Vec::new(),
         devices: Vec::new(),
         ad_blocking: Some(true),
+        ad_blocked: "12".into(),
         developer_mode: Some(false),
         // PREVIEW_BOOST=on or off gives the site a Boost, which shows its row.
         boostable: true,

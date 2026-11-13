@@ -10,11 +10,13 @@
 # shell's page shows through, and more Spaces than fit (#1401): 16 in the switcher of a sidebar
 # 300 wide, and 8 in the Library's Spaces in a window 1100 wide, and Settings › Sync at Settings'
 # 720 by 480 least size, scrolled, the section's name held at the card's top, and the URL field's
-# translate mark lit under the pointer, light and dark (#2112), and the foot bar with two lines over
-# the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380), and
+# translate mark lit under the pointer, light and dark (#2112), the foot bar with two lines over
+# the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380),
 # Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default
-# naming its model, light and dark (#2455). The preview's Linux host places no window, so sway
-# puts Site Controls and the icon picker in the middle rather than where the Mac's host would.
+# naming its model, light and dark (#2455), and the safe-start card at the sidebar's foot, light
+# and dark, and in the narrowest sidebar with ad blocking off (#2345). The preview's Linux host
+# places no window, so sway puts Site Controls and the icon picker in the middle rather than where
+# the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -49,6 +51,9 @@ screens=(
   "model-menu-claude-light|menu shown|PREVIEW_MODEL_MENU=claude,sonnet PREVIEW_APPEARANCE=light"
   "model-menu-codex-dark|menu shown|PREVIEW_MODEL_MENU=codex PREVIEW_APPEARANCE=dark"
   "model-menu-codex-light|menu shown|PREVIEW_MODEL_MENU=codex PREVIEW_APPEARANCE=light"
+  "safe-start-light|safe start card 0 at|PREVIEW_SAFE_START=1 PREVIEW_APPEARANCE=light"
+  "safe-start-dark|safe start card 0 at|PREVIEW_SAFE_START=1 PREVIEW_APPEARANCE=dark"
+  "safe-start-narrow|safe start card 0 at|PREVIEW_SAFE_START=unblocked PREVIEW_SIDEBAR=164"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;

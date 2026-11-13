@@ -316,7 +316,7 @@ send window 1
 
 # A page in Safari's engine moves to a new window as Chromium's does, and the window it left draws
 # WebKit's picture of it. The drm page asks for Widevine, so its Site Controls offer Safari's
-# engine, whose row is their first, at y 262 (clear.sh), and On shows the page there.
+# engine with a switch, and On shows the page there.
 webkit_moved=
 if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   before=$(today)
@@ -331,8 +331,8 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: site controls http://127.0.0.1:$port: .*; Safari's engine off\$" \
     "the Site Controls didn't offer Safari's engine for the drm page: $(grep '^browser: site controls http' "$log" | tail -1)"
   expect '^browser: site controls settled$' "the Site Controls didn't open at the drm page"
-  post click 207 262
-  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's row didn't offer On"
+  click_placed post "switch Safari's engine"
+  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's switch didn't offer On"
   engine_from=$(date '+%Y-%m-%d %H:%M:%S')
   send choose On
   expect "^browser: site controls set Safari's engine On\$" "On in the menu didn't run"

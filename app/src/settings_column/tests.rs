@@ -79,7 +79,7 @@ fn plate_y(section: Section) -> f32 {
     unreachable!()
 }
 
-/// The twelve sections run down the column in their three groups, and a click on each shows it.
+/// The thirteen sections run down the column in their three groups, and a click on each shows it.
 #[gpui::test]
 fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
     let (view, cx) = shown(cx);
@@ -96,6 +96,7 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
             "Profiles",
             "Passwords",
             "Privacy",
+            "Ad Blocking",
             "Sync",
             "Import & Export",
             "About"
@@ -117,7 +118,7 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
     }
     // Each click picked once: none reached the ground, whose press moves the window, which the
     // test window can't.
-    assert_eq!(view.read_with(cx, |view, _| view.picked.borrow().len()), 12);
+    assert_eq!(view.read_with(cx, |view, _| view.picked.borrow().len()), 13);
 }
 
 /// Chromium's settings sit at the column's foot, 8 up from the window's bottom, and a click there
@@ -132,7 +133,7 @@ fn the_foot_opens_chromiums_settings(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view.picked.borrow().is_empty()));
 }
 
-/// At Settings' 720 × 480 minimum the twelve sections don't fit over the foot: they scroll above
+/// At Settings' 720 × 480 minimum the thirteen sections don't fit over the foot: they scroll above
 /// it, so the last, scrolled to, shows clear of the foot, and a click on the foot is the foot's.
 #[gpui::test]
 fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContext) {
@@ -173,7 +174,7 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
     );
 }
 
-/// VoiceOver reads the column as a tab list of the twelve sections, the one shown selected, and
+/// VoiceOver reads the column as a tab list of the thirteen sections, the one shown selected, and
 /// Chromium settings as a button; its press on a section shows it, as a click does (#1381).
 #[gpui::test]
 fn voiceover_reads_the_sections_as_tabs(cx: &mut TestAppContext) {
@@ -294,7 +295,7 @@ impl Render for Stops {
 }
 
 /// Every place ⇥ stops in Settings is one VoiceOver can name: each has a role and a name, and ⇥
-/// goes round all nineteen, the twelve sections, the field, the card's five and the foot.
+/// goes round all twenty, the thirteen sections, the field, the card's five and the foot.
 #[gpui::test]
 fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
     use gpui::accesskit::{NodeId, Role};
@@ -350,7 +351,7 @@ fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
     ] {
         assert!(names.contains(&name), "⇥ never reached {name}: {names:?}");
     }
-    assert_eq!(stops.len(), 19, "{names:?}");
+    assert_eq!(stops.len(), 20, "{names:?}");
 }
 
 /// Settings in small for the keyboard: the column with the search field, and the card with a
