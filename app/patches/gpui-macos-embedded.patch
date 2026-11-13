@@ -240,7 +240,7 @@ index 4b48188131..b9b785975c 100644
          }
      }
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index f2208d35ec..4b446e3fa4 100644
+index f2208d35ec..b9da0bdd0b 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
 @@ -11,7 +11,7 @@ use dispatch2::DispatchQueue;
@@ -943,7 +943,19 @@ index f2208d35ec..4b446e3fa4 100644
              PlatformInput::ModifiersChanged(ModifiersChangedEvent {
                  modifiers,
                  capslock,
-@@ -3362,7 +3646,14 @@ extern "C" fn step(view: *mut c_void) {
+@@ -2938,6 +3222,11 @@ extern "C" fn handle_view_event(this: &AnyObject, _: Sel, native_event: *mut Any
+             drop(lock);
+             callback(event);
+             window_state.lock().event_callback = Some(callback);
++        } else if let PlatformInput::MouseDown(_) | PlatformInput::MouseUp(_) = event {
++            // A press or release that comes while the window handles another event, as a nested
++            // pump delivers it, is lost, and leaves no other trace (#2658).
++            let button = if matches!(event, PlatformInput::MouseDown(_)) { "down" } else { "up" };
++            eprintln!("browser: gpui dropped mouse {button}, callback in use");
+         }
+     }
+ }
+@@ -3362,7 +3651,14 @@ extern "C" fn step(view: *mut c_void) {
              signal_source,
              ..Default::default()
          });
@@ -959,7 +971,7 @@ index f2208d35ec..4b446e3fa4 100644
      }
  }
  
-@@ -3555,6 +3846,10 @@ extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
+@@ -3555,6 +3851,10 @@ extern "C" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {
      }
  }
  
@@ -970,7 +982,7 @@ index f2208d35ec..4b446e3fa4 100644
  extern "C" fn accepts_first_mouse(this: &AnyObject, _: Sel, _: *mut AnyObject) -> Bool {
      let window_state = unsafe { get_window_state(this) };
      let mut lock = window_state.as_ref().lock();
-@@ -3717,54 +4012,11 @@ extern "C" fn dragging_session_ended(
+@@ -3717,54 +4017,11 @@ extern "C" fn dragging_session_ended(
      let window_state = unsafe { get_window_state(this) };
      {
          let mut lock = window_state.lock();
