@@ -705,7 +705,8 @@ void host_show_settings(void);
 void host_hide_settings(void);
 
 // Closes the window with the keyboard if it's one of Chrome's with a close button, such as its
-// Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did.
+// Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did. A tab's dialog
+// isn't one: ⌘W on it closes its tab.
 bool host_close_other_window(void);
 
 // A detent on the trackpad, as a swipe's nearest Space changes.
