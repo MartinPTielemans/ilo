@@ -278,6 +278,10 @@ perf_launch() {
   [ "$3" != warm ] || crlset_await "$PWD/$perf_dir/crlset-warm.log" "$profile_dir" $((launched / 1000)) "ilo's"
   quit
 }
+# Proof only (#2377): with check/perf-rounds naming a count, only the traced switches, each
+# browser's that many times, in launches of their own with the order alternated (at the end).
+perf_rounds=$(cat check/perf-rounds 2> /dev/null || true)
+if [ -z "$perf_rounds" ]; then
 : > "$perf_dir/link"
 : > "$perf_dir/restore"
 : > "$perf_dir/on-screen"
@@ -364,6 +368,7 @@ pid=$!
 exec 3> "$out/drive"
 await "^browser: title [0-9]* p1 fcp " || fail "the session's first page didn't paint"
 send click $page_point
+fi
 
 # Opens page $1 from ⌘T's bar and keeps the ms from ↩ to its first paint in the file $2.
 perf_open() {
@@ -482,13 +487,15 @@ perf_session() {
   perf_row memory-closed "Memory, back to 1 tab after 20" "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" \
     "Ardia 358 MB, Chrome 406 MB"
 }
-if [ "$active" = 1 ]; then
-  perf_session
-else
-  echo "skip: perf's session. Browser wasn't the active app, so the page didn't get its keys."
+if [ -z "$perf_rounds" ]; then
+  if [ "$active" = 1 ]; then
+    perf_session
+  else
+    echo "skip: perf's session. Browser wasn't the active app, so the page didn't get its keys."
+  fi
+  exec 3>&-
+  quit
 fi
-exec 3>&-
-quit
 
 # With CHECK_TRACE_CATEGORIES, each browser's 16 switches again at 20 tabs, in a launch of their own,
 # as tracing slows what it times and the session's rows stay untraced. DevTools traces from just
@@ -584,7 +591,7 @@ perf_traced_rows() {
     "$(awk -F '\t' -v b="$3" '$1 == b && $2 == "loaded" { print $8 }' "$traced_tsv" | perf_stats '%.1f') ms" \
     "Chrome 8 ms (gate: 16 ms)"
 }
-if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
+if [ -z "$perf_rounds" ] && [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
   log="$perf_dir/traced.log"
   cdp_log="$perf_dir/traced-cdp.log"
   step=0
@@ -797,7 +804,7 @@ chrome_quit() {
   done
   fail "Chrome's processes outlived it: $(python3 -I check/usage.py kinds "$perf_dir/chrome-left.json")"
 }
-if [ "$active" != 1 ]; then
+if [ "$active" != 1 ] || [ -n "$perf_rounds" ]; then
   :
 elif [ ! -x "$chrome" ]; then
   if [ -n "${CI:-}" ] || [ -n "${CHECK_CHROME:-}" ]; then
@@ -978,6 +985,175 @@ for label, ilo, chrome, unit, fails, apart in [
 PY
   fi
   snap_procs=
+fi
+# Proof only (#2377): the kernel's scheduler events on every CPU while a round's switches are traced,
+# on the monotonic clock Chromium's trace uses, so what held each CPU shows beside the trace.
+sched_dir=
+for each in /sys/kernel/tracing /sys/kernel/debug/tracing; do
+  if sudo -n test -e "$each/trace_clock" 2> /dev/null; then
+    sched_dir=$each
+    break
+  fi
+done
+[ -n "$sched_dir" ] && echo "perf: scheduler trace from $sched_dir" || echo "perf: no tracefs, so no scheduler trace"
+sched_on() {
+  [ -n "$sched_dir" ] || return 0
+  sudo -n sh -c "cd $sched_dir && echo 0 > tracing_on && echo 0 > events/enable && echo > trace &&
+    echo mono > trace_clock && echo 65536 > buffer_size_kb &&
+    echo 1 > events/sched/sched_switch/enable && echo 1 > events/sched/sched_wakeup/enable &&
+    echo 1 > tracing_on" || fail "couldn't start the scheduler trace"
+}
+sched_off() {
+  [ -n "$sched_dir" ] || return 0
+  sudo -n sh -c "cd $sched_dir && echo 0 > tracing_on && echo 0 > events/enable" || true
+  {
+    sudo -n sh -c "grep -H overrun $sched_dir/per_cpu/cpu*/stats" || true
+    sudo -n cat "$sched_dir/trace" || true
+  } | gzip > "$perf_dir/sched-$1.txt.gz"
+  echo "perf: scheduler trace sched-$1.txt.gz, $(gzip -dc "$perf_dir/sched-$1.txt.gz" | wc -l) lines"
+}
+# Proof only (#2377): the traced switches alone, ilo's and Chrome's, each in $perf_rounds launches of
+# their own, the order alternated, after a warm launch of each. Rows and traces carry the round.
+perf_round_ilo() {
+  # With $2, the engine's name in the files, for check/perf-ab-other's rounds.
+  tag=${2:-ilo}
+  log="$perf_dir/traced-$tag-$1.log"
+  cdp_log="$perf_dir/traced-$tag-$1-cdp.log"
+  step=0
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  scratch=$(mktemp -d)
+  start_with_cdp "$page?t1" "$profile_dir" ""
+  await "^browser: title [0-9]* t1 fcp " || fail "round $1's first page didn't paint"
+  send click $page_point
+  [ "$active" = 1 ] || fail "Browser wasn't the active app for round $1's switches"
+  : > "$perf_dir/traced-newtab-$1"
+  for n in $(seq 2 20); do
+    perf_open "t$n" "traced-newtab-$1"
+  done
+  perf_until $((loaded + 15))
+  sched_on
+  perf_trace "trace-$tag-$1.json" "$cdp_log" "$tag-$1" "traced-switch-$tag-$1-rows" "$log" \
+    perf_switches "traced-switch-$tag-$1" spaced
+  sched_off "$tag-$1"
+  perf_traced_rows "traced-switch-$tag-$1" "Tab switch, $tag, round $1" "$tag-$1"
+  exec 3>&- 5>&-
+  quit
+  kill "$helper" 2> /dev/null || true
+  helper=
+  rm -rf "$scratch"
+  scratch=
+}
+perf_round_chrome() {
+  snap_procs=$chrome_procs
+  chrome_launch t1 || fail "Chrome didn't stay open for round $1: $(tail -3 "$perf_dir/chrome.log")"
+  chrome_await "^cdp: title [^ ]* t1 fcp " "Chrome's round $1 didn't paint its page"
+  : > "$perf_dir/chrome-traced-newtab-$1"
+  for n in $(seq 2 20); do
+    chrome_open "t$n" "chrome-traced-newtab-$1"
+    perf_until $((typed / 1000 + 2))
+  done
+  perf_until $((loaded + 15))
+  sched_on
+  perf_trace "trace-chrome-$1.json" "$log" "chrome-$1" "chrome-traced-switch-$1-rows" "" \
+    chrome_switches t "chrome-traced-switch-$1" spaced
+  sched_off "chrome-$1"
+  perf_traced_rows "chrome-traced-switch-$1" "Chrome here, tab switch, round $1" "chrome-$1"
+  chrome_quit
+  snap_procs=
+}
+# Proof only (#2377): with check/perf-ab-env naming NAME=VALUE, the rounds are this app as it is
+# (this) against it with that in its environment (other), the order alternated, and no Chrome.
+ab_env=$(cat check/perf-ab-env 2> /dev/null || true)
+if [ -n "$perf_rounds" ] && [ -n "$ab_env" ]; then
+  [ -n "${CHECK_TRACE_CATEGORIES:-}" ] || fail "perf-rounds needs CHECK_TRACE_CATEGORIES"
+  ab_env_use() {
+    if [ "$1" = this ]; then
+      unset "${ab_env%%=*}"
+    else
+      export "${ab_env?}"
+    fi
+  }
+  echo "perf: A/B, this app (this) against it with $ab_env (other)"
+  ab_env_use this
+  perf_launch "$page?warm" warm warm
+  ab_env_use other
+  perf_launch "$page?warm" warm warm-other
+  for round in $(seq "$perf_rounds"); do
+    if [ $((round % 2)) = 1 ]; then order="this other"; else order="other this"; fi
+    for arm in $order; do
+      ab_env_use "$arm"
+      perf_round_ilo "$round" "$arm"
+    done
+    echo "perf: round $round done ($order)"
+  done
+  ab_env_use this
+  perf_rounds=
+fi
+# Proof only (#2686): with check/perf-ab-other naming a Windows engine's commit, the rounds are this
+# checkout's engine against that one, each with the same app, the order alternated, and no Chrome.
+ab_other=$(cat check/perf-ab-other 2> /dev/null || true)
+if [ -n "$perf_rounds" ] && [ -n "$ab_other" ]; then
+  [ -n "${CHECK_TRACE_CATEGORIES:-}" ] || fail "perf-rounds needs CHECK_TRACE_CATEGORIES"
+  this_engine=$(cd ../engine && ./fetch.sh commit | cut -c1-12)
+  [ "$this_engine" != "$ab_other" ] || fail "perf-ab-other names this checkout's own engine, $this_engine"
+  repo=$(git -C ../engine config -f prebuilt.ini prebuilt.repository)
+  url=$repo/releases/download/engine-windows-$ab_other/Chromium-windows-x64.zip
+  ab_dir="$PWD/$perf_dir/engine-$ab_other"
+  rm -rf "$ab_dir.part" build/BrowserOther
+  mkdir -p "$ab_dir.part"
+  curl -fsSL --retry 5 -o "$ab_dir.zip" "$url" || fail "couldn't download engine-windows-$ab_other"
+  sha=$(curl -fsSL --retry 5 "$url.sha256")
+  echo "$sha  $ab_dir.zip" | sha256sum -c --status || fail "engine-windows-$ab_other doesn't match its sha256"
+  unzip -q "$ab_dir.zip" -d "$ab_dir.part"
+  rm "$ab_dir.zip"
+  # The release holds the engine in a folder of its own, Chromium.
+  cp -al "$ab_dir.part/Chromium" build/BrowserOther
+  cp build/Browser/Browser.dll build/Browser/mcp-bridge.exe build/BrowserOther/
+  cp -R build/Browser/ublock build/BrowserOther/
+  this_app=$app
+  ab_use() {
+    if [ "$1" = this ]; then app=$this_app; else app="$PWD/build/BrowserOther"; fi
+    procs="$(cygpath -m "$app/chrome.exe")"
+  }
+  echo "perf: A/B, this engine $this_engine (this), the other $ab_other (other)"
+  ab_use this
+  perf_launch "$page?warm" warm warm
+  ab_use other
+  perf_launch "$page?warm" warm warm-other
+  for round in $(seq "$perf_rounds"); do
+    if [ $((round % 2)) = 1 ]; then order="this other"; else order="other this"; fi
+    for engine in $order; do
+      ab_use "$engine"
+      perf_round_ilo "$round" "$engine"
+    done
+    echo "perf: round $round done ($order)"
+  done
+  ab_use this
+  perf_rounds=
+fi
+if [ -n "$perf_rounds" ]; then
+  [ -n "${CHECK_TRACE_CATEGORIES:-}" ] || fail "perf-rounds needs CHECK_TRACE_CATEGORIES"
+  [ -x "$chrome" ] || fail "perf-rounds needs Chrome, which isn't at $chrome"
+  perf_launch "$page?warm" warm warm
+  snap_procs=$chrome_procs
+  : > "$perf_dir/chrome.log"
+  # shellcheck disable=SC2046 # the flags, a word each
+  chrome_launch warm $(crlset_flags "$PWD/$perf_dir/crlset-chrome-warm.log" fast) ||
+    fail "Chrome didn't stay open for its warm launch: $(tail -3 "$perf_dir/chrome.log")"
+  sleep 15
+  crlset_await "$PWD/$perf_dir/crlset-chrome-warm.log" "$chrome_dir" $((launched / 1000)) "Chrome's"
+  chrome_quit
+  snap_procs=
+  for round in $(seq "$perf_rounds"); do
+    if [ $((round % 2)) = 1 ]; then
+      perf_round_ilo "$round"
+      perf_round_chrome "$round"
+    else
+      perf_round_chrome "$round"
+      perf_round_ilo "$round"
+    fi
+    echo "perf: round $round done"
+  done
 fi
 missed=$(grep ', missed$' "$perf_dir/gate.txt" 2> /dev/null | sed 's/^perf: gate, //; s/: ilo .*(\(.*\)), missed$/ \1/' |
   tr '\n' ';' | sed 's/;$//; s/;/; /g')
