@@ -4,4 +4,3 @@
 switch-frames #2248 2026-11-10 the page area showed no page through a switch
 safe-start #2629 2026-11-13 the core didn't hold Check Safe Start and the ad blocker
 safe-start #2629 2026-11-13 the Extensions menu listed an extension in a safe start
-filled #2633 2026-11-13 filling its screen, the window is

@@ -419,6 +419,23 @@ hide_bars() {
   defaults write com.apple.dock autohide -bool true
   defaults write -g _HIHideMenuBar -bool true
   killall Dock 2>/dev/null || true
+  # The Dock hides only once it has started again, and an app launched before then may keep its
+  # place on the screen (#2633). A new process's visible area is then the whole screen, within the
+  # 4 pt a hidden Dock may keep, as the menu bar's is for the apps launched after.
+  for _ in $(seq 40); do
+    screen_areas | awk 'NF == 8 { ok = $5 - $1 <= 4 && $6 - $2 <= 4 && $1 + $3 - $5 - $7 <= 4 &&
+      $2 + $4 - $6 - $8 <= 4 } END { exit !ok }' && return 0
+    sleep 0.5
+  done
+  fail "the Dock or the menu bar still showed 20 s after hiding them: a new process's screen and its visible area (x, y up from the bottom, w, h) are $(screen_areas)"
+}
+# The first screen's frame and its visible area, x, y up from the bottom, width and height, as a new
+# process's AppKit gives them.
+screen_areas() {
+  osascript -l JavaScript -e 'ObjC.import("AppKit");
+const s = $.NSScreen.screens.objectAtIndex(0);
+[s.frame, s.visibleFrame].map((r) => [r.origin.x, r.origin.y, r.size.width, r.size.height].join(" "))
+  .join(" ")' 2>&1 | tr '\n' ' '
 }
 # Puts the Dock and the menu bar back as hide_bars found them.
 show_bars() {
