@@ -168,7 +168,7 @@ yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
   "$browser" --load-extension="$(app_path "$extension")" \
   --enable-tracing=navigation,loading,content,browser --enable-tracing-format=json \
-  --trace-startup-duration=15 --trace-startup-file="$out/startup-trace.json" \
+  --trace-startup-duration=12 --trace-startup-file="$out/startup-trace.json" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -342,6 +342,12 @@ case "$clicked" in
   "error: That link opens "*"(ms-word:), outside the browser"*"The tab stayed on “Documents”."*) ;;
   *) fail "clicking a link to an app answered: $clicked" ;;
 esac
+# Proof only: the startup trace is written once its 12 s end, after the click above.
+for _ in $(seq 120); do
+  [ -s "$out/startup-trace.json" ] && tail -c 64 "$out/startup-trace.json" | grep -q '}' && break
+  sleep 0.5
+done
+echo "startup trace: $(wc -c < "$out/startup-trace.json" 2>/dev/null || echo none) bytes"
 listed=$(call list_tabs '{}')
 printf '%s\n' "$listed" | grep -q "^. $documents  Documents  .*/documents\.html\$" ||
   fail "the link to an app took the tab off its page: $listed"
