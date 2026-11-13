@@ -830,7 +830,9 @@ fn a_question_s_next_frame_asked_mid_update_still_makes_room(cx: &mut TestAppCon
     let card = shell.read_with(cx, |shell, _| shell.question_drawn.get());
     let card = card.expect("the question wasn't drawn");
     let platform = cx.test_window(cx.window_handle());
-    shell.update(cx, |_, _| platform.simulate_frame_request(RequestFrameOptions::default()));
+    shell.update(cx, |_, _| {
+        platform.simulate_frame_request(RequestFrameOptions::default())
+    });
     platform.simulate_frame_request(RequestFrameOptions::default());
     cx.run_until_parked();
     let laid = shell.read_with(cx, |shell, _| shell.page_laid.map(|(frame, _)| frame.top()));
