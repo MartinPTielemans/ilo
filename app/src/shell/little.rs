@@ -434,7 +434,7 @@ impl Shell {
     }
 
     /// Whether the window is about to close by itself, its sign-in done: its bar says so in place
-    /// of the page's title, with the key that brings it back, so the window going reads as meant.
+    /// of the page's title, so the window going reads as meant.
     pub fn set_little_closing(&mut self, closing: bool, cx: &mut Context<Self>) {
         if let Some(little) = &mut self.little
             && little.closing != closing
@@ -447,20 +447,11 @@ impl Shell {
     }
 
     /// The bar's title after the page's host: the page's own, unless the window is about to close
-    /// by itself, when it says so and names the key that reopens it, as a message one can undo
-    /// names its undo's key.
-    pub(super) fn little_bar_title(
-        &self,
-        tab: u64,
-        site: &str,
-        url: &str,
-        cx: &App,
-    ) -> SharedString {
+    /// by itself, when it says so. It names no key to bring it back, as nothing does: the page's
+    /// address carries a single-use code, which the browser keeps nowhere (#2527).
+    pub(super) fn little_bar_title(&self, tab: u64, site: &str, url: &str) -> SharedString {
         if self.little.as_ref().is_some_and(|little| little.closing) {
-            return match super::user_keys(cx).label(Command::ReopenClosedTab) {
-                Some(key) => format!("Signed in, closing · {key} reopens").into(),
-                None => "Signed in, closing".into(),
-            };
+            return "Signed in, closing".into();
         }
         // A page with no title of its own is named by its host, which the bar shows already, as
         // part of the whole URL in Developer Mode.
@@ -575,7 +566,7 @@ impl Shell {
         // the bar does, in the URL field's colours.
         let (site, site_color) = self.url_words(tab, &url, 1.);
         let icon = (tab != 0).then(|| self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()));
-        let title = self.little_bar_title(tab, &site, &url, cx);
+        let title = self.little_bar_title(tab, &site, &url);
         let closing = self.little.as_ref().is_some_and(|little| little.closing);
         let title = div()
             .id("little-title")
