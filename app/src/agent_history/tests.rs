@@ -132,3 +132,68 @@ fn a_row_says_what_its_receipt_did() {
     assert!(about.starts_with("Claude Code · "), "{about}");
     assert!(about.ends_with(" · 1 order placed · 1 page"), "{about}");
 }
+
+/// A Point step (#2352) in the file keeps its page, its title and, per element, its kind alone,
+/// its box, "Not sent" for its value and its picture's size: never the page's title or text, the
+/// element's name, the user's note or the selector that found it, which Settings › Agents alone
+/// shows, from memory (#2326's rule).
+#[test]
+fn a_saved_point_step_keeps_no_words_of_the_page_or_the_user() {
+    use crate::point::{Element, Note};
+    let element = Element {
+        kind: "region".into(),
+        name: "Ada Lovelace's orders".into(),
+        address: "https://shop.example/orders".into(),
+        title: "Orders for Ada".into(),
+        tag: "section".into(),
+        text: "Order 1815 for Ada Lovelace".into(),
+        selector: "#ada-lovelace-orders".into(),
+        frame: gpui::Bounds::new(
+            gpui::point(gpui::px(10.), gpui::px(20.)),
+            gpui::size(gpui::px(300.), gpui::px(200.)),
+        ),
+        withheld: true,
+        png: Some(std::sync::Arc::from(&b"png"[..])),
+        width: 316,
+        height: 216,
+        ..Element::default()
+    };
+    let note = Note {
+        element,
+        words: "the total is wrong".into(),
+    };
+    let sent = crate::point::sent(&[note]);
+    let mut entry = past("point", 40 * DAY);
+    entry.steps = vec![Step {
+        target: "1 element".into(),
+        url: "https://shop.example/orders".into(),
+        sent,
+        ..step(40 * DAY - 10, "pointed", "shop.example", "")
+    }];
+    let text = write(&[entry]);
+    for said in [
+        "Orders for Ada",
+        "Ada Lovelace",
+        "1815",
+        "the total is wrong",
+        "ada-lovelace",
+    ] {
+        assert!(!text.contains(said), "the file kept \"{said}\": {text}");
+    }
+    let kept = &read(&text)[0].steps[0];
+    let lines: Vec<_> = (kept.sent.iter())
+        .map(|line| format!("{} {}: {}", line.depth, line.name, line.value))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "0 1: ",
+            "1 kind: Section",
+            "1 box: 300 × 200 at 10, 20",
+            "1 value: Not sent",
+            "1 picture: 316 × 216 pixels",
+        ]
+    );
+    assert_eq!(kept.url, "https://shop.example/orders");
+    assert_eq!(kept.target, "1 element");
+}

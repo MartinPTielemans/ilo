@@ -2910,7 +2910,7 @@ impl Shell {
             });
             crate::settings_rows::sent_part(
                 ("past-step-all", step),
-                &each.url,
+                (crate::settings_rows::address_label(&each.action), &each.url),
                 &each.sent,
                 !each.refused.is_empty(),
                 all,
@@ -2918,6 +2918,10 @@ impl Shell {
                 true,
                 move |window, cx| more(&gpui::ClickEvent::default(), window, cx),
             )
+            .when(each.action == "pointed", |part| {
+                let aside = crate::agent_history::POINTED_ASIDE;
+                part.child(crate::settings_rows::sent_aside(aside, secondary))
+            })
             .pl(px(ARCHIVED_LEFT + ARCHIVED_TEXT_X))
             .pr(px(ARCHIVED_RIGHT + 8.))
             .pb(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
@@ -2959,6 +2963,21 @@ impl Shell {
         }
         // check.sh waits for this line.
         log!("browser: library step {step} {said}");
+        // check.sh reads this line: where an opened step went and the lines it keeps.
+        let shown = (said == "opened")
+            .then(|| self.agent_history.iter().find(|past| past.id == key.0))
+            .flatten()
+            .and_then(|past| past.steps.get(step));
+        if let Some(each) = shown {
+            let lines = (each.sent.iter())
+                .map(|line| format!("{}: {}", line.name, line.value))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            log!(
+                "browser: library step {step} shows {}, sent: {lines}",
+                each.url
+            );
+        }
         cx.notify();
     }
 

@@ -125,3 +125,52 @@ fn the_tooltip_says_why_point_cant_start_and_the_agent_never_hears_it() {
     // Whatever stopped it, the agent's answer is the one that says nothing of the tab.
     assert!(!NOTHING.contains("tab") && !NOTHING.contains("page"));
 }
+
+/// The log's row opens to what was sent: the page's title, then each element by its number with
+/// the user's note and the panel's rows, its kind alone, its value as "Not sent" and its picture as
+/// its size, in the order the panel shows them.
+#[test]
+fn the_logs_row_holds_each_note_and_the_rows_sent() {
+    let notes = [
+        Note {
+            element: trending(),
+            words: " Hide this. ".into(),
+        },
+        Note {
+            element: Element {
+                png: None,
+                ..sign_in()
+            },
+            words: String::new(),
+        },
+    ];
+    let lines: Vec<_> = (sent(&notes).iter())
+        .map(|line| format!("{} {}: {}", line.depth, line.name, line.value))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "0 title: Fieldnotes",
+            "0 1: ",
+            "1 kind: Section",
+            "1 note: Hide this.",
+            "1 name: Trending",
+            "1 text: Trending\nLemon tart",
+            "1 found by: main > section:nth-of-type(2)",
+            "1 box: 300 × 420 at 880, 120",
+            "1 styles: color rgb(22, 20, 15); background rgb(255, 255, 255); font Inter; size 15px; \
+             padding 16px",
+            "1 picture: 632 × 872 pixels",
+            "0 2: ",
+            "1 kind: Form",
+            "1 name: Sign in",
+            "1 text: Sign in\nForgot your password?",
+            "1 found by: main > section:nth-of-type(2)",
+            "1 box: 300 × 420 at 880, 120",
+            "1 styles: color rgb(22, 20, 15); background rgb(255, 255, 255); font Inter; size 15px; \
+             padding 16px",
+            "1 value: Not sent",
+            "1 picture: None: the page didn't give one.",
+        ]
+    );
+}

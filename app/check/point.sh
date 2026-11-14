@@ -16,7 +16,8 @@
 # lists the steps. Through all of it the page's own MutationObserver hears nothing, so Point added
 # nothing to the page's DOM, not even an attribute. Each state is captured, light and dark (-dark),
 # as point-ask, point-hover, point-note, point-note-open, point-note-end, point-noted,
-# point-picture and point-cant, and once as point-way-out and point-sent.
+# point-picture, point-cant, point-log-open (the sent row opened in Settings › Agents) and
+# point-sent-open (in Library › Agents, keeping less), and once as point-way-out and point-sent.
 
 serve
 log="$out/point.log"
@@ -33,8 +34,9 @@ chmod 600 "$agents_file"
 # disabled one, which an agent's screenshot shows (core/withheld_fields.cc) and Point's picture
 # hatches all the same. The red line under them is no field's, so the picture shows it. A value
 # the agent typed is the unit test's (PointsPictureHatchesEveryValue): Point starts in the
-# window's selected tab, which is always the user's, where an agent may not type. Its title says it's ready once the fields are filled; the observer starts after that
-# title, so the only title it sets is "changed", once, on anything added, removed or changed.
+# window's selected tab, which is always the user's, where an agent may not type. Its title says
+# it's ready once the fields are filled; the observer starts after that title, so the only title it
+# sets is "changed", once, on anything added, removed or changed.
 printf '%s' '<!doctype html><meta charset=utf-8><title>-</title>
 <style>body { margin: 0 }
 section { position: relative; width: 520px; height: 320px; margin: 25vh auto 0;
@@ -182,6 +184,46 @@ sys.exit(failed)
 PY
     fail "the sent picture showed a field's value, or not the section's red line: $(cat "$3")"
 }
+# What nothing of Point's may give: a field's value, or the address's query or fragment. An
+# underscore is a space.
+VALUES='ada@example.com lovelace-check Netherlands Meet_at_noon Ada_Lovelace AL-1815 December_1815 s3cr3t session= #top'
+# Fails with $2 if $1 gives any of VALUES away.
+gives_none() {
+  for part in $VALUES; do
+    part=$(printf '%s' "$part" | tr _ ' ')
+    case "$1" in *"$part"*) fail "$2 gave away \"$part\": $1" ;; esac
+  done
+}
+
+# Settings › Agents opens a pointed row to its page and every line sent, the note's text among
+# them, and no field's value (#2462). $1 is head or tail, the lowest id or the highest, so each
+# look opens a row of its own: a row opened stays open, and a second press would close it. $2 is
+# the capture's suffix.
+log_opened() {
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  fi
+  settings_drew Agents
+  drawn 'pointed [0-9]*' > /dev/null || fail "Settings › Agents drew no row for what the user sent"
+  pointed=$(sed -n 's/^browser: settings pointed \([0-9]*\) at .*/\1/p' "$log" | sort -nu | $1 -1)
+  click_in_sight "pointed $pointed"
+  expect "^browser: settings request $pointed opened to http[^ ]*/point.html, sent: " \
+    "a press on the pointed row $pointed didn't open it to the page and what was sent"
+  shown=$(sed -n "s/^browser: settings request $pointed opened //p" "$log" | tail -1)
+  for part in 'note: the title is cut off' 'kind: Section' 'value: Not sent' 'found by: ' \
+    'picture: '; do
+    case "$shown" in *"$part"*) ;; *) fail "the opened row didn't have \"$part\": $shown" ;; esac
+  done
+  gives_none "$shown" "the opened row in Settings › Agents"
+  ../tools/window-screenshot.sh "$pid" "$out/point-log-open$2.png" || fail "no window to capture"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+}
+
 # One ask, pointed at and sent, as JSON-RPC call $1, its captures named with $2: "" for light and
 # "-dark" for dark. The ask waits for the user, so its answer is read once they've sent.
 round() {
@@ -259,10 +301,7 @@ print(("error: " if result.get("isError") else "") + result["content"][0]["text"
     "A form field's value never goes"; do
     case "$answer" in *"$part"*) ;; *) fail "the answer didn't have \"$part\": $answer" ;; esac
   done
-  for part in 'ada@example.com' 'lovelace-check' 'Netherlands' 'Meet at noon' 'Ada Lovelace' \
-    'AL-1815' 'December 1815' 's3cr3t' 'session=' '#top'; do
-    case "$answer" in *"$part"*) fail "the answer gave away \"$part\": $answer" ;; esac
-  done
+  gives_none "$answer" "the answer"
   [ -s "$out/point-picture$2.png" ] || fail "the answer had no picture of the section: $answer"
   pictured "$out/point-picture$2.png" "$answer" "$out/point-picture$2.txt"
   more '^browser: agent logged mcp-client pointed ' "$logged_before" ||
@@ -297,6 +336,7 @@ print(json.load(sys.stdin)["result"]["content"][0]["text"])') || fail "the ask l
 send menu "Appearance › Dark"
 expect '^browser: appearance dark$' "View › Appearance › Dark didn't make the app dark"
 round 2 -dark
+log_opened head -dark
 
 # On a page that isn't http(s), Point is dimmed on the card and says why under the pointer. The
 # user's Not Now there answers that they pointed at nothing.
@@ -324,6 +364,7 @@ nothing=$(next_answer | python3 -I -c '
 import json, sys
 print(json.load(sys.stdin)["result"]["content"][0]["text"])') || fail "the ask on about:blank didn't answer"
 [ "$nothing" = "The user didn't point at anything." ] || fail "Not Now answered: $nothing"
+log_opened tail ""
 # What went, as the user sees it once the client leaves: its session's page in Library › Agents,
 # whose steps are the asks to point and the user's sends.
 session=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as check$/\1/p' "$log")
@@ -338,10 +379,32 @@ past=$(sed -n "s/^browser: settings library past \($session-[0-9]*\) at .*/\1/p"
 send click $at
 expect "^browser: agents history shows $past: " "the session's row didn't open its page"
 ../tools/window-screenshot.sh "$pid" "$out/point-sent.png" || fail "no window to capture"
+# Its file keeps what was pointed at and not what was said: a sent step opens to its page and,
+# per element, its kind, its box, that its value wasn't sent and its picture's size, with a line
+# saying why the rest isn't there (#2326).
+drawn 'library step [0-9]*' > /dev/null || fail "the session's page drew no step that opens"
+sent_step=$(sed -n 's/^browser: settings library step \([0-9]*\) at .*/\1/p' "$log" | sort -nu | head -1)
+send click $(drawn "library step $sent_step")
+expect "^browser: library step $sent_step opened\$" "a click on the sent step didn't open it"
+expect "^browser: library step $sent_step shows http[^ ]*/point.html, sent: " \
+  "the opened step didn't show its page and what its file keeps"
+kept=$(sed -n "s/^browser: library step $sent_step shows //p" "$log" | tail -1)
+for part in 'kind: Section' 'box: 520 × 320 at ' 'value: Not sent' 'picture: '; do
+  case "$kept" in *"$part"*) ;; *) fail "the Library's step didn't keep \"$part\": $kept" ;; esac
+done
+for part in 'the title is cut off' 'note:' 'found by' 'Sign in' 'title:'; do
+  case "$kept" in *"$part"*) fail "the Library's file kept \"$part\": $kept" ;; esac
+done
+gives_none "$kept" "the Library's step"
+../tools/window-screenshot.sh "$pid" "$out/point-sent-open.png" || fail "no window to capture"
+send menu "Appearance › Dark"
+expect '^browser: appearance dark$' "View › Appearance › Dark didn't make the app dark"
+../tools/window-screenshot.sh "$pid" "$out/point-sent-open-dark.png" || fail "no window to capture"
 quit
 echo "ok: the agent's ask to point started from its card, marked the section, took a note in the" \
   "panel, whose rows said what goes, and sent it, with the section's text, no field's value and" \
   "the address without its query, logged, and nothing added to the page, light and dark. On" \
   "about:blank Point was dimmed with its reason, and Not Now, as esc mid-point, answered with" \
-  "nothing. Library › Agents listed the session's steps. Windows:" \
+  "nothing. Settings › Agents opened what was sent to the note and no value, and Library ›" \
+  "Agents listed the session's steps, one opening to what its file keeps. Windows:" \
   "$out/point-*.png"
