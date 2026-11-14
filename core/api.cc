@@ -318,7 +318,7 @@ bool bc_window_dialog(bc_id id, bc_rect* frame) {
 }
 
 bool bc_window_devtools(bc_id id, bc_rect* devtools, bc_rect* page) {
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   views::Widget* widget = OpenWidget(id);
   const auto frames = widget ? browser_core::platform::DevToolsFrames(widget) : std::nullopt;
   if (!frames) {

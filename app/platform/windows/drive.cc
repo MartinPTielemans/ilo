@@ -1099,6 +1099,10 @@ void LogLayout(HWND root) {
   // in: the pane whose window has the focus, or holds the one that has it.
   const HWND focus = GetFocus();
   std::string keyboard = "none";
+  // DevTools docked in a pane and its page beside them are aura windows in the pane's window, which
+  // Windows doesn't see, so the core says where they are, from the content's top-left.
+  bc_rect devtools{}, beside{};
+  const bool docked = bc_window_devtools(host_browser_window_id(g_driven), &devtools, &beside);
   // Back to front, as AppKit lists a view's subviews: GPUI's view, then the pages over it. Frames
   // as the Mac's are, from the content's bottom-left corner.
   for (HWND child = GetWindow(GetWindow(root, GW_CHILD), GW_HWNDLAST); child;
@@ -1115,17 +1119,33 @@ void LogLayout(HWND root) {
     RECT rect;
     GetWindowRect(child, &rect);
     MapWindowPoints(HWND_DESKTOP, root, reinterpret_cast<POINT*>(&rect), 2);
-    snprintf(part, sizeof part, "%.0f,%.0f %.0fx%.0f", rect.left / scale,
-             (client.bottom - rect.bottom) / scale, (rect.right - rect.left) / scale,
-             (rect.bottom - rect.top) / scale);
-    line += std::string(", ") + name + " " + part;
+    const double left = rect.left / scale, top = rect.top / scale,
+                 across = (rect.right - rect.left) / scale, high = (rect.bottom - rect.top) / scale;
+    snprintf(part, sizeof part, "%.0f,%.0f %.0fx%.0f", left, height - (top + high), across, high);
     if (IsChromium(child) && focus && (focus == child || IsChild(child, focus))) {
       keyboard = part;
     }
     // As the Mac's driver gives a page view's rounded layer.
-    if (const double radius = IsChromium(child) ? CornerRadius(child, scale) : 0; radius > 0) {
-      snprintf(part, sizeof part, " radius %.0f", radius);
-      line += part;
+    const double radius = IsChromium(child) ? CornerRadius(child, scale) : 0;
+    char round[32] = "";
+    if (radius > 0) {
+      snprintf(round, sizeof round, " radius %.0f", radius);
+    }
+    // DevTools fill the pane they're docked in, and are listed before the page, as the Mac's views
+    // and Linux's driver have them.
+    const bool holds_devtools = IsChromium(child) && docked && std::abs(devtools.x - left) <= 1 &&
+                                std::abs(devtools.y - top) <= 1 &&
+                                std::abs(devtools.width - across) <= 1 &&
+                                std::abs(devtools.height - high) <= 1;
+    if (!holds_devtools) {
+      line += std::string(", ") + name + " " + part + round;
+      continue;
+    }
+    for (const bc_rect& view : {devtools, beside}) {
+      char frame[160];
+      snprintf(frame, sizeof frame, ", %s %.0f,%.0f %.0fx%.0f%s", name, view.x,
+               height - (view.y + view.height), view.width, view.height, round);
+      line += frame;
     }
   }
   // The ring the core draws inside a split view's focused page, over the pages, as the Mac's driver

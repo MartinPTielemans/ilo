@@ -306,16 +306,9 @@ fi
 # of it, from the frame's left, through a resize. Each tab has its own. Sets $views to the frames
 # of the views shown, DevTools' first, once there are $1 of them. DevTools fill the frame at once,
 # and the page moves aside once they've loaded, as in Arc, so with two it waits for that too.
-# Windows' driver lists the pages the UI lays out, and DevTools are an aura window in the same
-# Chromium window as the page, which Windows doesn't see, so there it doesn't check the views;
-# devtools.png shows them. Linux's driver lists docked DevTools too (drive.rs).
-sees_devtools=1
-if [ "$(uname)" != Darwin ] && [ "$(uname)" != Linux ]; then
-  sees_devtools=
-  echo "skip: where DevTools dock beside the page: Windows' driver can't see aura windows."
-fi
+# DevTools are aura windows in Chromium's on Linux and Windows, which the drivers list where the
+# core says (bc_window_devtools).
 await_views() {
-  [ -n "$sees_devtools" ] || return 0
   for _ in $(seq 50); do
     send layout
     layout=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content')
@@ -329,7 +322,6 @@ await_views() {
 # DevTools fill the card, which is 228 from the left and 10 from the other edges, and the page
 # keeps its left part.
 check_docked() {
-  [ -n "$sees_devtools" ] || return 0
   content=$(echo "$layout" | sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
   width=${content%x*}
   height=${content#*x}

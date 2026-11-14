@@ -795,16 +795,9 @@ expect "^browser: url field http://localhost:$port/index.html\$" \
   "in Developer Mode the URL field didn't say the whole URL"
 expect "^browser: developer outline $r at " "in Developer Mode the tab drew no outline"
 # In Developer Mode the URL field has DevTools' button before Copy URL, under the pointer as those
-# are: a click docks DevTools in the card, as ⌥⌘I does, and another closes them.
-# Windows' driver lists the pages the UI lays out, and docked DevTools are an aura window in
-# Chromium's, which Windows doesn't see, so there it doesn't count them, as find.sh. The Mac's sees
-# them, and Linux's lists them beside their page (drive.rs).
-case "$(uname)" in
-  Darwin | Linux) ;;
-  *) echo "skip: where DevTools' button docks DevTools: Windows' driver can't see aura windows." ;;
-esac
+# are: a click docks DevTools in the card, as ⌥⌘I does, and another closes them. The Mac's driver
+# sees them, and Linux's and Windows' list them beside their page where the core says, as find.sh.
 page_views() {
-  case "$(uname)" in Darwin | Linux) ;; *) return 0 ;; esac
   for _ in $(seq 50); do
     send layout
     views=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
