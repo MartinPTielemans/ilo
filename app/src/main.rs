@@ -678,11 +678,16 @@ unsafe extern "C" fn agent_request_done(
 
 unsafe extern "C" fn launching(_: *mut c_void) {
     safe_start_host::launching();
+    ad_block_host::launching();
     // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
     // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
     #[cfg(target_os = "linux")]
     if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
         gpui_wgpu::WgpuContext::make_instance_early();
+    }
+    #[cfg(target_os = "windows")]
+    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+        gpui_windows::make_early();
     }
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
@@ -943,8 +948,13 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     // Whether this launch holds the extensions, which the app decides from its own mark and says
     // at every launch, so a restart that gives the browser its switches again decides afresh.
     args.push(safe_start_host::prepare());
+    // Which ad blocker this launch runs, from the user's choice in Settings, decided afresh at
+    // every launch as safe start's is.
+    let ad_blocker = ad_block_host::prepare(&given, &profile);
+    args.extend(ad_blocker.switches());
     let given = given.into_iter().filter(|arg| {
         !arg.starts_with(browser::safe_start::SWITCH)
+            && ad_blocker.passes(arg)
             && (!cfg!(feature = "prod")
                 || !(arg.starts_with(TEST_HOST) || arg.starts_with(CRASH_TEST)))
     });

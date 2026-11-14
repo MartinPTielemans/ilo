@@ -114,14 +114,10 @@ expect "^browser: loaded $tab https://example.org/\$" "a click on reload didn't 
 # A mouse's side buttons over the page go back and forward, as Chrome's do (#688). Over the sidebar
 # they show another Space, which the spaces run checks.
 # A side button's click gives the page the keyboard, so this comes after the keys with the UI focused.
-if windows; then
-  echo "skip: side buttons over the page: the Windows driver can't press them yet."
-else
-  send sideclick $page_point back
-  expect_page example.com 1 1 "after the back side button over the page"
-  send sideclick $page_point forward
-  expect_page example.org 1 0 "after the forward side button over the page"
-fi
+send sideclick $page_point back
+expect_page example.com 1 1 "after the back side button over the page"
+send sideclick $page_point forward
+expect_page example.org 1 0 "after the forward side button over the page"
 
 # While a page loads, the URL field shows where it's going and reload is stop.
 send click $page_point

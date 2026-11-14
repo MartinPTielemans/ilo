@@ -521,7 +521,12 @@ none_since "^browser: splits [0-9]" || fail "⌥⌘-click on a Today tab's row o
 
 # ⌘W closes it into the archive, as Arc's Little Arc does, and ⇧⌘T in the main window reopens it
 # in a new Little ilo window for its Space.
-# New, so it logs no "key window"; ⌘W closing it shows it's key.
+# New, so it logs no "key window"; ⌘W closing it shows it's key. On X11, under real input, the
+# main window takes the keyboard back (#2762), so the driver gives it to the Little ilo window.
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: the Little ilo window holding the tab coming to the front, on X11: the main window takes the keyboard back (#2762)."
+  send window "$(grep -c '^browser: window opened ' "$log")"
+fi
 send key w cmd
 expect "^browser: window closed $little\$" "the Little ilo window holding the tab didn't come to the front: ⌘W didn't close it"
 expect '^browser: archive [1-9][0-9]* tabs$' "closing the Little ilo window didn't archive its tab"
@@ -740,8 +745,12 @@ give_way() {
   ../tools/window-screenshot.sh "$pid" "$out/little-gave-way-$2.png" all || fail "no window to capture"
   uncover
 }
-give_way ⌘W w
-give_way escape escape
+if [ "${BROWSER_XVFB:-}" = kwin ]; then
+  echo "skip: Little ilo giving way to another app's window, under KWin: the driver's stack never lists the stand-in (#2756)."
+else
+  give_way ⌘W w
+  give_way escape escape
+fi
 
 exec 3>&-
 quit
@@ -827,7 +836,7 @@ expect '^browser: tab [0-9]* opened by [0-9]* in the background$' \
 # pointer arrives and before the press, so the page says when 600 ms have passed since the pointer
 # left its link, and each press waits for that. Only real input holds the button where the plate
 # can ask.
-printf '%s' '<title>loading</title>
+printf '%s' '<title>loading</title><script src="painted.js"></script>
 <body style="margin:0;height:100vh">
 <a id=l href="notes.txt" style="position:fixed;left:0;top:0;width:40px;height:40px"></a>
 <script>
@@ -841,17 +850,18 @@ l.addEventListener("mouseleave", () => {
   clearTimeout(rest);
   rest = setTimeout(() => document.title = "rested " + entered, 600);
 });
-requestAnimationFrame(() => setTimeout(() => document.title = "held ready"));
+painted(() => document.title = "held ready");
 </script>' > "$out/site/little-held.html"
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar for the held press's page"
 send insert "${site}little-held.html"
 send key return
 expect '^browser: title [0-9]* held ready$' "the held press's page didn't draw"
-# A click on the page first, as before the hovers above: with Windows' real input, a move onto a
-# link in a page loaded from the command bar reached neither the page nor the link target. Real
-# input sets the cursor, and two sets in a row make one move, so the page says when the pointer
-# reached its link before it leaves.
+# The page says it's ready once it has painted (painted.js, site.sh): until then Chromium holds the
+# last page's picture and drops the pointer's events, so under Wayland's real input the click and
+# the move onto the link went unheard (#2764), as one move did on Windows (#2724). A click on the
+# page first, as before the hovers above. Real input sets the cursor, and two sets in a row make
+# one move, so the page says when the pointer reached its link before it leaves.
 send click $page_point
 send move $((x + 20)) $((y + 20))
 await '^browser: title [0-9]* on 1$' ||
