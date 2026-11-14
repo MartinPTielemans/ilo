@@ -2339,6 +2339,20 @@ void bc_tab_boost_zap(bc_id id, bool on) {
   }
 }
 
+void bc_arrange_set_lift(const bc_arrange_lift* lift) {
+  if (!lift) {
+    return;
+  }
+  // Sizes past what a shadow is for draw it at 0, as a value left out does.
+  const auto size = [](double value) { return browser_core::arrangement::Within(value, 0, 64, 0); };
+  browser_core::Arrange::SetLift({.rim = lift->rim,
+                                  .outline = lift->outline,
+                                  .shadow = lift->shadow,
+                                  .outline_blur = size(lift->outline_blur),
+                                  .shadow_y = size(lift->shadow_y),
+                                  .shadow_blur = size(lift->shadow_blur)});
+}
+
 bool bc_tab_arrange(bc_id id, bool on, const bc_arrange_look* look) {
   content::WebContents* contents = browser_core::Tab::FromId(id);
   browser_core::Arrange* arrange =
