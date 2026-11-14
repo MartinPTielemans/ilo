@@ -980,14 +980,19 @@ fn output_names(connection: &RustConnection, root: xproto::Window) -> Option<Vec
 }
 
 /// One XTEST event at the root's `x`, `y`, waited on until the server has handled it, on a
-/// display `xtest` allows.
+/// display `xtest` allows. A button's press says so in the log, as Windows' driver does for its
+/// real input: a check waits on what only a held real button gives, such as `little`'s plate.
 fn xtest_event(kind: u8, detail: u8, x: i16, y: i16) -> Option<()> {
     xtest()?;
     let server = server()?;
     let (connection, root) = &*server;
     let delay = xtest_delay(kind);
     (connection.xtest_fake_input(kind, detail, delay, *root, x, y, 0)).ok()?;
-    connection.get_input_focus().ok()?.reply().ok().map(drop)
+    connection.get_input_focus().ok()?.reply().ok()?;
+    if kind == xproto::BUTTON_PRESS_EVENT && (1..=3).contains(&detail) {
+        log!("browser: drive: real press at {x},{y}");
+    }
+    Some(())
 }
 
 /// The milliseconds the server waits before an XTEST event of `kind`, XTEST's time being a delay.
