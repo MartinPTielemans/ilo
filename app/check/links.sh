@@ -551,9 +551,12 @@ else
   # below opens as a tab.
   printf 'otherwise\t1\n' > "$rules_file"
 fi
-# The sidebar's picture, which the launches below show until their UI has drawn.
+# The sidebar's picture, which the launches below show until their UI has drawn, on the Mac and
+# Windows.
 mac=
 [ "$(uname)" = Darwin ] && mac=1
+pictures=$mac
+! windows || pictures=1
 if [ -n "$mac" ]; then
   # A window the screen has less room for at the next launch opens smaller, and past
   # launch_picture.rs's tolerance with no picture. One filling the hosted Mac's 1024 by 768 screen
@@ -563,16 +566,14 @@ if [ -n "$mac" ]; then
   corner=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4,5)
   send place $((${corner% *} + 40)) $((${corner#* } + 60)) 900 560
   expect '^browser: drawn at 900x560$' "the window didn't draw at 900 by 560"
-elif windows; then
-  echo "skip: the sidebar's picture ⌘Q keeps, shown by the launches after: Windows' isn't checked yet."
-else
+elif [ -z "$pictures" ]; then
   echo "skip: the sidebar's picture ⌘Q keeps, shown by the launches after: Linux has no launch picture."
 fi
 quit_by_key
-[ -z "$mac" ] || grep -q '^browser: launch picture taken$' "$log" ||
+[ -z "$pictures" ] || grep -q '^browser: launch picture taken$' "$log" ||
   fail "⌘Q didn't keep the sidebar's picture for the next launch"
 exited
-[ -z "$mac" ] || ls "$(dirname "$saved")"/launch-picture-*.png > /dev/null 2>&1 ||
+[ -z "$pictures" ] || ls "$(dirname "$saved")"/launch-picture-*.png > /dev/null 2>&1 ||
   fail "the sidebar's picture ⌘Q took wasn't on disk once the app quit"
 # The next launch opens 3 points shorter than the picture, as when the Dock or the menu bar has
 # grown since the quit (#1450), and still shows it, its foot at the window's bottom: the launch
@@ -639,10 +640,10 @@ quit_launched() {
 at() {
   grep -m1 "^browser: $1 at " "$log" | sed 's/.* at \([0-9.]*\) ms$/\1/'
 }
-# On the Mac, fails with $1 unless the launch showed the sidebar's picture, which it leaves out
-# when it opens at another size than the picture's, so the failure names both.
+# On the Mac and Windows, fails with $1 unless the launch showed the sidebar's picture, which it
+# leaves out when it opens at another size than the picture's, so the failure names both.
 pictured() {
-  [ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" || {
+  [ -z "$pictures" ] || grep -q '^browser: launch picture shown$' "$log" || {
     kept=$(ls "$(dirname "$saved")" | grep '^launch-picture-' | tr '\n' ' ')
     fail "$1: it opened at $(grep -m1 '^browser: launch window frame ' "$log" | cut -d' ' -f5-), the pictures kept being ${kept:-none}"
   }
