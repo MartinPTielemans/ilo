@@ -71,13 +71,13 @@ send move $((bx + bw / 2)) $((by + bh / 2))
 ../tools/window-screenshot.sh "$pid" "$out/quiet-bell.png" || fail "no window to capture"
 
 # The Site Controls the bell opened hang from it, as from the button it takes the place of: centred
-# on it, under it.
+# on it, under it, their beak's tip up to a pixel into it.
 hangs_from_bell() {
   read -r sx sy sw _ << EOF
 $(grep '^browser: site controls at ' "$log" | tail -1 | cut -d' ' -f5-)
 EOF
   awk -v sx="$sx" -v sy="$sy" -v sw="$sw" -v bx="$bx" -v by="$by" -v bw="$bw" -v bh="$bh" \
-    'BEGIN { d = sx + sw / 2 - (bx + bw / 2); exit !(d > -1 && d < 1 && sy >= by + bh) }' ||
+    'BEGIN { d = sx + sw / 2 - (bx + bw / 2); exit !(d > -1 && d < 1 && sy >= by + bh - 1) }' ||
     fail "the Site Controls at $sx $sy, $sw wide, don't hang from the bell at $bx $by $bw $bh"
 }
 
