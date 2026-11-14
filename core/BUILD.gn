@@ -195,6 +195,16 @@ source_set("arrangement") {
   ]
 }
 
+# When the ad blocker looks at its lists, and whether a download takes the place of a list's copy,
+# apart so browser_core_unittests tests the rules alone.
+source_set("ad_block_list_check") {
+  sources = [
+    "ad_block_list_check.cc",
+    "ad_block_list_check.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
 # When auto-archive takes a Today tab, Never too, apart so browser_core_unittests tests the rule
 # alone.
 source_set("archive_rule") {
@@ -473,6 +483,7 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":ad_block_list_check",
     ":ad_block_page",
     ":archive_rule",
     ":arrangement",
@@ -767,6 +778,7 @@ source_set("browser_core") {
 # engine's run runs them.
 test("browser_core_unittests") {
   sources = [
+    "ad_block_list_check_unittest.cc",
     "archive_rule_unittest.cc",
     "arrangement_unittest.cc",
     "agent_download_hold_unittest.cc",
@@ -799,6 +811,7 @@ test("browser_core_unittests") {
     "withheld_fields_unittest.cc",
   ]
   deps = [
+    ":ad_block_list_check",
     ":archive_rule",
     ":arrangement",
     ":agent_download_hold",
