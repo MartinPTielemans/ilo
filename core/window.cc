@@ -22,6 +22,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/browser_window_stand_in.h"
@@ -53,6 +54,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/tab_list/tab_removed_reason.h"
 #include "chrome/browser/ui/browser_active_state_manager/browser_active_state_manager.h"
 #include "chrome/browser/ui/browser_tabrestore.h"
@@ -75,6 +77,7 @@
 #include "components/sessions/core/serialized_navigation_entry.h"
 #include "components/sessions/core/serialized_user_agent_override.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
@@ -1135,6 +1138,19 @@ void Window::SetSpaceProfile(bc_id space, const std::string& profile) {
 }
 
 // static
+void Window::TabsArrived(const std::vector<bc_id>& tabs) {
+  for (auto& [id, window] : Windows()) {
+    const bc_id waiting = window->waiting_;
+    const Space* shown = Space::FromId(window->space_);
+    if (!waiting || !std::ranges::contains(tabs, waiting) || !shown ||
+        !(shown->Has(waiting) || Favorites::ShownIn(waiting, *shown))) {
+      continue;
+    }
+    window->Select(waiting);
+  }
+}
+
+// static
 void Window::HiddenFavoritesGone() {
   for (auto& [id, window] : Windows()) {
     // A favorite a Space no longer shows isn't the tab it comes back to.
@@ -1259,6 +1275,12 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   const bool pinned = from->IsPinned(tab);
   const GURL url = from->PinnedUrl(tab);
   const bc_id next = from->NextAfterLeaving(tab, &Tab::Loaded);
+  // In a Space it's the user's or the agent's, and its page closes it no longer.
+  for (bc_id each : {tab, moved}) {
+    if (Tab* page = Tab::Get(each)) {
+      page->SetPageMayClose(false);
+    }
+  }
   // A Today tab keeps its node's id, so sync moves it on the account's other devices rather than
   // closing it into their archives and opening it again there.
   const Space::Node* node = pinned ? nullptr : from->NodeOf(tab);
@@ -1271,6 +1293,11 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
     to->AddAt(moved, 0);
   }
   from->Remove(tab);
+  // Out of an agent's Space, it's the user's: the agent's session there ends, and with it what
+  // the agent started in it, which would land in the user's page.
+  if (from->agent()) {
+    EndTabSession(tab, BC_AGENT_SESSION_RELEASED);
+  }
   if (kept.is_valid()) {
     // Its place was among the old Space's tabs, so it gets one at the top of the new one's.
     to->RestoreNodes(to->node(), {{moved, Space::Node{kept, syncer::UniquePosition()}}});
@@ -1526,13 +1553,17 @@ bool Window::RedoRemoveSuggestion(bc_id removal) {
   return suggestions_ && suggestions_->RemoveAgain(removal);
 }
 
-content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool when_shown) {
+content::WebContents* Window::OpenTab(Profile* profile,
+                                      const GURL& url,
+                                      bool when_shown,
+                                      bool typed_http) {
   BrowserWindowInterface* browser = BrowserFor(profile);
   if (!browser) {
     return nullptr;
   }
   NavigateParams params(browser, url, ui::PAGE_TRANSITION_TYPED);
   params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  params.url_typed_with_http_scheme = typed_http;
   if (when_shown && url.SchemeIsHTTPOrHTTPS()) {
     return OpenBehind(params);
   }
@@ -1542,11 +1573,12 @@ content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool wh
   return params.navigated_or_inserted_contents;
 }
 
-content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url) {
+content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url, bool typed_http) {
   // A pinned tab without its page opens it too.
   const Tab* from = Tab::Get(pinned);
   content::WebContents* contents =
-      from && from->profile() ? OpenTab(from->profile(), url, /*when_shown=*/false) : nullptr;
+      from && from->profile() ? OpenTab(from->profile(), url, /*when_shown=*/false, typed_http)
+                              : nullptr;
   if (contents) {
     ReportTabOpened(Tab::IdOf(contents), pinned, /*foreground=*/true, /*split_with=*/0,
                     /*popup=*/std::nullopt, /*popup_placed=*/false);
@@ -1554,21 +1586,40 @@ content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url) {
   return contents;
 }
 
-content::WebContents* Window::OpenPreview(content::WebContents& opener, const GURL& url) {
-  BrowserWindowInterface* browser =
-      BrowserFor(Profile::FromBrowserContext(opener.GetBrowserContext()));
+content::WebContents* Window::OpenPreview(content::WebContents& opener,
+                                          const GURL& url,
+                                          const gfx::Size& size) {
+  Profile* profile = Profile::FromBrowserContext(opener.GetBrowserContext());
+  BrowserWindowInterface* browser = BrowserFor(profile);
   if (!browser) {
     return nullptr;
   }
-  NavigateParams params(browser, url, ui::PAGE_TRANSITION_LINK);
+  // Made here and loaded once it's sized, rather than by Navigate, which makes a background tab,
+  // sizes it to the active tab's page and loads it at once, so the preview's page read the window's
+  // page's size and drew a frame at it before the app's size came (#2539).
+  content::WebContents::CreateParams create(profile,
+                                            tab_util::GetSiteInstanceForNewTab(profile, url));
+  create.initially_hidden = true;
+#if defined(USE_AURA)
+  create.context = widget_->GetNativeWindow();
+#endif
+  NavigateParams params(browser, content::WebContents::Create(create));
   params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
-  // What the page would have sent with the link, by the policy Chrome's pages default to.
-  params.referrer = content::Referrer(
-      opener.GetLastCommittedURL(), network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin);
   // No Space takes it until the app keeps it, so the app isn't told of it as a tab opened.
   base::AutoReset<bool> opening(&opening_tab_, true);
   Navigate(&params);
-  return params.navigated_or_inserted_contents;
+  content::WebContents* preview = params.navigated_or_inserted_contents;
+  if (!preview) {
+    return nullptr;
+  }
+  // Inserting a background tab sized it to the active tab's page.
+  preview->Resize(gfx::Rect(size));
+  NavigateParams load(browser, url, ui::PAGE_TRANSITION_LINK);
+  // What the page would have sent with the link, by the policy Chrome's pages default to.
+  load.referrer = content::Referrer(
+      opener.GetLastCommittedURL(), network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin);
+  preview->GetController().LoadURLWithParams(LoadURLParamsFromNavigateParams(preview, &load));
+  return preview;
 }
 
 void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
@@ -1821,6 +1872,7 @@ void Window::SetSidebarWidth(double width) {
 void Window::ShowNothing() {
   HoldPictured();
   selected_ = 0;
+  waiting_ = 0;
   for (bc_id pane : std::exchange(panes_, {})) {
     Seen(pane);
   }
@@ -1893,12 +1945,23 @@ void Window::SetPageScale(double scale) {
 
 void Window::Select(bc_id tab) {
   const Tab* selecting = Tab::Get(tab);
+  waiting_ = 0;
   // A window with a Space of its own shows its tabs alone, and a regular one never shows them:
   // Chrome never moves a page between incognito and regular windows.
   const Space* holding = Space::Holding(tab);
   if (!selecting ||
       (own_space_ ? !holding || holding->id() != space_
                   : (holding && holding->own()) || OffTheRecord(selecting))) {
+    return;
+  }
+  // One whose profile is still loading, or one of its split's, can't have its page yet: the window
+  // shows nothing until it's here (TabsArrived), as it would while a page starts.
+  if (std::ranges::any_of(PanesWith(tab), [](bc_id pane) {
+        const Tab* in = Tab::Get(pane);
+        return in && in->waiting_for_profile();
+      })) {
+    ShowNothing();
+    waiting_ = tab;
     return;
   }
   // A tab without its page, and each of its split's, gets it back here, as it's shown.
@@ -2163,7 +2226,7 @@ bc_id Window::UndoDeleteSpace(bc_id id) {
     above = true;
   }
   space.saved.today = std::move(today);
-  RestoreSpace(*this, profile, space.saved, space.id, space.at);
+  RestoreSpace(*this, DirOf(profile), space.saved, space.id, space.at);
   // Not one of the Space's own, which closed with it and came back as other tabs.
   if (Favorites::Has(space.shown) && !Favorites::SpaceOf(space.shown)) {
     SetSelectedIn(space.id, space.shown);

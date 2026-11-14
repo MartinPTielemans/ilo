@@ -1403,8 +1403,9 @@ impl Browser for Recorder {
     }
 
     /// The host's clipboard holds what was copied last.
-    fn pasted(&self, _: &App) -> Option<String> {
-        self.copied.borrow().last().cloned()
+    fn pasted(&self, cx: &mut App, done: crate::clipboard::Done) {
+        let text = self.copied.borrow().last().cloned();
+        cx.defer(move |cx| done(text, cx));
     }
 
     fn share_services(&self, _: &str) -> Vec<SharedString> {

@@ -2003,22 +2003,34 @@ impl Shell {
     /// does. The clipboard is read only now, and text that isn't one http(s) link opens nothing,
     /// as a drop of it doesn't. No agent path: the clipboard is the user's.
     fn paste_url_as_tab(&mut self, cx: &mut Context<Self>) {
-        if let Some(urls) = self.pasted_urls(cx) {
-            self.browser.open_at(&urls, false, 0, 0, cx);
-        }
+        self.pasted_urls(cx, |shell, urls, cx| {
+            shell.browser.open_at(&urls, false, 0, 0, cx);
+        });
     }
 
-    /// The clipboard's web link, read now, as one URL to open, or None for anything else.
-    pub(super) fn pasted_urls(&self, cx: &App) -> Option<Vec<String>> {
+    /// Hands `then` the clipboard's web link, read now, as one URL to open, and nothing for
+    /// anything else.
+    pub(super) fn pasted_urls(
+        &self,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, Vec<String>, &mut Context<Self>) + 'static,
+    ) {
+        let shell = cx.entity().downgrade();
         // From the host, where Copy Link put it: a driven Mac run's pasteboard is its own.
-        let text = self.browser.pasted(cx).unwrap_or_default();
-        // Text that isn't a web link opens nothing here, not a search, as Arc's ⌥⌘V does.
-        let urls = dropped_urls([(text.trim(), false)], |_| None);
-        if urls.is_empty() {
-            // check.sh reads this line.
-            log!("browser: pasted no URL");
-        }
-        Some(urls).filter(|urls| !urls.is_empty())
+        self.browser.pasted(
+            cx,
+            Box::new(move |text, cx| {
+                let text = text.unwrap_or_default();
+                // Text that isn't a web link opens nothing here, not a search, as Arc's ⌥⌘V does.
+                let urls = dropped_urls([(text.trim(), false)], |_| None);
+                if urls.is_empty() {
+                    // check.sh reads this line.
+                    log!("browser: pasted no URL");
+                    return;
+                }
+                shell.update(cx, |shell, cx| then(shell, urls, cx)).ok();
+            }),
+        );
     }
 
     /// File › Share… and the command bar's Share…: the system's share sheet for the page shown,
