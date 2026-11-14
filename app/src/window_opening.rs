@@ -646,6 +646,8 @@ pub(crate) fn finish_opening(
         platform::host_watch_active(became_active);
     }
     follow_reduce_motion(cx);
+    // After the first frame: no time shows before the Library opens.
+    update_app_later(follow_clock);
     browser::shell::follow_scroll_bars(cx);
     #[cfg(not(target_os = "linux"))]
     unsafe {

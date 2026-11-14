@@ -11,8 +11,8 @@ use std::{
 
 use chrono::{Local, NaiveDate, TimeZone};
 use gpui::{
-    AnyElement, Context, MouseButton, MouseDownEvent, Pixels, Point, SharedString, div, prelude::*,
-    px,
+    AnyElement, ClickEvent, Context, Modifiers, MouseButton, MouseDownEvent, Pixels, Point,
+    SharedString, div, prelude::*, px, svg,
 };
 
 use super::{
@@ -21,6 +21,8 @@ use super::{
     Section, Shell, UNSELECTED_TITLE, favicon, host, text, text_line,
 };
 use crate::agent_history::{self, Past};
+use crate::shell::access::Accessible;
+use crate::tokens::shell::{CLOSE_GLYPH, CLOSE_HOVERED, CLOSE_RIGHT, CLOSE_SIZE, NAV_RADIUS};
 
 /// How many pages History asks for at a time: a few screens of its rows.
 const PAGE: usize = 60;
@@ -45,6 +47,14 @@ pub(super) struct Visit {
     pub(super) page: Visited,
     pub(super) day: Option<NaiveDate>,
     pub(super) by: Option<SharedString>,
+}
+
+/// The History row under the pointer, which shows its trash: a closed tab's by its id, or a visited
+/// page's by its line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Pointed {
+    Closed(u64),
+    Visited(usize),
 }
 
 /// What a request asked for.
@@ -78,6 +88,8 @@ pub(super) struct History {
     pub(super) any: bool,
     /// The profile's agents' past tasks of the last 30 days, read once.
     pasts: Option<Vec<Past>>,
+    /// The row under the pointer.
+    pub(super) pointed: Option<Pointed>,
 }
 
 impl History {
@@ -129,17 +141,45 @@ pub(super) fn day_span(day: NaiveDate) -> Option<(i64, i64)> {
 }
 
 /// When a History row's tab closed or its page was visited, under its day's heading: the time
-/// today and yesterday, with the weekday this week and last, and the date before.
-pub(super) fn history_when(at: f64, starts: [f64; 4]) -> String {
+/// today and yesterday, with the weekday this week and last, and the date before. Times are on the
+/// system's clock, 12- or 24-hour (`twelve`).
+pub(super) fn history_when(at: f64, starts: [f64; 4], twelve: bool) -> String {
     let Some(time) = Local.timestamp_millis_opt(at as i64).single() else {
         return String::new();
     };
+    let hour = crate::clock::hour_minute(twelve);
     let format = match starts.iter().position(|&start| at >= start) {
-        Some(0 | 1) => "%H:%M",
-        Some(_) => "%a %H:%M",
-        None => "%-d %b",
+        Some(0 | 1) => hour.to_string(),
+        Some(_) => format!("%a {hour}"),
+        None => "%-d %b".to_string(),
     };
-    time.format(format).to_string()
+    time.format(&format).to_string()
+}
+
+/// A History row's title over what it is and when, which truncate before the row's trash while it
+/// shows, and otherwise end 12 from the row's end.
+pub(super) fn history_text(
+    title: SharedString,
+    about: SharedString,
+    at_rest: bool,
+    palette: &crate::palette::Palette,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .pl(px(ARCHIVED_TEXT_X))
+        .when(at_rest, |text| text.pr(px(12.)))
+        .child(text_line(
+            title,
+            text::BODY,
+            17.,
+            palette.text(UNSELECTED_TITLE),
+        ))
+        .child(text_line(about, text::SMALL, 15., palette.text(SECONDARY)))
 }
 
 /// The agent whose past task's tab visited `page`: one that recorded the page, and ran when it was
@@ -157,6 +197,60 @@ fn visited_by(pasts: &[Past], page: &Visited) -> Option<SharedString> {
 }
 
 impl Shell {
+    /// The pointer came onto a History row, or left it: only the row under it shows its trash.
+    pub(super) fn point_history(&mut self, row: Pointed, hovered: bool, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        let pointed = &mut library.history.pointed;
+        // Off it, only its own: the pointer may be on another's already.
+        let now = match hovered {
+            true => Some(row),
+            false => pointed.filter(|on| *on != row),
+        };
+        if *pointed != now {
+            *pointed = now;
+            cx.notify();
+        }
+    }
+
+    /// A History row's trash: the sidebar's close button, the same control in the same place, 5
+    /// inside the plate's end, with History's glyph, as the owner's "trash removes" has it
+    /// (11-02). It shows only under the pointer, and the title truncates before it then, as a tab
+    /// row's does before its ✕, so at rest a title has the row's whole width.
+    pub(super) fn history_trash(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        name: &'static str,
+        remove: impl Fn(&mut Shell, &mut Context<Shell>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .when(self.a11y, |button| button.button_named(name))
+            .flex_none()
+            .ml(px(4.))
+            .mr(px(CLOSE_RIGHT))
+            .size(px(CLOSE_SIZE))
+            .rounded(px(NAV_RADIUS))
+            .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                svg()
+                    .path("icons/trash.svg")
+                    .size(px(CLOSE_GLYPH))
+                    .text_color(self.palette.text(SECONDARY)),
+            )
+            // Not the row's press, which would open what it lists.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                cx.stop_propagation();
+                remove(shell, cx)
+            }))
+    }
+
     /// The Library drew its first frame: History asks for its pages now, off the way the Library
     /// opens.
     pub(super) fn library_drawn(&mut self, cx: &mut Context<Self>) {
@@ -336,8 +430,8 @@ impl Shell {
     }
 
     /// A visited page's line in History, as a closed tab's: its favicon, its title over when it
-    /// was visited, by an agent's tab if one did, and its host. A click opens it in a new tab and
-    /// closes the Library, and a right-click shows its menu.
+    /// was visited, by an agent's tab if one did, and its host. A click opens it in Peek, and a
+    /// right-click shows its menu.
     pub(super) fn visited_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(library) = &self.library else {
             return div().into_any_element();
@@ -350,12 +444,17 @@ impl Shell {
             true => url.clone(),
             false => visit.page.title.clone(),
         };
-        let when = history_when(visit.page.visited, library.starts);
+        let when = history_when(
+            visit.page.visited,
+            library.starts,
+            crate::clock::twelve_hour(),
+        );
         let about = match &visit.by {
             Some(agent) => format!("Visited {when} by {agent} · {}", host(&url)),
             None => format!("Visited {when} · {}", host(&url)),
         };
         let day = visit.day;
+        let pointed = library.history.pointed == Some(Pointed::Visited(index));
         if !self.page_favicons.contains_key(&url) {
             self.page_favicons.insert(url.clone(), None);
             self.browser.page_favicon(&url, cx);
@@ -364,7 +463,13 @@ impl Shell {
             &self.palette,
             self.page_favicons.get(&url).cloned().flatten(),
         );
-        let (open, menu) = (url.clone(), url);
+        let (open, menu, removed) = (url.clone(), url.clone(), url);
+        let trash = pointed.then(|| {
+            let remove = move |shell: &mut Shell, cx: &mut Context<Shell>| {
+                shell.remove_visited(&removed, day, cx)
+            };
+            self.history_trash(("visited-trash", index), "Remove from History", remove, cx)
+        });
         div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
@@ -375,11 +480,18 @@ impl Shell {
                     .id(("visited", index))
                     .size_full()
                     .relative()
+                    .flex()
+                    .items_center()
                     .rounded(px(ARCHIVED_RADIUS))
                     .block_mouse_except_scroll()
+                    .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                        shell.point_history(Pointed::Visited(index), *hovered, cx)
+                    }))
                     .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
                     .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
-                    .on_click(cx.listener(move |shell, _, _, cx| shell.open_visited(&open, cx)))
+                    .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                        shell.open_visited(open.clone(), event.position(), event.modifiers(), cx)
+                    }))
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
@@ -396,34 +508,41 @@ impl Shell {
                             .items_center()
                             .child(icon),
                     )
-                    .child(
-                        div()
-                            .size_full()
-                            .flex()
-                            .flex_col()
-                            .justify_center()
-                            .pl(px(ARCHIVED_TEXT_X))
-                            .pr(px(12.))
-                            .child(text_line(
-                                title,
-                                text::BODY,
-                                17.,
-                                self.palette.text(UNSELECTED_TITLE),
-                            ))
-                            .child(text_line(
-                                about.into(),
-                                text::SMALL,
-                                15.,
-                                self.palette.text(SECONDARY),
-                            )),
-                    ),
+                    .child(history_text(
+                        title,
+                        about.into(),
+                        trash.is_none(),
+                        &self.palette,
+                    ))
+                    .children(trash),
             )
             .into_any_element()
     }
 
-    /// Opens a visited page in a new tab of the Space shown, and closes the Library. The page isn't
-    /// logged: it's the user's.
-    fn open_visited(&mut self, url: &str, cx: &mut Context<Self>) {
+    /// A click on a visited page's row opens it in Peek, growing from the row at `at`, as a closed
+    /// tab's does, so a click means one thing down the list; Open as Tab keeps it. ⌘-click, or a
+    /// page Peek can't show, opens it at once.
+    fn open_visited(
+        &mut self,
+        url: SharedString,
+        at: Point<Pixels>,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let web = url.starts_with("https://") || url.starts_with("http://");
+        let page = self.preview_page().filter(|_| {
+            web && self.selected != 0 && !modifiers.secondary(cx) && self.browser.link_previews()
+        });
+        let Some(page) = page else {
+            return self.open_visited_tab(&url, cx);
+        };
+        // check.sh waits for this line. The page isn't logged: it's the user's.
+        log!("browser: history page in preview");
+        self.browser.open_preview(self.selected, url, at, page, cx);
+    }
+
+    /// Opens a visited page in a new tab of the Space shown, and closes the Library.
+    fn open_visited_tab(&mut self, url: &str, cx: &mut Context<Self>) {
         log!("browser: history open");
         self.browser.open_at(&[url.to_string()], false, 0, 0, cx);
         self.set_library(false, cx);
@@ -453,7 +572,7 @@ impl Shell {
             Box::new(move |chosen, cx| {
                 shell
                     .update(cx, |shell, cx| match chosen {
-                        Some(0) => shell.open_visited(&url, cx),
+                        Some(0) => shell.open_visited_tab(&url, cx),
                         Some(1) => {
                             let link = shell.copied_link(&url);
                             shell.copy(&link, "Copied URL", cx)

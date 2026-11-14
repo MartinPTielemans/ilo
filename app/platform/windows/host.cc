@@ -3558,6 +3558,23 @@ void host_watch_reduce_motion(void (*changed)(void)) {
   g_reduce_motion_changed = changed;
 }
 
+bool host_twelve_hour_clock(void) {
+  wchar_t format[80] = {};
+  if (!GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_STIMEFORMAT, format, ARRAYSIZE(format))) {
+    return false;
+  }
+  // h is the 12-hour clock's hour and H the 24-hour's; what's in quotes is the format's own text.
+  bool quoted = false;
+  for (const wchar_t* c = format; *c; ++c) {
+    if (*c == L'\'') {
+      quoted = !quoted;
+    } else if (!quoted && *c == L'h') {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool host_is_default_browser(void) {
   return ChoiceIsOurs(L"http") && ChoiceIsOurs(L"https");
 }

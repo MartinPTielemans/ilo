@@ -683,6 +683,7 @@ dependencies = [
  "gpui_platform",
  "gpui_wgpu",
  "image",
+ "libc",
  "raw-window-handle",
  "serde_json",
  "wayland-client",

@@ -47,6 +47,9 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 xkbcommon = "0.8"
 serde_json = "1"
+# The locale's time format, for its 12- or 24-hour clock (platform/linux/clock.rs), as ../Cargo.toml
+# has it.
+libc = "0.2"
 
 # Its own, apart from the browser crate's, which has no workspace: Zed's crates in ../.deps would join one.
 # Seeded from ../Cargo.lock, so the two build the same versions.

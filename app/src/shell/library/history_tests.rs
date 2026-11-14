@@ -9,11 +9,13 @@ use chrono::{Local, NaiveDate, TimeZone};
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 
 use super::{
-    ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, COLUMN_WIDTH, FILTER_WIDTH, FILTER_X,
-    HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, SEARCH_HEIGHT, SEARCH_TOP, Visited,
+    ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_RIGHT, Archived, COLUMN_WIDTH,
+    FILTER_WIDTH, FILTER_X, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, LIBRARY_WIDTH,
+    Pointed, SEARCH_HEIGHT, SEARCH_TOP, Visited, history_when,
 };
 use crate::agent_history::{self, Past};
 use crate::shell::{Command, Folders, Section, Shell, recorder::Recorder};
+use crate::tokens::shell::{CLOSE_RIGHT, CLOSE_SIZE};
 
 /// The profile of the window's Space.
 const PROFILE: u64 = 7;
@@ -538,6 +540,132 @@ fn remove_from_history_takes_the_rows_day(cx: &mut TestAppContext) {
     assert_eq!(what, "7 0 \"\" 60");
 }
 
+fn library_open(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
+    shell.read_with(cx, |shell, _| shell.library_open)
+}
+
+/// The calls History made since the last time, past its asks for pages and favicons.
+fn made(host: &Recorder) -> Vec<String> {
+    let calls = host.take().into_iter();
+    calls
+        .filter(|call| !call.starts_with("list history ") && !call.starts_with("page favicon"))
+        .collect()
+}
+
+/// A click on a visited page opens it in Peek over the tab shown, growing from the row, as a
+/// closed tab's does, and the Library stays; kept, it's the window's tab and the Library closes.
+/// ⌘-click opens it in a new tab at once and closes the Library (the orchestrator, 11-14).
+#[gpui::test]
+fn a_click_on_a_visited_page_opens_it_in_peek(cx: &mut TestAppContext) {
+    let (shell, host, cx) = history(Vec::new(), cx);
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    answer(&shell, first, vec![page("mail", at(9, 14))], false, cx);
+    made(&host);
+    cx.simulate_click(row(0), Modifiers::none());
+    let (x, y) = (f32::from(row(0).x), f32::from(row(0).y));
+    let peek = format!("open preview over 10 {} from {x},{y}", url("mail"));
+    assert_eq!(made(&host), [peek]);
+    assert!(library_open(&shell, cx));
+    shell.update(cx, |shell, cx| shell.kept_from_preview(cx));
+    cx.run_until_parked();
+    assert!(!library_open(&shell, cx));
+
+    shell.update(cx, |shell, cx| shell.run(Command::ViewLibrary, "test", cx));
+    shell.update(cx, |shell, _| shell.library_motion = None);
+    next_frame(cx);
+    if let Some((again, _)) = asked(&host).pop() {
+        answer(&shell, again, vec![page("mail", at(9, 14))], false, cx);
+    }
+    made(&host);
+    let command = cx.update(|_, cx| Modifiers::secondary_key(cx));
+    cx.simulate_click(row(0), command);
+    assert_eq!(made(&host), [format!("open {} false 0 0", url("mail"))]);
+    assert!(!library_open(&shell, cx));
+}
+
+/// Where a History row's trash is, at the end of the list's `row`th row, as the sidebar's ✕ is
+/// at the end of a tab's.
+fn trash(
+    shell: &Entity<Shell>,
+    row: usize,
+    cx: &mut VisualTestContext,
+) -> gpui::Point<gpui::Pixels> {
+    let end = shell.read_with(cx, |shell, _| {
+        shell.library_x() + LIBRARY_WIDTH - ARCHIVED_RIGHT
+    });
+    point(px(end - CLOSE_RIGHT - CLOSE_SIZE / 2.), self::row(row).y)
+}
+
+fn pointed(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Pointed> {
+    shell.read_with(cx, |shell, _| {
+        shell.library.as_ref().unwrap().history.pointed
+    })
+}
+
+/// A History row's trash shows only under the pointer, as a tab row's ✕ does, and goes as the
+/// pointer leaves: at rest the row's text has its whole width. A closed tab's trash deletes it
+/// from the archive, which ⌘Z brings back, and the Library stays (the orchestrator, 11-14).
+#[gpui::test]
+fn a_closed_tabs_trash_shows_under_the_pointer(cx: &mut TestAppContext) {
+    let (shell, host, cx) = history(vec![closed(5, "news", at(9, 15), false)], cx);
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    answer(&shell, first, Vec::new(), false, cx);
+    let away = point(px(COLUMN_WIDTH + 4.), px(4.));
+    cx.simulate_mouse_move(away, None, Modifiers::none());
+    next_frame(cx);
+    assert_eq!(pointed(&shell, cx), None);
+    cx.simulate_mouse_move(row(0), None, Modifiers::none());
+    next_frame(cx);
+    assert_eq!(pointed(&shell, cx), Some(Pointed::Closed(5)));
+    cx.simulate_mouse_move(away, None, Modifiers::none());
+    next_frame(cx);
+    assert_eq!(
+        pointed(&shell, cx),
+        None,
+        "the trash after the pointer left"
+    );
+
+    let at = trash(&shell, 0, cx);
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    next_frame(cx);
+    made(&host);
+    host.take_edits();
+    cx.simulate_click(at, Modifiers::none());
+    let calls = made(&host);
+    assert!(
+        !calls.iter().any(|call| call.contains("preview")),
+        "{calls:?}"
+    );
+    assert_eq!(host.take_edits(), ["archive remove 5 as 9001"]);
+    assert!(library_open(&shell, cx));
+}
+
+/// A visited page's trash removes its visits that day, and its row goes at once.
+#[gpui::test]
+fn a_visited_pages_trash_removes_its_day(cx: &mut TestAppContext) {
+    let (shell, host, cx) = history(Vec::new(), cx);
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    answer(&shell, first, vec![page("mail", at(9, 14))], false, cx);
+    let spot = trash(&shell, 0, cx);
+    cx.simulate_mouse_move(spot, None, Modifiers::none());
+    next_frame(cx);
+    assert_eq!(pointed(&shell, cx), Some(Pointed::Visited(0)));
+    made(&host);
+    cx.simulate_click(spot, Modifiers::none());
+    let micros = |ms: f64| (ms * 1000.) as i64;
+    let removed = format!(
+        "remove history 7 {} {} {}",
+        url("mail"),
+        micros(at(9, 0)),
+        micros(at(10, 0))
+    );
+    assert_eq!(made(&host), [removed]);
+    assert!(items(&shell, cx).iter().all(|item| item != "visited mail"));
+}
+
 /// History is the profile's of the Space shown: another profile's Space lists its own, from the
 /// top, and the first's answer is left.
 #[gpui::test]
@@ -587,4 +715,23 @@ fn a_private_window_lists_no_history(cx: &mut TestAppContext) {
                 .any(|item| matches!(item, Item::Visit(_)))
         );
     });
+}
+
+/// A row's time is on the system's clock, 12- or 24-hour, today, this week and last; a date has no
+/// time to show.
+#[test]
+fn row_times_follow_the_systems_clock() {
+    // Today the 13th, yesterday, this week from the 9th, last week from the 2nd.
+    let starts = [at(13, 0), at(12, 0), at(9, 0), at(2, 0)];
+    let minute = 5. * 60. * 1000.;
+    let today = at(13, 14) + minute;
+    assert_eq!(history_when(today, starts, false), "14:05");
+    assert_eq!(history_when(today, starts, true), "2:05 PM");
+    let morning = at(12, 9) + minute;
+    assert_eq!(history_when(morning, starts, true), "9:05 AM");
+    assert_eq!(history_when(morning, starts, false), "09:05");
+    let week = at(10, 21) + minute;
+    assert_eq!(history_when(week, starts, true), "Tue 9:05 PM");
+    assert_eq!(history_when(week, starts, false), "Tue 21:05");
+    assert_eq!(history_when(at(1, 14), starts, true), "1 Nov");
 }

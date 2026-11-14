@@ -200,7 +200,7 @@ pub struct Archived {
 
 mod history_list;
 pub use history_list::Visited;
-use history_list::{History, history_when};
+use history_list::{History, Pointed, history_text, history_when};
 
 /// A video a Media tile plays: its file's name, for the log, and the frame it shows, none before
 /// its first.
@@ -1340,9 +1340,9 @@ impl Shell {
             .open_archived_preview(self.selected, id, url, at, page, cx);
     }
 
-    /// The archived tab a preview showed is the window's tab now, kept from the preview, and the
-    /// Library closes as it does for one restored from its row.
-    pub fn restored_from_preview(&mut self, cx: &mut Context<Self>) {
+    /// A preview's page is the window's tab now, kept from it, and the Library a row of History
+    /// opened it from closes, as it does for a tab restored or a page opened from the row.
+    pub fn kept_from_preview(&mut self, cx: &mut Context<Self>) {
         self.set_library(false, cx);
     }
 
@@ -2515,13 +2515,29 @@ impl Shell {
         );
         // What the row is and when, and Little ilo's while others' are listed.
         let (when, host) = match &self.library {
-            Some(library) => (history_when(tab.archived, library.starts), host(&url)),
+            Some(library) => {
+                let twelve = crate::clock::twelve_hour();
+                (
+                    history_when(tab.archived, library.starts, twelve),
+                    host(&url),
+                )
+            }
             None => (String::new(), host(&url)),
         };
         let named = self.library.as_ref().is_some_and(|library| library.named);
         let about = SharedString::from(match tab.little && named {
             true => format!("Closed {when} in Little ilo · {host}"),
             false => format!("Closed {when} · {host}"),
+        });
+        let pointed = (self.library.as_ref())
+            .is_some_and(|library| library.history.pointed == Some(Pointed::Closed(id)));
+        let trash = pointed.then(|| {
+            let remove = move |shell: &mut Shell, cx: &mut Context<Shell>| {
+                // check.sh waits for this line.
+                log!("browser: remove archived {id}");
+                shell.delete_archived(id, cx)
+            };
+            self.history_trash(("archived-trash", id), "Delete from Archive", remove, cx)
         });
         div()
             .h(px(ARCHIVED_PITCH))
@@ -2533,8 +2549,13 @@ impl Shell {
                     .id(("archived", id))
                     .size_full()
                     .relative()
+                    .flex()
+                    .items_center()
                     .rounded(px(ARCHIVED_RADIUS))
                     .block_mouse_except_scroll()
+                    .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                        shell.point_history(Pointed::Closed(id), *hovered, cx)
+                    }))
                     .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
                     .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
                     .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
@@ -2556,27 +2577,8 @@ impl Shell {
                             .items_center()
                             .child(icon),
                     )
-                    .child(
-                        div()
-                            .size_full()
-                            .flex()
-                            .flex_col()
-                            .justify_center()
-                            .pl(px(ARCHIVED_TEXT_X))
-                            .pr(px(12.))
-                            .child(text_line(
-                                title,
-                                text::BODY,
-                                17.,
-                                self.palette.text(UNSELECTED_TITLE),
-                            ))
-                            .child(text_line(
-                                about,
-                                text::SMALL,
-                                15.,
-                                self.palette.text(SECONDARY),
-                            )),
-                    ),
+                    .child(history_text(title, about, trash.is_none(), &self.palette))
+                    .children(trash),
             )
             .into_any_element()
     }

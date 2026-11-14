@@ -60,8 +60,10 @@ impl Host for Recorder {
             archived.map_or(String::new(), |archived| format!(" of archived {archived}"));
         self.push(format!("keep {window} {tab}{archived}"));
     }
-    fn kept_archived(&self, window: u64, archived: u64, _: &mut App) {
-        self.push(format!("kept archived {archived} in {window}"));
+    fn kept(&self, window: u64, archived: Option<u64>, _: &mut App) {
+        if let Some(archived) = archived {
+            self.push(format!("kept archived {archived} in {window}"));
+        }
     }
     fn closed(&self, window: u64, closed: Closed, undone: bool, _: &mut App) {
         let (x, y) = (f32::from(closed.link.x), f32::from(closed.link.y));

@@ -72,9 +72,9 @@ pub trait Host {
     /// of the archived tab `archived` goes to the Space that tab closed in, as a restore does, and
     /// takes it out of the archive.
     fn keep(&self, window: u64, tab: u64, archived: Option<u64>);
-    /// The kept preview was of the archived tab `archived`, which is the window's tab now, as a tab
-    /// restored from it is.
-    fn kept_archived(&self, _window: u64, _archived: u64, _cx: &mut App) {}
+    /// The preview over the browser window `window` was kept: its page is the window's tab now,
+    /// as a tab restored from the archived tab `archived` is, if it was of one.
+    fn kept(&self, _window: u64, _archived: Option<u64>, _cx: &mut App) {}
     /// The user closed the preview over the browser window `window`, for ⌘Z and ⇧⌘T to open
     /// again; `undone` if Redo closed it, as that history has it already.
     fn closed(&self, window: u64, closed: Closed, undone: bool, cx: &mut App);
@@ -873,9 +873,7 @@ impl LinkPreview {
                 // check.sh reads this line.
                 log!("browser: link preview kept {}", shown.tab);
                 self.host.hide();
-                if let Some(archived) = shown.archived {
-                    self.host.kept_archived(shown.window, archived, cx);
-                }
+                self.host.kept(shown.window, shown.archived, cx);
             }
             leaving => {
                 self.host.hide();
