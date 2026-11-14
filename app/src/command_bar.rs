@@ -566,8 +566,9 @@ pub trait Host {
     fn restore_archived(&self, archived: u64, cx: &mut App) -> bool;
     /// Now, in milliseconds since 1970, which a row counts the days since its page's visit from.
     fn now(&self) -> f64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        // web_time's: std's panics in the web preview.
+        web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .map_or(0., |since| since.as_secs_f64() * 1000.)
     }
 }

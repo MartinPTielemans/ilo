@@ -17,9 +17,13 @@ for name in a b; do
   printf '<meta charset=utf-8><title>loading Pull requests · ilo</title><p style="font:24px system-ui">GitHub %s</p>
 <script>%s</script>' "$name" "$ready" > "$out/github/$name/index.html"
 done
-for name in one two closed visited; do
+for name in one two; do
   printf '<meta charset=utf-8><title>loading Ranking %s</title><p style="font:24px system-ui">Ranking %s</p>
 <script>%s</script>' "$name" "$name" "$ready" > "$out/site/ranking-$name.html"
+done
+for name in closed visited; do
+  printf '<meta charset=utf-8><title>loading Place %s</title><p style="font:24px system-ui">Place %s</p>
+<script>%s</script>' "$name" "$name" "$ready" > "$out/site/place-$name.html"
 done
 for name in alpha beta gamma delta; do
   printf '<meta charset=utf-8><title>loading Rise %s</title><p style="font:24px system-ui">Rise %s</p>
@@ -200,24 +204,26 @@ send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
 # Where a page is: one whose tab ⌘W closed ends "Closed today · Reopen", and one only visited ends
-# "Visited today", read from what the bar logs its rows say.
-closed="${site}ranking-closed.html"
-visited="${site}ranking-visited.html"
-go_to "$visited" "Ranking visited"
+# "Visited today", read from what the bar logs its rows say. Pages of their own, which "place"
+# alone matches, as the core gives the bar three pages from history at most.
+closed="${site}place-closed.html"
+visited="${site}place-visited.html"
+go_to "$visited" "Place visited"
 go_to "$two" "Ranking two"
-open_page "$closed" "Ranking closed"
+open_page "$closed" "Place closed"
 send key w cmd
 expect "^browser: tab $tab closed\$" "⌘W didn't close the tab for $closed"
 expect '^browser: archive [1-9][0-9]* tabs$' "⌘W didn't archive the tab for $closed"
-type_for ranking "^$closed\$" ranking-closed-visited.png
-said=$(grep '^browser: command bar says "ranking": ' "$log" | tail -1 | sed 's/^browser: command bar says "ranking": //')
+# The core gives both pages in one answer, as its history matches come together.
+type_for place "^$visited\$" ranking-closed-visited.png
+said=$(grep '^browser: command bar says "place": ' "$log" | tail -1 | sed 's/^browser: command bar says "place": //')
 case "; $said;" in
 *"; $closed Closed today · Reopen;"*) ;;
-*) fail "the row for $closed, whose tab ⌘W closed, doesn't end \"Closed today · Reopen\": the rows say \"$said\", listed $(listed ranking | tr '\n' ' ')" ;;
+*) fail "the row for $closed, whose tab ⌘W closed, doesn't end \"Closed today · Reopen\": the rows say \"$said\", listed $(listed place | tr '\n' ' ')" ;;
 esac
 case "; $said;" in
 *"; $visited Visited today;"*) ;;
-*) fail "the row for $visited, visited in a tab that then went elsewhere, doesn't end \"Visited today\": the rows say \"$said\", listed $(listed ranking | tr '\n' ' ')" ;;
+*) fail "the row for $visited, visited in a tab that then went elsewhere, doesn't end \"Visited today\": the rows say \"$said\", listed $(listed place | tr '\n' ' ')" ;;
 esac
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
