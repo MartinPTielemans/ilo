@@ -81,6 +81,22 @@ fn watch() -> Option<Watch> {
         .ok()?
         .check()
         .ok()?;
+    // PROBE #2762: the server's raw keys and buttons, whatever grabs them, with their times.
+    {
+        use x11rb::protocol::xinput::{self, ConnectionExt as _};
+        if connection.xinput_xi_query_version(2, 2).ok().and_then(|c| c.reply().ok()).is_some() {
+            let mask = xinput::EventMask {
+                deviceid: xinput::Device::ALL_MASTER.into(),
+                mask: vec![
+                    xinput::XIEventMask::RAW_KEY_PRESS
+                        | xinput::XIEventMask::RAW_KEY_RELEASE
+                        | xinput::XIEventMask::RAW_BUTTON_PRESS
+                        | xinput::XIEventMask::RAW_BUTTON_RELEASE,
+                ],
+            };
+            _ = connection.xinput_xi_select_events(root, &[mask]);
+        }
+    }
     Some(Watch {
         connection,
         root,
@@ -120,6 +136,10 @@ fn pump() {
                         }
                     });
                 }
+                Event::XinputRawKeyPress(raw) => crate::log!("browser: probe raw key press {} at {}", raw.detail, raw.time),
+                Event::XinputRawKeyRelease(raw) => crate::log!("browser: probe raw key release {} at {}", raw.detail, raw.time),
+                Event::XinputRawButtonPress(raw) => crate::log!("browser: probe raw button press {} at {}", raw.detail, raw.time),
+                Event::XinputRawButtonRelease(raw) => crate::log!("browser: probe raw button release {} at {}", raw.detail, raw.time),
                 Event::FocusIn(focus) => crate::log!("browser: probe focus in {:#x} mode {:?} detail {:?}, focus {}", focus.event, focus.mode, focus.detail, probe_focus(&watch)),
                 Event::FocusOut(focus) => crate::log!("browser: probe focus out {:#x} mode {:?} detail {:?}", focus.event, focus.mode, focus.detail),
                 _ => {}
