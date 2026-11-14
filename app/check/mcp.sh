@@ -2085,7 +2085,7 @@ quit
 # The switch the run turned off goes back on. The launch waits 2 s for an answer and 3 s for a
 # handoff in place of the spec's 5 and 15 minutes, which the time limits' step below reaches.
 printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
-log="$out/mcp-relaunch.log"
+log="$out/mcp-waits.log"
 step=0
 BROWSER_DRIVE=1 "$browser" --agent-waits=2,3 < "$out/drive" > "$log" 2>&1 &
 pid=$!
