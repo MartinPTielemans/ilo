@@ -95,18 +95,25 @@ ask() {
   more '^browser: agent mcp-client asks to point ' "$asked" || fail "the agent's ask to point $1 didn't come"
   id=$(sed -n 's/^browser: agent mcp-client asks to point \([0-9]*\)$/\1/p' "$log" | tail -1)
 }
-# The middle of the card's chip $1, from the last place it was drawn at.
-chip() {
-  grep "^browser: task chip task-[0-9]* $1 at " "$log" | tail -1 | sed "s/.* $1 at //" |
-    awk '{ print int($1 + $3 / 2), int($2 + $4 / 2) }'
+# An outside agent's ask waits in the card under the URL field (a ⌘T task's has chips on its own
+# card). This waits for ask $id's card, failing with $1, and sets qx qy qw qh to where it was last
+# drawn. Its buttons sit at its foot, Not Now at the left and Point at the right, as mcp.sh presses
+# a card's.
+card() {
+  expect "^browser: agent question $id at " "$1"
+  read -r qx qy qw qh << CARD
+$(grep "^browser: agent question $id at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
 }
+not_now_button() { echo $((qx + 30)) $((qy + qh - 26)); }
+point_button() { echo $((qx + qw - 30)) $((qy + qh - 26)); }
 # One ask, pointed at and sent, as JSON-RPC call $1, its captures named with $2: "" for light and
 # "-dark" for dark. The ask waits for the user, so its answer is read once they've sent.
 round() {
   ask "$1" "Which part of the page looks wrong?"
-  expect '^browser: task chip task-[0-9]* Point at ' "the agent's card drew no Point"
+  card "the agent's ask drew no card under the URL field"
   ../tools/window-screenshot.sh "$pid" "$out/point-ask$2.png" || fail "no window to capture"
-  send click $(chip Point)
+  send click $(point_button)
   if [ "$active" != 1 ]; then
     exec 3>&- 4>&-
     quit
@@ -174,20 +181,21 @@ round 2 -dark
 go_from_bar about:blank
 expect "^browser: page $tab back [0-9]* forward 0 loading 0 about:blank\$" "the tab didn't go to about:blank"
 ask 3 "And the footer?"
-expect '^browser: task chip task-[0-9]* Point at ' "the agent's card drew no Point for its ask on about:blank"
+card "the agent's ask on about:blank drew no card under the URL field"
 for look in dark light; do
   if [ $look = light ]; then
     send menu "Appearance › Light"
     expect '^browser: appearance light$' "View › Appearance › Light didn't make the app light"
     away
   fi
-  send move $(chip Point)
+  # The card stays where it was in either look, and logs its place only when it moves.
+  send move $(point_button)
   expect '^browser: tooltip shown ' "resting on the dimmed Point showed no reason"
   name=point-cant-$look
   [ $look = dark ] || name=point-cant
   ../tools/window-screenshot.sh "$pid" "$out/$name.png" || fail "no window to capture"
 done
-send click $(chip 'Not Now')
+send click $(not_now_button)
 expect "^browser: point $id not now\$" "Not Now on the card didn't answer the ask"
 expect "^browser: point $id unanswered\$" "the agent didn't hear its ask went unanswered"
 nothing=$(next_answer | python3 -I -c '
