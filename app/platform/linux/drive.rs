@@ -7,12 +7,11 @@
 //! screen of a desktop's, Xvfb's one "screen" or tools/headless.sh's Xwayland on a headless sway.
 //! Anywhere else it refuses, and its pointer and keys can't do anything.
 //!
-//! What XTEST can't do still goes as X events sent to the app's own windows, which each window's
-//! client handles as the device's (Chromium takes core events, and GPUI a sent core pointer event
-//! for the XInput 2 one it selects): a held key's repeat, which the server makes only of a key held
-//! past its delay; and, until the drive moves them too, a press with ⌃, ⌥ or ⇧ held, a key with
-//! Alt, which the window manager may take, and the keys while `flags` holds a modifier, whose
-//! modifiers an XKB lock holds.
+//! The pointer goes through XTEST alone, a click's modifiers as keys held around it. Some keys
+//! still go as X events sent to the window the server would pick, which its client handles as the
+//! device's: a held key's repeat, which the server makes only of a key held past its delay; and,
+//! until the drive moves them too, a key with Alt, which the window manager may take, and the keys
+//! while `flags` holds a modifier, whose modifiers an XKB lock holds.
 //!
 //! Under Wayland no client can hand another's surfaces input, so there the pointer and keys are
 //! sway's virtual devices, in tools/headless.sh's session alone (drive_wayland.rs).
@@ -81,9 +80,8 @@ use x11rb::{
     protocol::{
         Event,
         xproto::{
-            self, ButtonPressEvent, ChangeWindowAttributesAux, ConfigureWindowAux,
-            ConnectionExt as _, EnterNotifyEvent, EventMask, KeyButMask, KeyPressEvent,
-            MotionNotifyEvent, StackMode,
+            self, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt as _, EventMask,
+            KeyButMask, KeyPressEvent, StackMode,
         },
         xtest::ConnectionExt as _,
     },
@@ -372,9 +370,6 @@ thread_local! {
     static XTEST_MODIFIERS: Cell<u16> = const { Cell::new(0) };
     /// The other keys the driver holds down through XTEST, whose next press is a repeat.
     static XTEST_KEYS: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
-    /// That a sent press is held, whose drag and release go sent too: XTEST's motions would say no
-    /// button is.
-    static SENT_PRESS: Cell<bool> = const { Cell::new(false) };
     /// Whether the display is one XTEST may drive (`xtest`), once known.
     static XTEST: Cell<Option<bool>> = const { Cell::new(None) };
     /// The last press, a click's or a drag's, in any of the app's windows: its time, place and
@@ -752,135 +747,55 @@ fn button_mask(button: u8) -> u16 {
     }
 }
 
-/// Moves the pointer to `to`: through XTEST, with the server's crossings, or while a sent press is
-/// held, telling the window it was in that it left, and `to` that it came.
-fn hover(to: Target, state: u16) -> Option<()> {
-    if !SENT_PRESS.get() {
-        HOVERED.set(Some(to));
-        return xtest_event(xproto::MOTION_NOTIFY_EVENT, 0, to.root_x, to.root_y);
-    }
+/// Moves the pointer to `to` through XTEST, with the server's crossings. Not when it's there
+/// already, as a hand sends no move then: Blink takes a move while a button is down, even to the
+/// same point, for a drag, and the release then clicks nothing (#2717, #2736).
+fn hover(to: Target) -> Option<()> {
+    HOVERED.set(Some(to));
     let x = server()?;
     let (connection, root) = &*x;
-    let from = HOVERED.replace(Some(to));
-    if from.map(|from| from.window) == Some(to.window) {
+    let at = connection.query_pointer(*root).ok()?.reply().ok()?;
+    if (at.root_x, at.root_y) == (to.root_x, to.root_y) {
         return Some(());
     }
-    let crossing = |kind: u8, at: Target| EnterNotifyEvent {
-        response_type: kind,
-        detail: xproto::NotifyDetail::NONLINEAR,
-        sequence: 0,
-        time: x11rb::CURRENT_TIME,
-        root: *root,
-        event: at.window,
-        child: x11rb::NONE,
-        root_x: at.root_x,
-        root_y: at.root_y,
-        event_x: at.x,
-        event_y: at.y,
-        state: KeyButMask::from(state),
-        mode: xproto::NotifyMode::NORMAL,
-        same_screen_focus: 1,
-    };
-    if let Some(from) = from {
-        let from = Target {
-            root_x: to.root_x,
-            root_y: to.root_y,
-            ..from
-        };
-        let event = crossing(xproto::LEAVE_NOTIFY_EVENT, from);
-        connection
-            .send_event(false, from.window, EventMask::NO_EVENT, event)
-            .ok()?;
-    }
-    let event = crossing(xproto::ENTER_NOTIFY_EVENT, to);
-    connection
-        .send_event(false, to.window, EventMask::NO_EVENT, event)
-        .ok()?;
-    Some(())
+    xtest_event(xproto::MOTION_NOTIFY_EVENT, 0, to.root_x, to.root_y)
 }
 
 /// A press of `button`, 1 the left, 3 the right and 4 to 7 the wheel's, or its release, at `at`,
-/// with `state` the modifiers and the buttons held before it. Through XTEST, unless the press has
-/// modifiers, which go sent with it, as the keys `flags` holds do, till the drive moves them too.
+/// through XTEST, with `state` the modifiers and the buttons held before it. The modifiers' keys
+/// go down before the press and up after the release.
 fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
-    let modifiers = (state | FLAGS.get()) & MODIFIERS;
-    if !SENT_PRESS.get() && !(press && modifiers != 0) {
-        // A hand lifts the ⌘ of its last chord before it clicks: the Control a key left down
-        // would make the press a Ctrl-click, where the sent press carried no modifier.
-        if press && XTEST_MODIFIERS.get() != 0 {
+    if press {
+        // A hand lifts the ⌘ of its last chord before it clicks, and holds the click's own: the
+        // Control a key left down would make the press a Ctrl-click.
+        if XTEST_MODIFIERS.get() != 0 {
             KEY_FLAGS.set(0);
-            xtest_modifiers(0)?;
         }
-        hover(at, state)?;
-        let kind = match press {
-            true => xproto::BUTTON_PRESS_EVENT,
-            false => xproto::BUTTON_RELEASE_EVENT,
-        };
-        return xtest_event(kind, button, at.root_x, at.root_y);
+        xtest_modifiers(state & MODIFIERS)?;
     }
-    // The display's pointer goes to the press first, so its crossings are the press's, and comes
-    // to the release after it, as the sent drag doesn't move it.
-    hover(at, state)?;
-    SENT_PRESS.set(press);
-    let x = server()?;
-    let (connection, root) = &*x;
-    let event = ButtonPressEvent {
-        response_type: match press {
-            true => xproto::BUTTON_PRESS_EVENT,
-            false => xproto::BUTTON_RELEASE_EVENT,
-        },
-        detail: button,
-        sequence: 0,
-        time: x11rb::CURRENT_TIME,
-        root: *root,
-        event: at.window,
-        child: x11rb::NONE,
-        root_x: at.root_x,
-        root_y: at.root_y,
-        event_x: at.x,
-        event_y: at.y,
-        state: KeyButMask::from(state),
-        same_screen: true,
+    hover(at)?;
+    let kind = match press {
+        true => xproto::BUTTON_PRESS_EVENT,
+        false => xproto::BUTTON_RELEASE_EVENT,
     };
-    connection
-        .send_event(false, at.window, EventMask::NO_EVENT, event)
-        .ok()?;
-    connection.flush().ok()?;
+    xtest_event(kind, button, at.root_x, at.root_y)?;
     match press {
         true => Some(()),
-        false => hover(at, state),
+        false => xtest_modifiers(0),
     }
 }
 
-/// Moves the pointer to `at`: through XTEST, which holds the buttons itself, or sent with `state`
-/// while a sent press is held.
+/// Moves the pointer to `at` through XTEST, which holds the buttons itself. While one is held, the
+/// modifiers' keys `state` names are held with it, as a drag's ⌥ that drops a copy comes during it.
 fn motion(at: Target, state: u16) -> Option<()> {
-    hover(at, state)?;
-    if !SENT_PRESS.get() {
-        return Some(());
+    if state & BUTTONS != 0 {
+        xtest_modifiers(state & MODIFIERS)?;
     }
-    let x = server()?;
-    let (connection, root) = &*x;
-    let event = MotionNotifyEvent {
-        response_type: xproto::MOTION_NOTIFY_EVENT,
-        detail: xproto::Motion::NORMAL,
-        sequence: 0,
-        time: x11rb::CURRENT_TIME,
-        root: *root,
-        event: at.window,
-        child: x11rb::NONE,
-        root_x: at.root_x,
-        root_y: at.root_y,
-        event_x: at.x,
-        event_y: at.y,
-        state: KeyButMask::from(state),
-        same_screen: true,
-    };
-    connection
-        .send_event(false, at.window, EventMask::NO_EVENT, event)
-        .ok()?;
-    connection.flush().ok()
+    hover(at)
 }
+
+/// The five buttons X has a state's bit for.
+const BUTTONS: u16 = 0x1f00;
 
 /// Control, Shift and Alt, in an X state.
 const MODIFIERS: u16 = 1 << 2 | 1 | 1 << 3;
@@ -1328,7 +1243,7 @@ fn code_events(code: u8, state: u16, kinds: &[u8]) -> Option<()> {
     let repeat =
         kinds == [xproto::KEY_PRESS_EVENT] && XTEST_KEYS.with_borrow(|down| down.contains(&code));
     // A chord with Alt, the Mac's ⌃ or ⌥, is slice 2's class (#2721): under Xvfb Openbox takes
-    // Ctrl+Alt with an arrow for itself, so it stays sent, as presses with modifiers do.
+    // Ctrl+Alt with an arrow for itself, so it stays sent.
     let alt = state & u16::from(KeyButMask::MOD1) != 0;
     if repeat || alt || FLAGS.get() != 0 {
         return sent_code_events(code, state, kinds);
@@ -2523,7 +2438,7 @@ fn run_command(line: &str) -> Option<()> {
         "handclick" => {
             let (x, y) = point(&mut words)?;
             let at = target_at(x, y)?;
-            hover(at, none)?;
+            hover(at)?;
             xtest_event(xproto::BUTTON_PRESS_EVENT, 1, at.root_x, at.root_y)?;
             xtest_event(xproto::BUTTON_RELEASE_EVENT, 1, at.root_x, at.root_y)
         }
