@@ -1442,11 +1442,13 @@ fn in_driven_point<'a>(words: &mut impl Iterator<Item = &'a str>) -> Option<(f64
 
 /// Chromium's Picture in Picture window, if one shows: a window of the app's that's neither a
 /// browser window nor Settings, as a video's, the Mini Player, and a page's, as a call floats in.
+/// The core's Mini Player has no app id, as Settings has none, so Settings is told by its title.
 fn mini_player() -> Option<Node> {
     let nodes = ours();
     let open = browsers(&nodes);
+    let settings = |node: &Node| node.is_settings() && node.name == crate::settings::title();
     let found = (nodes.iter())
-        .find(|node| !node.is_settings() && !open.iter().any(|(_, each)| each.id == node.id))
+        .find(|node| !settings(node) && !open.iter().any(|(_, each)| each.id == node.id))
         .cloned();
     if found.is_none() {
         describe(&nodes);
