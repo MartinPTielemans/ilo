@@ -64,9 +64,12 @@ def pack(src, archive):
     ]
     names += files_under(src, OUT + "/obj/browser_core", lambda f: f.endswith(".ninja"))
     names.append(OUT + "/args.gn")
-    core = os.path.join(src, "browser_core")
+    # Under src, as files_under takes it: src joined again found nothing when src was relative, as
+    # the engine's build gives it, so every core file read as one a branch adds (#2782).
     with open(os.path.join(src, CORE_FILES), "w") as f:
-        f.writelines(os.path.relpath(p, "browser_core") + "\n" for p in files_under(src, core))
+        f.writelines(
+            os.path.relpath(p, "browser_core") + "\n" for p in files_under(src, "browser_core")
+        )
     names.append(CORE_FILES)
     zstd = subprocess.Popen(["zstd", "-10", "-T0", "-q", "-o", archive], stdin=subprocess.PIPE)
     with tarfile.open(fileobj=zstd.stdin, mode="w|") as t:
