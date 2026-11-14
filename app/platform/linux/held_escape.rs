@@ -96,7 +96,9 @@ fn pressed() {
         if x.is_none() {
             *x = connect();
         }
-        let X { connection, root, .. } = x.as_ref()?;
+        let X {
+            connection, root, ..
+        } = x.as_ref()?;
         raw_releases(connection, *root, true);
         let focus = connection.get_input_focus().ok()?.reply().ok()?.focus;
         let mut windows = vec![focus];
@@ -137,7 +139,10 @@ fn within(connection: &RustConnection, window: xproto::Window, windows: &mut Vec
 /// Whether the held Escape has been let go since it went down.
 fn released() -> bool {
     X.with_borrow(|x| {
-        let Some(X { connection, escape, .. }) = x else {
+        let Some(X {
+            connection, escape, ..
+        }) = x
+        else {
             return true;
         };
         let mut released = false;
@@ -157,7 +162,10 @@ fn released() -> bool {
 fn let_go() {
     let Some(windows) = HELD.take() else { return };
     X.with_borrow(|x| {
-        if let Some(X { connection, root, .. }) = x {
+        if let Some(X {
+            connection, root, ..
+        }) = x
+        {
             raw_releases(connection, *root, false);
             select(connection, &windows, EventMask::NO_EVENT);
             while let Ok(Some(_)) = connection.poll_for_event() {}
