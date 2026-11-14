@@ -565,20 +565,10 @@ for y in 167 223 279 335 391 447 503 559 615 671 727; do
 done
 [ -n "$visited_y" ] || fail "History listed no visited page in the rows the window shows; they were: $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: history pointed ' | cut -d' ' -f4- | tr '\n' ' ')"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-visited.png" || fail "no window to capture"
-send click 300 $visited_y
-expect '^browser: history page in preview$' "a click on a visited page's row didn't open it in Peek"
-none_since '^browser: history open$' || fail "a click on a visited page's row opened it at once"
-expect '^browser: link preview [1-9][0-9]* https\{0,1\}://' "Peek of the visited page didn't open at a page"
-peek=$(grep '^browser: link preview [1-9][0-9]* http' "$log" | tail -1 | cut -d' ' -f4)
-expect '^browser: link preview settled$' "Peek of the visited page didn't settle"
-../tools/window-screenshot.sh "$pid" "$out/history-peek-visited.png" || fail "no window to capture"
-send key escape
-expect '^browser: link preview closing (' "Esc didn't close Peek of the visited page"
-expect "^browser: tab $peek closed\$" "Esc didn't close the page Peek showed"
-none_since '^browser: library hidden$' || fail "closing Peek of a visited page closed the Library"
 # Remove from History, in a visited page's menu, takes the row's day of it out of the profile's
 # history through the core, and History lists one page fewer once the core says so; ⌘Z puts it
-# back, which the core doesn't say, so History asks again and lists it (#2337).
+# back, which the core doesn't say, so History asks again and lists it (#2337). Before Peek, whose
+# visit would put the page back above the closed tabs, so the rows stay where they were.
 listed=$(grep '^browser: history lists [0-9]* pages$' "$log" | tail -1 | cut -d' ' -f4)
 [ -n "$listed" ] || fail "History never said how many pages it lists"
 post rightclick 300 $visited_y
@@ -591,6 +581,17 @@ expect "^browser: history lists $((listed - 1)) pages\$" \
 send key z cmd
 expect "^browser: history lists $listed pages\$" \
   "⌘Z didn't bring the removed page back to History's $listed pages"
+send click 300 $visited_y
+expect '^browser: history page in preview$' "a click on a visited page's row didn't open it in Peek"
+none_since '^browser: history open$' || fail "a click on a visited page's row opened it at once"
+expect '^browser: link preview [1-9][0-9]* https\{0,1\}://' "Peek of the visited page didn't open at a page"
+peek=$(grep '^browser: link preview [1-9][0-9]* http' "$log" | tail -1 | cut -d' ' -f4)
+expect '^browser: link preview settled$' "Peek of the visited page didn't settle"
+../tools/window-screenshot.sh "$pid" "$out/history-peek-visited.png" || fail "no window to capture"
+send key escape
+expect '^browser: link preview closing (' "Esc didn't close Peek of the visited page"
+expect "^browser: tab $peek closed\$" "Esc didn't close the page Peek showed"
+none_since '^browser: library hidden$' || fail "closing Peek of a visited page closed the Library"
 # A right-click on the archived tab shows its menu, whose Copy URL copies its URL.
 post rightclick 300 111
 expect "^browser: menu shown $(cased 'Reopen Tab, Copy URL, Delete from Archive')\$" \
