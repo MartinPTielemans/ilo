@@ -455,7 +455,10 @@ while [ $(($(date +%s) - copied_at)) -lt 92 ]; do
   sleep 1
 done
 clipboard
-[ -z "$clipped" ] || fail "the clipboard still held the words 90 s after A copied them"
+# The Mac's host logs when its clear ran and what it did; none yet means it hadn't run.
+cleared=$(grep '^browser: secret clear ' "$log" | tail -1)
+[ -z "$clipped" ] ||
+  fail "the clipboard still held the words 90 s after A copied them${cleared:+ ($cleared)}"
 
 # B and C sign out without a question, as A keeps the account, and the server forgets them.
 for d in c b; do

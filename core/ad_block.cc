@@ -33,6 +33,7 @@
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "browser_core/ad_block_list_check.h"
+#include "browser_core/ad_block_off_sites.h"
 #include "browser_core/extensions.h"
 #include "browser_core/hooks.h"
 #include "browser_core/native_ad_block.h"
@@ -41,13 +42,17 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/configuration_policy_provider.h"
 #include "components/policy/core/common/policy_bundle.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_namespace.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/core/common/policy_types.h"
+#include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
@@ -102,9 +107,10 @@ constexpr base::TimeDelta kFirstUpdateOfStaleLists = base::Seconds(2);
 // How long a list stays current where assets.json doesn't say, as uBlock Origin's default.
 constexpr base::TimeDelta kUpdateAfter = base::Days(5);
 
-// The patterns of the sites the user turned it off on, in its entry of the profile's extension
-// prefs.
-constexpr char kOffSitesPref[] = "browser_core_off_sites";
+// Where uBlock Origin's entry of the profile's extension prefs kept the patterns of the sites the
+// user turned it off on, before the profile's own prefs did (ad_block_off_sites.h). Read once, to
+// carry them over, and left for a release as the way back.
+constexpr char kOldOffSitesPref[] = "browser_core_off_sites";
 
 // Filters, one a line, for its "My filters" until the user sets theirs: check.sh's, which block
 // and hide what its page loads.
@@ -462,15 +468,48 @@ std::string PatternFor(const GURL& url) {
   return domain.empty() ? "*://" + std::string(url.host()) + "/*" : "*://*." + domain + "/*";
 }
 
+// Builds no service: Chrome registers a profile's prefs through its factories.
+class PrefsFactory : public ProfileKeyedServiceFactory {
+ public:
+  static PrefsFactory* GetInstance() {
+    static base::NoDestructor<PrefsFactory> instance;
+    return instance.get();
+  }
+
+  PrefsFactory() : ProfileKeyedServiceFactory("BrowserCoreAdBlock") {}
+
+ private:
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
+      content::BrowserContext* context) const override {
+    return nullptr;
+  }
+
+  void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) override {
+    RegisterAdBlockOffSitesPrefs(registry);
+  }
+};
+
+// The prefs of |profile|, which keep the sites the user turned it off on: uBlock Origin's, carried
+// over as they're first read.
+PrefService* OffSitePrefs(Profile* profile) {
+  PrefService* prefs = profile->GetOriginalProfile()->GetPrefs();
+  if (!prefs->GetBoolean(kAdBlockOffSitesCarriedPref)) {
+    const extensions::ExtensionPrefs* old =
+        extensions::ExtensionPrefs::Get(profile->GetOriginalProfile());
+    CarryOverAdBlockOffSites(prefs, old ? old->ReadPrefAsList(kId, kOldOffSitesPref) : nullptr);
+  }
+  return prefs;
+}
+
+// The URL patterns of the sites the user turned it off on, in the order they did.
+const base::ListValue& OffSiteList(Profile* profile) {
+  return OffSitePrefs(profile)->GetList(kAdBlockOffSitesPref);
+}
+
 // The patterns of the sites the user turned it off on, in the order they did.
 std::vector<URLPattern> OffSitePatterns(Profile* profile) {
   std::vector<URLPattern> patterns;
-  const base::ListValue* list =
-      extensions::ExtensionPrefs::Get(profile)->ReadPrefAsList(kId, kOffSitesPref);
-  if (!list) {
-    return patterns;
-  }
-  for (const base::Value& site : *list) {
+  for (const base::Value& site : OffSiteList(profile)) {
     URLPattern pattern(kSchemes);
     if (site.is_string() && pattern.Parse(site.GetString()) == URLPattern::ParseResult::kSuccess) {
       patterns.push_back(std::move(pattern));
@@ -508,8 +547,7 @@ void ApplyOffSites(Profile* profile, const extensions::Extension& extension) {
 
 // Keeps |sites|, URL patterns, as the sites it's off on in |profile|, and applies them.
 void KeepOffSites(Profile* profile, base::ListValue sites) {
-  extensions::ExtensionPrefs::Get(profile)->UpdateExtensionPref(kId, kOffSitesPref,
-                                                                base::Value(std::move(sites)));
+  OffSitePrefs(profile)->SetList(kAdBlockOffSitesPref, std::move(sites));
   // Turned off in Settings, it takes them up as it loads again.
   if (const extensions::Extension* extension =
           extensions::ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(kId)) {
@@ -704,17 +742,23 @@ void LoadInto(Profile* profile) {
     return;
   }
   // uBlock Origin, unless the browser's own blocks, which reads the lists uBlock Origin comes with.
-  if (!NativeAdBlock()) {
+  // A safe start holds it by not loading it, so no page waits for it.
+  const bool uses_ublock = !NativeAdBlock();
+  const bool held = uses_ublock && SafeStart();
+  if (uses_ublock && !held) {
     Followers()[profile] = std::make_unique<Follower>(profile);
     Load(profile);
   }
   ReadListsOnce();
-  // Here, as the last of the profile's extensions has loaded and none has run yet, with either
-  // ad blocker.
-  HoldExtensionsForSafeStart(profile);
+  // Here, as the profile's saved extensions have loaded and none has run yet.
+  HoldExtensionsForSafeStart(profile, held ? 1 : 0);
 }
 
 }  // namespace
+
+void RegisterAdBlockPrefs() {
+  PrefsFactory::GetInstance();
+}
 
 void SetUpAdBlock() {
   g_browser_core_load_bundled_extensions = &LoadInto;
@@ -755,10 +799,13 @@ void AddAdBlockHold(content::NavigationThrottleRegistry& registry) {
   content::BrowserContext* context = navigation.GetWebContents()->GetBrowserContext();
   Profile* profile = Profile::FromBrowserContext(context);
   // Only where it filters and will get ready: http(s), in a profile it's loaded and on in, and not
-  // on a site the user turned it off on, whose requests it never sees.
+  // on a site the user turned it off on, whose requests it never sees. Off the record, its page
+  // starts only in the profile's private windows, the original's primary off-the-record profile,
+  // never in one made apart, as the sync sign-in window's (#2619).
   if (!url.SchemeIsHTTPOrHTTPS() || !Followers().contains(profile->GetOriginalProfile()) ||
       !extensions::ExtensionRegistry::Get(profile)->enabled_extensions().Contains(kId) ||
-      (profile->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(kId, profile)) ||
+      (profile->IsOffTheRecord() && (!profile->IsPrimaryOTRProfile() ||
+                                     !extensions::util::IsIncognitoEnabled(kId, profile))) ||
       Ready(context) || OffSites(profile->GetOriginalProfile()).MatchesURL(url)) {
     return;
   }
@@ -799,6 +846,7 @@ void ProxyForAdBlock(content::BrowserContext* context,
                      content::ContentBrowserClient::URLLoaderFactoryType type,
                      const url::Origin& request_initiator,
                      const net::IsolationInfo& isolation_info,
+                     ukm::SourceIdObj ukm_source_id,
                      network::URLLoaderFactoryBuilder& factory_builder) {
   using Type = content::ContentBrowserClient::URLLoaderFactoryType;
   if (!NativeAdBlock() || !UserSettings().ad_blocking || type == Type::kDownload ||
@@ -823,7 +871,7 @@ void ProxyForAdBlock(content::BrowserContext* context,
       OffSites(Profile::FromBrowserContext(context)->GetOriginalProfile()).MatchesURL(page)) {
     return;
   }
-  ProxyForNativeAdBlock(factory_builder);
+  ProxyForNativeAdBlock(factory_builder, frame, ukm_source_id.ToInt64());
 }
 
 bool AdBlockingOffAt(content::BrowserContext* context, const GURL& url) {
@@ -851,19 +899,16 @@ void SetAdBlockingOnSite(content::WebContents* contents, bool on) {
   }
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
   const GURL url = contents->GetLastCommittedURL();
-  extensions::ExtensionPrefs* prefs = extensions::ExtensionPrefs::Get(profile);
   base::ListValue sites;
-  if (const base::ListValue* list = prefs->ReadPrefAsList(kId, kOffSitesPref)) {
-    for (const base::Value& site : *list) {
-      URLPattern pattern(kSchemes);
-      // Turning it back on lets go of every pattern that covers the page.
-      if (on && site.is_string() &&
-          pattern.Parse(site.GetString()) == URLPattern::ParseResult::kSuccess &&
-          pattern.MatchesURL(url)) {
-        continue;
-      }
-      sites.Append(site.Clone());
+  for (const base::Value& site : OffSiteList(profile)) {
+    URLPattern pattern(kSchemes);
+    // Turning it back on lets go of every pattern that covers the page.
+    if (on && site.is_string() &&
+        pattern.Parse(site.GetString()) == URLPattern::ParseResult::kSuccess &&
+        pattern.MatchesURL(url)) {
+      continue;
     }
+    sites.Append(site.Clone());
   }
   if (!on) {
     sites.Append(PatternFor(url));
@@ -881,14 +926,9 @@ std::vector<std::string> AdBlockingOffSites(Profile* profile) {
 }
 
 void TurnOnAdBlockingOnSite(Profile* profile, const std::string& site) {
-  const base::ListValue* list =
-      extensions::ExtensionPrefs::Get(profile)->ReadPrefAsList(kId, kOffSitesPref);
-  if (!list) {
-    return;
-  }
   base::ListValue sites;
   bool found = false;
-  for (const base::Value& kept : *list) {
+  for (const base::Value& kept : OffSiteList(profile)) {
     URLPattern pattern(kSchemes);
     if (kept.is_string() && pattern.Parse(kept.GetString()) == URLPattern::ParseResult::kSuccess &&
         pattern.host() == site) {
