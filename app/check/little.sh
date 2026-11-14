@@ -827,7 +827,7 @@ expect '^browser: tab [0-9]* opened by [0-9]* in the background$' \
 # pointer arrives and before the press, so the page says when 600 ms have passed since the pointer
 # left its link, and each press waits for that. Only real input holds the button where the plate
 # can ask.
-printf '%s' '<title>loading</title>
+printf '%s' '<title>loading</title><script src="painted.js"></script>
 <body style="margin:0;height:100vh">
 <a id=l href="notes.txt" style="position:fixed;left:0;top:0;width:40px;height:40px"></a>
 <script>
@@ -841,14 +841,14 @@ l.addEventListener("mouseleave", () => {
   clearTimeout(rest);
   rest = setTimeout(() => document.title = "rested " + entered, 600);
 });
-requestAnimationFrame(() => setTimeout(() => {
+painted(() => {
   document.title = "held ready";
   // Probe (#2764): every pointer event the page hears, in the log by its title.
   let k = 0;
   for (const type of ["mousemove", "mousedown", "mouseup", "mouseover", "pointerover"])
     addEventListener(type, e => document.title =
       `ev ${++k} ${type} ${e.clientX},${e.clientY} ${e.target.id || e.target.tagName}`, true);
-}));
+});
 </script>' > "$out/site/little-held.html"
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar for the held press's page"
