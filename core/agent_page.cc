@@ -2309,52 +2309,110 @@ void AgentPage::Locate(Then then) {
              if (!page) {
                return;
              }
-             page->Send(
-                 "DOM.scrollIntoViewIfNeeded", base::DictValue().Set("backendNodeId", element),
+             page->ScrollParams(
+                 slot, element,
                  base::BindOnce(
                      [](base::WeakPtr<AgentPage> page, int slot, int element, Then then,
-                        const base::DictValue*) {
+                        base::DictValue params) {
                        if (!page) {
                          return;
                        }
                        page->Send(
-                           "DOM.getContentQuads", base::DictValue().Set("backendNodeId", element),
+                           "DOM.scrollIntoViewIfNeeded", std::move(params),
                            base::BindOnce(
-                               [](base::WeakPtr<AgentPage> page, Then then,
-                                  const base::DictValue* result) {
+                               [](base::WeakPtr<AgentPage> page, int slot, int element, Then then,
+                                  const base::DictValue*) {
                                  if (!page) {
                                    return;
                                  }
-                                 const base::ListValue* quads =
-                                     result ? result->FindList("quads") : nullptr;
-                                 const base::ListValue* quad =
-                                     quads && !quads->empty() ? (*quads)[0].GetIfList() : nullptr;
-                                 if (!quad || quad->size() < 8) {
-                                   std::move(then).Run(std::nullopt);
-                                   return;
-                                 }
-                                 // The box around its corners.
-                                 double xs[4];
-                                 double ys[4];
-                                 for (size_t corner = 0; corner < 4; ++corner) {
-                                   xs[corner] = (*quad)[2 * corner].GetIfDouble().value_or(0);
-                                   ys[corner] = (*quad)[2 * corner + 1].GetIfDouble().value_or(0);
-                                 }
-                                 const auto [left, right] = std::ranges::minmax(xs);
-                                 const auto [top, bottom] = std::ranges::minmax(ys);
-                                 const gfx::RectF box(
-                                     static_cast<float>(left), static_cast<float>(top),
-                                     static_cast<float>(right - left),
-                                     static_cast<float>(bottom - top));
-                                 std::move(then).Run(box);
+                                 page->Measure(slot, element, std::move(then));
                                },
-                               page, std::move(then)),
+                               page, slot, element, std::move(then)),
                            slot);
                      },
-                     page, slot, element, std::move(then)),
-                 slot);
+                     page, slot, element, std::move(then)));
            },
            weak_factory_.GetWeakPtr(), slot, element, std::move(then)),
+       slot);
+}
+
+void AgentPage::ScrollParams(int slot,
+                             int element,
+                             base::OnceCallback<void(base::DictValue)> then) {
+  Send(
+      "DOM.getBoxModel", base::DictValue().Set("backendNodeId", element),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, int slot, int element,
+             base::OnceCallback<void(base::DictValue)> then, const base::DictValue* result) {
+            if (!page) {
+              return;
+            }
+            const base::DictValue* model = result ? result->FindDict("model") : nullptr;
+            const std::optional<int> width = model ? model->FindInt("width") : std::nullopt;
+            const std::optional<int> height = model ? model->FindInt("height") : std::nullopt;
+            if (!width || !height) {
+              std::move(then).Run(base::DictValue().Set("backendNodeId", element));
+              return;
+            }
+            page->Send(
+                "Page.getLayoutMetrics", base::DictValue(),
+                base::BindOnce(
+                    [](int element, int width, int height,
+                       base::OnceCallback<void(base::DictValue)> then,
+                       const base::DictValue* metrics) {
+                      base::DictValue params = base::DictValue().Set("backendNodeId", element);
+                      const base::DictValue* viewport =
+                          metrics ? metrics->FindDict("cssLayoutViewport") : nullptr;
+                      const double view =
+                          viewport ? viewport->FindDouble("clientHeight").value_or(0) : 0;
+                      // A quarter of the view above and below it, or as much as an element too
+                      // tall for that leaves, so its middle, where a click lands, stays in view.
+                      const int room = static_cast<int>(std::min(view / 4, (view - height) / 2));
+                      if (room > 0) {
+                        params.Set("rect", base::DictValue()
+                                               .Set("x", 0)
+                                               .Set("y", -room)
+                                               .Set("width", std::max(width, 1))
+                                               .Set("height", height + 2 * room));
+                      }
+                      std::move(then).Run(std::move(params));
+                    },
+                    element, *width, *height, std::move(then)),
+                slot);
+          },
+          weak_factory_.GetWeakPtr(), slot, element, std::move(then)),
+      slot);
+}
+
+void AgentPage::Measure(int slot, int element, Then then) {
+  Send("DOM.getContentQuads", base::DictValue().Set("backendNodeId", element),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, Then then, const base::DictValue* result) {
+             if (!page) {
+               return;
+             }
+             const base::ListValue* quads = result ? result->FindList("quads") : nullptr;
+             const base::ListValue* quad =
+                 quads && !quads->empty() ? (*quads)[0].GetIfList() : nullptr;
+             if (!quad || quad->size() < 8) {
+               std::move(then).Run(std::nullopt);
+               return;
+             }
+             // The box around its corners.
+             double xs[4];
+             double ys[4];
+             for (size_t corner = 0; corner < 4; ++corner) {
+               xs[corner] = (*quad)[2 * corner].GetIfDouble().value_or(0);
+               ys[corner] = (*quad)[2 * corner + 1].GetIfDouble().value_or(0);
+             }
+             const auto [left, right] = std::ranges::minmax(xs);
+             const auto [top, bottom] = std::ranges::minmax(ys);
+             const gfx::RectF box(static_cast<float>(left), static_cast<float>(top),
+                                  static_cast<float>(right - left),
+                                  static_cast<float>(bottom - top));
+             std::move(then).Run(box);
+           },
+           weak_factory_.GetWeakPtr(), std::move(then)),
        slot);
 }
 

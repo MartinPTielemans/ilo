@@ -1013,6 +1013,39 @@ addEventListener("scroll", () => parent.postMessage("tall scrolled", "*"), { onc
   esac
   call close_tab "{\"tab\":$scroll_tab}" > /dev/null
 
+  # Scrolling to a field leaves room around it: one already whole on screen, just under a sticky
+  # header that covers its label, comes down far enough for the label to show (#2355).
+  printf '%s' '<script src="painted.js"></script>
+<header style="position: sticky; top: 0; height: 60px; background: #ddd">Header</header>
+<div style="height: 1500px"></div>
+<label id=label for=email>Email</label><br><input id=email style="height: 30px">
+<div style="height: 1500px"></div>
+<script>
+// The field whole, just under the header, which covers its label.
+scrollBy(0, email.getBoundingClientRect().top - 61);
+onscroll = () => {
+  const shows = label.getBoundingClientRect().top >= 60;
+  const whole = email.getBoundingClientRect().bottom <= innerHeight;
+  if (shows && whole) document.title = "label shows";
+};
+painted(() => document.title = "sticky");
+</script>' > "$out/site/sticky.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/sticky.html\"}")
+  sticky_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$sticky_tab" ] || fail "opening the sticky header's page answered: $opened"
+  await_log "^browser: title $sticky_tab sticky\$" "the sticky header's page didn't paint"
+  outline=$(call snapshot "{\"tab\":$sticky_tab}")
+  email=$(ref_of textbox Email)
+  [ -n "$email" ] || fail "the sticky header's page had no ref for its field: $outline"
+  scrolled=$(call scroll "{\"tab\":$sticky_tab,\"ref\":\"$email\"}")
+  case "$scrolled" in
+    "Scrolled to “Email”."*) ;;
+    *) fail "scrolling to the field under the header answered: $scrolled" ;;
+  esac
+  await_log "^browser: title $sticky_tab label shows\$" \
+    "scrolling to the field left its label under the sticky header"
+  call close_tab "{\"tab\":$sticky_tab}" > /dev/null
+
   # Its keys go to the page alone: type with submit and press_key's Enter submit the form, Tab
   # moves the keyboard to the next field, and Escape reaches the page. Escape the page doesn't keep
   # is ilo's Stop while a page loads, and the agent's runs no shortcut of ilo's: the page goes on

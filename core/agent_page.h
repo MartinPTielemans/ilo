@@ -262,6 +262,11 @@ class AgentPage : public content::WebContentsObserver,
   void Center(Then then);
   // The same in the viewport of the frame whose session has the element.
   void Locate(Then then);
+  // DOM.scrollIntoViewIfNeeded's parameters for the |element|, with room around it of a quarter
+  // of the viewport where it fits, so a sticky header doesn't cover it or its label.
+  void ScrollParams(int slot, int element, base::OnceCallback<void(base::DictValue)> then);
+  // The element's box in the viewport of the frame whose session has it.
+  void Measure(int slot, int element, Then then);
   // Moves |box|, in the session at |slot|, into the main frame's viewport, through the elements
   // its frame is in.
   void Offset(int slot, gfx::RectF box, Then then);
