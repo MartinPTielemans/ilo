@@ -88,9 +88,10 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
       elif [ "$BROWSER_XVFB" = i3 ] || [ "$BROWSER_XVFB" = i3tile ]; then
         # Probe (#2790): i3, a tiling manager, with no bar and no wizard; i3tile tiles dialogs too.
         config=$(mktemp)
-        printf "font pango:monospace 8\nfocus_follows_mouse no\n" > "$config"
+        printf "# i3 config file (v4)\nfont pango:monospace 8\nfocus_follows_mouse no\n" > "$config"
         [ "$BROWSER_XVFB" = i3 ] ||
           printf "for_window [window_type=\"dialog\"] floating disable\n" >> "$config"
+        echo "$ready.log" > /tmp/i3-2790.where
         i3 -c "$config" > "$ready.log" 2>&1 &
         tries=0
         until i3-msg -t get_version > /dev/null 2>&1; do
