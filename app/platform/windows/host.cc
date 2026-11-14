@@ -26,6 +26,7 @@
 #include <winrt/Windows.UI.Notifications.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cmath>
 #include <cstdio>
@@ -33,6 +34,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -3275,10 +3277,10 @@ void host_maximize_window(void* ui_view) {
 
 namespace {
 // Whether the app asked for the jump list (host_add_dock_items), which waits for a window with the
-// AppUserModelID it goes under, and whether it's set.
+// AppUserModelID it goes under, and whether it's been written.
 bool g_jump_list_wanted = false;
 bool g_jump_list_set = false;
-void SetJumpList();
+void WriteJumpList();
 }  // namespace
 
 void host_show_window(void* ui_view) {
@@ -3287,7 +3289,7 @@ void host_show_window(void* ui_view) {
   ShowWindow(root, SW_SHOW);
   SetForegroundWindow(root);
   if (g_jump_list_wanted && !std::exchange(g_jump_list_set, true)) {
-    SetJumpList();
+    WriteJumpList();
   }
   // The launch window stays over it until the UI has drawn (host_close_launch_window).
   if (g_launch.hwnd) {
@@ -3360,71 +3362,14 @@ bool host_window_shown(void* ui_view) {
 namespace {
 std::wstring BrowserModelId();
 
-// The taskbar's jump list, Windows' stand-in for the Mac's Dock menu: New window and New incognito
-// window, each launching ilo again with Chrome's switch for it, which the running browser hears as
-// a second launch (bc_host's app_new_window). Under the AppUserModelID the windows have, so the
-// list is the one their taskbar button shows. Set once, after the first window, which has the ID.
-void SetJumpList() {
-  ComPtr<ICustomDestinationList> list;
-  if (FAILED(CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&list)))) {
-    return;
-  }
-  const std::wstring id = BrowserModelId();
-  if (!id.empty()) {
-    list->SetAppID(id.c_str());
-  }
-  UINT slots = 0;
-  ComPtr<IObjectArray> removed;
-  ComPtr<IObjectCollection> tasks;
-  if (FAILED(list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
-      FAILED(CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&tasks)))) {
-    return;
-  }
-  wchar_t exe[MAX_PATH] = {};
-  GetModuleFileNameW(nullptr, exe, MAX_PATH);
-  // PKEY_Title, named here rather than linked from propsys.
-  constexpr PROPERTYKEY kTitle = {
-      {0xF29F85E0, 0x4FF9, 0x1068, {0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9}}, 2};
-  for (auto [title, switch_name] : {std::pair{L"New window", L"--new-window"},
-                                    std::pair{L"New incognito window", L"--incognito"}}) {
-    ComPtr<IShellLinkW> link;
-    ComPtr<IPropertyStore> store;
-    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
-                                IID_PPV_ARGS(&link))) ||
-        FAILED(link.As(&store))) {
-      continue;
-    }
-    link->SetPath(exe);
-    link->SetArguments(switch_name);
-    link->SetIconLocation(exe, 0);
-    PROPVARIANT value;
-    PropVariantInit(&value);
-    value.vt = VT_LPWSTR;
-    if (FAILED(SHStrDupW(title, &value.pwszVal))) {
-      continue;
-    }
-    store->SetValue(kTitle, value);
-    store->Commit();
-    PropVariantClear(&value);
-    tasks->AddObject(link.Get());
-  }
-  ComPtr<IObjectArray> array;
-  if (SUCCEEDED(tasks.As(&array)) && SUCCEEDED(list->AddUserTasks(array.Get()))) {
-    list->CommitList();
-    // check.sh reads this line.
-    fprintf(stderr, "browser: jump list set\n");
-  }
-}
 }  // namespace
 
-// Windows has no Dock menu; its jump list holds New window and New incognito window instead, once
-// the app has finished launching.
+// Windows has no Dock menu; its jump list holds New window, New incognito window and New Little ilo
+// Window instead, written as the first window shows (WriteJumpList).
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {
   g_jump_list_wanted = true;
   if (!UiViews().empty() && !std::exchange(g_jump_list_set, true)) {
-    SetJumpList();
+    WriteJumpList();
   }
 }
 
@@ -3442,13 +3387,8 @@ static std::map<void*, uint64_t>& WindowIds() {
   return ids;
 }
 
-// Writes the jump list's task host_set_little_task keeps, once a window has the AppUserModelID.
-static void WriteLittleTask();
-
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
-  // The core gave its window the AppUserModelID as it made it (core's AddWindowViews).
-  WriteLittleTask();
   // Opened behind another, it hears it isn't the one the user is in, which no foreground event says.
   TellMain(GetForegroundWindow());
 }
@@ -5694,11 +5634,9 @@ constexpr UINT kTrayId = 1;
 HWND g_tray = nullptr;
 void (*g_tray_clicked)(void) = nullptr;
 UINT g_taskbar_created = 0;
-// The task's title, which the icon's tooltip says too, and its arguments, kept until it's
-// written under the windows' AppUserModelID, which the first window has.
+// The jump list's Little ilo task's title, which the icon's tooltip says too, and its arguments.
 std::wstring g_little_title;
 std::wstring g_little_arguments;
-bool g_little_task_waits = false;
 
 // PKEY_Title, named here as kAppId is, rather than linked from propsys.
 constexpr PROPERTYKEY kTitle = {
@@ -5790,20 +5728,23 @@ void host_set_little_status_item(void (*clicked)(void)) {
 void host_set_little_task(const char* title, const char* arguments) {
   g_little_title = Wide(title);
   g_little_arguments = Wide(arguments);
-  g_little_task_waits = true;
-  WriteLittleTask();
+  // Before the first window shows, it's written with the rest of the list then.
+  if (g_jump_list_set) {
+    WriteJumpList();
+  }
 }
 
 }  // extern "C"
 
-static void WriteLittleTask() {
-  // The list goes under the windows' ID, so their taskbar button has it, and no window has it
-  // before the first opens.
-  const std::wstring id = g_little_task_waits ? BrowserModelId() : std::wstring();
-  if (id.empty()) {
-    return;
-  }
-  g_little_task_waits = false;
+namespace {
+
+// Writes the jump list under the windows' AppUserModelID |id|: New window and New incognito window,
+// each launching ilo again with Chrome's switch for it, which the running browser hears as a second
+// launch (bc_host's app_new_window), then Little ilo's task if the app gave one. Each commit
+// replaces the whole list, so all three go in one. The caller has CoInitialized this thread.
+void WriteJumpListNow(const std::wstring& id,
+                      const std::wstring& little_title,
+                      const std::wstring& little_arguments) {
   // check.sh reads these lines: which step refused, and why.
   const auto refused = [](const char* step, HRESULT result) {
     fprintf(stderr, "browser: jump list refused at %s: 0x%08lx\n", step,
@@ -5811,8 +5752,6 @@ static void WriteLittleTask() {
   };
   ComPtr<ICustomDestinationList> list;
   ComPtr<IObjectCollection> tasks;
-  ComPtr<IShellLinkW> link;
-  ComPtr<IPropertyStore> store;
   HRESULT result = CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
                                     IID_PPV_ARGS(&list));
   if (FAILED(result)) {
@@ -5823,43 +5762,85 @@ static void WriteLittleTask() {
   if (FAILED(result)) {
     return refused("the tasks", result);
   }
-  result = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
-  if (FAILED(result) || FAILED(result = link.As(&store))) {
-    return refused("the task", result);
-  }
   if (FAILED(result = list->SetAppID(id.c_str()))) {
     return refused("its app id", result);
   }
-  const std::wstring exe = ExePath();
-  link->SetPath(exe.c_str());
-  link->SetArguments(g_little_arguments.c_str());
-  link->SetIconLocation(exe.c_str(), 0);
-  link->SetDescription(g_little_title.c_str());
-  PROPVARIANT value;
-  PropVariantInit(&value);
-  value.vt = VT_LPWSTR;
-  const size_t bytes = (g_little_title.size() + 1) * sizeof(wchar_t);
-  value.pwszVal = static_cast<LPWSTR>(CoTaskMemAlloc(bytes));
-  if (value.pwszVal) {
-    memcpy(value.pwszVal, g_little_title.c_str(), bytes);
+  std::vector<std::pair<std::wstring, std::wstring>> all = {
+      {L"New window", L"--new-window"}, {L"New incognito window", L"--incognito"}};
+  if (!little_title.empty()) {
+    all.emplace_back(little_title, little_arguments);
   }
-  result = value.pwszVal ? store->SetValue(kTitle, value) : E_OUTOFMEMORY;
-  PropVariantClear(&value);
-  if (FAILED(result) || FAILED(result = store->Commit())) {
-    return refused("its title", result);
+  const std::wstring exe = ExePath();
+  for (const auto& [title, arguments] : all) {
+    ComPtr<IShellLinkW> link;
+    ComPtr<IPropertyStore> store;
+    result = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
+    if (FAILED(result) || FAILED(result = link.As(&store))) {
+      return refused("the task", result);
+    }
+    link->SetPath(exe.c_str());
+    link->SetArguments(arguments.c_str());
+    link->SetIconLocation(exe.c_str(), 0);
+    link->SetDescription(title.c_str());
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    value.vt = VT_LPWSTR;
+    result = SHStrDupW(title.c_str(), &value.pwszVal);
+    if (SUCCEEDED(result)) {
+      result = store->SetValue(kTitle, value);
+    }
+    PropVariantClear(&value);
+    if (FAILED(result) || FAILED(result = store->Commit())) {
+      return refused("its title", result);
+    }
+    if (FAILED(result = tasks->AddObject(link.Get()))) {
+      return refused("the task", result);
+    }
   }
   UINT slots = 0;
   ComPtr<IObjectArray> removed;
   ComPtr<IObjectArray> array;
-  if (FAILED(result = tasks->AddObject(link.Get())) || FAILED(result = tasks.As(&array)) ||
+  if (FAILED(result = tasks.As(&array)) ||
       FAILED(result = list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
       FAILED(result = list->AddUserTasks(array.Get())) || FAILED(result = list->CommitList())) {
     return refused("the commit", result);
   }
-  // check.sh reads this line.
-  fprintf(stderr, "browser: jump list task %ls: %ls\n", g_little_title.c_str(),
-          g_little_arguments.c_str());
+  // check.sh reads these lines.
+  fprintf(stderr, "browser: jump list set\n");
+  if (!little_title.empty()) {
+    fprintf(stderr, "browser: jump list task %ls: %ls\n", little_title.c_str(),
+            little_arguments.c_str());
+  }
 }
+
+// The taskbar's jump list, Windows' stand-in for the Mac's Dock menu, under the AppUserModelID the
+// windows have, so it's the one their taskbar button shows, which is why it waits for the first
+// window to show. COM's shell objects take tens of milliseconds the first window's first frame
+// would wait for (#2384), so they're written on a thread of their own, as Chrome writes its list
+// off the UI thread. The newest write wins: one that finds a newer one asked for leaves it alone.
+void WriteJumpList() {
+  const std::wstring id = BrowserModelId();
+  if (id.empty()) {
+    return;
+  }
+  // Leaked, as a write may still be going at exit.
+  static auto* lock = new std::mutex;
+  static auto* asked = new std::atomic<uint64_t>(0);
+  const uint64_t ask = ++*asked;
+  std::thread([id, ask, title = g_little_title, arguments = g_little_arguments] {
+    std::lock_guard<std::mutex> hold(*lock);
+    if (ask != asked->load()) {
+      return;
+    }
+    const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+    WriteJumpListNow(id, title, arguments);
+    if (com) {
+      CoUninitialize();
+    }
+  }).detach();
+}
+
+}  // namespace
 
 extern "C" {
 
