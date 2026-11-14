@@ -149,6 +149,10 @@ FOLD
   # Esc drops the note, and the section picked again opens the panel with the keyboard.
   send key escape
   expect '^browser: note panel dismissed$' "esc in the note panel didn't drop the note"
+  # The pointer left the page for the panel, so it comes back and marks the section before the
+  # click, as a hand's does: a press before its hover is answered picks nothing.
+  send move $page_point
+  expect "browser: tab $tab point over section\$" "the section wasn't marked again after the note panel"
   send click $page_point
   expect '^browser: note panel 1 withheld$' "the section picked again opened no note panel"
   send type the title is cut off
