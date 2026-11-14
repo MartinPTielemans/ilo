@@ -21,6 +21,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/task_traits.h"
 #include "base/time/time.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
@@ -75,6 +76,8 @@
 #include "components/sessions/core/serialized_navigation_entry.h"
 #include "components/sessions/core/serialized_user_agent_override.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
@@ -102,6 +105,12 @@
 namespace browser_core {
 
 namespace {
+
+// Below the UI thread's default queue, where the window compositor's begin frame arrives, so a
+// switch's frame starts before the app hears of it and the page takes the keyboard (#2377).
+scoped_refptr<base::SingleThreadTaskRunner> AfterFrame() {
+  return content::GetUIThreadTaskRunner({base::TaskPriority::USER_VISIBLE});
+}
 
 // Whether |contents| is a tab in a Browser's tab strip. One Chrome is taking out isn't, from
 // within its change to the tabs, where Chrome tells its observers once the tab has left.
@@ -2542,7 +2551,7 @@ void Window::SelectAfterClosing() {
 void Window::ReportSelected() {
   SessionChanged();
   // Posted, like the Space's changes, so the app hears of its own call once it has returned.
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+  AfterFrame()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<Window> window, bc_id tab) {
                        // Not for a window that's closing, or whose native window Chromium has
@@ -3076,8 +3085,8 @@ void Window::FocusPageSoon() {
   // Posted: AppKit can be part way through moving the keyboard, as when a committing page hides the
   // view that had it and Chromium makes the window key. A page view focused inside that move
   // believes it has the keyboard after AppKit has given it elsewhere (FocusSettledOnActivation).
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&Window::FocusPage, weak_factory_.GetWeakPtr()));
+  AfterFrame()->PostTask(FROM_HERE,
+                         base::BindOnce(&Window::FocusPage, weak_factory_.GetWeakPtr()));
 }
 
 void Window::FocusPage() {
