@@ -8,7 +8,9 @@
 # hidden on another display is. The names come from the host's code, and a name this run has no way
 # to open fails it, so a new overlay is walked as soon as it's added. The foot bar, which nothing
 # but BROWSER_FOOT_BAR shows yet and nothing hides, is only seen shown. Each shown overlay is
-# captured with the windows over the browser window, as overlays-<event>-<name>.png.
+# captured with the windows over the browser window, as overlays-<event>-<name>.png. Point's note
+# panel opens only for an agent's ask to point, so an agent connects as point's does and asks once
+# for each walk; an engine from before the core's point mode skips it.
 # Real input needs CI's hosted desktop, and lives are the Windows host's; the Mac's and Linux's
 # events are #2563's audit.
 
@@ -46,6 +48,7 @@ capture
 dialog
 link preview
 boost editor
+note panel
 folder preview
 offer
 drop targets
@@ -82,6 +85,16 @@ printf '%s\n' '/* overlays */' > "$profile_dir/Default/Boosts/$host.css"
 log="$out/overlays.log"
 step=0
 rm -f "$saved" "$launch_frame"
+points=
+if engine_has ../core/point.cc; then
+  points=1
+  token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
+  agents_file="$(dirname "$saved")/Agents"
+  printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+  chmod 600 "$agents_file"
+else
+  echo "skip: overlays' note panel. This engine is from before the core's point mode."
+fi
 BROWSER_DRIVE=1 BROWSER_FOOT_BAR=arrange BROWSER_URL="${site}overlays.html" "$browser" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -97,6 +110,21 @@ if [ "$active" != 1 ]; then
   exit 0
 fi
 logged '^browser: drive: real press' || fail "CI's desktop gave no real input, which the run's events need"
+asks=0
+if [ -n "$points" ]; then
+  await '^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ||
+    fail "the saved switch didn't start the agents' server, which the note panel's ask needs"
+  socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
+  . check/git-bash.sh
+  rm -f "$out/point-in" "$out/point-out"
+  mkfifo "$out/point-in" "$out/point-out"
+  BROWSER_AGENT_TOKEN=$token windows_bridge "$app/mcp-bridge.exe" "$socket" "$out/point-in" \
+    "$out/point-out" 2> "$out/point-bridge.log" &
+  exec 4> "$out/point-in" 5< "$out/point-out"
+  printf '%s\n' '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' >&4
+  perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line' <&5 || fail "the browser didn't answer the agent's hello"
+  printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&4
+fi
 await '^browser: foot bar shown over [0-9]*$' || fail "BROWSER_FOOT_BAR didn't show the foot bar"
 
 # The tabs: the page pinned, then a folder under it holding a pinned tab, closed, and a login page
@@ -317,6 +345,28 @@ close() {
       expect '^browser: drop targets hidden$' "$2: the tab back over the sidebar left the drop targets"
       send release $today_row
       ;;
+    'note panel')
+      asks=$((asks + 1))
+      printf '{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"point","arguments":{"question":"Which part?"}}}\n' "$asks" >&4
+      expect '^browser: agent mcp-client asks to point [0-9]*$' "$2: the agent's ask to point didn't come"
+      point=$(sed -n 's/^browser: agent mcp-client asks to point \([0-9]*\)$/\1/p' "$log" | tail -1)
+      expect '^browser: task chip task-[0-9]* Point at ' "$2: the agent's card drew no Point"
+      read -r cx cy cw ch << CHIP
+$(grep '^browser: task chip task-[0-9]* Point at ' "$log" | tail -1 | sed 's/.* Point at //')
+CHIP
+      send click $((cx + cw / 2)) $((cy + ch / 2))
+      expect "^browser: point $point started in $a\$" "$2: Point on the card didn't start pointing"
+      send click $page_point
+      expect '^browser: note panel 1 ' "$2: a click on the page in Point gave no note panel"
+      ;;
+    'note panel')
+      send key escape
+      expect '^browser: note panel hidden$' "$2: Escape didn't close the note panel"
+      # A second Escape ends Point, which answers the agent that nothing was pointed at.
+      send key escape
+      expect "^browser: point $point not now\$" "$2: Escape didn't end Point once the note panel had gone"
+      perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line' <&5 || fail "$2: the agent's ask had no answer"
+      ;;
     reveal)
       send move 650 320
       send flags winalt
@@ -343,6 +393,7 @@ walk() {
   # The names come in on 7, as a loop in a pipe would run in a subshell, where a failure wouldn't
   # end the run and the steps' count would be lost.
   while read -r name <&7; do
+    [ "$name" != 'note panel' ] || [ -n "$points" ] || continue
     if [ -n "${3:-}" ] && [ "$name" != 'foot bar' ]; then
       entry "$name"
       [ -z "$got" ] || {
@@ -417,6 +468,8 @@ done
 walk "Win+D and back" win-d
 events="$events, Win+D and back"
 
-exec 3>&-
+exec 3>&- 4>&-
 quit
-echo "ok: overlays. Each of the $(printf '%s\n' "$order" | grep -c .) the host floats, after $events: shown on screen at its window's scale, and closed off screen with neither the keyboard nor the capture."
+walked=$(printf '%s\n' "$order" | grep -c .)
+[ -n "$points" ] || walked=$((walked - 1))
+echo "ok: overlays. Each of the $walked the host floats, after $events: shown on screen at its window's scale, and closed off screen with neither the keyboard nor the capture."
