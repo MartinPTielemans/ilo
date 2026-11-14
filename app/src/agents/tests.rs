@@ -2177,6 +2177,62 @@ fn the_log_says_how_long_ago() {
     assert_eq!(ago(now + Duration::from_secs(5), now), "Just now");
 }
 
+/// A page whose requests were still open when the core stopped waiting, though what it showed
+/// held still, as one that polls, says that rather than that it may change yet (#2355).
+#[gpui::test]
+fn an_action_says_when_only_requests_were_still_open(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "scroll", json!({ "tab": 20 }), cx);
+    let polling = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+    ], "requests": true })
+    .to_string();
+    let scrolled = page_done(&agents, &browser, answer, polling, cx);
+    assert!(!scrolled.error);
+    assert!(
+        scrolled.text.starts_with(
+            "Scrolled down. The page held still, with requests it made still open after 5 s.\n\n\
+             Tab 20"
+        ),
+        "{}",
+        scrolled.text
+    );
+    assert!(
+        !scrolled.text.contains("may change yet"),
+        "{}",
+        scrolled.text
+    );
+}
+
+/// A wait step until "quiet" ends as soon as the page holds still with only its requests open, as
+/// a page that polls keeps one open for good (#2355).
+#[gpui::test]
+fn a_wait_step_ends_on_a_page_that_holds_still_while_it_polls(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let steps =
+        json!({ "tab": 20, "steps": [{ "action": "wait", "until": "quiet", "seconds": 10 }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    let polling = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+    ], "requests": true })
+    .to_string();
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, polling, false, cx)
+    });
+    cx.run_until_parked();
+    let ran = run.recv().unwrap();
+    assert!(
+        ran.text.starts_with(
+            "Ran 1 steps.\n1. The page held still, with requests it made still open after 5 s.\n\n\
+             Tab 20"
+        ),
+        "{}",
+        ran.text
+    );
+    assert_eq!(browser.pages.borrow().len(), 1, "it looked again");
+}
+
 /// The core answers the agents' last request of it with the shop's tree.
 fn shop_done(agents: &Entity<Agents>, browser: &Made, cx: &mut TestAppContext) {
     let request = browser.pages.borrow().last().unwrap().1;
@@ -2207,7 +2263,8 @@ fn an_action_says_when_its_page_was_still_busy(cx: &mut TestAppContext) {
 }
 
 /// A wait step until "quiet" asks the core for the page once it has settled, again while it was
-/// still busy, and once its time is up goes on with the run, as a page that polls never settles.
+/// still busy, and once its time is up goes on with the run, as a page that keeps changing never
+/// settles.
 #[gpui::test]
 fn a_wait_step_waits_for_the_page_to_settle(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);

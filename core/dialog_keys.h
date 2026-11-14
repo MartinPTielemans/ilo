@@ -1,6 +1,9 @@
 #ifndef BROWSER_CORE_DIALOG_KEYS_H_
 #define BROWSER_CORE_DIALOG_KEYS_H_
 
+namespace content {
+class WebContents;
+}
 namespace views {
 class Widget;
 }
@@ -14,6 +17,11 @@ namespace browser_core::dialog_keys {
 // Asks the app about the keys of each tab dialog that browser window |window| shows, from now until
 // the dialog goes.
 void Watch(views::Widget* window);
+
+// Gives the keyboard back to the tab dialog over |page| when the page takes it, as a click on the
+// page beside the dialog gives it on the Mac: the page drops every key while its dialog shows, so
+// ilo's shortcuts would be lost (#2625).
+void PageFocused(content::WebContents* page);
 
 }  // namespace browser_core::dialog_keys
 
