@@ -759,11 +759,13 @@ fi
 # Its look, Dia's: 6 pt corners and a rim, one flat scrim, and its close button 28 × 28 at the top
 # left and back to its tab 29 × 28 at the top right, 12 in. An engine older than its core has
 # Chrome's.
+looked=
 if engine_has ../core/mini_player.cc ../engine/patches/ours/chromium-core-mini-player.patch; then
+  looked=1
   expect 'browser: mini player look ' "the core didn't give the Mini Player its look" "$floated"
   look=$(grep 'browser: mini player look ' "$log" | tail -1)
   case "$look" in
-  *" close 12,12 28x28 back "*",12 29x28") ;;
+  *" close 12,12 28x28 back "*",12 29x28 origin "*) ;;
   *) fail "the Mini Player's buttons weren't Dia's: $look" ;;
   esac
 fi
@@ -936,5 +938,19 @@ placed_where_left ||
   fail "after a relaunch the Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 exec 3>&-
 quit
+
+# Chrome's origin, its word on whose video this is, shows beside the ×, on its row, clear of it, of
+# back to its tab and of the "–", at each size the Mini Player had, from the smallest it opens at
+# (#2802). The core logs a look as "<w>x<h> close <x>,<y> <w>x<h> back … origin … minimize …|none".
+if [ -n "$looked" ]; then
+  bad=$(grep 'browser: mini player look ' "$log" | sed 's/.*mini player look //' | tr ',x' '  ' |
+    awk '{
+      right = $4 + $6; ends = $14 + $16
+      clear = $13 == "origin" && $16 > 0 && $14 >= right && ends <= $9 && 2 * $15 + $17 == 2 * $5 + $7
+      if ($19 != "none") clear = clear && ends <= $19 && $19 >= right && $19 + $21 <= $9
+      if (!clear) { print; exit }
+    }')
+  [ -z "$bad" ] || fail "the Mini Player's origin or its \"–\" was over its buttons: $bad"
+fi
 
 echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, skips back, sets its volume from a drawer, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, after a relaunch too, and coming back to its tab's window from another window, or from another app with a menu open, puts it back in the tab."
