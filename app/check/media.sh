@@ -274,9 +274,10 @@ EOF
   fail "$2"
 }
 # pip_driven: whether the driver finds a Picture in Picture window, which it does through X11
-# alone: drive.mm has no pip, and under Wayland no client sees another's windows.
+# alone: drive.mm has no pip, and under Wayland no client sees another's windows. Under KWin it
+# finds none (#2757).
 pip_driven() {
-  [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]
+  [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${BROWSER_XVFB:-}" != kwin ]
 }
 # kept_keys [what]: waits for the browser window to have the keyboard once <what> has floated, the
 # call as its tab hid if none, as it keeps it on the Mac and X11. Wayland's compositor gives the
@@ -410,7 +411,9 @@ kept_keys
 # one from its bottom right corner, in the 10 its edges keep for sizing, sizes it. The window
 # manager does both, with the display's pointer. The driver through X11 alone, as pip_driven says;
 # Windows answers with its hit test below, and a Mac in CI drags it with check/pointer.mm.
-if pip_driven; then
+if [ "${BROWSER_XVFB:-}" = kwin ]; then
+  echo "skip: moving and sizing the floating call, under KWin: the driver finds no window for it (#2757)."
+elif pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at 1 "the floating call had no window"
@@ -803,9 +806,14 @@ if pip_driven; then
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
   expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
 else
-  echo "skip: moving, sizing and double-clicking the Mini Player on" \
-    "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
-    "there."
+  if [ "${BROWSER_XVFB:-}" = kwin ]; then
+    echo "skip: the Mini Player's place, and moving, sizing and double-clicking it, under KWin:" \
+      "the driver finds no window for it (#2757)."
+  else
+    echo "skip: moving, sizing and double-clicking the Mini Player on" \
+      "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
+      "there."
+  fi
   # Clear of the page's middle, where sway floats the Mini Player wherever the core asks for it.
   send click 300 200
   send key x
