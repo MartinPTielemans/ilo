@@ -108,12 +108,13 @@ await '^browser: title [0-9]* body rgb(51, 51, 51)$' ||
 read -r bx by bw bh << EOF
 $(grep '^browser: safe start button 0 at ' "$log" | tail -1 | cut -d' ' -f7-)
 EOF
+# Its Windows id, read while it runs: once it has quit, Git Bash has no /proc entry for it.
+! windows || old_id=$(cat "/proc/$pid/winpid")
 # Posted: the app quits before the driver could say it's done.
 post click $((bx + bw / 2)) $((by + bh / 2))
 expect '^browser: command turn-back-on via sidebar$' "Turn Back On didn't take the click"
 exec 3>&-
 old=$pid
-! windows || old_id=$(cat "/proc/$old/winpid")
 for _ in $(seq 300); do
   kill -0 "$old" 2> /dev/null || break
   sleep 0.1
