@@ -997,13 +997,9 @@ expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
 # The driver numbers windows in the order they were made, the private one that closed too.
 second=$(grep -c '^browser: window opened ' "$log")
 # The new window becomes the one the user is in a moment after it opens; going back before then
-# leaves the first one main all along, and nothing comes back to it. Linux's host doesn't say.
-if [ "$(uname)" != Linux ]; then
-  opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
-  expect "^browser: window $opened main true\$" "the window ⌘N opened didn't become the main one"
-else
-  echo "skip: the window ⌘N opened becoming the main one: Linux's host doesn't say which is."
-fi
+# leaves the first one main all along, and nothing comes back to it.
+opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+expect "^browser: window $opened main true\$" "the window ⌘N opened didn't become the main one"
 send window 1
 expect 'browser: mini player back in its tab$' \
   "coming back to the video's window didn't put the Mini Player back in its tab"
