@@ -46,6 +46,7 @@
 #include "ui/compositor/layer_solid_color.h"
 #include "ui/events/event.h"
 #include "ui/events/event_handler.h"
+#include "ui/events/event_target.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
@@ -316,6 +317,9 @@ class WindowViews : public views::WidgetObserver,
       : widget_(widget), ui_(ui), ui_text_input_(widget) {
     observation_.Observe(widget);
     content()->AddPreTargetHandler(this);
+    if (OnWayland()) {
+      content()->AddPreTargetHandler(&keys_kept_, ui::EventTarget::Priority::kSystem);
+    }
     if (auto* client = aura::client::GetFocusClient(content())) {
       focus_observation_.Observe(client);
     }
@@ -828,6 +832,9 @@ class WindowViews : public views::WidgetObserver,
     children_events_ = x11::ScopedEventSelector();
     focus_observation_.Reset();
     content()->RemovePreTargetHandler(this);
+    if (OnWayland()) {
+      content()->RemovePreTargetHandler(&keys_kept_);
+    }
     ring_.Hide();
     for (Slot& slot : panes_) {
       Empty(slot);
@@ -1147,6 +1154,23 @@ class WindowViews : public views::WidgetObserver,
   }
 
  private:
+  // On Wayland the UI's and an overlay's keys reach the window too, and views' focus manager, whose
+  // handler on the root window comes before this one's, runs the window's accelerators with them:
+  // a tab dialog's escape sent Chrome's warning before http back as it closed the command bar over
+  // it (#2443). At system priority this one hears them before every default handler, and ends them.
+  class KeysKept : public ui::EventHandler {
+   public:
+    explicit KeysKept(const WindowViews* views) : views_(views) {}
+    void OnKeyEvent(ui::KeyEvent* event) override {
+      if (views_->ui_has_keyboard_ || views_->overlay_has_keyboard_) {
+        event->StopPropagation();
+      }
+    }
+
+   private:
+    const raw_ptr<const WindowViews> views_;
+  };
+
   // The page a window of Chromium's took the keyboard from has it back, if it's still shown and the
   // window still has it.
   void PageTakesBackKeyboard() {
@@ -1211,6 +1235,8 @@ class WindowViews : public views::WidgetObserver,
   bool window_manager_full_screen_ = false;
   bool ui_has_keyboard_ = false;
   bool overlay_has_keyboard_ = false;
+  // Ahead of views' focus manager on the window (KeysKept).
+  KeysKept keys_kept_{this};
   // What runs as the overlay that has the keyboard lets it go (platform::WhenOverlayLetsGo).
   std::vector<base::OnceClosure> overlay_let_go_;
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
