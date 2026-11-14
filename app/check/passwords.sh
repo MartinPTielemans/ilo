@@ -198,14 +198,53 @@ expect '^browser: command site-controls via key$' \
 expect '^browser: site controls settled$' "the Site Controls the key opened didn't settle"
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls the key opened"
+# Sets children to how many child windows the browser window has, Chrome's dropdown among them.
+# In this shell, never in $(…), where send's count of the driver's steps would be lost.
+count_children() {
+  send layout
+  children=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+    grep -c '^browser: layout child' || true)
+}
+# Waits up to 10 s, as expect does, by the clock wait_begins reads, for the browser window to have
+# more child windows than $shown, or fails with $1. Chrome shows its dropdown after reading the
+# saved logins, so a count of layouts would be over sooner on a quick driver.
+dropdown_shown() {
+  began=${SECONDS:-$(date +%s)}
+  until count_children; [ "$children" -gt "$shown" ]; do
+    [ "$((${SECONDS:-$(date +%s)} - began))" -lt 10 ] ||
+      fail "$1: $children child windows, as before it"
+    sleep 0.1
+  done
+}
+# Waits up to 10 s for Chrome's dropdown to close, after escape, or fails with $1.
+dropdown_gone() {
+  send key escape
+  began=${SECONDS:-$(date +%s)}
+  until count_children; [ "$children" = "$shown" ]; do
+    [ "$((${SECONDS:-$(date +%s)} - began))" -lt 10 ] ||
+      fail "$1: $children child windows, where there were $shown"
+    sleep 0.1
+  done
+}
 # With the password cleared, a click in the username field shows Chrome's dropdown under it, where
-# down previews the saved login and return fills it in again.
+# down previews the saved login and return fills it in again. Chrome shows it a moment after the
+# click, and a down before then only opens it (a Wayland run, 43492843229), so down waits for it where
+# the driver lists Chromium's popups as child windows: the Mac's and both of Linux's.
+count_children
+shown=$children
 send click 600 60
 send key tab
 send key a cmd
 send key backspace
 expect "^browser: title $tab cleared\$" "clearing the password didn't undo the fill"
-send click 600 60
+if ! windows; then
+  # Emptying the password can bring a dropdown up at its field, which the click would replace.
+  dropdown_gone "escape didn't close the dropdown at the emptied password"
+  send click 600 60
+  dropdown_shown "a click in the username field showed no dropdown of the saved login"
+else
+  send click 600 60
+fi
 send key down
 expect "^browser: title $tab filled\$" "down didn't preview the saved login"
 ../tools/window-screenshot.sh "$pid" "$out/password-fill.png" || fail "no window to capture"
@@ -499,30 +538,6 @@ if [ "$(uname)" = Darwin ]; then
     "Edit lacks ilo's AutoFill after Find: $(grep "$edit" "$log" | tail -1)"
   [ "$(grep "$edit" "$log" | tail -1 | grep -o 'AutoFill ›' | wc -l)" -eq 3 ] ||
     fail "Edit has the system's AutoFill too: $(grep "$edit" "$log" | tail -1)"
-  # Sets children to how many child windows the browser window has, Chrome's dropdown among them.
-  # In this shell, never in $(…), where send's count of the driver's steps would be lost.
-  count_children() {
-    send layout
-    children=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
-      grep -c '^browser: layout child' || true)
-  }
-  # Waits for the browser window to have more child windows than $shown, or fails with $1.
-  dropdown_shown() {
-    for _ in $(seq 30); do
-      count_children
-      [ "$children" -gt "$shown" ] && return
-    done
-    fail "$1"
-  }
-  # Waits for Chrome's dropdown to close, after escape, or fails with $1.
-  dropdown_gone() {
-    send key escape
-    for _ in $(seq 30); do
-      count_children
-      [ "$children" = "$shown" ] && return
-    done
-    fail "$1"
-  }
   go_from_bar "${site#http://}address.html"
   expect "^browser: title $tab address\$" "the address page didn't load for Edit › AutoFill"
   count_children
