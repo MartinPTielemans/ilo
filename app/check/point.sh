@@ -211,7 +211,10 @@ FOLD
   # Settings' card's does until the wheel brings their end in sight.
   expect '^browser: note panel rows go on below$' "the panel's rows, past its height, drew no fade at their cut edge"
   ../tools/window-screenshot.sh "$pid" "$out/point-note-open$2.png" || fail "no window to capture"
-  send scrollkey $((fx + fw / 2)) $((fy + fh + 80)) 400 2
+  # scrollkey's point is in the panel's own window: its middle, over the rows near its foot.
+  pw=$(sed -n 's/^browser: note panel at [0-9]* [0-9]* \([0-9]*\) [0-9]*$/\1/p' "$log" | tail -1)
+  ph=$(sed -n 's/^browser: note panel drawn \([0-9]*\) tall$/\1/p' "$log" | tail -1)
+  send scrollkey $((pw / 2)) $((ph - 80)) 400 2
   expect '^browser: note panel rows end in sight$' "the wheel over the panel's rows didn't bring their end in sight"
   ../tools/window-screenshot.sh "$pid" "$out/point-note-end$2.png" || fail "no window to capture"
   # Esc drops the note, and the section picked again opens the panel with the keyboard.
