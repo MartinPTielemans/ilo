@@ -177,6 +177,7 @@ use updates_host::*;
 mod quitting;
 mod scripting_host;
 use quitting::*;
+mod ad_block_host;
 mod battery_saver_host;
 use battery_saver_host::*;
 mod other_tabs_host;
@@ -677,6 +678,7 @@ unsafe extern "C" fn agent_request_done(
 
 unsafe extern "C" fn launching(_: *mut c_void) {
     safe_start_host::launching();
+    ad_block_host::launching();
     // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
     // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
     #[cfg(target_os = "linux")]
@@ -875,10 +877,16 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // On the Mac, child processes start from Apéritif helpers, as Chrome's field trial has
         // them: those link the framework at launch, so the kernel binds its constant data clean
         // and shared, where the other helpers load it late and dyld dirties 11.7 MiB of it in each.
+        // On Windows a tab's dialog from Chromium's TabDialogManager, such as 157's warning before
+        // http, takes a window of its own, as the core has the older ones take
+        // (PageDialogsInOwnWindow): drawn in the browser window's, it would be under the pages'
+        // windows, out of sight, and a click on it would reach the page (#2651).
         format!(
             "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval{}",
             if cfg!(target_os = "macos") {
                 ",AperitifHelpers"
+            } else if cfg!(target_os = "windows") {
+                ",TabModalUsesDesktopWidget"
             } else {
                 ""
             }
@@ -936,8 +944,13 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     // Whether this launch holds the extensions, which the app decides from its own mark and says
     // at every launch, so a restart that gives the browser its switches again decides afresh.
     args.push(safe_start_host::prepare());
+    // Which ad blocker this launch runs, from the user's choice in Settings, decided afresh at
+    // every launch as safe start's is.
+    let ad_blocker = ad_block_host::prepare(&given, &profile);
+    args.extend(ad_blocker.switches());
     let given = given.into_iter().filter(|arg| {
         !arg.starts_with(browser::safe_start::SWITCH)
+            && ad_blocker.passes(arg)
             && (!cfg!(feature = "prod")
                 || !(arg.starts_with(TEST_HOST) || arg.starts_with(CRASH_TEST)))
     });
@@ -948,6 +961,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         .into_iter()
         .filter_map(|arg| CString::new(arg).ok())
         .collect();
+    ad_block_host::keep_cache_in(&args);
     if std::env::var_os("BROWSER_DRIVE").is_some() {
         #[cfg(target_os = "linux")]
         drive::start();
@@ -1063,6 +1077,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_frozen: Some(tab_frozen),
         other_tabs_changed: Some(other_tabs_changed),
         app_new_window: Some(app_new_window),
+        ad_block_use: Some(ad_block_host::ad_block_use),
+        ad_block_request: Some(ad_block_host::ad_block_request),
+        ad_block_page: Some(ad_block_host::ad_block_page),
+        ad_block_hide: Some(ad_block_host::ad_block_hide),
         ..Default::default()
     };
     (args, host)

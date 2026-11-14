@@ -826,8 +826,8 @@ pub trait Browser {
         background: crate::capture::portrait::Background,
         cx: &mut App,
     );
-    /// Whether Portrait Mode can put a page on the desktop's picture, which only the Mac's host
-    /// reads.
+    /// Whether Portrait Mode can put a page on the desktop's picture, which the Mac's and Windows'
+    /// hosts read.
     fn desktop_picture_offered(&self) -> bool {
         false
     }
