@@ -98,9 +98,14 @@ ask() {
 # An outside agent's ask waits in the card under the URL field (a ⌘T task's has chips on its own
 # card). This waits for ask $id's card, failing with $1, and sets qx qy qw qh to where it was last
 # drawn. Its buttons sit at its foot, Not Now at the left and Point at the right, as mcp.sh presses
-# a card's.
+# a card's. The ask comes from the client, not a driver command, so this reads the whole log, where
+# the ask's id is its own.
 card() {
-  expect "^browser: agent question $id at " "$1"
+  wait_begins
+  more "^browser: agent question $id at " 0 || {
+    ran_out "^browser: agent question $id at " ""
+    fail "$1"
+  }
   read -r qx qy qw qh << CARD
 $(grep "^browser: agent question $id at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
