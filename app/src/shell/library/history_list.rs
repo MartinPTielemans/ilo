@@ -403,6 +403,7 @@ impl Shell {
         history.any |= !history.pages.is_empty();
         history.more = more;
         history.text = Some(asked.text);
+        log!("browser: history lists {} pages", history.pages.len());
         self.filter(true, cx);
     }
 
@@ -610,7 +611,8 @@ impl Shell {
         let (Some(profile), Some((begin, end))) = (history.profile, day.and_then(day_span)) else {
             return;
         };
-        if !(self.browser).remove_history(profile, url, begin, end, cx) {
+        let removal = (self.browser).remove_history(profile, url, begin, end, cx);
+        if removal == 0 {
             return;
         }
         history
@@ -618,5 +620,19 @@ impl Shell {
             .retain(|visit| !(visit.page.url == url && visit.day == day));
         log!("browser: history removed a page");
         self.filter(true, cx);
+        // ⌘Z puts it back, as it does a page the command bar took out.
+        self.suggestion_removed(removal, cx);
+    }
+
+    /// ⌘Z put back a removal from history, which the core doesn't report as it does a deletion:
+    /// History lists the profile's pages again.
+    pub(in crate::shell) fn history_put_back(&mut self, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        library.history.stale = true;
+        if self.section == Section::Archive {
+            self.filter(true, cx);
+        }
     }
 }

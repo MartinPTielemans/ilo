@@ -775,9 +775,12 @@ impl Browser for Recorder {
         !self.history_unloaded.get()
     }
 
-    fn remove_history(&self, profile: u64, url: &str, begin: i64, end: i64, _: &mut App) -> bool {
+    fn remove_history(&self, profile: u64, url: &str, begin: i64, end: i64, _: &mut App) -> u64 {
         self.record(format!("remove history {profile} {url} {begin} {end}"));
-        !self.history_unloaded.get()
+        match self.history_unloaded.get() {
+            true => 0,
+            false => self.core.ticket(),
+        }
     }
 
     fn act_on_download(&self, _: u64, _: DownloadAction, _: &mut App) {}

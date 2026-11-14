@@ -683,6 +683,21 @@ fn a_visited_pages_trash_removes_its_day(cx: &mut TestAppContext) {
     );
     assert_eq!(made(&host), [removed]);
     assert!(items(&shell, cx).iter().all(|item| item != "visited mail"));
+
+    // ⌘Z puts it back through the core's removal, which says nothing as a deletion does, so
+    // History asks for its pages again, and lists it once they come.
+    host.take_edits();
+    assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
+    cx.run_until_parked();
+    let edits = host.take_edits();
+    assert!(
+        edits.len() == 1 && edits[0].starts_with("put back removal "),
+        "{edits:?}"
+    );
+    let (request, what) = one_ask(&host);
+    assert_eq!(what, "7 0 \"\" 60");
+    answer(&shell, request, vec![page("mail", at(9, 14))], false, cx);
+    assert!(items(&shell, cx).iter().any(|item| item == "visited mail"));
 }
 
 /// History is the profile's of the Space shown: another profile's Space lists its own, from the
