@@ -14,9 +14,10 @@ use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, FocusHandle, FontWeight, Global, Hsla, Image,
-    KeyBinding, MouseButton, PathBuilder, Pixels, Point, SharedString, Size, Task, TitlebarOptions,
-    Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
-    accesskit::Role, actions, canvas, div, fill, img, point, prelude::*, px, rgb, size, svg,
+    KeyBinding, MouseButton, PathBuilder, Pixels, Point, Rgba, SharedString, Size, Task,
+    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, accesskit::Role, actions, canvas, div, fill, img, point, prelude::*, px, rgb,
+    size, svg,
 };
 
 use crate::elevation::Level;
@@ -75,6 +76,11 @@ pub trait Host {
     /// The kept preview was of the archived tab `archived`, which is the window's tab now, as a tab
     /// restored from it is.
     fn kept_archived(&self, _window: u64, _archived: u64, _cx: &mut App) {}
+    /// What the pages of the browser window `window` show until they draw their first frame, once
+    /// it has said: the colour the core gives the preview's page until it draws.
+    fn page_color(&self, _window: u64, _cx: &App) -> Option<Rgba> {
+        None
+    }
     /// The user closed the preview over the browser window `window`, for ⌘Z and ⇧⌘T to open
     /// again; `undone` if Redo closed it, as that history has it already.
     fn closed(&self, window: u64, closed: Closed, undone: bool, cx: &mut App);
@@ -1100,9 +1106,13 @@ impl Render for LinkPreview {
             true => {
                 let hole = (scaled_about(page, 1. / pose.scale, about), page_radius);
                 let color = Hsla::from(palette.overlay);
+                // The page's place shows what the page does until it draws, so the hole opening
+                // onto a page that hasn't drawn changes nothing on screen (#2742), and its first
+                // frame, most likely in that colour, changes little.
+                let unpainted = (self.host.page_color(shown.window, cx)).map_or(color, Hsla::from);
                 let coming = match plate {
-                    true => color,
-                    false => color.opacity(1. - pose.page),
+                    true => unpainted,
+                    false => unpainted.opacity(1. - pose.page),
                 };
                 let colors = (color, coming, Level::Modal.rim_in(&palette));
                 let frame = canvas(
