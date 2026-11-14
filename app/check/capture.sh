@@ -525,14 +525,9 @@ expect '^browser: capture left (escape)$' "escape didn't leave the dragged recta
 capture_mode page
 send click 100 400
 expect '^browser: capture left (dismissed)$' "a click on the sidebar didn't leave capture mode"
-# The click gives the keyboard to the UI, but on X11 the core leaves it in the page (#708). On
-# Wayland GPUI hears the press itself and takes it, as on the Mac, and under KWin too, now that the
-# driver's press is real input (#2721).
-if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${BROWSER_XVFB:-}" != kwin ]; then
-  capture_mode page
-else
-  capture_mode ui
-fi
+# The click gives the keyboard to the UI, as on the Mac: GPUI hears the press itself and takes it,
+# on X11 too now that the driver's press is real input (#2721).
+capture_mode ui
 send resize 1200 760
 expect '^browser: capture left (dismissed)$' "a resize didn't leave capture mode"
 
