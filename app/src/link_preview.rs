@@ -71,6 +71,10 @@ pub trait Host {
     /// of the app's can hold one. It's laid out where it rests then, and doesn't scale with the
     /// motion: what of it is in the frame drawn shows.
     fn page_under(&self) -> bool;
+    /// Whether a page under the window shows through the hole only once the core says it's on
+    /// screen there, not from the frame after it's laid out at rest: only where the window's page
+    /// showed through on main (#2640).
+    fn open_waits(&self) -> bool;
     /// It stops taking the keyboard and clicks, which the browser window gets back, as it leaves.
     fn release(&self);
     /// Hides its window, once it has left.
@@ -1063,12 +1067,12 @@ impl Render for LinkPreview {
         // window's draws over it, and the host hears again as that moves. It can't scale or fade,
         // and isn't resized for the motion, as a page reads its size as it loads (#2519): it waits
         // out of sight while the card grows with a plate where it will show, comes in under the
-        // plate the frame after the card first draws at rest, and shows through the hole once the
-        // core says it's on screen there. As it closes, the plate is in the hole the frame before
-        // the hole closes, the page leaves the frame after, and the card shrinks back once the
-        // core says the page has gone. The hole changes at once, and the frames of the page and
-        // the window reach the screen later, each in its own time, so each step waits for the
-        // frame that covers it to be there (#2640).
+        // plate the frame after the card first draws at rest, and shows through the hole from the
+        // frame after that, or under Wayland once the core says it's on screen there. As it
+        // closes, the plate is in the hole the frame before the hole closes, the page leaves the
+        // frame after, and the card shrinks back once the core says the page has gone. The hole
+        // changes at once, and the frames of the page and the window reach the screen later, each
+        // in its own time, so each step waits for the frame that covers it to be there (#2640).
         let mut leave_to = None;
         let (page, plate) = match under {
             false => (page, false),
@@ -1083,7 +1087,8 @@ impl Render for LinkPreview {
                     }
                     (None, false) if !moving => {
                         if !settling {
-                            shown.cut = shown.placed == rest && shown.there;
+                            let waits = self.host.open_waits();
+                            shown.cut = shown.placed == rest && (shown.there || !waits);
                             // Proof only (#2640): when the hole opens, from the motion's start.
                             if shown.cut {
                                 let ms = shown
@@ -1092,7 +1097,9 @@ impl Render for LinkPreview {
                                 log!("browser: probe open {ms:.1} ms");
                             }
                             shown.lay_out(&*self.host, rest);
-                            shown.wait(cx);
+                            if waits {
+                                shown.wait(cx);
+                            }
                         }
                         if shown._wait.is_none() {
                             window.request_animation_frame();

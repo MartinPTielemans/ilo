@@ -12,6 +12,8 @@ struct Recorder {
     calls: RefCell<Vec<String>>,
     /// Whether the page shows under the window, as on Windows and Linux.
     under: Cell<bool>,
+    /// Whether its hole opens the frame after it's laid out at rest, as on X11 and Windows.
+    opens_at_once: Cell<bool>,
 }
 
 impl Recorder {
@@ -45,6 +47,9 @@ impl Host for Recorder {
     }
     fn page_under(&self) -> bool {
         self.under.get()
+    }
+    fn open_waits(&self) -> bool {
+        !self.opens_at_once.get()
     }
     fn release(&self) {
         self.push("release".into());
@@ -351,6 +356,36 @@ fn the_wait_ends_as_the_core_says(cx: &mut TestAppContext) {
     assert!(waiting(&mut shown));
     shown.cx.cx.update(|cx| tab_closed(TAB, cx));
     assert!(shown.cx.cx.update(|cx| tab(cx)).is_none());
+}
+
+/// Where the window's page never showed through as the card came to rest (X11 and Windows), the
+/// hole opens the frame after the page is laid out at rest, with no word from the core, and the
+/// close still holds the card at rest until the core says the page has left (#2640).
+#[gpui::test]
+fn where_the_open_never_showed_through_it_doesnt_wait(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    host.opens_at_once.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE, HOLE]);
+    assert!(!waiting(&mut shown));
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(
+        shown.drawn(),
+        [HOLE, HOLE, NO_HOLE, NO_HOLE, OUT_OF_SIGHT, "release"]
+    );
+    advance(&mut shown, CLOSE / 2.);
+    assert_eq!(pose_of(&mut shown).scale, 1.);
+    there(&mut shown, LEFT);
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
 }
 
 /// Under Reduce Motion the card fades in where it rests, and the page waits out of sight for it
