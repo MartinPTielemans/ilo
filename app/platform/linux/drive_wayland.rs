@@ -110,6 +110,8 @@ thread_local! {
     static LAST_CLICK: Cell<Option<(Instant, f64, f64, u32)>> = const { Cell::new(None) };
     /// Where in sway's layout the pointer was last put.
     static POINTER: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
+    /// A press on the Mini Player: where in it, and its content's frame then.
+    static PIP_HELD: Cell<Option<(f64, f64, [f64; 4])>> = const { Cell::new(None) };
     /// The output `display add` plugged in, which `display remove` takes out.
     static ADDED: RefCell<Option<String>> = const { RefCell::new(None) };
 }
@@ -1035,13 +1037,13 @@ fn insert(text: &str) -> Option<()> {
 
 /// A turn of the wheel by `notches` along `axis` at (`x`, `y`) in sway's layout, down or right
 /// for a positive one.
-fn wheel(x: f64, y: f64, axis: wl_pointer::Axis, notches: i32) -> Option<()> {
+fn wheel(x: f64, y: f64, axis: wl_pointer::Axis, notches: i32, state: u16) -> Option<()> {
     // The notches alone where the pointer already is, as drive.rs turns them: a move before them
     // stops a page's scroll short of the notches' points, as the window run's did (#1573).
     if POINTER.get() != Some((x, y)) {
         motion(x, y)?;
     }
-    with_modifiers(0, || {
+    with_modifiers(state, || {
         with_session(|session, time| {
             for _ in 0..notches.unsigned_abs() {
                 session.pointer.axis_source(wl_pointer::AxisSource::Wheel);
@@ -1346,7 +1348,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 return swipe(x, y, (0., -dy), count.max(1).unsigned_abs(), 0);
             }
             let notches = count.max(1) * if dy > 0. { 1 } else { -1 };
-            wheel(x, y, wl_pointer::Axis::VerticalScroll, notches)
+            wheel(x, y, wl_pointer::Axis::VerticalScroll, notches, 0)
         })(),
         // In the window with the keyboard, as clickkey's point is: Settings, which is GPUI's.
         "scrollkey" => (|| {
@@ -1371,7 +1373,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             let dx: f64 = words.next()?.parse().ok()?;
             let notches = (dx.abs().round() as i32).max(1);
             let notches = if dx > 0. { -notches } else { notches };
-            wheel(x, y, wl_pointer::Axis::HorizontalScroll, notches)
+            wheel(x, y, wl_pointer::Axis::HorizontalScroll, notches, 0)
         })(),
         "key" => (|| {
             let name = words.next()?;
@@ -1508,6 +1510,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
         })(),
         "layout" => layout(),
         "scales" => scales(),
+        "pip" => mini_player_command(words),
         "display" => match words.next() {
             Some("add") => {
                 (|| display_add(words.next()?.parse().ok()?, words.next()?.parse().ok()?))()
@@ -1523,4 +1526,167 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
 fn in_driven_point<'a>(words: &mut impl Iterator<Item = &'a str>) -> Option<(f64, f64)> {
     let (x, y) = drive::point(words)?;
     in_driven(x, y)
+}
+
+/// Chromium's Picture in Picture window, if one shows: a window of the app's that's neither a
+/// browser window nor Settings, as a video's, the Mini Player, and a page's, as a call floats in.
+/// The core's Mini Player has no app id, as Settings has none, so Settings is told by its title.
+fn mini_player() -> Option<Node> {
+    let nodes = ours();
+    let open = browsers(&nodes);
+    let settings = |node: &Node| node.is_settings() && node.name == crate::settings::title();
+    let found = (nodes.iter())
+        .find(|node| !settings(node) && !open.iter().any(|(_, each)| each.id == node.id))
+        .cloned();
+    if found.is_none() {
+        describe(&nodes);
+    }
+    found
+}
+
+/// pip, and pip doubleclick, wheel, press, dragto and release, as drive.rs's, at points from the
+/// Mini Player's top-left corner as the command finds it, or as it was at the press.
+fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<()> {
+    let Some(pip) = mini_player() else {
+        log!("browser: pip none");
+        return Some(());
+    };
+    let Some(action) = words.next() else {
+        log!(
+            "browser: pip at {:.0} {:.0} {:.0} {:.0}",
+            pip.x,
+            pip.y,
+            pip.width,
+            pip.height
+        );
+        watch_mini_player(pip.id);
+        return Some(());
+    };
+    let (x, y) = drive::point(&mut words)?;
+    if action != "dragto" && action != "release" && !in_front(&pip, pip.x + x, pip.y + y)? {
+        log!("browser: pip {action}: another window is over the Mini Player there");
+        return Some(());
+    }
+    match action {
+        "doubleclick" => {
+            click(pip.x + x, pip.y + y, BTN_LEFT, 0, false)?;
+            click(pip.x + x, pip.y + y, BTN_LEFT, 0, true)
+        }
+        // pip wheel <x> <y> <notches> [cmd]: a notch for each, down for content moving up.
+        "wheel" => {
+            let notches: i32 = words.next()?.parse().ok()?;
+            let state = drive::click_modifiers(words);
+            let axis = wl_pointer::Axis::VerticalScroll;
+            wheel(pip.x + x, pip.y + y, axis, notches, state)
+        }
+        "press" => {
+            let (at_x, at_y) = (pip.x + x, pip.y + y);
+            first_press(at_x, at_y, BTN_LEFT, false);
+            motion(at_x, at_y)?;
+            PIP_HELD.set(Some((x, y, [pip.x, pip.y, pip.width, pip.height])));
+            with_modifiers(0, || button(BTN_LEFT, true))
+        }
+        "dragto" | "release" => {
+            let (held_x, held_y, start) = PIP_HELD.get()?;
+            let [left, top, ..] = start;
+            let to = (left + x, top + y);
+            motion(to.0, to.1)?;
+            // sway moves or sizes it with the pointer's moves from when Chromium asks it to, past
+            // the drag's threshold, so a move sent before then is lost to it: a hand that drags
+            // keeps moving, a point back and forth till sway has started, or 1 s.
+            let frame_of = |node: Node| [node.x, node.y, node.width, node.height];
+            // Asked after each move, as the point back puts it where it was if sway started there.
+            let taken = || {
+                (ours().into_iter())
+                    .find(|node| node.id == pip.id)
+                    .is_none_or(|now| frame_of(now) != start)
+            };
+            if to != (left + held_x, top + held_y) && !taken() {
+                for _ in 0..20 {
+                    std::thread::sleep(Duration::from_millis(50));
+                    motion(to.0 + 1., to.1)?;
+                    let moved = taken();
+                    motion(to.0, to.1)?;
+                    if moved || taken() {
+                        break;
+                    }
+                }
+            }
+            if action == "dragto" {
+                return Some(());
+            }
+            PIP_HELD.set(None);
+            with_modifiers(0, || button(BTN_LEFT, false))?;
+            let [x, y, width, height] = frame_of(mini_player()?);
+            log!("browser: pip at {x:.0} {y:.0} {width:.0} {height:.0}");
+            Some(())
+        }
+        _ => None,
+    }
+}
+
+/// Whether the Mini Player is in front at (`x`, `y`), raised if another window was. tools/headless.sh
+/// floats every window, so sway raises the browser window over it as that takes the keyboard,
+/// where on a desktop the browser window tiles and a floating one stays over it. sway raises the
+/// one it focuses, and a press on it gives it the keyboard anyway, as it does on X11.
+fn in_front(pip: &Node, x: f64, y: f64) -> Option<bool> {
+    if front_at(x, y) != Some(pip.id) {
+        sway_command(&format!("[con_id={}] focus", pip.id))?;
+    }
+    Some(front_at(x, y) == Some(pip.id))
+}
+
+/// sway's window in front at (`x`, `y`) in its layout, as `others_at` finds it.
+fn front_at(x: f64, y: f64) -> Option<i64> {
+    let mut front: Vec<(Node, Option<u64>)> = every_window().into_iter().rev().collect();
+    front.sort_by_key(|(node, _)| !node.full_screen);
+    front
+        .into_iter()
+        .find(|(node, _)| {
+            (node.x..node.x + node.width).contains(&x)
+                && (node.y..node.y + node.height).contains(&y)
+        })
+        .map(|(node, _)| node.id)
+}
+
+/// Logs the Mini Player's frame each time window `con` moves or resizes, then "browser: pip gone"
+/// once it's gone, from a thread of its own, as drive.rs's X11 watcher does with the X server's
+/// events. sway sends none for a floating window's move, so it asks sway's tree every 50 ms while
+/// the Mini Player shows, the driver's alone.
+fn watch_mini_player(con: i64) {
+    static WATCHED: std::sync::Mutex<Option<i64>> = std::sync::Mutex::new(None);
+    {
+        let mut watched = WATCHED.lock().unwrap_or_else(|e| e.into_inner());
+        if *watched == Some(con) {
+            return;
+        }
+        *watched = Some(con);
+    }
+    std::thread::spawn(move || {
+        let frame_of = || {
+            (ours().into_iter())
+                .find(|node| node.id == con)
+                .map(|node| [node.x, node.y, node.width, node.height])
+        };
+        let mut last = frame_of();
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            if *WATCHED.lock().unwrap_or_else(|e| e.into_inner()) != Some(con) {
+                return;
+            }
+            let now = frame_of();
+            match now {
+                None => {
+                    log!("browser: pip gone");
+                    *WATCHED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    return;
+                }
+                Some([x, y, width, height]) if now != last => {
+                    log!("browser: pip at {x:.0} {y:.0} {width:.0} {height:.0}");
+                }
+                Some(_) => {}
+            }
+            last = now;
+        }
+    });
 }

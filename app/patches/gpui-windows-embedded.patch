@@ -1,3 +1,15 @@
+diff --git a/crates/gpui_windows/Cargo.toml b/crates/gpui_windows/Cargo.toml
+index 37e4a2f7f2..c9c60e1e67 100644
+--- a/crates/gpui_windows/Cargo.toml
++++ b/crates/gpui_windows/Cargo.toml
+@@ -61,6 +61,7 @@ windows = { workspace = true, features = [
+     "Win32_System_StationsAndDesktops",
+     "Win32_System_SystemInformation",
+     "Win32_System_SystemServices",
++    "Win32_UI_Accessibility",
+     "Win32_UI_Controls",
+     "Win32_UI_HiDpi",
+     "Win32_UI_Input_Ime",
 diff --git a/crates/gpui_windows/src/dialog.rs b/crates/gpui_windows/src/dialog.rs
 index 16866cfc35..659fa75c23 100644
 --- a/crates/gpui_windows/src/dialog.rs
@@ -112,7 +124,7 @@ index 622c1cb604..697ce244f7 100644
          let bind_flag;
          let bytes_per_pixel;
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
-index 98a13f304c..c8fd25a160 100644
+index 98a13f304c..22267df7e8 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
 @@ -54,6 +54,9 @@ pub(crate) struct DirectXRenderer {
@@ -167,7 +179,21 @@ index 98a13f304c..c8fd25a160 100644
  struct DirectXRenderPipelines {
      shadow_pipeline: PipelineState<Shadow>,
      quad_pipeline: PipelineState<Quad>,
-@@ -194,6 +217,7 @@ impl DirectXRenderer {
+@@ -168,8 +191,11 @@ impl DirectXRenderer {
+             .context("Creating DirectX resources")?;
+         let globals = DirectXGlobalElements::new(&devices.device)
+             .context("Creating DirectX global elements")?;
+-        let pipelines = DirectXRenderPipelines::new(&devices.device)
+-            .context("Creating DirectX render pipelines")?;
++        let pipelines = match take_early_pipelines(&devices.device) {
++            Some(pipelines) => pipelines,
++            None => DirectXRenderPipelines::new(&devices.device)
++                .context("Creating DirectX render pipelines")?,
++        };
+ 
+         let direct_composition = if disable_direct_composition {
+             None
+@@ -194,6 +220,7 @@ impl DirectXRenderer {
              width: 1,
              height: 1,
              skip_draws: false,
@@ -175,7 +201,7 @@ index 98a13f304c..c8fd25a160 100644
          })
      }
  
-@@ -324,6 +348,7 @@ impl DirectXRenderer {
+@@ -324,6 +351,7 @@ impl DirectXRenderer {
          self.pipelines = pipelines;
          self.direct_composition = direct_composition;
          self.skip_draws = true;
@@ -183,7 +209,7 @@ index 98a13f304c..c8fd25a160 100644
          Ok(())
      }
  
-@@ -338,7 +363,47 @@ impl DirectXRenderer {
+@@ -338,7 +366,47 @@ impl DirectXRenderer {
              return Ok(());
          }
          self.render(scene, background_appearance)?;
@@ -232,7 +258,7 @@ index 98a13f304c..c8fd25a160 100644
      }
  
      /// Clear the render target for `background_appearance` and encode every
-@@ -409,7 +474,6 @@ impl DirectXRenderer {
+@@ -409,7 +477,6 @@ impl DirectXRenderer {
      /// goes through MetalRenderer; this is the Windows analogue). Draws into
      /// the existing render target, copies it into a `D3D11_USAGE_STAGING`
      /// texture, maps it, and converts BGRA to RGBA.
@@ -240,7 +266,7 @@ index 98a13f304c..c8fd25a160 100644
      pub(crate) fn render_to_image(
          &mut self,
          scene: &Scene,
-@@ -618,16 +682,21 @@ impl DirectXRenderer {
+@@ -618,16 +685,21 @@ impl DirectXRenderer {
          }
  
          let devices = self.devices.as_ref().context("devices missing")?;
@@ -264,7 +290,7 @@ index 98a13f304c..c8fd25a160 100644
                  None,
              );
          }
-@@ -660,9 +729,9 @@ impl DirectXRenderer {
+@@ -660,9 +732,9 @@ impl DirectXRenderer {
          // Resolve MSAA to non-MSAA intermediate texture
          unsafe {
              devices.device_context.ResolveSubresource(
@@ -276,7 +302,7 @@ index 98a13f304c..c8fd25a160 100644
                  0,
                  RENDER_TARGET_FORMAT,
              );
-@@ -704,6 +773,10 @@ impl DirectXRenderer {
+@@ -704,6 +776,10 @@ impl DirectXRenderer {
  
          let devices = self.devices.as_ref().context("devices missing")?;
          let resources = self.resources.as_ref().context("resources missing")?;
@@ -287,7 +313,7 @@ index 98a13f304c..c8fd25a160 100644
          self.pipelines.path_sprite_pipeline.update_buffer(
              &devices.device,
              &devices.device_context,
-@@ -713,7 +786,7 @@ impl DirectXRenderer {
+@@ -713,7 +789,7 @@ impl DirectXRenderer {
          // Draw the sprites with the path texture
          self.pipelines.path_sprite_pipeline.draw_with_texture(
              &devices.device_context,
@@ -296,7 +322,7 @@ index 98a13f304c..c8fd25a160 100644
              slice::from_ref(&self.globals.sampler),
              sprites.len() as u32,
          )
-@@ -889,25 +962,15 @@ impl DirectXResources {
+@@ -889,25 +965,15 @@ impl DirectXResources {
              )?
          };
  
@@ -325,7 +351,7 @@ index 98a13f304c..c8fd25a160 100644
              viewport,
          })
      }
-@@ -919,21 +982,12 @@ impl DirectXResources {
+@@ -919,26 +985,38 @@ impl DirectXResources {
          width: u32,
          height: u32,
      ) -> Result<()> {
@@ -351,7 +377,33 @@ index 98a13f304c..c8fd25a160 100644
          self.viewport = viewport;
          Ok(())
      }
-@@ -1359,20 +1413,12 @@ fn create_resources(
+ }
+ 
++/// The first window's pipelines, which `make_early` makes with the devices, and the device they're
++/// for: a window whose device is another, after the device was lost, makes its own.
++static EARLY_PIPELINES: std::sync::Mutex<Option<(ID3D11Device, DirectXRenderPipelines)>> =
++    std::sync::Mutex::new(None);
++
++/// Makes the first window's pipelines on `device` now, off the main thread, for its renderer to
++/// take: they need only the device, and cost the main thread ~3 ms as the window opens.
++pub(crate) fn make_pipelines_early(device: &ID3D11Device) {
++    let Ok(pipelines) = DirectXRenderPipelines::new(device) else {
++        return;
++    };
++    if let Ok(mut early) = EARLY_PIPELINES.lock() {
++        *early = Some((device.clone(), pipelines));
++    }
++}
++
++fn take_early_pipelines(device: &ID3D11Device) -> Option<DirectXRenderPipelines> {
++    let (made_on, pipelines) = EARLY_PIPELINES.lock().ok()?.take()?;
++    (made_on == *device).then_some(pipelines)
++}
++
+ impl DirectXRenderPipelines {
+     pub fn new(device: &ID3D11Device) -> Result<Self> {
+         let shadow_pipeline = PipelineState::new(
+@@ -1359,20 +1437,12 @@ fn create_resources(
      width: u32,
      height: u32,
  ) -> Result<(
@@ -372,7 +424,7 @@ index 98a13f304c..c8fd25a160 100644
      let viewport = D3D11_VIEWPORT {
          TopLeftX: 0.0,
          TopLeftY: 0.0,
-@@ -1381,15 +1427,7 @@ fn create_resources(
+@@ -1381,15 +1451,7 @@ fn create_resources(
          MinDepth: 0.0,
          MaxDepth: 1.0,
      };
@@ -813,7 +865,7 @@ index 08f91bd626..9de2c0e12a 100644
 +    true
 +}
 diff --git a/crates/gpui_windows/src/gpui_windows.rs b/crates/gpui_windows/src/gpui_windows.rs
-index e7a45a034d..c7b8e5dc0c 100644
+index e7a45a034d..559f8e96f4 100644
 --- a/crates/gpui_windows/src/gpui_windows.rs
 +++ b/crates/gpui_windows/src/gpui_windows.rs
 @@ -20,6 +20,10 @@ mod vsync;
@@ -821,7 +873,7 @@ index e7a45a034d..c7b8e5dc0c 100644
  mod wrapper;
  
 +pub use events::{drive_commit, drive_compose, drive_fingers, marked_range};
-+pub use platform::embed;
++pub use platform::{embed, make_early};
 +pub use window::open_next_window_in;
 +
  pub(crate) use clipboard::*;
@@ -947,7 +999,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..ca96f169ff 100644
+index 095e009e23..7088748947 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -20,7 +20,10 @@ use windows::{
@@ -982,7 +1034,46 @@ index 095e009e23..ca96f169ff 100644
  }
  
  impl TrackedWindow {
-@@ -372,10 +379,17 @@ impl WindowsPlatform {
+@@ -65,6 +72,8 @@ pub struct WindowsPlatform {
+     foreground_executor: ForegroundExecutor,
+     text_system: Arc<dyn PlatformTextSystem>,
+     direct_write_text_system: Option<Arc<DirectWriteTextSystem>>,
++    /// The devices `make_early` made, which the first `attach_gpu` takes.
++    early_devices: RefCell<Option<DirectXDevices>>,
+     drop_target_helper: Option<IDropTargetHelper>,
+     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
+     /// as resizing them has failed, causing us to have lost at least the render target.
+@@ -184,10 +193,18 @@ impl WindowsPlatform {
+         }
+         // A platform that can become windowed needs the real text system from the start: the app
+         // keeps the one it's created with. It gets DirectX devices when it becomes windowed.
++        let (early_text_system, early_devices) = match (!headless).then(take_early).flatten() {
++            Some((text_system, devices)) => (text_system.ok(), devices.ok()),
++            None => (None, None),
++        };
+         let (text_system, direct_write_text_system) = if !headless {
+-            let dw_text_system = Arc::new(
+-                DirectWriteTextSystem::new(None).context("Error creating DirectWriteTextSystem")?,
+-            );
++            let dw_text_system = match early_text_system {
++                Some(text_system) => text_system,
++                None => Arc::new(
++                    DirectWriteTextSystem::new(None)
++                        .context("Error creating DirectWriteTextSystem")?,
++                ),
++            };
+             (
+                 dw_text_system.clone() as Arc<dyn PlatformTextSystem>,
+                 Some(dw_text_system),
+@@ -277,6 +294,7 @@ impl WindowsPlatform {
+             foreground_executor,
+             text_system,
+             direct_write_text_system,
++            early_devices: RefCell::new(early_devices),
+             suspend_resume_notification: RefCell::new(None),
+             disable_direct_composition,
+             has_package_identity: has_package_identity(),
+@@ -372,10 +390,17 @@ impl WindowsPlatform {
          if active_window_hwnd.is_invalid() {
              return None;
          }
@@ -1002,7 +1093,19 @@ index 095e009e23..ca96f169ff 100644
              .map(|hwnd| hwnd.as_raw())
      }
  
-@@ -422,7 +436,7 @@ impl WindowsPlatform {
+@@ -408,7 +433,10 @@ impl WindowsPlatform {
+ 
+     /// Creates the DirectX devices that windows draw with, and starts vsync.
+     fn attach_gpu(&self) -> Result<()> {
+-        let devices = DirectXDevices::new().context("Creating DirectX devices")?;
++        let devices = match self.early_devices.take() {
++            Some(devices) => devices,
++            None => DirectXDevices::new().context("Creating DirectX devices")?,
++        };
+         if let Some(text_system) = &self.direct_write_text_system {
+             text_system.handle_gpu_lost(&devices)?;
+         }
+@@ -422,7 +450,7 @@ impl WindowsPlatform {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
              // Not joined: the thread can be sending this thread a message. It exits after its
              // next vsync, and drops its reference to the devices then.
@@ -1011,7 +1114,7 @@ index 095e009e23..ca96f169ff 100644
          }
          if let Some(text_system) = &self.direct_write_text_system {
              text_system.release_gpu();
-@@ -449,10 +463,18 @@ impl WindowsPlatform {
+@@ -449,10 +477,18 @@ impl WindowsPlatform {
          std::thread::Builder::new()
              .name("VSyncProvider".to_owned())
              .spawn(move || {
@@ -1032,7 +1135,7 @@ index 095e009e23..ca96f169ff 100644
                      if stop.load(Ordering::Acquire) {
                          break;
                      }
-@@ -468,11 +490,33 @@ impl WindowsPlatform {
+@@ -468,11 +504,33 @@ impl WindowsPlatform {
                          ) {
                              panic!("Device lost: {err}");
                          }
@@ -1066,7 +1169,7 @@ index 095e009e23..ca96f169ff 100644
                          unsafe {
                              if let Some(signal_at) = signal_at {
                                  if IsWindowVisible(hwnd.as_raw()).as_bool()
-@@ -495,6 +539,84 @@ impl WindowsPlatform {
+@@ -495,6 +553,84 @@ impl WindowsPlatform {
      }
  }
  
@@ -1151,7 +1254,7 @@ index 095e009e23..ca96f169ff 100644
  fn encode_restart_arguments(arguments: &[OsString]) -> OsString {
      // `Start-Process` accepts a single native command line, so quote each argument according to
      // the Windows argv parsing rules before passing the complete string through the environment.
-@@ -587,6 +709,11 @@ impl Platform for WindowsPlatform {
+@@ -587,6 +723,11 @@ impl Platform for WindowsPlatform {
          }
          on_finish_launching();
  
@@ -1163,7 +1266,7 @@ index 095e009e23..ca96f169ff 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -748,6 +875,14 @@ impl Platform for WindowsPlatform {
+@@ -748,6 +889,14 @@ impl Platform for WindowsPlatform {
              .map(|inner| inner.handle)
      }
  
@@ -1178,7 +1281,7 @@ index 095e009e23..ca96f169ff 100644
      fn open_window(
          &self,
          handle: AnyWindowHandle,
-@@ -761,6 +896,7 @@ impl Platform for WindowsPlatform {
+@@ -761,6 +910,7 @@ impl Platform for WindowsPlatform {
          self.raw_window_handles.write().push(TrackedWindow {
              handle: handle.into(),
              frame_signal: window.state.frame_signal.clone(),
@@ -1186,7 +1289,7 @@ index 095e009e23..ca96f169ff 100644
          });
  
          Ok(Box::new(window))
-@@ -1253,21 +1389,11 @@ impl WindowsPlatformInner {
+@@ -1253,21 +1403,11 @@ impl WindowsPlatformInner {
          Some(0)
      }
  
@@ -1212,7 +1315,7 @@ index 095e009e23..ca96f169ff 100644
          Some(0)
      }
  
-@@ -1409,7 +1535,7 @@ impl WindowsPlatformInner {
+@@ -1409,7 +1549,7 @@ impl WindowsPlatformInner {
  impl Drop for WindowsPlatform {
      fn drop(&mut self) {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
@@ -1221,7 +1324,7 @@ index 095e009e23..ca96f169ff 100644
          }
          unsafe {
              if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
-@@ -1637,10 +1763,43 @@ fn file_save_dialog(
+@@ -1637,10 +1777,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -1266,7 +1369,7 @@ index 095e009e23..ca96f169ff 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1763,6 +1922,8 @@ fn handle_gpu_device_lost(
+@@ -1763,6 +1936,8 @@ fn handle_gpu_device_lost(
              }
          }
      }
@@ -1275,7 +1378,7 @@ index 095e009e23..ca96f169ff 100644
      Ok(())
  }
  
-@@ -1980,3 +2141,12 @@ mod tests {
+@@ -1980,3 +2155,52 @@ mod tests {
          );
      }
  }
@@ -1287,6 +1390,46 @@ index 095e009e23..ca96f169ff 100644
 +/// own, and windows take their key presses from the embedder's dispatch. Call it before starting.
 +pub fn embed() {
 +    EMBEDDED.store(true, std::sync::atomic::Ordering::Relaxed);
++}
++
++type Early = (Result<Arc<DirectWriteTextSystem>>, Result<DirectXDevices>);
++
++static EARLY: std::sync::Mutex<Option<std::thread::JoinHandle<Early>>> =
++    std::sync::Mutex::new(None);
++
++/// Starts making the text system, the DirectX devices and the first window's pipelines on a
++/// thread of their own, for the platform and that window to take, and loads UI Automation, which
++/// each window's accessibility adapter starts: an embedder that has other work before it starts
++/// GPUI, such as a browser engine starting, saves the main thread their ~15 ms. None needs the
++/// main thread; the drop helper, an apartment-threaded COM object, is still made there.
++pub fn make_early() {
++    let made = std::thread::Builder::new()
++        .name("GpuiEarly".into())
++        .spawn(|| {
++            let text_system = DirectWriteTextSystem::new(None).map(Arc::new);
++            let devices = DirectXDevices::new();
++            if let Ok(devices) = &devices {
++                crate::directx_renderer::make_pipelines_early(&devices.device);
++            }
++            // As accesskit's adapter does (init_uia), which then finds it loaded: ~3.5 ms.
++            unsafe {
++                windows::Win32::UI::Accessibility::UiaLookupId(
++                    windows::Win32::UI::Accessibility::AutomationIdentifierType_Property,
++                    &windows::Win32::UI::Accessibility::ControlType_Property_GUID,
++                )
++            };
++            (text_system, devices)
++        });
++    if let (Ok(thread), Ok(mut early)) = (made, EARLY.lock()) {
++        *early = Some(thread);
++    }
++}
++
++/// What `make_early` made, waiting for it to finish, or None if it wasn't called or failed. A
++/// part that failed early is made again on the main thread, to report its error there.
++fn take_early() -> Option<Early> {
++    let thread = EARLY.lock().ok()?.take()?;
++    thread.join().ok()
 +}
 diff --git a/crates/gpui_windows/src/vsync.rs b/crates/gpui_windows/src/vsync.rs
 index 5121c41b61..3d7c019c33 100644

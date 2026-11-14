@@ -1129,12 +1129,12 @@ Ours (the owner's call, #2345): Arc and Chrome have none. When ilo crashes at la
 - **What's held.** The profile's extensions, the ad blocker included, are held for that launch before any of them runs. That's Chrome's own state for an extension whose process crashed, so nothing is saved. Chrome's extensions page still lists each one with its switch as the user left it, and its Remove. The browser's own component extensions, themes, and any extension a policy keeps on stay. Boosts don't show, and Settings' Boosts switch reads as the user left it.
 - **The card.** It sits at the sidebar's foot, 6 over the footer, under the update banner and any media player. It has the row plate's inset and radius, and the pressed plate's ink on the window's opaque look.
   - The circle-alert glyph sits in the rows' icon column, on the first line of the title.
-  - The title, "ilo closed unexpectedly twice", is in body type, medium weight.
+  - The title, "ilo closed unexpectedly", is in body type, medium weight. It doesn't say how many times: the count isn't something the user acts on.
   - Under it, in small secondary words: "Extensions and Boosts are off for now, so ads aren’t blocked.", or without the last clause while Settings' ad blocking is off.
   - Both wrap on the title column, and the card grows to their lines, as the list gives up its room.
-  - Below them come Turn Back On, an accent button, and "Manage Extensions…" in small secondary words that brighten under the pointer. It opens Chrome's extensions page in a new tab.
+  - Below them come Turn Back On and "Extensions…", an agent task card's chips, so the foot's cards read as one family and turning back on what may have crashed ilo isn't the loudest thing in the sidebar. Their plates hang 8 outside the title column, so their labels sit under the title. Extensions… is under Turn Back On at every width, so the card doesn't reflow as the sidebar's width changes. An action's label is never cut: the line above says what's off, so the chip needn't say "Manage", and it fits whole at the narrowest sidebar. It opens Chrome's extensions page in a new tab.
   - It has no ×: the hold lasts the launch, so the card does too. It's in every window, private ones too, with no toast, badge or modal.
-- **The way out.** Turn Back On restarts ilo with its windows and tabs into a normal launch. Any quit ends a safe start too, so the next launch is normal.
+- **The way out.** The card stays as long as the launch is a safe start. Turn Back On restarts ilo with its windows and tabs into a normal launch. Any quit ends a safe start too, so the next launch is normal. Reloading one extension on Chrome's page brings that one back, but the card stays, since Boosts are still held until the launch ends.
 - **Agents** can't start or end one: no tool does either. The MCP server stays up through it.
 - **Every OS** is the same: the mark, the count and the card are the app's, and the core holds the extensions on each.
 
