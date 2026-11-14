@@ -659,9 +659,12 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     std::string blink = command_line->GetSwitchValueASCII(switches::kEnableBlinkFeatures);
     blink += blink.empty() ? "" : ",";
     // And ⌥-click on a link opens it in a split view, as Arc's does, not Chrome's download
-    // (chromium-core-alt-click-split.patch).
-    command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures,
-                                    blink + "PasswordReveal,AltClickSplitView");
+    // (chromium-core-alt-click-split.patch). And a page asks to share the screen only from a click
+    // or a key, as the spec and the other two engines have it, so none puts the picker up unasked;
+    // the promise it gets otherwise is refused, with no UI of ours (decision 12, #2456).
+    command_line->AppendSwitchASCII(
+        switches::kEnableBlinkFeatures,
+        blink + "PasswordReveal,AltClickSplitView,GetDisplayMediaRequiresUserActivation");
 #if BUILDFLAG(IS_MAC)
     platform::NameKeychainItem();
 #endif
