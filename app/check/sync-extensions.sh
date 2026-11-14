@@ -6,18 +6,18 @@
 # off. B recovers with A's words and takes them by itself: Dark, which its windows draw in, Little
 # ilo's setting, and the extension, which it installs from the store. B turns Settings off, and the
 # core takes it. It needs the network and Google's store, so it runs only when named:
-# ./check.sh sync-extensions. On Linux under Xvfb, on Windows, where each copy's window takes the
-# foreground from the other's as the run drives it, as sync-devices' do, and on the Mac, where each
-# copy activates itself as it starts.
+# ./check.sh sync-extensions. On Linux under Xvfb and Wayland, on Windows, where each copy's window
+# takes the foreground from the other's as the run drives it, as sync-devices' do, and on the Mac,
+# where each copy activates itself as it starts.
 
 if [ -z "${ILO_SERVER:-}" ]; then
   echo "skip: sync-extensions. It needs ILO_SERVER, an ilo-server built from its repo," \
     "to sign in to."
   return 0
 fi
-if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; then
-  echo "skip: sync-extensions. On Linux it runs under Xvfb so far," \
-    "where xdotool and xclip reach it."
+if sway_xwayland; then
+  echo "skip: sync-extensions. On Linux it runs under Xvfb and Wayland so far," \
+    "where the run reaches the clipboard and each copy's windows."
   return 0
 fi
 rm -f "$saved" "$launch_frame"
