@@ -31,6 +31,7 @@
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/native_widget_factory.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -42,6 +43,7 @@
 #include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host_platform.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_solid_color.h"
 #include "ui/events/event.h"
@@ -433,7 +435,10 @@ class WindowViews : public views::WidgetObserver,
 
   // Shows |page|, a link preview's, at |frame| over the pages shown, in place of the preview it
   // shows. The app's overlay over the window has a hole where it shows, and its card round that.
-  void ShowPreview(aura::Window* page, const gfx::Rect& frame, double corner_radius) {
+  void ShowPreview(aura::Window* page,
+                   const gfx::Rect& frame,
+                   double corner_radius,
+                   base::OnceClosure shown) {
     aura::Window* holder = HolderFor(preview_);
     if (preview_.page != page) {
       Empty(preview_);
@@ -453,6 +458,25 @@ class WindowViews : public views::WidgetObserver,
     holder->Show();
     LayOut(preview_, size);
     ShowThrough();
+    WhenPreviewShown(holder->layer()->GetCompositor(), std::move(shown));
+  }
+
+  // Runs |shown| once the first frame |compositor| draws from now is on screen, unless the preview
+  // is placed again first. It asks the compositor only for its next frame's time, which a frame the
+  // new place makes anyway sets off; it draws no frame of its own.
+  void WhenPreviewShown(ui::Compositor* compositor, base::OnceClosure shown) {
+    const uint64_t placed = ++preview_placed_;
+    if (!compositor) {
+      return;
+    }
+    compositor->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
+        [](base::WeakPtr<WindowViews> views, uint64_t placed, base::OnceClosure shown,
+           const viz::FrameTimingDetails&) {
+          if (views && views->preview_placed_ == placed) {
+            std::move(shown).Run();
+          }
+        },
+        weak_factory_.GetWeakPtr(), placed, std::move(shown)));
   }
 
   // Sizes each slot to its insets.
@@ -1195,6 +1219,8 @@ class WindowViews : public views::WidgetObserver,
   // under it.
   Slot preview_;
   SkColor4f preview_color_ = SkColors::kWhite;
+  // How many times the preview's page has been placed, for WhenPreviewShown to tell the last.
+  uint64_t preview_placed_ = 0;
   // After the slots, so it leaves its holder before that goes.
   FocusRing ring_;
   double corner_radius_ = 0;
@@ -1471,10 +1497,11 @@ void ShowPageIn(views::Widget* widget,
                 gfx::NativeView page,
                 void*,
                 const gfx::Rect& frame,
-                double corner_radius) {
+                double corner_radius,
+                base::OnceClosure shown) {
   WindowViews* views = widget ? ViewsOf(widget) : nullptr;
   if (views && page) {
-    views->ShowPreview(page, frame, corner_radius);
+    views->ShowPreview(page, frame, corner_radius, std::move(shown));
   }
 }
 

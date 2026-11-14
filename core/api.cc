@@ -1832,9 +1832,15 @@ void bc_tab_show_in(bc_id id, void* view, bc_rect frame, double corner_radius) {
     return;
   }
   browser_core::Window* window = browser_core::Window::Holding(id);
+  // The frame the app passed, not the rect laid out from it, so the app can match it.
+  auto shown = [](bc_id id, bc_rect frame) {
+    if (browser_core::Host().tab_shown_in) {
+      browser_core::Host().tab_shown_in(browser_core::Host().context, id, frame);
+    }
+  };
   browser_core::platform::ShowPageIn(window ? window->widget() : nullptr,
                                      contents->GetNativeView(), view, ToRect(frame),
-                                     corner_radius);
+                                     corner_radius, base::BindOnce(shown, id, frame));
   contents->Focus();
 }
 

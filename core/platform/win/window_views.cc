@@ -984,11 +984,14 @@ void HidePages(views::Widget* widget) {
 // The app's view for a link preview is an overlay of its own over the window, which can't hold a
 // page, as on Linux, so the page shows in the window over its pages, where the overlay leaves a
 // hole, and the card the app draws round that.
+// The app shows the page through its hole the frame after placing it, as no run showed it late
+// here (#2640), so nothing waits for it to be on screen.
 void ShowPageIn(views::Widget* widget,
                 gfx::NativeView page,
                 void*,
                 const gfx::Rect& frame,
-                double corner_radius) {
+                double corner_radius,
+                base::OnceClosure) {
   WindowViews* views = widget ? ViewsOf(widget) : nullptr;
   if (views && page) {
     views->ShowPreview(page, frame, corner_radius);
