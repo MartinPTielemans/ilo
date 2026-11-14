@@ -123,19 +123,18 @@ open_held=$(sed -n "s/^browser: pop-up $open_tab held \([0-9.]*\) ms\$/\1/p" "$l
   fail "the core didn't say how long window.open()'s tab took and how long it was held: $(grep "^browser: \(tab\|pop-up\) $open_tab " "$log" | head -4 | tr '\n' ' ')"
 expect "^browser: title $open_tab held\$" "window.open()'s pop-up the filters let through didn't load"
 
-# window.open() with no address is listed at once, not held, and closes once sent to a page a
-# pop-up filter names, as before.
+# window.open() with no address is listed at once, not held. Sent on to a page a pop-up filter
+# names, it isn't closed yet, as on main (#2839), so ⌘W closes it.
 go_from_bar "${site#http://}opener-blank.html"
 expect "^browser: title $open_tab the blank opener\$" "the blank opener page didn't load"
 send click $page_point
 expect "^browser: tab [0-9]* opened by $open_tab in the foreground\$" \
   "window.open() with no address wasn't listed at once"
 blank_tab=$(sed -n "/^browser: drive $step: /,\$s/^browser: tab \([0-9]*\) opened by $open_tab in the foreground\$/\1/p" "$log" | head -1)
-expect "^browser: ad block closed a pop-up at ${site}popup.html\$" \
-  "the pop-up filter didn't close window.open()'s tab once sent to the page it names"
-expect "^browser: tab $blank_tab closed\$" "window.open()'s tab didn't close once sent to the page a pop-up filter names"
 sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "^browser: pop-up $blank_tab held " &&
   fail "window.open() with no address was held"
+send key w cmd
+expect "^browser: tab $blank_tab closed\$" "⌘W didn't close window.open()'s tab"
 
 # A middle click on the link the filter names opens the user's tab, behind and listed at once.
 # The tab in front once window.open()'s closed is the app's to choose, so the log says which.
