@@ -139,12 +139,14 @@ round() {
     "a click on the section didn't pick it, with its fields' values withheld"
   expect '^browser: note panel 1 withheld$' "the note panel didn't open at the section"
   expect '^browser: note panel fold at ' "the note panel drew no Show what's sent"
+  expect '^browser: note panel drawn [0-9]* tall$' "the note panel's window didn't take its content's height"
   ../tools/window-screenshot.sh "$pid" "$out/point-note$2.png" || fail "no window to capture"
   read -r fx fy fw fh << FOLD
 $(grep '^browser: note panel fold at ' "$log" | tail -1 | sed 's/.* at //')
 FOLD
   send click $((fx + fw / 2)) $((fy + fh / 2))
   expect '^browser: note panel fold at ' "Show what's sent didn't open the panel's rows"
+  expect '^browser: note panel drawn [0-9]* tall$' "the note panel's window didn't grow to its rows"
   ../tools/window-screenshot.sh "$pid" "$out/point-note-open$2.png" || fail "no window to capture"
   # Esc drops the note, and the section picked again opens the panel with the keyboard.
   send key escape
