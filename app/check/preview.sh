@@ -183,8 +183,10 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   xprop -root _NET_ACTIVE_WINDOW _NET_CLIENT_LIST_STACKING >> "$out/probe-stack.txt" 2>&1 || true
   # A click on the other window's middle, from xdotool's own pointer, as a hand's on a window half
   # over ilo's.
-  xdotool mousemove 630 400 click 1 2> /dev/null || true
-  sleep 0.7
+  closings=$(grep -c '^browser: link preview closing' "$log")
+  xdotool mousemove 250 400 click 1 2> /dev/null || true
+  for _ in $(seq 30); do [ "$(grep -c '^browser: link preview closing' "$log")" -gt "$closings" ] && break; sleep 0.1; done
+  echo "probe: a click on the dim drawn over the other app closed Peek: $([ "$(grep -c '^browser: link preview closing' "$log")" -gt "$closings" ] && echo yes || echo no), active $(xdotool getactivewindow 2> /dev/null)"
   import -window root "$out/probe-4-after-click.png"
   exec 7>&-
   wait "$other" 2> /dev/null || true
