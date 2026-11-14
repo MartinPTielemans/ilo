@@ -57,6 +57,7 @@ env:
     split extensions capture popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
+    update-checks
     webrtc tab-drag count ranking everyday hosts policies translate pictures boosts rules
     switch-frames foot-bar later-launch peek-motion safe-start
   # The runs that pass on Wayland so far, in the headless sway session.
