@@ -26,6 +26,7 @@
 #include <winrt/Windows.UI.Notifications.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cmath>
 #include <cstdio>
@@ -33,6 +34,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -325,6 +327,12 @@ struct Menu {
   bool give_back = true;
   // Bumped by each show and hide, so a show posted before a hide doesn't put the menu back.
   unsigned showing = 0;
+  // Where the pointer rested as it showed, until the pointer leaves it. Windows sends the window
+  // under a resting pointer a move to where it is as windows show and hide, which a native menu
+  // ignores; it would take the highlight from the checked item of a pop-up opened from the
+  // keyboard, so ↓ went from the item under the pointer instead (#2544).
+  bool resting = false;
+  POINT rest{};
 };
 Menu g_menu;
 // The thread hooks that watch the pointer and the keys while the menu shows.
@@ -1504,10 +1512,14 @@ HHOOK g_mouse_hook = nullptr;
 
 // In a driven run only the driver's pointer reaches the app, as drive.cc keeps the desktop's out of
 // its windows. The thread's mouse hooks hear the desktop's before that, and Windows moves it over a
-// window as one shows, so a menu opening where it rests would hover its row (#1125).
+// window as one shows, so a menu opening where it rests would hover its row (#1125). Unless the
+// driver's input is the desktop's own, real as a hand's (#2544).
+// Set by the driver (host_drive_real_input), which the host doesn't call: the preview links no
+// driver, whose core calls it couldn't link.
+bool g_drive_real = false;
 bool DesktopPointerHeard() {
   static const bool driven = GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0;
-  return !driven;
+  return !driven || g_drive_real;
 }
 
 // The pointer at |point| on screen, for the link target and the reveals.
@@ -1878,10 +1890,17 @@ void KeepKeyboard(HWND root) {
   }
   Later([root] {
     HWND hwnd = KeepsKeyboard(root);
-    if (!hwnd || GetForegroundWindow() != root) {
+    // Asked twice for one activation, it has the keyboard already.
+    if (!hwnd || GetForegroundWindow() == hwnd) {
       return;
     }
     const char* name = host_floating_name(hwnd);
+    if (GetForegroundWindow() != root) {
+      // check.sh shows this line when a step's keys went to the wrong window.
+      fprintf(stderr, "browser: %s leaves the keyboard: its window is no longer in front\n",
+              name ? name : "window");
+      return;
+    }
     // check.sh reads this line.
     fprintf(stderr, "browser: %s takes the keyboard back from its window\n",
             name ? name : "window");
@@ -1975,9 +1994,16 @@ bool MenuTakesPointer(WPARAM message, POINT pt) {
 }
 
 LRESULT CALLBACK MenuMouse(int code, WPARAM wparam, LPARAM lparam) {
-  if (code == HC_ACTION && DesktopPointerHeard() &&
-      MenuTakesPointer(wparam, reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->pt)) {
-    return 1;
+  if (code == HC_ACTION && DesktopPointerHeard()) {
+    const POINT pt = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->pt;
+    const bool moved = wparam == WM_MOUSEMOVE || wparam == WM_NCMOUSEMOVE;
+    if (moved && g_menu.resting && pt.x == g_menu.rest.x && pt.y == g_menu.rest.y) {
+      return 1;
+    }
+    g_menu.resting = g_menu.resting && !moved;
+    if (MenuTakesPointer(wparam, pt)) {
+      return 1;
+    }
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
@@ -2514,11 +2540,24 @@ HBITMAP LoadLaunchPicture(const std::wstring& path, LONG height, SIZE* size, COL
   return bitmap;
 }
 
+int TopEdge(HWND root);
+
 LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
   switch (message) {
     case WM_NCACTIVATE:
       // Its frame stands for the browser window's, which has the keyboard once it's under it.
       return DefWindowProcW(hwnd, message, TRUE, lparam);
+    // With no caption, as FrameProc gives the browser window none: its client area is then as high
+    // as the picture of the browser window's, which LoadLaunchPicture checks. As it's made, before
+    // any frame change, Windows asks with the window's rectangle alone.
+    case WM_NCCALCSIZE: {
+      RECT* rect = wparam ? &reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam)->rgrc[0]
+                          : reinterpret_cast<RECT*>(lparam);
+      const LONG top = rect->top;
+      const LRESULT result = DefWindowProcW(hwnd, message, wparam, lparam);
+      rect->top = top + (IsZoomed(hwnd) ? TopEdge(hwnd) : 0);
+      return result;
+    }
     case WM_ERASEBKGND:
       return 1;
     case WM_PAINT: {
@@ -2590,6 +2629,44 @@ void WritePng(const std::wstring& path, const std::vector<uint8_t>& pixels, UINT
     // held the file open is gone by now.
     DeleteFileW(path.c_str());
   }
+}
+
+// With BROWSER_LAUNCH_CAPTURE, writes the launch window as it has been on screen, its frame too, to
+// that PNG, for check.sh, as the Mac's host does: it's up only until the UI has drawn under it.
+void CaptureLaunchWindow(HWND window) {
+  const char* path = getenv("BROWSER_LAUNCH_CAPTURE");
+  RECT frame{};
+  if (!path || !*path || !GetWindowRect(window, &frame)) {
+    return;
+  }
+  const int width = frame.right - frame.left;
+  const int height = frame.bottom - frame.top;
+  if (width < 1 || height < 1) {
+    return;
+  }
+  BITMAPINFO info{};
+  info.bmiHeader = {sizeof(BITMAPINFOHEADER), width, -height, 1, 32, BI_RGB};
+  void* bits = nullptr;
+  HDC screen = GetDC(nullptr);
+  if (HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &bits, nullptr, 0)) {
+    HDC dc = CreateCompatibleDC(screen);
+    HGDIOBJ was = SelectObject(dc, bitmap);
+    const bool printed = PrintWindow(window, dc, PW_RENDERFULLCONTENT);
+    GdiFlush();
+    SelectObject(dc, was);
+    DeleteDC(dc);
+    if (printed) {
+      const auto* start = static_cast<const uint8_t*>(bits);
+      const std::vector<uint8_t> pixels(start, start + static_cast<size_t>(width) * height * 4);
+      const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+      WritePng(Wide(path), pixels, static_cast<UINT>(width), static_cast<UINT>(height));
+      if (SUCCEEDED(com)) {
+        CoUninitialize();
+      }
+    }
+    DeleteObject(bitmap);
+  }
+  ReleaseDC(nullptr, screen);
 }
 
 }  // namespace
@@ -3040,6 +3117,7 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
 
 void host_close_launch_window(void) {
   if (g_launch.hwnd) {
+    CaptureLaunchWindow(g_launch.hwnd);
     DestroyWindow(g_launch.hwnd);
   }
   if (g_launch.owner) {
@@ -3226,12 +3304,22 @@ void host_maximize_window(void* ui_view) {
   HWND key = GetForegroundWindow();
   DWORD process = 0;
   GetWindowThreadProcessId(key, &process);
+  // With another app in front, as when the app relaunches behind it, the app's own active window
+  // is the one to give back, as it comes in front with the app (#2544).
+  const bool in_front = process == GetCurrentProcessId();
+  if (!in_front) {
+    key = GetActiveWindow();
+  }
   // As Chromium's own Maximize does.
   SendMessageW(root, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
   // Maximizing activates it too, which a window a relaunch brings back behind the one in front
   // mustn't be (#1454): the keyboard goes back to the app's window that had it.
-  if (key && key != root && key != g_launch.hwnd && process == GetCurrentProcessId()) {
-    SetForegroundWindow(key);
+  if (key && key != root && key != g_launch.hwnd) {
+    if (in_front) {
+      SetForegroundWindow(key);
+    } else {
+      SetActiveWindow(key);
+    }
   }
   // Maximizing brings it to the front, and the launch window stays over it until the UI has drawn.
   if (g_launch.hwnd) {
@@ -3241,10 +3329,13 @@ void host_maximize_window(void* ui_view) {
 
 namespace {
 // Whether the app asked for the jump list (host_add_dock_items), which waits for a window with the
-// AppUserModelID it goes under, and whether it's set.
+// AppUserModelID it goes under, and whether it's been written.
 bool g_jump_list_wanted = false;
 bool g_jump_list_set = false;
-void SetJumpList();
+void WriteJumpList();
+// How long after the first window shows the list is written: past the launch's first page, as
+// Chrome waits 2 s (kLongDelayForUpdate) before it writes its own.
+constexpr double kJumpListAfter = 2;
 }  // namespace
 
 void host_show_window(void* ui_view) {
@@ -3253,7 +3344,7 @@ void host_show_window(void* ui_view) {
   ShowWindow(root, SW_SHOW);
   SetForegroundWindow(root);
   if (g_jump_list_wanted && !std::exchange(g_jump_list_set, true)) {
-    SetJumpList();
+    After(kJumpListAfter, WriteJumpList);
   }
   // The launch window stays over it until the UI has drawn (host_close_launch_window).
   if (g_launch.hwnd) {
@@ -3326,71 +3417,14 @@ bool host_window_shown(void* ui_view) {
 namespace {
 std::wstring BrowserModelId();
 
-// The taskbar's jump list, Windows' stand-in for the Mac's Dock menu: New window and New incognito
-// window, each launching ilo again with Chrome's switch for it, which the running browser hears as
-// a second launch (bc_host's app_new_window). Under the AppUserModelID the windows have, so the
-// list is the one their taskbar button shows. Set once, after the first window, which has the ID.
-void SetJumpList() {
-  ComPtr<ICustomDestinationList> list;
-  if (FAILED(CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&list)))) {
-    return;
-  }
-  const std::wstring id = BrowserModelId();
-  if (!id.empty()) {
-    list->SetAppID(id.c_str());
-  }
-  UINT slots = 0;
-  ComPtr<IObjectArray> removed;
-  ComPtr<IObjectCollection> tasks;
-  if (FAILED(list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
-      FAILED(CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&tasks)))) {
-    return;
-  }
-  wchar_t exe[MAX_PATH] = {};
-  GetModuleFileNameW(nullptr, exe, MAX_PATH);
-  // PKEY_Title, named here rather than linked from propsys.
-  constexpr PROPERTYKEY kTitle = {
-      {0xF29F85E0, 0x4FF9, 0x1068, {0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9}}, 2};
-  for (auto [title, switch_name] : {std::pair{L"New window", L"--new-window"},
-                                    std::pair{L"New incognito window", L"--incognito"}}) {
-    ComPtr<IShellLinkW> link;
-    ComPtr<IPropertyStore> store;
-    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
-                                IID_PPV_ARGS(&link))) ||
-        FAILED(link.As(&store))) {
-      continue;
-    }
-    link->SetPath(exe);
-    link->SetArguments(switch_name);
-    link->SetIconLocation(exe, 0);
-    PROPVARIANT value;
-    PropVariantInit(&value);
-    value.vt = VT_LPWSTR;
-    if (FAILED(SHStrDupW(title, &value.pwszVal))) {
-      continue;
-    }
-    store->SetValue(kTitle, value);
-    store->Commit();
-    PropVariantClear(&value);
-    tasks->AddObject(link.Get());
-  }
-  ComPtr<IObjectArray> array;
-  if (SUCCEEDED(tasks.As(&array)) && SUCCEEDED(list->AddUserTasks(array.Get()))) {
-    list->CommitList();
-    // check.sh reads this line.
-    fprintf(stderr, "browser: jump list set\n");
-  }
-}
 }  // namespace
 
-// Windows has no Dock menu; its jump list holds New window and New incognito window instead, once
-// the app has finished launching.
+// Windows has no Dock menu; its jump list holds New window, New incognito window and New Little ilo
+// Window instead, written once the first window has shown (WriteJumpList).
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {
   g_jump_list_wanted = true;
   if (!UiViews().empty() && !std::exchange(g_jump_list_set, true)) {
-    SetJumpList();
+    After(kJumpListAfter, WriteJumpList);
   }
 }
 
@@ -3408,13 +3442,8 @@ static std::map<void*, uint64_t>& WindowIds() {
   return ids;
 }
 
-// Writes the jump list's task host_set_little_task keeps, once a window has the AppUserModelID.
-static void WriteLittleTask();
-
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
-  // The core gave its window the AppUserModelID as it made it (core's AddWindowViews).
-  WriteLittleTask();
   // Opened behind another, it hears it isn't the one the user is in, which no foreground event says.
   TellMain(GetForegroundWindow());
 }
@@ -3871,9 +3900,16 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
     ContentSize(Root(ui_view), &width, &height);
   }
   Show(g_dialog, ui_view, x, y, width, height, true);
+  HWND root = Root(ui_view);
+  // Shown with another app in front, it's its thread's active window meanwhile, as a modal dialog
+  // of Windows' own is, without coming in front. The taskbar button and Alt+Tab bring an app back
+  // with that window, so it comes back with the keyboard: its browser window, active before it,
+  // hears nothing of the app coming back to take the keyboard back for it with (#2544).
+  if (g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) && !AppInFront()) {
+    SetActiveWindow(g_dialog.hwnd);
+  }
   // Shown with another app in front, it asks for the user by its window's taskbar button, until
   // they come to that window, as Chrome's dialogs do (#1365).
-  HWND root = Root(ui_view);
   if (root && root != g_dialog_asking && g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) &&
       !AppInFront()) {
     FLASHWINFO flash{sizeof flash, root, FLASHW_TRAY | FLASHW_TIMERNOFG, 0, 0};
@@ -4066,9 +4102,180 @@ void host_hide_capture(void) {
   fprintf(stderr, "browser: capture hidden\n");
 }
 
+namespace {
+
+// What the desktop shows behind the window in front, which is ours when the user asks to capture:
+// its picture's file, or none for a solid colour, filled with |colour|, at |screen|'s size in
+// pixels. Windows Spotlight's pictures aren't a file the system names, so it gives no answer, and
+// Portrait Mode puts the page on white. The caller has CoInitialized this thread.
+bool DesktopShown(std::wstring* file, COLORREF* colour, RECT* screen) {
+  HMONITOR monitor = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY);
+  MONITORINFO info{sizeof info};
+  if (!GetMonitorInfoW(monitor, &info)) {
+    return false;
+  }
+  *screen = info.rcMonitor;
+  // Settings › Personalization › Background's choice: 3 is Spotlight.
+  DWORD type = 0, size = sizeof type;
+  RegGetValueW(HKEY_CURRENT_USER,
+               L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers",
+               L"BackgroundType", RRF_RT_REG_DWORD, nullptr, &type, &size);
+  if (type == 3) {
+    fprintf(stderr, "browser: desktop picture none, Spotlight\n");
+    return false;
+  }
+  *colour = GetSysColor(COLOR_DESKTOP);
+  ComPtr<IDesktopWallpaper> wallpaper;
+  if (SUCCEEDED(CoCreateInstance(CLSID_DesktopWallpaper, nullptr, CLSCTX_ALL,
+                                 IID_PPV_ARGS(&wallpaper)))) {
+    COLORREF background = 0;
+    if (SUCCEEDED(wallpaper->GetBackgroundColor(&background))) {
+      *colour = background;
+    }
+    // Its monitors are named by device path; the one whose rectangle is this monitor's.
+    UINT count = 0;
+    wallpaper->GetMonitorDevicePathCount(&count);
+    for (UINT index = 0; index < count; ++index) {
+      LPWSTR id = nullptr;
+      RECT rect{};
+      LPWSTR path = nullptr;
+      if (SUCCEEDED(wallpaper->GetMonitorDevicePathAt(index, &id)) &&
+          SUCCEEDED(wallpaper->GetMonitorRECT(id, &rect)) && EqualRect(&rect, screen) &&
+          SUCCEEDED(wallpaper->GetWallpaper(id, &path)) && path) {
+        *file = path;
+      }
+      CoTaskMemFree(path);
+      CoTaskMemFree(id);
+      if (!file->empty()) {
+        return true;
+      }
+    }
+  }
+  // Before Windows 8, or a desktop the interface doesn't answer for: the primary monitor's.
+  wchar_t path[MAX_PATH] = {};
+  if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0)) {
+    *file = path;
+  }
+  return true;
+}
+
+// The desktop's picture drawn at |width| by |height|, filling it and centred as the desktop's
+// Fill does, else |colour| alone, as top-down BGRA. The caller has CoInitialized this thread.
+bool DesktopPixels(const std::wstring& file, COLORREF colour, UINT width, UINT height,
+                   std::vector<uint8_t>* pixels) {
+  pixels->assign(static_cast<size_t>(width) * height * 4, 0xff);
+  if (file.empty()) {
+    for (size_t at = 0; at < pixels->size(); at += 4) {
+      (*pixels)[at] = GetBValue(colour);
+      (*pixels)[at + 1] = GetGValue(colour);
+      (*pixels)[at + 2] = GetRValue(colour);
+    }
+    return true;
+  }
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IWICBitmapDecoder> decoder;
+  ComPtr<IWICBitmapFrameDecode> frame;
+  ComPtr<IWICFormatConverter> converter;
+  ComPtr<IWICBitmapScaler> scaler;
+  UINT pictured_width = 0, pictured_height = 0;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&wic))) ||
+      FAILED(wic->CreateDecoderFromFilename(file.c_str(), nullptr, GENERIC_READ,
+                                            WICDecodeMetadataCacheOnDemand, &decoder)) ||
+      FAILED(decoder->GetFrame(0, &frame)) ||
+      FAILED(frame->GetSize(&pictured_width, &pictured_height)) || !pictured_width ||
+      !pictured_height || FAILED(wic->CreateFormatConverter(&converter)) ||
+      FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA,
+                                   WICBitmapDitherTypeNone, nullptr, 0,
+                                   WICBitmapPaletteTypeCustom))) {
+    return false;
+  }
+  const double fill = (std::max)(static_cast<double>(width) / pictured_width,
+                                 static_cast<double>(height) / pictured_height);
+  const UINT drawn_width = (std::max)(width, static_cast<UINT>(std::ceil(pictured_width * fill)));
+  const UINT drawn_height =
+      (std::max)(height, static_cast<UINT>(std::ceil(pictured_height * fill)));
+  const WICRect middle{static_cast<INT>((drawn_width - width) / 2),
+                       static_cast<INT>((drawn_height - height) / 2), static_cast<INT>(width),
+                       static_cast<INT>(height)};
+  return SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
+         SUCCEEDED(scaler->Initialize(converter.Get(), drawn_width, drawn_height,
+                                      WICBitmapInterpolationModeHighQualityCubic)) &&
+         SUCCEEDED(scaler->CopyPixels(&middle, width * 4, static_cast<UINT>(pixels->size()),
+                                      pixels->data()));
+}
+
+// |pixels|, |width| by |height| top-down BGRA, as a PNG. The caller has CoInitialized this thread.
+bool EncodePng(const std::vector<uint8_t>& pixels, UINT width, UINT height,
+               std::vector<uint8_t>* png) {
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IWICBitmap> source;
+  ComPtr<IStream> stream;
+  ComPtr<IWICBitmapEncoder> encoder;
+  ComPtr<IWICBitmapFrameEncode> frame;
+  ComPtr<IPropertyBag2> options;
+  WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+  STATSTG stat{};
+  HGLOBAL global = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&wic))) ||
+      FAILED(wic->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppBGRA, width * 4,
+                                         static_cast<UINT>(pixels.size()),
+                                         const_cast<BYTE*>(pixels.data()), &source)) ||
+      FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) ||
+      FAILED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) ||
+      FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
+      FAILED(encoder->CreateNewFrame(&frame, &options)) ||
+      FAILED(frame->Initialize(options.Get())) || FAILED(frame->SetSize(width, height)) ||
+      FAILED(frame->SetPixelFormat(&format)) ||
+      FAILED(frame->WriteSource(source.Get(), nullptr)) || FAILED(frame->Commit()) ||
+      FAILED(encoder->Commit()) || FAILED(stream->Stat(&stat, STATFLAG_NONAME)) ||
+      FAILED(GetHGlobalFromStream(stream.Get(), &global)) || !global) {
+    return false;
+  }
+  void* data = GlobalLock(global);
+  if (!data) {
+    return false;
+  }
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  png->assign(bytes, bytes + static_cast<size_t>(stat.cbSize.QuadPart));
+  GlobalUnlock(global);
+  return !png->empty();
+}
+
+}  // namespace
+
 bool host_desktop_picture(void* context,
                           void (*png)(void* context, const uint8_t* data, size_t size)) {
-  return false;
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  std::wstring file;
+  COLORREF colour = RGB(0, 0, 0);
+  RECT screen{};
+  std::vector<uint8_t> pixels, encoded;
+  const bool shown = DesktopShown(&file, &colour, &screen);
+  const UINT width = static_cast<UINT>(screen.right - screen.left);
+  const UINT height = static_cast<UINT>(screen.bottom - screen.top);
+  const bool found = shown && width && height &&
+                     DesktopPixels(file, colour, width, height, &pixels) &&
+                     EncodePng(pixels, width, height, &encoded);
+  if (SUCCEEDED(com)) {
+    CoUninitialize();
+  }
+  if (!found) {
+    if (shown) {
+      fprintf(stderr, "browser: desktop picture none, unread\n");
+    }
+    return false;
+  }
+  // check.sh reads this line: the picture's size, and whether it's a file's or a colour.
+  if (file.empty()) {
+    fprintf(stderr, "browser: desktop picture %ux%u, colour %02x%02x%02x\n", width, height,
+            GetRValue(colour), GetGValue(colour), GetBValue(colour));
+  } else {
+    fprintf(stderr, "browser: desktop picture %ux%u, a picture\n", width, height);
+  }
+  png(context, encoded.data(), encoded.size());
+  return true;
 }
 
 void host_copy_png(const uint8_t* png, size_t size) {
@@ -4260,7 +4467,15 @@ void host_show_toast(void* ui_view) {
 void host_hide_toast(void) {
   g_toast_over = nullptr;
   g_toast.plate = RECT{};
+  const bool shown = g_toast.hwnd && IsWindowVisible(g_toast.hwnd);
   Hide(g_toast);
+  // GPUI keeps where the pointer was when the toast hid, and Windows tells a hidden window nothing
+  // of the pointer leaving: a toast clicked away and the next shown in its place took itself as
+  // hovered and stayed past its time (#2544, as #2076 on the Mac). It hears the pointer leave as it
+  // hides, posted, as GPUI drops what a window hears while the UI is busy, as it is here.
+  if (shown) {
+    PostMessageW(g_toast.hwnd, WM_MOUSELEAVE, 0, 0);
+  }
 }
 
 void host_add_foot_bar(void* foot_bar_view) {
@@ -4390,6 +4605,10 @@ void host_hide_link_target(double fade) {
   FadeOut(g_link_target, fade, MaybeStopWatchingPointer);
 }
 
+bool host_mouse_down(void) {
+  return Pressed();
+}
+
 void host_focus(void* view) {
   HWND hwnd = Hwnd(view);
   HWND root = GetAncestor(hwnd, GA_ROOT);
@@ -4506,6 +4725,7 @@ void host_show_menu_window(void* ui_view,
     SendMessageW(g_menu.hwnd, WM_PAINT, 0, 0);
     PlaceAndShow(g_menu.hwnd, frame.left, frame.top, wide, high,
                  Step(g_menu.life, OverlayEvent::kShow, kKeyboard));
+    g_menu.resting = GetCursorPos(&g_menu.rest);
     InstallMenuHooks();
     // check.sh reads this line.
     fprintf(stderr, "browser: menu window at %.0f,%.0f %.0fx%.0f\n", left, top, width, height);
@@ -4764,11 +4984,12 @@ bool host_close_other_window(void) {
   }
   DWORD process = 0;
   GetWindowThreadProcessId(window, &process);
-  // Our own, but neither a browser window (Ctrl+W closes its tab) nor one of the UI's floating
-  // windows: a Chrome window of its own, such as the Task Manager or undocked DevTools, which carry
+  // Our own, but neither a browser window (Ctrl+W closes its tab), one of the UI's floating windows
+  // nor a window another owns, such as a tab's dialog, whose Ctrl+W closes its tab as in Chrome
+  // (#2651): a Chrome window of its own, such as the Task Manager or undocked DevTools, which carry
   // a system close button. Closing it is that button's click.
   if (process != GetCurrentProcessId() || UiViewOf(window) || FloatingByHwnd().count(window) ||
-      !(GetWindowLongPtrW(window, GWL_STYLE) & WS_SYSMENU)) {
+      GetWindow(window, GW_OWNER) || !(GetWindowLongPtrW(window, GWL_STYLE) & WS_SYSMENU)) {
     return false;
   }
   PostMessageW(window, WM_CLOSE, 0, 0);
@@ -4946,6 +5167,11 @@ void* host_drop_target(void* hwnd) {
 // The driver's: carries the app's own drags in place of DoDragDrop (g_drive_drag).
 void host_drive_drags(HRESULT (*drag)(IDataObject*, DWORD, DWORD*, POINT*)) {
   g_drive_drag = drag;
+}
+
+// The driver's: its input is real, which the menu hooks then hear as a hand's (#2544).
+void host_drive_real_input(void) {
+  g_drive_real = true;
 }
 
 bool host_trash(const char* path) {
@@ -5463,11 +5689,9 @@ constexpr UINT kTrayId = 1;
 HWND g_tray = nullptr;
 void (*g_tray_clicked)(void) = nullptr;
 UINT g_taskbar_created = 0;
-// The task's title, which the icon's tooltip says too, and its arguments, kept until it's
-// written under the windows' AppUserModelID, which the first window has.
+// The jump list's Little ilo task's title, which the icon's tooltip says too, and its arguments.
 std::wstring g_little_title;
 std::wstring g_little_arguments;
-bool g_little_task_waits = false;
 
 // PKEY_Title, named here as kAppId is, rather than linked from propsys.
 constexpr PROPERTYKEY kTitle = {
@@ -5559,20 +5783,23 @@ void host_set_little_status_item(void (*clicked)(void)) {
 void host_set_little_task(const char* title, const char* arguments) {
   g_little_title = Wide(title);
   g_little_arguments = Wide(arguments);
-  g_little_task_waits = true;
-  WriteLittleTask();
+  // Before the list is first written, it's written with the rest then.
+  if (g_jump_list_set) {
+    WriteJumpList();
+  }
 }
 
 }  // extern "C"
 
-static void WriteLittleTask() {
-  // The list goes under the windows' ID, so their taskbar button has it, and no window has it
-  // before the first opens.
-  const std::wstring id = g_little_task_waits ? BrowserModelId() : std::wstring();
-  if (id.empty()) {
-    return;
-  }
-  g_little_task_waits = false;
+namespace {
+
+// Writes the jump list under the windows' AppUserModelID |id|: New window and New incognito window,
+// each launching ilo again with Chrome's switch for it, which the running browser hears as a second
+// launch (bc_host's app_new_window), then Little ilo's task if the app gave one. Each commit
+// replaces the whole list, so all three go in one. The caller has CoInitialized this thread.
+void WriteJumpListNow(const std::wstring& id,
+                      const std::wstring& little_title,
+                      const std::wstring& little_arguments) {
   // check.sh reads these lines: which step refused, and why.
   const auto refused = [](const char* step, HRESULT result) {
     fprintf(stderr, "browser: jump list refused at %s: 0x%08lx\n", step,
@@ -5580,8 +5807,6 @@ static void WriteLittleTask() {
   };
   ComPtr<ICustomDestinationList> list;
   ComPtr<IObjectCollection> tasks;
-  ComPtr<IShellLinkW> link;
-  ComPtr<IPropertyStore> store;
   HRESULT result = CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
                                     IID_PPV_ARGS(&list));
   if (FAILED(result)) {
@@ -5592,43 +5817,87 @@ static void WriteLittleTask() {
   if (FAILED(result)) {
     return refused("the tasks", result);
   }
-  result = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
-  if (FAILED(result) || FAILED(result = link.As(&store))) {
-    return refused("the task", result);
-  }
   if (FAILED(result = list->SetAppID(id.c_str()))) {
     return refused("its app id", result);
   }
-  const std::wstring exe = ExePath();
-  link->SetPath(exe.c_str());
-  link->SetArguments(g_little_arguments.c_str());
-  link->SetIconLocation(exe.c_str(), 0);
-  link->SetDescription(g_little_title.c_str());
-  PROPVARIANT value;
-  PropVariantInit(&value);
-  value.vt = VT_LPWSTR;
-  const size_t bytes = (g_little_title.size() + 1) * sizeof(wchar_t);
-  value.pwszVal = static_cast<LPWSTR>(CoTaskMemAlloc(bytes));
-  if (value.pwszVal) {
-    memcpy(value.pwszVal, g_little_title.c_str(), bytes);
+  std::vector<std::pair<std::wstring, std::wstring>> all = {
+      {L"New window", L"--new-window"}, {L"New incognito window", L"--incognito"}};
+  if (!little_title.empty()) {
+    all.emplace_back(little_title, little_arguments);
   }
-  result = value.pwszVal ? store->SetValue(kTitle, value) : E_OUTOFMEMORY;
-  PropVariantClear(&value);
-  if (FAILED(result) || FAILED(result = store->Commit())) {
-    return refused("its title", result);
+  const std::wstring exe = ExePath();
+  for (const auto& [title, arguments] : all) {
+    ComPtr<IShellLinkW> link;
+    ComPtr<IPropertyStore> store;
+    result = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
+    if (FAILED(result) || FAILED(result = link.As(&store))) {
+      return refused("the task", result);
+    }
+    link->SetPath(exe.c_str());
+    link->SetArguments(arguments.c_str());
+    link->SetIconLocation(exe.c_str(), 0);
+    link->SetDescription(title.c_str());
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    value.vt = VT_LPWSTR;
+    result = SHStrDupW(title.c_str(), &value.pwszVal);
+    if (SUCCEEDED(result)) {
+      result = store->SetValue(kTitle, value);
+    }
+    PropVariantClear(&value);
+    if (FAILED(result) || FAILED(result = store->Commit())) {
+      return refused("its title", result);
+    }
+    if (FAILED(result = tasks->AddObject(link.Get()))) {
+      return refused("the task", result);
+    }
   }
   UINT slots = 0;
   ComPtr<IObjectArray> removed;
   ComPtr<IObjectArray> array;
-  if (FAILED(result = tasks->AddObject(link.Get())) || FAILED(result = tasks.As(&array)) ||
+  if (FAILED(result = tasks.As(&array)) ||
       FAILED(result = list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
       FAILED(result = list->AddUserTasks(array.Get())) || FAILED(result = list->CommitList())) {
     return refused("the commit", result);
   }
-  // check.sh reads this line.
-  fprintf(stderr, "browser: jump list task %ls: %ls\n", g_little_title.c_str(),
-          g_little_arguments.c_str());
+  // check.sh reads these lines.
+  fprintf(stderr, "browser: jump list set\n");
+  if (!little_title.empty()) {
+    fprintf(stderr, "browser: jump list task %ls: %ls\n", little_title.c_str(),
+            little_arguments.c_str());
+  }
 }
+
+// The taskbar's jump list, Windows' stand-in for the Mac's Dock menu, under the AppUserModelID the
+// windows have, so it's the one their taskbar button shows, which is why it waits for the first
+// window to show. COM's shell objects take tens of milliseconds (#2384): on the main thread the
+// first window waited for them, and on a thread of their own while the launch's page loads, that
+// page did. So they're written on a thread of their own, as Chrome writes its list off the UI
+// thread, and at launch kJumpListAfter later. The newest write wins: one that finds a newer one
+// asked for leaves it alone.
+void WriteJumpList() {
+  const std::wstring id = BrowserModelId();
+  if (id.empty()) {
+    return;
+  }
+  // Leaked, as a write may still be going at exit.
+  static auto* lock = new std::mutex;
+  static auto* asked = new std::atomic<uint64_t>(0);
+  const uint64_t ask = ++*asked;
+  std::thread([id, ask, title = g_little_title, arguments = g_little_arguments] {
+    std::lock_guard<std::mutex> hold(*lock);
+    if (ask != asked->load()) {
+      return;
+    }
+    const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+    WriteJumpListNow(id, title, arguments);
+    if (com) {
+      CoUninitialize();
+    }
+  }).detach();
+}
+
+}  // namespace
 
 extern "C" {
 

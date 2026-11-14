@@ -1331,6 +1331,64 @@ fn the_input_method_composes_and_commits_in_the_bar(cx: &mut TestAppContext) {
     assert_eq!(bar.input(), ("ねこ".into(), 6..6));
 }
 
+/// `key` pressed and released as Wayland's platform hands it to the window: down, then its
+/// character typed into the field if the window didn't take the key, then up. A macro, since
+/// GPUI's test window can't be named here.
+macro_rules! press {
+    ($platform:expr, $key:expr) => {{
+        use gpui::PlatformWindow as _;
+        let keystroke = gpui::Keystroke::parse($key).unwrap().with_simulated_ime();
+        let down = gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        if !$platform.simulate_input(down) {
+            let mut field = $platform.take_input_handler().expect("no input handler");
+            field.replace_text_in_range(None, keystroke.key_char.as_deref().unwrap());
+            $platform.set_input_handler(field);
+        }
+        $platform.simulate_input(gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
+    }};
+}
+
+/// A character typed while the App is in an update, as a nested event pump delivers it, lands in
+/// the bar once the update is over, and ahead of the one typed after it (#2672).
+#[gpui::test]
+fn a_character_typed_mid_update_lands_in_the_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    let mut platform = bar.cx.cx.test_window(bar.window.into());
+    (bar.window)
+        .update(&mut bar.cx.cx, |_, _, _| press!(platform, "a"))
+        .unwrap();
+    press!(platform, "b");
+    bar.cx.run_until_parked();
+    assert_eq!(bar.input(), ("ab".into(), 2..2));
+}
+
+/// Japanese the input method composes and commits while the App is in an update, with no key of
+/// its own, as a candidate picked with the pointer is: once the update is over the bar has the
+/// committed text and nothing marked (#2672).
+#[gpui::test]
+fn a_japanese_commit_mid_update_lands_in_the_bar(cx: &mut TestAppContext) {
+    use gpui::PlatformWindow as _;
+    let mut bar = Bar::new(cx);
+    bar.compose("にほん");
+    let mut platform = bar.cx.cx.test_window(bar.window.into());
+    (bar.window)
+        .update(&mut bar.cx.cx, |_, _, _| {
+            let mut ime = platform.take_input_handler().expect("no input handler");
+            ime.replace_and_mark_text_in_range(None, "にほんご", None);
+            ime.replace_text_in_range(None, "日本語");
+            platform.set_input_handler(ime);
+        })
+        .unwrap();
+    bar.cx.run_until_parked();
+    assert!(!bar.composing());
+    assert_eq!(bar.input(), ("日本語".into(), 9..9));
+    assert_eq!(bar.calls(), Vec::<String>::new());
+}
+
 /// Korean from a 2-set keyboard, where one key can commit a syllable and start the next (#2457):
 /// in a new tab's bar and over the URL the bar opened on. The core is asked only for committed
 /// text, and ↩, which AppKit's, IBus's and Windows' Korean input methods pass on once they've

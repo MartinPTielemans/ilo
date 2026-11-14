@@ -1,3 +1,15 @@
+diff --git a/crates/gpui_windows/Cargo.toml b/crates/gpui_windows/Cargo.toml
+index 37e4a2f7f2..c9c60e1e67 100644
+--- a/crates/gpui_windows/Cargo.toml
++++ b/crates/gpui_windows/Cargo.toml
+@@ -61,6 +61,7 @@ windows = { workspace = true, features = [
+     "Win32_System_StationsAndDesktops",
+     "Win32_System_SystemInformation",
+     "Win32_System_SystemServices",
++    "Win32_UI_Accessibility",
+     "Win32_UI_Controls",
+     "Win32_UI_HiDpi",
+     "Win32_UI_Input_Ime",
 diff --git a/crates/gpui_windows/src/dialog.rs b/crates/gpui_windows/src/dialog.rs
 index 16866cfc35..659fa75c23 100644
 --- a/crates/gpui_windows/src/dialog.rs
@@ -112,7 +124,7 @@ index 622c1cb604..697ce244f7 100644
          let bind_flag;
          let bytes_per_pixel;
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
-index 98a13f304c..c8fd25a160 100644
+index 98a13f304c..22267df7e8 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
 @@ -54,6 +54,9 @@ pub(crate) struct DirectXRenderer {
@@ -167,7 +179,21 @@ index 98a13f304c..c8fd25a160 100644
  struct DirectXRenderPipelines {
      shadow_pipeline: PipelineState<Shadow>,
      quad_pipeline: PipelineState<Quad>,
-@@ -194,6 +217,7 @@ impl DirectXRenderer {
+@@ -168,8 +191,11 @@ impl DirectXRenderer {
+             .context("Creating DirectX resources")?;
+         let globals = DirectXGlobalElements::new(&devices.device)
+             .context("Creating DirectX global elements")?;
+-        let pipelines = DirectXRenderPipelines::new(&devices.device)
+-            .context("Creating DirectX render pipelines")?;
++        let pipelines = match take_early_pipelines(&devices.device) {
++            Some(pipelines) => pipelines,
++            None => DirectXRenderPipelines::new(&devices.device)
++                .context("Creating DirectX render pipelines")?,
++        };
+ 
+         let direct_composition = if disable_direct_composition {
+             None
+@@ -194,6 +220,7 @@ impl DirectXRenderer {
              width: 1,
              height: 1,
              skip_draws: false,
@@ -175,7 +201,7 @@ index 98a13f304c..c8fd25a160 100644
          })
      }
  
-@@ -324,6 +348,7 @@ impl DirectXRenderer {
+@@ -324,6 +351,7 @@ impl DirectXRenderer {
          self.pipelines = pipelines;
          self.direct_composition = direct_composition;
          self.skip_draws = true;
@@ -183,7 +209,7 @@ index 98a13f304c..c8fd25a160 100644
          Ok(())
      }
  
-@@ -338,7 +363,47 @@ impl DirectXRenderer {
+@@ -338,7 +366,47 @@ impl DirectXRenderer {
              return Ok(());
          }
          self.render(scene, background_appearance)?;
@@ -232,7 +258,7 @@ index 98a13f304c..c8fd25a160 100644
      }
  
      /// Clear the render target for `background_appearance` and encode every
-@@ -409,7 +474,6 @@ impl DirectXRenderer {
+@@ -409,7 +477,6 @@ impl DirectXRenderer {
      /// goes through MetalRenderer; this is the Windows analogue). Draws into
      /// the existing render target, copies it into a `D3D11_USAGE_STAGING`
      /// texture, maps it, and converts BGRA to RGBA.
@@ -240,7 +266,7 @@ index 98a13f304c..c8fd25a160 100644
      pub(crate) fn render_to_image(
          &mut self,
          scene: &Scene,
-@@ -618,16 +682,21 @@ impl DirectXRenderer {
+@@ -618,16 +685,21 @@ impl DirectXRenderer {
          }
  
          let devices = self.devices.as_ref().context("devices missing")?;
@@ -264,7 +290,7 @@ index 98a13f304c..c8fd25a160 100644
                  None,
              );
          }
-@@ -660,9 +729,9 @@ impl DirectXRenderer {
+@@ -660,9 +732,9 @@ impl DirectXRenderer {
          // Resolve MSAA to non-MSAA intermediate texture
          unsafe {
              devices.device_context.ResolveSubresource(
@@ -276,7 +302,7 @@ index 98a13f304c..c8fd25a160 100644
                  0,
                  RENDER_TARGET_FORMAT,
              );
-@@ -704,6 +773,10 @@ impl DirectXRenderer {
+@@ -704,6 +776,10 @@ impl DirectXRenderer {
  
          let devices = self.devices.as_ref().context("devices missing")?;
          let resources = self.resources.as_ref().context("resources missing")?;
@@ -287,7 +313,7 @@ index 98a13f304c..c8fd25a160 100644
          self.pipelines.path_sprite_pipeline.update_buffer(
              &devices.device,
              &devices.device_context,
-@@ -713,7 +786,7 @@ impl DirectXRenderer {
+@@ -713,7 +789,7 @@ impl DirectXRenderer {
          // Draw the sprites with the path texture
          self.pipelines.path_sprite_pipeline.draw_with_texture(
              &devices.device_context,
@@ -296,7 +322,7 @@ index 98a13f304c..c8fd25a160 100644
              slice::from_ref(&self.globals.sampler),
              sprites.len() as u32,
          )
-@@ -889,25 +962,15 @@ impl DirectXResources {
+@@ -889,25 +965,15 @@ impl DirectXResources {
              )?
          };
  
@@ -325,7 +351,7 @@ index 98a13f304c..c8fd25a160 100644
              viewport,
          })
      }
-@@ -919,21 +982,12 @@ impl DirectXResources {
+@@ -919,26 +985,38 @@ impl DirectXResources {
          width: u32,
          height: u32,
      ) -> Result<()> {
@@ -351,7 +377,33 @@ index 98a13f304c..c8fd25a160 100644
          self.viewport = viewport;
          Ok(())
      }
-@@ -1359,20 +1413,12 @@ fn create_resources(
+ }
+ 
++/// The first window's pipelines, which `make_early` makes with the devices, and the device they're
++/// for: a window whose device is another, after the device was lost, makes its own.
++static EARLY_PIPELINES: std::sync::Mutex<Option<(ID3D11Device, DirectXRenderPipelines)>> =
++    std::sync::Mutex::new(None);
++
++/// Makes the first window's pipelines on `device` now, off the main thread, for its renderer to
++/// take: they need only the device, and cost the main thread ~3 ms as the window opens.
++pub(crate) fn make_pipelines_early(device: &ID3D11Device) {
++    let Ok(pipelines) = DirectXRenderPipelines::new(device) else {
++        return;
++    };
++    if let Ok(mut early) = EARLY_PIPELINES.lock() {
++        *early = Some((device.clone(), pipelines));
++    }
++}
++
++fn take_early_pipelines(device: &ID3D11Device) -> Option<DirectXRenderPipelines> {
++    let (made_on, pipelines) = EARLY_PIPELINES.lock().ok()?.take()?;
++    (made_on == *device).then_some(pipelines)
++}
++
+ impl DirectXRenderPipelines {
+     pub fn new(device: &ID3D11Device) -> Result<Self> {
+         let shadow_pipeline = PipelineState::new(
+@@ -1359,20 +1437,12 @@ fn create_resources(
      width: u32,
      height: u32,
  ) -> Result<(
@@ -372,7 +424,7 @@ index 98a13f304c..c8fd25a160 100644
      let viewport = D3D11_VIEWPORT {
          TopLeftX: 0.0,
          TopLeftY: 0.0,
-@@ -1381,15 +1427,7 @@ fn create_resources(
+@@ -1381,15 +1451,7 @@ fn create_resources(
          MinDepth: 0.0,
          MaxDepth: 1.0,
      };
@@ -390,10 +442,18 @@ index 98a13f304c..c8fd25a160 100644
  
  #[inline]
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..679d76e0e9 100644
+index 08f91bd626..dca73547ee 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
-@@ -103,13 +103,14 @@ impl WindowsWindowInner {
+@@ -28,6 +28,7 @@ pub(crate) const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = WM_USER + 5;
+ pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
+ pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
+ pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
++pub(crate) const WM_GPUI_VSYNC_FRAME: u32 = WM_USER + 11;
+ 
+ const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
+ 
+@@ -103,13 +104,14 @@ impl WindowsWindowInner {
              WM_TIMER => self.handle_timer_msg(handle, wparam),
              WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
              WM_DPICHANGED => self.handle_dpi_changed_msg(handle, wparam, lparam),
@@ -409,7 +469,7 @@ index 08f91bd626..679d76e0e9 100644
              WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
              // Treat double click as a second single click, since we track the double clicks ourselves.
              // If you don't interact with any elements, this will fall through to the windows default
-@@ -146,11 +147,18 @@ impl WindowsWindowInner {
+@@ -146,11 +148,18 @@ impl WindowsWindowInner {
              }
              WM_MOUSEWHEEL => self.handle_mouse_wheel_msg(handle, wparam, lparam),
              WM_MOUSEHWHEEL => self.handle_mouse_horizontal_wheel_msg(handle, wparam, lparam),
@@ -428,7 +488,15 @@ index 08f91bd626..679d76e0e9 100644
              WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
              WM_SETTINGCHANGE => self.handle_system_settings_changed(handle, wparam, lparam),
              WM_INPUTLANGCHANGE => self.handle_input_language_changed(),
-@@ -169,7 +177,7 @@ impl WindowsWindowInner {
+@@ -159,6 +168,7 @@ impl WindowsWindowInner {
+             WM_GETOBJECT => self.handle_wm_getobject(wparam, lparam),
+             WM_GPUI_CURSOR_STYLE_CHANGED
+             | WM_GPUI_FORCE_UPDATE_WINDOW
++            | WM_GPUI_VSYNC_FRAME
+             | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(handle, msg, wparam, lparam),
+             _ => None,
+         };
+@@ -169,7 +179,7 @@ impl WindowsWindowInner {
          }
      }
  
@@ -437,7 +505,27 @@ index 08f91bd626..679d76e0e9 100644
          let origin = logical_point(
              lparam.signed_loword() as f32,
              lparam.signed_hiword() as f32,
-@@ -381,8 +389,28 @@ impl WindowsWindowInner {
+@@ -315,6 +325,19 @@ impl WindowsWindowInner {
+         self.draw_window(handle, false)
+     }
+ 
++    /// The vsync thread's frame. A key or button already queued is handled first, as it is ahead
++    /// of WM_PAINT, so the frame shows it: the window is invalidated for the paint after it instead.
++    /// Not a mouse move, which Windows queues as a window appears under the pointer, and which
++    /// had held nearly every launch's first frame for the paint.
++    fn handle_vsync_frame(&self, handle: HWND) -> Option<isize> {
++        self.state.frame_want.unqueue();
++        if unsafe { GetQueueStatus(QS_KEY | QS_MOUSEBUTTON) } >> 16 != 0 {
++            unsafe { RedrawWindow(Some(handle), None, None, RDW_INVALIDATE).ok().log_err() };
++            return Some(0);
++        }
++        self.draw_window(handle, false)
++    }
++
+     fn handle_close_msg(&self) -> Option<isize> {
+         let mut callback = self.state.callbacks.should_close.take()?;
+         let should_close = callback();
+@@ -381,8 +404,28 @@ impl WindowsWindowInner {
          if handled { Some(0) } else { Some(1) }
      }
  
@@ -467,10 +555,48 @@ index 08f91bd626..679d76e0e9 100644
          // The next window's `WM_SETCURSOR` picks its own cursor, so we just clear
          // the flag for tight `is_cursor_visible()` semantics.
          self.state.cursor_visible.store(true, Ordering::Relaxed);
-@@ -439,6 +467,31 @@ impl WindowsWindowInner {
-         if handled { Some(0) } else { Some(1) }
-     }
+@@ -413,7 +456,14 @@ impl WindowsWindowInner {
+     // It's a known bug that you can't trigger `ctrl-shift-0`. See:
+     // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
+     pub(crate) fn handle_keydown_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
+-        let Some(input) = handle_key_event(
++        let handled = self
++            .dispatch_keydown(wparam, lparam)
++            .is_some_and(|result| !result.propagate);
++        if handled { Some(0) } else { Some(1) }
++    }
++
++    fn dispatch_keydown(&self, wparam: WPARAM, lparam: LPARAM) -> Option<DispatchEventResult> {
++        let input = handle_key_event(
+             wparam,
+             lparam,
+             &self.state,
+@@ -424,19 +474,56 @@ impl WindowsWindowInner {
+                     prefer_character_input,
+                 })
+             },
+-        ) else {
+-            return Some(1);
+-        };
+-
+-        let Some(mut func) = self.state.callbacks.input.take() else {
+-            return Some(1);
+-        };
+-
+-        let handled = !func(input).propagate;
+-
++        )?;
++        let key_down = matches!(input, PlatformInput::KeyDown(_));
++        let mut func = self.state.callbacks.input.take()?;
++        let result = func(input);
+         self.state.callbacks.input.set(Some(func));
++        if result.later && key_down {
++            self.state.held_key_text.borrow_mut().push_back(None);
++        }
++        Some(result)
++    }
  
+-        if handled { Some(0) } else { Some(1) }
 +    /// An embedder's message loop translates a key press before dispatching it, where GPUI's own
 +    /// loop offers it to the window first. So the window takes it here, and a key it used loses the
 +    /// character the translation queued, as it would in GPUI's loop.
@@ -483,23 +609,37 @@ index 08f91bd626..679d76e0e9 100644
 +        if self.handle_input_mode_key(handle, wparam) {
 +            return Some(0);
 +        }
-+        if self.handle_keydown_msg(wparam, lparam) != Some(0) {
++        let Some(result) = self
++            .dispatch_keydown(wparam, lparam)
++            .filter(|result| !result.propagate)
++        else {
 +            return None;
-+        }
++        };
 +        let mut msg = MSG::default();
++        let mut typed = Vec::new();
 +        unsafe {
-+            while PeekMessageW(&mut msg, Some(handle), WM_CHAR, WM_DEADCHAR, PM_REMOVE).as_bool() {}
++            while PeekMessageW(&mut msg, Some(handle), WM_CHAR, WM_DEADCHAR, PM_REMOVE).as_bool() {
++                if msg.message == WM_CHAR {
++                    typed.push(msg.wParam.0 as u16);
++                }
++            }
 +            while PeekMessageW(&mut msg, Some(handle), WM_SYSCHAR, WM_SYSDEADCHAR, PM_REMOVE)
 +                .as_bool()
 +            {}
 +        }
++        // A key that goes later types what its translation queued now, if nothing takes it then.
++        if result.later
++            && let Some(text) = self.state.held_key_text.borrow_mut().back_mut()
++        {
++            *text = String::from_utf16(&typed)
++                .ok()
++                .filter(|text| !text.is_empty() && !text.chars().any(char::is_control));
++        }
 +        Some(0)
-+    }
-+
+     }
+ 
      fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-         let Some(input) = handle_key_event(wparam, lparam, &self.state, |keystroke, _| {
-             PlatformInput::KeyUp(KeyUpEvent { keystroke })
-@@ -710,6 +763,72 @@ impl WindowsWindowInner {
+@@ -710,6 +797,72 @@ impl WindowsWindowInner {
          }
      }
  
@@ -572,7 +712,7 @@ index 08f91bd626..679d76e0e9 100644
      fn handle_ime_composition(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          let ctx = ImeContext::get(handle)?;
          self.handle_ime_composition_inner(*ctx, lparam)
-@@ -933,7 +1052,35 @@ impl WindowsWindowInner {
+@@ -933,7 +1086,35 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -609,7 +749,7 @@ index 08f91bd626..679d76e0e9 100644
          let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
          if new_monitor.is_invalid() {
              log::error!("No monitor detected!");
-@@ -944,12 +1091,21 @@ impl WindowsWindowInner {
+@@ -944,12 +1125,21 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -636,7 +776,7 @@ index 08f91bd626..679d76e0e9 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1021,6 +1177,12 @@ impl WindowsWindowInner {
+@@ -1021,6 +1211,12 @@ impl WindowsWindowInner {
      }
  
      fn handle_nc_mouse_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
@@ -649,7 +789,15 @@ index 08f91bd626..679d76e0e9 100644
          self.start_tracking_mouse(handle, TME_LEAVE | TME_NONCLIENT);
          self.restore_cursor_after_hide();
  
-@@ -1335,6 +1497,8 @@ impl WindowsWindowInner {
+@@ -1306,6 +1502,7 @@ impl WindowsWindowInner {
+         match message {
+             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
+             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
++            WM_GPUI_VSYNC_FRAME => self.handle_vsync_frame(handle),
+             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
+             _ => unreachable!(),
+         }
+@@ -1335,6 +1532,8 @@ impl WindowsWindowInner {
  
      fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {
          self.state.direct_manipulation.on_pointer_hit_test(wparam);
@@ -658,7 +806,7 @@ index 08f91bd626..679d76e0e9 100644
          None
      }
  
-@@ -1347,16 +1511,28 @@ impl WindowsWindowInner {
+@@ -1347,16 +1546,28 @@ impl WindowsWindowInner {
              }
              // Validate the region so a nested message pump doesn't keep
              // re-dispatching WM_PAINT for the still-invalid region in a busy
@@ -689,7 +837,7 @@ index 08f91bd626..679d76e0e9 100644
  
          let events = self.state.direct_manipulation.drain_events();
          if !events.is_empty() {
-@@ -1823,3 +1999,70 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +2034,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -761,7 +909,7 @@ index 08f91bd626..679d76e0e9 100644
 +    true
 +}
 diff --git a/crates/gpui_windows/src/gpui_windows.rs b/crates/gpui_windows/src/gpui_windows.rs
-index e7a45a034d..c7b8e5dc0c 100644
+index e7a45a034d..559f8e96f4 100644
 --- a/crates/gpui_windows/src/gpui_windows.rs
 +++ b/crates/gpui_windows/src/gpui_windows.rs
 @@ -20,6 +20,10 @@ mod vsync;
@@ -769,7 +917,7 @@ index e7a45a034d..c7b8e5dc0c 100644
  mod wrapper;
  
 +pub use events::{drive_commit, drive_compose, drive_fingers, marked_range};
-+pub use platform::embed;
++pub use platform::{embed, make_early};
 +pub use window::open_next_window_in;
 +
  pub(crate) use clipboard::*;
@@ -895,7 +1043,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..ca96f169ff 100644
+index 095e009e23..bbb5dcc35d 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -20,7 +20,10 @@ use windows::{
@@ -930,7 +1078,46 @@ index 095e009e23..ca96f169ff 100644
  }
  
  impl TrackedWindow {
-@@ -372,10 +379,17 @@ impl WindowsPlatform {
+@@ -65,6 +72,8 @@ pub struct WindowsPlatform {
+     foreground_executor: ForegroundExecutor,
+     text_system: Arc<dyn PlatformTextSystem>,
+     direct_write_text_system: Option<Arc<DirectWriteTextSystem>>,
++    /// The devices `make_early` made, which the first `attach_gpu` takes.
++    early_devices: RefCell<Option<DirectXDevices>>,
+     drop_target_helper: Option<IDropTargetHelper>,
+     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
+     /// as resizing them has failed, causing us to have lost at least the render target.
+@@ -184,10 +193,18 @@ impl WindowsPlatform {
+         }
+         // A platform that can become windowed needs the real text system from the start: the app
+         // keeps the one it's created with. It gets DirectX devices when it becomes windowed.
++        let (early_text_system, early_devices) = match (!headless).then(take_early).flatten() {
++            Some((text_system, devices)) => (text_system.ok(), devices.ok()),
++            None => (None, None),
++        };
+         let (text_system, direct_write_text_system) = if !headless {
+-            let dw_text_system = Arc::new(
+-                DirectWriteTextSystem::new(None).context("Error creating DirectWriteTextSystem")?,
+-            );
++            let dw_text_system = match early_text_system {
++                Some(text_system) => text_system,
++                None => Arc::new(
++                    DirectWriteTextSystem::new(None)
++                        .context("Error creating DirectWriteTextSystem")?,
++                ),
++            };
+             (
+                 dw_text_system.clone() as Arc<dyn PlatformTextSystem>,
+                 Some(dw_text_system),
+@@ -277,6 +294,7 @@ impl WindowsPlatform {
+             foreground_executor,
+             text_system,
+             direct_write_text_system,
++            early_devices: RefCell::new(early_devices),
+             suspend_resume_notification: RefCell::new(None),
+             disable_direct_composition,
+             has_package_identity: has_package_identity(),
+@@ -372,10 +390,17 @@ impl WindowsPlatform {
          if active_window_hwnd.is_invalid() {
              return None;
          }
@@ -950,7 +1137,19 @@ index 095e009e23..ca96f169ff 100644
              .map(|hwnd| hwnd.as_raw())
      }
  
-@@ -422,7 +436,7 @@ impl WindowsPlatform {
+@@ -408,7 +433,10 @@ impl WindowsPlatform {
+ 
+     /// Creates the DirectX devices that windows draw with, and starts vsync.
+     fn attach_gpu(&self) -> Result<()> {
+-        let devices = DirectXDevices::new().context("Creating DirectX devices")?;
++        let devices = match self.early_devices.take() {
++            Some(devices) => devices,
++            None => DirectXDevices::new().context("Creating DirectX devices")?,
++        };
+         if let Some(text_system) = &self.direct_write_text_system {
+             text_system.handle_gpu_lost(&devices)?;
+         }
+@@ -422,7 +450,7 @@ impl WindowsPlatform {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
              // Not joined: the thread can be sending this thread a message. It exits after its
              // next vsync, and drops its reference to the devices then.
@@ -959,7 +1158,7 @@ index 095e009e23..ca96f169ff 100644
          }
          if let Some(text_system) = &self.direct_write_text_system {
              text_system.release_gpu();
-@@ -449,10 +463,18 @@ impl WindowsPlatform {
+@@ -449,10 +477,18 @@ impl WindowsPlatform {
          std::thread::Builder::new()
              .name("VSyncProvider".to_owned())
              .spawn(move || {
@@ -980,7 +1179,7 @@ index 095e009e23..ca96f169ff 100644
                      if stop.load(Ordering::Acquire) {
                          break;
                      }
-@@ -468,11 +490,33 @@ impl WindowsPlatform {
+@@ -468,25 +504,66 @@ impl WindowsPlatform {
                          ) {
                              panic!("Device lost: {err}");
                          }
@@ -1012,9 +1211,48 @@ index 095e009e23..ca96f169ff 100644
 +                            continue;
 +                        }
                          unsafe {
++                            let shown = IsWindowVisible(hwnd.as_raw()).as_bool()
++                                && !IsIconic(hwnd.as_raw()).as_bool();
                              if let Some(signal_at) = signal_at {
-                                 if IsWindowVisible(hwnd.as_raw()).as_bool()
-@@ -495,6 +539,84 @@ impl WindowsPlatform {
+-                                if IsWindowVisible(hwnd.as_raw()).as_bool()
+-                                    && !IsIconic(hwnd.as_raw()).as_bool()
+-                                {
++                                if shown {
+                                     hwnd.frame_signal.record(signal_at, signal_source);
+                                 } else {
+                                     // Hidden windows may not consume WM_PAINT until shown again.
+                                     hwnd.frame_signal.take();
+                                 }
+                             }
+-                            RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE)
+-                                .ok()
+-                                .log_err();
++                            // A shown window's frame is a message of its own: Windows hands out
++                            // WM_PAINT only once nothing else is queued, so in an embedder's busy
++                            // loop, such as Chromium's at launch, it waited 18–24 ms after the
++                            // vsync. A hidden window is invalidated, so it draws once it's shown.
++                            if !shown {
++                                RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE)
++                                    .ok()
++                                    .log_err();
++                            } else if hwnd.frame_want.queue()
++                                && PostMessageW(
++                                    Some(hwnd.as_raw()),
++                                    WM_GPUI_VSYNC_FRAME,
++                                    WPARAM(validation_number),
++                                    LPARAM(0),
++                                )
++                                .is_err()
++                            {
++                                hwnd.frame_want.unqueue();
++                                RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE)
++                                    .ok()
++                                    .log_err();
++                            }
+                         }
+                     }
+                 }
+@@ -495,6 +572,84 @@ impl WindowsPlatform {
      }
  }
  
@@ -1099,7 +1337,7 @@ index 095e009e23..ca96f169ff 100644
  fn encode_restart_arguments(arguments: &[OsString]) -> OsString {
      // `Start-Process` accepts a single native command line, so quote each argument according to
      // the Windows argv parsing rules before passing the complete string through the environment.
-@@ -587,6 +709,11 @@ impl Platform for WindowsPlatform {
+@@ -587,6 +742,11 @@ impl Platform for WindowsPlatform {
          }
          on_finish_launching();
  
@@ -1111,7 +1349,7 @@ index 095e009e23..ca96f169ff 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -748,6 +875,14 @@ impl Platform for WindowsPlatform {
+@@ -748,6 +908,14 @@ impl Platform for WindowsPlatform {
              .map(|inner| inner.handle)
      }
  
@@ -1126,7 +1364,7 @@ index 095e009e23..ca96f169ff 100644
      fn open_window(
          &self,
          handle: AnyWindowHandle,
-@@ -761,6 +896,7 @@ impl Platform for WindowsPlatform {
+@@ -761,6 +929,7 @@ impl Platform for WindowsPlatform {
          self.raw_window_handles.write().push(TrackedWindow {
              handle: handle.into(),
              frame_signal: window.state.frame_signal.clone(),
@@ -1134,7 +1372,7 @@ index 095e009e23..ca96f169ff 100644
          });
  
          Ok(Box::new(window))
-@@ -1253,21 +1389,11 @@ impl WindowsPlatformInner {
+@@ -1253,21 +1422,11 @@ impl WindowsPlatformInner {
          Some(0)
      }
  
@@ -1160,7 +1398,7 @@ index 095e009e23..ca96f169ff 100644
          Some(0)
      }
  
-@@ -1409,7 +1535,7 @@ impl WindowsPlatformInner {
+@@ -1409,7 +1568,7 @@ impl WindowsPlatformInner {
  impl Drop for WindowsPlatform {
      fn drop(&mut self) {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
@@ -1169,7 +1407,7 @@ index 095e009e23..ca96f169ff 100644
          }
          unsafe {
              if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
-@@ -1637,10 +1763,43 @@ fn file_save_dialog(
+@@ -1637,10 +1796,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -1214,7 +1452,7 @@ index 095e009e23..ca96f169ff 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1763,6 +1922,8 @@ fn handle_gpu_device_lost(
+@@ -1763,6 +1955,8 @@ fn handle_gpu_device_lost(
              }
          }
      }
@@ -1223,7 +1461,7 @@ index 095e009e23..ca96f169ff 100644
      Ok(())
  }
  
-@@ -1980,3 +2141,12 @@ mod tests {
+@@ -1980,3 +2174,52 @@ mod tests {
          );
      }
  }
@@ -1236,8 +1474,48 @@ index 095e009e23..ca96f169ff 100644
 +pub fn embed() {
 +    EMBEDDED.store(true, std::sync::atomic::Ordering::Relaxed);
 +}
++
++type Early = (Result<Arc<DirectWriteTextSystem>>, Result<DirectXDevices>);
++
++static EARLY: std::sync::Mutex<Option<std::thread::JoinHandle<Early>>> =
++    std::sync::Mutex::new(None);
++
++/// Starts making the text system, the DirectX devices and the first window's pipelines on a
++/// thread of their own, for the platform and that window to take, and loads UI Automation, which
++/// each window's accessibility adapter starts: an embedder that has other work before it starts
++/// GPUI, such as a browser engine starting, saves the main thread their ~15 ms. None needs the
++/// main thread; the drop helper, an apartment-threaded COM object, is still made there.
++pub fn make_early() {
++    let made = std::thread::Builder::new()
++        .name("GpuiEarly".into())
++        .spawn(|| {
++            let text_system = DirectWriteTextSystem::new(None).map(Arc::new);
++            let devices = DirectXDevices::new();
++            if let Ok(devices) = &devices {
++                crate::directx_renderer::make_pipelines_early(&devices.device);
++            }
++            // As accesskit's adapter does (init_uia), which then finds it loaded: ~3.5 ms.
++            unsafe {
++                windows::Win32::UI::Accessibility::UiaLookupId(
++                    windows::Win32::UI::Accessibility::AutomationIdentifierType_Property,
++                    &windows::Win32::UI::Accessibility::ControlType_Property_GUID,
++                )
++            };
++            (text_system, devices)
++        });
++    if let (Ok(thread), Ok(mut early)) = (made, EARLY.lock()) {
++        *early = Some(thread);
++    }
++}
++
++/// What `make_early` made, waiting for it to finish, or None if it wasn't called or failed. A
++/// part that failed early is made again on the main thread, to report its error there.
++fn take_early() -> Option<Early> {
++    let thread = EARLY.lock().ok()?.take()?;
++    thread.join().ok()
++}
 diff --git a/crates/gpui_windows/src/vsync.rs b/crates/gpui_windows/src/vsync.rs
-index 5121c41b61..3d7c019c33 100644
+index 5121c41b61..8f35f1ab32 100644
 --- a/crates/gpui_windows/src/vsync.rs
 +++ b/crates/gpui_windows/src/vsync.rs
 @@ -1,5 +1,9 @@
@@ -1251,7 +1529,7 @@ index 5121c41b61..3d7c019c33 100644
      time::{Duration, Instant},
  };
  
-@@ -23,6 +27,45 @@ static QPC_TICKS_PER_SECOND: LazyLock<u64> = LazyLock::new(|| {
+@@ -23,6 +27,65 @@ static QPC_TICKS_PER_SECOND: LazyLock<u64> = LazyLock::new(|| {
  const VSYNC_INTERVAL_THRESHOLD: Duration = Duration::from_millis(1);
  const DEFAULT_VSYNC_INTERVAL: Duration = Duration::from_micros(16_666); // ~60Hz
  
@@ -1270,13 +1548,33 @@ index 5121c41b61..3d7c019c33 100644
 +pub(crate) struct FrameWant {
 +    /// Milliseconds after `FRAME_EPOCH`, plus one so that 0 means never.
 +    at: AtomicU64,
++    /// When the frame message in the window's queue was posted, as `at` is, or 0 for none: the
++    /// vsync thread posts one at a time, and posts again if one hasn't come in `FRAME_RUN_ON`.
++    queued: AtomicU64,
 +}
 +
 +impl FrameWant {
 +    pub(crate) fn new() -> Self {
 +        Self {
 +            at: AtomicU64::new(0),
++            queued: AtomicU64::new(0),
 +        }
++    }
++
++    /// Notes a frame message as posted; false if one already is, and not lost.
++    pub(crate) fn queue(&self) -> bool {
++        let now = FRAME_EPOCH.elapsed().as_millis() as u64 + 1;
++        let posted = self.queued.load(Ordering::Acquire);
++        if posted != 0 && now - posted <= FRAME_RUN_ON.as_millis() as u64 {
++            return false;
++        }
++        self.queued.store(now, Ordering::Release);
++        true
++    }
++
++    /// The posted frame message has come, or wasn't posted.
++    pub(crate) fn unqueue(&self) {
++        self.queued.store(0, Ordering::Release);
 +    }
 +
 +    pub(crate) fn wake(&self) {
@@ -1297,10 +1595,21 @@ index 5121c41b61..3d7c019c33 100644
  pub(crate) struct VSyncProvider {
      interval: Duration,
      f: Box<dyn Fn() -> bool>,
-@@ -88,6 +131,16 @@ fn retrieve_duration(counts: u64, ticks_per_second: u64) -> Duration {
+@@ -88,6 +151,27 @@ fn retrieve_duration(counts: u64, ticks_per_second: u64) -> Duration {
  mod tests {
      use super::*;
  
++    #[test]
++    fn a_window_has_one_frame_message_posted_at_a_time_until_it_comes_or_is_lost() {
++        let want = FrameWant::new();
++        assert!(want.queue());
++        assert!(!want.queue());
++        want.unqueue();
++        assert!(want.queue());
++        std::thread::sleep(FRAME_RUN_ON + Duration::from_millis(20));
++        assert!(want.queue());
++    }
++
 +    #[test]
 +    fn a_window_wants_frames_only_for_a_while_after_it_asks() {
 +        let want = FrameWant::new();
@@ -1315,10 +1624,18 @@ index 5121c41b61..3d7c019c33 100644
      fn successful_compositor_wait_reports_native_callback() {
          let provider = VSyncProvider {
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index c467101fc8..4f9f9dda90 100644
+index c467101fc8..6977a8c79d 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
-@@ -32,6 +32,18 @@ use crate::direct_manipulation::DirectManipulationHandler;
+@@ -2,6 +2,7 @@
+ 
+ use std::{
+     cell::{Cell, RefCell},
++    collections::VecDeque,
+     num::NonZeroIsize,
+     path::PathBuf,
+     rc::{Rc, Weak},
+@@ -32,6 +33,18 @@ use crate::direct_manipulation::DirectManipulationHandler;
  use crate::*;
  use gpui::*;
  
@@ -1337,7 +1654,7 @@ index c467101fc8..4f9f9dda90 100644
  pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
  
  impl std::ops::Deref for WindowsWindow {
-@@ -55,6 +67,7 @@ pub struct WindowsWindowState {
+@@ -55,9 +68,13 @@ pub struct WindowsWindowState {
  
      pub callbacks: Callbacks,
      pub frame_signal: Arc<PlatformFrameSignal>,
@@ -1345,7 +1662,13 @@ index c467101fc8..4f9f9dda90 100644
      pub input_handler: Cell<Option<PlatformInputHandler>>,
      pub ime_enabled: Cell<bool>,
      pub pending_surrogate: Cell<Option<u16>>,
-@@ -170,6 +183,7 @@ impl WindowsWindowState {
++    /// What each key down GPUI holds (`DispatchEventResult::later`) types if nothing takes it, in
++    /// order: the characters its translation queued, which it can't make again later (#2672).
++    pub held_key_text: RefCell<VecDeque<Option<String>>>,
+     pub last_reported_modifiers: Cell<Option<Modifiers>>,
+     pub last_reported_capslock: Cell<Option<Capslock>>,
+     pub hovered: Cell<bool>,
+@@ -170,9 +187,11 @@ impl WindowsWindowState {
              min_size,
              callbacks,
              frame_signal: Arc::new(PlatformFrameSignal::new()),
@@ -1353,7 +1676,11 @@ index c467101fc8..4f9f9dda90 100644
              input_handler: Cell::new(input_handler),
              ime_enabled: Cell::new(true),
              pending_surrogate: Cell::new(pending_surrogate),
-@@ -489,7 +503,18 @@ impl WindowsWindow {
++            held_key_text: RefCell::default(),
+             last_reported_modifiers: Cell::new(last_reported_modifiers),
+             last_reported_capslock: Cell::new(last_reported_capslock),
+             hovered: Cell::new(hovered),
+@@ -489,7 +508,18 @@ impl WindowsWindow {
                  .unwrap_or(""),
          );
  
@@ -1373,7 +1700,7 @@ index c467101fc8..4f9f9dda90 100644
              (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
          } else {
              let mut dwstyle = WS_SYSMENU;
-@@ -510,6 +535,11 @@ impl WindowsWindow {
+@@ -510,6 +540,11 @@ impl WindowsWindow {
  
              (dwexstyle, dwstyle)
          };
@@ -1385,7 +1712,7 @@ index c467101fc8..4f9f9dda90 100644
          if !disable_direct_composition {
              dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
          }
-@@ -528,9 +558,9 @@ impl WindowsWindow {
+@@ -528,9 +563,9 @@ impl WindowsWindow {
              handle,
              hide_title_bar,
              display,
@@ -1398,7 +1725,7 @@ index c467101fc8..4f9f9dda90 100644
              min_size: params.window_min_size,
              executor,
              current_cursor,
-@@ -546,17 +576,29 @@ impl WindowsWindow {
+@@ -546,17 +581,29 @@ impl WindowsWindow {
              draw_coordinator,
              parent_hwnd,
          };
@@ -1433,7 +1760,7 @@ index c467101fc8..4f9f9dda90 100644
                  None,
                  Some(hinstance.into()),
                  Some(&context as *const _ as *const _),
-@@ -569,6 +611,14 @@ impl WindowsWindow {
+@@ -569,6 +616,14 @@ impl WindowsWindow {
          let hwnd = creation_result?;
          let this = this.unwrap();
  
@@ -1448,7 +1775,7 @@ index c467101fc8..4f9f9dda90 100644
          register_drag_drop(&this)?;
          set_non_rude_hwnd(hwnd, true);
          configure_dwm_dark_mode(hwnd, appearance);
-@@ -582,6 +632,11 @@ impl WindowsWindow {
+@@ -582,6 +637,11 @@ impl WindowsWindow {
              }
              unsafe { SetWindowPlacement(hwnd, &placement)? };
          } else {
@@ -1460,7 +1787,7 @@ index c467101fc8..4f9f9dda90 100644
              this.state.initial_placement.set(Some(WindowOpenStatus {
                  placement,
                  state: WindowOpenState::Windowed,
-@@ -623,7 +678,8 @@ impl Drop for WindowsWindow {
+@@ -623,7 +683,8 @@ impl Drop for WindowsWindow {
                  this.dialog_owner.when_idle().await;
                  let handle = this.hwnd;
                  unsafe {
@@ -1470,7 +1797,18 @@ index c467101fc8..4f9f9dda90 100644
                      DestroyWindow(handle).log_err();
                  }
              })
-@@ -924,7 +980,12 @@ impl PlatformWindow for WindowsWindow {
+@@ -718,6 +779,10 @@ impl PlatformWindow for WindowsWindow {
+         self.state.input_handler.take()
+     }
+ 
++    fn held_key_text(&self, _: &Keystroke) -> Option<String> {
++        self.state.held_key_text.borrow_mut().pop_front().flatten()
++    }
++
+     fn prompt(
+         &self,
+         level: PromptLevel,
+@@ -924,7 +989,12 @@ impl PlatformWindow for WindowsWindow {
                  set_window_composition_attribute(hwnd, None, 0);
              }
              WindowBackgroundAppearance::Transparent => {
@@ -1484,7 +1822,7 @@ index c467101fc8..4f9f9dda90 100644
              }
              WindowBackgroundAppearance::Blurred => {
                  set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
-@@ -968,7 +1029,14 @@ impl PlatformWindow for WindowsWindow {
+@@ -968,7 +1038,14 @@ impl PlatformWindow for WindowsWindow {
          self.state.is_fullscreen()
      }
  
@@ -1500,7 +1838,7 @@ index c467101fc8..4f9f9dda90 100644
          self.state.callbacks.request_frame.set(Some(callback));
      }
  
-@@ -1041,7 +1109,6 @@ impl PlatformWindow for WindowsWindow {
+@@ -1041,7 +1118,6 @@ impl PlatformWindow for WindowsWindow {
              .log_err();
      }
  

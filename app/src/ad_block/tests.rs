@@ -289,15 +289,32 @@ fn a_request_waits_for_the_engine_asked_for() {
     let folder = folder("blocker");
     let blocker = Arc::new(Blocker::new());
     blocker.use_setup(setup(&folder, ""), None);
-    let engine = blocker.engine().expect("the engine, once loaded");
+    let first = blocker.engine().expect("the first engine, waited for");
     let page = "https://news.example/";
     assert_eq!(
-        check(&engine, "https://ads.example/a.js", page, "script"),
+        check(&first, "https://ads.example/a.js", page, "script"),
         Verdict::Block
     );
-    // A setup with the user's filter: the next request waits for it.
+    // A setup with the user's filter, held from coming in once loaded: a request has the last
+    // engine, where it waited for the next and got none once FIRST_WAIT ran out (#2826).
+    let held = blocker.swap.lock().unwrap();
     blocker.use_setup(setup(&folder, "||mine.example^"), None);
-    let engine = blocker.engine().unwrap();
+    let engine = (blocker.engine()).expect("the last engine, while the next loads");
+    assert!(Arc::ptr_eq(&engine, &first));
+    assert_eq!(
+        check(&engine, "https://mine.example/x", page, "image"),
+        Verdict::Allow
+    );
+    drop(held);
+    // Once it's in, it answers.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let engine = loop {
+        let engine = blocker.engine().unwrap();
+        if !Arc::ptr_eq(&engine, &first) || Instant::now() > deadline {
+            break engine;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     assert_eq!(
         check(&engine, "https://mine.example/x", page, "image"),
         Verdict::Block
@@ -397,4 +414,160 @@ fn a_pages_procedural_filters_run_isolated_and_a_plain_style_is_a_rule() {
         serde_json::from_str(&page(&engine, "https://other.example/")).unwrap();
     assert_eq!(other["styles"], serde_json::json!([]));
     assert_eq!(other["isolated"], "");
+}
+
+#[test]
+fn a_lists_conditions_keep_only_what_ublock_origin_on_chromium_loads() {
+    let folder = folder("conditions");
+    // One host a branch, each blocked only if its branch is kept.
+    let list = "\
+!#if env_chromium
+||chromium.example^
+!#endif
+!#if env_firefox
+||firefox.example^
+!#else
+||not-firefox.example^
+!#endif
+!#if !env_firefox
+||negated.example^
+!#endif
+!#if cap_html_filtering
+||html-filtering.example^
+!#endif
+!#if cap_ipaddress
+||ipaddress.example^
+!#endif
+!#if cap_something_new
+||new-cap.example^
+!#endif
+!#if something_unknown
+||unknown.example^
+!#else
+||unknown-else.example^
+!#endif
+!#if env_safari
+||safari.example^
+!#endif
+!#if env_mobile
+||mobile.example^
+!#endif
+!#if env_mv3
+||mv3.example^
+!#endif
+!#if ext_ubol
+||ubol.example^
+!#endif
+!#if false
+||false.example^
+!#endif
+!#if adguard_ext_opera
+||opera.example^
+!#endif
+!#if (ext_ublock || adguard)
+||either.example^
+!#endif
+!#if ext_ublock && !env_mobile
+||both.example^
+!#endif
+!#if env_chromium
+!#if env_mobile
+||nested-mobile.example^
+!#else
+||nested-desktop.example^
+!#endif
+||nested-after.example^
+!#endif
+!#if env_firefox
+!#if env_chromium
+||inside-dropped.example^
+!#endif
+||after-inside-dropped.example^
+!#endif
+||outside.example^
+";
+    fs::write(folder.join("assets/ublock/filters.txt"), list).unwrap();
+    let engine = compile(&setup(
+        &folder,
+        "!#if env_firefox\n||mine-firefox.example^\n!#endif\n",
+    ));
+    let blocks = |host: &str| {
+        check(
+            &engine,
+            &format!("https://{host}/a.js"),
+            "https://news.example/",
+            "script",
+        ) == Verdict::Block
+    };
+    let kept = [
+        "chromium.example",
+        "not-firefox.example",
+        "negated.example",
+        "ipaddress.example",
+        "unknown.example",
+        "unknown-else.example",
+        "opera.example",
+        "either.example",
+        "both.example",
+        "nested-desktop.example",
+        "nested-after.example",
+        "outside.example",
+    ];
+    let dropped = [
+        "firefox.example",
+        "html-filtering.example",
+        "new-cap.example",
+        "safari.example",
+        "mobile.example",
+        "mv3.example",
+        "ubol.example",
+        "false.example",
+        "nested-mobile.example",
+        "inside-dropped.example",
+        "after-inside-dropped.example",
+        "mine-firefox.example",
+    ];
+    for host in kept {
+        assert!(
+            blocks(host),
+            "{host}'s branch holds on Chromium, so its filter should block"
+        );
+    }
+    for host in dropped {
+        assert!(
+            !blocks(host),
+            "{host}'s branch doesn't hold on Chromium, so its filter should be left out"
+        );
+    }
+}
+
+#[test]
+fn a_condition_reads_as_the_preparser_reads_it() {
+    // An unknown first token gives way to `||` and stays unknown through `&&`.
+    assert_eq!(if_holds("unknown_token || env_chromium"), Some(true));
+    assert_eq!(if_holds("unknown_token || env_firefox"), Some(false));
+    assert_eq!(if_holds("unknown_token && env_chromium"), None);
+    // Any later unknown token, or one not written as `op token`, makes it all unknown.
+    assert_eq!(if_holds("env_chromium && unknown_token"), None);
+    assert_eq!(if_holds("env_chromium &&env_mobile"), None);
+    assert_eq!(if_holds("env_chromium env_mobile"), None);
+    assert_eq!(if_holds("|| env_chromium"), None);
+    assert_eq!(if_holds(""), None);
+    // Left to right, without precedence.
+    assert_eq!(
+        if_holds("env_firefox && env_mobile || env_chromium"),
+        Some(true)
+    );
+    assert_eq!(
+        if_holds("env_chromium || env_firefox && env_mobile"),
+        Some(false)
+    );
+    assert_eq!(if_holds("(!env_safari && !ext_abp)"), Some(true));
+    assert_eq!(if_holds("!false"), Some(true));
+    assert_eq!(if_holds("!cap_something_new"), Some(true));
+    // `!#ifdef` and `!#include` aren't conditions; a list without one is left as it is.
+    assert_eq!(if_directive("!#ifdef x"), None);
+    assert_eq!(if_directive("!#include other.txt"), None);
+    let plain = "||a.example^\n! comment\n".to_string();
+    assert_eq!(if_evaluated(plain.clone()), plain);
 }
