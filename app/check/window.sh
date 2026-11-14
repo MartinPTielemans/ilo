@@ -879,10 +879,10 @@ drag 110 400 moves "the empty sidebar"
 # design/tokens.toml's card-inset is 10.
 if windows; then
   drag 600 5 stays "the frame's top edge, which resizes"
-  drag 600 9 moves "the card's top margin"
-else
-  drag 600 5 moves "the card's top margin"
 fi
+# Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the screen's
+# top, its quick-maximize zone, as it does under a hand.
+drag 600 9 moves "the card's top margin"
 drag $((width - 8)) 300 moves "the card's right margin"
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
 # unless it's set to something else. Sway, the Wayland session's compositor, maximizes no window:
