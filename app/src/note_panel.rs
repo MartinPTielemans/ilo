@@ -286,6 +286,15 @@ fn decoded(png: &[u8]) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])))
 }
 
+/// The size, in points, a picture `pixels` wide and tall at the window's `scale` is drawn at in a
+/// row: its own size at most, no wider than `width` and no taller than `most`, keeping its shape,
+/// so its box ends where it does.
+fn fitted(pixels: (f32, f32), scale: f32, width: f32, most: f32) -> (f32, f32) {
+    let (wide, tall) = (pixels.0 / scale, pixels.1 / scale);
+    let by = (width / wide).min(most / tall).min(1.);
+    (wide * by, tall * by)
+}
+
 /// How tall it is folded: the field, and the thumbnail's line under it.
 fn folded_height() -> f32 {
     INSET * 2. + FIELD_HEIGHT + ROWS_TOP + THUMB_HEIGHT
@@ -373,6 +382,7 @@ impl NotePanel {
 
 impl Render for NotePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let scale = window.scale_factor();
         let root = div()
             .key_context("NotePanel")
             .on_action(cx.listener(Self::add))
@@ -510,7 +520,15 @@ impl Render for NotePanel {
                 let rows = element.rows().into_iter().map(|row| {
                     let picture = (row.name == "Picture")
                         .then(|| picture(None, PICTURE_MOST))
-                        .flatten();
+                        .flatten()
+                        .zip(shown.picture.as_ref())
+                        .map(|(each, drawn)| {
+                            let size = drawn.size(0);
+                            let pixels = (size.width.0 as f32, size.height.0 as f32);
+                            let column = WIDTH - INSET * 2. - NAME_WIDTH;
+                            let (w, h) = fitted(pixels, scale, column, PICTURE_MOST);
+                            each.w(px(w)).h(px(h))
+                        });
                     div()
                         .mt(px(ROW_GAP))
                         .flex()
