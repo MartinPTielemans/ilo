@@ -112,7 +112,7 @@ index 622c1cb604..697ce244f7 100644
          let bind_flag;
          let bytes_per_pixel;
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
-index 98a13f304c..c8fd25a160 100644
+index 98a13f304c..22267df7e8 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
 @@ -54,6 +54,9 @@ pub(crate) struct DirectXRenderer {
@@ -167,7 +167,21 @@ index 98a13f304c..c8fd25a160 100644
  struct DirectXRenderPipelines {
      shadow_pipeline: PipelineState<Shadow>,
      quad_pipeline: PipelineState<Quad>,
-@@ -194,6 +217,7 @@ impl DirectXRenderer {
+@@ -168,8 +191,11 @@ impl DirectXRenderer {
+             .context("Creating DirectX resources")?;
+         let globals = DirectXGlobalElements::new(&devices.device)
+             .context("Creating DirectX global elements")?;
+-        let pipelines = DirectXRenderPipelines::new(&devices.device)
+-            .context("Creating DirectX render pipelines")?;
++        let pipelines = match take_early_pipelines(&devices.device) {
++            Some(pipelines) => pipelines,
++            None => DirectXRenderPipelines::new(&devices.device)
++                .context("Creating DirectX render pipelines")?,
++        };
+ 
+         let direct_composition = if disable_direct_composition {
+             None
+@@ -194,6 +220,7 @@ impl DirectXRenderer {
              width: 1,
              height: 1,
              skip_draws: false,
@@ -175,7 +189,7 @@ index 98a13f304c..c8fd25a160 100644
          })
      }
  
-@@ -324,6 +348,7 @@ impl DirectXRenderer {
+@@ -324,6 +351,7 @@ impl DirectXRenderer {
          self.pipelines = pipelines;
          self.direct_composition = direct_composition;
          self.skip_draws = true;
@@ -183,7 +197,7 @@ index 98a13f304c..c8fd25a160 100644
          Ok(())
      }
  
-@@ -338,7 +363,47 @@ impl DirectXRenderer {
+@@ -338,7 +366,47 @@ impl DirectXRenderer {
              return Ok(());
          }
          self.render(scene, background_appearance)?;
@@ -232,7 +246,7 @@ index 98a13f304c..c8fd25a160 100644
      }
  
      /// Clear the render target for `background_appearance` and encode every
-@@ -409,7 +474,6 @@ impl DirectXRenderer {
+@@ -409,7 +477,6 @@ impl DirectXRenderer {
      /// goes through MetalRenderer; this is the Windows analogue). Draws into
      /// the existing render target, copies it into a `D3D11_USAGE_STAGING`
      /// texture, maps it, and converts BGRA to RGBA.
@@ -240,7 +254,7 @@ index 98a13f304c..c8fd25a160 100644
      pub(crate) fn render_to_image(
          &mut self,
          scene: &Scene,
-@@ -618,16 +682,21 @@ impl DirectXRenderer {
+@@ -618,16 +685,21 @@ impl DirectXRenderer {
          }
  
          let devices = self.devices.as_ref().context("devices missing")?;
@@ -264,7 +278,7 @@ index 98a13f304c..c8fd25a160 100644
                  None,
              );
          }
-@@ -660,9 +729,9 @@ impl DirectXRenderer {
+@@ -660,9 +732,9 @@ impl DirectXRenderer {
          // Resolve MSAA to non-MSAA intermediate texture
          unsafe {
              devices.device_context.ResolveSubresource(
@@ -276,7 +290,7 @@ index 98a13f304c..c8fd25a160 100644
                  0,
                  RENDER_TARGET_FORMAT,
              );
-@@ -704,6 +773,10 @@ impl DirectXRenderer {
+@@ -704,6 +776,10 @@ impl DirectXRenderer {
  
          let devices = self.devices.as_ref().context("devices missing")?;
          let resources = self.resources.as_ref().context("resources missing")?;
@@ -287,7 +301,7 @@ index 98a13f304c..c8fd25a160 100644
          self.pipelines.path_sprite_pipeline.update_buffer(
              &devices.device,
              &devices.device_context,
-@@ -713,7 +786,7 @@ impl DirectXRenderer {
+@@ -713,7 +789,7 @@ impl DirectXRenderer {
          // Draw the sprites with the path texture
          self.pipelines.path_sprite_pipeline.draw_with_texture(
              &devices.device_context,
@@ -296,7 +310,7 @@ index 98a13f304c..c8fd25a160 100644
              slice::from_ref(&self.globals.sampler),
              sprites.len() as u32,
          )
-@@ -889,25 +962,15 @@ impl DirectXResources {
+@@ -889,25 +965,15 @@ impl DirectXResources {
              )?
          };
  
@@ -325,7 +339,7 @@ index 98a13f304c..c8fd25a160 100644
              viewport,
          })
      }
-@@ -919,21 +982,12 @@ impl DirectXResources {
+@@ -919,26 +985,38 @@ impl DirectXResources {
          width: u32,
          height: u32,
      ) -> Result<()> {
@@ -351,7 +365,33 @@ index 98a13f304c..c8fd25a160 100644
          self.viewport = viewport;
          Ok(())
      }
-@@ -1359,20 +1413,12 @@ fn create_resources(
+ }
+ 
++/// The first window's pipelines, which `make_early` makes with the devices, and the device they're
++/// for: a window whose device is another, after the device was lost, makes its own.
++static EARLY_PIPELINES: std::sync::Mutex<Option<(ID3D11Device, DirectXRenderPipelines)>> =
++    std::sync::Mutex::new(None);
++
++/// Makes the first window's pipelines on `device` now, off the main thread, for its renderer to
++/// take: they need only the device, and cost the main thread ~3 ms as the window opens.
++pub(crate) fn make_pipelines_early(device: &ID3D11Device) {
++    let Ok(pipelines) = DirectXRenderPipelines::new(device) else {
++        return;
++    };
++    if let Ok(mut early) = EARLY_PIPELINES.lock() {
++        *early = Some((device.clone(), pipelines));
++    }
++}
++
++fn take_early_pipelines(device: &ID3D11Device) -> Option<DirectXRenderPipelines> {
++    let (made_on, pipelines) = EARLY_PIPELINES.lock().ok()?.take()?;
++    (made_on == *device).then_some(pipelines)
++}
++
+ impl DirectXRenderPipelines {
+     pub fn new(device: &ID3D11Device) -> Result<Self> {
+         let shadow_pipeline = PipelineState::new(
+@@ -1359,20 +1437,12 @@ fn create_resources(
      width: u32,
      height: u32,
  ) -> Result<(
@@ -372,7 +412,7 @@ index 98a13f304c..c8fd25a160 100644
      let viewport = D3D11_VIEWPORT {
          TopLeftX: 0.0,
          TopLeftY: 0.0,
-@@ -1381,15 +1427,7 @@ fn create_resources(
+@@ -1381,15 +1451,7 @@ fn create_resources(
          MinDepth: 0.0,
          MaxDepth: 1.0,
      };
@@ -947,7 +987,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..e19c1f00b6 100644
+index 095e009e23..3990bc5937 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -20,7 +20,10 @@ use windows::{
@@ -1326,7 +1366,7 @@ index 095e009e23..e19c1f00b6 100644
      Ok(())
  }
  
-@@ -1980,3 +2155,42 @@ mod tests {
+@@ -1980,3 +2155,45 @@ mod tests {
          );
      }
  }
@@ -1345,18 +1385,21 @@ index 095e009e23..e19c1f00b6 100644
 +static EARLY: std::sync::Mutex<Option<std::thread::JoinHandle<Early>>> =
 +    std::sync::Mutex::new(None);
 +
-+/// Starts making the text system and the DirectX devices on a thread of their own, for the
-+/// platform to take when it's made: an embedder that has other work before it starts GPUI, such
-+/// as a browser engine starting, saves the main thread their ~9 ms. Neither needs the main
-+/// thread; the drop helper, an apartment-threaded COM object, is still made there.
++/// Starts making the text system, the DirectX devices and the first window's pipelines on a
++/// thread of their own, for the platform and that window to take: an embedder that has other work
++/// before it starts GPUI, such as a browser engine starting, saves the main thread their ~12 ms.
++/// None needs the main thread; the drop helper, an apartment-threaded COM object, is still made
++/// there.
 +pub fn make_early() {
 +    let made = std::thread::Builder::new()
 +        .name("GpuiEarly".into())
 +        .spawn(|| {
-+            (
-+                DirectWriteTextSystem::new(None).map(Arc::new),
-+                DirectXDevices::new(),
-+            )
++            let text_system = DirectWriteTextSystem::new(None).map(Arc::new);
++            let devices = DirectXDevices::new();
++            if let Ok(devices) = &devices {
++                crate::directx_renderer::make_pipelines_early(&devices.device);
++            }
++            (text_system, devices)
 +        });
 +    if let (Ok(thread), Ok(mut early)) = (made, EARLY.lock()) {
 +        *early = Some(thread);
