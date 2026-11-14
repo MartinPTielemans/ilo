@@ -5,9 +5,9 @@
 # tab's row shows its page's favicon, and keeps it until the next page has loaded without one. A
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
 # warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
-# and a local one over http. A right-click on reload lists Reload, Hard Reload
-# and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache, not
-# another site's, before the page loads again.
+# and stays as escape closes the command bar over it, and a local one over http. A right-click on
+# reload lists Reload, Hard Reload and Clear Site Data and Reload, the last deleting the site's
+# cookies, storage and cache, not another site's, before the page loads again.
 
 # Back, forward, reload and stop. stuck.test leads to a server that takes connections and never
 # answers, so its page keeps loading until it's stopped, and $plain to the check's own, which has no
@@ -309,11 +309,19 @@ if [ "$major" -ge 157 ]; then
     echo "skip: which window has the keyboard as the command bar opens and closes over Chrome's warning before http: the warning is a window of its own on the Mac alone, and here the second tab's address typed into the bar shows the bar has it."
   fi
   send key escape
+  escaped=$step
   expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened"
+  # The escape is the bar's alone. Under Wayland the window hears it too, where views' focus manager
+  # gave it to the warning as its Go back (#2443). The state's round trip comes after a back that
+  # escape started.
+  send state
+  sed -n "/^browser: drive $escaped: /,\$p" "$log" | grep -q "^browser: page $tab back [01] forward [01] loading 1 " &&
+    fail "escape closing the command bar over Chrome's warning before http also left the warning"
+  [ "$(grep "^browser: page $tab trouble " "$log" | tail -1)" = "browser: page $tab trouble network -20" ] ||
+    fail "Chrome's warning before http went as escape closed the command bar over it: $(grep "^browser: page $tab trouble " "$log" | tail -1)"
   # And gives it back to the warning, as the page under it drops every key, ilo's shortcuts with
   # them, while the warning's up (#2625). The second ⌘T, next, comes from there.
   if [ "$(uname)" = Darwin ]; then
-    send state
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "the command bar closing over Chrome's warning before http gave the keyboard to $key, on $focus, not back to the warning"
   fi
@@ -336,4 +344,4 @@ fi
 exec 3>&-
 quit
 kill "$stuck"
-echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, where ⌘L, ⌘T and ⌘W reach the UI, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
+echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, where ⌘L, ⌘T and ⌘W reach the UI and escape closes the command bar alone, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
