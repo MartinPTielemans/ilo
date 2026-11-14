@@ -119,6 +119,12 @@ pub extern "C" fn host_add_link_preview(
         preview.view = view;
         preview.dismissed = Some(dismissed);
     });
+    // Spike (#2790): Peek as a window the window manager manages, when the check's dispatch asks
+    // for it through its trace categories.
+    if std::env::var("CHECK_TRACE_CATEGORIES").is_ok_and(|asked| asked.contains("managed")) {
+        gpui_linux::set_overlay_managed(view);
+        browser::log!("browser: spike 2790 peek managed");
+    }
     // The core shows the page in the browser window, under this one, and only needs to know there's
     // a view it goes with.
     view

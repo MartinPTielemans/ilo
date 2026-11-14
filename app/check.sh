@@ -82,6 +82,21 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
           fi
           sleep 0.1
         done
+      elif [ "$BROWSER_XVFB" = i3 ]; then
+        # Spike (#2790): i3, a tiling manager, with no bar and no wizard.
+        config=$(mktemp)
+        printf "font pango:monospace 8\nfocus_follows_mouse no\n" > "$config"
+        i3 -c "$config" > "$ready.log" 2>&1 &
+        tries=0
+        until i3-msg -t get_version > /dev/null 2>&1; do
+          tries=$((tries + 1))
+          if ! kill -0 $! 2> /dev/null || [ "$tries" -gt 300 ]; then
+            echo "i3 did not start" >&2
+            cat "$ready.log" >&2
+            exit 1
+          fi
+          sleep 0.1
+        done
       else
         openbox --config-file "$PWD/check/openbox.xml" --startup "touch $ready" &
         while [ ! -e "$ready" ]; do

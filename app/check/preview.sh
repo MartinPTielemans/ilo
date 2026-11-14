@@ -159,8 +159,11 @@ open_preview "from the pinned tab"
 first_frame=$(grep -m1 '^browser: link preview first frame in ' "$log" | sed 's/.* in //')
 [ -n "$first_frame" ] || fail "the preview didn't log its first frame"
 ../tools/window-screenshot.sh "$pid" "$out/preview-open.png" || fail "no window to capture"
-# Probe (#2781): another app's window raised over Peek's card, and the whole session captured.
-if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+# Probe (#2781, #2790): another app's window raised over Peek's card, and the whole session
+# captured, when the dispatch's trace categories ask for it.
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && case "${CHECK_TRACE_CATEGORIES:-}" in *probe*) true ;; *) false ;; esac; then
+  echo "probe: input focus before $(xdotool getwindowfocus 2> /dev/null)"
+  xwininfo -root -tree > "$out/probe-tree-before.txt" 2>&1 || true
   import -window root "$out/probe-0-peek.png"
   rm -f "$out/other-in"
   mkfifo "$out/other-in"
@@ -169,6 +172,8 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   exec 7> "$out/other-in"
   for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
   ow=$(head -1 "$out/other-window.log")
+  [ "${BROWSER_XVFB:-}" != i3 ] || i3-msg "[id=$ow] floating enable" > /dev/null 2>&1 ||
+    echo "probe: i3 didn't float the other window"
   xdotool windowactivate --sync "$ow" 2> /dev/null || echo "probe: windowactivate failed"
   xdotool windowsize --sync "$ow" 900 560 2> /dev/null || echo "probe: windowsize failed"
   xdotool windowmove --sync "$ow" 180 120 2> /dev/null || echo "probe: windowmove failed"
@@ -180,6 +185,9 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     import -window root "$out/probe-$t-other-over.png"
   done
   xwininfo -root -children > "$out/probe-stack.txt" 2>&1 || true
+  xwininfo -root -tree > "$out/probe-tree-after.txt" 2>&1 || true
+  # Who has the keyboard with the other app's window active, and before, in the log.
+  echo "probe: input focus $(xdotool getwindowfocus 2> /dev/null)"
   xprop -root _NET_ACTIVE_WINDOW _NET_CLIENT_LIST_STACKING >> "$out/probe-stack.txt" 2>&1 || true
   # A click on the other window's middle, from xdotool's own pointer, as a hand's on a window half
   # over ilo's.

@@ -16,8 +16,7 @@ if [ "$(uname)" = Darwin ]; then
 fi
 # Under Xvfb and openbox nothing composites, so the preview's window draws its dim opaque, and a
 # frame can't say where the motion is from it.
-if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ] &&
-  [ "${BROWSER_XVFB:-}" != kwin ]; then
+if false; then
   echo "skip: peek-motion. Under Xvfb with no compositor, Peek's dim is drawn opaque."
   exit 0
 fi
