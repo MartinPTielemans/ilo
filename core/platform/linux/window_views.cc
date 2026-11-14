@@ -803,6 +803,12 @@ class WindowViews : public views::WidgetObserver,
     if (auto* client = aura::client::GetFocusClient(content())) {
       client->ResetFocusWithinActiveWindow(content());
     }
+    // That does nothing in a window that isn't active, as while an overlay has the input focus, and
+    // views focuses the view it stored as the window lost activation, the page's, once it's active
+    // again (DesktopNativeWidgetAura::OnWindowActivated), taking the keyboard from the UI (#2789).
+    if (views::FocusManager* focus = widget_->GetFocusManager()) {
+      focus->SetStoredFocusView(nullptr);
+    }
     ui_text_input_.SetKeyboard(true);
     if (ui_ == x11::Window::None) {
       return;
