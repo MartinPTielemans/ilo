@@ -225,8 +225,9 @@ pub trait Browser {
     ) -> bool {
         false
     }
-    /// Deletes `profile`'s visits to `url` from `begin` to `end`, in microseconds since 1970, and
-    /// says whether it could, as `list_history` can.
+    /// Deletes `profile`'s visits to `url` from `begin` to `end`, in microseconds since 1970, as
+    /// the window's removal that `undo_remove_suggestion` puts back, or 0 when it can't, as
+    /// `list_history` can't.
     fn remove_history(
         &self,
         _profile: u64,
@@ -234,8 +235,8 @@ pub trait Browser {
         _begin: i64,
         _end: i64,
         _cx: &mut App,
-    ) -> bool {
-        false
+    ) -> u64 {
+        0
     }
     /// Does `action` to the download.
     fn act_on_download(&self, download: u64, action: DownloadAction, cx: &mut App);

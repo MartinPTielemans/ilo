@@ -718,8 +718,13 @@ impl Edit {
                 .then_some(Edit::ClosePreview(closed)),
             Edit::ClosePreview(closed) => (shell.browser.close_preview(closed.over, cx))
                 .then_some(Edit::ReopenPreview(closed)),
-            Edit::PutBackSuggestion(removal) => (shell.browser.undo_remove_suggestion(removal, cx))
-                .then_some(Edit::RemoveSuggestion(removal)),
+            Edit::PutBackSuggestion(removal) => {
+                let back = shell.browser.undo_remove_suggestion(removal, cx);
+                if back {
+                    shell.history_put_back(cx);
+                }
+                back.then_some(Edit::RemoveSuggestion(removal))
+            }
             Edit::RemoveSuggestion(removal) => (shell.browser.redo_remove_suggestion(removal, cx))
                 .then_some(Edit::PutBackSuggestion(removal)),
         }

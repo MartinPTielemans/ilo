@@ -871,7 +871,7 @@ impl Browser for Fake {
     }
 
     // The row goes, and nothing else keeps the made-up pages.
-    fn remove_history(&self, _: u64, _: &str, _: i64, _: i64, _: &mut App) -> bool {
+    fn remove_history(&self, _: u64, _: &str, _: i64, _: i64, _: &mut App) -> u64 {
         true
     }
 

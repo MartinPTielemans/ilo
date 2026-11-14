@@ -549,11 +549,11 @@ impl Browser for Engine {
         unsafe { bc::bc_profile_list_history(profile, request, before, text.as_ptr(), max) }
     }
 
-    fn remove_history(&self, profile: u64, url: &str, begin: i64, end: i64, _: &mut App) -> bool {
+    fn remove_history(&self, profile: u64, url: &str, begin: i64, end: i64, _: &mut App) -> u64 {
         let Ok(url) = CString::new(url) else {
-            return false;
+            return 0;
         };
-        unsafe { bc::bc_profile_remove_history(profile, url.as_ptr(), begin, end) }
+        unsafe { bc::bc_window_remove_history(self.window, profile, url.as_ptr(), begin, end) }
     }
 
     fn page_favicon(&self, url: &str, _: &mut App) {
