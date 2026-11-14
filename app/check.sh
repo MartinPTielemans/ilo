@@ -68,7 +68,7 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
         # and its blur, which it leaves off there unless its config turns it on. Ready once the blur
         # names its property on the root window (#2134).
         config=$(mktemp -d)
-        printf "[Plugins]\nblurEnabled=true\n" > "$config/kwinrc"
+        printf "[Plugins]\nblurEnabled=true\n[MouseBindings]\nCommandAllKey=Meta\n" > "$config/kwinrc"
         XDG_CONFIG_HOME=$config KWIN_COMPOSE=O2 dbus-run-session -- kwin_x11 > "$ready.log" 2>&1 &
         tries=0
         until xprop -root _KDE_NET_WM_BLUR_BEHIND_REGION 2> /dev/null |
