@@ -416,6 +416,35 @@ key-gap = 6.0
 disabled = 0.38
 primary-key = 0.65
 
+[note-panel]
+# The note Point opens at the element clicked (#2352): ours, from its accepted mock, in the foot
+# bar's material and inks. The field, with ↩ Add at its end, then the line that says what goes,
+# which opens to the rows the agent gets, each its name and value, the picture last. It goes this
+# far beside the element, and past `most` tall its rows scroll.
+width = 340.0
+radius = 12.0
+inset = 10.0
+gap = 18.0
+most = 420.0
+field-height = 32.0
+field-radius = 6.0
+field-fill = 0xffffff14
+field-inset = 10.0
+text = 13.0
+small = 12.0
+rows-top = 12.0
+row-gap = 6.0
+name-width = 70.0
+withheld = 0xffffff66
+picture-most = 160.0
+picture-radius = 6.0
+# Folded, the picture is a thumbnail before the line, and the panel's top this far over the
+# element's, so its field is level with the mark's label.
+thumb-width = 88.0
+thumb-height = 50.0
+thumb-gap = 10.0
+above = 20.0
+
 [icon-picker]
 # Arc's, measured at 2× (docs/ux-spec.md › Spaces › Icon). The card is square, and the window
 # holds the arrow over it too.
@@ -1501,6 +1530,27 @@ tag-size = 10.0
 tag-height = 16.0
 tag-inset = 5.0
 tag-radius = 6.0
+
+[shell.point]
+# Ours (#2352): while the user points for an agent, the page they point in is framed in the Space's
+# accent, with a tab at its top's middle saying for whom, Lucide's mouse-pointer-2 before the words.
+# The marks are Arrange's (#2347), drawn over the page so nothing is added to it: a line on the
+# element's own box, and its label over it, on the accent, cut with an ellipsis past its width.
+frame = 2.0
+tab-height = 22.0
+tab-inset = 9.0
+tab-size = 12.0
+tab-glyph = 13.0
+tab-gap = 5.0
+tab-radius = 6.0
+mark-line = 2.0
+mark-radius = 6.0
+label-size = 11.0
+label-height = 16.0
+label-inset = 5.0
+label-gap = 4.0
+label-width = 320.0
+label-radius = 6.0
 
 [shell.task-area]
 # Ours (Agent task), as Arc and Dia have no tasks: a task's page watched in the page area has its

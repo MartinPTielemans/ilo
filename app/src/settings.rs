@@ -3775,7 +3775,41 @@ impl Settings {
                 vec![switch],
             ))
         });
-        let mut blocks = vec![Block::Rows([master].into_iter().chain(tasks).collect())];
+        // Point (#2352) asks the user to click on a page what they mean; its own switch, as
+        // what the user sends is theirs to give.
+        let point_on = agents.read(cx).point_on();
+        let pointing = on.then(|| {
+            let switch = {
+                let agents = agents.clone();
+                let set = move |on, cx: &mut App| {
+                    agents.update(cx, |agents, cx| agents.set_point_on(on, cx))
+                };
+                self.toggle(
+                    "agent pointing",
+                    "Agents can ask you to point",
+                    point_on,
+                    set,
+                    accent,
+                    cx,
+                )
+            };
+            let line = match point_on {
+                true => {
+                    "An agent can ask you to click what you mean on a page. It gets only the \
+                         notes you send."
+                }
+                false => "Off: an agent that asks you to point hears it's turned off.",
+            };
+            nested(setting(
+                look,
+                "Agents can ask you to point",
+                Some(line.into()),
+                vec![switch],
+            ))
+        });
+        let mut blocks = vec![Block::Rows(
+            [master].into_iter().chain(tasks).chain(pointing).collect(),
+        )];
         if tasks_on {
             blocks.push(Block::Heading("Tasks".into()));
             blocks.push(Block::Group(self.tasks(agents, cx)));
@@ -3959,9 +3993,12 @@ impl Settings {
             .when(self.a11y, |head| {
                 named_button(head, what.clone()).aria_expanded(opened)
             })
-            // Its method, which check.sh tells reads from changes by, and no path: its "/" would
-            // end the run's pattern.
-            .child(self.drawn(format!("request {id} {}", method(&entry.target))))
+            // A request's method, which check.sh tells reads from changes by, and no path: its "/"
+            // would end the run's pattern. Point's sent answer is "pointed".
+            .child(self.drawn(match entry.action.as_ref() {
+                "request" => format!("request {id} {}", method(&entry.target)),
+                action => format!("{action} {id}"),
+            }))
             .on_click({
                 let (agents, agent) = (agents.clone(), entry.agent.clone());
                 cx.listener(move |settings, _, _, cx| {
@@ -3980,7 +4017,10 @@ impl Settings {
         let part = opened.then(|| {
             sent_part(
                 ("request-all", id),
-                &entry.url,
+                (
+                    browser::settings_rows::address_label(&entry.action),
+                    &entry.url,
+                ),
                 &entry.sent,
                 refused,
                 all,
@@ -4007,20 +4047,13 @@ impl Settings {
             self.requests_opened.insert(id);
         }
         let opened = self.requests_opened.contains(&id);
-        let said = |sent: &[agents::request::Sent]| {
-            let lines = sent.iter().map(|line| match line.name.is_empty() {
-                true => line.value.clone(),
-                false => format!("{}: {}", line.name, line.value),
-            });
-            lines.collect::<Vec<_>>().join(" · ")
-        };
         let found = (agents.read(cx).activity(agent))
             .find(|entry| entry.id == id)
             .map(|entry| {
                 (
                     entry.url.clone(),
                     entry.refused.is_empty(),
-                    said(&entry.sent),
+                    browser::settings_rows::sent_said(&entry.sent),
                 )
             });
         // check.sh reads this line: where it went, and what it sent, secrets hidden.

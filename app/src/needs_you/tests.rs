@@ -50,6 +50,7 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         open: Vec::new(),
         retry: false,
         command: None,
+        point: None,
     }
 }
 

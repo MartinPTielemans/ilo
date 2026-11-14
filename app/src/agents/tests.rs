@@ -52,6 +52,11 @@ struct Made {
     splits: RefCell<Vec<Vec<u64>>>,
     /// Each mute or unmute asked of a tab, in order.
     muted: RefCell<Vec<(u64, bool)>>,
+    /// Each Point turned on or off: the tab, the agent and on; what the core answers turning it
+    /// on, BC_POINT_CAN unless a test says; and the mode the windows last showed.
+    points: RefCell<Vec<(u64, String, bool)>>,
+    point_can: std::cell::Cell<i32>,
+    point_mode: RefCell<Option<crate::agents::PointMode>>,
 }
 
 impl Made {
@@ -331,6 +336,15 @@ impl Browser for Made {
         self.requests
             .borrow_mut()
             .push((tab, request, sent.clone()));
+    }
+
+    fn point(&self, tab: u64, agent: &str, on: bool) -> i32 {
+        self.points.borrow_mut().push((tab, agent.into(), on));
+        if on { self.point_can.get() } else { 0 }
+    }
+
+    fn pointing(&self, mode: Option<crate::agents::PointMode>, _: &mut App) {
+        *self.point_mode.borrow_mut() = mode;
     }
 }
 
@@ -3078,6 +3092,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "run_steps",
             "hand_off",
             "ask_for_tab",
+            "point",
             "pin_tab",
             "unpin_tab",
             "remove_tab",
@@ -3117,6 +3132,11 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ),
         ("hand_off", tab(json!({ "reason": "Sign in" }))),
         ("ask_for_tab", tab(json!({ "reason": "To go on" }))),
+        // Point asks the core nothing of a tab: the user's press turns it on, in their own.
+        (
+            "point",
+            json!({ "question": "Which one is the box on the right?" }),
+        ),
         ("pin_tab", tab(json!({}))),
         ("unpin_tab", tab(json!({}))),
         ("pin_tab", tab(json!({}))),
@@ -5998,4 +6018,150 @@ mod sessions {
     }
 }
 
+/// What the user picked on Fieldnotes, as the core gives it, with a picture.
+fn pointed_note() -> crate::point::Note {
+    crate::point::Note {
+        element: crate::point::Element {
+            kind: "section".into(),
+            name: "Trending".into(),
+            address: "https://fieldnotes.example/recipes".into(),
+            title: "Fieldnotes".into(),
+            tag: "section".into(),
+            text: "Trending".into(),
+            png: Some(Arc::from(&b"png"[..])),
+            width: 600,
+            height: 400,
+            ..Default::default()
+        },
+        words: "Hide this.".into(),
+    }
+}
+
+/// `point` asks on the agent's card, and nothing reaches the core until the user's Point, which
+/// turns it on in the tab in front of them. Their Send is the answer, the notes and their
+/// pictures, and the log's row says how many on which site. Point goes off with it.
+#[gpui::test]
+fn the_users_send_is_points_answer(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let question = json!({ "question": "Which one is “the box on the right”? Show me." });
+    let answer = call(&agents, "claude-code", "point", question, cx);
+    let asked = browser.asked.borrow().clone().expect("the card didn't ask");
+    assert!(asked.point);
+    assert_eq!(asked.what, "Which one is “the box on the right”? Show me.");
+    assert!(
+        browser.points.borrow().is_empty(),
+        "it reached the core before Point"
+    );
+    assert!(answer.try_recv().is_err());
+
+    agents.update(cx, |agents, cx| agents.point_start(asked.id, 10, cx));
+    assert_eq!(*browser.points.borrow(), [(10, "claude-code".into(), true)]);
+    let mode = browser.point_mode.borrow().clone().expect("no mode");
+    assert_eq!((mode.id, mode.tab), (asked.id, 10));
+    // The card's question is the bar's now.
+    assert_eq!(*browser.asked.borrow(), None);
+
+    agents.update(cx, |agents, cx| {
+        agents.point_send(asked.id, vec![pointed_note()], cx)
+    });
+    let sent = answer.recv().unwrap();
+    assert!(!sent.error);
+    assert!(sent.text.starts_with("The user pointed at 1 element."));
+    assert!(sent.text.contains("Their note: Hide this."));
+    assert_eq!(sent.pngs.len(), 1);
+    let content = sent.to_json()["content"].clone();
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["mimeType"], "image/png");
+    assert_eq!(
+        browser.points.borrow()[1],
+        (10, "claude-code".into(), false)
+    );
+    assert_eq!(*browser.point_mode.borrow(), None);
+    let logged = log(&agents, "claude-code", cx);
+    assert_eq!(
+        logged[0],
+        ("pointed".into(), "fieldnotes.example".into(), "".into())
+    );
+}
+
+/// Not Now, the ask left 5 minutes, Point left 15, and the core ending it all answer the same, so
+/// the agent can't tell which happened, nor anything of the tab. A tab Point can't point into
+/// leaves the ask waiting: the card said why before the press.
+#[gpui::test]
+fn every_other_end_of_point_answers_nothing(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let ask = |cx: &mut TestAppContext| {
+        let question = json!({ "question": "Which one?" });
+        let answer = call(&agents, "claude-code", "point", question, cx);
+        let id = browser.asked.borrow().as_ref().unwrap().id;
+        (answer, id)
+    };
+    let nothing = |answer: mpsc::Receiver<ToolResult>| {
+        let answer = answer.recv().unwrap();
+        assert_eq!(
+            (answer.text.as_str(), answer.error),
+            (crate::point::NOTHING, false)
+        );
+    };
+
+    let (answer, id) = ask(cx);
+    agents.update(cx, |agents, cx| agents.point_drop(id, cx));
+    nothing(answer);
+
+    let (answer, id) = ask(cx);
+    browser.point_can.set(1);
+    agents.update(cx, |agents, cx| agents.point_start(id, 10, cx));
+    assert_eq!(*browser.point_mode.borrow(), None);
+    assert!(
+        answer.try_recv().is_err(),
+        "a page it can't point into answered"
+    );
+    browser.point_can.set(0);
+    cx.executor().advance_clock(ASK_WAIT);
+    nothing(answer);
+
+    let (answer, id) = ask(cx);
+    agents.update(cx, |agents, cx| agents.point_start(id, 10, cx));
+    cx.executor().advance_clock(ASK_WAIT);
+    assert!(
+        answer.try_recv().is_err(),
+        "Point gave up at the ask's 5 minutes"
+    );
+    cx.executor().advance_clock(HANDOFF_WAIT - ASK_WAIT);
+    nothing(answer);
+    assert_eq!(browser.points.borrow().last().unwrap().2, false);
+
+    let (answer, id) = ask(cx);
+    agents.update(cx, |agents, cx| agents.point_start(id, 10, cx));
+    let calls = browser.points.borrow().len();
+    agents.update(cx, |agents, cx| agents.point_ended(10, cx));
+    nothing(answer);
+    assert_eq!(
+        browser.points.borrow().len(),
+        calls,
+        "it turned off what the core ended"
+    );
+    assert_eq!(*browser.point_mode.borrow(), None);
+}
+
+/// The agent hears only about the tool: one ask at a time, and Settings › Agents' switch, which
+/// also ends the ask waiting.
+#[gpui::test]
+fn point_refuses_only_for_the_tools_own_reasons(cx: &mut TestAppContext) {
+    let (agents, _browser, _) = connected(cx);
+    let question = || json!({ "question": "Which one?" });
+    let first = call(&agents, "claude-code", "point", question(), cx);
+    let again = call(&agents, "claude-code", "point", question(), cx)
+        .recv()
+        .unwrap();
+    assert!(again.error && again.text.contains("already"));
+
+    agents.update(cx, |agents, cx| agents.set_point_on(false, cx));
+    assert_eq!(first.recv().unwrap().text, crate::point::NOTHING);
+    let off = call(&agents, "claude-code", "point", question(), cx)
+        .recv()
+        .unwrap();
+    assert!(off.error && off.text.contains("Settings › Agents"));
+    assert!(!agents.read_with(cx, |agents, _| agents.point_on()));
+}
 mod holds;

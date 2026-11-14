@@ -104,6 +104,9 @@ enum Chip {
     Retry,
     Copy(&'static str),
     Open(SharedString),
+    /// An ask to point's (#2352), by its id: they go once the user points, the bar having them.
+    NotNow(u64),
+    Point(u64),
 }
 
 impl Chip {
@@ -113,6 +116,8 @@ impl Chip {
             Chip::Retry => "Retry".into(),
             Chip::Copy(_) => "Copy".into(),
             Chip::Open(label) => label.clone(),
+            Chip::NotNow(_) => "Not Now".into(),
+            Chip::Point(_) => "Point".into(),
         }
     }
 }
@@ -121,6 +126,9 @@ impl Chip {
 /// Done's Open <site> or Open 3 pages.
 fn chips(card: &Card) -> Vec<Chip> {
     let mut chips: Vec<Chip> = card.answers.iter().cloned().map(Chip::Answer).collect();
+    if let Some(point) = card.point.filter(|point| !point.pointing) {
+        chips.extend([Chip::NotNow(point.id), Chip::Point(point.id)]);
+    }
     if card.retry {
         chips.push(Chip::Retry);
     }
@@ -1750,6 +1758,15 @@ impl Shell {
                 } else {
                     alpha
                 };
+                // Point dims where it can't start, and says why on hover.
+                let can_point = match chip {
+                    Chip::Point(_) => self.may_point_here(&card.agent),
+                    _ => 0,
+                };
+                let alpha = match can_point {
+                    0 => alpha,
+                    _ => alpha * crate::tokens::foot_bar::DISABLED,
+                };
                 let id = ("task-chip", n * 8 + index as u64);
                 let element = card_chip(&self.palette, id, chip.label())
                     .relative()
@@ -1782,6 +1799,24 @@ impl Shell {
                         cx.stop_propagation();
                         shell.copy(command, "Command Copied", cx);
                     })),
+                    Chip::NotNow(id) => element.on_click(cx.listener(move |shell, _, _, cx| {
+                        cx.stop_propagation();
+                        // check.sh reads this line.
+                        log!("browser: point {id} not now");
+                        shell.browser.answer_point(id, None, cx);
+                    })),
+                    Chip::Point(id) => {
+                        let chips = self.foot.chips_drawn.clone();
+                        element
+                            .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                                let frame = chips.borrow().get(&(n, index)).copied();
+                                shell.point_tip(frame, *hovered, can_point, cx);
+                            }))
+                            .on_click(cx.listener(move |shell, _, _, cx| {
+                                cx.stop_propagation();
+                                shell.press_point(id, &agent, cx);
+                            }))
+                    }
                 };
                 Some(element.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()))
             });

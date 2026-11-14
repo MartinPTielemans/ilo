@@ -496,6 +496,19 @@ fn shared() -> Value {
             },
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
+        {
+            "name": "point",
+            "title": "Ask the user to point",
+            "description": "Ask the user to show you what they mean on a page they're looking at, such as “the box on the right”. They click each element they mean on their page and write a note on it, and this waits for what they send: for each, their note, the page's address and title, the element's kind, text, a selector that finds it, its box, styles and picture. Or it answers that they didn't point at anything. Form fields' values are never sent.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "What you ask them to point at, in one short sentence, such as “Which one is “the box on the right”? Show me.”" },
+                },
+                "required": ["question"],
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false },
+        },
     ])
 }
 
@@ -765,6 +778,14 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             };
         }
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
+        "point" => (
+            "Asking you to point",
+            "Asked you to point",
+            "Couldn't ask you to point",
+            String::new(),
+        ),
+        // The user's Send, the log's row for it: "You pointed at 3 elements".
+        "pointed" => return format!("You pointed at {}", target("an element")),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
         action => return describe(action).to_string(),
     };
@@ -815,6 +836,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         | "add_to_split" | "separate_tab" | "list_split" => "icons/app-window.svg",
         "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
+        "point" | "pointed" => "icons/square-mouse-pointer.svg",
         "thought" => "icons/lightbulb.svg",
         _ => "icons/globe.svg",
     }
@@ -923,6 +945,8 @@ pub fn describe(action: &str) -> &'static str {
         "title" => "Named the task",
         "ask" => "Asked you",
         "answered" => "You answered",
+        "point" => "Asked you to point",
+        "pointed" => "You pointed at elements",
         "finish" => "Finished",
         _ => "Acted",
     }

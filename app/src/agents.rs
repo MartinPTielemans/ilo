@@ -20,6 +20,7 @@ mod held;
 pub mod page;
 #[cfg(windows)]
 mod pipe;
+mod pointing;
 pub mod ready;
 pub mod request;
 pub mod runner;
@@ -42,6 +43,7 @@ use gpui::{App, AppContext, Context, Entity, Global, SharedString, Task};
 use serde_json::{Value, json};
 
 pub use clients::{Client, Clients, Entry, System};
+pub use pointing::{PointMode, TaskPoint};
 
 /// The name the clients list the server by: the browser's, a dev build's apart.
 pub fn server_name() -> String {
@@ -129,6 +131,8 @@ pub struct Question {
     pub changes: Vec<(SharedString, SharedString)>,
     /// The changes it doesn't list.
     pub more: usize,
+    /// An ask to point (pointing.rs), `what` the agent's question: Not Now, or Point.
+    pub point: bool,
 }
 
 /// What an agent is doing, and what the user holds from it, for the bar in its Space.
@@ -258,6 +262,11 @@ pub trait Browser {
     /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
     /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);
+    /// Turns Point on or off in `tab` for `agent`, from the user's press on Point (bc_tab_point):
+    /// 0 once it's as asked, else why not, a BC_POINT_ value.
+    fn point(&self, tab: u64, agent: &str, on: bool) -> i32;
+    /// Shows Point's mode in the window that holds its tab, or ends it (None), in every window.
+    fn pointing(&self, mode: Option<PointMode>, cx: &mut App);
 }
 
 /// What the server's threads hand the UI thread.
@@ -302,6 +311,8 @@ pub struct ToolResult {
     pub error: bool,
     /// A picture, as a JPEG in base64.
     pub image: Option<String>,
+    /// Pictures after the text, as PNGs in base64: Point's, one for each element sent.
+    pub pngs: Vec<String>,
 }
 
 impl ToolResult {
@@ -310,6 +321,7 @@ impl ToolResult {
             text: text.into(),
             error: false,
             image: None,
+            pngs: Vec::new(),
         }
     }
 
@@ -318,6 +330,7 @@ impl ToolResult {
             text: text.into(),
             error: true,
             image: None,
+            pngs: Vec::new(),
         }
     }
 
@@ -326,6 +339,7 @@ impl ToolResult {
             text: String::new(),
             error: false,
             image: Some(jpeg),
+            pngs: Vec::new(),
         }
     }
 
@@ -336,7 +350,13 @@ impl ToolResult {
                 "isError": self.error,
             }),
             None => {
-                json!({ "content": [{ "type": "text", "text": self.text }], "isError": self.error })
+                let pictures = (self.pngs.iter())
+                    .map(|png| json!({ "type": "image", "data": png, "mimeType": "image/png" }));
+                let content: Vec<Value> =
+                    std::iter::once(json!({ "type": "text", "text": self.text }))
+                        .chain(pictures)
+                        .collect();
+                json!({ "content": content, "isError": self.error })
             }
         }
     }
@@ -636,6 +656,10 @@ pub struct Agents {
     /// Settings › Agents' Tasks from the command bar is off: asking an agent from ⌘T and letting
     /// an app connect are two trust decisions, so tasks have a switch of their own under agents'.
     tasks_off: bool,
+    /// The agents' asks to point, waiting on the user (pointing.rs), and Settings › Agents'
+    /// Pointing switch, off.
+    points: Vec<pointing::PointAsk>,
+    point_off: bool,
 }
 
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
@@ -792,6 +816,8 @@ impl Agents {
             scripts: false,
             script_event: 0,
             tasks_off: false,
+            points: Vec::new(),
+            point_off: false,
         }
     }
 
@@ -852,6 +878,7 @@ impl Agents {
         }))
         .collect();
         self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
+        self.point_off = saved.get("point").and_then(Value::as_bool) == Some(false);
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         self.scripts = saved
             .get("scripts")
@@ -1583,6 +1610,7 @@ impl Agents {
                     false => self.ask_first(act, host, CHANGES_ASK, cx),
                 }
             }
+            "point" => self.point_tool(&agent, &arguments, reply, cx),
             "title" | "ask" | "finish" if is_task(&agent) => {
                 self.task_tool(&agent, &tool, &arguments, reply, cx)
             }
@@ -2563,7 +2591,7 @@ impl Agents {
         let handoff = (self.held.iter())
             .filter(|(_, held)| held.reply.is_some() && shown(&held.agent, held.question))
             .min_by_key(|(_, held)| held.question);
-        handoff.map(|(&tab, held)| Question {
+        let handoff = handoff.map(|(&tab, held)| Question {
             id: held.question,
             agent: self.agent_name(&held.agent),
             from: held.agent.clone().into(),
@@ -2575,7 +2603,8 @@ impl Agents {
             handoff: Some(tab),
             back: held.back.is_some(),
             ..Question::default()
-        })
+        });
+        handoff.or_else(|| self.point_question())
     }
 
     fn asked(&self, cx: &mut Context<Self>) {
@@ -2606,6 +2635,7 @@ impl Agents {
         for tab in self.held_from(agent) {
             self.let_go(tab, held::Event::Gone { holder: true }, cx);
         }
+        self.forget_points(agent, cx);
         if self.question().map(|question| question.id) != asked {
             self.asked(cx);
         }
@@ -3405,6 +3435,7 @@ impl Agents {
             "grants": grants,
             "tasks": tasks,
             "scripts": self.scripts,
+            "point": !self.point_off,
         });
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");
@@ -3522,6 +3553,7 @@ fn finish(sending: Sending, error: bool) {
         text,
         error,
         image: None,
+        pngs: Vec::new(),
     });
 }
 

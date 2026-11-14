@@ -2048,6 +2048,7 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
         },
         retry: false,
         command: None,
+        point: None,
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
     // Newest first, as the Agents send them.

@@ -13,6 +13,31 @@ use serde_json::{Value, json};
 
 use crate::agents::request::Sent;
 
+/// What a Point step (#2352) keeps of the lines it sent, by their names under each element's
+/// number: its kind alone, its box, that its value wasn't sent and its picture's size. Never the
+/// page's title or text, the element's name, the user's note or the selector that found it, which
+/// can carry an id a site built from a person's name. Settings › Agents, in memory, shows them all.
+const POINTED_KEPT: [&str; 4] = ["kind", "box", "value", "picture"];
+
+/// What Library › Agents says under a Point step's lines, as the rest isn't there.
+pub const POINTED_ASIDE: &str = "The page's words, your notes and each element's selector aren't \
+                                 kept here. Settings › Agents shows them until ilo quits.";
+
+/// The lines a step keeps in the file: a Point step's as POINTED_KEPT says, any other's all.
+pub fn kept_lines(action: &str, sent: &[Sent]) -> Vec<Sent> {
+    if action != "pointed" {
+        return sent.to_vec();
+    }
+    let number = |line: &Sent| line.value.is_empty() && line.name.parse::<usize>().is_ok();
+    (sent.iter())
+        .filter(|line| match line.depth {
+            0 => number(line),
+            _ => POINTED_KEPT.contains(&line.name.as_str()),
+        })
+        .cloned()
+        .collect()
+}
+
 /// The file in a profile's folder its past tasks are kept in.
 pub const FILE: &str = "Agent sessions";
 
@@ -129,7 +154,7 @@ impl Past {
                     "refused": step.refused,
                 });
                 if !step.url.is_empty() {
-                    let sent: Vec<Value> = (step.sent.iter())
+                    let sent: Vec<Value> = (kept_lines(&step.action, &step.sent).iter())
                         .map(|line| json!([line.depth, line.name, line.value]))
                         .collect();
                     kept["target"] = json!(step.target);

@@ -72,6 +72,8 @@ pub(super) struct Recorder {
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
+    /// Whether the window over the page is shown, as the last `show_drop_targets` asked.
+    pub(super) over_page_shown: Cell<bool>,
     /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
     /// answer.
     pub(super) safe_start: Cell<bool>,
@@ -132,6 +134,8 @@ pub(super) struct Recorder {
     pub(super) share_services: RefCell<Vec<SharedString>>,
     /// The system has a share sheet of its own.
     pub(super) share_sheet: Cell<bool>,
+    /// Whether Point may start on a tab, as `may_point` answers: 0 if it may, else why not.
+    pub(super) point_can: Cell<i32>,
     /// What the last menu does with the item chosen, as `choose` picks it.
     answer: RefCell<Option<Box<dyn FnOnce(Option<usize>, &mut App)>>>,
     /// The questions the dialog was asked through `tell`, each as its message, its buttons and
@@ -528,7 +532,9 @@ impl Browser for Recorder {
         self.record(format!("open split {url} {with} {left} {stacked}"))
     }
 
-    fn show_drop_targets(&self, _: bool, _: &mut App) {}
+    fn show_drop_targets(&self, shown: bool, _: &mut App) {
+        self.over_page_shown.set(shown)
+    }
 
     fn pointer(&self, _: &mut App) -> Option<Point<Pixels>> {
         self.pointer.get()
@@ -1088,6 +1094,28 @@ impl Browser for Recorder {
 
     fn zap(&self, tab: u64, on: bool, _: &mut App) {
         self.record(format!("zap {tab} {on}"))
+    }
+
+    fn may_point(&self, _: u64, _: &str) -> i32 {
+        self.point_can.get()
+    }
+
+    fn start_point(&self, id: u64, tab: u64, _: &mut App) {
+        self.record(format!("start point {id} {tab}"))
+    }
+
+    fn answer_point(&self, id: u64, notes: Option<Vec<crate::point::Note>>, _: &mut App) {
+        match notes {
+            None => self.record(format!("answer point {id} not now")),
+            Some(notes) => {
+                let words: Vec<_> = notes.iter().map(|note| note.words.as_str()).collect();
+                self.record(format!("answer point {id}: {}", words.join(" | ")))
+            }
+        }
+    }
+
+    fn point_do(&self, tab: u64, inner: bool) {
+        self.record(format!("point do {tab} {inner}"))
     }
 
     fn edit_file(&self, path: &std::path::Path, _: &mut App) {

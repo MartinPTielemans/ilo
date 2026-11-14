@@ -186,6 +186,8 @@ mod translate_host;
 use translate_host::{tab_language, tab_translate_texts};
 mod boosts_host;
 use boosts_host::{tab_boost_zap_ended, tab_boost_zapped};
+mod point_host;
+use point_host::{tab_point_ended, tab_point_hover, tab_point_picked};
 
 use browser::bc;
 
@@ -254,6 +256,12 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     if update_tab_window(tab, |shell, cx| shell.run_agent_page_key(&keystroke, cx)).unwrap_or(false)
     {
         return (true, "agent bar");
+    }
+    // Point's esc, ⌘↩, ↑ and ↓, which the page pointed in doesn't see (shell/pointing.rs).
+    if update_tab_window(tab, |shell, cx| shell.point_key(&keystroke, Some(tab), cx))
+        .unwrap_or(false)
+    {
+        return (true, "point");
     }
     // Escape ends Zap on the page, which the page doesn't see (shell/boost.rs).
     if keystroke == "escape"
@@ -1031,6 +1039,9 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_press_moved: Some(tab_press_moved),
         tab_press_released: Some(tab_press_released),
         tab_boost_zapped: Some(tab_boost_zapped),
+        tab_point_hover: Some(tab_point_hover),
+        tab_point_picked: Some(tab_point_picked),
+        tab_point_ended: Some(tab_point_ended),
         tab_boost_zap_ended: Some(tab_boost_zap_ended),
         held_keys_unclaimed: Some(held_keys_unclaimed),
         tab_media_unsupported: Some(tab_media_unsupported),

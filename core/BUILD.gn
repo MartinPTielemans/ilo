@@ -297,6 +297,19 @@ source_set("window_frames") {
   ]
 }
 
+# A page's text as its accessibility tree has it, an element's too, with no field's value: what
+# bc_tab_read_text and Point read.
+source_set("ax_text") {
+  sources = [
+    "ax_text.cc",
+    "ax_text.h",
+  ]
+  deps = [
+    "//base",
+    "//ui/accessibility",
+  ]
+}
+
 # Which fields' contents an agent sees, and the hatch over those it doesn't in its pictures, apart
 # so browser_core_unittests tests the rule alone.
 source_set("withheld_fields") {
@@ -428,6 +441,8 @@ source_set("browser_core") {
     "platform/playready.h",
     "platform/system_page.h",
     "platform/window_views.h",
+    "point.cc",
+    "point.h",
     "popular_sites.cc",
     "popular_sites.h",
     "profiles.cc",
@@ -476,6 +491,7 @@ source_set("browser_core") {
     ":ad_block_page",
     ":archive_rule",
     ":arrangement",
+    ":ax_text",
     ":drm_request",
     ":idle_check",
     ":mini_player_place",
@@ -769,6 +785,7 @@ test("browser_core_unittests") {
   sources = [
     "archive_rule_unittest.cc",
     "arrangement_unittest.cc",
+    "ax_text_unittest.cc",
     "agent_download_hold_unittest.cc",
     "boost_script_unittest.cc",
     "idle_check_unittest.cc",
@@ -801,6 +818,7 @@ test("browser_core_unittests") {
   deps = [
     ":archive_rule",
     ":arrangement",
+    ":ax_text",
     ":agent_download_hold",
     ":boost_script",
     ":idle_check",

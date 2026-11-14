@@ -815,6 +815,10 @@ typedef void (*bc_writer)(void* out, const char* text, size_t size);
 
 // Declared further down, with bc_tab_arrange; tab_arrange_state hands the app one.
 typedef struct bc_arrange_state bc_arrange_state;
+// Declared further down, with bc_tab_arrange and bc_tab_point; the tab_point_ callbacks hand the
+// app them.
+typedef struct bc_arrange_element bc_arrange_element;
+typedef struct bc_point_element bc_point_element;
 
 typedef struct bc_host {
   // Passed back to every callback.
@@ -1366,6 +1370,19 @@ typedef struct bc_host {
   // and the list's dimmed rows.
   void (*tab_arrangement_fits)(void* context, bc_id tab, const char* site,
                                const uint32_t* misfits, size_t count);
+  // The element under the pointer in the tab's Point (bc_tab_point), or the one ↑ or ↓ moved to:
+  // its kind and name as Arrange names them, for the label, and its border in points from the
+  // top-left of the page's view, for the outline the app draws over the page; |box| 0 wide when
+  // there's none, or while the page scrolls. At most once a frame while the pointer moves, none
+  // while it rests. |element| lasts only for the call.
+  void (*tab_point_hover)(void* context, bc_id tab, const bc_arrange_element* element,
+                          bc_rect box);
+  // The user clicked an element in the tab's Point: |element| is all that goes to the agent if
+  // they Send it, for the app to show as it is and send as it is. It lasts only for the call.
+  void (*tab_point_picked)(void* context, bc_id tab, const bc_point_element* element);
+  // Point ended on the tab without the app asking: a new page, the tab moved into another agent's
+  // Space or a private window, or it closed.
+  void (*tab_point_ended)(void* context, bc_id tab);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -3035,10 +3052,10 @@ typedef struct bc_arrange_look {
 // it off. While on, a left press, its drag and its release go to Arrange instead of the page, the
 // page's moves still reach it, and the marks are drawn in the page where its scripts can neither
 // style nor cover them, and are gone once it ends; the foot bar and the mini bar are the app's.
-// Returns whether it's on: never for a tab in an agent's Space, a private window, or a page that
-// isn't http(s). Turning it on ends Zap on the tab, with tab_boost_zap_ended, and
-// bc_tab_boost_zap ends it, with tab_arrange_ended, as both take the page's presses. A new page
-// ends it, with tab_arrange_ended.
+// Returns whether it's on: never for a tab in an agent's Space, a private window, a page that
+// isn't http(s), or a tab in Point (bc_tab_point). Turning it on ends Zap on the tab, with
+// tab_boost_zap_ended, and bc_tab_boost_zap ends it, with tab_arrange_ended, as both take the
+// page's presses. A new page ends it, with tab_arrange_ended.
 BC_EXPORT bool bc_tab_arrange(bc_id tab, bool on, const bc_arrange_look* look);
 
 // What the user asks of Arrange, by the keys the app takes before the page and the bars' buttons:
@@ -3137,6 +3154,83 @@ BC_EXPORT int bc_profile_set_arrangement(bc_id profile, const char* site, const 
 // refused. The user's alone: no agent, page, sync, link or import calls it.
 BC_EXPORT bool bc_profile_turn_on_arrangement(bc_id profile, const char* site,
                                               const char* arrangement, size_t size);
+
+// Point (#2352): an agent's `point` tool asks the user to show it something, and the user points
+// at elements on the page in front, notes each and sends them, or doesn't. The agent names no tab
+// and learns nothing of this one until the user's Send, so the core's refusals are said to the app,
+// for Point's tooltip, and never to the agent. An agent's call in a tab while the user points in
+// it is refused, in the activity log.
+//
+// Why Point can't start on a tab: it can; the page isn't http(s), ilo's own pages among them; the
+// tab is in a private window; it's in an agent's Space other than the asking agent's; or the user
+// is arranging it (bc_tab_arrange).
+#define BC_POINT_CAN 0
+#define BC_POINT_NOT_WEB 1
+#define BC_POINT_PRIVATE 2
+#define BC_POINT_OTHER_AGENT 3
+#define BC_POINT_ARRANGING 4
+// Whether bc_tab_point would start on the tab for the agent with the id |agent|: a BC_POINT_
+// value, for the app to dim Point with its reason before it's pressed. Asks nothing of the page.
+BC_EXPORT int bc_tab_may_point(bc_id tab, const char* agent);
+
+// Turns Point on or off on the tab's page, for the agent with the id |agent|, which asked. Returns
+// BC_POINT_CAN once it's on or off as asked, else why it isn't on, as bc_tab_may_point says. While
+// on, a left press and its release go to Point instead of the page, and the page's moves still
+// reach it, so a hover menu opens as the user reaches for it. The hit test is DevTools', as
+// bc_tab_element_at's, and nothing is added to the page, no script, node or style: the app draws
+// the marks over the page from tab_point_hover. Turning it on ends Zap on the tab, with
+// tab_boost_zap_ended, and bc_tab_boost_zap ends it, as both take the page's presses. A new page,
+// the tab moving into another agent's Space, or its closing ends it, with tab_point_ended. The
+// user's, from their press on Point: agents get none.
+BC_EXPORT int bc_tab_point(bc_id tab, const char* agent, bool on);
+
+// What the user asks of Point, by the keys the app takes before the page: point at the box around
+// the one pointed at (↑) or inside it (↓). Then tab_point_hover. Nothing while it's off.
+#define BC_POINT_DO_OUTER 0
+#define BC_POINT_DO_INNER 1
+BC_EXPORT void bc_tab_point_do(bc_id tab, int action);
+
+// An element the user picked in Point, as it goes to the agent. Its strings are UTF-8, "" when
+// there's none.
+//
+// What's withheld is what an agent's own outline and screenshot withhold. No form control's value
+// is in |text|, as none is in bc_tab_read_text's. The picture is made as an agent's screenshot is,
+// by the same function and rule: each field in the element holding what the user typed, or
+// autofill or a password manager put there, an email or a card number as much as a password, is
+// hatched over, as is each frame whose fields can't be read. |withheld| says the element held one.
+typedef struct bc_point_element {
+  // Its kind and name, as Arrange names them, for the label and the note's first line.
+  bc_arrange_element element;
+  // The page's address, its origin and path only: never its query or fragment, which can carry a
+  // session's token. And the page's title.
+  const char* address;
+  const char* title;
+  // Its tag name, lowercase.
+  const char* tag;
+  // Its text as the accessibility tree reads it, a line for each block, up to 2000 characters.
+  const char* text;
+  // A selector that finds it again, from its id, its role and its path: words for the agent, never
+  // run.
+  const char* selector;
+  // The styles a person names it by, computed: its colour, its background colour, its font's
+  // family and size, and its padding, as CSS writes them.
+  const char* color;
+  const char* background;
+  const char* font;
+  const char* font_size;
+  const char* padding;
+  // Its border, in points from the top-left of the page's view.
+  bc_rect box;
+  // Whether a form control in it held a value, or a frame in it was hatched.
+  bool withheld;
+  // Its picture, as an agent's screenshot is made, of its box and 8 points around it, cut to the
+  // view: a PNG |size| bytes long, |width| by |height| pixels at the display's scale, or null and 0
+  // if the page couldn't give one.
+  const uint8_t* png;
+  size_t size;
+  int width;
+  int height;
+} bc_point_element;
 
 // Takes the tab's playing video into Picture in Picture, or brings it back, as
 // bc_site_controls' picture_in_picture says it can. Then tab_site_controls.

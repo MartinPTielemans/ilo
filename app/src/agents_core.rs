@@ -200,6 +200,17 @@ impl Browser for Core {
         });
     }
 
+    fn point(&self, tab: u64, agent: &str, on: bool) -> i32 {
+        let Ok(agent) = CString::new(agent) else {
+            return bc::BC_POINT_OTHER_AGENT as i32;
+        };
+        unsafe { bc::bc_tab_point(tab, agent.as_ptr(), on) }
+    }
+
+    fn pointing(&self, mode: Option<agents::PointMode>, cx: &mut App) {
+        crate::update_shells_in(cx, |shell, cx| shell.set_point_mode(mode.clone(), cx));
+    }
+
     fn hand_off(&self, agent: &str, tab: u64) -> bool {
         let Ok(agent) = CString::new(agent) else {
             return false;

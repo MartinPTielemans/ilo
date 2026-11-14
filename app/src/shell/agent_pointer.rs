@@ -118,20 +118,21 @@ impl Shell {
     }
 
     /// What the window over the page draws: Add Split View's targets while a tab or a link is
-    /// dragged over it, the agent's pointer, and a new download's icon on its way to the Library
-    /// button.
+    /// dragged over it, Point's frame and marks, the agent's pointer, and a new download's icon on
+    /// its way to the Library button.
     pub fn over_page(&self, window: &mut Window, cx: &App) -> AnyElement {
         div()
             .size_full()
             .relative()
             .child(self.drop_targets(window))
+            .children(self.point_drawn())
             .children(self.agent_pointer_drawn(window, cx))
             .children(self.download_flight_drawn(window, cx))
             .into_any_element()
     }
 
     /// The pane `tab`'s page is in, in the window.
-    fn pane_of(&self, tab: u64) -> Option<Bounds<Pixels>> {
+    pub(super) fn pane_of(&self, tab: u64) -> Option<Bounds<Pixels>> {
         if let Some((watched, place)) = self.task_page_place() {
             return (watched == tab).then_some(place);
         }

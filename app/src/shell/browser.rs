@@ -404,6 +404,19 @@ pub trait Browser {
     /// Turns Zap on or off on `tab`'s page: while it's on, a click there hides what's under it,
     /// which comes back in `Shell::boost_zapped`. The user's alone.
     fn zap(&self, _tab: u64, _on: bool, _cx: &mut App) {}
+    /// Whether Point can start in `tab` for the agent `agent` (bc_tab_may_point): 0, or the
+    /// reason it can't, which the card's tooltip gives the user and the agent never hears.
+    fn may_point(&self, _tab: u64, _agent: &str) -> i32 {
+        1
+    }
+    /// The user pressed Point on the ask `id` with `tab` in front of them
+    /// (agents::Agents::point_start).
+    fn start_point(&self, _id: u64, _tab: u64, _cx: &mut App) {}
+    /// The user sent `notes` for the ask `id`, or let it go unanswered (None): Not Now or esc.
+    fn answer_point(&self, _id: u64, _notes: Option<Vec<crate::point::Note>>, _cx: &mut App) {}
+    /// Moves what Point marks in `tab` out to the element holding it, or in (`inner`) to the one
+    /// under the pointer inside it, as ↑ and ↓ do.
+    fn point_do(&self, _tab: u64, _inner: bool) {}
     /// Opens the file at `path` in the user's text editor.
     fn edit_file(&self, _path: &std::path::Path, _cx: &mut App) {}
     /// Shows the file at `path` in the system's file manager.

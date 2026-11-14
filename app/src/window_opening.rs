@@ -714,6 +714,20 @@ pub(crate) fn finish_opening(
         },
         cx,
     );
+    when_asked::<browser::note_panel::NotePanel>(
+        |cx| {
+            if let Some(panel) = browser::note_panel::open(Rc::new(NotePanelHost), cx)
+                && let Ok(view) = panel.update(cx, |_, window, _| ns_view(window))
+            {
+                elevate(NOTE_PANEL, Level::Popover);
+                let radius = browser::tokens::note_panel::RADIUS.into();
+                unsafe {
+                    platform::host_add_overlay(NOTE_PANEL, view, radius, note_panel_dismissed)
+                };
+            }
+        },
+        cx,
+    );
     let opener: boost_editor::Opener = Rc::new(|cx| {
         let editor = boost_editor::open(Rc::new(BoostEditorHost), cx)?;
         let view = editor.update(cx, |_, window, _| ns_view(window)).ok()?;
