@@ -611,12 +611,16 @@ sidebar_back "$out/green-button-again.png" ||
 # escape and the page's full screen work. The check VM's AppKit keeps the window full screen, and
 # finishes a way out it started, but on the owner's Mac it took the window out without finishing,
 # and the page stayed laid out full screen, for good (#415).
+# The Mac's is the main display, at 0 0; sway's an output beside the session's.
 second_display() {
   send display add 1280 800 main
   added=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: display ')
-  [ "$added" = "browser: display added at 0 0 1280 800" ] ||
-    fail "no second display for the page's full screen: $added"
-  send place 40 40 1000 700
+  case "$added" in
+  "browser: display added at "*" 1280 800") set -- ${added#browser: display added at } ;;
+  *) fail "no second display for the page's full screen: $added" ;;
+  esac
+  [ "$(uname)" != Darwin ] || [ "$1 $2" = "0 0" ] || fail "the second display isn't the main one: $added"
+  send place $(($1 + 40)) $(($2 + 40)) 1000 700
   send key f
   expect '^browser: page entered full screen$' "the page didn't go full screen on the second display"
   expect '^browser: window entered full screen$' "the page didn't take the window full screen on the second display"
@@ -649,6 +653,9 @@ together() {
     expect_from '^browser: page left full screen$' "the page stayed full screen as its window left it, its display gone $1"
     expect_from '^browser: title [0-9]* fullscreen 0$' "the page's document stayed full screen as its window left it, its display gone $1"
   fi
+  # sway puts a window that leaves full screen back where it was, here on the display that went and
+  # off the one left, and under Wayland ilo can't place its windows: a user moves it back.
+  [ -z "${WAYLAND_DISPLAY:-}" ] || send place $frame
   windowed_again "$1" "$2"
 }
 # After the page's display went away $1, the window is windowed with its sidebar and card back, and
@@ -681,11 +688,25 @@ windowed_again() {
   sidebar_back "$out/$2-again.png" ||
     fail "after the page's next full screen the sidebar is $sidebar_now, not $sidebar: the page still covers it"
 }
-if [ "$(uname)" = Linux ]; then
-  echo "skip: second display: the Linux driver can't add one yet."
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  # sway takes a window full screen and out in one step, with no way in or out for the display to
+  # go during, so those steps are the Mac's.
+  send order
+  frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+  second_display
+  send display remove
+  from=$step
+  together "in full screen" display-gone
+  echo "skip: the second display going as the window leaves or enters full screen: sway does either in one step."
+  displays="a full-screen window's display going away in full screen keeps the window and the page together"
+  display_shots="$out/display-gone.png, $out/display-gone-again.png, "
+elif [ "$(uname)" = Linux ]; then
+  echo "skip: second display: the X11 driver can't add one yet."
 elif windows; then
   echo "skip: second display: the Windows driver can't add one yet."
 else
+  displays="a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed"
+  display_shots="$out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, "
   send order
   frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
   second_display
@@ -757,7 +778,7 @@ expect '^browser: window entered full screen$' "the window didn't go full screen
 check_layout "full screen with the sized page"
 full=$content
 await_drawn sized-full-screen "$orange" "the sized page in full screen"
-if [ "$(uname)" = Darwin ]; then
+if [ "$(uname)" = Darwin ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
   send display add 1280 800
   added=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: display ')
   case "$added" in "browser: display added at "*) ;; *) fail "no display to plug in: $added" ;; esac
@@ -770,7 +791,7 @@ if [ "$(uname)" = Darwin ]; then
   [ "$content" = "$full" ] || fail "the plugged-in display going took the full-screen window from $full to $content"
   await_drawn display-unplugged "$orange" "full screen as the plugged-in display went away"
 else
-  driver=Linux
+  driver=X11
   ! windows || driver=Windows
   echo "skip: a display plugged in while full screen: the $driver driver can't add one yet."
 fi
@@ -838,13 +859,6 @@ in_browser RenderWidgetHostViewCocoa "after the command bar closed over a page t
 # don't move the window itself: the window server follows the real pointer.
 moves=0
 drag() {
-  # On X11 the window manager moves the window with the real pointer, once it has taken it from the
-  # app. The driver lets go before then, as no hand can, and the move outlives the drag and eats the
-  # next press: the driver waiting for the window manager is #2721's slice 2.
-  if [ "$3" = moves ] && [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-    echo "skip: a drag on $4 moving the window, on X11: #2721 slice 2."
-    return
-  fi
   send drag "$1" "$2" $(($1 + 5)) "$2"
   count=$(grep -c '^browser: window move$' "$log" || true)
   if [ "$3" = moves ]; then
@@ -865,10 +879,10 @@ drag 110 400 moves "the empty sidebar"
 # design/tokens.toml's card-inset is 10.
 if windows; then
   drag 600 5 stays "the frame's top edge, which resizes"
-  drag 600 9 moves "the card's top margin"
-else
-  drag 600 5 moves "the card's top margin"
 fi
+# Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the screen's
+# top, its quick-maximize zone, as it does under a hand.
+drag 600 9 moves "the card's top margin"
 drag $((width - 8)) 300 moves "the card's right margin"
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
 # unless it's set to something else. Sway, the Wayland session's compositor, maximizes no window:
@@ -1582,10 +1596,11 @@ fi
 # With two windows, only the key window's hidden sidebar comes out at its edge, as Arc 1.171's: a
 # window behind leaves its edge to the pointer on its way to the one in front (#1402). The driver
 # sends the window behind its moves without bringing it forward, as dialogs' hover card behind
-# shows they reach it; once in front, the same moves bring its sidebar out. Linux's driver can't
-# drive a window behind another.
-if [ "$(uname)" = Linux ]; then
-  echo "skip: the edge of a window behind another, which Linux's driver can't drive without bringing it forward."
+# shows they reach it; once in front, the same moves bring its sidebar out. On X11 the pointer is
+# the display's own, so the second window goes to the screen's right half, clear of the first's
+# edge. Under Wayland and on sway's Xwayland the compositor places the windows.
+if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || sway_xwayland; }; then
+  echo "skip: the edge of a window behind another, under Wayland or on sway's Xwayland: the compositor places the windows."
 else
   send click 110 400
   send key s cmd
@@ -1599,6 +1614,10 @@ else
   expect_late '^browser: command bar shown$' "⌘N's window didn't open the command bar"
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close ⌘N's command bar"
+  if [ "$(uname)" = Linux ]; then
+    send window "$driven_second"
+    send place 640 60 600 680
+  fi
   send window 1 behind
   behind=$step
   send move 400 300
@@ -1611,10 +1630,11 @@ else
   sed -n "/^browser: drive $behind: /,/^browser: drive $step: /p" "$log" |
     grep -q '^browser: reveal \(waits\|shown\)$' &&
     fail "the pointer at the edge of the window behind brought its sidebar out"
-  # Windows' pointer is real: it rests at the edge as the window comes in front, which hears it
-  # there as a hand's, so the sidebar can come out with the step that brings the window forward.
+  # Windows' pointer is real, as X11's is: it rests at the edge as the window comes in front, which
+  # hears it there as a hand's, so the sidebar can come out with the step that brings the window
+  # forward.
   in_front=$((step + 1))
-  windows && in_front=$step
+  { windows || [ "$(uname)" = Linux ]; } && in_front=$step
   reveal_at_edge "the pointer at the edge of the first window, in front, didn't bring its sidebar out" \
     "$in_front"
   check_reveal "with the first window's sidebar out in front of the second" shown
@@ -1659,4 +1679,4 @@ fi
 exec 3>&-
 quit
 echo "edge: $edge"
-echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Dock icon: $dock. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}${dock_shots:-}"
+echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, ${displays:+$displays, }the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Dock icon: $dock. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, ${display_shots:-}$out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}${dock_shots:-}"

@@ -453,6 +453,19 @@ if [ "$active" != 1 ]; then
   echo "skip: the restored pinned tab's way back. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
+# The window opened under the pointer the quit left on the favicon, so it drew that hover with no
+# move, and the driver's real click in the page jumped the pointer away with none either: off every
+# row first, or the move back to the favicon changes no hover and draws no line (#2831).
+send move $sidebar_point
+drawn_hover() {
+  grep '^browser: hover \(tab\|new\|none\) ' "$log" | tail -1
+}
+for _ in $(seq 100); do
+  drawn_hover | grep -q '^browser: hover none ' && break
+  sleep 0.1
+done
+drawn_hover | grep -q '^browser: hover none ' ||
+  fail "the pointer off every row left a row hovered: $(drawn_hover)"
 # Unloaded, its row has the remove button in its −'s place.
 send move $(pinned_favicon 0)
 expect "^browser: hover tab $c close remove favicon $c\$" \

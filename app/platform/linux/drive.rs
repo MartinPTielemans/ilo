@@ -40,15 +40,17 @@
 //! drive.mm's scripted input method does, in the UI's fields alone, as a page's input method is
 //! Chromium's, and it can't compose in a page. dragover and dragdrop are XDND's source, as
 //! another app's drag is, to the browser window's top-level window or its proxy, and wait for its
-//! answer; under Wayland, the data device's, from a client of the driver's own (drive_drags.rs). swipe is Wayland's alone, as X11 sends no touchpad's phases. The others, such as
-//! displays, the driver can't do yet, and says so as drive.mm does. pip, which drive.mm doesn't
+//! answer; under Wayland, the data device's, from a client of the driver's own (drive_drags.rs). swipe is Wayland's alone, as X11 sends no touchpad's phases. display add and remove
+//! are Wayland's alone too: an output of sway's headless backend, beside the others, as the
+//! session's (drive_wayland.rs). The others the driver can't do yet, and says so as drive.mm does. pip, which drive.mm doesn't
 //! have yet, finds a video's Picture in Picture window, the Mini Player, or a page's, as a call
 //! floats in, and logs "browser: pip at <x> <y> <width> <height>" as it is and each time it moves
 //! or resizes, then "browser: pip gone", or "browser: pip none" without one. pip doubleclick, pip
 //! wheel, and pip press, dragto and release work in it, at points from its top-left corner as the
 //! command finds it, or as it was at the press. pip press, dragto and release alone move the
 //! display's pointer, through XTest, onto the window only, and the release puts it back once the
-//! window manager has let go, logging where the drag left the window.
+//! window manager has let go, logging where the drag left the window. Under Wayland pip is
+//! drive_wayland.rs's, from sway's tree, with its virtual pointer and in sway's layout.
 //!
 //! It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, "browser: drive
 //! <n>: can't do that" for one it can't, and "browser: drive <n> done, key <window>, focus <view>,
@@ -355,6 +357,13 @@ thread_local! {
     /// The window a press went to, which gets the drag's events until the release, as the X
     /// server's grab of the pointer does.
     static PRESSED: Cell<Option<Target>> = const { Cell::new(None) };
+    /// That the app asked the window manager to move a browser window, as a drag on the window's
+    /// background does as the app handles its move (`window_move_asked`).
+    static MOVE_ASKED: Cell<bool> = const { Cell::new(false) };
+    /// The window manager's grab of the pointer for that move, as the browser window hears it.
+    static WM_GRAB: Cell<WmGrab> = const { Cell::new(WmGrab::None) };
+    /// What runs once the main loop has read the events the driver sent (`handled`).
+    static HANDLED: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
     /// The Mini Player's press through XTest, till its release (hold_mini_player).
     static PIP_HELD: Cell<Option<HeldPip>> = const { Cell::new(None) };
     /// The window the pointer is in, which hears it leave.
@@ -431,9 +440,126 @@ fn sync() {
             Event::SelectionRequest(request) => serve_drag(&request),
             Event::SelectionNotify(notify) => pasted(&notify),
             Event::ClientMessage(message) if message.format == 32 => drag_answered(&message),
+            Event::EnterNotify(crossing) => WM_GRAB.set(wm_grab_after(
+                WM_GRAB.get(),
+                false,
+                crossing.mode,
+                crossing.detail,
+            )),
+            Event::LeaveNotify(crossing) => WM_GRAB.set(wm_grab_after(
+                WM_GRAB.get(),
+                true,
+                crossing.mode,
+                crossing.detail,
+            )),
             _ => {}
         }
     }
+}
+
+/// The window manager's grab of the pointer for a window move, as the browser window the pointer
+/// is in hears it: the pointer leaves it as the window manager takes it, and comes back as it ends.
+#[derive(Clone, Copy, PartialEq)]
+enum WmGrab {
+    None,
+    Taken,
+    GivenBack,
+}
+
+/// The grab after the browser window hears the pointer `leave` it, or enter, in `mode`, as
+/// `detail` says. Openbox grabs the pointer, which leaves the window in Grab mode, and comes back
+/// in Ungrab mode. KWin first maps a window of its own over the screen and grabs the pointer
+/// there, so it leaves as a plain move would, and comes back as KWin takes that window away. A
+/// crossing into or out of the window's own children changes nothing, nor does an earlier grab's
+/// end.
+fn wm_grab_after(
+    now: WmGrab,
+    leave: bool,
+    mode: xproto::NotifyMode,
+    detail: xproto::NotifyDetail,
+) -> WmGrab {
+    if detail == xproto::NotifyDetail::INFERIOR {
+        return now;
+    }
+    match now {
+        WmGrab::None if leave && mode != xproto::NotifyMode::UNGRAB => WmGrab::Taken,
+        WmGrab::None if mode == xproto::NotifyMode::GRAB => WmGrab::Taken,
+        WmGrab::Taken if !leave || mode == xproto::NotifyMode::UNGRAB => WmGrab::GivenBack,
+        _ => now,
+    }
+}
+
+/// The app has asked the window manager to move a browser window, which takes the pointer for it.
+pub(crate) fn window_move_asked() {
+    MOVE_ASKED.set(true);
+}
+
+/// Has the driver hear the pointer cross into and out of browser window `window`, as the window
+/// manager's grab makes it (`WmGrab`). Each client selects events for itself, so Chromium's are
+/// as they were.
+fn watch_crossings(window: xproto::Window) -> Option<()> {
+    let x = server()?;
+    let (connection, _) = &*x;
+    let events = EventMask::ENTER_WINDOW | EventMask::LEAVE_WINDOW;
+    let aux = ChangeWindowAttributesAux::new().event_mask(events);
+    connection.change_window_attributes(window, &aux).ok()?;
+    connection.flush().ok()
+}
+
+/// Runs `then` once the main loop has read the events the driver sent and the windows have drawn
+/// what they changed, as `settle` waits before it reports a command done.
+fn handled(then: Box<dyn FnOnce()>) {
+    sync();
+    gpui_linux::sync_display();
+    HANDLED.set(Some(then));
+    idle(Box::new(|| {
+        sync();
+        gpui_linux::sync_display();
+        if let Some(then) = HANDLED.take() {
+            drawn(then);
+        }
+    }));
+}
+
+/// Lets go of a drag's press at `to` once the app has handled its move, as no hand can sooner.
+/// When the app asked the window manager to move the window, the release also waits for the
+/// window manager to take the pointer, as a hand's comes during the move: before then, the move
+/// would outlive the drag and take the next press. The drag is then done once the window manager
+/// has given the pointer back.
+fn release_after_move(to: Target, done: Box<dyn FnOnce()>) {
+    handled(Box::new(move || {
+        let asked = MOVE_ASKED.take();
+        let until = Instant::now() + Duration::from_secs(5);
+        let release = move || {
+            if button(to, 1, false, button_mask(1)).is_none() {
+                log!("browser: drive couldn't let go of the drag");
+            }
+            let until = Instant::now() + Duration::from_secs(5);
+            await_wm_grab(asked, WmGrab::GivenBack, until, done);
+        };
+        await_wm_grab(asked, WmGrab::Taken, until, Box::new(release));
+    }));
+}
+
+/// Runs `then` once the window manager's grab for the window move the app `asked` for is `want`,
+/// at once if it asked for none. After `until` it says what it waited for, and runs it anyway.
+fn await_wm_grab(asked: bool, want: WmGrab, until: Instant, then: Box<dyn FnOnce()>) {
+    sync();
+    if !asked || WM_GRAB.get() == want {
+        return then();
+    }
+    if Instant::now() >= until {
+        let what = match want {
+            WmGrab::GivenBack => "give the pointer back after the drag let go",
+            _ => "take the pointer for the window move the app asked for",
+        };
+        log!("browser: drive waited 5 s for the window manager to {what}");
+        return then();
+    }
+    after(
+        10,
+        Box::new(move || await_wm_grab(asked, want, until, then)),
+    );
 }
 
 /// A browser window, as the X server has it.
@@ -774,6 +900,9 @@ fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
         xtest_modifiers(state & MODIFIERS)?;
     }
     hover(at)?;
+    if press {
+        uncover(at);
+    }
     let kind = match press {
         true => xproto::BUTTON_PRESS_EVENT,
         false => xproto::BUTTON_RELEASE_EVENT,
@@ -783,6 +912,56 @@ fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
         true => Some(()),
         false => xtest_modifiers(0),
     }
+}
+
+/// Before a press at `at`, with the pointer there: waits until no window of the screen's that's
+/// input-only, which a hand can't see and so never means to click, is over the point. KWin keeps
+/// one over each screen corner that has an action, and takes it away as the pointer comes into it
+/// (its X11 WindowBasedEdge's approach window), so a hand's press reaches the window under it; the
+/// driver's, sent with the move, reached KWin's first (#2765). For 2 s at most, then it goes.
+fn uncover(at: Target) {
+    let Some(x) = server() else { return };
+    let (connection, root) = &*x;
+    let covering = || {
+        let child = connection.query_pointer(*root).ok()?.reply().ok()?.child;
+        if child == x11rb::NONE || within(connection, at.window, child) {
+            return None;
+        }
+        let attributes = connection.get_window_attributes(child).ok()?.reply().ok()?;
+        (attributes.class == xproto::WindowClass::INPUT_ONLY).then_some(child)
+    };
+    let until = Instant::now() + Duration::from_secs(2);
+    let started = Instant::now();
+    let pause = || std::thread::sleep(Duration::from_millis(2));
+    match await_uncovered(until, covering, pause) {
+        Ok(0) => {}
+        Ok(_) => log!(
+            "browser: drive waited {} ms for an input-only window over the point to go",
+            started.elapsed().as_millis()
+        ),
+        Err(window) => log!(
+            "browser: drive pressed under {window:#x}, an input-only window still over the point after 2 s"
+        ),
+    }
+}
+
+/// Asks `covering` which window covers the point until it's none, with `pause` between, as the
+/// window's client takes it away once it hears the pointer come; until `until`, when it answers the
+/// window still there. How many times it was covered, otherwise.
+fn await_uncovered(
+    until: Instant,
+    mut covering: impl FnMut() -> Option<xproto::Window>,
+    mut pause: impl FnMut(),
+) -> Result<usize, xproto::Window> {
+    let mut times = 0;
+    while let Some(window) = covering() {
+        if Instant::now() >= until {
+            return Err(window);
+        }
+        times += 1;
+        pause();
+    }
+    Ok(times)
 }
 
 /// Moves the pointer to `at` through XTEST, which holds the buttons itself. While one is held, the
@@ -878,14 +1057,19 @@ fn output_names(connection: &RustConnection, root: xproto::Window) -> Option<Vec
 }
 
 /// One XTEST event at the root's `x`, `y`, waited on until the server has handled it, on a
-/// display `xtest` allows.
+/// display `xtest` allows. A button's press says so in the log, as Windows' driver does for its
+/// real input: a check waits on what only a held real button gives, such as `little`'s plate.
 fn xtest_event(kind: u8, detail: u8, x: i16, y: i16) -> Option<()> {
     xtest()?;
     let server = server()?;
     let (connection, root) = &*server;
     let delay = xtest_delay(kind);
     (connection.xtest_fake_input(kind, detail, delay, *root, x, y, 0)).ok()?;
-    connection.get_input_focus().ok()?.reply().ok().map(drop)
+    connection.get_input_focus().ok()?.reply().ok()?;
+    if kind == xproto::BUTTON_PRESS_EVENT && (1..=3).contains(&detail) {
+        log!("browser: drive: real press at {x},{y}");
+    }
+    Some(())
 }
 
 /// The milliseconds the server waits before an XTEST event of `kind`, XTEST's time being a delay.
@@ -2451,6 +2635,7 @@ fn run_command(line: &str) -> Option<()> {
             let (x, y) = point(&mut words)?;
             let at = target_at(x, y)?;
             hover(at)?;
+            uncover(at);
             xtest_event(xproto::BUTTON_PRESS_EVENT, 1, at.root_x, at.root_y)?;
             xtest_event(xproto::BUTTON_RELEASE_EVENT, 1, at.root_x, at.root_y)
         }
@@ -2509,10 +2694,14 @@ fn run_command(line: &str) -> Option<()> {
                 ..target_in(driven()?.window, x2, y2)?
             };
             let to = relative_to(to, at.window)?;
+            watch_crossings(driven()?.window)?;
+            MOVE_ASKED.set(false);
+            WM_GRAB.set(WmGrab::None);
             first_press(at, 1, false);
             button(at, 1, true, none)?;
             motion(to, button_mask(1))?;
-            button(to, 1, false, button_mask(1))
+            go_on(Box::new(move |done| release_after_move(to, done)));
+            Some(())
         }
         "press" | "dragto" | "release" | "rightpress" | "rightdragto" | "rightrelease" => {
             let (x, y) = point(&mut words)?;
@@ -3302,7 +3491,54 @@ fn relative_to(to: Target, window: xproto::Window) -> Option<Target> {
 
 #[cfg(test)]
 mod tests {
-    use super::{xproto, xtest_delay, xtest_verdict};
+    use super::{WmGrab, await_uncovered, wm_grab_after, xproto, xtest_delay, xtest_verdict};
+    use std::time::{Duration, Instant};
+
+    // KWin's input-only window over the screen's corner took the press the driver sent with the
+    // move there, before KWin heard the pointer come and took the window away (#2765).
+    #[test]
+    fn a_press_waits_for_an_input_only_window_over_the_point_to_go() {
+        let later = Instant::now() + Duration::from_secs(60);
+        let mut pauses = 0;
+        let mut answers = [Some(0x20001b), Some(0x20001b), None].into_iter();
+        let waited = await_uncovered(later, || answers.next().flatten(), || pauses += 1);
+        assert_eq!(waited, Ok(2));
+        assert_eq!(pauses, 2);
+        // Nothing over the point: the press goes at once.
+        let mut pauses = 0;
+        assert_eq!(await_uncovered(later, || None, || pauses += 1), Ok(0));
+        assert_eq!(pauses, 0);
+        // One that stays past the deadline is named, and the press goes anyway.
+        let past = Instant::now();
+        assert_eq!(
+            await_uncovered(past, || Some(0x20001b), || {}),
+            Err(0x20001b)
+        );
+    }
+
+    // The driver let go of a drag before the window manager took the pointer for the window move
+    // the drag started, and the move outlived it and took the next press (#2721).
+    #[test]
+    fn a_window_move_waits_for_the_window_managers_grab_and_its_end() {
+        use xproto::{NotifyDetail as Detail, NotifyMode as Mode};
+        let (leave, enter) = (true, false);
+        let after = |now, leave, mode, detail| wm_grab_after(now, leave, mode, detail);
+        // Openbox: the grab takes the pointer out of the window, and its end brings it back.
+        let taken = after(WmGrab::None, leave, Mode::GRAB, Detail::VIRTUAL);
+        assert!(taken == WmGrab::Taken);
+        assert!(after(taken, enter, Mode::UNGRAB, Detail::VIRTUAL) == WmGrab::GivenBack);
+        // KWin: the window it maps over the screen takes the pointer, and goes at the move's end.
+        let taken = after(WmGrab::None, leave, Mode::NORMAL, Detail::NONLINEAR);
+        assert!(taken == WmGrab::Taken);
+        assert!(after(taken, leave, Mode::GRAB, Detail::NONLINEAR) == WmGrab::Taken);
+        assert!(after(taken, enter, Mode::NORMAL, Detail::NONLINEAR) == WmGrab::GivenBack);
+        // The pointer going into or out of the window's own children is no grab.
+        assert!(after(WmGrab::None, leave, Mode::NORMAL, Detail::INFERIOR) == WmGrab::None);
+        assert!(after(WmGrab::Taken, enter, Mode::NORMAL, Detail::INFERIOR) == WmGrab::Taken);
+        // An earlier grab's end, before the move's, gives nothing back and takes nothing.
+        assert!(after(WmGrab::None, enter, Mode::UNGRAB, Detail::VIRTUAL) == WmGrab::None);
+        assert!(after(WmGrab::None, leave, Mode::UNGRAB, Detail::VIRTUAL) == WmGrab::None);
+    }
 
     fn outputs(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| name.to_string()).collect()
