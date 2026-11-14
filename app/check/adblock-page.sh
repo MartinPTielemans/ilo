@@ -13,10 +13,15 @@ if ! engine_has ../core/native_ad_block.cc ../core/ad_block.cc; then
 fi
 serve
 printf '%s' '<title>the blocked page</title>' > "$out/site/blocked.html"
-# A page that's all a link to a pop-up, which a click anywhere on it opens in a new tab.
+# A page that's all a link to a pop-up, which a click anywhere on it opens in a new tab. Its title
+# says when it has drawn, as Blink drops a press before a page's first frame, and when it has the
+# press.
 printf '%s' '<title>the opener</title>
-<a href="popup.html" target="_blank" style="position:fixed;inset:0">a pop-up</a>' \
-  > "$out/site/opener.html"
+<a id=link href="popup.html" target="_blank" style="position:fixed;inset:0">a pop-up</a>
+<script>
+link.onmousedown = () => document.title = "the opener pressed";
+requestAnimationFrame(() => requestAnimationFrame(() => document.title = "the opener ready"));
+</script>' > "$out/site/opener.html"
 printf '%s' '<title>the pop-up</title>' > "$out/site/popup.html"
 # localhost, where the check's server is too, as a list writes a host: a line of its own.
 blocked="http://localhost:$port/blocked.html"
@@ -55,8 +60,13 @@ served '/blocked\.html' "Open anyway didn't ask the server for the page"
 
 # A pop-up a filter names: its tab closes before the page reaches the server.
 go_from_bar "${site#http://}opener.html"
-expect "^browser: title $tab the opener\$" "the opener page didn't load"
-send click $page_point
+expect "^browser: title $tab the opener ready\$" "the opener page didn't draw"
+# The link opens its tab on the release, which the browser allows as a pop-up only with the
+# activation the page sends it on the press, on another pipe (#2510). So the release waits for the
+# page to have the press, as a hand's comes some 100 ms after it.
+send press $page_point
+expect "^browser: title $tab the opener pressed\$" "the opener page didn't take the press on its link"
+send release $page_point
 expect "^browser: ad block closed a pop-up at ${site}popup.html\$" \
   "the pop-up filter didn't close the tab the link opened"
 # Its tab may close before the app lists it, so this reads the Today the app shows last.

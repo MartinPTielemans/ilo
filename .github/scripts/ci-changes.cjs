@@ -7,6 +7,17 @@ const fs = require("node:fs");
 // Each job ci.yml can run, and the paths it covers. app_linux and engine_windows are ready for
 // app-linux.yml and engine-windows.yml; ci.yml's comment says how to hook them in.
 const JOBS = {
+  // What only Windows compiles of the UI: its host, the browser's DLL, GPUI's Windows patch, and the
+  // build script and manifest that name the host's files, its libraries and Cargo's Windows target.
+  // app-windows.yml runs for the rest of app/ once a pull request is labelled queue:ready.
+  app_windows: [
+    /^app\/platform\/windows\//,
+    /^app\/windows\//,
+    /^app\/patches\/gpui-windows-embedded\.patch$/,
+    /^app\/build\.rs$/,
+    /^app\/Cargo\.toml$/,
+    /^\.github\/workflows\/app-windows\.yml$/,
+  ],
   core_linux: [/^core\//, /^engine\//, /^\.github\/workflows\/core-linux\.yml$/],
   app_linux: [/^app\//, /^core\/public\//, /^\.github\/workflows\/app-linux\.yml$/],
   // The app's Rust, its patches and the core's header bindgen reads, but not check.sh's runs, which

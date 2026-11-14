@@ -58,23 +58,24 @@ env:
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
     webrtc tab-drag count ranking everyday hosts policies translate pictures boosts rules
-    switch-frames foot-bar later-launch
+    switch-frames foot-bar later-launch peek-motion
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
-    favorites cards extensions adblock adblock-lists adblock-cosmetic private little capture
+    favorites cards extensions adblock adblock-lists adblock-cosmetic adblock-page private little capture
     passwords preview access dialogs crash import quit onboarding passkeys appearance about
     sync sync-account sync-devices
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
     blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
     window windows
-    media pictures boosts links notifications switch-frames foot-bar peek-motion
+    media pictures boosts links notifications switch-frames foot-bar peek-motion rules later-launch
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |
     keychain: it checks the Mac's Keychain across a change of signing identity, in a check VM
     scripting: AppleScript is the Mac's alone
     filled: it hides the Dock and the menu bar, so it runs only in a Mac check VM
+    sidebar-right: it checks AppKit's window buttons, the Mac's alone
 
 jobs:
   # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
@@ -300,6 +301,10 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # The runner has no sound card, so a page's audio would fail to open ALSA's default, which
+          # ALSA reports on the shared standard error in pieces, and a browser: line written between
+          # them is lost to a check's wait (#2734). Its null device opens and plays to nothing.
+          printf 'pcm.!default { type null }\n' > ~/.asoundrc
           rustup update stable --no-self-update
           mkdir -p "$RUNNER_TEMP/bin"
           # ImageMagick 6 has a tool for each of 7's magick subcommands, such as headless.sh's
