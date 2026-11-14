@@ -18,6 +18,7 @@ use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use web_time::Instant;
 
+pub mod choice;
 mod scriptlets;
 
 /// What the engine blocks with, as the core gives it (bc_host's ad_block_use).
