@@ -219,6 +219,16 @@ log_opened() {
     case "$shown" in *"$part"*) ;; *) fail "the opened row didn't have \"$part\": $shown" ;; esac
   done
   gives_none "$shown" "the opened row in Settings › Agents"
+  # Its lines run on under the card's foot from a row in the card's lower half: the wheel brings
+  # the row to the card's top, so the capture shows them.
+  at=$(drawn "pointed $pointed")
+  sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
+  if [ -n "$sight" ] && [ "${at#* }" -gt $(((${sight%% to *} + ${sight##* to }) / 2)) ]; then
+    send scrollkey "${at% *}" $(((${sight%% to *} + ${sight##* to }) / 2)) \
+      $((${at#* } - ${sight%% to *} - 8)) 1
+    drawn_after "pointed $pointed" "^browser: drive $step: " > /dev/null ||
+      fail "the wheel over Settings › Agents didn't bring the opened row up"
+  fi
   ../tools/window-screenshot.sh "$pid" "$out/point-log-open$2.png" || fail "no window to capture"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
