@@ -2166,6 +2166,8 @@ if [ "$driven" = 1 ]; then
       await_log "^browser: needs you $needing while active\$" "the need with ilo active wasn't held back"
       if [ "$(uname)" = Darwin ]; then
         await_more '^browser: dock badge 1$' "$badges" || fail "the Dock's badge didn't count the need"
+      else
+        echo "skip: the need with ilo in the background, and its count on a badge: here no other app's window takes the keyboard from ilo, or no notification server takes the notification, which X11's run has, and Linux has no badge every desktop reads."
       fi
       ;;
   esac
@@ -2254,11 +2256,12 @@ quit
 
 # A tab's id names it alone across launches (#1449): relaunched, a call with the user's tab's id
 # from before is refused as one from before ilo restarted, as the tab it comes back as has another.
-# The switch the run turned off goes back on.
+# The switch the run turned off goes back on. The launch waits 2 s for an answer and 3 s for a
+# handoff in place of the spec's 5 and 15 minutes, which the time limits' step below reaches.
 printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
-log="$out/mcp-relaunch.log"
+log="$out/mcp-waits.log"
 step=0
-BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+BROWSER_DRIVE=1 "$browser" --agent-waits=2,3 < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: restored in ' || fail "the relaunch didn't restore the Spaces"
@@ -2271,6 +2274,32 @@ mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 stale=$(call read_page "{\"tab\":$user_tab}")
 [ "$stale" = "error: ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now." ] ||
   fail "a call with a tab's id from before the relaunch answered: $stale"
+# The time limits (#2184): a change the user leaves unanswered is refused once its wait ends, and a
+# handoff not handed back answers the agent's call, the tab staying the user's.
+opened=$(call open_tab "{\"url\":\"localhost:$port/frames.html\"}")
+waits_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+[ -n "$waits_tab" ] || fail "open_tab answered: $opened"
+request request "{\"tab\":$waits_tab,\"requests\":[{\"method\":\"POST\",\"path\":\"/api/items\",\"body\":{\"title\":\"Late\"}}]}" >&4
+await_log '^browser: agent mcp-client asks [0-9]*: make a change on localhost$' "the change didn't ask first"
+q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+await_log "^browser: agent mcp-client asked $q with no answer\$" \
+  "a change left unanswered wasn't refused once its 2 s wait ended"
+refused=$(next_answer) || fail "the browser didn't answer the change left unanswered"
+refused=$(printf '%s\n' "$refused" | answered "the change left unanswered")
+case "$refused" in
+  "error: The user didn't answer in 5 minutes"*) ;;
+  *) fail "the change left unanswered answered: $refused" ;;
+esac
+grep -q '"title":"Late"' "$out/site.log" && fail "the change left unanswered went to the site"
+request hand_off "{\"tab\":$waits_tab,\"reason\":\"Sign in later\"}" >&4
+await_log "^browser: agent mcp-client hands off $waits_tab: Sign in later\$" \
+  "hand_off didn't hand the tab to the user"
+handed=$(next_answer) || fail "the browser didn't answer the handoff once its 3 s wait ended"
+handed=$(printf '%s\n' "$handed" | answered hand_off)
+case "$handed" in
+  "error: The user hasn't handed tab $waits_tab back in 15 minutes."*) ;;
+  *) fail "the handoff not handed back answered: $handed" ;;
+esac
 exec 4>&- 5<&-
 quit
 forget_login

@@ -351,7 +351,17 @@ send key 2 cmd
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" \
   "⌘2 didn't show the split with its pane focused last"
 expect "^browser: panes $a $b\$" "⌘2 didn't show both panes"
-send click 205 $(row 1 | cut -d' ' -f2)
+if windows || { [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; }; then
+  # The driver's pointer is real on Windows (#2544) and X11's XTEST (#2721), heard before the press
+  # as a hand's is, so a frame draws the row's ✕ under it first and the right favicon sits left of
+  # the ✕'s room, as a hand finds it.
+  send move 205 $(row 1 | cut -d' ' -f2)
+  expect '^browser: hover tab [0-9]* close 1 ' \
+    "resting on the split's row at 205 didn't show its ✕ (wanted a \"hover tab … close 1\" line): $(grep '^browser: hover ' "$log" | tail -3 | tr '\n' ';')"
+  send click 170 $(row 1 | cut -d' ' -f2)
+else
+  send click 205 $(row 1 | cut -d' ' -f2)
+fi
 expect "^browser: selected $b\( in .*\)\{0,1\}\$" \
   "a click on the split's right segment didn't focus it"
 read_keyboard
@@ -638,7 +648,9 @@ drawn_smaller() {
 # which has no compositor: the capture is the targets' window alone, black where it's clear.
 if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; then
   echo "skip: the pages drawn smaller, in pixels: under Xvfb the capture is the targets' window alone"
-elif ! windows && [ "$still" != on ]; then
+elif windows; then
+  echo "skip: the pages drawn smaller, in pixels: on Windows each page is a window of its own and keeps its size."
+elif [ "$still" != on ]; then
   # The app logs the scale as it tells the core, and the page draws at it a frame or more later,
   # so a capture taken at once can still show it at its size, as on Wayland in #2493's runs.
   for _ in $(seq 20); do
@@ -754,8 +766,20 @@ expect '^browser: command redo via \(ui\|page\)$' "⇧⌘Z didn't redo the split
 expect "^browser: splits $onto+$dragged\$" "⇧⌘Z didn't join the tab again: \"$(splits)\""
 # ⌥-click on the split row's ✕ takes its tabs out of the split and closes neither, as Arc's does,
 # and ⌘Z joins them again.
-close="202 $(row "$(row_of "$onto")" | cut -d' ' -f2)"
+# The ✕ shows only under the pointer, and a ⇧⌘Z the page handed back hides the row under it until
+# the pointer moves, so the click waits for the row's hover line. The pointer rests on another row
+# first, so the move onto the ✕ draws a new one whether the ✕ showed before it or not (#2846).
+onto_row=$(row_of "$onto")
+other_row=$((onto_row == 0 ? 1 : 0))
+other=
+for id in $(today); do
+  [ "$(row_of "$id")" = "$other_row" ] && other=$id && break
+done
+send move $(row "$other_row")
+expect "^browser: hover tab $other " "the pointer on row $other_row didn't hover tab $other"
+close="202 $(row "$onto_row" | cut -d' ' -f2)"
 send move $close
+expect "^browser: hover tab $onto close 1 " "the split's row under the pointer didn't draw its ✕"
 send click $close alt
 expect '^browser: command separate-split via sidebar$' "⌥-click on the split's ✕ didn't reach it"
 expect '^browser: splits $' "⌥-click on the split row's ✕ didn't separate it: \"$(splits)\""

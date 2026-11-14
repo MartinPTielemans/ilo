@@ -470,6 +470,19 @@ if [ "$active" != 1 ]; then
   echo "skip: the restored pinned tab's way back. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
+# The window opened under the pointer the quit left on the favicon, so it drew that hover with no
+# move, and the driver's real click in the page jumped the pointer away with none either: off every
+# row first, or the move back to the favicon changes no hover and draws no line (#2831).
+send move $sidebar_point
+drawn_hover() {
+  grep '^browser: hover \(tab\|new\|none\) ' "$log" | tail -1
+}
+for _ in $(seq 100); do
+  drawn_hover | grep -q '^browser: hover none ' && break
+  sleep 0.1
+done
+drawn_hover | grep -q '^browser: hover none ' ||
+  fail "the pointer off every row left a row hovered: $(drawn_hover)"
 # Unloaded, its row has the remove button in its −'s place.
 send move $(pinned_favicon 0)
 expect "^browser: hover tab $c close remove favicon $c\$" \
@@ -715,6 +728,17 @@ expect "^browser: selected $c in " "the tab chosen in the folder's preview didn'
 recorded
 # The folder staying closed logs no new outline, so the last one is the folder's state.
 [ "$(outline)" = "$f-[$c]" ] || fail "showing a tab from the preview opened the folder: $(outline)"
+# A click on its row chooses that tab as ↩ does. The pointer leaves the row and rests on it again.
+send move $page_point
+send move $(pinned_row 0)
+expect "^browser: folder preview shown $f at " "resting on the closed folder again didn't preview it"
+read -r px py pw _ << EOF
+$(grep "^browser: folder preview shown $f at " "$log" | tail -1 | cut -d' ' -f7-)
+EOF
+# The first row's middle: under the search (48), its line (1) and the padding (4), half its fill.
+send click $((px + pw / 2)) $((py + 75))
+expect "^browser: folder preview chose $c\$" "a click on the folder preview's row didn't choose its tab"
+expect '^browser: folder preview hidden$' "a click on the folder preview's row left it up"
 send move $page_point
 switch "9 cmd" "$a"
 quit_by_key
