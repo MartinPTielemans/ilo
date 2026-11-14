@@ -856,9 +856,9 @@ fi
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
-# tab and lands it, as pip_driven says. Under Wayland sway places it and keeps it where it is as it
-# grows, and from where the pointer is past the drag's threshold moves it.
-if pip_driven; then
+# tab and lands it, as pip_driven says, and on Windows. Under Wayland sway places it and keeps it
+# where it is as it grows, and from where the pointer is past the drag's threshold moves it.
+if pip_driven || windows; then
   px=0 py=0 pw=0 ph=0
   send pip
   if wayland; then
@@ -879,15 +879,22 @@ if pip_driven; then
   # The window manager moves it with the pointer, as by a title bar, from when the core asks it,
   # past the drag's threshold, and tells it where it is at the release. The core's lines carry
   # Chromium's prefix.
-  send pip press $((pw / 8)) $((ph / 2))
-  expect 'browser: mini player pressed at ' "a press off its controls didn't reach the Mini Player"
-  send pip dragto $((pw / 8 - 10)) $((ph / 2))
-  expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
-  send pip dragto $((pw / 8 - 200)) $((ph / 2))
-  send pip release $((pw / 8 - 200)) $((ph / 2))
-  moved="x == px - 200" grown="(2 * x + w - 2 * px - pw) ^ 2 <= 16 && (2 * y + h - 2 * py - ph) ^ 2 <= 16"
-  ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
-  mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
+  grown="(2 * x + w - 2 * px - pw) ^ 2 <= 16 && (2 * y + h - 2 * py - ph) ^ 2 <= 16"
+  if windows; then
+    # Chromium's move loop moves it there with the desktop's pointer, which the driver never moves.
+    echo "skip: moving the Mini Player with a drag on Windows: the driver can't move the pointer" \
+      "Windows moves it with."
+  else
+    send pip press $((pw / 8)) $((ph / 2))
+    expect 'browser: mini player pressed at ' "a press off its controls didn't reach the Mini Player"
+    send pip dragto $((pw / 8 - 10)) $((ph / 2))
+    expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
+    send pip dragto $((pw / 8 - 200)) $((ph / 2))
+    send pip release $((pw / 8 - 200)) $((ph / 2))
+    moved="x == px - 200"
+    ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
+    mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
+  fi
   send pip wheel $((pw / 2)) $((ph / 3)) -2 cmd
   mini_player_at "w > pw * 1.15 && h > ph * 1.15 && $grown" \
     "Ctrl with a scroll didn't grow the Mini Player in place"
@@ -940,7 +947,7 @@ placed_where_left ||
   fail "the second Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 none_since 'browser: mini player back in its tab$' ||
   fail "the Mini Player went back to its tab as the menu that floated it closed"
-if pip_driven && ! wayland; then
+if { pip_driven || windows; } && ! wayland; then
   send pip
   mini_player_at "$across && $down" "the second Mini Player didn't show where the last was left"
 fi
