@@ -185,6 +185,13 @@ if [ -n "$p2790on" ]; then
   peek=$(new_windows "$out/probe2790-p0.json" "$out/probe2790-p1.json" "$pb" | head -1)
   note peek "{\"id\": \"$peek\", \"browser\": \"$pb\"}"
   [ -z "$peek" ] || battery "$pb" "$peek" peek
+  # Probe: after the other app was active and ilo again, does Peek's page still have the keys?
+  if [ -n "$peek" ]; then
+    send key return cmd
+    sleep 1
+    note peek "keys-after-switch {\"kept\": $(grep -c '^browser: link preview keeping' "$log"), \"background\": $(grep -c 'opened by .* in the background' "$log")}"
+    fail "probe2790: stopped after the keys test"
+  fi
 fi
 # On Windows the card holds Peek's page where the core shows it: the frame the UI draws it in, at its
 # window's scale, and the page's in the browser window, in pixels, each edge within 3 of the other's,
