@@ -162,8 +162,7 @@ impl EngineRow {
             (true, Engine::Native) => concat!(
                 "The extension ",
                 env!("APP_NAME"),
-                " blocked with before. It blocks again with these lists and My filters, ones you \
-                 added since included."
+                " used before, with these lists and My filters, new ones too."
             ),
             (true, Engine::UBlockOrigin) => concat!(
                 "Turned off, ",
