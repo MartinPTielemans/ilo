@@ -6,11 +6,16 @@
 # pages for a while after. A pop-up filter closes the tab a page's link opens, before its page
 # reaches the server, as uBlock Origin does. A filter on a response's header (#2758) fails a script
 # whose response has it before the page runs any of it, and a redirect's response too, whose target
-# is never asked for.
+# is never asked for. My filters uBlock Origin kept, as typed in its own dashboard before Settings
+# had them, carry over once: a profile uBlock Origin kept a filter in, launched again with the
+# browser's own and no filters given, blocks what it names, and keeps it as its My filters, while
+# uBlock Origin's storage stays for the way back.
 
-# An engine from before the page warning lets the page through.
+# An engine from before the page warning lets the page through, and one from before the carry-over
+# leaves My filters behind.
 if ! engine_has ../core/native_ad_block.cc ../core/ad_block.cc; then
-  echo "skip: adblock-page. This engine is from before the native ad blocker's page warning."
+  echo "skip: adblock-page. This engine is from before the native ad blocker's page warning or" \
+    "its carry-over of My filters."
   exit 0
 fi
 serve
@@ -89,8 +94,57 @@ grep -q '/headed?n=c' "$out/site.log" &&
   fail "the redirect whose response has the header went on to c"
 
 quit
+
+# My filters carried over from uBlock Origin. The page asks for its script every 100 ms, as the
+# filter applies a moment after the launch's page starts, once the settings are read.
+printf '%s' 'self.carried = true;' > "$out/site/carried-ad.js"
+printf '%s' '<title>loading</title>
+<script>
+let n = 0;
+setInterval(() => fetch("carried-ad.js?" + n++).then(
+  () => document.title = "carried script loaded",
+  () => document.title = "carried script blocked"), 100);
+</script>' > "$out/site/carried.html"
+carried="${site}carried.html"
+carry_dir="$PWD/$out/adblock-page/carry"
+rm -rf "$carry_dir"
+mkdir -p "$carry_dir"
+# uBlock Origin keeps the filter it's given in its own storage, as one typed in its dashboard.
+for carry_engine in ublock native; do
+  log="$out/adblock-page-carry-$carry_engine.log"
+  step=0
+  if [ "$carry_engine" = ublock ]; then
+    carry_switch=--ad-block-filters=/carried-ad.js
+  else
+    carry_switch=--ad-block-engine=native
+  fi
+  BROWSER_DRIVE=1 BROWSER_URL="$carried" BROWSER_PROFILE_DIR="$carry_dir" \
+    "$browser" "$carry_switch" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await "^browser: loaded [0-9]* $carried\$" ||
+    fail "$carry_engine: the app didn't load the carried page"
+  tab=$(sed -n "s|^browser: loaded \([0-9]*\) $carried\$|\1|p" "$log" | head -1)
+  await "^browser: title $tab carried script blocked\$" ||
+    fail "$carry_engine: the carried filter didn't block the page's script, which last said:" \
+      "$(grep "^browser: title $tab " "$log" | tail -1)"
+  quit
+done
+python3 -I -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    filters = json.load(f).get("settings", {}).get("ad_block_filters")
+if filters != "/carried-ad.js":
+    sys.exit("My filters after the carry-over: %r" % (filters,))
+' "$carry_dir/Spaces.json" ||
+  fail "the carried filter isn't the profile's My filters in Spaces.json"
+[ -d "$carry_dir/Default/Local Extension Settings/oghkpboejbohceocapipmnjifoklonij" ] ||
+  fail "uBlock Origin's storage went with the carry-over, so the way back has no filters"
+
 echo "ok: a host a list names on a line of its own never reached the server: the tab showed the" \
   "warning, whose Open anyway, from the keyboard, opened the page. A pop-up filter closed the tab" \
   "a link opened before its page reached the server. A header filter failed a script and a" \
-  "redirect by their responses' header. Windows: $out/adblock-page.png," \
+  "redirect by their responses' header. A filter uBlock Origin kept in its own storage blocked" \
+  "with the browser's own engine on that profile's next launch, given no filters, and stayed as" \
+  "its My filters, with uBlock Origin's storage kept. Windows: $out/adblock-page.png," \
   "$out/adblock-page-opened.png"

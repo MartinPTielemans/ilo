@@ -32,6 +32,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
+#include "browser_core/ad_block_carry.h"
 #include "browser_core/ad_block_list_check.h"
 #include "browser_core/ad_block_off_sites.h"
 #include "browser_core/extensions.h"
@@ -74,6 +75,7 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/permissions/permissions_updater.h"
 #include "extensions/browser/unpacked_installer.h"
+#include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/url_pattern.h"
@@ -298,6 +300,46 @@ std::optional<std::string> UserFilters() {
   return base::JoinString(base::SplitString(command_line.GetSwitchValueASCII(kFiltersSwitch), "\n",
                                             base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY),
                           "\n");
+}
+
+// Makes My filters uBlock Origin kept the user's own, once, for the browser's own ad blocker, if
+// the user never set any in Settings: those of the profile the browser started in, as My filters
+// are the browser's and not a profile's. None count too, so it's done for good, but a storage that
+// couldn't be read leaves it for the next launch, as an empty My filters would empty uBlock
+// Origin's on the way back. uBlock Origin keeps its copy. On the UI thread, once the settings are
+// read.
+void CarryFiltersOver() {
+  static bool tried = false;
+  ProfileManager* manager = g_browser_process->profile_manager();
+  if (!NativeAdBlock() || UserFilters() || AdminFilters() || !manager || tried) {
+    return;
+  }
+  for (Profile* profile : manager->GetLoadedProfiles()) {
+    if (!profile->IsRegularProfile()) {
+      continue;
+    }
+    tried = true;
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&ad_block_carry::OldFilters,
+                       profile->GetPath()
+                           .Append(extensions::kLocalExtensionSettingsDirectoryName)
+                           .AppendASCII(kId)),
+        base::BindOnce([](std::optional<std::string> filters) {
+          // The user's own, or the account's, may have come while it read.
+          if (!filters || UserFilters() || AdminFilters()) {
+            return;
+          }
+          if (filters->empty()) {
+            // Done, with nothing for the ad blocker to compile again.
+            UserSettings().ad_block_filters = std::string();
+            SessionChanged();
+          } else {
+            SetAdBlockFilters(*filters);
+          }
+        }));
+    return;
+  }
 }
 
 // Its settings, as uBlock Origin reads them from managed storage (its managed_storage.json).
@@ -821,6 +863,7 @@ void ApplyAdBlocking() {
   Apply();
   const bool on = UserSettings().ad_blocking;
   if (NativeAdBlock()) {
+    CarryFiltersOver();
     SetNativeAdBlockOn(on);
     return;
   }
