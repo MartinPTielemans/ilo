@@ -1487,6 +1487,17 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
         }
         "press" => {
             let (at_x, at_y) = (pip.x + x, pip.y + y);
+            // tools/headless.sh floats every window, so sway raises the browser window over it as
+            // the core gives that the keyboard back, where on a desktop the browser window tiles
+            // and a floating one stays over it. sway raises the one it focuses, and the press
+            // gives it the keyboard anyway, as it does on X11.
+            if front_at(at_x, at_y) != Some(pip.id) {
+                sway_command(&format!("[con_id={}] focus", pip.id))?;
+                if front_at(at_x, at_y) != Some(pip.id) {
+                    log!("browser: pip press: another window is over the Mini Player there");
+                    return Some(());
+                }
+            }
             first_press(at_x, at_y, BTN_LEFT, false);
             motion(at_x, at_y)?;
             PIP_HELD.set(Some((x, y, [pip.x, pip.y, pip.width, pip.height])));
@@ -1529,6 +1540,19 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
         }
         _ => None,
     }
+}
+
+/// sway's window in front at (`x`, `y`) in its layout, as `others_at` finds it.
+fn front_at(x: f64, y: f64) -> Option<i64> {
+    let mut front: Vec<(Node, Option<u64>)> = every_window().into_iter().rev().collect();
+    front.sort_by_key(|(node, _)| !node.full_screen);
+    front
+        .into_iter()
+        .find(|(node, _)| {
+            (node.x..node.x + node.width).contains(&x)
+                && (node.y..node.y + node.height).contains(&y)
+        })
+        .map(|(node, _)| node.id)
 }
 
 /// Logs the Mini Player's frame each time window `con` moves or resizes, then "browser: pip gone"
