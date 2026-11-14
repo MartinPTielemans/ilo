@@ -1768,6 +1768,12 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener,
   if (!preview) {
     return nullptr;
   }
+  // The app shows it in its card until it draws, so it shows the window's page colour until then,
+  // as the panes do, not Chromium's white (#2742).
+  if (Tab* tab = Tab::FromWebContents(preview); tab && page_color_) {
+    tab->SetPageColor(
+        SkColorSetRGB(*page_color_ >> 16, *page_color_ >> 8 & 0xff, *page_color_ & 0xff));
+  }
   // Inserting a background tab sized it to the active tab's page.
   preview->Resize(gfx::Rect(size));
   NavigateParams load(browser, url, ui::PAGE_TRANSITION_LINK);
