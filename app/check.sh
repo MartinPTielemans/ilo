@@ -83,7 +83,7 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
           sleep 0.1
         done
       else
-        openbox --config-file check/openbox.xml --startup "touch $ready" &
+        openbox --config-file "$PWD/check/openbox.xml" --startup "touch $ready" &
         while [ ! -e "$ready" ]; do
           kill -0 $! 2> /dev/null || { echo "openbox exited" >&2; exit 1; }
           sleep 0.1
