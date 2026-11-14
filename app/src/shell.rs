@@ -4443,6 +4443,7 @@ impl Render for Shell {
             .is_some_and(|drag| drag.over_page.is_some())
             || self.link_over.is_some()
             || self.agent_pointer_shown()
+            || self.point_shown()
             || self.download_flying(cx);
         if drop_targets || self.drop_targets_shown {
             self.drop_targets_shown = drop_targets;
