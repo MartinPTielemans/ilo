@@ -39,12 +39,18 @@ jobs:
           fi
 
       # bindgen reads the core's header with libclang in build.rs, which runs on the runner. The
-      # wasm-bindgen that writes the JS has to be the version Cargo.lock builds against.
+      # list is UI on Linux's, whose .debs main keeps, so a release installs them without the mirror,
+      # which can stall or fail to resolve (#1969).
+      - name: Install Ubuntu packages
+        if: ${{ steps.check.outputs.built == 'true' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+
+      # The wasm-bindgen that writes the JS has to be the version Cargo.lock builds against.
       - name: Install tools
         if: ${{ steps.check.outputs.built == 'true' }}
         run: |
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq libclang-dev
           rustup update stable --no-self-update
           rustup target add wasm32-unknown-unknown
           version=$(awk '$0 == "name = \"wasm-bindgen\"" { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)

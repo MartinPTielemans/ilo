@@ -9,12 +9,8 @@
 //! that hides it, at most twice the card's size, and held here in memory alone, by tab, until the
 //! tab unloads or closes or the system is short of memory.
 
-use std::{
-    collections::HashMap,
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, FontWeight, Global, Hsla, Image, ImageSource,

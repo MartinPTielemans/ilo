@@ -10,6 +10,7 @@ Browsing's own verdict handlers stay cut.
 Adapted: the declaration in extension_service.h sits after Shutdown(), since our tree has no
 Helium ToggleUBlockExtension() to follow. In update_service.cc the check reads the update's state
 itself, since ungoogled-chromium's patch for Chromium 156 drops the flag that held it.
+The handler in extension_service.cc has two lines of context, which Chromium 156 and 157 share.
 
 --- a/chrome/browser/extensions/BUILD.gn
 +++ b/chrome/browser/extensions/BUILD.gn
@@ -53,8 +54,7 @@ itself, since ungoogled-chromium's patch for Chromium 156 drops the flag that he
        force_installed_tracker_(registry_, profile_),
        force_installed_metrics_(registry_, profile_, &force_installed_tracker_),
        corrupted_extension_reinstaller_(
-@@ -506,6 +510,17 @@
- }
+@@ -507,4 +511,15 @@
  #endif
  
 +void ExtensionService::PerformActionBasedOnOmahaAttributes(
@@ -70,7 +70,6 @@ itself, since ungoogled-chromium's patch for Chromium 156 drops the flag that he
 +
  void ExtensionService::PerformActionBasedOnExtensionTelemetryServiceVerdicts(
      const Blocklist::BlocklistStateMap& blocklist_state_map) {
-   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 --- a/chrome/browser/extensions/extension_service.h
 +++ b/chrome/browser/extensions/extension_service.h
 @@ -24,6 +24,7 @@

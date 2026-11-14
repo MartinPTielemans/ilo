@@ -1,3 +1,5 @@
+# check.sh runs this at 840, only when named.
+# It takes 16 minutes, Chrome's measures beside ilo's, so it runs only when named.
 # Measures the browser against #456's targets, the way Ardia's bench measured Ardia, Chrome, Arc
 # and Helium (docs/perf/vs-browsers.md in Ardia's repo, its numbers of 2026-10-19 the targets), and
 # says each row's median of its samples, with their range, beside its target. Those targets are an
@@ -10,6 +12,11 @@
 # own site, which puts in its title when it first painted ("<id> fcp <ms>") and, each time it's
 # shown, two frames after it became visible ("<id> shown <n> <ms>"), both in Unix ms.
 #
+# - A new profile's first launch, 3 times, to the page painted with BROWSER_URL and how long uBlock
+#   Origin held it, as it compiles the lists it ships. The last is the profile every launch after
+#   uses, as a user's.
+# - Where uBlock Origin holds a launch's page, 5 launches with no selfie of its filters, then one
+#   that stays until it writes the selfie, so the launches after are on it, as a user's.
 # - Launch to the page painted, 5 times, with BROWSER_URL, as a link from another app opens it.
 # - Launch to the restored page painted, 5 times, with no URL, its last tab put back.
 # - The first window on screen, as each of those 10 launches logged it: the launch window, on the
@@ -34,8 +41,10 @@
 #   trace-chrome-newtab.json, for where a new tab's time goes (#2383).
 #
 # Idle is measured in 10 s windows, six to the minute, and memory is summed over every process of
-# the browser, as check/usage.py says for each OS. On Linux and the Mac the shell's clock is a
-# process of its own, so each time from a key includes one process start, which the run says.
+# the browser, as check/usage.py says for each OS. Each browser's first launch waits for its CRLSet,
+# which it then keeps parsed in memory, and each memory sample says whether it was in (#2317). On
+# Linux and the Mac the shell's clock is a process of its own, so each time from a key includes one
+# process start, which the run says.
 
 serve
 # Windows turns the display off after the runner's idle minutes, which DevTools' input never resets
@@ -47,6 +56,12 @@ serve
 memory=on
 export BROWSER_MEMORY=$memory
 perf_dir="$out/perf"
+engine_switch=
+# perf-native sets engine=native for the browser's own ad blocker (#2111), which holds no page.
+if [ -n "${engine:-}" ] && [ "$engine" != ublock ]; then
+  perf_dir="$out/perf-$engine"
+  engine_switch=--ad-block-engine=$engine
+fi
 rm -rf "$perf_dir"
 mkdir -p "$perf_dir"
 profile_dir="$PWD/$perf_dir/profile"
@@ -138,6 +153,43 @@ perf_row() {
   echo "perf: $2: $3; target $4"
   printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$perf_dir/rows.tsv"
 }
+# The CRLSet, Google's list of revoked certificates, comes from the component updater a minute or
+# more after a profile's first launch, and from then on the browser keeps it parsed, about 27 MiB
+# for the set of 2026-11 (#2317). So each browser's warm launch, not measured, checks for updates
+# 10 s in rather than a minute and waits for its set, and each memory sample says whether the set
+# was in, as a slow download would otherwise make one browser's figure the smaller by its size.
+# Chromium logs nothing at the parse, but at VLOG 1 its component installer logs each component's
+# version and folder as it hands it over, at launch or once downloaded, and the CRLSet's policy
+# then reads and parses it at once.
+crlset_wait=300
+# The flags that have a browser log that to $1, with --component-updater=fast-update if $2 is fast.
+# Logging to a file still puts errors on stderr, as the checks read them there.
+crlset_flags() {
+  crlset_file=$1
+  ! windows || crlset_file="$(cygpath -w "$crlset_file")"
+  echo "${2:+--component-updater=fast-update }--enable-logging --vmodule=component_installer=1" \
+    "--log-file=$crlset_file"
+}
+# The version of the CRLSet that log $1 says was handed over, with its file in user data folder $2.
+crlset_in() {
+  [ -f "$1" ] || return 0
+  v=$(tr -d '\r' < "$1" |
+    sed -n 's|^.*Component ready, version \([0-9][0-9]*\) in .*CertificateRevocation[/\\]\1$|\1|p' | tail -1)
+  [ -z "$v" ] || [ ! -f "$2/CertificateRevocation/$v/crl-set" ] || echo "$v"
+}
+# Waits, until $crlset_wait s after $3 in Unix seconds, for the CRLSet of $4, which logs to $1 with
+# user data folder $2, checking $pid is still there.
+crlset_await() {
+  until [ -n "$(crlset_in "$1" "$2")" ]; do
+    if [ "$(date +%s)" -ge $(($3 + crlset_wait)) ]; then
+      echo "perf: $4 CRLSet never arrived in the $crlset_wait s its first launch waited"
+      return 0
+    fi
+    kill -0 "$pid" 2> /dev/null || fail "$4 first launch ended while it waited for its CRLSet"
+    sleep 1
+  done
+  echo "perf: $4 CRLSet $(crlset_in "$1" "$2") arrived $(($(date +%s) - $3)) s into its first launch"
+}
 # Snapshots what the browser's processes use, or those of $snap_procs, as $1.
 perf_snap() {
   # shellcheck disable=SC2086 # kinds, or nothing
@@ -151,11 +203,18 @@ perf_until() {
     sleep 1
   done
 }
-# The memory now, in $memory: "MiB processes", and by kind of process in $kinds.
+# The memory now, in $memory: "MiB processes", and by kind of process in $kinds; whether the
+# browser had its CRLSet in, which $crlset_log and $crlset_dir say, in $settled.
 perf_memory() {
   perf_snap "memory-$1" kinds
   memory=$(python3 -I check/usage.py memory "$perf_dir/memory-$1.json")
   kinds=$(python3 -I check/usage.py kinds "$perf_dir/memory-$1.json")
+  crlset_in "$crlset_log" "$crlset_dir" > "$perf_dir/crlset-$1"
+  if [ -s "$perf_dir/crlset-$1" ]; then
+    settled="; CRLSet $(cat "$perf_dir/crlset-$1") in"
+  else
+    settled="; not settled: $crlset_who CRLSet never arrived"
+  fi
 }
 # Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats.
 perf_idle() {
@@ -194,9 +253,12 @@ perf_launch() {
   perf_stamp
   launched=$stamp
   if [ -n "$1" ]; then
-    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+    # shellcheck disable=SC2046,SC2086 # the flags, a word each
+    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch \
+      $([ "$3" != warm ] || crlset_flags "$PWD/$perf_dir/crlset-warm.log" fast) \
+      < /dev/null > "$log" 2>&1 &
   else
-    BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+    BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch < /dev/null > "$log" 2>&1 &
   fi
   pid=$!
   # A tab put back has its last title, an earlier launch's paint, until its page loads.
@@ -217,6 +279,7 @@ perf_launch() {
   fi
   # The core holds a launch's first page until uBlock Origin is ready (core/ad_block.cc).
   held=$(sed -n 's/^.*browser: ad blocking held a page \([0-9]*\) ms.*$/\1/p' "$log" | head -1)
+  [ "$3" != warm ] || crlset_await "$PWD/$perf_dir/crlset-warm.log" "$profile_dir" $((launched / 1000)) "ilo's"
   quit
 }
 : > "$perf_dir/link"
@@ -224,8 +287,47 @@ perf_launch() {
 : > "$perf_dir/on-screen"
 : > "$perf_dir/browser-on-screen"
 : > "$perf_dir/held"
-# The first launch makes the profile, which the others find, as a user's, so it isn't counted.
-perf_launch "$page?warm" warm warm
+# A new profile's first launch, 3 times: uBlock Origin compiles the lists it ships. The last profile
+# is the one every launch after uses, as a user's.
+: > "$perf_dir/new"
+: > "$perf_dir/new-held"
+for n in 1 2 3; do
+  rm -rf "$profile_dir"
+  mkdir -p "$profile_dir"
+  perf_launch "$page?new$n" "new$n" "new$n"
+  echo "$painted" >> "$perf_dir/new"
+  echo "${held:-0}" >> "$perf_dir/new-held"
+done
+perf_row launch-new "Launch, a new profile's first, link to page painted" \
+  "$(perf_stats '%.0f' < "$perf_dir/new") ms, held $(perf_stats '%.0f' < "$perf_dir/new-held") ms" \
+  "none: once a profile"
+# uBlock Origin's selfie (#2381), all in this block and lib.sh's, which go whole with uBlock
+# Origin (#2111).
+# A launch takes its filters in from its selfie, the filters it compiled, or with none from its
+# lists. It writes the selfie 53 s after its lists last changed, in the session then, and takes it
+# out as a list changes, so a launch after a list update has none, as has each launch while no
+# session has lasted the 53 s. Those are 5 launches that quit seconds in; then one stays until the
+# selfie is written, and the launches after it are on it, a user's.
+if [ -n "$held" ]; then
+  : > "$perf_dir/unselfied"
+  : > "$perf_dir/unselfied-held"
+  for n in 1 2 3 4 5; do
+    ! ublock_selfie ||
+      fail "uBlock Origin wrote its selfie before launch unselfied$n, in one that quit seconds in"
+    rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+    perf_launch "$page?unselfied$n" "unselfied$n" "unselfied$n"
+    echo "$painted" >> "$perf_dir/unselfied"
+    echo "${held:-0}" >> "$perf_dir/unselfied-held"
+  done
+  unselfied=$(perf_stats '%.0f' < "$perf_dir/unselfied")
+  perf_row launch-unselfied "Launch with no uBlock Origin selfie, link to page painted" \
+    "$unselfied ms, held $(perf_stats '%.0f' < "$perf_dir/unselfied-held") ms" \
+    "none: after a list update, until a session lasts 53 s"
+  selfie_launch "$page?selfie" "$perf_dir/launch-selfie.log"
+  echo "perf: uBlock Origin wrote its selfie $selfie_at s into a launch that stayed;" \
+    "the launches below are on it"
+  selfied=", on uBlock Origin's selfie"
+fi
 for n in 1 2 3 4 5; do
   rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
   perf_launch "$page?link$n" "link$n" "link$n"
@@ -241,23 +343,27 @@ for n in 1 2 3 4 5; do
   echo "$browser_on_screen" >> "$perf_dir/browser-on-screen"
   echo "${held:-0}" >> "$perf_dir/held"
 done
-perf_row launch-link "Launch, link to page painted" "$(perf_stats '%.0f' < "$perf_dir/link") ms" \
-  "Ardia 413 ms, Chrome 484 ms"
+perf_row launch-link "Launch, link to page painted${selfied:-}" \
+  "$(perf_stats '%.0f' < "$perf_dir/link") ms" "Ardia 413 ms, Chrome 484 ms"
 perf_row launch-window "Launch, window on screen" "$(perf_stats '%.0f' < "$perf_dir/on-screen") ms" \
   "Ardia 280 ms, Chrome 424 ms (gate: ≤ Chrome)"
 perf_row launch-browser-window "Launch, browser window on screen" \
   "$(perf_stats '%.0f' < "$perf_dir/browser-on-screen") ms" "none: on Linux it's the row above"
-perf_row launch-restore "Launch, restored page painted" \
+perf_row launch-restore "Launch, restored page painted${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/restore") ms" "Ardia 360 ms, Helium 355 ms, Chrome 438 ms"
-perf_row launch-held "Launch, the page held for uBlock Origin" \
+perf_row launch-held "Launch, the page held for uBlock Origin${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
 
 log="$perf_dir/session.log"
 step=0
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
 started=$(date +%s)
-BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
-  < "$out/drive" > "$log" 2>&1 &
+crlset_log="$PWD/$perf_dir/crlset-session.log"
+crlset_dir=$profile_dir
+crlset_who="ilo's"
+# shellcheck disable=SC2046,SC2086 # the flags, a word each
+BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch \
+  $(crlset_flags "$crlset_log") < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await "^browser: title [0-9]* p1 fcp " || fail "the session's first page didn't paint"
@@ -311,7 +417,7 @@ perf_switches() {
 perf_session() {
   perf_until $((started + 30))
   perf_memory 1
-  perf_row memory-1 "Memory, 1 tab" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
+  perf_row memory-1 "Memory, 1 tab" "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" \
     "Ardia 298 MB, Chrome 370 MB (gate: ≤ Chrome)"
   perf_idle idle-1
   perf_row idle-cpu-1 "Idle CPU, 1 tab" "$cpu" "Ardia 0.16 %, Chrome 0.2 %"
@@ -327,14 +433,14 @@ perf_session() {
   done
   perf_until $((loaded + 10))
   perf_memory 10
-  perf_row memory-10 "Memory, 10 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
+  perf_row memory-10 "Memory, 10 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" \
     "Ardia 714 MB, Chrome 692 MB (gate: ≤ Chrome)"
   for n in 11 12 13 14 15 16 17 18 19 20; do
     perf_open "p$n" newtab
   done
   perf_until $((loaded + 15))
   perf_memory 20
-  perf_row memory-20 "Memory, 20 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
+  perf_row memory-20 "Memory, 20 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" \
     "Ardia 1082 MB, Chrome 919 MB (gate: ≤ Chrome)"
   perf_row newtab "New tab, ↩ in ⌘T's bar to page painted" \
     "$(perf_stats '%.0f' < "$perf_dir/newtab") ms" "Ardia 54.9 ms, Chrome 54.3 ms (gate: ≤ Chrome)"
@@ -378,7 +484,7 @@ perf_session() {
   [ "$(today | wc -w | tr -d ' ')" = 1 ] || fail "⌘W 19 times didn't leave 1 tab: $(today)"
   perf_until $(($(date +%s) + 30))
   perf_memory closed
-  perf_row memory-closed "Memory, back to 1 tab after 20" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
+  perf_row memory-closed "Memory, back to 1 tab after 20" "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" \
     "Ardia 358 MB, Chrome 406 MB"
 }
 if [ "$active" = 1 ]; then
@@ -715,9 +821,14 @@ else
   : > "$perf_dir/chrome.log"
   # The 5 s a Chrome that won't stay takes to go, in its first 15 s, which warm its caches for the
   # launches measured.
-  if ! chrome_launch warm || ! sleep 15 || ! kill -0 "$pid" 2> /dev/null; then
+  # It also checks for updates 10 s in and waits for its CRLSet, as ilo's warm launch does.
+  # shellcheck disable=SC2046 # the flags, a word each
+  if ! chrome_launch warm $(crlset_flags "$PWD/$perf_dir/crlset-chrome-warm.log" fast) ||
+    ! sleep 15 || ! kill -0 "$pid" 2> /dev/null; then
     echo "skip: perf's Chrome on this runner. It didn't stay open: $(tail -3 "$perf_dir/chrome.log")"
   else
+    crlset_await "$PWD/$perf_dir/crlset-chrome-warm.log" "$chrome_dir" $((launched / 1000)) \
+      "Chrome's"
     chrome_quit
     # Five launches with a link, as the app's: to the page painted, and to the window on screen,
     # which Chrome times from its main to its window shown (Startup.BrowserWindowDisplay), and from
@@ -742,13 +853,19 @@ else
 
     # Then the app's session, as the app's: the same rows at the same times, its tabs opened by
     # DevTools, as Chrome has no driver.
-    chrome_launch c1 || fail "Chrome didn't stay open for its session: $(tail -3 "$perf_dir/chrome.log")"
+    # Its memory samples say whether its CRLSet was in, from the session's own log.
+    crlset_log="$PWD/$perf_dir/crlset-chrome.log"
+    crlset_dir=$chrome_dir
+    crlset_who="Chrome's"
+    # shellcheck disable=SC2046 # the flags, a word each
+    chrome_launch c1 $(crlset_flags "$crlset_log") ||
+      fail "Chrome didn't stay open for its session: $(tail -3 "$perf_dir/chrome.log")"
     chrome_await "^cdp: title [^ ]* c1 fcp " "Chrome's session's first page didn't paint"
     started=$((launched / 1000))
     perf_until $((started + 30))
     perf_memory chrome-1
     perf_row chrome-memory-1 "Chrome here, memory, 1 tab" \
-      "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+      "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" "ilo's, the gate"
     # cdp.py asks for the titles each 50 ms, which idle mustn't count.
     echo "titles off" >&5
     perf_idle chrome-idle-1
@@ -768,7 +885,7 @@ else
     perf_until $(($(date +%s) + 10))
     perf_memory chrome-10
     perf_row chrome-memory-10 "Chrome here, memory, 10 tabs" \
-      "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+      "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" "ilo's, the gate"
     for n in 11 12 13 14 15 16 17 18 19 20; do
       chrome_open "c$n" chrome-newtab
       perf_until $((typed / 1000 + 2))
@@ -776,7 +893,7 @@ else
     perf_until $(($(date +%s) + 15))
     perf_memory chrome-20
     perf_row chrome-memory-20 "Chrome here, memory, 20 tabs" \
-      "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+      "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" "ilo's, the gate"
     perf_row chrome-newtab "Chrome here, new tab, cdp.py's stamp to page painted" \
       "$(perf_stats '%.0f' < "$perf_dir/chrome-newtab") ms" "ilo's, the gate"
     echo "titles off" >&5
@@ -816,7 +933,8 @@ else
     # under 5 % from run to run, so ilo more than 10 % over Chrome's fails the run. At 1 tab, 30 s
     # after launch, uBlock Origin is still taking in its lists, and ilo's moved by 70 % from one run
     # to the next, and idle moves 2 to 5 times from one 10 s window to the next on a hosted runner,
-    # so those only report.
+    # so those only report. A memory row where either browser's sample hadn't its CRLSet in isn't a
+    # fair comparison either way, so it reports that and doesn't decide.
     python3 -I - "$perf_dir" << 'PY' | tee "$perf_dir/gate.txt"
 import json, os, statistics, sys
 
@@ -824,35 +942,49 @@ d = sys.argv[1]
 def memory(name):
     with open(os.path.join(d, f"memory-{name}.json")) as f:
         return sum(p[3] for p in json.load(f)["procs"].values()) / 1048576
+def unsettled(*samples):
+    for who, name in samples:
+        with open(os.path.join(d, f"crlset-{name}")) as f:
+            if not f.read().strip():
+                yield f"{who} CRLSet never arrived"
 def idle(name, column):
     with open(os.path.join(d, f"{name}.txt")) as f:
         return statistics.median(float(line.split()[column]) for line in f)
 def median(name):
     with open(os.path.join(d, name)) as f:
         return statistics.median(float(line) for line in f if line.strip())
-for label, ilo, chrome, unit, fails in [
-    ("launch, link to page painted", median("link"), median("chrome-link"), "ms", False),
-    ("launch, window on screen", median("on-screen"), median("chrome-on-screen"), "ms", False),
+def sets(n):
+    return list(unsettled(("ilo's", n), ("Chrome's", f"chrome-{n}")))
+for label, ilo, chrome, unit, fails, apart in [
+    ("launch, link to page painted", median("link"), median("chrome-link"), "ms", False, []),
+    ("launch, window on screen", median("on-screen"), median("chrome-on-screen"), "ms", False, []),
     # ilo's from the shell's clock, whose process start is in it, Chrome's from cdp.py's.
     ("new tab to page painted, ilo's with its clock's start", median("newtab"),
-     median("chrome-newtab"), "ms", False),
+     median("chrome-newtab"), "ms", False, []),
     ("tab switch to page shown, ilo's with its clock's start", median("switch"),
-     median("chrome-switch"), "ms", False),
-    ("idle CPU, 1 tab, settled", idle("settled-1", 0), idle("chrome-settled-1", 0), "%", False),
-    ("idle CPU, 20 tabs, settled", idle("settled-20", 0), idle("chrome-settled-20", 0), "%", False),
-    ("idle wakeups, 1 tab, settled", idle("settled-1", 1), idle("chrome-settled-1", 1), "/s", False),
+     median("chrome-switch"), "ms", False, []),
+    ("idle CPU, 1 tab, settled", idle("settled-1", 0), idle("chrome-settled-1", 0), "%", False, []),
+    ("idle CPU, 20 tabs, settled", idle("settled-20", 0), idle("chrome-settled-20", 0), "%", False,
+     []),
+    ("idle wakeups, 1 tab, settled", idle("settled-1", 1), idle("chrome-settled-1", 1), "/s", False,
+     []),
     ("idle wakeups, 20 tabs, settled", idle("settled-20", 1), idle("chrome-settled-20", 1), "/s",
-     False),
-    ("memory, 1 tab", memory("1"), memory("chrome-1"), "MiB", False),
-    ("memory, 10 tabs", memory("10"), memory("chrome-10"), "MiB", True),
-    ("memory, 20 tabs", memory("20"), memory("chrome-20"), "MiB", True),
-    ("idle CPU, 1 tab", idle("idle-1", 0), idle("chrome-idle-1", 0), "%", False),
-    ("idle CPU, 20 tabs", idle("idle-20", 0), idle("chrome-idle-20", 0), "%", False),
-    ("idle wakeups, 1 tab", idle("idle-1", 1), idle("chrome-idle-1", 1), "/s", False),
-    ("idle wakeups, 20 tabs", idle("idle-20", 1), idle("chrome-idle-20", 1), "/s", False),
+     False, []),
+    ("memory, 1 tab", memory("1"), memory("chrome-1"), "MiB", False, sets("1")),
+    ("memory, 10 tabs", memory("10"), memory("chrome-10"), "MiB", True, sets("10")),
+    ("memory, 20 tabs", memory("20"), memory("chrome-20"), "MiB", True, sets("20")),
+    ("idle CPU, 1 tab", idle("idle-1", 0), idle("chrome-idle-1", 0), "%", False, []),
+    ("idle CPU, 20 tabs", idle("idle-20", 0), idle("chrome-idle-20", 0), "%", False, []),
+    ("idle wakeups, 1 tab", idle("idle-1", 1), idle("chrome-idle-1", 1), "/s", False, []),
+    ("idle wakeups, 20 tabs", idle("idle-20", 1), idle("chrome-idle-20", 1), "/s", False, []),
 ]:
     by = f"{(ilo / chrome - 1) * 100:+.0f} %" if chrome else "Chrome none"
-    missed = "missed" if fails and chrome and ilo > chrome * 1.1 else "fails over +10 %" if fails else "reports"
+    if apart:
+        missed = "not settled: " + ", ".join(apart)
+    elif fails and chrome and ilo > chrome * 1.1:
+        missed = "missed"
+    else:
+        missed = "fails over +10 %" if fails else "reports"
     print(f"perf: gate, {label}: ilo {ilo:.2f} {unit}, Chrome here {chrome:.2f} {unit} ({by}), {missed}")
 PY
   fi
@@ -861,7 +993,13 @@ fi
 missed=$(grep ', missed$' "$perf_dir/gate.txt" 2> /dev/null | sed 's/^perf: gate, //; s/: ilo .*(\(.*\)), missed$/ \1/' |
   tr '\n' ';' | sed 's/;$//; s/;/; /g')
 [ -z "$missed" ] || fail "ilo took more than 10 % over Chrome on this runner: $missed (#456)"
+apart=$(grep -E '^perf: gate, memory, (10|20) tabs: .*, not settled: ' "$perf_dir/gate.txt" 2> /dev/null |
+  sed 's/^perf: gate, memory, \([0-9]*\) tabs: .*, not settled: /\1 tabs, /' | tr '\n' ';' |
+  sed 's/;$//; s/;/; /g')
+[ -z "$apart" ] || echo "skip: the gate on memory, as a browser's CRLSet hadn't arrived: $apart"
+within="ilo's memory at 10 and 20 tabs within 10 % of Chrome's here"
+[ -z "$apart" ] || within="ilo's memory within 10 % of Chrome's where both had their CRLSet"
 echo "ok: perf measured $(wc -l < "$perf_dir/rows.tsv" | tr -d ' ') rows against #456's targets," \
-  "and ilo's memory at 10 and 20 tabs within 10 % of Chrome's here; each time from a key" \
+  "and $within; each time from a key" \
   "includes the shell's clock ($perf_clock), $clock ms. Rows:" \
   "$perf_dir/rows.tsv, usage snapshots: $perf_dir/"

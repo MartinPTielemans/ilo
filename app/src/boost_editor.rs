@@ -7,8 +7,11 @@
 //!
 //! Like the theme picker, it's a window of its own that the host shows over the browser window, as
 //! its child, and closes the same ways: Esc, or a click outside it. ⌘Z takes back its changes one
-//! at a time. The name's menu holds Rename…, Reset All Edits and Delete Boost…. The look and the
-//! layout are ours, as the owner approved the mock on 2026-11-10: Arc's editor isn't recorded.
+//! at a time. The name's menu holds Rename…, Reset All Edits and Delete Boost…. Advanced, at
+//! Invert lightness's line's end, opens the page's contrast, brightness and saturation under it,
+//! the card growing down, and stays open or closed for the Boost as the user leaves it. The look
+//! and the layout are ours, as the owner approved the mock on 2026-11-10: Arc's editor isn't
+//! recorded.
 //!
 //! It has no agent path: a Boost's CSS could carry a page's values out, which agents never get
 //! (principle 3, decision 8).
@@ -19,13 +22,18 @@ use gpui::{
     App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, FontWeight, Global,
     ImageSource, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
     Point, RenderImage, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, accesskit::Role, actions, canvas, div,
-    img, point, prelude::*, px, rgb, size, svg,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    accesskit::{Action, Role},
+    actions, canvas, div, img, point,
+    prelude::*,
+    px, rgb, size, svg,
 };
 use image::{Frame, RgbaImage};
 
 use crate::{
-    boost_style::{self, Case, Dot, Face, LARGEST, SIZE_STEP, SMALLEST, Style},
+    boost_style::{
+        self, ADJUST_STEP, Adjust, Case, Dot, Face, LARGEST, SIZE_STEP, SMALLEST, Style,
+    },
     icon_picker,
     palette::{self, Palette},
     settings_rows::{self, Look},
@@ -34,7 +42,7 @@ use crate::{
     theme_picker::{self, At},
 };
 
-actions!(boost_editor, [Dismiss, Commit, Undo]);
+actions!(boost_editor, [Dismiss, Commit, Undo, Decrease, Increase]);
 
 /// The name's left edge, after the site's icon.
 const NAME_LEFT: f32 = INSET + SITE_ICON + GAP;
@@ -43,13 +51,15 @@ const ZAP_X: f32 = INSET + EDIT_WIDTH + GAP + SCRIPT_WIDTH + GAP;
 
 pub use crate::tokens::boost_editor::HEIGHT;
 use crate::tokens::boost_editor::{
-    BUTTON, CASE_Y, CHIP_PADDING, DIM, EDIT_WIDTH, FIELD_HEIGHT, FIELD_TOP, FONT_Y, FOOTER_Y, GAP,
-    HEADER, HINT_RIGHT, HINT_TOP, INSET, INVERT_WIDTH, INVERT_Y, LABEL_WIDTH, MENU_LEFT, MENU_TOP,
-    PLATE, PLATE_CHOSEN, PLATE_HOVERED, RULE, RULES, SCRIPT_WIDTH, SEGMENT, SEGMENT_HEIGHT,
-    SEGMENT_PADDING, SITE_ICON, SIZE_Y, STEPPER_VALUE, SWITCH_RIGHT, TILE_GAP, TILE_HEIGHT,
-    TILE_RING, TILE_TEXT, TILES_TOP, ZAP_WIDTH,
+    ADVANCED_HEIGHT, ADVANCED_WIDTH, BUTTON, CASE_Y, CHIP_PADDING, DIM, EDIT_WIDTH, FIELD_HEIGHT,
+    FIELD_TOP, FONT_Y, FOOTER_Y, GAP, HEADER, HINT_RIGHT, HINT_TOP, INSET, INVERT_WIDTH, INVERT_Y,
+    LABEL_WIDTH, MENU_LEFT, MENU_TOP, PLATE, PLATE_CHOSEN, PLATE_HOVERED, RESET_WIDTH, RULE, RULES,
+    SCRIPT_WIDTH, SEGMENT, SEGMENT_HEIGHT, SEGMENT_PADDING, SITE_ICON, SIZE_Y, SLIDER_FILL_INK,
+    SLIDER_PITCH, SLIDER_RING, SLIDER_TICK, SLIDER_TRACK_INK, SLIDER_VALUE, SLIDER_Y,
+    STEPPER_VALUE, SWITCH_RIGHT, TILE_GAP, TILE_HEIGHT, TILE_RING, TILE_TEXT, TILES_TOP, ZAP_WIDTH,
 };
 use crate::tokens::settings::{SWITCH_HEIGHT, SWITCH_WIDTH};
+use crate::tokens::shell::{MEDIA_SLIDER_KNOB, MEDIA_SLIDER_TRACK};
 use crate::tokens::theme_picker::{
     CARD_WIDTH, DOT_ALPHA, DOT_PITCH, FIELD, FIELD_FILL, FIELD_INSET, FIELD_RADIUS, FIELD_RIM,
     HANDLE, HANDLE_RING, MAIN_HANDLE, MAIN_RING,
@@ -63,12 +73,22 @@ const HINT: &str = "Drag a dot: big for the ground, small for links";
 const REST: [Dot; 2] = [Dot { x: -0.15, y: 0.8 }, Dot { x: 0.45, y: -0.25 }];
 /// Where the controls start along a line, after its label.
 const CONTROL_X: f32 = INSET + LABEL_WIDTH + GAP;
+/// Where they end.
+const CONTROL_RIGHT: f32 = CARD_WIDTH - INSET;
+/// Advanced's chip's left edge, at the controls' right edge, and Reset's, left of it.
+const ADVANCED_X: f32 = CONTROL_RIGHT - ADVANCED_WIDTH;
+const RESET_X: f32 = ADVANCED_X - GAP - RESET_WIDTH;
+/// A slider's track's ends, where its knob's middle goes at its least and its most.
+const TRACK: (f32, f32) = (CONTROL_X, CONTROL_RIGHT - SLIDER_VALUE);
 
 /// What the editor asks of its window.
 pub trait Host {
     /// Shows the editor's window with its top left at `left`, `top` in browser window `window`,
     /// with the keyboard, in the shape of `corners`, as the theme picker's host does.
     fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]);
+    /// Makes it `height` tall, keeping its top, in the shape of `corners`, as Advanced opens and
+    /// closes.
+    fn resize(&self, height: f32, corners: &[(f32, f32, f32)]);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
 }
@@ -112,6 +132,10 @@ pub enum Target {
     Smaller,
     Larger,
     Case(Option<Case>),
+    Advanced,
+    /// Advanced's Reset, which puts its three back.
+    ResetAdvanced,
+    Slider(Adjust),
     EditCss,
     EditScript,
     Zap,
@@ -132,12 +156,22 @@ struct Editing {
     left: bool,
     /// False once it's closing: what it shows stays, for the host's shrink out.
     open: bool,
-    /// The dot being dragged, where in it the pointer took it, and the style before the drag.
-    drag: Option<(usize, (f32, f32), Style)>,
+    /// What's being dragged, and the style before the drag.
+    drag: Option<(Drag, Style)>,
+    /// The slider the arrow keys move, the last one pressed while Advanced is open.
+    focused: Option<Adjust>,
     menu: bool,
     renaming: Option<Entity<TextInput>>,
     drawn: bool,
     palette: Palette,
+}
+
+/// What a drag moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Drag {
+    /// A dot, the ground's 0 and the links' 1, and where in it the pointer took it.
+    Dot(usize, (f32, f32)),
+    Slider(Adjust),
 }
 
 pub struct BoostEditor {
@@ -182,6 +216,10 @@ pub fn open_at(
         KeyBinding::new("escape", Dismiss, Some("BoostEditor")),
         KeyBinding::new("enter", Commit, Some("BoostEditor")),
         crate::shell::view_binding("cmd-z", Box::new(Undo), "BoostEditor", cx),
+        KeyBinding::new("left", Decrease, Some("BoostEditor")),
+        KeyBinding::new("down", Decrease, Some("BoostEditor")),
+        KeyBinding::new("right", Increase, Some("BoostEditor")),
+        KeyBinding::new("up", Increase, Some("BoostEditor")),
     ]);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -251,7 +289,8 @@ pub fn show(
             if editor.families.is_none() {
                 editor.families = Some(families(&cx.text_system().all_font_names()));
             }
-            let (x, top, arrow_y) = theme_picker::placed_of(at, left, height, HEIGHT);
+            let card = height_of(&style);
+            let (x, top, arrow_y) = theme_picker::placed_of(at, left, height, card);
             editor.editing = Some(Editing {
                 site,
                 icon,
@@ -263,13 +302,16 @@ pub fn show(
                 left,
                 open: true,
                 drag: None,
+                focused: None,
                 menu: false,
                 renaming: None,
                 drawn: false,
                 palette,
             });
             window.focus(&editor.focus, cx);
-            let corners = theme_picker::corners_of(arrow_y, left, HEIGHT);
+            let corners = theme_picker::corners_of(arrow_y, left, card);
+            // At its height before it shows, as Advanced was left open or closed.
+            editor.host.resize(card, &corners);
             editor.host.show(over, x, top, &corners);
             cx.notify();
         })
@@ -354,6 +396,34 @@ fn families(fonts: &[String]) -> Vec<(Option<Face>, SharedString)> {
             (face, family.into())
         })
         .collect()
+}
+
+/// The card's height with `style`, taller while Advanced is open.
+pub fn height_of(style: &Style) -> f32 {
+    HEIGHT + below(style)
+}
+
+/// How far what's under Advanced's sliders moves down while they show.
+fn below(style: &Style) -> f32 {
+    if style.advanced { ADVANCED_HEIGHT } else { 0. }
+}
+
+/// A slider's line's middle.
+fn slider_y(adjust: Adjust) -> f32 {
+    SLIDER_Y + adjust as usize as f32 * SLIDER_PITCH
+}
+
+/// Where along its track `adjust`'s knob lies with `style`, from 0 to 1.
+fn along(adjust: Adjust, style: &Style) -> f32 {
+    let (least, most) = adjust.range();
+    f32::from(adjust.of(style) - least) / f32::from(most - least)
+}
+
+/// The value of `adjust` with its knob at `x` in the card, before it's put on its step.
+fn value_at(adjust: Adjust, x: f32) -> i32 {
+    let (least, most) = adjust.range();
+    let along = ((x - TRACK.0) / (TRACK.1 - TRACK.0)).clamp(0., 1.);
+    (f32::from(least) + along * f32::from(most - least)).round() as i32
 }
 
 /// A tile's left edge and width, of `count`.
@@ -458,7 +528,28 @@ pub fn target(x: f32, y: f32, style: &Style, menu: bool) -> Option<Target> {
     if within(INSET, INVERT_WIDTH, INVERT_Y, BUTTON) {
         return Some(Target::Invert);
     }
-    if (TILES_TOP..TILES_TOP + TILE_HEIGHT).contains(&y) {
+    if within(ADVANCED_X, ADVANCED_WIDTH, INVERT_Y, BUTTON) {
+        return Some(Target::Advanced);
+    }
+    let below = below(style);
+    if style.advanced {
+        if within(RESET_X, RESET_WIDTH, INVERT_Y, BUTTON) {
+            return Some(Target::ResetAdvanced);
+        }
+        // The track and the knob past its ends, a line tall, so a press needn't hit 4 points.
+        let (left, right) = (
+            TRACK.0 - MEDIA_SLIDER_KNOB / 2.,
+            TRACK.1 + MEDIA_SLIDER_KNOB / 2.,
+        );
+        let slider = Adjust::ALL
+            .into_iter()
+            .find(|&adjust| within(left, right - left, slider_y(adjust), SLIDER_PITCH));
+        if let Some(adjust) = slider {
+            return Some(Target::Slider(adjust));
+        }
+    }
+    let tiles_top = TILES_TOP + below;
+    if (tiles_top..tiles_top + TILE_HEIGHT).contains(&y) {
         let faces = faces();
         return faces.iter().enumerate().find_map(|(index, &face)| {
             let (left, width) = tile(index, faces.len());
@@ -467,29 +558,39 @@ pub fn target(x: f32, y: f32, style: &Style, menu: bool) -> Option<Target> {
                 .then_some(Target::Face(face))
         });
     }
-    if within(CONTROL_X, BUTTON, SIZE_Y, BUTTON) {
+    if within(CONTROL_X, BUTTON, SIZE_Y + below, BUTTON) {
         return Some(Target::Smaller);
     }
-    if within(CONTROL_X + BUTTON + STEPPER_VALUE, BUTTON, SIZE_Y, BUTTON) {
+    if within(
+        CONTROL_X + BUTTON + STEPPER_VALUE,
+        BUTTON,
+        SIZE_Y + below,
+        BUTTON,
+    ) {
         return Some(Target::Larger);
     }
     if let Some(index) = (0..CASES.len()).find(|&index| {
         within(
             segment_x(index),
             SEGMENT,
-            CASE_Y,
+            CASE_Y + below,
             SEGMENT_HEIGHT + 2. * SEGMENT_PADDING,
         )
     }) {
         return Some(Target::Case(CASES[index]));
     }
-    if within(INSET, EDIT_WIDTH, FOOTER_Y, BUTTON) {
+    if within(INSET, EDIT_WIDTH, FOOTER_Y + below, BUTTON) {
         return Some(Target::EditCss);
     }
-    if within(INSET + EDIT_WIDTH + GAP, SCRIPT_WIDTH, FOOTER_Y, BUTTON) {
+    if within(
+        INSET + EDIT_WIDTH + GAP,
+        SCRIPT_WIDTH,
+        FOOTER_Y + below,
+        BUTTON,
+    ) {
         return Some(Target::EditScript);
     }
-    if within(ZAP_X, ZAP_WIDTH, FOOTER_Y, BUTTON) {
+    if within(ZAP_X, ZAP_WIDTH, FOOTER_Y + below, BUTTON) {
         return Some(Target::Zap);
     }
     None
@@ -549,8 +650,10 @@ impl BoostEditor {
         let Some(mut before) = editing.undo.pop() else {
             return;
         };
-        // The hint, once gone, stays gone.
+        // The hint, once gone, stays gone, and Advanced stays as it's shown: opening it isn't an
+        // edit.
         before.dragged |= editing.style.dragged;
+        before.advanced = editing.style.advanced;
         // check.sh reads this line.
         log!("browser: boost editor undo");
         self.set(before, true, cx);
@@ -629,14 +732,20 @@ impl BoostEditor {
             cx.notify();
             return;
         }
+        // The arrow keys move the slider last pressed, until a press lands elsewhere.
+        editing.focused = match target {
+            Some(Target::Slider(adjust)) => Some(adjust),
+            _ => None,
+        };
         let Some(target) = target else {
+            cx.notify();
             return;
         };
         match target {
             Target::Name => editing.menu = true,
             Target::Shuffle => {
-                let seed = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let seed = web_time::SystemTime::now()
+                    .duration_since(web_time::UNIX_EPOCH)
                     .map_or(0, |since| since.as_nanos() as u64);
                 self.keep(|style| *style = style.shuffled(seed), cx);
             }
@@ -648,14 +757,30 @@ impl BoostEditor {
             Target::Dot(index) => {
                 let at = in_card(dot_of(&editing.style, index).unwrap_or(REST[index]));
                 let grab = (x - at.0, y - at.1);
-                editing.drag = Some((index, grab, editing.style.clone()));
+                editing.drag = Some((Drag::Dot(index, grab), editing.style.clone()));
                 self.drag_to(x, y, cx);
             }
             // A press on the field places the ground there, and drags it from there.
             Target::Field => {
-                editing.drag = Some((0, (0., 0.), editing.style.clone()));
+                editing.drag = Some((Drag::Dot(0, (0., 0.)), editing.style.clone()));
                 self.drag_to(x, y, cx);
             }
+            // A press on a track puts the knob there, and drags it from there.
+            Target::Slider(adjust) => {
+                editing.drag = Some((Drag::Slider(adjust), editing.style.clone()));
+                self.drag_to(x, y, cx);
+            }
+            Target::Advanced => {
+                let mut style = editing.style.clone();
+                style.advanced = !style.advanced;
+                // check.sh reads this line.
+                log!("browser: boost editor advanced {}", style.advanced);
+                let corners =
+                    theme_picker::corners_of(editing.arrow_y, editing.left, height_of(&style));
+                self.host.resize(height_of(&style), &corners);
+                self.set(style, true, cx);
+            }
+            Target::ResetAdvanced => self.keep(|style| style.adjust = [100; 3], cx),
             Target::Invert => self.keep(|style| style.invert = !style.invert, cx),
             Target::Face(face) => self.keep(|style| style.face = face, cx),
             Target::Smaller => self.keep(
@@ -703,6 +828,7 @@ impl BoostEditor {
                 |style| {
                     *style = Style {
                         dragged: style.dragged,
+                        advanced: style.advanced,
                         name: style.name.clone(),
                         ..Style::default()
                     }
@@ -739,24 +865,62 @@ impl BoostEditor {
         cx.notify();
     }
 
-    /// Moves the dragged dot to the pointer at `x`, `y` in the card, shown and not yet kept.
+    /// Moves what's dragged to the pointer at `x`, `y` in the card, shown and not yet kept.
     fn drag_to(&mut self, x: f32, y: f32, cx: &mut Context<Self>) {
         let Some(editing) = self.editing.as_mut() else {
             return;
         };
-        let Some((index, grab, _)) = editing.drag else {
+        let Some((drag, _)) = editing.drag else {
             return;
         };
-        let dot = field_dot(x - grab.0, y - grab.1);
         let mut style = editing.style.clone();
-        match index {
-            0 => style.ground = Some(dot),
-            _ => style.links = Some(dot),
+        match drag {
+            Drag::Dot(index, grab) => {
+                let dot = field_dot(x - grab.0, y - grab.1);
+                match index {
+                    0 => style.ground = Some(dot),
+                    _ => style.links = Some(dot),
+                }
+                style.dragged = true;
+            }
+            Drag::Slider(adjust) => adjust.set(&mut style, value_at(adjust, x)),
         }
-        style.dragged = true;
         if style != editing.style {
             self.set(style, false, cx);
         }
+    }
+
+    /// Moves the focused slider a step by `steps`, as an arrow key does.
+    fn step(&mut self, steps: i32, cx: &mut Context<Self>) {
+        let Some(editing) = self.editing.as_ref().filter(|editing| editing.open) else {
+            return;
+        };
+        let Some(adjust) = editing.focused.filter(|_| editing.style.advanced) else {
+            return;
+        };
+        if editing.renaming.is_some() || editing.drag.is_some() {
+            return;
+        }
+        self.slide(adjust, steps, cx);
+    }
+
+    /// Moves `adjust` by `steps`, kept as one step for ⌘Z.
+    fn slide(&mut self, adjust: Adjust, steps: i32, cx: &mut Context<Self>) {
+        self.keep(
+            |style| {
+                let value = i32::from(adjust.of(style)) + steps * i32::from(ADJUST_STEP);
+                adjust.set(style, value)
+            },
+            cx,
+        );
+    }
+
+    fn decrease(&mut self, _: &Decrease, _: &mut Window, cx: &mut Context<Self>) {
+        self.step(-1, cx);
+    }
+
+    fn increase(&mut self, _: &Increase, _: &mut Window, cx: &mut Context<Self>) {
+        self.step(1, cx);
     }
 
     fn moved(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -769,7 +933,7 @@ impl BoostEditor {
         let Some(editing) = self.editing.as_mut() else {
             return;
         };
-        let Some((_, _, before)) = editing.drag.take() else {
+        let Some((_, before)) = editing.drag.take() else {
             return;
         };
         if editing.style != before {
@@ -827,26 +991,21 @@ impl Render for BoostEditor {
             .key_context(KEY_CONTEXT)
             .size_full()
             .font_family(crate::face::UI);
-        // The pointer's moves anywhere in the window while a dot is dragged, and its release
-        // always, as the theme picker's: a press and its release can come before the next frame.
-        let dragging = self
-            .editing
-            .as_ref()
-            .is_some_and(|editing| editing.drag.is_some());
+        // The pointer's moves anywhere in the window and its release, in every frame, as the theme
+        // picker's: a press and its first move or its release can come before the next frame
+        // (#2605).
         let entity = cx.weak_entity();
         let listener = canvas(
             |_, _, _| {},
             move |_, _, window, _| {
-                if dragging {
-                    let moved = entity.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Capture {
-                            moved
-                                .update(cx, |editor, cx| editor.moved(event.position, cx))
-                                .ok();
-                        }
-                    });
-                }
+                let moved = entity.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        moved
+                            .update(cx, |editor, cx| editor.moved(event.position, cx))
+                            .ok();
+                    }
+                });
                 let released = entity.clone();
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
@@ -871,6 +1030,8 @@ impl Render for BoostEditor {
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::commit))
             .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::decrease))
+            .on_action(cx.listener(Self::increase))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|editor, event: &MouseDownEvent, window, cx| {
@@ -902,10 +1063,13 @@ impl Render for BoostEditor {
         let card_left = theme_picker::card_x(left);
         let card_x = |x: f32| px(card_left + x);
         let card_fill = palette::current(cx).card_drawn();
+        // One card, one shape and one fill, at the height Advanced gives it.
+        let card_height = height_of(style);
+        let below = below(style);
         let card = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                let corners = theme_picker::corners_of(arrow_y, left, HEIGHT);
+                let corners = theme_picker::corners_of(arrow_y, left, card_height);
                 icon_picker::paint_card(bounds.origin, &corners, card_fill, window)
             },
         )
@@ -926,7 +1090,7 @@ impl Render for BoostEditor {
                 .h(px(height))
         };
         let label = |name: &'static str, y: f32| {
-            at(INSET, y, LABEL_WIDTH, BUTTON)
+            at(INSET, y + below, LABEL_WIDTH, BUTTON)
                 .flex()
                 .items_center()
                 .text_size(px(text::SMALL))
@@ -1110,8 +1274,78 @@ impl Render for BoostEditor {
                     }),
             )
             .child("Invert lightness");
-        let rules =
-            RULES.map(|y| at(INSET, y, CARD_WIDTH - 2. * INSET, 1.).bg(palette.plate(RULE)));
+        let rules = RULES
+            .map(|y| at(INSET, y + below, CARD_WIDTH - 2. * INSET, 1.).bg(palette.plate(RULE)));
+
+        // Advanced, at the line's end, and while it's open Reset beside it and its sliders.
+        let advanced = at(ADVANCED_X, INVERT_Y, ADVANCED_WIDTH, BUTTON)
+            .id("boost-advanced")
+            .when(a11y, |chip| {
+                chip.role(Role::Button)
+                    .aria_label("Advanced")
+                    .aria_expanded(style.advanced)
+            })
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(GAP / 2.))
+            .rounded(px(CONTROL))
+            .bg(plate(style.advanced))
+            .hover(move |chip| chip.bg(hovered))
+            .text_size(px(text::BODY))
+            .text_color(palette.ink)
+            .child("Advanced")
+            .child(
+                svg()
+                    .path(if style.advanced {
+                        "icons/chevron-up.svg"
+                    } else {
+                        "icons/chevron-down.svg"
+                    })
+                    .flex_none()
+                    .size(px(text::SMALL))
+                    .text_color(dim),
+            );
+        let untouched = style.adjust == [100; 3];
+        let reset = style.advanced.then(|| {
+            at(RESET_X, INVERT_Y, RESET_WIDTH, BUTTON)
+                .id("boost-advanced-reset")
+                .when(a11y, |chip| {
+                    chip.role(Role::Button)
+                        .aria_label("Reset Contrast, Brightness and Saturation")
+                        .when(untouched, |chip| {
+                            chip.a11y_synthetic_children(|builder| {
+                                builder.parent_node().set_disabled()
+                            })
+                        })
+                })
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(CONTROL))
+                .bg(plate(false))
+                .when(!untouched, |chip| chip.hover(move |chip| chip.bg(hovered)))
+                .text_size(px(text::BODY))
+                .text_color(if untouched { dim } else { palette.ink.into() })
+                .child("Reset")
+        });
+        let sliders = (style.advanced)
+            .then(|| {
+                Adjust::ALL.map(|adjust| {
+                    slider_line(
+                        adjust,
+                        style,
+                        editing.focused == Some(adjust),
+                        &palette,
+                        a11y,
+                        card_left,
+                        cx.weak_entity(),
+                    )
+                })
+            })
+            .into_iter()
+            .flatten()
+            .flatten();
 
         // The faces, each in its own.
         let count = families.len();
@@ -1122,37 +1356,42 @@ impl Render for BoostEditor {
                 let (left, width) = tile(index, count);
                 let chosen = style.face == face;
                 let title = face.map_or("Site's", Face::title);
-                at(left, TILES_TOP + TILE_HEIGHT / 2., width, TILE_HEIGHT)
-                    .id(("boost-face", index))
-                    .when(a11y, |tile| tile.role(Role::RadioButton).aria_label(title))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(CONTROL))
-                    .bg(plate(chosen))
-                    .when(chosen, |tile| {
-                        tile.border(px(TILE_RING)).border_color(palette.accent)
-                    })
-                    .when(!chosen, |tile| tile.hover(move |tile| tile.bg(hovered)))
-                    .child(
-                        div()
-                            .font_family(family)
-                            .text_size(px(TILE_TEXT))
-                            .text_color(palette.ink)
-                            .child("Aa"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(text::SMALL))
-                            .text_color(dim)
-                            .child(title),
-                    )
+                at(
+                    left,
+                    TILES_TOP + below + TILE_HEIGHT / 2.,
+                    width,
+                    TILE_HEIGHT,
+                )
+                .id(("boost-face", index))
+                .when(a11y, |tile| tile.role(Role::RadioButton).aria_label(title))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .rounded(px(CONTROL))
+                .bg(plate(chosen))
+                .when(chosen, |tile| {
+                    tile.border(px(TILE_RING)).border_color(palette.accent)
+                })
+                .when(!chosen, |tile| tile.hover(move |tile| tile.bg(hovered)))
+                .child(
+                    div()
+                        .font_family(family)
+                        .text_size(px(TILE_TEXT))
+                        .text_color(palette.ink)
+                        .child("Aa"),
+                )
+                .child(
+                    div()
+                        .text_size(px(text::SMALL))
+                        .text_color(dim)
+                        .child(title),
+                )
             });
 
         // The size and the case.
         let step = |id: &'static str, glyph: &'static str, x: f32, enabled: bool| {
-            at(x, SIZE_Y, BUTTON, BUTTON)
+            at(x, SIZE_Y + below, BUTTON, BUTTON)
                 .id(id)
                 .when(a11y, |button| button.role(Role::Button).aria_label(id))
                 .flex()
@@ -1174,10 +1413,10 @@ impl Render for BoostEditor {
                 )
         };
         let stepper_width = 2. * BUTTON + STEPPER_VALUE;
-        let stepper = at(CONTROL_X, SIZE_Y, stepper_width, BUTTON)
+        let stepper = at(CONTROL_X, SIZE_Y + below, stepper_width, BUTTON)
             .rounded(px(CONTROL))
             .bg(plate(false));
-        let size_value = at(CONTROL_X + BUTTON, SIZE_Y, STEPPER_VALUE, BUTTON)
+        let size_value = at(CONTROL_X + BUTTON, SIZE_Y + below, STEPPER_VALUE, BUTTON)
             .flex()
             .items_center()
             .justify_center()
@@ -1199,7 +1438,7 @@ impl Render for BoostEditor {
         let segments_width = 3. * SEGMENT + 4. * SEGMENT_PADDING;
         let segments = at(
             CONTROL_X,
-            CASE_Y,
+            CASE_Y + below,
             segments_width,
             SEGMENT_HEIGHT + 2. * SEGMENT_PADDING,
         )
@@ -1212,7 +1451,7 @@ impl Render for BoostEditor {
                 Some(Case::Upper) => ("AA", "Uppercase"),
             };
             let chosen = style.case == case;
-            at(segment_x(index), CASE_Y, SEGMENT, SEGMENT_HEIGHT)
+            at(segment_x(index), CASE_Y + below, SEGMENT, SEGMENT_HEIGHT)
                 .id(("boost-case", index))
                 .when(a11y, |segment| {
                     segment.role(Role::RadioButton).aria_label(name)
@@ -1234,7 +1473,7 @@ impl Render for BoostEditor {
 
         // The footer: what the card under the URL field also offers.
         let chip = |id: &'static str, label: &'static str, x: f32, width: f32| {
-            at(x, FOOTER_Y, width, BUTTON)
+            at(x, FOOTER_Y + below, width, BUTTON)
                 .id(id)
                 .when(a11y, |chip| chip.role(Role::Button).aria_label(label))
                 .flex()
@@ -1335,6 +1574,9 @@ impl Render for BoostEditor {
                 .child(switch)
                 .child(field)
                 .child(invert)
+                .child(advanced)
+                .children(reset)
+                .children(sliders)
                 .children(rules)
                 .child(label("Font", FONT_Y))
                 .children(tiles)
@@ -1352,6 +1594,90 @@ impl Render for BoostEditor {
                 .children(menu),
         )
     }
+}
+
+/// One of Advanced's lines: its label, its slider filled from 100 % in the middle to the knob,
+/// and its value. Its knob has the accent's ring while the arrow keys move it.
+fn slider_line(
+    adjust: Adjust,
+    style: &Style,
+    focused: bool,
+    palette: &Palette,
+    a11y: bool,
+    card_left: f32,
+    editor: gpui::WeakEntity<BoostEditor>,
+) -> Vec<gpui::AnyElement> {
+    let y = slider_y(adjust);
+    let value = adjust.of(style);
+    let (least, most) = adjust.range();
+    let width = TRACK.1 - TRACK.0;
+    let knob = TRACK.0 + along(adjust, style) * width;
+    let middle = TRACK.0 + width / 2.;
+    let line = |left: f32, width: f32, height: f32| {
+        div()
+            .absolute()
+            .left(px(card_left + left))
+            .top(px(y - height / 2.))
+            .w(px(width))
+            .h(px(height))
+    };
+    let label = line(INSET, LABEL_WIDTH + GAP, BUTTON)
+        .flex()
+        .items_center()
+        .whitespace_nowrap()
+        .text_size(px(text::SMALL))
+        .text_color(palette.on_overlay(DIM))
+        .child(adjust.title());
+    // The track as it is, not raised to the overlay's text floor as the fill is, or it reads as
+    // bright as the fill and the fill from 100 % can't be seen.
+    let track = line(TRACK.0, width, MEDIA_SLIDER_TRACK)
+        .rounded_full()
+        .bg(palette.faint(SLIDER_TRACK_INK));
+    let fill = line(knob.min(middle), (knob - middle).abs(), MEDIA_SLIDER_TRACK)
+        .rounded_full()
+        .bg(palette.on_overlay(SLIDER_FILL_INK));
+    let tick = line(middle - 0.5, 1., SLIDER_TICK).bg(palette.on_overlay(DIM));
+    let size = MEDIA_SLIDER_KNOB;
+    let knob = line(knob - size / 2., size, size)
+        .rounded_full()
+        .bg(palette.on_overlay(1.))
+        .when(focused, |knob| {
+            knob.border(px(SLIDER_RING)).border_color(palette.accent)
+        });
+    let shown = line(CONTROL_RIGHT - SLIDER_VALUE, SLIDER_VALUE, BUTTON)
+        .flex()
+        .items_center()
+        .justify_end()
+        .text_size(px(text::BODY))
+        .text_color(palette.ink)
+        .child(format!("{value} %"));
+    let (up, down) = (editor.clone(), editor);
+    let slider = line(TRACK.0, width, BUTTON)
+        .id(("boost-slider", adjust as usize))
+        .when(a11y, |slider| {
+            slider
+                .role(Role::Slider)
+                .aria_label(adjust.title())
+                .aria_min_numeric_value(f64::from(least))
+                .aria_max_numeric_value(f64::from(most))
+                .aria_numeric_value_step(f64::from(ADJUST_STEP))
+                .aria_numeric_value(f64::from(value))
+                .on_a11y_action(Action::Increment, move |_, _, cx| {
+                    (up.update(cx, |editor, cx| editor.slide(adjust, 1, cx))).ok();
+                })
+                .on_a11y_action(Action::Decrement, move |_, _, cx| {
+                    (down.update(cx, |editor, cx| editor.slide(adjust, -1, cx))).ok();
+                })
+        });
+    vec![
+        label.into_any_element(),
+        track.into_any_element(),
+        fill.into_any_element(),
+        tick.into_any_element(),
+        knob.into_any_element(),
+        shown.into_any_element(),
+        slider.into_any_element(),
+    ]
 }
 
 #[cfg(test)]

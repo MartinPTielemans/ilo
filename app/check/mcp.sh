@@ -1,3 +1,4 @@
+# check.sh runs this at 380.
 # An MCP client reaches the browser through the bridge beside it once Settings › Agents is on and
 # it's connected, as the saved settings say here. The socket is the user's alone, and the bridge
 # gets nowhere without the agent's token. Its first call makes its Space, which no window lists, and
@@ -21,24 +22,35 @@
 # activity log, and is refused a tab of the user's.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, each answered with what changed in the outline alone, and not into a frame's password
-# field. Its text leaves out a frame an extension puts in
-# the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
-# the page doesn't keep runs no Stop of ilo's. Where it acts in the page watched, its pointer and a
+# field. Its text leaves out a frame an extension puts in the page, which isn't the page's. Nor is
+# the rest of what an extension puts there (#2355): its button is in neither the outline nor the
+# text, a click or the wheel where its frame covers the page, or a frame of the page, is refused,
+# and so are keys while its frame has the keyboard, each with an activity-log entry, and its
+# listeners don't hear the agent's keys or typing. Neither the agent's click nor its ArrowDown and
+# Enter in a login field opens or accepts Chrome's suggestion of a saved login. Its keys, typed or
+# pressed, go to the page alone, and Escape the page doesn't keep runs no Stop of ilo's. Where it
+# acts in the page watched, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, goes back, where the tab
 # takes the page's title again, scrolls, takes a screenshot and closes a tab, pins a tab of its own, unpins it and removes it, and a page that asks before it's left stays open, with no
 # dialog, until the agent discards it. Its download asks first, and Allow Once downloads the
 # file, which the answer names, and Never leaves none. It sends requests to its tab's site, carrying a session it
-# never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't. A bank's site asks first, in a card whose Allow Once opens it. Always Allow
+# never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't. Settings
+# › Agents opens each request to where it went and what it sent, or that the denied one wasn't. A bank's site asks first, in a card whose Allow Once opens it. Always Allow
 # opens it from then on, as Settings › Agents lists with its Revoke. A login the
 # user saved fills in neither as the agent's tab loads it nor from a dropdown, and fills once the
 # user takes the tab over, without a reload. Closing the client's end ends its session with the tab.
 # Reconnected, its next call is a card of its own, whose Stop answers the call under way and closes
 # the client's connection. Turning Settings › Agents off takes the socket away and drops a client
 # connected. Relaunched, a call with a tab's id from before is refused as one from before ilo
-# restarted.
+# restarted. Its tools offer it nothing of Boosts, which are the user's alone.
 # It scrolls in a panel and in another site's frame by their refs, until each answers that
 # nothing scrolled. A table's rows and a menu's items have refs it clicks by, and an answer says what
 # changed in an element, as a button now enabled.
+# Its picture of a page paints over each field whose contents its outline withholds: one filled by
+# the page's script, as the user's or a password manager's fill is, one it typed into that changed
+# since, a password field made a text field and a card's field, in another site's frame and half
+# out of view too, while its own unchanged typing and the page's own values show. An extension's
+# own frames, over the page and in its flow, are painted over whole, as its outline leaves them out.
 # Through all it does before the user first looks at its card, the user's Space, tab and focused
 # field stay as the user left them, and the user's next keys go into that field (decision 8).
 
@@ -65,7 +77,8 @@ token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
 printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
 chmod 600 "$agents_file"
 # An extension of the check's own, whose content script puts a frame of its page in the frames
-# page, as a password manager puts its own in pages. The frame tells the page it's there.
+# page, as a password manager puts its own in pages. The frame tells the page it's there. In the
+# page with fields it puts two frames showing red text, one over the page and one in its flow.
 extension="$PWD/$out/frame-extension"
 mkdir -p "$extension"
 cat > "$extension/manifest.json" << 'EOF'
@@ -73,8 +86,15 @@ cat > "$extension/manifest.json" << 'EOF'
   "manifest_version": 3,
   "name": "Frame check",
   "version": "1",
-  "content_scripts": [{"matches": ["http://localhost/frames.html*"], "js": ["content.js"]}],
-  "web_accessible_resources": [{"resources": ["frame.html"], "matches": ["http://localhost/*"]}]
+  "content_scripts": [
+    {"matches": ["http://localhost/frames.html*"], "js": ["content.js"]},
+    {"matches": ["http://localhost/withheld.html*"], "js": ["withheld.js"]},
+    {"matches": ["http://localhost/covered.html*"], "js": ["covered.js"]},
+    {"matches": ["http://127.0.0.1/covered-inner.html*"], "js": ["covered-inner.js"], "all_frames": true}
+  ],
+  "web_accessible_resources": [
+    {"resources": ["frame.html", "shown.html"], "matches": ["http://localhost/*", "http://127.0.0.1/*"]}
+  ]
 }
 EOF
 printf '%s' 'const frame = document.createElement("iframe");
@@ -82,6 +102,35 @@ frame.src = chrome.runtime.getURL("frame.html");
 document.body.append(frame);' > "$extension/content.js"
 printf '%s' '<p>Extension text</p><script src=frame.js></script>' > "$extension/frame.html"
 printf '%s' 'parent.postMessage("extension frame", "*");' > "$extension/frame.js"
+# On the covered page it adds a button of its own, a frame of its page over the page's button, as a
+# password manager's menu is, and key and input listeners of its own that mark the page when they
+# hear one. In the other site's frame there, it covers the frame's page with a frame of its own.
+printf '%s' 'const button = document.createElement("button");
+button.textContent = "Extension button";
+document.body.append(button);
+const frame = document.createElement("iframe");
+frame.src = chrome.runtime.getURL("frame.html");
+frame.style = "position: absolute; left: 0; top: 0; width: 300px; height: 120px; border: 0";
+document.body.append(frame);
+for (const type of ["keydown", "keypress", "beforeinput", "input"]) {
+  document.addEventListener(type, () => document.documentElement.dataset.heard = "1", true);
+}' > "$extension/covered.js"
+printf '%s' 'const frame = document.createElement("iframe");
+frame.src = chrome.runtime.getURL("frame.html");
+frame.style = "position: fixed; left: 0; top: 0; width: 100%; height: 100%; border: 0";
+document.body.append(frame);' > "$extension/covered-inner.js"
+printf '%s' 'for (const style of ["position: fixed; left: 40vw; top: 76vh", "display: block; margin-left: 2vw"]) {
+  const frame = document.createElement("iframe");
+  frame.src = chrome.runtime.getURL("shown.html");
+  frame.style = style + "; width: 25vw; height: 15vh; border: 0";
+  document.body.append(frame);
+}' > "$extension/withheld.js"
+printf '%s' '<!doctype html><meta charset=utf-8><style>
+body { margin: 0; background: #fff; color: #f00; font: 60vh/1 monospace;
+  -webkit-text-stroke: 0.1em #f00; overflow: hidden }
+</style><p style="margin: 20vh 5vw">██████</p><script src=shown.js></script>' > "$extension/shown.html"
+printf '%s' 'requestAnimationFrame(() => requestAnimationFrame(() =>
+  parent.postMessage("extension painted", "*")));' > "$extension/shown.js"
 # On Linux the app's notifications go to the desktop's server: check/notify-server.py, on a session
 # bus of the run's own, takes them and clicks them, as a desktop's does. Without dbus-daemon and
 # python3-gi, the run says it skips them.
@@ -220,26 +269,29 @@ mcp() {
   printf '%s\n' "$1" >&4
   case "$1" in *'"id":'*) answer=$(next_answer) || fail "the browser didn't answer $1"; printf '%s\n' "$answer" ;; esac
 }
-# Prints a tool's answer on stdin: its text, after "error: " if it's an error, or a picture's type
-# and size.
+# Prints the answer on stdin to the call $1: its text, after "error: " if it's an error, or a
+# picture's type and size. An answer with no result, as a JSON-RPC error, fails the run with it.
 answered() {
-  python3 -I -c '
+  raw=$(cat)
+  printf '%s\n' "$raw" | python3 -I -c '
 import json, sys
 result = json.load(sys.stdin)["result"]
 content = result["content"][0]
 if content["type"] == "image":
     print(content["mimeType"], len(content["data"]))
 else:
-    print(("error: " if result["isError"] else "") + content["text"])'
+    print(("error: " if result["isError"] else "") + content["text"])' 2> /dev/null ||
+    fail "the browser answered $1 with: $raw"
 }
-# The tools/call request for the tool $1 with the arguments $2.
+# The tools/call request for the tool $1 with the arguments $2, as they are: sh's echo would make
+# a JSON escape such as \n a line break.
 request() {
   id=$((id + 1))
-  echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}"
+  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}"
 }
 # Calls the tool $1 with the arguments $2, and prints its answer.
 call() {
-  mcp "$(request "$1" "$2")" | answered
+  mcp "$(request "$1" "$2")" | answered "$1"
 }
 
 mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
@@ -248,8 +300,10 @@ grep -q '"protocolVersion":"2025-06-18"' "$out/mcp-initialize.json" ||
   fail "initialize didn't answer in the client's version"
 await_log '^browser: agent mcp-client hello from check$' "the app didn't hear the client's hello"
 mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-mcp '{"jsonrpc":"2.0","id":100,"method":"tools/list"}' | grep -q '"name":"read_page"' ||
-  fail "tools/list didn't list read_page"
+mcp '{"jsonrpc":"2.0","id":100,"method":"tools/list"}' > "$out/mcp-tools.json"
+grep -q '"name":"read_page"' "$out/mcp-tools.json" || fail "tools/list didn't list read_page"
+# A Boost is the user's alone (decision 8), so no tool reads, writes or turns one on.
+grep -qi 'boost' "$out/mcp-tools.json" && fail "tools/list named a Boost among the agent's tools: $(grep -o '"name":"[^"]*"' "$out/mcp-tools.json" | tr '\n' ' ')"
 
 listed=$(call list_tabs '{}')
 await_log '^browser: made space [1-9][0-9]* for agent mcp-client$' "list_tabs didn't make the agent's Space"
@@ -297,6 +351,46 @@ esac
 closed=$(call close_tab "{\"tab\":$documents}")
 case "$closed" in "Closed tab $documents."*) ;; *) fail "closing the documents tab answered: $closed" ;; esac
 
+# A tab an agent's tab opens follows the agent's rules from when it's made, as the agent's own tab
+# does, whether a link, a page's window.open or a redirect in it leads there (#2660).
+if engine_has ../core/space.cc ../core/window.cc ../core/tab.cc ../core/main_delegate.cc; then
+  # The tab open_tab made refused the link to an app above where the core decides, as it's the
+  # agent's from its first request: open_tab makes it so before its page starts.
+  grep -q "browser: agent tab $documents refused ms-word\$" "$log" ||
+    fail "the agent's own tab didn't refuse the link to an app; its last agent tab line:
+$(grep 'browser: agent tab ' "$log" | tail -1)"
+  # window.open by name: a handler's bare open() is the document's, which with one argument
+  # replaces the page and opens nothing.
+  printf '%s' '<!doctype html><title>Opens</title>
+<a href="maps:?q=check" target="_blank">Link</a>
+<a href="bounce?to=maps%3A%3Fq%3Dcheck" target="_blank">Redirect</a>
+<button onclick="window.open(&quot;maps:?q=check&quot;)">Pop up</button>' > "$out/site/opens.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/opens.html\"}")
+  opens=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  # The core's line carries Chromium's prefix.
+  kept='browser: agent tab [0-9]* refused maps$'
+  for target in 'link "Link"' 'link "Redirect"' 'button "Pop up"'; do
+    ref=$(printf '%s\n' "$opened" | sed -n "s/.*- $target \[\(e[0-9]*\)\].*/\1/p" | head -1)
+    before=$(grep -c "$kept" "$log" || true)
+    call click "{\"tab\":$opens,\"ref\":\"$ref\"}" > /dev/null
+    await_more "$kept" "$before" || fail "the tab the agent's $target opened didn't follow the agent's rules"
+    kept_tab=$(grep "$kept" "$log" | tail -1 | sed 's/.*browser: agent tab \([0-9]*\) .*/\1/')
+    [ "$kept_tab" != "$opens" ] || fail "the agent's $target was kept in its own tab, not one it opened"
+    grep -q "^browser: page $kept_tab dialog [^n]" "$log" &&
+      fail "the tab the agent's $target opened asked the user: $(grep "^browser: page $kept_tab dialog" "$log" | tail -1)"
+    if call list_tabs '{}' | grep -q "^. $kept_tab  "; then
+      closed=$(call close_tab "{\"tab\":$kept_tab}")
+      case "$closed" in "Closed tab $kept_tab."*) ;; *) fail "closing tab $kept_tab answered: $closed" ;; esac
+    fi
+  done
+  closed=$(call close_tab "{\"tab\":$opens}")
+  case "$closed" in "Closed tab $opens."*) ;; *) fail "closing tab $opens answered: $closed" ;; esac
+  opened_said=", each following its rules from when it's made"
+else
+  opened_said=""
+  echo "skip: mcp, a tab an agent's tab opens. This engine is from before such a tab was the agent's from when it's made (#2660)."
+fi
+
 # Ten cases of a web toolkit, each the same form on a page of its own, which an agent moves to
 # Closed in tabs the user isn't looking at, each step on all ten in one turn: cases.py, through a
 # bridge of its own. The server answers a turn's calls at once (#1476). The form says Ready once
@@ -338,8 +432,9 @@ cases=$(sed -n 's/^cases: \(10 cases in .*\)/\1/p' "$out/cases.log")
 # button is enabled 4 s after the page shows, as a form's once its data is in: after open_tab's
 # answer, which waits for the page to settle and took 2.5 s on Windows' runner (#2079), and well
 # within the 5 s the click waits for it. Its click fetches /slow, which takes a second, then says
-# what came: the click's answer has it, with no wait step. Stall's fetch never comes, so its click
-# answers after 5 s, saying the page was still busy.
+# what came: the click's answer has it, with no wait step. Stall's fetch never comes, as a poll's
+# doesn't, while the page holds still: its click answers after 5 s saying so, not that the page may
+# change yet (#2355).
 printf '%s' '<script src="painted.js"></script>
 <h1>Settle</h1>
 <p><button id=load disabled>Load</button> <button id=stall>Stall</button> <span id=state></span></p>
@@ -372,9 +467,10 @@ case "$settled" in
 esac
 stalled=$(call click "{\"tab\":$settle_tab,\"ref\":\"$stall\"}")
 case "$stalled" in
-  "Clicked button “Stall”. The page was still busy after 5 s"*) ;;
+  "Clicked button “Stall”. The page held still, with requests it made still open after 5 s."*) ;;
   *) fail "the click on Stall, whose fetch never comes, answered: $stalled" ;;
 esac
+case "$stalled" in *"may change yet"*) fail "the click on Stall said the page may change yet" ;; esac
 settle="the settle page's click waited $(($(date +%s) - started)) s in all"
 closed=$(call close_tab "{\"tab\":$settle_tab}")
 case "$closed" in "Closed tab $settle_tab."*) ;; *) fail "closing the settle page answered: $closed" ;; esac
@@ -648,7 +744,8 @@ painted(() => document.title = "fields");
     case "$read" in *"$secret"*) fail "reading the fields page gave a field's value, $secret" ;; esac
   done
 
-  # The outline names the fields by ref, the password field off limits, and gives no value.
+  # The outline names the fields by ref, the password field off limits, and gives no value. A
+  # select's line names its options, the page's own, and never which one is chosen (#2355).
   outline=$(call snapshot "{\"tab\":$agent_tab}")
   printf '%s\n' "$outline" > "$out/mcp-outline.txt"
   case "$outline" in
@@ -656,8 +753,14 @@ painted(() => document.title = "fields");
     *) fail "the fields page's outline was: $outline" ;;
   esac
   for secret in $secrets; do
+    [ "$secret" = chosen-by-ada ] && continue
     case "$outline" in *"$secret"*) fail "the fields page's outline gave a field's value, $secret" ;; esac
   done
+  chosen=$(printf '%s\n' "$outline" | grep 'chosen-by-ada')
+  case "$chosen" in
+    *'- combobox [e'*'(options: "Pick one", "chosen-by-ada")') ;;
+    *) fail "the select's line didn't name just its options: $chosen" ;;
+  esac
   ref_of() { printf '%s\n' "$outline" | sed -n "s/.*- $1 \"$2\" \[\(e[0-9]*\)\].*/\1/p" | head -1; }
   password=$(ref_of textbox Password)
   refused=$(call type "{\"tab\":$agent_tab,\"ref\":\"$password\",\"text\":\"by-the-agent\"}")
@@ -822,7 +925,12 @@ addEventListener('message', (event) => {
 <ul id=list role=listbox aria-label=Priorities hidden>
 <li role=option>Low<li role=option>High<li role=option>Urgent
 </ul>
+<input id=city role=combobox aria-label=City aria-owns=cities aria-expanded=true value=Ber-by-ada>
+<ul id=cities role=listbox aria-label=Cities>
+<li role=option>Berlin<li role=option>Bern
+</ul>
 <script>
+cities.onclick = event => document.title = "city " + event.target.textContent;
 const field = document.getElementById("status");
 field.onchange = () => document.title = "status " + field.value;
 const show = open => { list.hidden = !open; pick.ariaExpanded = open; };
@@ -842,8 +950,23 @@ painted(() => document.title = "choose");
   printf '%s\n' "$outline" > "$out/mcp-choose.txt"
   status=$(ref_of combobox Status)
   priority=$(ref_of combobox Priority)
+  case "$outline" in
+    *"- combobox \"Status\" [$status] (options: \"Open\", \"Pending\", \"Closed\")"*) ;;
+    *) fail "the select's line didn't name its options: $(printf '%s\n' "$outline" | grep Status)" ;;
+  esac
   [ -n "$status" ] && [ -n "$priority" ] ||
     fail "the choosing page's fields had the refs '$status' and '$priority'"
+  # A picker whose list is its child (aria-owns), as Chromium's tree has it, shows its options with
+  # refs, and still not what's in its field (#2355).
+  case "$outline" in *Ber-by-ada*) fail "the picker's line gave what its field holds" ;; esac
+  bern=$(ref_of option Bern)
+  case "$outline" in
+    *"- combobox \"City\" [e"*"- listbox \"Cities\" [e"*"- option \"Berlin\" [e"*"- option \"Bern\" [$bern]"*) ;;
+    *) fail "the picker's own list wasn't in the outline: $(printf '%s\n' "$outline" | grep -A3 City)" ;;
+  esac
+  picked=$(call click "{\"tab\":$choose_tab,\"ref\":\"$bern\"}")
+  case "$picked" in "Clicked option “Bern”."*) ;; *) fail "clicking the picker's option answered: $picked" ;; esac
+  await_log "^browser: title $choose_tab city Bern\$" "clicking the picker's option didn't reach the page"
   chose=$(call select "{\"tab\":$choose_tab,\"ref\":\"$status\",\"option\":\"closed\"}")
   case "$chose" in
     "The combobox “Status” now holds “Closed”."*) ;;
@@ -866,6 +989,56 @@ painted(() => document.title = "choose");
     fail "choosing an option the select hasn't answered: $missed"
   last=$(sed -n "s/^browser: title $choose_tab //p" "$log" | tail -1)
   [ "$last" = "priority High" ] || fail "a missed option changed the page, to $last"
+
+  # Choice tiles whose radios the page hid, with display: none and named by a label's "for" or
+  # inside it, show as those radios, named by the label's text and with which is chosen, and a
+  # click on one by its ref chooses it. A label with no control stays text (#2355).
+  printf '%s' '<script src="painted.js"></script>
+<fieldset><legend>Account type</legend>
+<input type=radio name=kind id=personal value=personal hidden checked>
+<label for=personal><h3>Personal</h3><p>For you</p></label>
+<label><input type=radio name=kind value=business style="display: none"><h3>Business</h3>
+<p>For a team</p></label>
+<label>No control</label></fieldset>
+<script>
+for (const radio of document.querySelectorAll("input")) {
+  radio.onchange = () => document.title = "kind " + radio.value;
+}
+painted(() => document.title = "tiles");
+</script>' > "$out/site/tiles.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/tiles.html\"}")
+  tiles_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$tiles_tab" ] || fail "opening the tiles page answered: $opened"
+  await_log "^browser: title $tiles_tab tiles\$" "the tiles page didn't paint"
+  outline=$(call snapshot "{\"tab\":$tiles_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-tiles.txt"
+  personal=$(ref_of radio "Personal For you")
+  business=$(ref_of radio "Business For a team")
+  [ -n "$personal" ] && [ -n "$business" ] ||
+    fail "the hidden radios' tiles had the refs '$personal' and '$business'"
+  case "$outline" in
+    *"radio \"Personal For you\" [$personal] (checked)"*) ;;
+    *) fail "the chosen tile didn't show as checked" ;;
+  esac
+  case "$outline" in
+    *"radio \"Business For a team\" [$business] (checked)"*) fail "both tiles showed as checked" ;;
+    *'"No control" ['*) fail "a label with no control had a ref" ;;
+  esac
+  clicked=$(call click "{\"tab\":$tiles_tab,\"ref\":\"$business\"}")
+  case "$clicked" in
+    "Clicked radio “Business For a team”."*) ;;
+    *) fail "clicking a tile answered: $clicked" ;;
+  esac
+  await_log "^browser: title $tiles_tab kind business\$" "clicking a tile didn't choose it"
+  outline=$(call snapshot "{\"tab\":$tiles_tab}")
+  printf '%s\n' "$outline" >> "$out/mcp-tiles.txt"
+  case "$outline" in
+    *"radio \"Business For a team\" [$business] (checked)"*) ;;
+    *) fail "the tile clicked didn't show as checked" ;;
+  esac
+  case "$outline" in
+    *"radio \"Personal For you\" [$personal] (checked)"*) fail "the tile left still showed as checked" ;;
+  esac
 
   # A console's list page: its table's rows and its side menu's items, which a person clicks, have
   # refs, and a click on a row opens it. Ticking the box enables Continue, and the click's answer
@@ -959,6 +1132,39 @@ addEventListener("scroll", () => parent.postMessage("tall scrolled", "*"), { onc
   esac
   call close_tab "{\"tab\":$scroll_tab}" > /dev/null
 
+  # Scrolling to a field leaves room around it: one already whole on screen, just under a sticky
+  # header that covers its label, comes down far enough for the label to show (#2355).
+  printf '%s' '<script src="painted.js"></script>
+<header style="position: sticky; top: 0; height: 60px; background: #ddd">Header</header>
+<div style="height: 1500px"></div>
+<label id=label for=email>Email</label><br><input id=email style="height: 30px">
+<div style="height: 1500px"></div>
+<script>
+// The field whole, just under the header, which covers its label.
+scrollBy(0, email.getBoundingClientRect().top - 61);
+onscroll = () => {
+  const shows = label.getBoundingClientRect().top >= 60;
+  const whole = email.getBoundingClientRect().bottom <= innerHeight;
+  if (shows && whole) document.title = "label shows";
+};
+painted(() => document.title = "sticky");
+</script>' > "$out/site/sticky.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/sticky.html\"}")
+  sticky_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$sticky_tab" ] || fail "opening the sticky header's page answered: $opened"
+  await_log "^browser: title $sticky_tab sticky\$" "the sticky header's page didn't paint"
+  outline=$(call snapshot "{\"tab\":$sticky_tab}")
+  email=$(ref_of textbox Email)
+  [ -n "$email" ] || fail "the sticky header's page had no ref for its field: $outline"
+  scrolled=$(call scroll "{\"tab\":$sticky_tab,\"ref\":\"$email\"}")
+  case "$scrolled" in
+    "Scrolled to “Email”."*) ;;
+    *) fail "scrolling to the field under the header answered: $scrolled" ;;
+  esac
+  await_log "^browser: title $sticky_tab label shows\$" \
+    "scrolling to the field left its label under the sticky header"
+  call close_tab "{\"tab\":$sticky_tab}" > /dev/null
+
   # Its keys go to the page alone: type with submit and press_key's Enter submit the form, Tab
   # moves the keyboard to the next field, and Escape reaches the page. Escape the page doesn't keep
   # is ilo's Stop while a page loads, and the agent's runs no shortcut of ilo's: the page goes on
@@ -1020,7 +1226,7 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   await_log "^browser: title $keys_tab escape heard\$" "press_key Escape didn't reach the page"
   pressed=$(perl -e 'alarm 60; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5) ||
     fail "the browser didn't answer press_key Escape"
-  pressed=$(printf '%s\n' "$pressed" | answered)
+  pressed=$(printf '%s\n' "$pressed" | answered "press_key Escape")
   case "$pressed" in "Pressed Escape."*) ;; *) fail "press_key Escape answered: $pressed" ;; esac
   kill -0 "$pid" 2>/dev/null || fail "the app exited as the agent pressed Escape"
   [ "$(grep -c "$stopped" "$log" || true)" = "$stops" ] ||
@@ -1028,6 +1234,159 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   [ "$(tabs)" = "$before" ] || fail "the agent's Escape changed the tabs in its Space"
   closed=$(call close_tab "{\"tab\":$keys_tab}")
   case "$closed" in "Closed tab $keys_tab."*) ;; *) fail "closing the keys page answered: $closed" ;; esac
+
+  # Its typing is keys, as a keyboard's, so a field's own key handlers filter and format it as they
+  # do a user's, and a line break never sends or submits: a chat composer whose Enter sends gets
+  # the agent's lines as one unsent message. Text that isn't one key arrives exact, with no
+  # composition left open, and a long text loses nothing on a busy page (#2355). Each field says
+  # what it holds in the title; the run writes what each came to, then checks them.
+  printf '%s' '<meta charset=utf-8><script>
+function report(name, text) { document.title = name + " " + text.replace(/\n/g, "|"); }
+let composing = false;
+addEventListener("compositionstart", () => composing = true);
+addEventListener("compositionend", () => composing = false);
+const digitsOnly = (event) => {
+  if (event.key.length === 1 && !/[0-9]/.test(event.key)) event.preventDefault();
+};
+let keyups = 0;
+function busy() { const until = performance.now() + 2; while (performance.now() < until); }
+const expected = "日本語 😀👩‍👩‍👧 é";
+</script>
+<div contenteditable role=textbox aria-label=Composer
+  onkeydown="if (event.key === &quot;Enter&quot; &amp;&amp; !event.shiftKey) { event.preventDefault(); report(&quot;sent&quot;, this.innerText); }"
+  onkeypress="if (event.keyCode === 13) { event.preventDefault(); report(&quot;sent&quot;, this.innerText); }"
+  oninput="report(&quot;composer&quot;, this.innerText.split(&quot;\n&quot;).filter(Boolean).join(&quot;\n&quot;))"></div>
+<textarea aria-label=Notes oninput="report(&quot;notes&quot;, this.value)"></textarea>
+<input aria-label=Unicode oninput="report(&quot;unicode&quot;, (this.value === expected ? &quot;exact&quot; : &quot;wrong &quot; + this.value.length) + (composing ? &quot; composing&quot; : &quot; closed&quot;))">
+<input aria-label=Digits onkeydown="digitsOnly(event)" oninput="report(&quot;digits&quot;, this.value)">
+<input aria-label=Short maxlength=5 oninput="report(&quot;short&quot;, this.value)">
+<input aria-label=Card onkeydown="digitsOnly(event)"
+  oninput="this.value = this.value.replace(/\D/g, &quot;&quot;).slice(0, 16).replace(/(\d{4})(?=\d)/g, &quot;$1 &quot;); report(&quot;card&quot;, this.value)">
+<input aria-label=Expiry onkeydown="digitsOnly(event)"
+  oninput="const d = this.value.replace(/\D/g, &quot;&quot;).slice(0, 4); this.value = d.length > 2 ? d.slice(0, 2) + &quot;/&quot; + d.slice(2) : d; report(&quot;expiry&quot;, this.value)">
+<input aria-label=Suggest onkeyup="if (event.key.length === 1 &amp;&amp; !event.ctrlKey &amp;&amp; !event.metaKey) report(&quot;suggest&quot;, ++keyups + &quot; &quot; + this.value)">
+<input aria-label=Long oninput="if (this.value.length >= 5000) report(&quot;long&quot;, this.value.length + &quot; &quot; + (this.value === &quot;abcdefghij&quot;.repeat(500)))">
+<input aria-label=Busy onkeydown="busy()" onkeypress="busy()"
+  oninput="busy(); if (this.value.length >= 2000) report(&quot;busy&quot;, this.value.length + &quot; &quot; + (this.value === &quot;0123456789&quot;.repeat(200)))">
+<script>document.title = "typing";</script>' > "$out/site/typing.html"
+  outline=$(call open_tab "{\"url\":\"localhost:$port/typing.html\"}")
+  typing_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$typing_tab" ] || fail "open_tab of the typing page answered: $outline"
+  await_log "^browser: title $typing_tab typing\$" "the typing page didn't load"
+  outline=$(call snapshot "{\"tab\":$typing_tab}")
+  now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
+  : > "$out/mcp-typing.txt"
+  typing_wrong=
+  # Types $2 into the field named $1 and checks that what its title last said starts with $3.
+  type_and_see() {
+    field=$(ref_of textbox "$1")
+    [ -n "$field" ] || fail "the typing page's outline had no $1 field: $outline"
+    started=$(now_ms)
+    typed=$(call type "{\"tab\":$typing_tab,\"ref\":\"$field\",\"text\":\"$2\"}")
+    took=$(($(now_ms) - started))
+    name=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    seen=
+    for _ in $(seq 30); do
+      seen=$(grep -E "^browser: title $typing_tab ($name|sent) " "$log" | tail -1 |
+        sed "s/^browser: title $typing_tab //")
+      [ "$seen" = "$name $3" ] && break
+      sleep 0.1
+    done
+    printf '%s: %s in %s ms, answered %s\n' "$1" "${seen:-nothing}" "$took" \
+      "$(printf '%s' "$typed" | head -1)" | tee -a "$out/mcp-typing.txt"
+    [ "$seen" = "$name $3" ] || typing_wrong="$typing_wrong; $1 came to '${seen:-nothing}', not '$name $3'"
+  }
+  type_and_see Composer 'line one\nline two\n\nline four' 'line one|line two|line four'
+  type_and_see Notes 'first\nsecond\n' 'first|second|'
+  type_and_see Unicode '日本語 😀👩‍👩‍👧 é' 'exact closed'
+  type_and_see Digits 'a1b2c3' '123'
+  type_and_see Short 'abcdefgh' 'abcde'
+  type_and_see Card '4242424242424242' '4242 4242 4242 4242'
+  type_and_see Expiry '1229' '12/29'
+  type_and_see Suggest 'abc' '3 abc'
+  type_and_see Long "$(printf 'abcdefghij%.0s' $(seq 500))" '5000 true'
+  type_and_see Busy "$(printf '0123456789%.0s' $(seq 200))" '2000 true'
+  grep -q "^browser: title $typing_tab sent " "$log" && typing_wrong="$typing_wrong; a line break sent the composer's message"
+  [ -z "$typing_wrong" ] || fail "the agent's typing came out wrong${typing_wrong}"
+  call close_tab "{\"tab\":$typing_tab}" > /dev/null
+
+  # An extension's controls in a page aren't the page's, and the agent can't act on them (#2355).
+  printf '%s' '<title>covered loading</title>
+<button style="position: absolute; left: 20px; top: 20px; width: 200px; height: 60px"
+  onclick="document.body.append(&quot;covered clicked&quot;)">Covered button</button>
+<input aria-label="Page field" style="position: absolute; left: 20px; top: 200px"
+  onkeydown="document.title = (document.documentElement.dataset.heard ? &quot;extension heard &quot; : &quot;page heard &quot;) + event.key"
+  oninput="document.title = (document.documentElement.dataset.heard ? &quot;extension heard &quot; : &quot;page heard &quot;) + this.value">
+<button style="position: absolute; left: 20px; top: 260px"
+  onclick="document.querySelector(&quot;iframe:not([title])&quot;).focus(); document.title = &quot;extension focused&quot;">Focus extension</button>
+<script>const heard = new Set();
+addEventListener("message", (event) => {
+  heard.add(event.data);
+  if (heard.has("extension frame") && heard.has("inner covered")) document.title = "covered";
+});</script>' > "$out/site/covered.html"
+  printf '%s' "<iframe title='Inner frame' src=http://127.0.0.1:$port/covered-inner.html
+  style='position: absolute; left: 20px; top: 360px; width: 400px; height: 200px'></iframe>" \
+    >> "$out/site/covered.html"
+  printf '%s' '<p>Inner covered text</p><div style="height: 3000px"></div>
+<script>addEventListener("message", (event) => {
+  if (event.data === "extension frame") top.postMessage("inner covered", "*");
+});</script>' > "$out/site/covered-inner.html"
+  outline=$(call open_tab "{\"url\":\"localhost:$port/covered.html\"}")
+  covered_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$covered_tab" ] || fail "open_tab of the covered page answered: $outline"
+  await_log "^browser: title $covered_tab covered\$" "the check's extension didn't cover the covered page"
+  outline=$(call snapshot "{\"tab\":$covered_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-covered.txt"
+  case "$outline" in
+    *"Extension button"*) fail "the outline had the extension's button: $outline" ;;
+    *'button "Covered button"'*'textbox "Page field"'*) ;;
+    *) fail "the covered page was outlined as: $outline" ;;
+  esac
+  refused=$(call click "{\"tab\":$covered_tab,\"ref\":\"$(ref_of button "Covered button")\"}")
+  case "$refused" in
+    "error: An extension's control covers that spot"*) ;;
+    *) fail "clicking the button the extension's frame covers answered: $refused" ;;
+  esac
+  await_log "^browser: agent activity mcp-client $covered_tab click refused: An extension's control covers" \
+    "the refused click didn't reach the activity log"
+  clicked=$(call click "{\"tab\":$covered_tab,\"ref\":\"$(ref_of textbox "Page field")\"}")
+  case "$clicked" in "Clicked"*) ;; *) fail "clicking the page's field answered: $clicked" ;; esac
+  pressed=$(call press_key "{\"tab\":$covered_tab,\"key\":\"ArrowDown\"}")
+  case "$pressed" in "Pressed ArrowDown."*) ;; *) fail "press_key in the page's field answered: $pressed" ;; esac
+  await_log "^browser: title $covered_tab [a-z]* heard ArrowDown\$" "the agent's key didn't reach the page"
+  grep -q "^browser: title $covered_tab extension heard " "$log" &&
+    fail "the extension's key listener heard the agent's key"
+  typed=$(call type "{\"tab\":$covered_tab,\"ref\":\"$(ref_of textbox "Page field")\",\"text\":\"by-the-agent\"}")
+  case "$typed" in "Typed into “Page field”."*) ;; *) fail "typing in the page's field answered: $typed" ;; esac
+  await_log "^browser: title $covered_tab [a-z]* heard by-the-agent\$" "the agent's typing didn't reach the page"
+  grep -q "^browser: title $covered_tab extension heard " "$log" &&
+    fail "the extension's listeners heard the agent's typing"
+  read=$(call read_page "{\"tab\":$covered_tab}")
+  printf '%s\n' "$read" > "$out/mcp-covered-text.txt"
+  case "$read" in
+    *"Extension button"*) fail "reading the covered page gave the extension's button: $read" ;;
+    *"Covered button"*"Inner covered text"*) ;;
+    *) fail "reading the covered page answered: $read" ;;
+  esac
+  # The wheel finds what's under it in every frame it goes into, as a click does.
+  refused=$(call scroll "{\"tab\":$covered_tab,\"ref\":\"$(ref_of Iframe "Inner frame")\",\"direction\":\"down\"}")
+  case "$refused" in
+    "error: An extension's control covers that spot"*) ;;
+    *) fail "scrolling where the extension covers the other site's frame answered: $refused" ;;
+  esac
+  await_log "^browser: agent activity mcp-client $covered_tab scroll refused: An extension's control covers" \
+    "the refused scroll didn't reach the activity log"
+  clicked=$(call click "{\"tab\":$covered_tab,\"ref\":\"$(ref_of button "Focus extension")\"}")
+  case "$clicked" in "Clicked"*) ;; *) fail "clicking Focus extension answered: $clicked" ;; esac
+  await_log "^browser: title $covered_tab extension focused\$" "the page didn't focus the extension's frame"
+  refused=$(call press_key "{\"tab\":$covered_tab,\"key\":\"Enter\"}")
+  case "$refused" in
+    "error: An extension's control has the keyboard"*) ;;
+    *) fail "press_key while the extension's frame had the keyboard answered: $refused" ;;
+  esac
+  await_log "^browser: agent activity mcp-client $covered_tab press_key refused: An extension's control has" \
+    "the refused key didn't reach the activity log"
+  call close_tab "{\"tab\":$covered_tab}" > /dev/null
 
   # It sends HTTP requests from its tab to the tab's own site, with the tab's session but never
   # seeing it: reads go at once, their answers without the cookie the site sets or the token in its
@@ -1061,7 +1420,7 @@ CARD
     send click $((qx + x)) $((qy + qh - 26))
     await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the change's question"
     changed=$(next_answer) || fail "the browser didn't answer the change"
-    changed=$(printf '%s\n' "$changed" | answered)
+    changed=$(printf '%s\n' "$changed" | answered "the change")
   }
   change Once 0
   case "$changed" in
@@ -1075,6 +1434,164 @@ CARD
   [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
     fail "the denied change answered: $changed"
   [ "$(grep -c "$posted" "$out/site.log")" = 1 ] || fail "the denied change reached the site"
+  # Settings › Agents lists each request by what it did, and a press opens it to where it went and
+  # what it sent, or, for the change the user said no to, that it wasn't sent (#2326). Each row's
+  # name holds its entry's id, which counts up, and its method.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  settings_drew
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
+    send clickkey $(drawn "toolbar Agents")
+    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  fi
+  settings_drew Agents
+  drawn 'request [0-9]* POST' > /dev/null || fail "Settings › Agents drew no change"
+  posts=$(sed -n 's/^browser: settings request \([0-9]*\) POST at .*/\1/p' "$log" | sort -nu)
+  allowed_id=$(printf '%s\n' "$posts" | head -1)
+  denied_id=$(printf '%s\n' "$posts" | tail -1)
+  read_id=$(sed -n 's/^browser: settings request \([0-9]*\) GET at .*/\1/p' "$log" | sort -nu | tail -1)
+  [ -n "$read_id" ] && [ "$allowed_id" != "$denied_id" ] ||
+    fail "Settings › Agents didn't list the read and both changes: $(grep '^browser: settings request ' "$log")"
+  # Opens the request $1, sent with the method $2, and checks its line says it shows $3. The oldest
+  # first, the lowest, so a row opened doesn't move the next one. The name is whole, as in_sight
+  # finds a scrolled row by its fixed text.
+  open_request() {
+    in_sight "request $1 $2" || fail "Settings › Agents didn't draw request $1"
+    send clickkey $at
+    expect "^browser: settings request $1 opened " "a click on request $1 didn't open it"
+    shown=$(sed -n "s/^browser: settings request $1 opened //p" "$log" | tail -1)
+    [ "$shown" = "$3" ] || fail "request $1 opened to show \"$shown\", not \"$3\""
+  }
+  open_request "$read_id" GET "to http://localhost:$port/api/me, sent: "
+  open_request "$allowed_id" POST "to http://localhost:$port/api/items, sent: title: Milk"
+  open_request "$denied_id" POST "to http://localhost:$port/api/items, not sent: title: Milk"
+  ../tools/window-screenshot.sh "$pid" "$out/settings-agents-requests.png" || fail "no window to capture"
+  # Back to General, for the visits below to click Agents.
+  send clickkey $(drawn "toolbar General")
+  expect '^browser: settings tab General$' "a click on General didn't show its section"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+
+  # The agent's picture of a page withholds what its outline does of a field: a field holding what
+  # the agent typed and is unchanged shows it, as does the page's own value, by the markup or in a
+  # read-only field; any other field with something in it is painted over, so a field filled by the
+  # page's script, as the user's typing or a password manager's fill would be, one the agent typed
+  # into that changed since, a password field the page made a text field and a card's field, in a
+  # frame of another site and half out of view too. Each field's text is red blocks: a field shown
+  # has red in the picture, and one withheld has none. The check's extension puts two frames of its
+  # own with red text in the page, one over it and one in its flow below the fields, which the
+  # outline leaves out, so the picture has no red there either. The site's frame has a rule of its
+  # own, as one for every iframe would place the extension's too.
+  printf '%s' '<!doctype html><meta charset=utf-8><style>
+body { margin: 0; background: #fff }
+input, textarea { position: absolute; box-sizing: border-box; width: 40%; height: 40%; margin: 0;
+  padding: 0; border: 2px solid #888; background: #fff; color: #f00; font: 30vh/1 monospace;
+  -webkit-text-stroke: 0.1em #f00; resize: none; overflow: hidden }
+</style>
+<input aria-label="Frame default" value="██████" style="left: 5%; top: 10%">
+<input aria-label="Frame filled" style="left: 55%; top: 10%">
+<script src="painted.js"></script>
+<script>document.querySelector("[aria-label=\"Frame filled\"]").value = "██████";
+painted(() => parent.postMessage("painted", "*"));</script>' > "$out/site/withheld-inner.html"
+  printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><style>
+body { margin: 0; background: #fff }
+input, textarea { position: absolute; box-sizing: border-box; width: 20vw; height: 12vh; margin: 0;
+  padding: 0; border: 2px solid #888; background: #fff; color: #f00; font: 9vh/1 monospace;
+  -webkit-text-stroke: 0.1em #f00; resize: none; overflow: hidden }
+#site { position: absolute; left: 2vw; top: 40vh; width: 60vw; height: 30vh; border: 0 }
+button { position: absolute; left: 70vw; top: 50vh }
+</style>
+<input aria-label=Typed style='left: 2vw; top: 2vh'>
+<input aria-label=Changed style='left: 26vw; top: 2vh'>
+<input aria-label=Filled style='left: 50vw; top: 2vh'>
+<input aria-label=Default value='██████' style='left: 74vw; top: 2vh'>
+<input aria-label=Fixed readonly style='left: 2vw; top: 20vh'>
+<input aria-label='Shown password' type=password value='██████' style='left: 26vw; top: 20vh'>
+<input aria-label=Card autocomplete=cc-number value='██████' style='left: 50vw; top: 20vh'>
+<textarea aria-label=Note style='left: 74vw; top: 20vh'>██████</textarea>
+<iframe id=site src=http://127.0.0.1:$port/withheld-inner.html></iframe>
+<button onclick='document.querySelector(\"[aria-label=Changed]\").value += \"█\"'>Change</button>
+<input aria-label=Below style='left: 2vw; top: 94vh'>
+<div style='height: 76vh'></div>
+<script src=painted.js></script>
+<script>
+const field = label => document.querySelector('[aria-label=\"' + label + '\"]');
+for (const label of ['Filled', 'Fixed', 'Below']) field(label).value = '██████';
+field('Shown password').type = 'text';
+let ready = 0;
+const shown = () => ++ready == 4 && (document.title = 'fields');
+painted(shown);
+addEventListener('message', event =>
+  (event.data == 'painted' || event.data == 'extension painted') && shown());
+</script>" > "$out/site/withheld.html"
+  outline=$(call open_tab "{\"url\":\"localhost:$port/withheld.html\"}")
+  fields_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  await_log "^browser: title $fields_tab fields\$" "the page with fields didn't paint"
+  for label in Typed Changed; do
+    ref=$(ref_of textbox "$label")
+    typed=$(call type "{\"tab\":$fields_tab,\"ref\":\"$ref\",\"text\":\"██████\"}")
+    case "$typed" in "error: "*) fail "typing into $label answered: $typed" ;; esac
+  done
+  clicked=$(call click "{\"tab\":$fields_tab,\"ref\":\"$(ref_of button Change)\"}")
+  case "$clicked" in
+    "Clicked button “Change”."*) ;;
+    *) fail "clicking Change answered: $clicked" ;;
+  esac
+  mcp "$(request screenshot "{\"tab\":$fields_tab}")" | python3 -I -c '
+import base64, json, sys
+content = json.load(sys.stdin)["result"]["content"][0]
+if content["type"] != "image":
+    sys.exit(content.get("text", "no picture"))
+open(sys.argv[1], "wb").write(base64.b64decode(content["data"]))' "$out/agent-fields.jpg" ||
+    fail "the screenshot of the page with fields answered no picture"
+  # The share of red pixels between ($1, $2) and ($3, $4), as hundredths of the picture's width
+  # and height, in %; pixel leaves the picture as a BMP.
+  pixel "$out/agent-fields.jpg" 0 0 > /dev/null
+  reds() {
+    python3 -I - "$out/pixel.bmp" "$@" << 'PY'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+offset, = struct.unpack_from("<I", data, 10)
+width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
+x0, y0, x1, y1 = (float(each) / 100 for each in sys.argv[2:6])
+stride = (bits * width + 31) // 32 * 4
+red = total = 0
+for y in range(int(y0 * abs(height)), int(y1 * abs(height))):
+    row = y if height < 0 else abs(height) - 1 - y
+    for x in range(int(x0 * width), int(x1 * width)):
+        b, g, r = data[offset + row * stride + x * bits // 8:][:3]
+        red += r > 160 and g < 100 and b < 100
+        total += 1
+print(red * 100 // max(total, 1))
+PY
+  }
+  # A field's inside, $1 between ($2, $3) and ($4, $5), clear of its border: $6, shown with red,
+  # or withheld with none.
+  see_field() {
+    share=$(reds "$2" "$3" "$4" "$5")
+    echo "$1: $share% red" >> "$out/mcp-pictured.txt"
+    if [ "$6" = shown ]; then
+      [ "$share" -ge 10 ] ||
+        fail "the agent's picture didn't show $1, which it may see: $share% red"
+    else
+      [ "$share" -eq 0 ] || fail "the agent's picture showed $1, which it may not: $share% red"
+    fi
+  }
+  : > "$out/mcp-pictured.txt"
+  see_field Typed 3 4 21 12 shown
+  see_field Changed 27 4 45 12 withheld
+  see_field Filled 51 4 69 12 withheld
+  see_field Default 75 4 93 12 shown
+  see_field Fixed 3 22 21 30 shown
+  see_field "Shown password" 27 22 45 30 withheld
+  see_field Card 51 22 69 30 withheld
+  see_field Note 75 22 93 30 shown
+  see_field "Frame default" 6 44 28 54 shown
+  see_field "Frame filled" 36 44 58 54 withheld
+  see_field Below 3 95 21 99 withheld
+  see_field "Extension frame over the page" 41 77 64 90 withheld
+  see_field "Extension frame in the page" 3 77 26 90 withheld
+  call close_tab "{\"tab\":$fields_tab}" > /dev/null
 
   # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.
   opened=$(call open_tab '{"url":"example.com"}')
@@ -1222,7 +1739,7 @@ CARD
   send click $((qx + 30)) $((qy + qh - 26))
   await_log "^browser: agent mcp-client handed back $opened_tab\$" "Hand Back didn't hand the tab back"
   handed=$(next_answer) || fail "the browser didn't answer hand_off"
-  handed=$(printf '%s\n' "$handed" | answered)
+  handed=$(printf '%s\n' "$handed" | answered hand_off)
   case "$handed" in
     "The user handed tab $opened_tab back."*) ;;
     *) fail "hand_off answered: $handed" ;;
@@ -1273,7 +1790,7 @@ CARD
   send click $((qx + 30)) $((qy + qh - 26))
   await_log "^browser: agent mcp-client answered $q Never\$" "Keep didn't answer"
   kept=$(next_answer) || fail "the browser didn't answer ask_for_tab"
-  kept=$(printf '%s\n' "$kept" | answered)
+  kept=$(printf '%s\n' "$kept" | answered ask_for_tab)
   case "$kept" in
     "error: The user keeps tab $opened_tab."*) ;;
     *) fail "ask_for_tab answered: $kept" ;;
@@ -1288,11 +1805,13 @@ CARD
   # while the user holds the tab, on this run's own port, fills in neither as the page loads nor
   # from a dropdown once the agent has the tab back. Take Over fills it at once, without a reload,
   # and the dropdown offers it. ⌘↩ on the page watched takes it over and hands it back.
+  # Its count has a name of its own: the run's $before, which the run reads after, holds the login
+  # page's loads.
   take_over() {
     taken="^browser: agent mcp-client taken over in $opened_tab\$"
-    before=$(grep -c "$taken" "$log" || true)
+    takeovers=$(grep -c "$taken" "$log" || true)
     send key return cmd
-    await_more "$taken" "$before" || fail "$1: ⌘↩ didn't take the tab"
+    await_more "$taken" "$takeovers" || fail "$1: ⌘↩ didn't take the tab"
   }
   # How many child windows the browser window has, Chrome's autofill dropdown among them.
   children() {
@@ -1361,10 +1880,24 @@ CARD
   fi
   ../tools/window-screenshot.sh "$pid" "$out/agent-login-empty.png" || fail "no window to capture"
   [ "$(children)" = "$shown" ] || fail "the agent's tab offered the saved login in a dropdown"
+  # Nor do the agent's keys, which would open the dropdown and accept its login (#2355).
+  call press_key "{\"tab\":$opened_tab,\"key\":\"ArrowDown\"}" > /dev/null
+  [ "$(children)" = "$shown" ] || fail "the agent's ArrowDown offered the saved login in a dropdown"
   grep -q "^browser: title $opened_tab filled\$" "$log" &&
     fail "Chrome filled the saved password in the agent's tab"
   outline=$(call snapshot "{\"tab\":$opened_tab}")
   case "$outline" in *hunter2*) fail "the login page's outline gave the password" ;; esac
+  # With nothing offered, its Enter submits the empty form, which goes on to the welcome page.
+  welcomes=$(grep -c "^browser: title $opened_tab welcome\$" "$log" || true)
+  call press_key "{\"tab\":$opened_tab,\"key\":\"Enter\"}" > /dev/null
+  await_more "^browser: title $opened_tab welcome\$" "$welcomes" ||
+    fail "the agent's Enter in the login field didn't submit the form"
+  grep -q "^browser: title $opened_tab filled\$" "$log" &&
+    fail "the agent's Enter accepted the saved login"
+  before=$(logins)
+  call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/login.html\"}" > /dev/null
+  await_more "^browser: title $opened_tab login\$" "$before" ||
+    fail "the login page didn't load in the agent's tab again"
   before=$(logins)
   take_over "to fill the login"
   await_log "^browser: title $opened_tab filled\$" "Take Over didn't fill the saved password in"
@@ -1400,7 +1933,7 @@ CARD
     send click $((qx + x)) $((qy + qh - 26 - 36))
     await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the download"
     downloaded=$(next_answer) || fail "the browser didn't answer the download's open_tab"
-    downloaded=$(printf '%s\n' "$downloaded" | answered)
+    downloaded=$(printf '%s\n' "$downloaded" | answered "the download's open_tab")
   }
   answer_download Once
   [ "$downloaded" = "Downloaded report.docx (7 bytes) to downloads. Agents can't open files; ask the user if you need it." ] ||
@@ -1420,6 +1953,28 @@ CARD
   done
   [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] ||
     fail "the refused download left a file: $(ls -A "$out/downloads" | tr '\n' ' ')"
+  # As does one a tab the agent's tab opened starts (#2660): the user's Never for the site just
+  # above refuses it without asking again.
+  if [ -n "$opened_said" ]; then
+    printf '%s' "<!doctype html><title>Files</title><a href=\"//files.localhost:$port/report.docx\" target=\"_blank\">Report</a>" \
+      > "$out/site/files.html"
+    opened=$(call open_tab "{\"url\":\"localhost:$port/files.html\"}")
+    files=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+    ref=$(printf '%s\n' "$opened" | sed -n 's/.*- link "Report" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+    never='^browser: agent logged mcp-client download files\.localhost refused: You said never on this site\.$'
+    before=$(grep -c "$never" "$log" || true)
+    call click "{\"tab\":$files,\"ref\":\"$ref\"}" > /dev/null
+    await_more "$never" "$before" ||
+      fail "a download a tab the agent's tab opened started wasn't refused by the user's Never for its site; the last download lines:
+$(grep 'browser: agent .*download' "$log" | tail -3)"
+    for _ in $(seq 50); do
+      [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] && break
+      sleep 0.1
+    done
+    [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] ||
+      fail "the opened tab's refused download left a file: $(ls -A "$out/downloads" | tr '\n' ' ')"
+    # Left open: the agent is at work in it, which the session's end below ends.
+  fi
 
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
@@ -1442,7 +1997,7 @@ CARD
     send click $((qx + x)) $((qy + y))
     await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the question"
     allowed=$(next_answer) || fail "the browser didn't answer the bank's open_tab"
-    allowed=$(printf '%s\n' "$allowed" | answered)
+    allowed=$(printf '%s\n' "$allowed" | answered "the bank's open_tab")
   }
   answer_bank Once
   case "$allowed" in "Opened tab "*) ;; *) fail "the allowed open_tab answered: $allowed" ;; esac
@@ -1496,7 +2051,7 @@ if [ "$driven" = 1 ]; then
     "the client's card didn't say when it ended: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   grep '^browser: task card session-[0-9]* Done ' "$log" | grep -q '[0-9] pages\{0,1\}' &&
     fail "the client's receipt counted its pages, which Open counts: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
-  # The agent is at work in the tab it last acted in, the bank's it opened.
+  # The agent is at work in the tab it last acted in, which is still open.
   at=$(grep '^browser: agent mcp-client at work in ' "$log" | tail -1 | awk '{print $NF}')
   await_log "^browser: agent mcp-client done in $at\$" "the tab still shows a gone agent at work"
   await_log "^browser: agent question $pending gone\$" "a gone agent's question stayed open"
@@ -1656,7 +2211,7 @@ STOP
       fail "the window stayed urgent once no task waited"
   fi
   stopped=$(next_answer) || fail "the browser didn't answer the hand_off it stopped"
-  stopped=$(printf '%s\n' "$stopped" | answered)
+  stopped=$(printf '%s\n' "$stopped" | answered "the hand_off it stopped")
   case "$stopped" in
     "error: The user stopped you."*) ;;
     *) fail "the hand_off stopped answered: $stopped" ;;
@@ -1682,7 +2237,7 @@ STOP
   fi
   settings_drew Agents
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents.png" || fail "no window to capture"
-  send clickkey $(drawn "switch agents")
+  click_in_sight "switch agents"
   expect '^browser: agents off$' "a click on the switch didn't turn agents off"
   for _ in $(seq 30); do [ -e "$socket" ] || break; sleep 0.1; done
   [ -e "$socket" ] && fail "the socket stayed once agents were off"
@@ -1736,9 +2291,9 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "${toast_skip:-}" ]; then
   echo "skip: the needs' toast showing, as Windows shows toasts only for an installed copy, which the run's isn't: it counted on the taskbar button and asked for the toast."

@@ -1,7 +1,8 @@
 //! The sidebar's header: the buttons to hide the sidebar and go back, forward and
 //! reload, and the URL field under them.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use web_time::Instant;
 
 use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::site_controls::Place;
@@ -460,8 +461,59 @@ impl Shell {
             None => Place::Corner(point(px(self.card_corner() + PLATE_INSET), px(PLATE_INSET))),
         };
         let extensions = self.site_controls_extensions();
-        self.browser
-            .site_controls(self.field_tab(), place, self.viewport, extensions, cx);
+        let profiles = self.site_controls_profiles();
+        self.browser.site_controls(
+            self.field_tab(),
+            place,
+            self.viewport,
+            extensions,
+            profiles,
+            cx,
+        );
+    }
+
+    /// The tab's profile and the user's others, for the Site Controls' chip, while there's more
+    /// than one (#2339). A window with a Space of its own has none: a private one's session shares
+    /// none of the profile's logins, and Little ilo's bar has its own picker.
+    pub(super) fn site_controls_profiles(&self) -> Option<crate::site_controls::Profiles> {
+        if self.private || self.blank || self.little.is_some() || self.profiles.len() < 2 {
+            return None;
+        }
+        let current = self.shown_space()?.profile;
+        let name = (self.profiles.iter())
+            .find(|(id, _)| *id == current)?
+            .1
+            .clone();
+        let others = (self.profiles.iter())
+            .filter(|(id, _)| *id != current)
+            .map(|(id, name)| (*id, name.clone(), self.users_space_in(*id).is_some()))
+            .collect();
+        Some(crate::site_controls::Profiles { name, others })
+    }
+
+    /// The first of the user's Spaces in `profile`, in the sidebar's order: agents' aren't theirs.
+    fn users_space_in(&self, profile: u64) -> Option<u64> {
+        (self.spaces.iter())
+            .find(|space| space.profile == profile && space.agent.is_empty())
+            .map(|space| space.id)
+    }
+
+    /// Site Controls' Open in <profile> (#2339): the tab's page in a new tab of the first of the
+    /// user's Spaces in `profile`, shown, as Little ilo's picker goes to that profile's first
+    /// Space. It loads fresh there, as the profile's cookies are its own (decision 5).
+    pub fn open_in_profile(&mut self, tab: u64, profile: u64, cx: &mut Context<Self>) {
+        let url = self.page(tab).url;
+        let Some(space) = self.users_space_in(profile) else {
+            return;
+        };
+        self.show_space(space, cx);
+        self.browser.open_page(&url, cx);
+    }
+
+    /// Site Controls' New Space in <profile>…, for a profile none of the user's Spaces is in: New
+    /// Space's form, its Space in `profile`.
+    pub fn new_space_in_profile(&mut self, profile: u64, cx: &mut Context<Self>) {
+        self.new_space_from(None, Some(profile), cx);
     }
 
     /// A button at the URL field's end, `end` in from it, shown while the pointer is over the

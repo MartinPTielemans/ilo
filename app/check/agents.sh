@@ -1,3 +1,4 @@
+# check.sh runs this at 80.
 # A Space the driver makes for an agent, through the core as agent code will, is never the user's
 # to see (#1080): the window keeps it apart, as a task's, out of the switcher, the Spaces menu and
 # ⌃1 to ⌃9, and the agent's work shows on its card instead. With the Spaces menu open on the Mac,
@@ -278,7 +279,7 @@ if windows || [ -n "$mac" ]; then
   connect_with() {
     calls="$(dirname "$1")/claude-calls"
     rm -f "$calls"
-    send clickkey $(drawn "connect claude-code")
+    click_in_sight "connect claude-code"
     expect '^browser: connect agent claude-code$' "a click on Connect didn't connect Claude Code"
     expect_late '^browser: agent claude-code \(connected\|couldn.t connect: .*\)$' \
       "Connect with $(basename "$1") didn't finish"
@@ -317,7 +318,7 @@ PY
     settings_tab General
     settings_tab Agents
     ../tools/window-screenshot.sh "$pid" "$out/connected-$2.png" || fail "no window to capture"
-    send clickkey $(drawn "disconnect claude-code")
+    click_in_sight "disconnect claude-code"
     expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
     calls_reach "$calls" 3 || fail "Disconnect didn't run claude"
     [ "$(tail -1 "$calls")" = "[\"mcp\",\"remove\",\"--scope\",\"user\",\"$name\"]" ] ||
@@ -342,18 +343,18 @@ PY
   # claude to take the server out, and Connect says it isn't installed.
   mkdir -p "$native"
   cp "$standin" "$native/"
-  send clickkey $(drawn "connect claude-code")
+  click_in_sight "connect claude-code"
   expect_late '^browser: agent claude-code connected$' "Connect with $(basename "$standin") didn't connect"
   rm -rf "$native"
   settings_tab General
   settings_tab Agents
-  send clickkey $(drawn "disconnect claude-code")
+  click_in_sight "disconnect claude-code"
   expect '^browser: agent claude-code disconnected$' "a click on Disconnect didn't disconnect Claude Code"
   expect_late "^browser: agent claude-code config kept: Claude Code's claude command isn't installed\.\$" \
     "Disconnect with claude gone didn't say it isn't installed"
   settings_tab General
   settings_tab Agents
-  send clickkey $(drawn "connect claude-code")
+  click_in_sight "connect claude-code"
   expect_late "^browser: agent claude-code couldn't connect: Claude Code's claude command isn't installed\.\$" \
     "Connect with no claude didn't say it isn't installed"
   settings_tab General

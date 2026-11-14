@@ -4,9 +4,11 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -47,7 +49,9 @@
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
+#include "extensions/browser/extension_system.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/browser/management_policy.h"
 #include "extensions/browser/permissions/active_tab_permission_granter.h"
 #include "extensions/browser/process_map.h"
 #include "extensions/browser/ui_util.h"
@@ -56,6 +60,7 @@
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/command.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/manifest.h"
 #include "extensions/common/manifest_handlers/options_page_info.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -182,8 +187,12 @@ class CrashWatch : public content::RenderProcessHostCreationObserver,
 
 // Extension |id| if it's turned on in |profile| and runs there: in a private window's profile only
 // if the user allowed it in Incognito, as in Chrome, whose off-the-record registry is the
-// original's and lists every extension.
+// original's and lists every extension. Never the ad blocker, whose popup and commands are uBlock
+// Origin's own UI, which Settings › Ad blocking stands for.
 const extensions::Extension* RunsIn(Profile* profile, const std::string& id) {
+  if (IsAdBlocker(id)) {
+    return nullptr;
+  }
   const extensions::Extension* extension =
       extensions::ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(id);
   if (extension && profile->IsOffTheRecord() &&
@@ -333,6 +342,87 @@ std::string OptionsPage(const extensions::Extension& extension) {
   return std::string(chrome::kChromeUIExtensionsURL) + "?options=" + extension.id();
 }
 
+// Whether a safe start holds |extension| in |profile|: all but the browser's own, a theme and one a
+// policy keeps on.
+bool Holdable(Profile* profile, const extensions::Extension& extension) {
+  return !extensions::Manifest::IsComponentLocation(extension.location()) &&
+         !extension.is_theme() &&
+         !extensions::ExtensionSystem::Get(profile)->management_policy()->MustRemainEnabled(
+             &extension, nullptr);
+}
+
+// A safe start's hold on one profile's extensions, for the launch. Each is terminated, as Chrome
+// leaves an extension whose process crashed: not loaded, nothing kept in its prefs, and listed on
+// Chrome's extensions page with its switch as the user left it and Remove. The profile's saved ones
+// are held before any runs. The command line's load a task later, as their installer checks them
+// first (#2629), so each is held as it loads, once: the user can still load it again there, and one
+// they install or turn on in the launch is theirs.
+class SafeStartHold : public extensions::ExtensionRegistryObserver {
+ public:
+  // |count| are held already.
+  SafeStartHold(Profile* profile, size_t count) : profile_(profile), count_(count) {
+    observation_.Observe(extensions::ExtensionRegistry::Get(profile));
+    Said();
+  }
+
+  // Whether it's about to hold |id|, as soon as the registry's notification is done.
+  bool Holding(const extensions::ExtensionId& id) const { return holding_.contains(id); }
+
+ private:
+  // extensions::ExtensionRegistryObserver:
+  void OnExtensionLoaded(content::BrowserContext* context,
+                         const extensions::Extension* extension) override {
+    if (extension->location() != extensions::mojom::ManifestLocation::kCommandLine ||
+        !Holdable(profile_, *extension) || !held_.insert(extension->id()).second) {
+      return;
+    }
+    holding_.insert(extension->id());
+    // Not inside the registry's notification.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&SafeStartHold::Hold, weak_factory_.GetWeakPtr(), extension->id()));
+  }
+  // The profile is going. This deletes this.
+  void OnShutdown(extensions::ExtensionRegistry* registry) override;
+
+  void Hold(const extensions::ExtensionId& id) {
+    holding_.erase(id);
+    if (!extensions::ExtensionRegistry::Get(profile_)->enabled_extensions().Contains(id)) {
+      return;
+    }
+    extensions::ExtensionRegistrar::Get(profile_)->TerminateExtension(id);
+    ++count_;
+    Said();
+  }
+
+  // check.sh reads this line, the launch's count so far.
+  void Said() { LOG(ERROR) << "browser: safe start holds " << count_ << " extensions"; }
+
+  const raw_ptr<Profile> profile_;
+  // The command line's it has held, and those of them it's about to.
+  std::set<extensions::ExtensionId> held_;
+  std::set<extensions::ExtensionId> holding_;
+  size_t count_;
+  base::ScopedObservation<extensions::ExtensionRegistry, extensions::ExtensionRegistryObserver>
+      observation_{this};
+  base::WeakPtrFactory<SafeStartHold> weak_factory_{this};
+};
+
+std::map<Profile*, std::unique_ptr<SafeStartHold>>& SafeStartHolds() {
+  static base::NoDestructor<std::map<Profile*, std::unique_ptr<SafeStartHold>>> holds;
+  return *holds;
+}
+
+void SafeStartHold::OnShutdown(extensions::ExtensionRegistry* registry) {
+  SafeStartHolds().erase(profile_);
+}
+
+// Whether a safe start is about to hold extension |id| in |profile|, one that loaded late.
+bool HoldingLate(Profile* profile, const extensions::ExtensionId& id) {
+  auto hold = SafeStartHolds().find(profile);
+  return hold != SafeStartHolds().end() && hold->second->Holding(id);
+}
+
 // Tells the app of one profile's extensions, once after each call that changed them.
 class ProfileExtensions : public extensions::ExtensionRegistryObserver,
                           public ToolbarActionsModel::Observer,
@@ -412,7 +502,9 @@ class ProfileExtensions : public extensions::ExtensionRegistryObserver,
     std::vector<scoped_refptr<const extensions::Extension>> listed;
     for (const scoped_refptr<const extensions::Extension>& extension :
          registry->GenerateInstalledExtensionsSet()) {
-      if (extensions::ui_util::ShouldDisplayInExtensionSettings(*extension)) {
+      // The ad blocker is Settings › Ad blocking, not an extension of the user's.
+      if (extensions::ui_util::ShouldDisplayInExtensionSettings(*extension) &&
+          !IsAdBlocker(extension->id())) {
         listed.push_back(extension);
       }
     }
@@ -429,7 +521,9 @@ class ProfileExtensions : public extensions::ExtensionRegistryObserver,
     std::vector<bc_extension> extensions;
     extensions.reserve(listed.size());
     for (const scoped_refptr<const extensions::Extension>& extension : listed) {
-      const bool enabled = registry->enabled_extensions().Contains(extension->id());
+      // Not one a safe start holds as soon as it can, which the menu would list until then.
+      const bool enabled = registry->enabled_extensions().Contains(extension->id()) &&
+                           !HoldingLate(profile_, extension->id());
       std::vector<bc_extension_command>& told = commands.emplace_back();
       for (const KeyedCommand& command : keyed.emplace_back(KeyedCommands(profile_, *extension))) {
         told.push_back({command.name.c_str(), command.description.c_str(), command.key.c_str(),
@@ -605,7 +699,8 @@ void WindowActions::Report() {
           extension ? extensions::ExtensionActionManager::Get(profile_)->GetExtensionAction(
                           *extension)
                     : nullptr;
-      if (!action) {
+      // Nor its action, pinned before it left the lists or not.
+      if (!action || IsAdBlocker(extension->id())) {
         return;
       }
       std::unique_ptr<Icon>& icon = icons_[extension->id()];
@@ -707,6 +802,31 @@ bool TurnOnExtension(Profile* profile, const std::string& id) {
   }
   extensions::ExtensionRegistrar::Get(profile)->EnableExtension(id);
   return registry->enabled_extensions().Contains(id);
+}
+
+bool SafeStart() {
+  // The app's switch, given at every launch (app/src/safe_start.rs).
+  static const bool safe =
+      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("safe-start") == "1";
+  return safe;
+}
+
+void HoldExtensionsForSafeStart(Profile* profile, size_t not_loaded) {
+  if (!SafeStart()) {
+    return;
+  }
+  std::vector<extensions::ExtensionId> held;
+  for (const scoped_refptr<const extensions::Extension>& extension :
+       extensions::ExtensionRegistry::Get(profile)->enabled_extensions()) {
+    if (Holdable(profile, *extension)) {
+      held.push_back(extension->id());
+    }
+  }
+  extensions::ExtensionRegistrar* registrar = extensions::ExtensionRegistrar::Get(profile);
+  for (const extensions::ExtensionId& id : held) {
+    registrar->TerminateExtension(id);
+  }
+  SafeStartHolds()[profile] = std::make_unique<SafeStartHold>(profile, held.size() + not_loaded);
 }
 
 bool RemoveExtension(Profile* profile, const std::string& id) {

@@ -208,6 +208,8 @@ unsafe extern "C" {
     #[cfg(target_os = "macos")]
     pub fn host_enter_full_screen(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
+    pub fn host_window_full_screen(ui_view: *mut c_void) -> bool;
+    #[cfg(target_os = "macos")]
     pub fn host_window_on_active_space(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_window_buttons(
@@ -294,7 +296,7 @@ unsafe extern "C" {
     pub fn host_key_repeated() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_paste(text: *mut c_char, capacity: usize) -> usize;
-    pub fn host_open_in_safari(url: *const c_char);
+    pub fn host_open_elsewhere(url: *const c_char);
     pub fn host_open_full_disk_access();
     pub fn host_share(
         ui_view: *mut c_void,
@@ -396,6 +398,16 @@ unsafe extern "C" {
     pub fn host_set_toast_plate(x: f64, y: f64, width: f64, height: f64);
     pub fn host_show_toast(ui_view: *mut c_void);
     pub fn host_hide_toast();
+    pub fn host_add_foot_bar(foot_bar_view: *mut c_void);
+    pub fn host_show_foot_bar(
+        ui_view: *mut c_void,
+        left: f64,
+        right: f64,
+        bottom: f64,
+        width: f64,
+        height: f64,
+    );
+    pub fn host_hide_foot_bar();
     pub fn host_add_tooltip(tooltip_view: *mut c_void, margin: f64, away: extern "C" fn());
     pub fn host_show_tooltip(ui_view: *mut c_void, overlay: c_int, left: f64, top: f64, fade: f64);
     pub fn host_hide_tooltip(fade: f64);

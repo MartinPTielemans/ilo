@@ -345,9 +345,9 @@ pub extern "C" fn host_show_overlay(
     let (origin, size) = (bounds.origin, bounds.size);
     let name = NAMES[overlay as usize];
     let at = [origin.x, origin.y, size.width, size.height].map(f32::from);
-    eprintln!("browser: {name} at {} {} {} {}", at[0], at[1], at[2], at[3]);
+    browser::log!("browser: {name} at {} {} {} {}", at[0], at[1], at[2], at[3]);
     if !was_shown {
-        eprintln!("browser: {name} shown");
+        browser::log!("browser: {name} shown");
     }
 }
 
@@ -362,7 +362,7 @@ pub extern "C" fn host_set_overlay_height(overlay: c_int, height: f64) {
     if let Some(Some((view, bounds, radius))) = moved {
         gpui_linux::move_overlay(view, bounds, radius);
         shadows::moved(overlay, bounds, f32::from(radius));
-        eprintln!("browser: {} height {height}", NAMES[overlay as usize]);
+        browser::log!("browser: {} height {height}", NAMES[overlay as usize]);
     }
 }
 
@@ -477,7 +477,7 @@ fn hide(overlay: c_int) -> bool {
     }) else {
         return false;
     };
-    eprintln!("browser: {} hidden", NAMES[overlay as usize]);
+    browser::log!("browser: {} hidden", NAMES[overlay as usize]);
     let Some((origin, started)) = shrinks else {
         gpui_linux::hide_overlay(view, move || lend_keyboard(window, view, false));
         shadows::hide(overlay);
@@ -684,7 +684,7 @@ pub extern "C" fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: 
     lend_keyboard(window, view, true);
     gpui_linux::set_overlay_pointer(view, None);
     show_over(view, ui_view, bounds, radius, true, left_dialog);
-    eprintln!("browser: dialog window shown");
+    browser::log!("browser: dialog window shown");
 }
 
 #[unsafe(no_mangle)]
@@ -699,7 +699,7 @@ pub extern "C" fn host_hide_dialog() {
             lend_keyboard(window, view, false);
         }
     });
-    eprintln!("browser: dialog window hidden");
+    browser::log!("browser: dialog window hidden");
 }
 
 /// The dialog was answered and leaves: it goes on drawing, and the clicks and keys go to the
@@ -717,7 +717,7 @@ pub(crate) fn dialog_leaving() {
     gpui_linux::set_overlay_pointer(view, Some(&[]));
     gpui_linux::set_overlay_keyboard(view, false, left_dialog);
     lend_keyboard(window, view, false);
-    eprintln!("browser: dialog gives the keyboard back");
+    browser::log!("browser: dialog gives the keyboard back");
 }
 
 /// Places the dialog again if it shows over the browser window of `ui_view`, as its content

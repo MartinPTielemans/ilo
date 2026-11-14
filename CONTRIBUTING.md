@@ -1,11 +1,11 @@
 # Contributing
 
 ilo is in beta on macOS and Linux and in alpha on Windows, with one maintainer and limited time to
-review. A pull request doesn't oblige anyone to review or merge it: we may close or defer it, ask
-for a smaller one, or build the idea another way later. Meeting this guide makes a PR eligible for
-review, not certain of a merge. The same bar applies to drafts.
+review. A pull request obliges no one to review or merge it: we may close or defer it, ask for a
+smaller one, or build the idea another way later. Meeting this guide makes a PR eligible for
+review, not certain of a merge, drafts included.
 
-Focused bug fixes, reliability and performance work are the most likely to land. Features nobody
+Focused bug fixes, reliability and performance work are likeliest to land. Features nobody
 agreed to, rewrites and unrelated cleanup are not.
 
 ## Where things go
@@ -24,8 +24,8 @@ Reproduce on public pages. Never put private URLs, cookies, account data or what
 shows in an issue, a PR or an attachment.
 
 A coding agent can investigate a problem on your Mac and draft the issue for you: ask it to follow
-[.github/triage/PLAYBOOK.md](.github/triage/PLAYBOOK.md). It files with the `via-triage` form, and
-shows you the issue before posting it.
+[.github/triage/PLAYBOOK.md](.github/triage/PLAYBOOK.md). It files with the `via-triage` form, showing
+you the issue first.
 
 ## Vouching
 
@@ -45,8 +45,8 @@ denounces the same way, with a reason, for bad faith such as spam or repeated lo
 
 Agree on the problem and the scope first:
 
-- **Features and changes to behavior** need a maintainer's approval of the direction and scope in
-  an issue, before you build them. Link the approval in your PR. Calling a behavior change a bug
+- **Features and changes to behavior** need a maintainer's approval of direction and scope in an
+  issue before you build them. Link the approval in your PR. Calling a behavior change a bug
   fix doesn't exempt it.
 - **A substantial bug fix** links an issue a maintainer has triaged, which establishes the failure
   and the intended behavior.
@@ -54,7 +54,7 @@ Agree on the problem and the scope first:
   There's no line cutoff: we judge purpose and effect.
 
 Settled decisions stay settled. One reopens only with the evidence its entry in
-[docs/decisions.md](docs/decisions.md) names, and some are off the table entirely: Electron as the
+[docs/decisions.md](docs/decisions.md) names, and some are off the table: Electron as the
 product, WebKit or Gecko as ilo's engine, and closed source.
 
 ## One problem per PR
@@ -67,7 +67,7 @@ batch related fixes.
 ## Evidence
 
 Say how you established the problem, how you checked the change, and what you saw. Name the checks
-you ran and state what you couldn't check. A checkbox or "it builds" doesn't show the change works.
+you ran and what you couldn't check. A checkbox or "it builds" doesn't show the change works.
 [AGENTS.md](AGENTS.md) says how to verify each part of the browser.
 
 - **Every surface.** Walk "Hit every surface" in AGENTS.md and say which entries applied. The most
@@ -100,7 +100,7 @@ and ask for another look, or open the focused PRs and link them to the first.
 
 ## Sign-off
 
-Every commit needs a `Signed-off-by:` line. It certifies the [Developer Certificate of Origin](https://developercertificate.org/): you wrote the change, or you have the right to submit it under this project's license.
+Every commit needs a `Signed-off-by:` line. It certifies the [Developer Certificate of Origin](https://developercertificate.org/): you wrote the change, or may submit it under this project's license.
 
 ```sh
 git commit -s

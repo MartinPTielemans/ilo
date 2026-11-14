@@ -1,3 +1,4 @@
+# check.sh runs this at 630.
 # A page in another language, translated on the device (#671), with the check's stand-in for the
 # Mac's translator (BROWSER_TRANSLATE=stand-in, src/translate_host.rs), which marks each text "[en]",
 # so the run proves the page's words go to the translator and back on any platform. A page that

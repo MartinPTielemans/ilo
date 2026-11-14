@@ -17,7 +17,8 @@
 // dpi <percent>, which tells the browser window it moved to a display of that scale as Windows does
 // (WM_DPICHANGED), keeping its size in pixels, and placement, which logs the window's maximized
 // state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the windows
-// on screen over the app's browser windows; stack, which lists every app's windows over the driven
+// on screen over the app's browser windows; lives, which lists every window the host floats over
+// them and where each is in its life; stack, which lists every app's windows over the driven
 // one, front first; and reshow, which shows those of the UI's that are hidden again, as Windows
 // does. window <n> behind drives a window without bringing it forward, as drive.mm's does. The
 // Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with
@@ -40,8 +41,13 @@
 // Linux's driver does. ime ja makes Microsoft's Japanese IME, where it's installed, the UI thread's
 // input method, on in hiragana, and sends the keys typed until ime off without a shortcut's
 // modifiers through Windows' input queue, to the window in front, which must be ilo's, so the IME
-// composes them, in a page too: "nihongo" composes にほんご, space converts it to 日本語.
+// composes them, in a page too: "nihongo" composes にほんご, space converts it to 日本語. ime ko does
+// the same with Microsoft's Korean IME, in Hangul: "gksrmf" composes 한글 (#2457).
 // fullscreen puts the window full screen or takes it out through the core, as Linux's driver does.
+// realkey <key> [win] [ctrl] [shift] [alt] presses a key with Windows' own modifiers, unlike key's,
+// as a hand does, through SendInput: Windows itself handles it, as it does Win+D, which no posted
+// message stands in for. It goes to the desktop's foreground window, whichever app's that is, so
+// the driver refuses it unless the desktop is the check's own: CI's, or BROWSER_DRIVE_OWN_DESKTOP=1.
 // The others, pageswipe, displays, hide, backdrop and openmenu, Windows has nothing the driver can
 // stand in for yet: each logs "browser: drive: unsupported <command>" before drive.mm's "can't do
 // that", so a run fails at once.
@@ -86,6 +92,8 @@ bool host_drive_pointer(unsigned message, long x, long y);
 bool host_drive_key(unsigned vk, long lparam);
 uint64_t host_browser_window_id(size_t index);
 const char* host_floating_name(void* hwnd);
+void host_floating_lives(void (*each)(void* context, const char* name, void* hwnd, int life),
+                         void* context);
 bool host_save_dialog_answer(const char* path);
 // The app's (src/main.rs), on GPUI's window |hwnd|, for the scripted input method.
 bool browser_drive_compose(void* hwnd, const char* text, size_t start, size_t end, bool selected);
@@ -351,16 +359,25 @@ void Enter(const Target& target) {
   g_hovered = target.hwnd;
 }
 
-// Posts the pointer moving to |target|, with |buttons| held.
-void Move(const Target& target, int modifiers, UINT buttons) {
+// Windows sends all of the thread's mouse input to the window that has the mouse captured,
+// wherever the pointer is, as GPUI's has from a press until it hears the release: the driver's
+// goes there too, so a capture left behind shows in a check as it does to a hand (#2516).
+Target Captured(const Target& target) {
+  const HWND held = GetCapture();
+  return held && held != target.hwnd && Ours(held) ? At(held, target.screen) : target;
+}
+
+// Posts the pointer moving to |to|, with |buttons| held.
+void Move(const Target& to, int modifiers, UINT buttons) {
   HoldKeys(modifiers, buttons);
-  if (host_drive_pointer(WM_MOUSEMOVE, target.screen.x, target.screen.y)) {
+  if (host_drive_pointer(WM_MOUSEMOVE, to.screen.x, to.screen.y)) {
     return;
   }
+  const Target target = Captured(to);
   // Over the frame, as over the UI's maximize button (host.cc's FrameHit), Windows sends the
   // window a non-client move, with what's there and the point on the screen. Entered, so the leave
   // Windows sends it at once, for the desktop's pointer, is dropped.
-  if (Ours(target.hwnd)) {
+  if (target.hwnd == to.hwnd && Ours(target.hwnd)) {
     const LPARAM screen = MAKELPARAM(target.screen.x, target.screen.y);
     const LRESULT hit = SendMessageW(target.hwnd, WM_NCHITTEST, 0, screen);
     if (hit != HTCLIENT && hit != HTTRANSPARENT && hit != HTNOWHERE) {
@@ -390,12 +407,13 @@ UINT Up(UINT button) {
 // Posts |button| going down at |target|, as Windows sends a press: its window's root decides
 // whether it's activated (only on this thread, never brought to the front) and the window's parents
 // hear of it, which is how a click in the UI takes the keyboard from the page.
-void Press(const Target& target, UINT button, int modifiers, bool second) {
+void Press(const Target& at, UINT button, int modifiers, bool second) {
   HoldKeys(modifiers, button);
   const UINT down = Down(button);
-  if (host_drive_pointer(down, target.screen.x, target.screen.y)) {
+  if (host_drive_pointer(down, at.screen.x, at.screen.y)) {
     return;
   }
+  const Target target = Captured(at);
   Enter(target);
   HWND root = GetAncestor(target.hwnd, GA_ROOT);
   const LRESULT activate = SendMessageW(target.hwnd, WM_MOUSEACTIVATE,
@@ -433,11 +451,12 @@ void Press(const Target& target, UINT button, int modifiers, bool second) {
   }
 }
 
-void Release(const Target& target, UINT button, int modifiers) {
+void Release(const Target& at, UINT button, int modifiers) {
   HoldKeys(modifiers);
-  if (host_drive_pointer(Up(button), target.screen.x, target.screen.y)) {
+  if (host_drive_pointer(Up(button), at.screen.x, at.screen.y)) {
     return;
   }
+  const Target target = Captured(at);
   PostMessageW(target.hwnd, Up(button), MouseKeys(modifiers, 0), ClientParam(target));
 }
 
@@ -884,22 +903,31 @@ std::optional<std::string> g_composition;
 // keyboard's do, so the IME composes them itself, in the UI's fields and in a page alike: posted
 // ones would pass it by.
 bool g_japanese = false;
+// Microsoft's Korean IME, while ime ko is on, its keys sent as the Japanese IME's are.
+bool g_korean = false;
+// The key that switches a Korean IME between Hangul and the keyboard's letters.
+constexpr UINT kImeHangul = VK_HANGUL;
 // The keys that turn a Japanese IME on in hiragana (VK_DBE_HIRAGANA, which not every SDK's headers
 // name) and on or off (VK_KANJI, Alt+` on a US keyboard).
 constexpr UINT kImeHiragana = 0xF2;
 constexpr UINT kImeOnOff = VK_KANJI;
 
-// Microsoft's Japanese IME, where it's one of the user's input methods, which a runner gets from
-// the Language.Basic~~~ja-JP capability and its language list (check-windows.yml).
-HKL JapaneseLayout() {
+// The input method for |language|, where it's one of the user's, which a runner gets from that
+// language's Language.Basic capability and its language list (check-windows.yml).
+HKL LanguageLayout(WORD language) {
   HKL layouts[32];
   const int count = GetKeyboardLayoutList(32, layouts);
   for (int i = 0; i < count; ++i) {
-    if (LOWORD(reinterpret_cast<UINT_PTR>(layouts[i])) == 0x0411) {
+    if (LOWORD(reinterpret_cast<UINT_PTR>(layouts[i])) == language) {
       return layouts[i];
     }
   }
   return nullptr;
+}
+
+// Microsoft's Japanese IME.
+HKL JapaneseLayout() {
+  return LanguageLayout(0x0411);
 }
 
 // |vk| pressed and let go through the input queue, to the window in front.
@@ -963,8 +991,9 @@ bool AddSentKey(UINT vk) {
 // as plain keys it would pass for a composition.
 int AddImeKey(const std::string& key, int modifiers) {
   const bool letter = key.size() == 1 && key[0] >= 'a' && key[0] <= 'z';
-  // Microsoft's Japanese IME takes the keys without a shortcut's modifiers, as a keyboard's.
-  if (g_japanese && !((modifiers | g_flags) & (kCtrl | kAlt))) {
+  // Microsoft's Japanese and Korean IMEs take the keys without a shortcut's modifiers, as a
+  // keyboard's.
+  if ((g_japanese || g_korean) && !((modifiers | g_flags) & (kCtrl | kAlt))) {
     int held = modifiers;
     const UINT vk = VirtualKey(key, &held);
     return vk && !held && AddSentKey(vk) ? 1 : 0;
@@ -1216,6 +1245,10 @@ HRESULT DriveDrag(IDataObject* data, DWORD, DWORD* effect, POINT* at) {
     g_drag_target->DragLeave();
   }
   EndDrag();
+  // DoDragDrop's loop takes the pointer for a window of its own, which ends the press that started
+  // the drag. Held on, the window the tab left kept the pointer, and the driver sent it the click
+  // meant for the window the tab opened in (#2607).
+  ReleaseCapture();
   data->AddRef();
   g_drag = data;
   AppDrag drag;
@@ -1349,7 +1382,10 @@ bool Run(const std::string& line) {
     // never over another app's, nor over one Stay On Top keeps on top, which a click can't put
     // under it and which SetWindowPos would take out of the topmost windows.
     HWND root = Driven();
-    for (size_t index = 0; index < 64; index++) {
+    // The others are behind a window on top already, and put after it, Windows would make them
+    // topmost too: still over a window opened later, while it had the keyboard (#2607).
+    const bool on_top = GetWindowLongPtrW(root, GWL_EXSTYLE) & WS_EX_TOPMOST;
+    for (size_t index = 0; index < 64 && !on_top; index++) {
       HWND other = Browser(index);
       const bool topmost = other && (GetWindowLongPtrW(other, GWL_EXSTYLE) & WS_EX_TOPMOST);
       if (other && other != root && !topmost) {
@@ -1375,6 +1411,53 @@ bool Run(const std::string& line) {
       return false;
     }
     ShowWindow(root, IsIconic(root) ? SW_SHOWNOACTIVATE : SW_SHOWMINNOACTIVE);
+    return true;
+  }
+  if (action == "realkey") {
+    const char* ci = std::getenv("CI");
+    const char* own = std::getenv("BROWSER_DRIVE_OWN_DESKTOP");
+    if (!(ci && *ci) && !(own && std::string(own) == "1")) {
+      fprintf(stderr, "browser: drive: realkey refused, the desktop isn't the check's own\n");
+      return false;
+    }
+    std::string key;
+    words >> key;
+    int typed = 0;
+    const UINT vk = VirtualKey(key, &typed);
+    if (!vk || typed) {
+      return false;
+    }
+    std::vector<WORD> keys;
+    std::string word;
+    while (words >> word) {
+      const WORD modifier = word == "win"     ? VK_LWIN
+                            : word == "ctrl"  ? VK_CONTROL
+                            : word == "shift" ? VK_SHIFT
+                            : word == "alt"   ? VK_MENU
+                                              : 0;
+      if (!modifier) {
+        return false;
+      }
+      keys.push_back(modifier);
+    }
+    keys.push_back(static_cast<WORD>(vk));
+    // Each key down 15 ms after the last, held 80 ms, then up in turn, as a hand's.
+    const auto send = [](WORD vk, bool up) {
+      INPUT input{};
+      input.type = INPUT_KEYBOARD;
+      input.ki.wVk = vk;
+      input.ki.dwFlags =
+          (up ? KEYEVENTF_KEYUP : 0) | (vk == VK_LWIN || Extended(vk) ? KEYEVENTF_EXTENDEDKEY : 0);
+      SendInput(1, &input, sizeof input);
+    };
+    for (size_t at = 0; at < keys.size(); ++at) {
+      const WORD down = keys[at];
+      g_steps.push_back({[send, down] { send(down, false); }, at + 1 < keys.size() ? 15u : 80u});
+    }
+    for (auto up = keys.rbegin(); up != keys.rend(); ++up) {
+      const WORD each = *up;
+      g_steps.push_back({[send, each] { send(each, true); }, 15});
+    }
     return true;
   }
   // The windows the app has over its browser windows that are on screen, by their own visibility:
@@ -1425,6 +1508,71 @@ bool Run(const std::string& line) {
       }
     }
     fprintf(stderr, "browser: overlays shown %s\n", shown.empty() ? "none" : shown.c_str());
+    return true;
+  }
+  // Each window the host floats over a browser window, made so far, and the menu, as the host's
+  // overlay machine has it and as Windows does, for a check that puts each through what made a
+  // hidden one go stale (#2563): "browser: lives command bar key on screen active focus,
+  // tooltip hidden, menu shown on screen capture dpi 96 over 120". Its life is the host's (Life),
+  // and the rest Windows': whether it's visible, the active window, the one with the keyboard's
+  // focus or the pointer's capture on its thread, and its DPI where it isn't its window's.
+  if (action == "lives") {
+    std::string line;
+    host_floating_lives(
+        [](void* context, const char* name, void* hwnd_pointer, int life) {
+          static const char* const kLives[] = {"hidden", "placed", "shown", "key", "hiding"};
+          const HWND hwnd = static_cast<HWND>(hwnd_pointer);
+          std::string& out = *static_cast<std::string*>(context);
+          out += out.empty() ? "" : ", ";
+          out += name ? name : "unnamed";
+          out += " ";
+          out += life >= 0 && life < static_cast<int>(std::size(kLives)) ? kLives[life] : "?";
+          GUITHREADINFO thread{sizeof(GUITHREADINFO)};
+          GetGUIThreadInfo(GetWindowThreadProcessId(hwnd, nullptr), &thread);
+          out += IsWindowVisible(hwnd) ? " on screen" : "";
+          out += thread.hwndActive == hwnd ? " active" : "";
+          out += thread.hwndFocus == hwnd ? " focus" : "";
+          out += thread.hwndCapture == hwnd ? " capture" : "";
+          HWND owner = GetWindow(hwnd, GW_OWNER);
+          const UINT dpi = GetDpiForWindow(hwnd), over = owner ? GetDpiForWindow(owner) : dpi;
+          if (dpi != over) {
+            out += " dpi " + std::to_string(dpi) + " over " + std::to_string(over);
+          }
+        },
+        &line);
+    fprintf(stderr, "browser: lives %s\n", line.empty() ? "none" : line.c_str());
+    return true;
+  }
+  // The DPI Windows gives the driven browser window and each window the host floats over one,
+  // shown or not, and the system's, from when the user signed in (#2541): "browser: dpis system 96,
+  // window 120, command bar 120, link preview 96".
+  if (action == "dpis") {
+    std::string line = "system " + std::to_string(GetDpiForSystem()) + ", window " +
+                       std::to_string(GetDpiForWindow(Driven()));
+    for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+      if (const char* name = Ours(top) ? host_floating_name(top) : nullptr) {
+        line += std::string(", ") + name + " " + std::to_string(GetDpiForWindow(top));
+      }
+    }
+    fprintf(stderr, "browser: dpis %s\n", line.c_str());
+    return true;
+  }
+  // Where Peek's page is, the page in front in the driven browser window, in pixels from its
+  // content's top left, for the frame the preview's card has it in (#2541).
+  if (action == "peek") {
+    HWND root = Driven();
+    for (HWND child = root ? GetWindow(root, GW_CHILD) : nullptr; child;
+         child = GetWindow(child, GW_HWNDNEXT)) {
+      if (IsWindowVisible(child) && IsChromium(child)) {
+        RECT rect;
+        GetWindowRect(child, &rect);
+        MapWindowPoints(HWND_DESKTOP, root, reinterpret_cast<POINT*>(&rect), 2);
+        fprintf(stderr, "browser: peek page %ld %ld %ld %ld\n", rect.left, rect.top,
+                rect.right - rect.left, rect.bottom - rect.top);
+        return true;
+      }
+    }
+    fprintf(stderr, "browser: peek page none\n");
     return true;
   }
   // The windows on screen over the driven browser window, front first, down to it, by Windows' own
@@ -1728,18 +1876,37 @@ bool Run(const std::string& line) {
     return true;
   }
   // As Windows tells a window that moved to a display of another scale, |percent|, keeping its
-  // size in pixels: Chromium and the core take the scale the message carries (#1823).
+  // size in pixels: Chromium and the core take the scale the message carries (#1823). With a name
+  // after it, such as "link preview", the window the host floats by that name hears it instead, so
+  // GPUI draws it at that scale where Windows has another, as one made hidden on another display
+  // and moved to the browser window's does (#2541).
   if (action == "dpi") {
     int percent = 0;
     if (!(words >> percent) || percent < 100 || percent > 500) {
       return false;
     }
-    g_steps.push_back({[percent] {
+    std::string name;
+    std::getline(words >> std::ws, name);
+    g_steps.push_back({[percent, name] {
       HWND root = Driven();
+      if (!name.empty()) {
+        root = nullptr;
+        for (HWND top = GetTopWindow(nullptr); top && !root; top = GetWindow(top, GW_HWNDNEXT)) {
+          const char* floating = Ours(top) ? host_floating_name(top) : nullptr;
+          root = floating && name == floating ? top : nullptr;
+        }
+        if (!root) {
+          fprintf(stderr, "browser: dpi found no %s\n", name.c_str());
+          return;
+        }
+      }
       RECT rect{};
       GetWindowRect(root, &rect);
       const WORD dpi = static_cast<WORD>(MulDiv(USER_DEFAULT_SCREEN_DPI, percent, 100));
       SendMessageW(root, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&rect));
+      if (!name.empty()) {
+        fprintf(stderr, "browser: dpi %d told %s\n", dpi, name.c_str());
+      }
     }, 300});
     return true;
   }
@@ -1992,8 +2159,22 @@ bool Run(const std::string& line) {
   if (action == "ime") {
     std::string state;
     words >> state;
-    if (state != "on" && state != "off" && state != "ja") {
+    if (state != "on" && state != "off" && state != "ja" && state != "ko") {
       return false;
+    }
+    if (state == "ko") {
+      // The UI thread's input method is the Korean IME, switched to Hangul as the user would.
+      HKL korean = LanguageLayout(0x0412);
+      if (!korean) {
+        fprintf(stderr, "browser: drive: no Korean IME\n");
+        return false;
+      }
+      g_steps.push_back({[korean] { ActivateKeyboardLayout(korean, 0); }});
+      g_korean = AddSentKey(kImeHangul);
+      return true;
+    }
+    if (std::exchange(g_korean, false)) {
+      AddSentKey(kImeHangul);
     }
     if (state == "ja") {
       // The UI thread's input method is the IME, on, in hiragana, as the user would pick it. Off,

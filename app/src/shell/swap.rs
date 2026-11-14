@@ -2,7 +2,8 @@
 //! starts loading: the old one fades and shrinks as the new one fades and grows in, as Arc's do.
 //! Lucide's check draws itself along its stroke.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, Hsla, PathBuilder, Transformation, Window, canvas, div, fill, point,

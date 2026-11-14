@@ -1,3 +1,4 @@
+# check.sh runs this at 280.
 # Links from other apps, as `open` sends them on the Mac, the way a link clicked in Mail does, and
 # off it as a second launch with the link does, which `xdg-open` makes on Linux and the command the
 # installer registers for links on Windows. Each opens once: Chrome opens no tab of its own for it
@@ -7,7 +8,8 @@
 # and AppKit's ordered and key windows on the Mac. With the app
 # running, one opens in a Little ilo window of its own for the Space the window in front shows, and
 # loads there, as Settings › Links sends everything else there until the user picks another, and
-# the same link again brings that window back to the front. On Windows one sent to the Store's MSIX,
+# the same link again brings that window back to the front, and a sign-in's page there closes it
+# once done (#2327). On Windows one sent to the Store's MSIX,
 # which Windows activates for it, opens the same way, once (#1427). Sent
 # instead to the Space in front, one opens as a new tab in the Space the window in front shows. With
 # a private window in front, it goes in the regular window, which comes to the front. Settings › Links
@@ -48,9 +50,9 @@ if windows; then
   grep -q '^Root: HKCU; Subkey: "Software\\Clients\\StartMenuInternet\\{#AppName}\\shell\\open\\command"; ValueType: string; ValueData: """{app}\\chrome\.exe"""$' \
     platform/windows/package/ilo.iss || fail "ilo.iss no longer starts the browser by chrome.exe alone"
   engines="$(cygpath -u "$LOCALAPPDATA")/ilo"
-  if [ -n "${BROWSER_PROFILE_DIR:-}" ] || [ -e "$engines/User Data" ]; then
+  if [ -e "$engines/User Data" ]; then
     echo "skip: links by chrome.exe's fast way, as Windows hands them over: the run keeps its" \
-      "profile, as BROWSER_PROFILE_DIR names one or $engines/User Data is an ilo's of the user's here."
+      "profile, as $engines/User Data is an ilo's of the user's here."
   else
     fast=1
     made="$engines/User Data"
@@ -222,6 +224,65 @@ send window 2
   fail "the same link again loaded in a tab of Chrome's own beside its Little ilo window"
 send key w cmd
 await "^browser: window closed $little\$" || fail "⌘W didn't close the link's Little ilo window"
+# A sign-in another app's link opened in Little ilo closes its window by itself once it's done
+# (#2327), on a signal that isn't the page's words: a load onto a loopback address carrying a code,
+# from another site. The provider here is localhost, another site than the callback's 127.0.0.1, as
+# a CLI's or an MCP client's login ends at its own server. The bar says it's closing, the window
+# closes 2 s on, and ⇧⌘T brings it back as any closed Little ilo window. One carrying an error
+# stays, and the same page in a tab the user opened stays.
+printf '%s' '<title>sign-in</title><script>
+addEventListener("load", () => setTimeout(() => location = "/bounce?to=" +
+  encodeURIComponent("http://127.0.0.1:" + location.port + "/signed-in.html" + location.search), 100));
+</script>' > "$out/site/signin.html"
+printf '%s' '<title>signed in</title>' > "$out/site/signed-in.html"
+callback="http://127.0.0.1:$port/signed-in.html"
+provider="http://localhost:$port"
+# Sends the link $1 as another app does, and waits for its tab, $tab, in Little ilo window $little.
+sign_in_link() {
+  sign_in_line="^browser: link from another app $1: tab [1-9][0-9]* in little window [0-9]* of space $first\$"
+  send_link "$1"
+  await "$sign_in_line" ||
+    fail "the link $1 didn't open in Little ilo: $(grep '^browser: link' "$log" | tail -1)"
+  tab=$(grep "$sign_in_line" "$log" | tail -1 | sed 's/.*: tab \([0-9]*\) .*/\1/')
+  little=$(grep "$sign_in_line" "$log" | tail -1 | sed 's/.* little window \([0-9]*\) .*/\1/')
+}
+sign_in_link "$provider/signin.html?code=abc"
+await "^browser: loaded $tab $callback?code=abc\$" || fail "the sign-in didn't come back to its callback"
+await "^browser: little window $little sign-in done at $callback?code=abc\$" ||
+  fail "the callback with a code didn't end the sign-in"
+await "^browser: little bar closing true\$" || fail "the sign-in's Little ilo bar didn't say it was closing"
+# The bar's words, for the PR: the window has the 2 s of its pause to be caught in.
+../tools/window-screenshot.sh "$pid" "$out/links-sign-in-closing.png" all ||
+  echo "note: the sign-in's Little ilo window closed before its capture"
+await "^browser: little window $little closed after its sign-in\$" ||
+  fail "the sign-in's Little ilo window didn't close after its pause"
+await "^browser: window closed $little\$" || fail "the sign-in's Little ilo window stayed open"
+send window 1
+send key t cmd shift
+expect "^browser: little window [0-9]* reopened [0-9]* as [0-9]*\$" \
+  "⇧⌘T didn't bring back the sign-in's Little ilo window: $(grep '^browser: little window' "$log" | tail -1)"
+send window "$(grep -c '^browser: window opened ' "$log")"
+send key w cmd
+expect "^browser: window closed [0-9]*\$" "⌘W didn't close the sign-in's reopened Little ilo window"
+sign_in_link "$provider/signin.html?error=denied"
+await "^browser: loaded $tab $callback?error=denied\$" || fail "the failed sign-in didn't come back to its callback"
+# The user's ⌘W closes it, and only then: the load decided it, before the key was sent.
+send window "$(grep -c '^browser: window opened ' "$log")"
+send key w cmd
+expect "^browser: window closed $little\$" "⌘W didn't close the failed sign-in's Little ilo window"
+grep -q "^browser: little window $little \(sign-in done\|closed\)" "$log" &&
+  fail "a failed sign-in's Little ilo window closed by itself: $(grep "^browser: little window $little " "$log" | tail -1)"
+# In a tab the user opened, it doesn't count.
+send window 1
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar for the user's sign-in"
+send type "$provider/signin.html?code=user"
+send key return
+await "^browser: loaded [0-9]* $callback?code=user\$" || fail "the user's sign-in page didn't reach its callback"
+user_sign_in=$(sed -n "s|^browser: loaded \([0-9]*\) $callback?code=user\$|\1|p" "$log" | tail -1)
+send key w cmd
+expect "^browser: tab $user_sign_in closed\$" "⌘W didn't close the user's sign-in tab"
+grep -q "sign-in done at $callback?code=user\$" "$log" && fail "a sign-in in a tab the user opened counted as done"
 # The Store's MSIX declares http and https in its manifest, not by ilo.iss's command, so Windows
 # activates the package for a link sent to it, and the package's chrome.exe, which names no
 # profile, hands the link to the browser running on the engine's folder (#1427). check-windows.yml
@@ -238,8 +299,9 @@ if windows; then
     open_little_link "?msix" "$first"
     via_msix=
     msix=1
-    # The third window the app made, after the regular one and the first link's.
-    send window 3
+    # The window the MSIX's link opened, the last the app made: the driver counts them in the order
+    # they opened, closed ones too, and the sign-ins' Little ilo windows came before it (#2603).
+    send window "$(grep -c '^browser: window opened ' "$log")"
     send key w cmd
     await "^browser: window closed $little\$" || fail "⌘W didn't close the MSIX's link's Little ilo window"
   fi
@@ -364,7 +426,7 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey $(drawn "link remove 0")
+  click_in_sight "link remove 0"
   expect "$(rules_drawn none "Little ilo")" "the trash didn't take the Meet rule, leaving the empty box"
   ../tools/window-screenshot.sh "$pid" "$out/links-rules-empty.png" || fail "no window to capture"
   post clickkey $(drawn "link otherwise")
@@ -399,7 +461,7 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey $(drawn "link add")
+  click_in_sight "link add"
   expect '^browser: link rule 0 field has the keyboard$' "+ didn't give the new rule's field the keyboard"
   send type work
   expect "$(rules_drawn 'URL contains "work" → [^,;]*' "$front")" "the rule didn't take the text typed"
@@ -417,7 +479,7 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey $(drawn "link add")
+  click_in_sight "link add"
   expect '^browser: link rule 1 field has the keyboard$' "+ didn't give the second rule's field the keyboard"
   send insert "${site}index.html"
   post clickkey $(drawn "link condition 1")
@@ -449,13 +511,13 @@ if [ "$driven" = 1 ]; then
   send menu Settings…
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
-  send clickkey $(drawn "link remove 0")
+  click_in_sight "link remove 0"
   expect "$(rules_drawn 'URL contains "work" → work' work)" "the trash didn't take the rule away"
   send key z cmd
   expect "$(rules_drawn "$exact, URL contains \"work\" → work" work)" \
     "⌘Z didn't bring the rule the trash took back to its place"
   ../tools/window-screenshot.sh "$pid" "$out/links-rule-back.png" || fail "no window to capture"
-  send clickkey $(drawn "link remove 0")
+  click_in_sight "link remove 0"
   expect "$(rules_drawn 'URL contains "work" → work' work)" "the trash didn't take the rule away again"
   # A rule to Little ilo opens its links in one, for the Space in front: the second, the last link
   # to the window having shown it.
@@ -710,7 +772,8 @@ fi
 if [ -n "$fast" ]; then
   rm -rf "$made"
   trap cleanup EXIT
-  unset BROWSER_PROFILE_DIR
+  profile_dir=$check_profile_dir
+  BROWSER_PROFILE_DIR=$(native_path "$profile_dir")
   saved=$check_saved
   launch_frame=$check_launch_frame
 fi

@@ -1,3 +1,4 @@
+# check.sh runs this at 390.
 # What an agent a page has talked round still can't do (#2325): a scripted MCP client tries
 # everything the rules forbid, and pages of the run's own try to steer it. No model is in the loop:
 # the client does the worst a fully steered agent could, and the browser must refuse each try or

@@ -12,7 +12,8 @@
 //! What the fingers hold, such as a swipe, follows them all the same: that's the hand, not
 //! motion. What they let go settles through `start`.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::App;
 

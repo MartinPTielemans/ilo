@@ -4,7 +4,8 @@
 //! page draws it (`Shell::over_page`), which the mouse goes through, so the user's own pointer and
 //! clicks are never in its way, and it goes a moment after the agent's last action.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, Context, Pixels, Point, SharedString, Task, Window, div, point,

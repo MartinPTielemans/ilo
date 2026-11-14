@@ -4,7 +4,7 @@
 top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI), or with front the
 one in front alone. `end-session PID` ends the session for the process as Windows does when the
 user signs out: each of its top-level windows is asked WM_QUERYENDSESSION, and once all agree,
-told WM_ENDSESSION, and it fails if one refuses (#1990). `list PID` prints each top-level window of the process, with its class, title,
+told WM_ENDSESSION, the hidden ones first, and it fails if one refuses (#1990). `list PID` prints each top-level window of the process, with its class, title,
 state and whether it's a browser window, minimized (IsIconic) or the one in front
 (GetForegroundWindow). `icon PID ICO` checks that each window of the process the taskbar and
 Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads them, and
@@ -16,7 +16,9 @@ window another app opens behind the one the user is in (#1689), says "cover <han
 (#1419), or with FRONT until that file exists, when it brings the browser window to the front, as
 a click on its taskbar button does, and ends (#1365). `foreground PID [TITLE]` gives the
 foreground to the process's browser window in front, or to its window titled TITLE (#2114).
-Usage: app-windows.py close|end-session|list|icon PID [front|ICO], cover PID ilo|away|behind [FRONT] or foreground PID [TITLE]"""
+`dialogs PID [cancel]` prints each dialog shown of the process and the processes it started, with
+its title, and with cancel ends each as its Cancel button does (#2512).
+Usage: app-windows.py close|end-session|list|icon PID [front|ICO], cover PID ilo|away|behind [FRONT], foreground PID [TITLE] or dialogs PID [cancel]"""
 
 import ctypes
 import ctypes.wintypes as w
@@ -34,6 +36,8 @@ WM_ENDSESSION = 0x0016
 ENDSESSION_LOGOFF = 0x80000000
 SMTO_ABORTIFHUNG = 0x0002
 GW_OWNER = 4
+WM_COMMAND = 0x0111
+IDCANCEL = 2
 EnumProc = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
 
 
@@ -173,7 +177,9 @@ def end_session(pid):
     end, and the windows left then answer nothing."""
     user32.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT, w.UINT,
                                            ctypes.POINTER(ctypes.c_size_t)]
-    found = windows(pid)
+    # Windows promises no order, and its stacking put GPUI's hidden window first only while ilo was
+    # behind another app's, which exited the process under Chromium (#2617): the hidden ones first.
+    found = sorted(windows(pid), key=lambda hwnd: bool(user32.IsWindowVisible(hwnd)))
     for hwnd in found:
         answer = ctypes.c_size_t()
         sent = user32.SendMessageTimeoutW(hwnd, WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF,
@@ -321,17 +327,85 @@ def cover(pid, foreground, front_file):
             user32.DispatchMessageW(ctypes.byref(message))
 
 
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", w.DWORD),
+        ("cntUsage", w.DWORD),
+        ("th32ProcessID", w.DWORD),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", w.DWORD),
+        ("cntThreads", w.DWORD),
+        ("th32ParentProcessID", w.DWORD),
+        ("pcPriClassBase", w.LONG),
+        ("dwFlags", w.DWORD),
+        ("szExeFile", w.WCHAR * 260),
+    ]
+
+
+def family(pid):
+    """Process pid and the processes it started, and theirs."""
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.restype = w.HANDLE
+    each = [w.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.Process32FirstW.argtypes = kernel32.Process32NextW.argtypes = each
+    kernel32.CloseHandle.argtypes = [w.HANDLE]
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    parents = {}
+    entry = PROCESSENTRY32W()
+    entry.dwSize = ctypes.sizeof(entry)
+    more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+    while more:
+        parents[entry.th32ProcessID] = entry.th32ParentProcessID
+        more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    kernel32.CloseHandle(snapshot)
+    found = {pid}
+    grew = True
+    while grew:
+        grew = False
+        for child, parent in parents.items():
+            if parent in found and child not in found:
+                found.add(child)
+                grew = True
+    return found
+
+
+def dialogs(pid, cancel):
+    """Prints the dialogs shown (class #32770) of process pid and the processes it started, as
+    Chrome's file dialogs may be a utility process's, and with cancel ends each as its Cancel does."""
+    processes = family(pid)
+    found = []
+
+    def each(hwnd, _):
+        owner = w.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if (owner.value in processes and user32.IsWindowVisible(hwnd)
+                and text(user32.GetClassNameW, hwnd) == "#32770"):
+            found.append((hwnd, owner.value))
+        return True
+
+    user32.EnumWindows(EnumProc(each), 0)
+    for hwnd, owner in found:
+        print('%#x "%s" process %d' % (hwnd, text(user32.GetWindowTextW, hwnd), owner))
+        if cancel:
+            user32.PostMessageW(hwnd, WM_COMMAND, IDCANCEL, 0)
+
+
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     front = command == "close" and sys.argv[3:] == ["front"]
-    known = ("close", "end-session", "list", "icon", "cover", "foreground")
-    wanted = ((4, 5) if command == "cover" else (3, 4) if command == "foreground" else
+    known = ("close", "end-session", "list", "icon", "cover", "foreground", "dialogs")
+    wanted = ((4, 5) if command == "cover" else (3, 4) if command in ("foreground", "dialogs") else
               (4,) if command == "icon" or front else (3,))
     if len(sys.argv) not in wanted or command not in known:
         sys.exit(__doc__.splitlines()[-1])
     pid = int(sys.argv[2])
     if command == "foreground":
         bring_forward(pid, sys.argv[3] if len(sys.argv) == 4 else None)
+        return
+    if command == "dialogs":
+        if sys.argv[3:] not in ([], ["cancel"]):
+            sys.exit(__doc__.splitlines()[-1])
+        dialogs(pid, sys.argv[3:] == ["cancel"])
         return
     if command == "icon":
         sys.exit(0 if check_icons(pid, sys.argv[3]) else 1)

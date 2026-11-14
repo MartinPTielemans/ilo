@@ -438,6 +438,52 @@ fn the_wave_sets_the_intensity_and_the_dial_the_grain(cx: &mut TestAppContext) {
     assert_eq!(picker.theme().unwrap().grain, 1.);
 }
 
+/// A drag that moves before the picker has drawn the hold still moves the knob and the dial: a
+/// quick flick, or the driver's press and dragto, puts both in one frame (#2605).
+#[gpui::test]
+fn a_drag_that_moves_before_the_hold_is_drawn_still_moves(cx: &mut TestAppContext) {
+    let mut picker = Picker::new(Some(Theme::at(0.5, 0.)), cx);
+    let knob = knob_x(DEFAULT_INTENSITY);
+    let quarter = (DIAL.0 + DIAL_RING, DIAL.1);
+    let drags = [
+        ((knob, SLIDER_Y), (knob_x(0.25), SLIDER_Y)),
+        ((DIAL.0, DIAL.1 - DIAL_RING), quarter),
+    ];
+    for (from, to) in drags {
+        let (from, to) = (Picker::at(from.0, from.1), Picker::at(to.0, to.1));
+        // One update, with no draw between the press and the move, as in one frame.
+        picker.cx.update(|window, cx| {
+            let down = MouseDownEvent {
+                position: from,
+                modifiers: Modifiers::none(),
+                button: MouseButton::Left,
+                click_count: 1,
+                first_mouse: false,
+            };
+            window.dispatch_event(PlatformInput::MouseDown(down), cx);
+            let moved = MouseMoveEvent {
+                position: to,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::none(),
+            };
+            window.dispatch_event(PlatformInput::MouseMove(moved), cx);
+        });
+        // The hold is drawn, then it's let go where it moved to.
+        picker.cx.run_until_parked();
+        picker
+            .cx
+            .simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+        picker.cx.run_until_parked();
+    }
+    let theme = picker.theme().unwrap();
+    assert!(
+        (theme.intensity - 0.25).abs() < 0.001,
+        "intensity {}",
+        theme.intensity
+    );
+    assert!((theme.grain - 0.25).abs() < 0.001, "grain {}", theme.grain);
+}
+
 #[gpui::test]
 fn without_a_colour_only_the_field_swatches_and_appearance_answer(cx: &mut TestAppContext) {
     let mut picker = Picker::new(None, cx);

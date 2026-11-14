@@ -2,6 +2,7 @@
 #define BROWSER_CORE_SESSION_H_
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -120,10 +121,11 @@ struct SavedSpace {
 // Puts the Today tabs it saved in |today| if it isn't null.
 SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today = nullptr);
 
-// Makes |saved| a Space, its tabs unloaded in |window| and |profile|, with the id |id|, a deleted
+// Makes |saved| a Space in the profile in the directory |profile|, its tabs unloaded in |window|
+// and waiting for that profile if it's still loading (Tab::Restore), with the id |id|, a deleted
 // Space's, if it isn't 0. The window shows its shown tab there. Returns it.
 Space* RestoreSpace(Window& window,
-                    Profile* profile,
+                    const std::string& profile,
                     const SavedSpace& saved,
                     bc_id id = 0,
                     size_t at = SIZE_MAX);
@@ -194,6 +196,12 @@ struct Settings {
   bool unload_idle_tabs = true;
   // Whether the browser blocks ads and trackers, in every profile.
   bool ad_blocking = true;
+  // The ad blocker's filter lists the user turned on or off, by key, each else as it starts
+  // (ad_block.h).
+  std::map<std::string, bool> ad_block_lists;
+  // The user's own filters, one a line, or nullopt until they first set them, which leaves the ad
+  // blocker's as they are.
+  std::optional<std::string> ad_block_filters;
   // Whether the browser sends its crash reports (crash_reports.h).
   bool send_crash_reports = false;
   // Whether WebRTC goes only through TURN relays in every profile, proxy or not (webrtc.h).

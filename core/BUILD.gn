@@ -15,6 +15,29 @@ mojom("drm_request") {
   generate_blink = true
 }
 
+# What the browser's own ad blocker (#2111) has a frame's next document hide and run, from the
+# browser to the frame's agent.
+mojom("ad_block_page") {
+  sources = [ "ad_block_page.mojom" ]
+}
+
+# The frame's side of it, which Chrome's renderer gives each frame
+# (engine/patches/ours/chromium-core-ad-block-page.patch), so it's apart from the browser's code.
+source_set("ad_block_page_agent") {
+  sources = [
+    "ad_block_page_agent.cc",
+    "ad_block_page_agent.h",
+  ]
+  deps = [
+    ":ad_block_page",
+    "//base",
+    "//content/public/renderer",
+    "//mojo/public/cpp/bindings",
+    "//third_party/blink/public:blink",
+    "//url",
+  ]
+}
+
 # The page a tab shows for a load that failed. Chrome's renderer calls it
 # (engine/patches/ours/chromium-core-error-page.patch), so it's apart from the browser's code.
 source_set("error_page") {
@@ -38,6 +61,17 @@ source_set("search_default") {
     "//components/prefs",
     "//components/search_engines",
   ]
+}
+
+# The profile prefs that keep the sites the user turned ad blocking off on, and their carry-over
+# from uBlock Origin's extension prefs, apart so browser_core_unittests tests it alone.
+source_set("ad_block_off_sites") {
+  sources = [
+    "ad_block_off_sites.cc",
+    "ad_block_off_sites.h",
+  ]
+  deps = [ "//components/prefs" ]
+  public_deps = [ "//base" ]
 }
 
 # The site searches a new profile has, and the one a word typed starts (#1397).
@@ -176,12 +210,87 @@ source_set("sync_spaces_newer") {
   public_deps = [ ":sync_spaces_proto" ]
 }
 
+# Whether a site's arrangement is placed: its file checked against the schema and the record of
+# the one the user made or turned on, apart so browser_core_unittests tests the rule alone.
+source_set("arrangement") {
+  sources = [
+    "arrangement.cc",
+    "arrangement.h",
+  ]
+  deps = [
+    "//base",
+    "//components/pref_registry",
+    "//components/prefs",
+    "//crypto",
+  ]
+}
+
+# Whether a pinned tab is at its pinned URL, apart so browser_core_unittests tests the rule alone.
+source_set("pinned_url") {
+  sources = [
+    "pinned_url.cc",
+    "pinned_url.h",
+  ]
+  deps = [ "//url" ]
+}
+
 # When auto-archive takes a Today tab, Never too, apart so browser_core_unittests tests the rule
 # alone.
 source_set("archive_rule") {
   sources = [
     "archive_rule.cc",
     "archive_rule.h",
+  ]
+  deps = [ "//base" ]
+}
+
+# When a tab may arrange and how giving one to an agent ends Arrange first, apart so
+# browser_core_unittests tests the rule alone.
+source_set("arrange_rule") {
+  sources = [
+    "arrange_rule.cc",
+    "arrange_rule.h",
+  ]
+  deps = [ "//base" ]
+}
+
+# Whether a load the user typed keeps its http:// (#2417), apart so browser_core_unittests tests
+# the rule alone.
+source_set("typed_http") {
+  sources = [
+    "typed_http.cc",
+    "typed_http.h",
+  ]
+  deps = [
+    "//base",
+    "//url",
+  ]
+}
+
+# How an agent's typing goes to a page as key events, apart so browser_core_unittests tests it alone.
+source_set("typing_keys") {
+  sources = [
+    "typing_keys.cc",
+    "typing_keys.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
+# How a check for idle tabs runs, apart so browser_core_unittests tests its order alone.
+source_set("idle_check") {
+  sources = [
+    "idle_check.cc",
+    "idle_check.h",
+  ]
+  deps = [ "//base" ]
+}
+
+# A native select's choices as an agent's outline gives them, apart so browser_core_unittests tests
+# the rule alone.
+source_set("select_choices") {
+  sources = [
+    "select_choices.cc",
+    "select_choices.h",
   ]
   deps = [ "//base" ]
 }
@@ -197,6 +306,21 @@ source_set("mini_player_place") {
   public_deps = [
     "//base",
     "//ui/gfx/geometry",
+  ]
+}
+
+# Whether a Boost's script runs: the record of the one the user turned on, and its copy, apart so
+# browser_core_unittests tests the rule alone.
+source_set("boost_script") {
+  sources = [
+    "boost_script.cc",
+    "boost_script.h",
+  ]
+  deps = [
+    "//base",
+    "//components/pref_registry",
+    "//components/prefs",
+    "//crypto",
   ]
 }
 
@@ -245,6 +369,33 @@ source_set("window_frames") {
   ]
 }
 
+# A page's text as its accessibility tree has it, an element's too, with no field's value: what
+# bc_tab_read_text and Point read.
+source_set("ax_text") {
+  sources = [
+    "ax_text.cc",
+    "ax_text.h",
+  ]
+  deps = [
+    "//base",
+    "//ui/accessibility",
+  ]
+}
+
+# Which fields' contents an agent sees, and the hatch over those it doesn't in its pictures, apart
+# so browser_core_unittests tests the rule alone.
+source_set("withheld_fields") {
+  sources = [
+    "withheld_fields.cc",
+    "withheld_fields.h",
+  ]
+  deps = [
+    "//base",
+    "//skia",
+    "//ui/gfx/geometry",
+  ]
+}
+
 source_set("browser_core") {
   configs += [ ":app_calls" ]
   sources = [
@@ -275,12 +426,16 @@ source_set("browser_core") {
     "battery_saver.h",
     "bluetooth_pair.cc",
     "bluetooth_pair.h",
+    "arrange.cc",
+    "arrange.h",
     "boosts.cc",
     "boosts.h",
     "browser_window_stand_in.cc",
     "browser_window_stand_in.h",
     "capture.cc",
     "capture.h",
+    "card_video.cc",
+    "card_video.h",
     "cast_dialog.cc",
     "cast_dialog.h",
     "clear_site.cc",
@@ -293,6 +448,8 @@ source_set("browser_core") {
     "developer_mode.h",
     "device_chooser.cc",
     "device_chooser.h",
+    "dialog_keys.cc",
+    "dialog_keys.h",
     "downloads.cc",
     "downloads.h",
     "drm_request.cc",
@@ -312,6 +469,8 @@ source_set("browser_core") {
     "history_deletions.h",
     "history_import.cc",
     "history_import.h",
+    "history_list.cc",
+    "history_list.h",
     "idle_unload.cc",
     "idle_unload.h",
     "host.h",
@@ -329,6 +488,10 @@ source_set("browser_core") {
     "memory.h",
     "mini_player.cc",
     "mini_player.h",
+    "native_ad_block.cc",
+    "native_ad_block.h",
+    "native_ad_block_lists.cc",
+    "native_ad_block_lists.h",
     "notes.cc",
     "notes.h",
     "open_app_dialog.cc",
@@ -356,6 +519,8 @@ source_set("browser_core") {
     "platform/playready.h",
     "platform/system_page.h",
     "platform/window_views.h",
+    "point.cc",
+    "point.h",
     "popular_sites.cc",
     "popular_sites.h",
     "profiles.cc",
@@ -401,11 +566,19 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":ad_block_off_sites",
+    ":ad_block_page",
     ":archive_rule",
+    ":arrange_rule",
+    ":pinned_url",
+    ":arrangement",
+    ":ax_text",
     ":drm_request",
+    ":idle_check",
     ":mini_player_place",
     ":other_tabs",
     ":search_default",
+    ":select_choices",
     ":agent_download_hold",
     ":sidebar_backups",
     ":site_searches",
@@ -415,9 +588,13 @@ source_set("browser_core") {
     ":memory_index",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":typed_http",
+    ":typing_keys",
     ":window_frames",
+    ":withheld_fields",
     "//base",
     "//base:i18n",
+    "//cc",
     "//chrome/app:command_ids",
     "//chrome/app:generated_resources",
     "//chrome/browser",
@@ -449,7 +626,8 @@ source_set("browser_core") {
     "//chrome/browser/resource_coordinator:mojo_bindings",
     "//chrome/browser/autofill",
     "//chrome/browser/search_engines",
-    "//chrome/browser/ui",
+    # Not //chrome/browser/ui, which 157 folds into //chrome/browser; on 156 //chrome/browser links
+    # it, and both pass on its public dependencies.
     "//chrome/browser/ui:browser_tabrestore",
     "//chrome/browser/ui:recently_audible_helper",
     "//chrome/browser/ui/actions:actions_headers",
@@ -475,6 +653,7 @@ source_set("browser_core") {
     "//chrome/browser/ui/tabs:utils",
     "//chrome/browser/ui/views:bubble_anchor_util_views",
     "//chrome/browser/ui/toolbar",
+    "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/views/extensions:extension_popup",
     "//chrome/browser/ui/views/eye_dropper",
     "//chrome/browser/ui/views/interaction:impl",
@@ -484,6 +663,7 @@ source_set("browser_core") {
     "//components/autofill/content/browser",
     "//components/autofill/core/browser",
     "//components/component_updater",
+    "//components/content_settings/browser",
     "//components/content_settings/core/browser",
     "//components/crash/core/app",
     "//components/crash/core/common",
@@ -556,6 +736,7 @@ source_set("browser_core") {
     "//mojo/public/cpp/system",
     "//net",
     "//services/media_session/public/mojom",
+    "//services/metrics/public/cpp:metrics_cpp",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//services/service_manager/public/cpp",
@@ -568,6 +749,8 @@ source_set("browser_core") {
     "//third_party/widevine/cdm:buildflags",
     "//ui/accessibility",
     "//ui/base",
+    "//ui/base/clipboard",
+    "//ui/compositor",
     "//ui/content_accelerators",
     "//ui/display",
     "//ui/events:dom_keycode_converter",
@@ -691,12 +874,27 @@ source_set("browser_core") {
 # engine's run runs them.
 test("browser_core_unittests") {
   sources = [
+    "ad_block_off_sites_unittest.cc",
     "archive_rule_unittest.cc",
+    "arrange_rule_unittest.cc",
+    "pinned_url_unittest.cc",
+    "arrangement_unittest.cc",
+    "ax_text_unittest.cc",
     "agent_download_hold_unittest.cc",
     "memory_index_unittest.cc",
+    "boost_script_unittest.cc",
+    "idle_check_unittest.cc",
+
+    # The engine's patch to leveldb's cache, through leveldb's own API.
+    "leveldb_cache_unittest.cc",
     "mini_player_place_unittest.cc",
+
+    # The engine patch that gives a history match its last visit, which the core's suggestions
+    # read.
+    "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
     "search_default_unittest.cc",
+    "select_choices_unittest.cc",
     "sidebar_backups_unittest.cc",
     "site_searches_unittest.cc",
 
@@ -709,15 +907,26 @@ test("browser_core_unittests") {
     "sync_pairing_unittest.cc",
     "sync_spaces_newer_unittest.cc",
     "sync_updates_unittest.cc",
+    "typed_http_unittest.cc",
+    "typing_keys_unittest.cc",
     "window_frames_unittest.cc",
+    "withheld_fields_unittest.cc",
   ]
   deps = [
+    ":ad_block_off_sites",
     ":archive_rule",
+    ":arrange_rule",
+    ":pinned_url",
+    ":arrangement",
+    ":ax_text",
     ":agent_download_hold",
     ":memory_index",
+    ":boost_script",
+    ":idle_check",
     ":mini_player_place",
     ":other_tabs",
     ":search_default",
+    ":select_choices",
     ":sidebar_backups",
     ":site_searches",
     ":space_default",
@@ -725,10 +934,19 @@ test("browser_core_unittests") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":typed_http",
+    ":typing_keys",
     ":window_frames",
+    ":withheld_fields",
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//components/history/core/browser",
+    "//components/history/core/test",
+    "//components/omnibox/browser",
+    "//components/omnibox/browser:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
     "//components/search_engines",
     "//components/sessions",
     "//components/download/public/common:test_support",
@@ -738,8 +956,12 @@ test("browser_core_unittests") {
     "//components/sync:test_support",
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
+    "//skia",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/leveldatabase",
+    "//third_party/metrics_proto",
+    "//ui/gfx/geometry",
     "//url",
   ]
   if (use_xkbcommon) {

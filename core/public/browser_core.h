@@ -1,5 +1,6 @@
 // The core's API: what the app calls in Chrome's framework. Plain C, so the app binds it without
-// sharing a C++ toolchain with Chromium. Everything runs on the main thread, callbacks included.
+// sharing a C++ toolchain with Chromium. Everything runs on the main thread, callbacks included,
+// but the three of bc_host's that ask the ad blocker about a page (ad_block_request).
 
 #ifndef BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
 #define BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
@@ -106,8 +107,9 @@ typedef struct bc_tab_state {
   bool share_instead;
   // The page's media, as Chrome's media controls show it: whether it has a session the browser
   // can play, pause and skip (bc_tab_media), whether that's playing, its title and artist, each
-  // empty without one, whether it has a previous and a next track, and whether it can float in
-  // Picture in Picture while nothing of the page floats.
+  // empty without one, whether it has a previous and a next track, whether it can float in
+  // Picture in Picture while nothing of the page floats or its card shows its video, and whether
+  // it has a video its card can show (bc_tab_show_video), which a page in a call hasn't.
   bool media;
   bool media_playing;
   const char* media_title;
@@ -115,6 +117,7 @@ typedef struct bc_tab_state {
   bool media_previous;
   bool media_next;
   bool media_picture_in_picture;
+  bool media_video;
   // The tab shows its page in Developer Mode (bc_tab_set_developer_mode): the user turned it on for
   // the page's site, or it's localhost, as Chrome counts it, and they didn't turn it off there.
   bool developer_mode;
@@ -155,6 +158,9 @@ typedef struct bc_suggestion {
   const char* keyword;
   // That engine's name, such as "DuckDuckGo", or "".
   const char* site;
+  // When the profile's history last saw a visit to its page, in microseconds since 1970, which the
+  // row says as "Visited yesterday" (#2337). Else 0, as for a search or a page not in history.
+  int64_t last_visit;
 } bc_suggestion;
 
 // A page in a tab's history, which bc_tab_history lists, as Chrome's back and forward buttons'
@@ -184,6 +190,12 @@ typedef struct bc_archived_tab {
   // Whether it closed in a Little ilo window, by its window closing or auto-archive, as the
   // Library's filter picks them out (Arc's Little Arc filter).
   bool little;
+  // When it comes back by itself, as bc_tab_snooze put it, in milliseconds since the Unix epoch,
+  // or 0 for a tab that stays until it's reopened.
+  double snoozed_until;
+  // The Space it closed in, which it goes back to, as the Library's row names it, or 0 once that
+  // Space is gone.
+  bc_id space;
 } bc_archived_tab;
 
 // One of an extension's keyboard commands that has a key, as Chrome's Keyboard Shortcuts page
@@ -476,6 +488,10 @@ typedef struct bc_site_controls {
   size_t login_count;
   // A BC_AD_BLOCKING_ value, which bc_tab_set_ad_blocking changes.
   int ad_blocking;
+  // How many requests the ad blocker blocked on the page, as it counts them, such as "12" or
+  // ">1k", or "" while it blocked none or ad_blocking isn't BC_AD_BLOCKING_ON. Each change reports
+  // again.
+  const char* ad_blocked;
   // A BC_DEVELOPER_MODE_ value, which bc_tab_set_developer_mode changes.
   int developer_mode;
   // The devices the site was given, |device_count| of them, as Chrome's page info lists them, which
@@ -800,6 +816,41 @@ typedef struct bc_sidebar_backup {
   const char* label;
 } bc_sidebar_backup;
 
+// A page of history: another browser's, for bc_profile_add_history, or the profile's, in
+// history_listed. Strings are UTF-8.
+typedef struct bc_history_page {
+  const char* url;
+  const char* title;
+  // When it was last visited, in microseconds since 1970.
+  int64_t last_visit;
+  int32_t visits;
+  // How many of the visits were typed into the address bar, which ranks it among suggestions.
+  int32_t typed;
+} bc_history_page;
+
+// What the ad blocker does with a request (bc_host's ad_block_request).
+// Lets it go ahead as it is.
+#define BC_AD_BLOCK_ALLOW 0
+// Fails it with net::ERR_BLOCKED_BY_CLIENT, as uBlock Origin's blocking does.
+#define BC_AD_BLOCK_BLOCK 1
+// Answers it in its place with a stand-in, a data: URL, as a filter's $redirect does: a script
+// that does nothing, say, for a page that breaks without the one blocked.
+#define BC_AD_BLOCK_REDIRECT 2
+// Sends it to another address instead: its own, with the tracking parameters a $removeparam
+// filter names taken out.
+#define BC_AD_BLOCK_REWRITE 3
+
+// Hands the core |size| bytes of UTF-8 a callback answers with, into |out|, which the callback
+// passes back as it was given. It may be called more than once, each adding to what came before.
+typedef void (*bc_writer)(void* out, const char* text, size_t size);
+
+// Declared further down, with bc_tab_arrange; tab_arrange_state hands the app one.
+typedef struct bc_arrange_state bc_arrange_state;
+// Declared further down, with bc_tab_arrange and bc_tab_point; the tab_point_ callbacks hand the
+// app them.
+typedef struct bc_arrange_element bc_arrange_element;
+typedef struct bc_point_element bc_point_element;
+
 typedef struct bc_host {
   // Passed back to every callback.
   void* context;
@@ -927,7 +978,8 @@ typedef struct bc_host {
   void (*window_show_downloads)(void* context, bc_id window);
   // The profile's extensions changed, or were first read: one was added, removed, turned on or
   // off, pinned or unpinned, a command's key changed, or bc_extensions_report asked. |extensions|
-  // is all of them that Chrome's extensions page lists, by name.
+  // is all of them that Chrome's extensions page lists, by name, but the ad blocker the browser
+  // comes with, which is Settings' Ad blocking (bc_ad_blocking).
   void (*extensions_changed)(void* context,
                              bc_id profile,
                              const bc_extension* extensions,
@@ -938,8 +990,8 @@ typedef struct bc_host {
   void (*window_extension_popup)(void* context, bc_id window, const char* extension);
   // The actions the window shows changed: those pinned in the profile of the tab it shows, in
   // their order, as they are for that tab, then, while the Site Controls show for the tab
-  // (bc_tab_site_controls), every other turned-on extension's of the profile, by name. Once the tab
-  // shown changes, if they're different for it.
+  // (bc_tab_site_controls), every other turned-on extension's of the profile, by name. Never the
+  // ad blocker's. Once the tab shown changes, if they're different for it.
   void (*window_extension_actions)(void* context,
                                    bc_id window,
                                    const bc_extension_action* actions,
@@ -1294,6 +1346,85 @@ typedef struct bc_host {
   // each with its BC_MEMORY_KEPT_OUT_ reason.
   void (*memory_kept_out)(void* context, bc_id profile, uint64_t request,
                           const char* const* sites, const int* why, size_t count);
+  // The pages bc_profile_list_history asked for as |request|, newest first, each once a day with
+  // |last_visit| its last visit that day, and |visits| and |typed| as history counts them for the
+  // page. |more| when history has pages older than the last. The strings last only for the call.
+  // The user's alone: agents get none.
+  void (*history_listed)(void* context, bc_id profile, uint64_t request,
+                         const bc_history_page* pages, size_t count, bool more);
+  // The browser's own ad blocker, which blocks in place of uBlock Origin with
+  // --ad-block-engine=native (#2111): the core finds the requests a page makes, and what it
+  // shows, and the app's engine says what to do with them. No call comes for a page that isn't
+  // http(s), on a site the user turned ad blocking off on, or with ad blocking off
+  // (bc_ad_blocking).
+  //
+  // On the main thread, before the first page and whenever Settings › Ad blocking changes:
+  // what to block with. |folder| is uBlock Origin's as the browser comes with it, whose
+  // web_accessible_resources and js/resources hold the stand-ins and scriptlets filters name.
+  // |lists| is the files of the filter lists turned on (bc_ad_block_lists), one a line, and
+  // |filters| the user's own (bc_ad_block_filters). The engine is ready for the next call to ask.
+  void (*ad_block_use)(void* context, const char* folder, const char* lists, const char* filters);
+  // The three that ask, alone of every callback, come on a sequence of the core's own, never the
+  // main thread, and at the same time as the main thread's: a page's requests never wait on the
+  // UI, nor the UI on matching. Each answers at once from the engine it has, never waiting for
+  // the main thread. The one ad_block_use asked for may still be loading, which the call waits
+  // for, as it then takes a moment.
+  //
+  // What to do with the request for |url|, of |type| as a filter's options name it ("document",
+  // "subdocument", "script", "stylesheet", "image", "font", "media", "object", "xmlhttprequest",
+  // "ping" or "other"), from the page at |source_url|: a BC_AD_BLOCK_ value. For
+  // BC_AD_BLOCK_REDIRECT it writes the stand-in's data: URL, for BC_AD_BLOCK_REWRITE the address
+  // the request goes to instead.
+  int (*ad_block_request)(void* context, const char* url, const char* source_url, const char* type,
+                          bc_writer write, void* out);
+  // What the page at |url| hides and runs from the start, written as a JSON object: "hide", the
+  // CSS selectors of what it hides; "procedural", the filters that hide or style by more than a
+  // selector, each a JSON string as adblock-rust gives it; "exceptions", the generic selectors it
+  // doesn't hide (for ad_block_hide); "script", the scriptlets' code, to run in the page's main
+  // world before its own scripts; and "generic", false where the page hides no generic selector.
+  void (*ad_block_page)(void* context, const char* url, bc_writer write, void* out);
+  // The generic selectors that hide the elements of a page with these classes and ids, JSON
+  // arrays of strings, but its |exceptions| (ad_block_page's), written as a JSON array.
+  void (*ad_block_hide)(void* context, const char* classes, const char* ids,
+                        const char* exceptions, bc_writer write, void* out);
+  // Arrange (bc_tab_arrange) changed what it shows on the tab's page: |state| says the step, the
+  // element and what a drop does, for the foot bar's line and the mini bar. Once for each change of
+  // step, element or drop, and while the page scrolls only as the scroll starts and once it rests,
+  // never a frame at a time. It lasts only for the call.
+  void (*tab_arrange_state)(void* context, bc_id tab, const bc_arrange_state* state);
+  // Arrange ended on the tab without the app asking: the page changed, Zap began, or the tab moved
+  // into an agent's Space.
+  void (*tab_arrange_ended)(void* context, bc_id tab);
+  // The user changed |site|'s arrangement in the tab's Arrange: |arrangement| is all of it, |size|
+  // bytes of JSON for the app to write to Boosts/<site>.arrange.json, or empty after Reset, for the
+  // app to remove the file. The core records these bytes as turned on before this comes, so the
+  // file read back is BC_ARRANGEMENT_ON.
+  void (*tab_arrange_saved)(void* context, bc_id tab, const char* site, const char* arrangement,
+                            size_t size);
+  // Which of |site|'s saved changes found no element on the tab's page: the indexes in its
+  // arrangement's list of changes, which are skipped, never matched to the nearest thing, while the
+  // rest apply. As the page loads, once more as the 1.5 s hold for late elements ends, and after
+  // the user changes the arrangement; none once all fit. The page places a change as soon as its
+  // element comes, but this count waits for the next of those. For Site Controls' "No longer fits"
+  // and the list's dimmed rows.
+  void (*tab_arrangement_fits)(void* context, bc_id tab, const char* site,
+                               const uint32_t* misfits, size_t count);
+  // A snoozed tab came back by itself (bc_tab_snooze): |tab| is at the top of its Space's Today
+  // tabs, unloaded, and nothing shows it, so the app marks it unread until it's shown.
+  void (*tab_unsnoozed)(void* context, bc_id tab);
+  // The element under the pointer in the tab's Point (bc_tab_point), or the one ↑ or ↓ moved to:
+  // its kind and name as Arrange names them, for the label, and its border in points from the
+  // top-left of the page's view, for the outline the app draws over the page; |box| 0 wide when
+  // there's none, or while the page scrolls. At most once a frame while the pointer moves, none
+  // while it rests. |element| lasts only for the call.
+  void (*tab_point_hover)(void* context, bc_id tab, const bc_arrange_element* element,
+                          bc_rect box);
+  // The user clicked an element in the tab's Point: |element| is all that goes to the agent if
+  // they Send it, for the app to show as it is and send as it is. It lasts only for the call.
+  void (*tab_point_picked)(void* context, bc_id tab, const bc_point_element* element);
+  // Point ended on the tab without the app asking: a new page, the tab moved into another agent's
+  // Space or a private window, or it closed.
+  void (*tab_point_ended)(void* context, bc_id tab);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1782,22 +1913,26 @@ BC_EXPORT bool bc_profile_set_archive_after(bc_id profile, double seconds);
 BC_EXPORT size_t bc_profile_notes_service(bc_id profile, char* service, size_t capacity);
 BC_EXPORT void bc_profile_set_notes_service(bc_id profile, const char* service);
 
-// A page of another browser's history, for bc_profile_add_history. Strings are UTF-8.
-typedef struct bc_history_page {
-  const char* url;
-  const char* title;
-  // When it was last visited, in microseconds since 1970.
-  int64_t last_visit;
-  int32_t visits;
-  // How many of the visits were typed into the address bar, which ranks it among suggestions.
-  int32_t typed;
-} bc_history_page;
-
 // Adds |count| pages from another browser's history to the loaded profile's, as Chrome's importer
 // does, and returns whether it will: not to a private profile or one that hasn't loaded. A page
 // already there with a visit as late is skipped, so importing the same history again adds
 // nothing. Then history_added, with how many it added. The core copies what it needs.
 BC_EXPORT bool bc_profile_add_history(bc_id profile, const bc_history_page* pages, size_t count);
+
+// Lists up to |max| pages of |profile|'s history visited before |before|, microseconds since 1970,
+// or now if 0, as the Library's History does a page of its list at a time (#2337): newest first,
+// each page once a day, whose title or URL has |text|'s words when it isn't empty. Then
+// history_listed with |request|. History reads them on its own thread, off the UI thread. Returns
+// whether it will: not for a private profile, whose history nothing keeps, or one that hasn't
+// loaded.
+BC_EXPORT bool bc_profile_list_history(bc_id profile, uint64_t request, int64_t before,
+                                       const char* text, size_t max);
+
+// Deletes |profile|'s visits to |url| from |begin| to |end|, microseconds since 1970, as the
+// Library's History removes one row, a page on one day. Chrome's observers hear it as any deletion,
+// and history_deleted follows. Returns whether it will, as bc_profile_list_history.
+BC_EXPORT bool bc_profile_remove_history(bc_id profile, const char* url, int64_t begin,
+                                         int64_t end);
 
 // A field of another browser's saved address, for bc_profile_add_addresses, as a Chromium-based
 // browser's Web Data keeps it: Chromium's FieldType and VerificationStatus numbers, and the value,
@@ -2202,6 +2337,23 @@ BC_EXPORT void bc_extensions_report(void);
 // bc_archive_undo_remove, or 0 if the archive was empty.
 BC_EXPORT bc_id bc_archive_clear(void);
 
+// Closes the Today tab as bc_tab_close does, into the archive snoozed until |until|, in
+// milliseconds since the Unix epoch. Then, or at the first launch after it with the window on
+// screen, it comes back by itself at the top of its Space's Today tabs, unloaded, and leaves the
+// archive: then space_changed, archive_changed and tab_unsnoozed. If its Space is gone by then, it
+// stays in the archive as a tab closed then. Till then it's an archived tab like the rest, with its
+// time in bc_archived_tab.snoozed_until, which auto-archive's 30 days don't drop, and
+// bc_window_reopen_tab and bc_window_restore_archived bring it back sooner. Returns false and
+// leaves it open if it isn't a Today tab of the user's own Spaces, such as a pinned tab, a
+// favorite, a private window's or an agent's, or |until| has passed. The user's: an agent's closed
+// pages don't go in the archive (#1408), so agents get no call for it.
+BC_EXPORT bool bc_tab_snooze(bc_id tab, double until);
+
+// Changes when the snoozed archived tab comes back, to |until|, or with 0 leaves it in the archive
+// as a tab closed now. Returns false if the archive has no such tab, or |until| has passed. Then
+// archive_changed. The user's, as bc_tab_snooze.
+BC_EXPORT bool bc_archive_snooze(bc_id archived, double until);
+
 // Takes the archived tab out of the archive, as bc_archive_clear does with all of them. Its tab,
 // if it closed since the browser started, still reopens with bc_window_reopen_closed_tab. Then
 // archive_changed, unless the archive has no such tab. Returns the removal's id, as
@@ -2310,8 +2462,8 @@ BC_EXPORT void bc_set_battery_saver_enabled(bool enabled);
 // |plugged| in or not, read at once. Does nothing without the switch.
 BC_EXPORT void bc_battery_for_testing(int percent, bool plugged);
 // Whether the browser blocks ads and trackers, in every profile and its private windows, with the
-// uBlock Origin it comes with: on unless the user turned it off. Off turns uBlock Origin off in
-// each profile, as its switch in Chrome's extensions page does. The core keeps it with the Spaces.
+// ad blocker it comes with, uBlock Origin, which no extension list shows: on unless the user
+// turned it off. The core keeps it with the Spaces.
 // The user's: agents get none, as it keeps trackers off the user's pages.
 BC_EXPORT bool bc_ad_blocking(void);
 BC_EXPORT void bc_set_ad_blocking(bool on);
@@ -2322,6 +2474,29 @@ BC_EXPORT void bc_set_ad_blocking(bool on);
 // two from their sites. The core keeps it with the Spaces. The user's, as bc_set_ad_blocking is.
 BC_EXPORT bool bc_cookie_notices_hidden(void);
 BC_EXPORT void bc_set_cookie_notices_hidden(bool on);
+// Settings › Ad blocking's filter lists and the user's own filters, browser-wide like
+// bc_ad_blocking: each change applies at once in every profile and its private windows, and the
+// core keeps them with the Spaces. The user's, as bc_set_ad_blocking is.
+//
+// Copies the filter lists the ad blocker can use into |lists| as bc_space_name does, each
+// "key\tgroup\ton\ttitle" on a line of its own, UTF-8: |group| one of default, ads, privacy,
+// malware, multipurpose, annoyances and regions, and |on| 1 or 0. The default group's lists and
+// most others' start on, the annoyance and regional lists off. Empty until the core has read them,
+// a moment after the first profile loads.
+BC_EXPORT size_t bc_ad_block_lists(char* lists, size_t capacity);
+// Whether an administrator's policy for the ad blocker chose its lists, which are then on as it
+// says, and which bc_set_ad_block_list doesn't change.
+BC_EXPORT bool bc_ad_block_lists_locked(void);
+// Turns the list of |key|, one of bc_ad_block_lists, on or off.
+BC_EXPORT void bc_set_ad_block_list(const char* key, bool on);
+// Copies the user's own filters, Settings' My filters, into |filters| as bc_space_name does, one
+// a line.
+BC_EXPORT size_t bc_ad_block_filters(char* filters, size_t capacity);
+// Whether an administrator's policy for the ad blocker set its filters in place of the user's,
+// which bc_set_ad_block_filters then doesn't change.
+BC_EXPORT bool bc_ad_block_filters_locked(void);
+// Makes |filters|, one a line, the user's own.
+BC_EXPORT void bc_set_ad_block_filters(const char* filters);
 
 // Chromium's everyday settings, as Settings shows them, browser-wide: the core writes each into
 // every profile, and into each as it loads, as Chrome's own settings page would (#1636). Each that
@@ -2424,6 +2599,13 @@ BC_EXPORT void bc_download_icon(bc_id download);
 // page_favicon.
 BC_EXPORT void bc_page_favicon(const char* url);
 
+// Copies the site of the page at |url| into |site| as bc_space_name does: its host's registrable
+// domain, the part the link target's plate emphasizes (docs.example.com and login.example.com are
+// example.com), or the host itself when it has none, as localhost and an IP address don't. Empty
+// for a page that isn't http(s). One meaning of a site for the app and agents: Sort Today Tabs by
+// Site gathers tabs by it.
+BC_EXPORT size_t bc_url_site(const char* url, char* site, size_t capacity);
+
 // Lists suggestions for |text| typed in the window's command bar, as Chrome's address bar does:
 // pages from the profile's history and bookmarks, open tabs among them, and a search for |text|.
 // Well-known sites |text| could start fill the rows left, under those. Nothing typed leaves the
@@ -2460,6 +2642,13 @@ BC_EXPORT bool bc_window_redo_remove_suggestion(bc_id window, bc_id removal);
 // 0 if the window is closing or gone.
 BC_EXPORT bc_id bc_tab_open(bc_id window, const char* url, bool when_shown);
 
+// As bc_tab_open, for the address the user typed as |typed|, which the core reads as Chrome's
+// address bar does: written with http://, |url| loads over http as written, not tried over https
+// first by HTTPS-Upgrades or by HTTPS-First, which Chrome's bar lets a typed http:// skip too.
+// Typed without a scheme, or null, it's bc_tab_open's load.
+BC_EXPORT bc_id bc_tab_open_typed(bc_id window, const char* url, bool when_shown,
+                                  const char* typed);
+
 // Copies up to |capacity| bytes of the URL Chrome's address bar goes to for |text| typed in it into
 // |url|, UTF-8 and ending in a NUL, and returns the URL's length without it: the page |text| names,
 // else a search for it with the default search engine of the profile |window| shows, DuckDuckGo
@@ -2482,16 +2671,29 @@ BC_EXPORT size_t bc_search_url(bc_id window,
 // page asks.
 
 // Opens |url| in a tab in no Space, in |opener|'s window and profile, loading it at once as the link
-// in |opener|'s page would have, for the app to show with bc_tab_show_in. bc_tab_close closes it,
-// which no archive or ⇧⌘T keeps, and bc_window_keep_preview keeps it. Quitting closes it. Returns 0
-// if |opener|'s window is closing or gone.
-BC_EXPORT bc_id bc_tab_open_preview(bc_id opener, const char* url);
+// in |opener|'s page would have, for the app to show with bc_tab_show_in at |frame|, whose size its
+// page has from before it loads, so its first script reads it. bc_tab_close closes it, which no
+// archive or ⇧⌘T keeps, and bc_window_keep_preview keeps it. Quitting closes it. Returns 0 if
+// |opener|'s window is closing or gone.
+BC_EXPORT bc_id bc_tab_open_preview(bc_id opener, const char* url, bc_rect frame);
 
 // Shows the page of |tab|, which no window shows, such as bc_tab_open_preview's, in |view|, an
 // NSView of the app's on the Mac, which keeps it from then on: at |frame| in points from the view's
 // top-left, over what the view draws, with corners of |corner_radius|, and with the keyboard. Call
 // it again as the frame changes.
 BC_EXPORT void bc_tab_show_in(bc_id tab, void* view, bc_rect frame, double corner_radius);
+
+// Draws the page bc_tab_show_in shows of |tab| at |scale| of its frame's size about (|about_x|,
+// |about_y|), in points from the view's top-left as its frame is, and at |opacity|, without laying
+// it out again: its size, and the size its page reads, stay its frame's. Each call replaces the
+// last, and another page shown in the view draws as it is. Where the page shows under the app's
+// view, on Windows and Linux; the Mac's is in the view, which scales and fades it with what the app
+// draws, and this does nothing.
+BC_EXPORT void bc_tab_draw_preview(bc_id tab,
+                                   double scale,
+                                   double about_x,
+                                   double about_y,
+                                   double opacity);
 
 // Puts |tab|, a link preview, at the top of the Today tabs of the Space the window shows, and shows
 // it there, as it is: its page doesn't load again. Then space_changed and window_selected.
@@ -2513,6 +2715,10 @@ BC_EXPORT void bc_tab_show(bc_id tab, bc_rect frame);
 // opens in a tab it opened, at the top of its Space's Today tabs, shown if its window shows that
 // Space, and closing that tab shows the pinned one again.
 BC_EXPORT void bc_tab_navigate(bc_id tab, const char* url);
+
+// As bc_tab_navigate, for the address the user typed as |typed|, read as bc_tab_open_typed reads
+// it.
+BC_EXPORT void bc_tab_navigate_typed(bc_id tab, const char* url, const char* typed);
 
 // Goes back, or forward, in the tab's history, if it has a page that way.
 BC_EXPORT void bc_tab_go_back(bc_id tab);
@@ -2886,6 +3092,229 @@ BC_EXPORT bool bc_profile_turn_on_boost_script(bc_id profile, const char* site, 
 // Turn Off and Delete…: forgets the script turned on for |site|, which is then new, and off.
 BC_EXPORT void bc_profile_forget_boost_script(bc_id profile, const char* site);
 
+// Arrange (#2347, docs/ux-spec.md › Boosts): the user drags the page's own elements where they want
+// them, and the page closes behind them. An arrangement is data, a list of changes the core places
+// with its own code, the same for every site: one element settled before or after another, two
+// traded, one floating over the page, and none other. Hiding is Zap's rule in the Boost's CSS. The
+// user's alone: no agent, page, sync, link or import starts the mode or changes an arrangement, and
+// a tab in an agent's Space never arranges.
+
+// How Arrange's marks in the page look, from the app's tokens and the Space's accent: the outline,
+// the drop line, a trade's fill and the label over the element, in |accent| with |label| for the
+// label's text; the place the carried element left, dashed in |ink|; colours as 0xRRGGBB, |line|
+// and |radius| in CSS pixels, up to 16. The label names the element's kind by the app's word for
+// its ARIA role or tag in |kinds|, |count| of them, else |other|, then its own words.
+//
+// How it moves, which the app fills from tokens.toml ([shell.boost.motion] and the sidebar's
+// springs), each the default given when it's outside its range, a zeroed struct's 0 included:
+// |rest|, the seconds a carry holds still before the page shows the drop made (0.05 to 1, 0.3);
+// |room_omega|, per second, the critically damped spring the page's other elements make room with
+// as the drop is shown (5 to 100, 25, as the Favorites make room); and |land_response|, seconds,
+// and |land_damping|, a ratio, the spring a dropped element lands in its place with (0.05 to 1,
+// 0.13, and 0.2 to 0.99, 0.9, as the sidebar's rows move). With reduced motion it lands at once.
+typedef struct bc_arrange_kind {
+  const char* kind;
+  const char* word;
+} bc_arrange_kind;
+typedef struct bc_arrange_look {
+  uint32_t accent;
+  uint32_t label;
+  uint32_t ink;
+  double line;
+  double radius;
+  const bc_arrange_kind* kinds;
+  size_t count;
+  const char* other;
+  double rest;
+  double room_omega;
+  double land_response;
+  double land_damping;
+} bc_arrange_look;
+
+// Turns Arrange on or off on the tab's page, with |look| for the marks, which may be null to turn
+// it off. While on, a left press, its drag and its release go to Arrange instead of the page, the
+// page's moves still reach it, and the marks are drawn in the page where its scripts can neither
+// style nor cover them, and are gone once it ends; the foot bar and the mini bar are the app's.
+// Returns whether it's on: never for a tab in an agent's Space, a private window, a page that
+// isn't http(s), or a tab in Point (bc_tab_point). Turning it on ends Zap on the tab, with
+// tab_boost_zap_ended, and bc_tab_boost_zap ends it, with tab_arrange_ended, as both take the
+// page's presses. A new page ends it, with tab_arrange_ended.
+BC_EXPORT bool bc_tab_arrange(bc_id tab, bool on, const bc_arrange_look* look);
+
+// What the user asks of Arrange, by the keys the app takes before the page and the bars' buttons:
+// point at the box around the one pointed at (↑) or inside it (↓); undo the last change of the
+// mode's; hide the selected element, as Zap does, with tab_boost_zapped for the app to add to the
+// Boost; put the selected element's change back; keep a floating element on screen, or let it
+// scroll with the page; and Reset, which puts back every change of the site's.
+#define BC_ARRANGE_DO_OUTER 0
+#define BC_ARRANGE_DO_INNER 1
+#define BC_ARRANGE_DO_UNDO 2
+#define BC_ARRANGE_DO_HIDE 3
+#define BC_ARRANGE_DO_PUT_BACK 4
+#define BC_ARRANGE_DO_STAYS_ON_SCREEN 5
+#define BC_ARRANGE_DO_SCROLLS_WITH_PAGE 6
+#define BC_ARRANGE_DO_RESET 7
+// Does |action|, a BC_ARRANGE_DO_ value, on the tab's Arrange. Nothing while it's off.
+BC_EXPORT void bc_tab_arrange_do(bc_id tab, int action);
+
+// Arrange's steps: the pointer is over an element; one is lifted and carried; the carry rested
+// and the page shows the drop as it would be; one is let go, or picked, and stays selected.
+#define BC_ARRANGE_POINTING 0
+#define BC_ARRANGE_CARRYING 1
+#define BC_ARRANGE_PREVIEW 2
+#define BC_ARRANGE_SELECTED 3
+// What a drop does, or what the selected element's change does: none, as at the place it left;
+// settles between two elements, the page making room; trades places with another; floats over the
+// page, where it's let go or with ⌘ held; or refused, as |refused| says why.
+#define BC_ARRANGE_NONE 0
+#define BC_ARRANGE_SETTLES 1
+#define BC_ARRANGE_TRADES 2
+#define BC_ARRANGE_FLOATS 3
+#define BC_ARRANGE_REFUSED 4
+// Why: the two don't fit each other's places, one overflowing at the other's width or a place
+// being in a table, a grid or a line of text; the page doesn't show the element, as inside a closed
+// <details>, which can't be picked; or it's placed, but the page draws over it, so it may be
+// covered.
+#define BC_ARRANGE_FITS 0
+#define BC_ARRANGE_DOESNT_FIT 1
+#define BC_ARRANGE_NOT_SHOWN 2
+#define BC_ARRANGE_COVERED 3
+
+// An element as Arrange names it, for the app's words: |kind| is its ARIA role, or its tag name
+// when it has none, such as "link", "img", "video" or "nav", and |name| the page's own words for
+// it, its label or the start of its text, up to 60 characters, or "". An empty |kind| is none.
+typedef struct bc_arrange_element {
+  const char* kind;
+  const char* name;
+} bc_arrange_element;
+
+typedef struct bc_arrange_state {
+  // A BC_ARRANGE_ step.
+  int step;
+  // The element pointed at, carried or selected.
+  bc_arrange_element element;
+  // A BC_ARRANGE_ change: what a drop here does while carrying or in a preview, what the selected
+  // element's change does, and none while pointing.
+  int change;
+  // A settle's place, between |before| and |after|, either empty at its container's start or end,
+  // or a trade's other element in |before|.
+  bc_arrange_element before;
+  bc_arrange_element after;
+  // Why a change is refused, or that a placed one may be covered: a BC_ARRANGE_ value, FITS if
+  // neither.
+  int refused;
+  // A floating element stays on screen, rather than scrolling with the page.
+  bool on_screen;
+  // Whether Undo and Reset have a change of the site's to take back.
+  bool can_undo;
+  bool can_reset;
+  // The selected element's border, in points from the top-left of the page's view, for the mini
+  // bar, or a box 0 wide when nothing is selected or while the page scrolls.
+  bc_rect box;
+} bc_arrange_state;
+
+// What the core makes of a site's arrangement, the bytes of Boosts/<site>.arrange.json: on, as the
+// user made it in this profile on this computer or turned it on; new, never turned on here; changed
+// outside the browser since; or refused whole, failing its schema or over a limit. Only ON is
+// placed: one changed outside could put a button where another is expected.
+#define BC_ARRANGEMENT_ON 0
+#define BC_ARRANGEMENT_NEW 1
+#define BC_ARRANGEMENT_CHANGED 2
+#define BC_ARRANGEMENT_REFUSED 3
+// The limits past which an arrangement is refused whole, with 2 KB to any string in it.
+#define BC_ARRANGEMENT_MAX_BYTES 65536
+#define BC_ARRANGEMENT_MAX_CHANGES 64
+
+// Gives |site| in |profile| the arrangement the app read from its file, |size| bytes, or takes it
+// away with null |arrangement|. Returns its BC_ARRANGEMENT_ state: the site's pages place it as
+// they commit, those open now at once, only while it's BC_ARRANGEMENT_ON, and nothing runs for a
+// site with none. A private window's pages take their profile's. The user's, as
+// bc_profile_set_boost.
+BC_EXPORT int bc_profile_set_arrangement(bc_id profile, const char* site, const char* arrangement,
+                                         size_t size);
+// Turn On, in Site Controls, which only the user's click calls: records |arrangement|, |size|
+// bytes, as turned on for |site|, and places it as bc_profile_set_arrangement does. False for one
+// refused. The user's alone: no agent, page, sync, link or import calls it.
+BC_EXPORT bool bc_profile_turn_on_arrangement(bc_id profile, const char* site,
+                                              const char* arrangement, size_t size);
+
+// Point (#2352): an agent's `point` tool asks the user to show it something, and the user points
+// at elements on the page in front, notes each and sends them, or doesn't. The agent names no tab
+// and learns nothing of this one until the user's Send, so the core's refusals are said to the app,
+// for Point's tooltip, and never to the agent. An agent's call in a tab while the user points in
+// it is refused, in the activity log.
+//
+// Why Point can't start on a tab: it can; the page isn't http(s), ilo's own pages among them; the
+// tab is in a private window; it's in an agent's Space other than the asking agent's; or the user
+// is arranging it (bc_tab_arrange).
+#define BC_POINT_CAN 0
+#define BC_POINT_NOT_WEB 1
+#define BC_POINT_PRIVATE 2
+#define BC_POINT_OTHER_AGENT 3
+#define BC_POINT_ARRANGING 4
+// Whether bc_tab_point would start on the tab for the agent with the id |agent|: a BC_POINT_
+// value, for the app to dim Point with its reason before it's pressed. Asks nothing of the page.
+BC_EXPORT int bc_tab_may_point(bc_id tab, const char* agent);
+
+// Turns Point on or off on the tab's page, for the agent with the id |agent|, which asked. Returns
+// BC_POINT_CAN once it's on or off as asked, else why it isn't on, as bc_tab_may_point says. While
+// on, a left press and its release go to Point instead of the page, and the page's moves still
+// reach it, so a hover menu opens as the user reaches for it. The hit test is DevTools', as
+// bc_tab_element_at's, and nothing is added to the page, no script, node or style: the app draws
+// the marks over the page from tab_point_hover. Turning it on ends Zap on the tab, with
+// tab_boost_zap_ended, and bc_tab_boost_zap ends it, as both take the page's presses. A new page,
+// the tab moving into another agent's Space, or its closing ends it, with tab_point_ended. The
+// user's, from their press on Point: agents get none.
+BC_EXPORT int bc_tab_point(bc_id tab, const char* agent, bool on);
+
+// What the user asks of Point, by the keys the app takes before the page: point at the box around
+// the one pointed at (↑) or inside it (↓). Then tab_point_hover. Nothing while it's off.
+#define BC_POINT_DO_OUTER 0
+#define BC_POINT_DO_INNER 1
+BC_EXPORT void bc_tab_point_do(bc_id tab, int action);
+
+// An element the user picked in Point, as it goes to the agent. Its strings are UTF-8, "" when
+// there's none.
+//
+// What's withheld is what an agent's own outline and screenshot withhold. No form control's value
+// is in |text|, as none is in bc_tab_read_text's. The picture is made as an agent's screenshot is,
+// by the same function and rule: each field in the element holding what the user typed, or
+// autofill or a password manager put there, an email or a card number as much as a password, is
+// hatched over, as is each frame whose fields can't be read. |withheld| says the element held one.
+typedef struct bc_point_element {
+  // Its kind and name, as Arrange names them, for the label and the note's first line.
+  bc_arrange_element element;
+  // The page's address, its origin and path only: never its query or fragment, which can carry a
+  // session's token. And the page's title.
+  const char* address;
+  const char* title;
+  // Its tag name, lowercase.
+  const char* tag;
+  // Its text as the accessibility tree reads it, a line for each block, up to 2000 characters.
+  const char* text;
+  // A selector that finds it again, from its id, its role and its path: words for the agent, never
+  // run.
+  const char* selector;
+  // The styles a person names it by, computed: its colour, its background colour, its font's
+  // family and size, and its padding, as CSS writes them.
+  const char* color;
+  const char* background;
+  const char* font;
+  const char* font_size;
+  const char* padding;
+  // Its border, in points from the top-left of the page's view.
+  bc_rect box;
+  // Whether a form control in it held a value, or a frame in it was hatched.
+  bool withheld;
+  // Its picture, as an agent's screenshot is made, of its box and 8 points around it, cut to the
+  // view: a PNG |size| bytes long, |width| by |height| pixels at the display's scale, or null and 0
+  // if the page couldn't give one.
+  const uint8_t* png;
+  size_t size;
+  int width;
+  int height;
+} bc_point_element;
+
 // Takes the tab's playing video into Picture in Picture, or brings it back, as
 // bc_site_controls' picture_in_picture says it can. Then tab_site_controls.
 BC_EXPORT void bc_tab_picture_in_picture(bc_id tab);
@@ -3063,6 +3492,18 @@ BC_EXPORT void bc_tab_share_instead(bc_id tab);
 // Then tab_state_changed. The user's: agents act in the page instead.
 BC_EXPORT void bc_tab_media(bc_id tab, int action);
 
+// Shows the video of |tab|'s media live in |window|, for its media card while no window shows the
+// tab and its state has media_video: at |frame| in points from the top-left of the window's
+// content, over what the app draws there, with corners of |corner_radius|, fitted in black. It's
+// the page's own video, as Picture in Picture shows it, so a paused one shows the frame it stopped
+// on, and it's black until the page sends its first frame. Call it again as the frame changes, and
+// with an empty frame once the card's gone. One video shows at a time, across windows: the last
+// asked for. While another Picture in Picture window is open, a page's own, a call's or the Mini
+// Player, it keeps its video, and the app's drawing shows at |frame|. bc_tab_media's Picture in
+// Picture floats the card's video into Chrome's window. The page sees its video go into Picture in
+// Picture and leave it. The user's: agents get no media cards.
+BC_EXPORT void bc_tab_show_video(bc_id tab, bc_id window, bc_rect frame, double corner_radius);
+
 // Closes the Today tabs below the tab, each as bc_tab_close does, bottom up. A window showing one
 // shows the tab first. Then tab_closed for each, and space_changed.
 BC_EXPORT void bc_tab_close_below(bc_id tab);
@@ -3132,6 +3573,14 @@ BC_EXPORT void bc_tab_close(bc_id tab, bool split);
 // Space too. A close the page asks for then closes the tab as the user's would, and tab_closed
 // follows. The user's alone: an agent's tab never has it.
 BC_EXPORT void bc_tab_set_page_may_close(bc_id tab, bool may);
+
+// Keeps nothing of the page the tab shows, as the UI asks for a sign-in's callback page in a
+// Little ilo window another app's link opened, whose address carries a single-use code: its URL
+// leaves the profile's history, with every visit to it, and so the command bar's suggestions. If
+// the tab closes while it still shows that page, it isn't archived or among the tabs
+// bc_window_reopen_closed_tab reopens. One that has gone on to another page closes as any does.
+// The user's alone: an agent's tab never shows such a page.
+BC_EXPORT void bc_tab_forget_page(bc_id tab);
 
 // Windows. Every window shows the same Spaces, and a tab's page is live in one window at a time:
 // the one that showed it last. The reads are for the UI and agents alike.
@@ -3335,6 +3784,15 @@ BC_EXPORT size_t bc_window_child_title(bc_id window, char* title, size_t capacit
 // own read of the clipboard waits, as the owner it asks can be Chromium, which answers on the UI's
 // thread.
 BC_EXPORT void bc_answer_clipboard_requests(void);
+
+// Reads the clipboard's text through Chromium's clipboard and hands it to |done| with |context|,
+// UTF-8, empty for none, on the UI's thread from a task of its own, never during the call. For the
+// UI's own fields under Wayland, where the UI shares Chromium's connection to the compositor:
+// there the UI can't read a selection Chromium holds, and a compositor may hand the selection to
+// the connection's first data device alone, which is Chromium's (#2463). Nothing an agent asks
+// reaches it.
+BC_EXPORT void bc_clipboard_read_text(void (*done)(void* context, const char* text),
+                                      void* context);
 
 // Moves the folder, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
 // as bc_tab_move_to_space moves a pinned tab: the folders keep their names, icons and whether

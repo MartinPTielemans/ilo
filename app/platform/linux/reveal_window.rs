@@ -72,7 +72,7 @@ pub extern "C" fn host_show_reveal(ui_view: *mut c_void, width: f64) {
     crate::overlays::show_over(view, ui_view, bounds, px(0.), false, ignore_left);
     if !was_shown {
         // check.sh reads it, as the Mac's host says it.
-        eprintln!("browser: reveal window shown");
+        browser::log!("browser: reveal window shown");
     }
 }
 

@@ -1,3 +1,4 @@
+# check.sh runs this at 360.
 # A new profile's first launch plays the onboarding over the window, captured at each step in a
 # light and a dark appearance: the intro draws ilo's wordmark and its line and goes on by itself, or
 # at any key; the import step lists the made-up Arc in src/import/fixture (a made-up Chrome on
@@ -311,9 +312,9 @@ expect '^browser: command bar shown$' "the replay in its own window didn't end w
 exec 3>&-
 quit
 
-# Suggested favorites: a first launch on a made-up Chrome whose history visits two sites three
-# times and more brings them in, with ↩ at the browser and ↩ at its choices, and the step after
-# the import is Your favorites, offering those two, ticked.
+# Suggested favorites: a first launch on a made-up Chrome with tabs open, whose history visits two
+# sites three times and more, brings them in with ↩ at the browser and ↩ at its choices, and the
+# step after the import is Your favorites, offering those two, ticked.
 fav_home="$PWD/$out/onboarding-favorites-home"
 rm -rf "$fav_home"
 if [ "$(uname)" = Darwin ]; then
@@ -326,7 +327,29 @@ fi
 mkdir -p "$fav_chrome/Default"
 printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Me"}}}}' > "$fav_chrome/Local State"
 printf '%s' '{}' > "$fav_chrome/Default/Preferences"
-printf '%s' '{"roots":{}}' > "$fav_chrome/Default/Bookmarks"
+# Three bookmarks on its bar, which come in as pinned tabs, and 55 tabs open in its last session,
+# which come in as Today tabs: placing those reads the first window's Shell, and the import step
+# is pressed inside that Shell's update, which aborted the launch (#2428).
+printf '%s' '{"roots":{"bookmark_bar":{"type":"folder","name":"Bookmarks bar","children":[
+  {"type":"url","name":"Docs","url":"https://docs.example.org/"},
+  {"type":"url","name":"Wiki","url":"https://wiki.example.org/"},
+  {"type":"url","name":"Calendar","url":"https://calendar.example.org/"}]}},"version":1}' \
+  > "$fav_chrome/Default/Bookmarks"
+mkdir -p "$fav_chrome/Default/Sessions"
+perl -e '
+sub cmd { my ($id, $body) = @_; pack("S<C", length($body) + 1, $id) . $body }
+sub nav { my ($tab, $index, $url) = @_;
+  my $pickle = pack("l<3", $tab, $index, length $url) . $url;
+  $pickle .= "\0" x (-length($pickle) % 4);
+  $pickle .= pack("l<", 0);
+  pack("l<", length $pickle) . $pickle }
+print "SNSS", pack("l<", 3), cmd(9, pack("l<2", 1, 0));
+for my $tab (2 .. 56) {
+  print cmd(0, pack("l<2", 1, $tab)), cmd(2, pack("l<2", $tab, $tab - 2)),
+    cmd(6, nav($tab, 0, "https://open.example.org/" . ($tab - 1)));
+}
+print cmd(255, "")' > "$fav_chrome/Default/Sessions/Session_13400000000000000" ||
+  fail "couldn't write the made-up Chrome's session"
 # Chromium counts microseconds from 1601: an hour ago.
 python3 -I -c '
 import sqlite3, sys, time
@@ -360,6 +383,9 @@ expect '^browser: import read Chrome: ' "favorites: picking Chrome didn't read i
 send key return
 expect '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' \
   "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
+expect '^browser: import from Chrome: [0-9]* Spaces, 3 pinned tabs, 55 open tabs, ' \
+  "favorites: the import didn't plan Chrome's bookmarks and open tabs: $(grep 'import from Chrome' "$log")"
+expect '^browser: import done: ' "favorites: the import with open tabs didn't finish"
 await '^browser: onboarding step favorites settled$' ||
   fail "favorites: the step after the import wasn't Your favorites"
 capture_step favorites

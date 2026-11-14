@@ -1,3 +1,4 @@
+# check.sh runs this at 250.
 # ⇧⌘2 from the page opens capture mode over it, with the keyboard, and the pointer over an element
 # lights the box the core hit tests. A click takes it, and the menu's Copy copies a picture of just
 # that box to a pasteboard of the run's own and shows the toast with Save and Share. ⇧⌘-drag on

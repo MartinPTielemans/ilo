@@ -17,8 +17,11 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/arrange.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/boosts.h"
+#include "browser_core/card_video.h"
+#include "browser_core/dialog_keys.h"
 #include "browser_core/favorites.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/host.h"
@@ -27,8 +30,11 @@
 #include "browser_core/page_press.h"
 #include "browser_core/page_translate.h"
 #include "browser_core/password_offer.h"
+#include "browser_core/pinned_url.h"
 #include "browser_core/platform/keyboard.h"
 #include "browser_core/platform/window_views.h"
+#include "browser_core/point.h"
+#include "browser_core/profiles.h"
 #include "browser_core/script_dialog.h"
 #include "browser_core/session.h"
 #include "browser_core/developer_mode.h"
@@ -306,28 +312,50 @@ std::vector<Tab*> Tab::All() {
 
 // static
 bc_id Tab::Restore(Profile* profile, const SavedTab& saved) {
-  if (!profile || saved.history.empty()) {
+  return profile ? Make(profile, std::string(), saved) : 0;
+}
+
+// static
+bc_id Tab::Restore(const std::string& dir, const SavedTab& saved) {
+  if (Profile* profile = ProfileFor(dir)) {
+    return Make(profile, std::string(), saved);
+  }
+  return ProfileExpected(dir) ? Make(nullptr, dir, saved) : 0;
+}
+
+// static
+std::vector<bc_id> Tab::ProfileArrived(const std::string& dir, Profile* profile) {
+  std::vector<bc_id> arrived;
+  for (auto& [id, tab] : Tabs()) {
+    if (dir.empty() || tab->waiting_for_ != dir) {
+      continue;
+    }
+    tab->waiting_for_.clear();
+    if (profile) {
+      tab->profile_ = profile->GetWeakPtr();
+    }
+    tab->TakeStorage(std::exchange(tab->waiting_storage_, std::string()));
+    tab->StateChanged();
+    tab->FindFavicon(tab->Url());
+    arrived.push_back(id);
+  }
+  return arrived;
+}
+
+// static
+bc_id Tab::Make(Profile* profile, const std::string& waiting_for, const SavedTab& saved) {
+  if (saved.history.empty()) {
     return 0;
   }
   const bc_id id = NewId();
   Tab* tab = (Tabs()[id] = base::WrapUnique(new Tab(id, profile))).get();
+  tab->waiting_for_ = waiting_for;
   // Only what the page would keep: the rest of |saved| is its place, which the caller sees to.
   SavedTab& unloaded = tab->unloaded_.emplace();
   unloaded.history = saved.history;
   unloaded.current = std::clamp(saved.current, 0, static_cast<int>(saved.history.size()) - 1);
   unloaded.muted = saved.muted;
-  // Its page's sessionStorage from the last launch, unless a tab has it already, as one a sidebar
-  // backup brings back may.
-  const std::string& storage = saved.session_storage;
-  if (!storage.empty() && std::ranges::none_of(All(), [&](const Tab* other) {
-        return other != tab && other->SessionStorageId() == storage;
-      })) {
-    tab->storage_ =
-        profile->GetDefaultStoragePartition()->GetDOMStorageContext()->RecreateSessionStorage(
-            storage);
-    // Kept on disk should it go unshown to the next launch too, as an unloaded tab's is (Unload).
-    tab->storage_->SetShouldPersist(true);
-  }
+  tab->TakeStorage(saved.session_storage);
   tab->name_ = saved.name;
   tab->icon_ = saved.icon;
   if (!saved.last_seen.is_null()) {
@@ -339,27 +367,42 @@ bc_id Tab::Restore(Profile* profile, const SavedTab& saved) {
   // Posted, as the state is, so the app hears of it once its call has returned.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&Tab::ReportTitle, tab->weak_factory_.GetWeakPtr()));
+  // Without a profile, once it's here (ProfileArrived).
   tab->FindFavicon(tab->Url());
   return id;
 }
 
-Tab::Tab(bc_id id, Profile* profile) : id_(id), profile_(profile->GetWeakPtr()) {}
+void Tab::TakeStorage(const std::string& storage) {
+  // Its page's sessionStorage from the last launch, unless a tab has it already, as one a sidebar
+  // backup brings back may.
+  if (storage.empty() || std::ranges::any_of(All(), [&](const Tab* other) {
+        return other != this && other->SessionStorageId() == storage;
+      })) {
+    return;
+  }
+  if (!profile()) {
+    waiting_storage_ = storage;
+    return;
+  }
+  storage_ =
+      profile()->GetDefaultStoragePartition()->GetDOMStorageContext()->RecreateSessionStorage(
+          storage);
+  // Kept on disk should it go unshown to the next launch too, as an unloaded tab's is (Unload).
+  storage_->SetShouldPersist(true);
+}
+
+Tab::Tab(bc_id id, Profile* profile)
+    : id_(id), profile_(profile ? profile->GetWeakPtr() : nullptr) {}
+
+std::string Tab::profile_dir() const {
+  return waiting_for_.empty() ? DirOf(profile()) : waiting_for_;
+}
 
 Tab::~Tab() = default;
 
 void Tab::Attach(content::WebContents* contents) {
   Observe(contents);
   TabLink::CreateForWebContents(contents, id_);
-  // Chrome's tab helpers make the driver as the tab is made, before anything asks for its id.
-  if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(contents)) {
-    favicon_observation_.Observe(driver);
-  }
-  // It keeps a tab audible 2 s after its sound stops, so the speaker doesn't flicker between
-  // sounds.
-  if (auto* audible = RecentlyAudibleHelper::FromWebContents(contents)) {
-    audible_subscription_ = audible->RegisterRecentlyAudibleChangedCallback(
-        base::IgnoreArgs<bool>(base::BindRepeating(&Tab::ReportStateSoon, base::Unretained(this))));
-  }
   // Its page's camera, microphone and sharing, as Chrome's tab strip marks them. Not once quitting,
   // as a page's popup can still come after StopHearingCaptures.
   if (!capture_observation_.IsObserving() && !CapturesStopped() &&
@@ -369,25 +412,58 @@ void Tab::Attach(content::WebContents* contents) {
   }
   // Another page's session is heard from once it plays.
   media_observer_.reset();
-  // Chrome's tab sharing infobar comes and goes on it as a page starts and stops sharing a tab.
   infobar_observation_.Reset();
-  if (auto* infobars = infobars::ContentInfoBarManager::FromWebContents(contents)) {
-    infobar_observation_.Observe(infobars);
-  }
   // Its page's alert(), confirm() and prompt() ask with the app's dialog.
   ScriptDialogs::Attach(contents);
   // A press with a modifier held may be the app's, such as ⇧⌘-drag's capture.
   PagePresses::CreateForWebContents(contents, id_);
   Boosts::CreateForWebContents(contents, id_);
-  // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
-  AutofillMenu::Watch(contents);
+  Arrange::CreateForWebContents(contents, id_);
+  PagePoint::CreateForWebContents(contents, id_);
   // Its page's language, and the app's translation of it (#671).
   PageTranslate::CreateForWebContents(contents, id_);
   // Its pages, kept once each while the user said yes (#2324).
   WatchForMemory(contents);
+  ObserveHelpers();
   // A tab is often made with its first page already on its way, before anything observes it, so
   // the app hears it's loading now rather than once the page commits.
   ReportStateSoon();
+}
+
+void Tab::ObserveHelpers() {
+  content::WebContents* contents = web_contents();
+  if (!favicon_observation_.IsObserving()) {
+    if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(contents)) {
+      favicon_observation_.Observe(driver);
+    }
+  }
+  // It keeps a tab audible 2 s after its sound stops, so the speaker doesn't flicker between
+  // sounds.
+  if (!audible_subscription_) {
+    if (auto* audible = RecentlyAudibleHelper::FromWebContents(contents)) {
+      audible_subscription_ = audible->RegisterRecentlyAudibleChangedCallback(
+          base::IgnoreArgs<bool>(
+              base::BindRepeating(&Tab::ReportStateSoon, base::Unretained(this))));
+    }
+  }
+  // Chrome's tab sharing infobar comes and goes on it as a page starts and stops sharing a tab.
+  if (!infobar_observation_.IsObserving()) {
+    if (auto* infobars = infobars::ContentInfoBarManager::FromWebContents(contents)) {
+      infobar_observation_.Observe(infobars);
+    }
+  }
+  // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
+  AutofillMenu::Watch(contents);
+  if (auto* translate = PageTranslate::FromWebContents(contents)) {
+    translate->ObserveDriver();
+  }
+}
+
+// static
+void Tab::HelpersArrived(content::WebContents* contents) {
+  if (Tab* tab = FromWebContents(contents)) {
+    tab->ObserveHelpers();
+  }
 }
 
 // static
@@ -505,11 +581,44 @@ GURL Tab::Url() const {
   return unloaded_ ? unloaded_->history[unloaded_->current].virtual_url() : GURL();
 }
 
+bool Tab::At(const GURL& url) const {
+  if (content::WebContents* contents = web_contents()) {
+    // A page in the system's engine, or one waiting to load, is only at its own URL.
+    content::NavigationEntry* entry =
+        system_page_ || waiting_ ? nullptr : contents->GetController().GetLastCommittedEntry();
+    const GURL requested =
+        entry && !entry->IsInitialEntry() ? entry->GetOriginalRequestURL() : GURL();
+    return AtPinnedUrl(url, PageUrl(contents), requested);
+  }
+  if (!unloaded_ || unloaded_->history.empty()) {
+    return false;
+  }
+  const sessions::SerializedNavigationEntry& entry = unloaded_->history[unloaded_->current];
+  return AtPinnedUrl(url, entry.virtual_url(), entry.original_request_url());
+}
+
+void Tab::ForgetPage() {
+  const GURL url = Url();
+  if (!url.is_valid()) {
+    return;
+  }
+  Window::ForgetPage(id_, url);
+  // Each visit to it, as the command bar's ⇧⌦ takes a page out; a private window's has none.
+  Profile* profile = this->profile();
+  if (!profile || profile->IsOffTheRecord()) {
+    return;
+  }
+  if (history::HistoryService* history =
+          HistoryServiceFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS)) {
+    history->DeleteURLs({url});
+  }
+}
+
 std::string Tab::SessionStorageId() const {
   if (content::WebContents* contents = web_contents()) {
     return contents->GetController().GetDefaultSessionStorageNamespace()->id();
   }
-  return storage_ ? storage_->id() : std::string();
+  return storage_ ? storage_->id() : waiting_storage_;
 }
 
 SavedTab Tab::Save() const {
@@ -697,6 +806,17 @@ void Tab::LoadWaiting() {
   const std::unique_ptr<content::NavigationController::LoadURLParams> load = std::move(waiting_);
   web_contents()->GetController().LoadURLWithParams(*load);
   StateChanged();
+}
+
+void Tab::SetPageMayClose(bool may) {
+  if (page_may_close_ == may) {
+    return;
+  }
+  page_may_close_ = may;
+  // The renderer reads it from the page's preferences (OverrideWebPreferences in main_delegate.cc).
+  if (web_contents()) {
+    web_contents()->NotifyPreferencesChanged();
+  }
 }
 
 void Tab::SetMuted(bool muted) {
@@ -1064,6 +1184,29 @@ bool Tab::muted() const {
   return web_contents() ? web_contents()->IsAudioMuted() : unloaded_ && unloaded_->muted;
 }
 
+void Tab::DidOpenRequestedURL(content::WebContents* new_contents,
+                              content::RenderFrameHost* source_render_frame_host,
+                              const GURL& url,
+                              const content::Referrer& referrer,
+                              WindowOpenDisposition disposition,
+                              ui::PageTransition transition,
+                              bool started_from_context_menu,
+                              bool renderer_initiated) {
+  // A pop-up an agent's page makes goes in the agent's Space, and is the agent's from now, as
+  // content makes it: content starts its page as the window is shown, before the window that
+  // places it hears of it (#2660). Its tab is made before Chrome's tab helpers, so it observes
+  // theirs once its tab strip has it (HelpersArrived). A tab Chrome's Navigate made, the window
+  // held as it made it.
+  Space* space = Space::Holding(id_);
+  if (!space || !space->agent()) {
+    return;
+  }
+  const bc_id opened = Tab::IdOf(new_contents);
+  if (!Space::Holding(opened)) {
+    space->Expect(opened);
+  }
+}
+
 void Tab::DidStartNavigation(content::NavigationHandle* navigation) {
   if (navigation->IsInPrimaryMainFrame()) {
     PasswordOffer::WatchKey(web_contents());
@@ -1148,7 +1291,7 @@ void Tab::ReportState() {
         .can_go_forward = current + 1 < count,
         .loading = false,
         .unloaded = true,
-        .away_from_pinned_url = pinned_url.is_valid() && Url() != pinned_url,
+        .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
         .audible = false,
         .muted = muted(),
         .icon = icon_.c_str(),
@@ -1191,7 +1334,7 @@ void Tab::ReportState() {
       .can_go_forward = CanGoForward(),
       .loading = page ? page->loading() : contents->ShouldShowLoadingUI(),
       .unloaded = !page && (history.NeedsReload() || waiting_),
-      .away_from_pinned_url = pinned_url.is_valid() && PageUrl(contents) != pinned_url,
+      .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
       .audible = page ? page->audible() : audible && audible->WasRecentlyAudible(),
       .muted = page ? page->muted() : contents->IsAudioMuted(),
       .volume = volume_,
@@ -1216,13 +1359,16 @@ void Tab::ReportState() {
       .media_next = controllable &&
                     std::ranges::contains(session->GetMediaSessionActionsSync(),
                                           media_session::mojom::MediaSessionAction::kNextTrack),
-      // Chrome offers the action while the page floats too, where the player has nothing to do.
+      // Chrome offers the action while the page floats too, where the player has nothing to do,
+      // but a video in its card floats from there (FloatCardVideo).
       .media_picture_in_picture =
           controllable &&
-          media->picture_in_picture_state !=
-              media_session::mojom::MediaPictureInPictureState::kInPictureInPicture &&
+          (media->picture_in_picture_state !=
+               media_session::mojom::MediaPictureInPictureState::kInPictureInPicture ||
+           CardShowsVideo(contents)) &&
           std::ranges::contains(session->GetMediaSessionActionsSync(),
                                 media_session::mojom::MediaSessionAction::kEnterPictureInPicture),
+      .media_video = controllable && CardCanShowVideo(contents),
       .developer_mode = developer_mode::On(profile(), GURL(url)),
   };
   Host().tab_state_changed(Host().context, id_, &state);
@@ -1460,6 +1606,10 @@ void Tab::OnVisibilityChanged(content::Visibility visibility) {
   }
 }
 
+void Tab::OnWebContentsFocused(content::RenderWidgetHost* render_widget_host) {
+  dialog_keys::PageFocused(web_contents());
+}
+
 // The page's renderer went away, crashed, killed or ended on purpose. check.sh waits for this line,
 // an error since our builds print no warnings.
 void Tab::PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) {
@@ -1652,8 +1802,11 @@ void Tab::Media(int action) {
       session->PreviousTrack();
       break;
     case BC_MEDIA_PICTURE_IN_PICTURE:
-      // The page's own handler if it has one, else its one video, as Chrome's media controls do.
-      session->EnterPictureInPicture();
+      // From its card to Chrome's window, if its card shows it, else the page's own handler if it
+      // has one, or its one video, as Chrome's media controls do.
+      if (!FloatCardVideo(web_contents())) {
+        session->EnterPictureInPicture();
+      }
       break;
   }
 }

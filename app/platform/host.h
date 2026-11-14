@@ -542,6 +542,25 @@ void host_show_toast(void* ui_view);
 // Hides the toast's window.
 void host_hide_toast(void);
 
+// Makes the window of |foot_bar_view| the foot bar: the bar a mode of the page, such as Arrange's
+// and pointing's, shows over the page's bottom centre, as a child of the browser window. A click on
+// it reaches its buttons, but it never takes the keyboard, which stays with the browser window and
+// so with the page. It starts hidden.
+void host_add_foot_bar(void* foot_bar_view);
+
+// Shows the foot bar's window over |ui_view|'s window, or moves it there: |width| by |height|
+// points, centred between |left| and |right| points in from the edges of the window's content,
+// with its bottom |bottom| points over the content's. It keeps those as the window resizes.
+void host_show_foot_bar(void* ui_view,
+                        double left,
+                        double right,
+                        double bottom,
+                        double width,
+                        double height);
+
+// Hides the foot bar's window.
+void host_hide_foot_bar(void);
+
 // Makes the window of |tooltip_view| the tooltip's, which floats over a browser window as its
 // child when shown, and lets the mouse through and never takes the keyboard. It starts hidden.
 // |away| is called when that window stops being key or the app stops being active, which hide it,
@@ -628,6 +647,10 @@ void host_press_window_button(void* ui_view, int button);
 // it's full screen already or on its way, as AppKit takes a window opened from a full-screen one
 // there itself. Returns whether it was.
 bool host_enter_full_screen(void* ui_view);
+
+// The Mac's: whether the browser window of |ui_view| is full screen or on its way, from the start
+// of its transition, before the window hears it's over.
+bool host_window_full_screen(void* ui_view);
 
 // Whether the browser window of |ui_view| is on the macOS desktop shown, as a window AppKit takes
 // full screen isn't until macOS has moved to its desktop. Off the Mac, always.
@@ -805,9 +828,11 @@ bool host_key_repeated(void);
 // NUL, and returns its whole length in bytes without the NUL, 0 if it holds none.
 size_t host_paste(char* text, size_t capacity);
 
-// Opens |url| in Safari, which plays the protected video the engine can't. A driven run only logs it,
-// so checks never launch Safari.
-void host_open_in_safari(const char* url);
+// Opens |url| in the browser the protected-playback card offers for video the engine can't play:
+// Safari on the Mac, and the system's default browser on Windows, which the card offers only while
+// that isn't this app (#2468). Linux offers none. A driven run only logs it, so checks never launch
+// another browser.
+void host_open_elsewhere(const char* url);
 
 // Shows System Settings' list of apps with Full Disk Access, which an import from Safari needs. A
 // driven run only logs it, so checks never open System Settings.

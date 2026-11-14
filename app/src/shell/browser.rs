@@ -119,6 +119,9 @@ pub trait Browser {
     fn share_instead(&self, tab: u64, cx: &mut App);
     /// Plays, pauses or skips `tab`'s media.
     fn media(&self, tab: u64, action: MediaAction, cx: &mut App);
+    /// Shows `tab`'s video live at `frame` in the window, with corners of `corner_radius`, for
+    /// its media card, or stops showing it with none.
+    fn show_video(&self, tab: u64, frame: Option<Bounds<Pixels>>, corner_radius: f32, cx: &mut App);
     /// Sets `tab`'s volume, 0 to 1, which scales its page's media (bc_tab_set_volume).
     fn set_volume(&self, tab: u64, volume: f32, cx: &mut App);
     /// Opens `tab`'s Cast dialog, which the core reports with `Shell::set_cast`.
@@ -598,15 +601,15 @@ pub trait Browser {
     fn watch_control(&self, cx: &mut App);
     /// Puts `text` on the clipboard.
     fn copy(&self, text: &str, cx: &mut App);
-    /// The clipboard's text, from where `copy` puts it, or None if it holds none.
-    fn pasted(&self, cx: &App) -> Option<String>;
-    /// Whether the platform can open a page in Safari, which plays the protected video ilo can't.
-    /// Where it can't, the UI offers no button for it.
-    fn can_open_in_safari(&self) -> bool {
-        false
+    /// Hands `done` the clipboard's text, from where `copy` puts it, or None if it holds none,
+    /// never during the call (crate::clipboard says why).
+    fn pasted(&self, cx: &mut App, done: crate::clipboard::Done);
+    /// The other browser the protected-playback note offers for video ilo can't play, if any.
+    fn elsewhere(&self) -> Option<super::drm_note::Elsewhere> {
+        super::drm_note::Elsewhere::on(self.os(), || self.is_default_browser())
     }
-    /// Opens `url` in Safari, leaving the tab as it is.
-    fn open_in_safari(&self, _url: &str, _cx: &mut App) {}
+    /// Opens `url` there, leaving the tab as it is.
+    fn open_elsewhere(&self, _url: &str, _cx: &mut App) {}
     /// Whether the platform has Safari's engine for a tab's page, which plays the protected video
     /// Chromium can't: macOS 14 or later. Where it hasn't, the note offers Safari instead.
     fn can_use_system_engine(&self) -> bool {
@@ -623,6 +626,15 @@ pub trait Browser {
     fn download_widevine(&self, _cx: &mut App) {}
     /// Quits and starts again, bringing back the windows and their Spaces.
     fn restart(&self, _cx: &mut App) {}
+    /// Whether this launch is a safe start, with extensions and Boosts held after two crashes at
+    /// launch (crate::safe_start). Agents can't start or end one.
+    fn safe_start(&self) -> bool {
+        false
+    }
+    /// Whether Settings has ad blocking on.
+    fn ad_blocking(&self) -> bool {
+        false
+    }
     /// What PlayReady, which Windows plays protected video with, needs that the PC may lack.
     fn playready_needs(&self) -> super::PlayReady {
         super::PlayReady::None
@@ -696,6 +708,11 @@ pub trait Browser {
     /// does, unless it is already, which it returns: AppKit takes a window opened from a
     /// full-screen one there itself.
     fn enter_full_screen(&self, cx: &mut App) -> bool;
+    /// Whether the window is full screen or on its way, as the window has it at once: the shell
+    /// hears it a frame or more later, AppKit's once the transition is over (#2553).
+    fn full_screen_now(&self) -> bool {
+        self.window_full_screen()
+    }
     /// Whether the window is on the macOS desktop shown: one AppKit takes full screen isn't until
     /// macOS has moved there, and an overlay opened before is left on the desktop it came from.
     fn on_active_space(&self) -> bool {
@@ -769,13 +786,15 @@ pub trait Browser {
     /// Opens the tab's find bar with the keyboard.
     fn find(&self, tab: u64, cx: &mut App);
     /// Opens the Site Controls for the site of the tab's page, or closes them if they show:
-    /// hanging from `place` in a window of `window`'s size, listing `extensions`.
+    /// hanging from `place` in a window of `window`'s size, listing `extensions`, with the tab's
+    /// profile and the others while there's more than one.
     fn site_controls(
         &self,
         tab: u64,
         place: crate::site_controls::Place,
         window: Size<Pixels>,
         extensions: Vec<crate::site_controls::Extension>,
+        profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,
     );
     /// The extensions the Site Controls list, if they show for the tab, as the core reported them.
@@ -1027,8 +1046,9 @@ pub struct Page {
     pub share_instead: bool,
     /// The page has media the browser can play, pause and skip, as Chrome's media controls do:
     /// whether it's playing, its title and artist, each empty without one, whether it has a
-    /// previous and a next track, and whether it can float in Picture in Picture while nothing of
-    /// the page floats.
+    /// previous and a next track, whether it can float in Picture in Picture while nothing of the
+    /// page floats or its card shows its video, and whether it has a video its card can show,
+    /// which a call hasn't.
     pub media: bool,
     pub media_playing: bool,
     pub media_title: SharedString,
@@ -1036,6 +1056,7 @@ pub struct Page {
     pub media_previous: bool,
     pub media_next: bool,
     pub media_picture_in_picture: bool,
+    pub media_video: bool,
     /// The tab shows its page in Developer Mode, for its site or as localhost.
     pub developer_mode: bool,
 }

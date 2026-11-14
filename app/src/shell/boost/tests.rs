@@ -438,6 +438,7 @@ struct Unseen;
 
 impl crate::boost_editor::Host for Unseen {
     fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+    fn resize(&self, _: f32, _: &[(f32, f32, f32)]) {}
     fn hide(&self) {}
 }
 

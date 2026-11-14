@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iterator>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <set>
@@ -22,9 +23,11 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/browser_window_stand_in.h"
+#include "browser_core/dialog_keys.h"
 #include "browser_core/extensions.h"
 #include "browser_core/favorites.h"
 #include "browser_core/host.h"
@@ -52,6 +55,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/browser/renderer_host/chrome_navigation_ui_data.h"
+#include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/tab_list/tab_removed_reason.h"
 #include "chrome/browser/ui/browser_active_state_manager/browser_active_state_manager.h"
 #include "chrome/browser/ui/browser_tabrestore.h"
@@ -74,8 +79,10 @@
 #include "components/sessions/core/serialized_navigation_entry.h"
 #include "components/sessions/core/serialized_user_agent_override.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_user_data.h"
 #include "content/public/common/referrer.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/extension_registry.h"
@@ -233,9 +240,21 @@ std::vector<DeletedSpace>& DeletedSpaces() {
   return *deleted;
 }
 
+// The pages Window::ForgetPage named, by their tab, until it closes.
+std::map<bc_id, GURL>& ForgottenPages() {
+  static base::NoDestructor<std::map<bc_id, GURL>> forgotten;
+  return *forgotten;
+}
+
 // Keeps |id|, a tab closing, for ReopenClosedTab, and archives it.
 void KeepClosed(bc_id id) {
   Tab* tab = Tab::Get(id);
+  // A sign-in's callback page, whose address carries a single-use code, leaves nothing to reopen
+  // (#2527); a tab that has gone on from it closes as any does.
+  if (auto forgotten = ForgottenPages().extract(id);
+      forgotten && tab && tab->Url() == forgotten.mapped()) {
+    return;
+  }
   Space* space = Space::Holding(id);
   // One not in a Space never showed, a pinned tab closes only when its page closes itself, and a
   // private window's leaves nothing behind. An agent's pages aren't the user's to find again
@@ -369,6 +388,105 @@ gfx::Size g_left_size;
 std::string Handing(bc_id window, bc_id tab) {
   return base::StrCat(
       {"window ", base::NumberToString(window), ", tab ", base::NumberToString(tab)});
+}
+
+// What a tab MakeHeldBy made loads, and the Space holding it, kept on its page until its tab strip
+// has it.
+class HeldLoad : public content::WebContentsUserData<HeldLoad> {
+ public:
+  // Starts the page of |contents|, held by its Space first, if MakeHeldBy made it and it hasn't
+  // started. Chrome's tab helpers are on it by now: its tab strip took it, or Navigate, which
+  // inserts it, has returned.
+  static void Start(content::WebContents* contents) {
+    HeldLoad* held = contents ? FromWebContents(contents) : nullptr;
+    if (!held) {
+      return;
+    }
+    const bc_id space_id = held->space_;
+    content::NavigationController::LoadURLParams load = std::move(held->load_);
+    const bool https_default = held->https_default_;
+    const bool no_https_upgrade = held->no_https_upgrade_;
+    const bool from_sync = held->from_sync_;
+    contents->RemoveUserData(UserDataKey());
+    // A Space gone before its tab had a page leaves the tab without one.
+    Space* space = Space::FromId(space_id);
+    if (!space) {
+      return;
+    }
+    const bc_id tab = Tab::IdOf(contents);
+    if (!Space::Holding(tab)) {
+      space->Expect(tab);
+    }
+    // As LoadURLParamsFromNavigateParams gives it, from the helpers now on the page.
+    if (load.frame_tree_node_id.is_null()) {
+      std::unique_ptr<ChromeNavigationUIData> ui_data =
+          ChromeNavigationUIData::CreateForMainFrameNavigation(contents, https_default,
+                                                               no_https_upgrade);
+      ui_data->set_navigation_initiated_from_sync(from_sync);
+      load.navigation_ui_data = std::move(ui_data);
+    }
+    contents->GetController().LoadURLWithParams(load);
+  }
+
+ private:
+  friend class content::WebContentsUserData<HeldLoad>;
+
+  HeldLoad(content::WebContents* contents, bc_id space, NavigateParams& params)
+      : content::WebContentsUserData<HeldLoad>(*contents),
+        space_(space),
+        load_(LoadURLParamsFromNavigateParams(&params)),
+        https_default_(params.is_using_https_as_default_scheme),
+        no_https_upgrade_(params.url_typed_with_http_scheme ||
+                          params.captive_portal_window_type !=
+                              captive_portal::CaptivePortalWindowType::kNone),
+        from_sync_(params.navigation_initiated_from_sync) {}
+
+  const bc_id space_;
+  content::NavigationController::LoadURLParams load_;
+  const bool https_default_;
+  const bool no_https_upgrade_;
+  const bool from_sync_;
+
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(HeldLoad);
+
+// Makes the new tab |params| asks for as Chrome's Navigate makes it (CreateTargetContents), for
+// |space| to hold from when its tab strip has it until the window places it, and leaves it to
+// Navigate to insert. Its page starts once inserted (HeldLoad::Start), as Chrome's Navigate starts
+// a tab's page once it has made the tab and its helpers. Chrome's Navigate would start it before
+// the tab strip had the tab, and the window places a tab a task after that, so a tab an agent
+// opens would be in no Space as its first request starts (#2660).
+void MakeHeldBy(Space& space, NavigateParams& params) {
+  Profile* profile = params.browser->GetProfile();
+  scoped_refptr<content::SiteInstance> site =
+      params.opener ? scoped_refptr<content::SiteInstance>(params.opener->GetSiteInstance())
+                    : tab_util::GetSiteInstanceForNewTab(profile, params.url);
+  content::WebContents::CreateParams create(profile, std::move(site));
+  create.main_frame_name = params.frame_name;
+  if (params.opener) {
+    create.opener_id = params.opener->GetGlobalId();
+  }
+  create.opened_by_another_window = params.opened_by_another_window;
+  create.initially_hidden = params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
+#if defined(USE_AURA)
+  // In the window's compositor, which draws its page out of sight while an agent acts on it, as
+  // Chrome's tabs are. A page in none draws no frame, and its input waits for one.
+  if (params.browser->GetWindow() && params.browser->GetWindow()->GetNativeWindow()) {
+    create.context = params.browser->GetWindow()->GetNativeWindow();
+  }
+#endif
+  std::unique_ptr<content::WebContents> made = content::WebContents::Create(create);
+  HeldLoad::CreateForWebContents(made.get(), space.id(), params);
+  // A tab strip no window watches still loads it, once Navigate has inserted it.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<content::WebContents> contents) {
+                       HeldLoad::Start(contents.get());
+                     },
+                     made->GetWeakPtr()));
+  params.contents_to_insert = std::move(made);
 }
 
 }  // namespace
@@ -895,6 +1013,16 @@ void Window::AdjustNavigate(NavigateParams& params) {
                        },
                        window->weak_factory_.GetWeakPtr()));
   }
+  // A tab an agent's tab opens, which goes in the agent's Space, is the agent's before its page
+  // starts, as every rule for an agent's page asks of it then (#2660). A pop-up's page, which
+  // content made, the opener's Tab held as content made it (Tab::DidOpenRequestedURL).
+  if (source_space && source_space->agent() && !params.contents_to_insert &&
+      (params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
+       params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB) &&
+      !params.url.is_empty() && !params.url.SchemeIs(url::kAboutScheme) &&
+      !params.url.SchemeIs(content::kChromeUIScheme)) {
+    MakeHeldBy(*Space::Holding(source_id), params);
+  }
 }
 
 // static
@@ -1134,6 +1262,19 @@ void Window::SetSpaceProfile(bc_id space, const std::string& profile) {
 }
 
 // static
+void Window::TabsArrived(const std::vector<bc_id>& tabs) {
+  for (auto& [id, window] : Windows()) {
+    const bc_id waiting = window->waiting_;
+    const Space* shown = Space::FromId(window->space_);
+    if (!waiting || !std::ranges::contains(tabs, waiting) || !shown ||
+        !(shown->Has(waiting) || Favorites::ShownIn(waiting, *shown))) {
+      continue;
+    }
+    window->Select(waiting);
+  }
+}
+
+// static
 void Window::HiddenFavoritesGone() {
   for (auto& [id, window] : Windows()) {
     // A favorite a Space no longer shows isn't the tab it comes back to.
@@ -1158,6 +1299,11 @@ void Window::HiddenFavoritesGone() {
       window->ShowNothing();
     }
   }
+}
+
+// static
+void Window::ForgetPage(bc_id tab, const GURL& url) {
+  ForgottenPages()[tab] = url;
 }
 
 // static
@@ -1258,6 +1404,12 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   const bool pinned = from->IsPinned(tab);
   const GURL url = from->PinnedUrl(tab);
   const bc_id next = from->NextAfterLeaving(tab, &Tab::Loaded);
+  // In a Space it's the user's or the agent's, and its page closes it no longer.
+  for (bc_id each : {tab, moved}) {
+    if (Tab* page = Tab::Get(each)) {
+      page->SetPageMayClose(false);
+    }
+  }
   // A Today tab keeps its node's id, so sync moves it on the account's other devices rather than
   // closing it into their archives and opening it again there.
   const Space::Node* node = pinned ? nullptr : from->NodeOf(tab);
@@ -1270,6 +1422,11 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
     to->AddAt(moved, 0);
   }
   from->Remove(tab);
+  // Out of an agent's Space, it's the user's: the agent's session there ends, and with it what
+  // the agent started in it, which would land in the user's page.
+  if (from->agent()) {
+    EndTabSession(tab, BC_AGENT_SESSION_RELEASED);
+  }
   if (kept.is_valid()) {
     // Its place was among the old Space's tabs, so it gets one at the top of the new one's.
     to->RestoreNodes(to->node(), {{moved, Space::Node{kept, syncer::UniquePosition()}}});
@@ -1525,13 +1682,17 @@ bool Window::RedoRemoveSuggestion(bc_id removal) {
   return suggestions_ && suggestions_->RemoveAgain(removal);
 }
 
-content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool when_shown) {
+content::WebContents* Window::OpenTab(Profile* profile,
+                                      const GURL& url,
+                                      bool when_shown,
+                                      bool typed_http) {
   BrowserWindowInterface* browser = BrowserFor(profile);
   if (!browser) {
     return nullptr;
   }
   NavigateParams params(browser, url, ui::PAGE_TRANSITION_TYPED);
   params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  params.url_typed_with_http_scheme = typed_http;
   if (when_shown && url.SchemeIsHTTPOrHTTPS()) {
     return OpenBehind(params);
   }
@@ -1541,11 +1702,27 @@ content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool wh
   return params.navigated_or_inserted_contents;
 }
 
-content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url) {
+content::WebContents* Window::OpenHeld(Space& space, Profile* profile, const GURL& url) {
+  BrowserWindowInterface* browser = BrowserFor(profile);
+  if (!browser) {
+    return nullptr;
+  }
+  NavigateParams params(browser, url, ui::PAGE_TRANSITION_TYPED);
+  params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  MakeHeldBy(space, params);
+  // The app hears only of the tabs it didn't open.
+  base::AutoReset<bool> opening(&opening_tab_, true);
+  Navigate(&params);
+  HeldLoad::Start(params.navigated_or_inserted_contents);
+  return params.navigated_or_inserted_contents;
+}
+
+content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url, bool typed_http) {
   // A pinned tab without its page opens it too.
   const Tab* from = Tab::Get(pinned);
   content::WebContents* contents =
-      from && from->profile() ? OpenTab(from->profile(), url, /*when_shown=*/false) : nullptr;
+      from && from->profile() ? OpenTab(from->profile(), url, /*when_shown=*/false, typed_http)
+                              : nullptr;
   if (contents) {
     ReportTabOpened(Tab::IdOf(contents), pinned, /*foreground=*/true, /*split_with=*/0,
                     /*popup=*/std::nullopt, /*popup_placed=*/false);
@@ -1553,21 +1730,40 @@ content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url) {
   return contents;
 }
 
-content::WebContents* Window::OpenPreview(content::WebContents& opener, const GURL& url) {
-  BrowserWindowInterface* browser =
-      BrowserFor(Profile::FromBrowserContext(opener.GetBrowserContext()));
+content::WebContents* Window::OpenPreview(content::WebContents& opener,
+                                          const GURL& url,
+                                          const gfx::Size& size) {
+  Profile* profile = Profile::FromBrowserContext(opener.GetBrowserContext());
+  BrowserWindowInterface* browser = BrowserFor(profile);
   if (!browser) {
     return nullptr;
   }
-  NavigateParams params(browser, url, ui::PAGE_TRANSITION_LINK);
+  // Made here and loaded once it's sized, rather than by Navigate, which makes a background tab,
+  // sizes it to the active tab's page and loads it at once, so the preview's page read the window's
+  // page's size and drew a frame at it before the app's size came (#2539).
+  content::WebContents::CreateParams create(profile,
+                                            tab_util::GetSiteInstanceForNewTab(profile, url));
+  create.initially_hidden = true;
+#if defined(USE_AURA)
+  create.context = widget_->GetNativeWindow();
+#endif
+  NavigateParams params(browser, content::WebContents::Create(create));
   params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
-  // What the page would have sent with the link, by the policy Chrome's pages default to.
-  params.referrer = content::Referrer(
-      opener.GetLastCommittedURL(), network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin);
   // No Space takes it until the app keeps it, so the app isn't told of it as a tab opened.
   base::AutoReset<bool> opening(&opening_tab_, true);
   Navigate(&params);
-  return params.navigated_or_inserted_contents;
+  content::WebContents* preview = params.navigated_or_inserted_contents;
+  if (!preview) {
+    return nullptr;
+  }
+  // Inserting a background tab sized it to the active tab's page.
+  preview->Resize(gfx::Rect(size));
+  NavigateParams load(browser, url, ui::PAGE_TRANSITION_LINK);
+  // What the page would have sent with the link, by the policy Chrome's pages default to.
+  load.referrer = content::Referrer(
+      opener.GetLastCommittedURL(), network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin);
+  preview->GetController().LoadURLWithParams(LoadURLParamsFromNavigateParams(preview, &load));
+  return preview;
 }
 
 void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
@@ -1820,6 +2016,7 @@ void Window::SetSidebarWidth(double width) {
 void Window::ShowNothing() {
   HoldPictured();
   selected_ = 0;
+  waiting_ = 0;
   for (bc_id pane : std::exchange(panes_, {})) {
     Seen(pane);
   }
@@ -1892,12 +2089,23 @@ void Window::SetPageScale(double scale) {
 
 void Window::Select(bc_id tab) {
   const Tab* selecting = Tab::Get(tab);
+  waiting_ = 0;
   // A window with a Space of its own shows its tabs alone, and a regular one never shows them:
   // Chrome never moves a page between incognito and regular windows.
   const Space* holding = Space::Holding(tab);
   if (!selecting ||
       (own_space_ ? !holding || holding->id() != space_
                   : (holding && holding->own()) || OffTheRecord(selecting))) {
+    return;
+  }
+  // One whose profile is still loading, or one of its split's, can't have its page yet: the window
+  // shows nothing until it's here (TabsArrived), as it would while a page starts.
+  if (std::ranges::any_of(PanesWith(tab), [](bc_id pane) {
+        const Tab* in = Tab::Get(pane);
+        return in && in->waiting_for_profile();
+      })) {
+    ShowNothing();
+    waiting_ = tab;
     return;
   }
   // A tab without its page, and each of its split's, gets it back here, as it's shown.
@@ -2162,7 +2370,7 @@ bc_id Window::UndoDeleteSpace(bc_id id) {
     above = true;
   }
   space.saved.today = std::move(today);
-  RestoreSpace(*this, profile, space.saved, space.id, space.at);
+  RestoreSpace(*this, DirOf(profile), space.saved, space.id, space.at);
   // Not one of the Space's own, which closed with it and came back as other tabs.
   if (Favorites::Has(space.shown) && !Favorites::SpaceOf(space.shown)) {
     SetSelectedIn(space.id, space.shown);
@@ -2761,6 +2969,17 @@ bool Window::ShouldConstrainDialogBoundsByHost() {
 
 void Window::AddObserver(web_modal::ModalDialogHostObserver* observer) {
   dialog_observers_.AddObserver(observer);
+  // A tab's dialog places itself through this as it's made, so its keys are asked about from its
+  // first, and again once it shows: the Mac lists a child window only once it's on screen.
+  dialog_keys::Watch(widget_.get());
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<Window> window) {
+                       if (window) {
+                         dialog_keys::Watch(window->widget());
+                       }
+                     },
+                     weak_factory_.GetWeakPtr()));
 }
 
 void Window::RemoveObserver(web_modal::ModalDialogHostObserver* observer) {
@@ -2788,7 +3007,16 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
     }
     return;
   }
-  if (change.type() != TabStripModelChange::kInserted || opening_tab_) {
+  if (change.type() != TabStripModelChange::kInserted) {
+    return;
+  }
+  // Each tab has Chrome's tab helpers now: a tab made before them observes theirs, and a tab
+  // MakeHeldBy made is its Space's and starts its page, one this window opens itself too.
+  for (const TabStripModelChange::ContentsWithIndex& inserted : change.GetInsert()->contents) {
+    Tab::HelpersArrived(inserted.contents);
+    HeldLoad::Start(inserted.contents);
+  }
+  if (opening_tab_) {
     return;
   }
   const bc_id split_with = std::exchange(split_with_, 0);

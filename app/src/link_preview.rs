@@ -9,11 +9,8 @@
 //! as on Linux, the page shows in the browser window under this one, which leaves it a hole and
 //! draws the card's rim round it. What it asks of its window and the core goes through `Host`.
 
-use std::{
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, FocusHandle, FontWeight, Global, Hsla, Image,
@@ -173,6 +170,20 @@ fn page_in(card: Bounds<Pixels>) -> Bounds<Pixels> {
             card.size.height - px(2. * RIM),
         ),
     )
+}
+
+/// Where a page under the window waits while it isn't to show, at its size where it rests, `rest`:
+/// left of the window's content, past any margin round it, where the window clips it. It moves by
+/// whole points, so the core lays it out at the same whole size as where it rests.
+fn out_of_sight(rest: Bounds<Pixels>) -> Bounds<Pixels> {
+    let by = f32::from(rest.right()).ceil() + 1000.;
+    Bounds::new(point(rest.left() - px(by), rest.top()), rest.size)
+}
+
+/// Where a preview's page rests over a window's page at `page`: the core makes it that size before
+/// it loads, so its first script reads the size it's shown at (#2539).
+pub fn resting(page: Bounds<Pixels>) -> Bounds<Pixels> {
+    page_in(card(page))
 }
 
 /// The card with its page at `page`.
@@ -468,6 +479,15 @@ struct Preview {
     /// When its window was first on screen, where the motion starts.
     shown: Option<Instant>,
     settled: bool,
+    /// Where its page was laid out last.
+    placed: Bounds<Pixels>,
+    /// Whether a page under the window shows through its hole.
+    cut: bool,
+    /// Whether the window's page is to have the keyboard back once a page under the window has
+    /// left, as it's closing.
+    releasing: bool,
+    /// The frame check.sh last read the card holds the page at, in pixels, and the scale.
+    logged: Option<([i32; 4], f32)>,
     /// Once it's leaving: when, how, and where the motion was.
     leaving: Option<(Instant, Leave, Pose)>,
     _leave: Option<Task<()>>,
@@ -494,6 +514,14 @@ impl Preview {
             scale: crate::motion::scale(pose.scale, cx),
             kept,
             ..pose
+        }
+    }
+
+    /// Lays a page under the window out at `at`, unless it's there.
+    fn lay_out(&mut self, host: &dyn Host, at: Bounds<Pixels>) {
+        if self.placed != at {
+            self.placed = at;
+            host.place(self.tab, at, RADIUS);
         }
     }
 
@@ -629,7 +657,7 @@ pub fn show(
         preview.finish(cx);
         // check.sh reads this line.
         log!("browser: link preview {tab} {url}");
-        let shown = Preview {
+        let mut shown = Preview {
             window,
             page,
             radius,
@@ -643,10 +671,19 @@ pub fn show(
             asked: Instant::now(),
             shown: None,
             settled: false,
+            placed: page_in(card(page)),
+            cut: false,
+            releasing: false,
+            logged: None,
             leaving: None,
             _leave: None,
         };
-        preview.host.place(tab, page_in(card(page)), RADIUS);
+        // A page under the window is laid out at its size from the first, and waits out of sight
+        // while the card grows (render).
+        if preview.host.page_under() {
+            shown.placed = out_of_sight(shown.placed);
+        }
+        preview.host.place(tab, shown.placed, RADIUS);
         preview.host.show(window);
         preview.preview = Some(shown);
         // The page has the keyboard, and the preview's keys are there once a click gives it to the
@@ -669,7 +706,10 @@ pub fn page_moved(window: u64, (page, radius): (Bounds<Pixels>, f32), cx: &mut A
         }
         shown.page = page;
         shown.radius = radius;
-        host.place(shown.tab, page_in(card(page)), RADIUS);
+        // A page under the window is laid out by the frame it draws next.
+        if !host.page_under() {
+            host.place(shown.tab, page_in(card(page)), RADIUS);
+        }
         cx.notify();
     });
 }
@@ -765,7 +805,13 @@ impl LinkPreview {
     /// Closes the preview back into its link, giving the browser window the keyboard and the
     /// clicks at once, and its page once it has left. Whether it was showing.
     fn close(&mut self, why: &str, cx: &mut Context<Self>) -> bool {
-        self.leave(Leave::Close, why, CLOSE, cx)
+        // A page under the window can't leave once the user has left it, as laying it out would
+        // take the keyboard after them, so the preview goes at once rather than shrink over it.
+        let seconds = match why == "dismissed" && self.host.page_under() {
+            true => 0.,
+            false => CLOSE,
+        };
+        self.leave(Leave::Close, why, seconds, cx)
     }
 
     /// Grows the preview into the tab's place, then keeps its page there as a Today tab.
@@ -791,7 +837,12 @@ impl LinkPreview {
             "closing"
         };
         log!("browser: link preview {what} ({why})");
-        self.host.release();
+        // A page under the window that shows leaves in the card's frames first (render), while it
+        // still has the keyboard, as laying it out takes it.
+        shown.releasing = how == Leave::Close && shown.cut && why != "dismissed";
+        if !shown.releasing {
+            self.host.release();
+        }
         let tab = shown.tab;
         shown._leave = Some(cx.spawn(async move |preview, cx| {
             cx.background_executor()
@@ -933,22 +984,96 @@ impl Render for LinkPreview {
         }
         let (card_frame, about, page) = frames(pose, shown.page, shown.link);
         let under = self.host.page_under();
-        // A page under the window shows only where it rests, and the host hears again as that
-        // moves.
-        let page = match under {
-            true => page.intersect(&page_in(card(shown.page))),
-            false => page,
-        };
         let page_radius = shown.page_radius(pose.kept);
+        // A page under the window shows only through the window's hole, where nothing of the
+        // window's draws over it, and the host hears again as that moves. It can't scale or fade,
+        // and isn't resized for the motion, as a page reads its size as it loads (#2519): it waits
+        // out of sight while the card grows with a plate where it will show, comes in under the
+        // plate the frame after the card first draws at rest, and shows through the hole from the
+        // frame after that. As it closes, the plate is in the hole the frame before the hole
+        // closes and the page leaves, and the card shrinks back with it. The page and the hole
+        // move at once, and a frame reaches the screen later, so each waits a frame for the one
+        // that covers it to be there.
+        let mut leave_to = None;
+        let (page, plate) = match under {
+            false => (page, false),
+            true => {
+                let rest = page_in(card(shown.page));
+                let none = Bounds::new(about, Size::default());
+                let how = shown.leaving.as_ref().map(|(_, how, _)| *how);
+                match (how, shown.cut) {
+                    (None, true) => {
+                        shown.lay_out(&*self.host, rest);
+                        (rest, false)
+                    }
+                    (None, false) if !moving => {
+                        if !settling {
+                            shown.cut = shown.placed == rest;
+                            shown.lay_out(&*self.host, rest);
+                        }
+                        window.request_animation_frame();
+                        (if shown.cut { rest } else { none }, false)
+                    }
+                    (Some(Leave::Close), true) => {
+                        shown.cut = false;
+                        window.request_animation_frame();
+                        (shown.placed, true)
+                    }
+                    (Some(Leave::Keep), true) => (page.intersect(&rest), false),
+                    _ => {
+                        if how.is_none() || shown.releasing {
+                            leave_to = Some(out_of_sight(rest));
+                        }
+                        (none, false)
+                    }
+                }
+            }
+        };
         if moving || settling || under {
             self.host.drew(page, page_radius * pose.scale, pose.page);
+        }
+        // The page leaves once the hole has closed over it.
+        if let Some(at) = leave_to {
+            shown.lay_out(&*self.host, at);
+            if std::mem::take(&mut shown.releasing) {
+                self.host.release();
+            }
         }
         if settling {
             // check.sh reads these lines, the button's before it waits on the other, to rest on it.
             let [keep, _] = buttons_in(controls_over(card(shown.page)));
             let (x, y) = (f32::from(keep.center().x), f32::from(keep.center().y));
             log!("browser: link preview keep button at {x} {y}");
+            // check/peek-motion.sh reads where the page rests and the point it grows from, to
+            // tell where the card is in each frame of the motion it films.
+            let rest = page_in(card(shown.page));
+            let (left, top) = (f32::from(rest.left()), f32::from(rest.top()));
+            let (width, height) = (f32::from(rest.size.width), f32::from(rest.size.height));
+            let (from_x, from_y) = (f32::from(about.x), f32::from(about.y));
+            log!(
+                "browser: link preview page at {left} {top} {width} {height} from {from_x} {from_y}"
+            );
             log!("browser: link preview settled");
+        }
+        if shown.settled && shown.leaving.is_none() {
+            // check.sh reads where the card holds the page, in the pixels it's drawn in, against
+            // the page's frame in the browser window's, at rest and again as either moves (#2541).
+            let (frame, scale) = (page_in(card(shown.page)), window.scale_factor());
+            let pixels = |at: Pixels| (f32::from(at) * scale).round() as i32;
+            let drawn = [
+                frame.left(),
+                frame.top(),
+                frame.size.width,
+                frame.size.height,
+            ]
+            .map(pixels);
+            if shown.logged != Some((drawn, scale)) {
+                shown.logged = Some((drawn, scale));
+                let [left, top, width, height] = drawn;
+                log!(
+                    "browser: link preview page frame {left} {top} {width} {height} at scale {scale}"
+                );
+            }
         }
         let palette = palette::current(cx);
         let card_radius = page_radius + RIM;
@@ -975,11 +1100,11 @@ impl Render for LinkPreview {
             true => {
                 let hole = (scaled_about(page, 1. / pose.scale, about), page_radius);
                 let color = Hsla::from(palette.overlay);
-                let colors = (
-                    color,
-                    color.opacity(1. - pose.page),
-                    Level::Modal.rim_in(&palette),
-                );
+                let coming = match plate {
+                    true => color,
+                    false => color.opacity(1. - pose.page),
+                };
+                let colors = (color, coming, Level::Modal.rim_in(&palette));
                 let frame = canvas(
                     |_, _, _| {},
                     move |_, _, window, _| {

@@ -1,3 +1,4 @@
+# check.sh runs this at 450.
 # An account's devices, each a copy of the app with a profile of its own, on an ilo-server of the
 # run's own (ilo-server.sh). A signs in first and copies its recovery words, which the clipboard
 # holds marked for clipboard managers to skip (#641). B signs in and asks the account's devices
@@ -454,7 +455,10 @@ while [ $(($(date +%s) - copied_at)) -lt 92 ]; do
   sleep 1
 done
 clipboard
-[ -z "$clipped" ] || fail "the clipboard still held the words 90 s after A copied them"
+# The Mac's host logs when its clear ran and what it did; none yet means it hadn't run.
+cleared=$(grep '^browser: secret clear ' "$log" | tail -1)
+[ -z "$clipped" ] ||
+  fail "the clipboard still held the words 90 s after A copied them${cleared:+ ($cleared)}"
 
 # B and C sign out without a question, as A keeps the account, and the server forgets them.
 for d in c b; do

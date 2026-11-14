@@ -10,8 +10,9 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, BackgroundExecutor, Bounds, BoxShadow, Context, DispatchPhase, Entity,
@@ -123,6 +124,7 @@ mod recent_downloads;
 mod recorder;
 mod return_mark;
 mod rows;
+mod safe_start;
 mod scripting;
 mod scroller;
 pub use scroller::{ScrollBarsShown, follow_scroll_bars};
@@ -133,6 +135,9 @@ mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
 mod space_order;
+mod split_fold;
+#[cfg(test)]
+mod split_fold_tests;
 mod split_targets;
 pub(crate) mod swap;
 mod swipe;
@@ -144,6 +149,7 @@ mod translate;
 mod trouble;
 mod undo;
 mod update_banner;
+mod wheel_gestures;
 
 pub use assets::Assets;
 pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
@@ -163,7 +169,7 @@ pub use commands::{
 };
 pub use display_face::display_text;
 pub use drag::{WindowDragEnd, dropped_urls};
-pub use drm_note::PlayReady;
+pub use drm_note::{Elsewhere, PlayReady};
 pub use extensions::{
     Extension, ExtensionAction, ExtensionCommand, menu_item as extension_menu_item,
     pin_menu_item as extension_pin_menu_item,
@@ -230,7 +236,7 @@ pub fn window_radius() -> f32 {
     #[cfg(target_os = "macos")]
     return tokens::WINDOW_RADIUS_MAC;
     #[cfg(target_os = "windows")]
-    return match windows_11() {
+    return match crate::build_info::windows_11() {
         true => tokens::WINDOW_RADIUS_WINDOWS,
         false => 0.,
     };
@@ -238,37 +244,6 @@ pub fn window_radius() -> f32 {
     return tokens::WINDOW_RADIUS_LINUX;
 }
 
-/// Whether this is Windows 11, build 22000 on, which rounds a window's corners, as the registry
-/// says (the window captures in tools/window-screenshot.sh read it there too).
-#[cfg(target_os = "windows")]
-fn windows_11() -> bool {
-    use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
-    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    let build = *BUILD.get_or_init(|| {
-        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
-        let folder = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-        let name = wide("CurrentBuildNumber");
-        let mut text = [0u16; 16];
-        let mut size = std::mem::size_of_val(&text) as u32;
-        let read = unsafe {
-            RegGetValueW(
-                HKEY_LOCAL_MACHINE,
-                folder.as_ptr(),
-                name.as_ptr(),
-                RRF_RT_REG_SZ,
-                std::ptr::null_mut(),
-                text.as_mut_ptr().cast(),
-                &mut size,
-            )
-        };
-        let text = String::from_utf16_lossy(&text[..(size as usize / 2).min(text.len())]);
-        match read {
-            0 => text.trim_end_matches('\0').parse().unwrap_or(0),
-            _ => 0,
-        }
-    });
-    build >= 22000
-}
 /// The most pages a split view shows, as the core's Space has it.
 const MAX_PANES: usize = 3;
 use crate::tokens::shell::FOCUS_GLOW;
@@ -310,6 +285,9 @@ const REVEAL_OUT_DAMPING: f32 = 0.76;
 /// The panel's window at rest ends at its edge, and is this much wider while it moves, for the
 /// spring's overshoot.
 const REVEAL_OVERSHOOT: f32 = 8.;
+
+/// The site's demo, in a page's canvas, where wheel events carry no phase.
+const WEB: bool = cfg!(target_family = "wasm");
 
 // Rows make room and close it, a closed tab's row fades and new rows fade in on one spring, Arc's
 // (docs/ux-spec.md › Motion: Row motion). A row's hover fill comes and goes in one frame, and only
@@ -446,7 +424,6 @@ const TITLE_END_INSET: f32 = FAVICON_X - PLATE_INSET;
 use crate::tokens::shell::BREATH_LOW;
 use crate::tokens::shell::EMOJI_SIZE;
 use crate::tokens::shell::FAVICON_DRAWN;
-use crate::tokens::shell::LOADING_ROW_MIN;
 use crate::tokens::shell::LOADING_SIZE;
 use crate::tokens::shell::STATUS_AGENT;
 use crate::tokens::shell::STATUS_DOT;
@@ -595,8 +572,12 @@ pub const WINDOW_BUTTONS: [(f32, u32); 3] = [
 ];
 // On Linux the browser window is Chromium's without a frame, and on Windows the host takes its
 // title bar away (platform/windows/host.cc), so nothing else draws its buttons: the UI draws them
-// where AppKit's show.
-const DRAWS_WINDOW_BUTTONS: bool = cfg!(any(target_os = "linux", target_os = "windows"));
+// where AppKit's show. The site's demo has no window of an OS's, so it draws them as the Mac's.
+const DRAWS_WINDOW_BUTTONS: bool = cfg!(any(
+    target_os = "linux",
+    target_os = "windows",
+    target_family = "wasm"
+));
 // The third button maximizes on Linux and Windows, as their title bars' does, where on the Mac it
 // goes full screen.
 const ZOOM_GLYPH: &str = match cfg!(any(target_os = "linux", target_os = "windows")) {
@@ -995,9 +976,9 @@ struct Opened {
 }
 
 impl Opened {
-    /// How far they've faded in, or None once they have.
-    fn done(&self) -> Option<f32> {
-        self.curve.at(self.start.elapsed().as_secs_f32())
+    /// How far they've faded in at `t` seconds into the list's motion, or None once they have.
+    fn done(&self, t: f32) -> Option<f32> {
+        self.curve.at(t)
     }
 }
 
@@ -1213,6 +1194,9 @@ struct Settle {
     next_door: bool,
 }
 
+/// Told a kind of decision the demo's wheel made of a swipe, and what it decided.
+pub type WheelNotes = Rc<dyn Fn(&'static str, &str)>;
+
 /// A page's full screen resizing the window, while `Shell::full_screen_step` waits to time it.
 struct FullScreenTiming {
     entering: bool,
@@ -1238,6 +1222,13 @@ impl Settle {
         let offset = (self.from + rise * t) * decay;
         let speed = (self.velocity - omega * rise * t) * decay;
         (offset.abs() > 0.25 || speed.abs() > 10.).then_some(offset)
+    }
+
+    /// Keeps no more of the speed than lands the page without passing its place: from `from`, the
+    /// spring passes it going toward it faster than ω·|from|.
+    fn spend(&mut self) {
+        let most = std::f32::consts::TAU / SPACE_SETTLE * self.from.abs();
+        self.velocity = self.velocity.clamp(-most, most);
     }
 
     fn elapsed(&self) -> f32 {
@@ -1335,6 +1326,10 @@ pub struct Shell {
     held_row: Option<HeldRow>,
     /// The header button the pointer pressed, for its shrinking and growing back.
     held_nav: Option<HeldNav>,
+    /// GPUI's clock, which the list's motion is timed by (`since`): the real one in the app, and
+    /// in a test one only the test moves, so a slide holds on a slow runner until the test moves
+    /// it on, as the Space's settle does (#2265, #2630).
+    clock: BackgroundExecutor,
     /// Rows on their way to their place: how far from it each started, and when.
     slides: HashMap<Slot, (f32, Instant, Curve)>,
     /// Where the frame last drawn had each tab's row in the list, which the pointer's presses hit
@@ -1368,6 +1363,16 @@ pub struct Shell {
     /// How long each frame drawn while the Spaces' pages moved took the sidebar, in ms, for the
     /// settle's log.
     paging_frames: Rc<RefCell<Vec<f32>>>,
+    /// On the web, the wheel's events cut into fingers landing, moving and lifting, and the timer
+    /// that lifts them once the events stop.
+    web_wheel: wheel_gestures::WheelGestures,
+    web_wheel_quiet: Option<Task<()>>,
+    /// On the web, the way fingers that just landed have gone, held until it's enough to tell
+    /// across from along.
+    web_undecided: Option<Point<Pixels>>,
+    /// With the demo's `?trace`, told each thing the wheel's events decide of a swipe, as its kind
+    /// and what it decided.
+    web_notes: Option<WheelNotes>,
     /// Where the page of the Space beside drew its tiles, by tab, and its URL field, as 0.
     #[cfg(test)]
     beside_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -1408,6 +1413,8 @@ pub struct Shell {
     /// changed there, for the chevron's turn.
     pinned_seen: Option<(u64, bool)>,
     pinned_turn: Option<Instant>,
+    /// Each split view's row in the Space shown, by its first tab, as it folds to a pane.
+    split_folds: HashMap<u64, split_fold::Fold>,
     /// The row whose ring the keys move while the sidebar has the keyboard (sidebar_keys.rs), the
     /// focus it takes them with, whether it takes them at the next draw, and where the ring was
     /// last drawn.
@@ -1772,6 +1779,12 @@ pub struct Shell {
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     update_offer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
+    /// The safe-start card's words as last wrapped, while this launch is a safe start, and where it
+    /// and its button and link are drawn (safe_start.rs).
+    safe_start: Option<safe_start::Shape>,
+    safe_start_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    safe_start_button_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    safe_start_manage_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
     /// goes to another site.
     drm_notes: HashMap<u64, SharedString>,
@@ -1938,6 +1951,7 @@ impl Shell {
             unhovered: Vec::new(),
             held_row: None,
             held_nav: None,
+            clock: cx.background_executor().clone(),
             slides: HashMap::new(),
             drawn_rows: RefCell::default(),
             drawn_top: RefCell::default(),
@@ -1951,6 +1965,10 @@ impl Shell {
             preview_row: None,
             pointer_at: Point::default(),
             paging_frames: Rc::default(),
+            web_wheel: Default::default(),
+            web_wheel_quiet: None,
+            web_undecided: None,
+            web_notes: None,
             #[cfg(test)]
             beside_frames: Rc::default(),
             button_frames: Rc::default(),
@@ -1969,6 +1987,7 @@ impl Shell {
             name_menu: false,
             pinned_seen: None,
             pinned_turn: None,
+            split_folds: HashMap::new(),
             keyed: None,
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
@@ -2149,6 +2168,10 @@ impl Shell {
             update_drawn: Rc::default(),
             update_offer_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
+            safe_start: None,
+            safe_start_drawn: Rc::default(),
+            safe_start_button_drawn: Rc::default(),
+            safe_start_manage_drawn: Rc::default(),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
             page_languages: HashMap::new(),
@@ -3324,6 +3347,10 @@ impl Shell {
     /// The window became the one in front: the browser's shortcuts and menus act on this shell,
     /// and the menu bar lists its Space's extensions.
     pub fn became_key(&mut self, cx: &mut Context<Self>) {
+        // A window made key or opened in front since, before this shell heard.
+        if commands::key_moved_on(&cx.weak_entity()) {
+            return;
+        }
         cx.set_global(ShellHandle(cx.weak_entity()));
         commands::heard_key(&cx.weak_entity());
         // Its tab's dialog goes over its card again, as another window's may have shown since, and
@@ -3687,10 +3714,7 @@ impl Shell {
     /// unless a page took it there, and leaving takes that away.
     pub fn set_full_screen(&mut self, entered: bool, cx: &mut Context<Self>) {
         self.full_screen = entered;
-        // A new window waiting for its full screen opens its bar at the next frame.
-        if self.opening.is_some() {
-            cx.notify();
-        }
+        self.opening_heard(entered, cx);
         // There for the page, or back, with no resize to end the hold, as a window already its
         // screen's size goes: held on, the page stayed put for good, under the Library (#1633).
         if entered == self.page_fullscreen && self.page_held.take().is_some() {
@@ -4114,11 +4138,22 @@ impl Shell {
         }
     }
 
+    /// Seconds since `start` on the list's clock.
+    pub(super) fn since(&self, start: Instant) -> f32 {
+        Self::since_on(&self.clock, start)
+    }
+
+    fn since_on(clock: &BackgroundExecutor, start: Instant) -> f32 {
+        clock.now().saturating_duration_since(start).as_secs_f32()
+    }
+
     /// Drops the list's and the pages' motion that's done, and returns whether any is left.
     fn list_moving(&mut self) -> bool {
+        let clock = self.clock.clone();
+        let since = |start: Instant| Self::since_on(&clock, start);
         let sliding = !self.slides.is_empty();
         self.slides
-            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_some());
+            .retain(|_, (_, start, curve)| curve.at(since(*start)).is_some());
         if sliding && self.slides.is_empty() {
             // check.sh waits for this line before it presses a row that moved, or scrolls the
             // list: a row sliding in from above leaves the list short until it settles.
@@ -4126,19 +4161,20 @@ impl Shell {
         }
         let tiling = !self.tile_slides.is_empty();
         self.tile_slides
-            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_some());
+            .retain(|_, (_, start, curve)| curve.at(since(*start)).is_some());
         if tiling && self.tile_slides.is_empty() {
             // check.sh waits for this line before it presses a tile that moved.
             log!("browser: tiles settled");
         }
         self.list_slide
-            .take_if(|(_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_none());
+            .take_if(|(_, start, curve)| curve.at(since(*start)).is_none());
         self.closing
-            .retain(|row| row_spring(row.start.elapsed().as_secs_f32()).is_some());
+            .retain(|row| row_spring(since(row.start)).is_some());
         self.unhovered
             .retain(|(_, start)| start.elapsed().as_secs_f32() < SELECTED_UNHOVER);
         if self.slides.is_empty() {
-            self.opened.take_if(|opened| opened.done().is_none());
+            self.opened
+                .take_if(|opened| opened.done(since(opened.start)).is_none());
         }
         if let Some(settle) = self.settle.take_if(|settle| settle.offset().is_none()) {
             // check.sh reads these lines.
@@ -4202,6 +4238,7 @@ impl Render for Shell {
             self.set_sidebar_right(right, cx);
         }
         self.full_screen_step("drawn", window.viewport_size());
+        self.shape_safe_start(cx);
         self.step_opening(window, cx);
         self.stop_videos(window, cx);
         // check.sh reads this line. It comes as the rows are drawn, so a click it sends next goes
@@ -4373,6 +4410,7 @@ impl Render for Shell {
         }
         self.step_tools(window);
         self.step_pinned_turn(window);
+        self.step_split_folds(window, cx);
         self.step_empty(window, cx);
         self.step_crash_cards(window);
         self.step_little(window, cx);
@@ -4443,7 +4481,8 @@ impl Render for Shell {
         if self.window_button_geometry.is_none() && window_buttons {
             self.window_button_geometry = self.browser.window_button_geometry(cx);
         }
-        // The Library slides in from the left with the card's edge, over the sidebar receding.
+        // The Library slides in from the left with the card's edge, over the sidebar receding, or
+        // on the right from behind the card after the sidebar going right (`library_x`).
         let library = self.library.is_some() && !self.page_fullscreen;
         // Full screen has no window buttons, so the panel draws none.
         let buttons = self.library_buttons() && !window.is_fullscreen();
@@ -4469,8 +4508,9 @@ impl Render for Shell {
             && (!self.sidebar_hidden || self.sidebar_motion.is_some());
         let sidebar = sidebar_shown.then(|| {
             let scale = self.sidebar_scale();
+            let shift = self.sidebar_shift();
             let origin = point(
-                px(self.from_side(width + RECEDE_X)),
+                px(self.from_side(width + RECEDE_X) + shift),
                 self.viewport.height / 2.,
             );
             // Whole: the Library fades in over it rather than cutting it (`library_opacity`).
@@ -4482,8 +4522,13 @@ impl Render for Shell {
             // Its buttons recede with it, over the Library, as the window's do in Arc. Full screen
             // has none.
             let buttons = self.sidebar_buttons() && !window.is_fullscreen();
-            let buttons = buttons.then(|| self.window_buttons(Some(self.viewport.width), cx));
-            let receding = div().absolute().size_full().opacity(opacity);
+            let buttons = buttons.then(|| self.window_buttons(self.viewport.width, cx));
+            let receding = div()
+                .absolute()
+                .top_0()
+                .left(px(shift))
+                .size_full()
+                .opacity(opacity);
             scaled(receding.child(sidebar).children(buttons), scale, origin)
         });
         let docked = sidebar_shown
@@ -4493,7 +4538,7 @@ impl Render for Shell {
         let edge = docked.then(|| self.sidebar_edge(cx));
         let own_buttons = self
             .draws_own_window_buttons()
-            .then(|| self.window_buttons(Some(self.viewport.width), cx));
+            .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
         self.breath.arm(cx);
@@ -4513,7 +4558,7 @@ impl Render for Shell {
             .size_full()
             .relative()
             .font_family(crate::face::UI)
-            .bg(self.palette.tint)
+            .when(!WEB, |shell| shell.bg(self.palette.tint))
             .capture_any_mouse_down(cx.listener(|shell, _, _, cx| shell.leave_keys("press", cx)))
             // The rows, buttons and fields keep their presses. Everywhere else is the window's
             // background, which moves the window as a title bar does.
@@ -4547,13 +4592,14 @@ impl Render for Shell {
                     }
                 }),
             )
-            .child(self.window_background())
+            .children((!WEB).then(|| self.window_background()))
+            .children(WEB.then(|| self.web_backdrop()).into_iter().flatten())
             .child(self.leave_listener(cx))
             // The page views go over the cards, as native views. A task the page area shows takes
             // the card's place, the Space's page pushed out of the window (task_area.rs).
             .when(normal, |shell| {
                 shell
-                    .children(self.cards())
+                    .children((!WEB).then(|| self.cards()).into_iter().flatten())
                     .children(self.little_bar(cx))
                     .children(
                         self.little
@@ -4577,10 +4623,93 @@ impl Render for Shell {
             .child(self.scroll_listener(true, cx))
             .child(self.navigate_listener(cx))
             .children(self.onboarding_layer(window, cx))
+            // The site's demo has one window, the page's canvas, so the reveal's panel is in it.
+            .children(WEB.then(|| {
+                let panel = self.render_reveal(window, cx);
+                let span = div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(self.reveal_span()));
+                let span = if self.right {
+                    span.right_0()
+                } else {
+                    span.left_0()
+                };
+                span.child(panel)
+            }))
     }
 }
 
 impl Shell {
+    /// On the web, the window's ground, tint and colour everywhere but the page's frame, where
+    /// the site's frame shows through the canvas from under it, as Chromium's page view goes over
+    /// the window in the app. GPUI paints over, never through, so the ground goes around the frame
+    /// in four bands, and the frame's rounded corners are filled with the window's colour there.
+    fn web_backdrop(&self) -> Vec<gpui::Div> {
+        let (frame, radius) = self.page_frame(self.viewport);
+        let (width, height) = (self.viewport.width, self.viewport.height);
+        let ground = |left: Pixels, top: Pixels, w: Pixels, h: Pixels| {
+            let window = div()
+                .absolute()
+                .left(-left)
+                .top(-top)
+                .w(width)
+                .h(height)
+                .bg(self.palette.underlay)
+                .child(div().absolute().size_full().bg(self.palette.tint))
+                .child(self.window_background());
+            div()
+                .absolute()
+                .left(left)
+                .top(top)
+                .w(w)
+                .h(h)
+                .overflow_hidden()
+                .child(window)
+        };
+        let mut backdrop = vec![
+            ground(px(0.), px(0.), width, frame.top()),
+            ground(px(0.), frame.bottom(), width, height - frame.bottom()),
+            ground(px(0.), frame.top(), frame.left(), frame.size.height),
+            ground(
+                frame.right(),
+                frame.top(),
+                width - frame.right(),
+                frame.size.height,
+            ),
+        ];
+        if radius > 0. {
+            let radius = px(radius);
+            for top in [frame.top(), frame.bottom() - radius] {
+                let y = f32::from(top + radius / 2.) / f32::from(height).max(1.);
+                // A border's inner edge rounds by its outer radius less its width.
+                let ring = div()
+                    .absolute()
+                    .left(-radius)
+                    .top(frame.top() - radius - top)
+                    .w(frame.size.width + radius * 2.)
+                    .h(frame.size.height + radius * 2.)
+                    .rounded(radius * 2.)
+                    .border(radius)
+                    .border_color(self.window_fill_at(y));
+                let corners = div()
+                    .absolute()
+                    .left(frame.left())
+                    .top(top)
+                    .w(frame.size.width);
+                backdrop.push(corners.h(radius).overflow_hidden().child(ring));
+            }
+        }
+        backdrop
+    }
+
+    /// How wide the site's demo draws the reveal's panel in: as its window in the app, with room
+    /// for its spring past its place.
+    fn reveal_span(&self) -> f32 {
+        REVEAL_INSET + self.width() + REVEAL_OVERSHOOT
+    }
+
     /// The cards under the pages shown: a page's own in a split view, so the gaps between them
     /// show the window, with the focused page's glowing in its ring's colour. While a pane is
     /// being added, its card is there, empty.
@@ -4696,6 +4825,7 @@ impl Shell {
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
                     .children(self.update_banner(cx))
+                    .children(self.safe_start_card(cx))
                     .children(self.task_ghosts())
                     .children(self.drm_note_card(cx))
             }
@@ -4820,14 +4950,17 @@ impl Shell {
             }
             let panes = space.panes(tab);
             if panes.len() > 1 {
-                let width = self.segment_width(depth, panes.len());
-                let segments = panes.iter().map(|&pane| {
+                let weights = self.rest_weights(&panes, selected);
+                let segments = panes.iter().zip(weights).map(|(&pane, weight)| {
+                    let speaker = self.still_speaker(&self.palette, pane);
+                    let fold = (weight, 0.);
                     self.segment(
                         &self.palette,
                         pane,
-                        width,
+                        fold,
                         pane == tab,
                         pane == selected,
+                        speaker,
                         cx,
                     )
                 });
@@ -5068,16 +5201,21 @@ impl Shell {
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
         self.step_pinned_turn(window);
+        self.step_split_folds(window, cx);
         self.step_foot(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // On the right, its window ends at the browser window's right edge, and the panel comes
         // out of that edge.
+        let span = match WEB {
+            true => self.reveal_span(),
+            false => f32::from(window.viewport_size().width),
+        };
         let left = match self.right {
-            true => f32::from(window.viewport_size().width) - left - self.width(),
+            true => span - left - self.width(),
             false => left,
         };
-        // Unless a field in the panel has it.
-        if !self.reveal_focus.contains_focused(window, cx) {
+        // Unless a field in the panel has it. On the web the panel is in the shell's own window.
+        if !WEB && !self.reveal_focus.contains_focused(window, cx) {
             window.focus(&self.reveal_focus, cx);
         }
         let panel = div()
@@ -5114,7 +5252,7 @@ impl Shell {
                     .border(px(0.5))
                     .border_color(self.palette.faint(REVEAL_BORDER))
                     .bg(self.gradient(Some(self.palette.underlay.into())))
-                    .child(self.window_buttons(Some(px(self.width())), cx))
+                    .child(self.window_buttons(px(self.width()), cx))
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
@@ -5135,11 +5273,11 @@ impl Shell {
         self.window_button_geometry.unwrap_or_default().frames()
     }
 
-    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel. With the sidebar
-    /// on the right they're mirrored `across` what they're drawn in, so close is at its corner, as
-    /// AppKit's are; the Library's column draws them as they are.
-    fn window_buttons(&self, across: Option<Pixels>, cx: &mut Context<Self>) -> AnyElement {
-        let right = self.right && across.is_some();
+    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel, the sidebar or
+    /// the Library's column. With the sidebar on the right they're mirrored `across` what they're
+    /// drawn in, so close is at its corner, as AppKit's are.
+    fn window_buttons(&self, across: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        let right = self.right;
         if cfg!(target_os = "windows") {
             return self.windows_buttons(right, cx);
         }
@@ -5154,8 +5292,7 @@ impl Shell {
             (WindowButton::Zoom, zoom),
         ];
         let frames = self.window_button_frames();
-        let frames =
-            frames.map(|frame| sidebar::mirrored(right, across.unwrap_or_default(), frame));
+        let frames = frames.map(|frame| sidebar::mirrored(right, across, frame));
         let row = Bounds::from_corners(
             point(frames[0].left().min(frames[2].left()), frames[0].top()),
             point(frames[0].right().max(frames[2].right()), frames[2].bottom()),

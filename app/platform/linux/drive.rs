@@ -123,6 +123,9 @@ pub fn start() {
             number += 1;
             let n = number;
             idle(Box::new(move || {
+                if n == 1 {
+                    release_held_modifiers();
+                }
                 log!("browser: drive {n}: {line}");
                 // It's done once the title has come, which it reports itself.
                 if let Some(text) = line.strip_prefix("title ").filter(|text| !text.is_empty()) {
@@ -1089,6 +1092,21 @@ fn hold_modifiers() -> Option<()> {
     connection.flush().ok()?;
     LOCKED.set(held);
     Some(())
+}
+
+/// Lets go of the Control and Alt the X server's keyboard still holds from an earlier launch's
+/// driver (hold_modifiers). The server keeps a lock its client leaves, so a launch that quit or
+/// crashed after a key with ⌘ or ⌃ left the next launch on the same server reading every key
+/// typed as a shortcut, in its UI, which takes the server's locked modifiers into each key, and in
+/// pages that get keys through XTest, as xdotool's (#2511).
+fn release_held_modifiers() {
+    if crate::drive_wayland::on() {
+        return;
+    }
+    // Before the first command the driver holds nothing. With what the server holds unknown,
+    // hold_modifiers tells it so, whatever it had locked.
+    LOCKED.set(u16::MAX);
+    hold_modifiers();
 }
 
 /// Runs `key`, a key command, once the X input focus is in a browser window, looking each

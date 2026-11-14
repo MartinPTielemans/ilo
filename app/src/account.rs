@@ -10,7 +10,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
@@ -269,7 +270,7 @@ pub fn copy_for(text: &str, kept: Duration, cx: &mut App) {
     cx.spawn(async move |cx| {
         cx.background_executor().timer(kept).await;
         cx.update(|cx| {
-            if cx.read_from_clipboard().and_then(|item| item.text()) == Some(text) {
+            if crate::clipboard::holds_own(cx, &text) {
                 cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
             }
         });

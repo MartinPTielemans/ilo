@@ -91,7 +91,7 @@ fn escape_leaves_full_screen_when_nothing_loads(cx: &mut TestAppContext) {
 #[gpui::test]
 fn escape_twice_or_held_in_the_page_leaves_full_screen(cx: &mut TestAppContext) {
     let (shell, host) = two_spaces(cx);
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let at = |ms| start + std::time::Duration::from_millis(ms);
     let press = |shell: &Entity<Shell>, repeat, when, cx: &mut TestAppContext| {
         shell.update(cx, |shell, cx| {
