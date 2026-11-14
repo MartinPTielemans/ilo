@@ -751,16 +751,23 @@ remove_keys=⌥⌘⌫
 [ "$(uname)" = Darwin ] || remove_keys=Shift+Del
 expect "^browser: tooltip shown Remove from History $remove_keys\$" \
   "resting on the trash didn't show Remove from History and $remove_keys"
-expect '^browser: tooltip window shown$' "the trash's tooltip didn't show"
-# Where the UI asked, in the bar, and where the host put it, which the Mac's and Linux's say.
-asked=$(grep '^browser: tooltip at ' "$log" | tail -1 | cut -d' ' -f4,5)
-placed=$(grep '^browser: tooltip window at ' "$log" | tail -1 | cut -d' ' -f5,6)
-[ -z "$placed" ] || echo "$asked $placed" | awk '{ exit !(($1 - $3)^2 < 1 && ($2 - $4)^2 < 1) }' ||
-  fail "the trash's tooltip is at $placed in the bar, not at $asked where the UI asked"
-../tools/window-screenshot.sh "$pid" "$out/remove-tooltip.png" || fail "no window to capture"
+# Under KWin, with the driver's pointer real input, the tooltip hides as its window shows (#2763).
+tooltip_hides=
+if [ "${BROWSER_XVFB:-}" = kwin ]; then
+  tooltip_hides=1
+  echo "skip: the trash's tooltip window showing, under KWin: it hides as its window shows (#2763)."
+else
+  expect '^browser: tooltip window shown$' "the trash's tooltip didn't show"
+  # Where the UI asked, in the bar, and where the host put it, which the Mac's and Linux's say.
+  asked=$(grep '^browser: tooltip at ' "$log" | tail -1 | cut -d' ' -f4,5)
+  placed=$(grep '^browser: tooltip window at ' "$log" | tail -1 | cut -d' ' -f5,6)
+  [ -z "$placed" ] || echo "$asked $placed" | awk '{ exit !(($1 - $3)^2 < 1 && ($2 - $4)^2 < 1) }' ||
+    fail "the trash's tooltip is at $placed in the bar, not at $asked where the UI asked"
+  ../tools/window-screenshot.sh "$pid" "$out/remove-tooltip.png" || fail "no window to capture"
+fi
 send clickkey $(cross "$row")
 expect '^browser: command bar removes https://example.com/$' "a click on the trash didn't take example.com's row out"
-expect '^browser: tooltip hidden$' "a click on the trash didn't end its tooltip"
+[ -n "$tooltip_hides" ] || expect '^browser: tooltip hidden$' "a click on the trash didn't end its tooltip"
 expect '^browser: command bar suggestions "example" in ' \
   "the command bar didn't list its rows again after the trash"
 none_since '^browser: command bar \(go\|switch to tab\|behind\)' || fail "a click on the trash took its row too"
