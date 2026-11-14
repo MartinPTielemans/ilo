@@ -686,6 +686,10 @@ impl link_target::Host for LinkTargetHost {
     fn hide(&self) {
         unsafe { platform::host_hide_link_target(link_target::FADE_OUT.as_secs_f64()) };
     }
+
+    fn pressed(&self) -> bool {
+        unsafe { platform::host_mouse_down() }
+    }
 }
 
 /// The pointer moved, at (`x`, `y`) in the window the link target shows over, while it shows.

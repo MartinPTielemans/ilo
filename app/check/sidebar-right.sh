@@ -3,9 +3,12 @@
 # a click on Right's drawing in Settings › Tabs & Sidebar › Sidebar position (#2407) moves it to
 # the right while the app runs, and AppKit's buttons follow at once, close 20 points from the
 # right edge as it is from the left, through a resize, the sidebar hidden and revealed from the
-# right edge, and full screen; the command bar lists only the move that acts, which brings it
-# back, buttons and all, and the setting's file goes with it. Elsewhere the UI draws the buttons,
-# which the UI's tests and the parity screens check.
+# right edge, and full screen. From a second Space, one long swipe right stops on the first, never
+# past it into the Library; the next brings the Library out on the sidebar's side, at the window's
+# right edge, and one the other way puts it back, recorded to sidebar-right-library.mp4. The
+# command bar lists only the move that acts, which brings it back, buttons and all, and the
+# setting's file goes with it. Elsewhere the UI draws the buttons, which the UI's tests and the
+# parity screens check.
 
 if [ "$(uname)" != Darwin ]; then
   echo "skip: sidebar-right checks AppKit's buttons, the Mac's alone."
@@ -87,6 +90,42 @@ shot fullscreen
 send fullscreen
 expect '^browser: window left full screen$' "the window didn't leave full screen"
 side_buttons "after full screen" right
+
+# The Library on the right. Spaces read left to right on either side, so fingers go right to the
+# Space before and on into the Library, as with the sidebar on the left: only where they are
+# moves, over the sidebar at the window's right.
+first=$(space)
+send menu New Space…
+expect '^browser: command new-space via ui$' "New Space in the menu didn't run new-space"
+expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
+second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
+expect "^browser: space $second in " "the window didn't show the new Space"
+send type second
+send key return
+expect "^browser: create space $second second\$" "return didn't name the second Space"
+expect '^browser: space form gone$' "the form didn't leave after Create"
+swipe_point="$((width - 110)) 500"
+# $1 is the driver's swipe and $2 whether the Library shows after it.
+library_to() {
+  send swipe $swipe_point $1
+  expect '^browser: command view-library via swipe$' "a swipe of $1 didn't reach the Library"
+  expect "^browser: library $2\$" "a swipe of $1 didn't leave the Library $2"
+}
+record sidebar-right-library 8
+# Far past the sidebar's width and the Library's, and still the first Space, with the Library
+# never out, not even partway while the fingers were down.
+send swipe $swipe_point 60 0 40
+expect '^browser: command select-space via swipe$' "a long swipe right from the second Space didn't page"
+expect "^browser: space $first in " "a long swipe right from the second Space didn't show the first"
+expect "^browser: settled space $first\$" "the first Space's page didn't settle after the swipe"
+none_since '^browser: library section ' ||
+  fail "a long swipe right from the second Space went on into the Library"
+library_to "12 0 10" shown
+across=$(grep '^browser: library across ' "$log" | tail -1 | cut -d' ' -f4-)
+echo "$across" | grep -q "^[1-9][0-9]* to $width of $width\$" ||
+  fail "the Library opened across $across, not at the window's right edge"
+library_to "-12 0 10" hidden
+recorded
 
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"

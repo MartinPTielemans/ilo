@@ -562,6 +562,8 @@ expect '^browser: library shown$' "View Media… didn't open the Library"
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: media video playing clip.mp4$' "the video's tile didn't play it"
   ../tools/window-screenshot.sh "$pid" "$out/media-video.png" || fail "no window to capture"
+else
+  echo "skip: the Media tile's video playing, and stopping with the Library closed: only the Mac's platform plays one."
 fi
 send menu 'View Media…'
 expect '^browser: library hidden$' "View Media… didn't close the Library"

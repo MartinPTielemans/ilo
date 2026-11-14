@@ -246,6 +246,8 @@ void After(double seconds, std::function<void()> task) {
 // with it when it's minimized, and placed in points from its content's top-left.
 struct Floating {
   HWND hwnd = nullptr;
+  // What check.sh calls it, which Adopt asks for, so every window the host floats is named.
+  const char* name = nullptr;
   // Clicks go through it to the browser window under it.
   bool mouse_through = false;
   // Where it takes clicks, in pixels from its top-left, if not all of it: the hover card's or the
@@ -323,6 +325,12 @@ struct Menu {
   bool give_back = true;
   // Bumped by each show and hide, so a show posted before a hide doesn't put the menu back.
   unsigned showing = 0;
+  // Where the pointer rested as it showed, until the pointer leaves it. Windows sends the window
+  // under a resting pointer a move to where it is as windows show and hide, which a native menu
+  // ignores; it would take the highlight from the checked item of a pop-up opened from the
+  // keyboard, so ↓ went from the item under the pointer instead (#2544).
+  bool resting = false;
+  POINT rest{};
 };
 Menu g_menu;
 // The thread hooks that watch the pointer and the keys while the menu shows.
@@ -476,8 +484,13 @@ void OwnShadow(HWND hwnd) {
   DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof backdrop);
 }
 
-void Adopt(Floating& floating, void* view, bool mouse_through, void (*dismissed)(void)) {
+void Adopt(Floating& floating,
+           void* view,
+           const char* name,
+           bool mouse_through,
+           void (*dismissed)(void)) {
   floating.hwnd = Hwnd(view);
+  floating.name = name;
   floating.mouse_through = mouse_through;
   floating.dismissed = dismissed;
   ShowWindow(floating.hwnd, SW_HIDE);
@@ -1497,10 +1510,14 @@ HHOOK g_mouse_hook = nullptr;
 
 // In a driven run only the driver's pointer reaches the app, as drive.cc keeps the desktop's out of
 // its windows. The thread's mouse hooks hear the desktop's before that, and Windows moves it over a
-// window as one shows, so a menu opening where it rests would hover its row (#1125).
+// window as one shows, so a menu opening where it rests would hover its row (#1125). Unless the
+// driver's input is the desktop's own, real as a hand's (#2544).
+// Set by the driver (host_drive_real_input), which the host doesn't call: the preview links no
+// driver, whose core calls it couldn't link.
+bool g_drive_real = false;
 bool DesktopPointerHeard() {
   static const bool driven = GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0;
-  return !driven;
+  return !driven || g_drive_real;
 }
 
 // The pointer at |point| on screen, for the link target and the reveals.
@@ -1871,10 +1888,17 @@ void KeepKeyboard(HWND root) {
   }
   Later([root] {
     HWND hwnd = KeepsKeyboard(root);
-    if (!hwnd || GetForegroundWindow() != root) {
+    // Asked twice for one activation, it has the keyboard already.
+    if (!hwnd || GetForegroundWindow() == hwnd) {
       return;
     }
     const char* name = host_floating_name(hwnd);
+    if (GetForegroundWindow() != root) {
+      // check.sh shows this line when a step's keys went to the wrong window.
+      fprintf(stderr, "browser: %s leaves the keyboard: its window is no longer in front\n",
+              name ? name : "window");
+      return;
+    }
     // check.sh reads this line.
     fprintf(stderr, "browser: %s takes the keyboard back from its window\n",
             name ? name : "window");
@@ -1968,9 +1992,16 @@ bool MenuTakesPointer(WPARAM message, POINT pt) {
 }
 
 LRESULT CALLBACK MenuMouse(int code, WPARAM wparam, LPARAM lparam) {
-  if (code == HC_ACTION && DesktopPointerHeard() &&
-      MenuTakesPointer(wparam, reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->pt)) {
-    return 1;
+  if (code == HC_ACTION && DesktopPointerHeard()) {
+    const POINT pt = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->pt;
+    const bool moved = wparam == WM_MOUSEMOVE || wparam == WM_NCMOUSEMOVE;
+    if (moved && g_menu.resting && pt.x == g_menu.rest.x && pt.y == g_menu.rest.y) {
+      return 1;
+    }
+    g_menu.resting = g_menu.resting && !moved;
+    if (MenuTakesPointer(wparam, pt)) {
+      return 1;
+    }
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
@@ -3219,12 +3250,22 @@ void host_maximize_window(void* ui_view) {
   HWND key = GetForegroundWindow();
   DWORD process = 0;
   GetWindowThreadProcessId(key, &process);
+  // With another app in front, as when the app relaunches behind it, the app's own active window
+  // is the one to give back, as it comes in front with the app (#2544).
+  const bool in_front = process == GetCurrentProcessId();
+  if (!in_front) {
+    key = GetActiveWindow();
+  }
   // As Chromium's own Maximize does.
   SendMessageW(root, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
   // Maximizing activates it too, which a window a relaunch brings back behind the one in front
   // mustn't be (#1454): the keyboard goes back to the app's window that had it.
-  if (key && key != root && key != g_launch.hwnd && process == GetCurrentProcessId()) {
-    SetForegroundWindow(key);
+  if (key && key != root && key != g_launch.hwnd) {
+    if (in_front) {
+      SetForegroundWindow(key);
+    } else {
+      SetActiveWindow(key);
+    }
   }
   // Maximizing brings it to the front, and the launch window stays over it until the UI has drawn.
   if (g_launch.hwnd) {
@@ -3562,7 +3603,7 @@ void host_forget_window(void* ui_view) {
 }
 
 void host_add_overlay(int overlay, void* overlay_view, double, void (*dismissed)(void)) {
-  Adopt(g_overlays[overlay], overlay_view, false, dismissed);
+  Adopt(g_overlays[overlay], overlay_view, kOverlayNames[overlay], false, dismissed);
   g_overlays[overlay].overlay = overlay;
   // The command bar is a rounded rectangle, as Windows' frame is. The pickers and the folder
   // preview have a beak, whose shape a rectangle's corners and shadow would show round.
@@ -3718,7 +3759,7 @@ void host_release_held_keys(void) {
 
 void host_add_find_bar(void* ui_view, void* find_bar_view, double right, double top) {
   Corner& corner = g_find_bars[ui_view];
-  Adopt(corner.floating, find_bar_view, false, nullptr);
+  Adopt(corner.floating, find_bar_view, "find bar", false, nullptr);
   SystemFrame(corner.floating.hwnd);
   corner.right = right;
   corner.top = top;
@@ -3752,7 +3793,7 @@ void host_hide_find_bar(void* ui_view) {
 
 void host_add_offer(void* ui_view, void* offer_view, double right, double top) {
   Corner& corner = g_offers[ui_view];
-  Adopt(corner.floating, offer_view, false, nullptr);
+  Adopt(corner.floating, offer_view, "offer", false, nullptr);
   SystemFrame(corner.floating.hwnd);
   corner.right = right;
   corner.top = top;
@@ -3788,7 +3829,7 @@ void host_set_pane_corner(void* ui_view, double left, double right, double top) 
 }
 
 void host_add_hud(void* hud_view, double right, double top, double margin) {
-  Adopt(g_hud, hud_view, true, nullptr);
+  Adopt(g_hud, hud_view, "hud", true, nullptr);
   g_hud_right = right;
   g_hud_top = top;
   g_hud_margin = margin;
@@ -3827,7 +3868,7 @@ void host_hide_hud(void) {
 }
 
 void host_add_drop_targets(void* view) {
-  Adopt(g_drop_targets, view, true, nullptr);
+  Adopt(g_drop_targets, view, "drop targets", true, nullptr);
 }
 
 void host_show_drop_targets(void* ui_view) {
@@ -3850,7 +3891,7 @@ void host_hide_drop_targets(void) {
 }
 
 void host_add_dialog(void* dialog_view) {
-  Adopt(g_dialog, dialog_view, false, nullptr);
+  Adopt(g_dialog, dialog_view, "dialog", false, nullptr);
   g_dialog.ui_closes = true;
 }
 
@@ -3864,9 +3905,16 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
     ContentSize(Root(ui_view), &width, &height);
   }
   Show(g_dialog, ui_view, x, y, width, height, true);
+  HWND root = Root(ui_view);
+  // Shown with another app in front, it's its thread's active window meanwhile, as a modal dialog
+  // of Windows' own is, without coming in front. The taskbar button and Alt+Tab bring an app back
+  // with that window, so it comes back with the keyboard: its browser window, active before it,
+  // hears nothing of the app coming back to take the keyboard back for it with (#2544).
+  if (g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) && !AppInFront()) {
+    SetActiveWindow(g_dialog.hwnd);
+  }
   // Shown with another app in front, it asks for the user by its window's taskbar button, until
   // they come to that window, as Chrome's dialogs do (#1365).
-  HWND root = Root(ui_view);
   if (root && root != g_dialog_asking && g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) &&
       !AppInFront()) {
     FLASHWINFO flash{sizeof flash, root, FLASHW_TRAY | FLASHW_TIMERNOFG, 0, 0};
@@ -3889,7 +3937,7 @@ void host_hide_dialog(void) {
 
 void host_add_site_controls(void* view, void (*dismissed)(void)) {
   // Its beak is in the window, whose rectangle Windows' corners and shadow would show round it.
-  Adopt(g_site_controls, view, false, dismissed);
+  Adopt(g_site_controls, view, "site controls", false, dismissed);
 }
 
 void host_set_site_controls_shape(const double*, size_t) {}
@@ -3944,7 +3992,7 @@ void host_hide_site_controls(void) {
 
 void* host_add_link_preview(void* view, void (*dismissed)(void)) {
   // It never has the keyboard, which stays with the page.
-  Adopt(g_link_preview.floating, view, false, nullptr);
+  Adopt(g_link_preview.floating, view, "link preview", false, nullptr);
   g_link_preview.dismissed = dismissed;
   SetWindowLongPtrW(g_link_preview.floating.hwnd, GWL_EXSTYLE,
                     GetWindowLongPtrW(g_link_preview.floating.hwnd, GWL_EXSTYLE) |
@@ -4031,7 +4079,7 @@ void host_hide_link_preview(void) {
 }
 
 void host_add_capture(void* view, void (*dismissed)(void)) {
-  Adopt(g_capture, view, false, dismissed);
+  Adopt(g_capture, view, "capture", false, dismissed);
 }
 
 void host_show_capture(void* ui_view, double left, double top, double width, double height) {
@@ -4059,9 +4107,180 @@ void host_hide_capture(void) {
   fprintf(stderr, "browser: capture hidden\n");
 }
 
+namespace {
+
+// What the desktop shows behind the window in front, which is ours when the user asks to capture:
+// its picture's file, or none for a solid colour, filled with |colour|, at |screen|'s size in
+// pixels. Windows Spotlight's pictures aren't a file the system names, so it gives no answer, and
+// Portrait Mode puts the page on white. The caller has CoInitialized this thread.
+bool DesktopShown(std::wstring* file, COLORREF* colour, RECT* screen) {
+  HMONITOR monitor = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY);
+  MONITORINFO info{sizeof info};
+  if (!GetMonitorInfoW(monitor, &info)) {
+    return false;
+  }
+  *screen = info.rcMonitor;
+  // Settings › Personalization › Background's choice: 3 is Spotlight.
+  DWORD type = 0, size = sizeof type;
+  RegGetValueW(HKEY_CURRENT_USER,
+               L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers",
+               L"BackgroundType", RRF_RT_REG_DWORD, nullptr, &type, &size);
+  if (type == 3) {
+    fprintf(stderr, "browser: desktop picture none, Spotlight\n");
+    return false;
+  }
+  *colour = GetSysColor(COLOR_DESKTOP);
+  ComPtr<IDesktopWallpaper> wallpaper;
+  if (SUCCEEDED(CoCreateInstance(CLSID_DesktopWallpaper, nullptr, CLSCTX_ALL,
+                                 IID_PPV_ARGS(&wallpaper)))) {
+    COLORREF background = 0;
+    if (SUCCEEDED(wallpaper->GetBackgroundColor(&background))) {
+      *colour = background;
+    }
+    // Its monitors are named by device path; the one whose rectangle is this monitor's.
+    UINT count = 0;
+    wallpaper->GetMonitorDevicePathCount(&count);
+    for (UINT index = 0; index < count; ++index) {
+      LPWSTR id = nullptr;
+      RECT rect{};
+      LPWSTR path = nullptr;
+      if (SUCCEEDED(wallpaper->GetMonitorDevicePathAt(index, &id)) &&
+          SUCCEEDED(wallpaper->GetMonitorRECT(id, &rect)) && EqualRect(&rect, screen) &&
+          SUCCEEDED(wallpaper->GetWallpaper(id, &path)) && path) {
+        *file = path;
+      }
+      CoTaskMemFree(path);
+      CoTaskMemFree(id);
+      if (!file->empty()) {
+        return true;
+      }
+    }
+  }
+  // Before Windows 8, or a desktop the interface doesn't answer for: the primary monitor's.
+  wchar_t path[MAX_PATH] = {};
+  if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0)) {
+    *file = path;
+  }
+  return true;
+}
+
+// The desktop's picture drawn at |width| by |height|, filling it and centred as the desktop's
+// Fill does, else |colour| alone, as top-down BGRA. The caller has CoInitialized this thread.
+bool DesktopPixels(const std::wstring& file, COLORREF colour, UINT width, UINT height,
+                   std::vector<uint8_t>* pixels) {
+  pixels->assign(static_cast<size_t>(width) * height * 4, 0xff);
+  if (file.empty()) {
+    for (size_t at = 0; at < pixels->size(); at += 4) {
+      (*pixels)[at] = GetBValue(colour);
+      (*pixels)[at + 1] = GetGValue(colour);
+      (*pixels)[at + 2] = GetRValue(colour);
+    }
+    return true;
+  }
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IWICBitmapDecoder> decoder;
+  ComPtr<IWICBitmapFrameDecode> frame;
+  ComPtr<IWICFormatConverter> converter;
+  ComPtr<IWICBitmapScaler> scaler;
+  UINT pictured_width = 0, pictured_height = 0;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&wic))) ||
+      FAILED(wic->CreateDecoderFromFilename(file.c_str(), nullptr, GENERIC_READ,
+                                            WICDecodeMetadataCacheOnDemand, &decoder)) ||
+      FAILED(decoder->GetFrame(0, &frame)) ||
+      FAILED(frame->GetSize(&pictured_width, &pictured_height)) || !pictured_width ||
+      !pictured_height || FAILED(wic->CreateFormatConverter(&converter)) ||
+      FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA,
+                                   WICBitmapDitherTypeNone, nullptr, 0,
+                                   WICBitmapPaletteTypeCustom))) {
+    return false;
+  }
+  const double fill = (std::max)(static_cast<double>(width) / pictured_width,
+                                 static_cast<double>(height) / pictured_height);
+  const UINT drawn_width = (std::max)(width, static_cast<UINT>(std::ceil(pictured_width * fill)));
+  const UINT drawn_height =
+      (std::max)(height, static_cast<UINT>(std::ceil(pictured_height * fill)));
+  const WICRect middle{static_cast<INT>((drawn_width - width) / 2),
+                       static_cast<INT>((drawn_height - height) / 2), static_cast<INT>(width),
+                       static_cast<INT>(height)};
+  return SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
+         SUCCEEDED(scaler->Initialize(converter.Get(), drawn_width, drawn_height,
+                                      WICBitmapInterpolationModeHighQualityCubic)) &&
+         SUCCEEDED(scaler->CopyPixels(&middle, width * 4, static_cast<UINT>(pixels->size()),
+                                      pixels->data()));
+}
+
+// |pixels|, |width| by |height| top-down BGRA, as a PNG. The caller has CoInitialized this thread.
+bool EncodePng(const std::vector<uint8_t>& pixels, UINT width, UINT height,
+               std::vector<uint8_t>* png) {
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IWICBitmap> source;
+  ComPtr<IStream> stream;
+  ComPtr<IWICBitmapEncoder> encoder;
+  ComPtr<IWICBitmapFrameEncode> frame;
+  ComPtr<IPropertyBag2> options;
+  WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+  STATSTG stat{};
+  HGLOBAL global = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&wic))) ||
+      FAILED(wic->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppBGRA, width * 4,
+                                         static_cast<UINT>(pixels.size()),
+                                         const_cast<BYTE*>(pixels.data()), &source)) ||
+      FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) ||
+      FAILED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) ||
+      FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
+      FAILED(encoder->CreateNewFrame(&frame, &options)) ||
+      FAILED(frame->Initialize(options.Get())) || FAILED(frame->SetSize(width, height)) ||
+      FAILED(frame->SetPixelFormat(&format)) ||
+      FAILED(frame->WriteSource(source.Get(), nullptr)) || FAILED(frame->Commit()) ||
+      FAILED(encoder->Commit()) || FAILED(stream->Stat(&stat, STATFLAG_NONAME)) ||
+      FAILED(GetHGlobalFromStream(stream.Get(), &global)) || !global) {
+    return false;
+  }
+  void* data = GlobalLock(global);
+  if (!data) {
+    return false;
+  }
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  png->assign(bytes, bytes + static_cast<size_t>(stat.cbSize.QuadPart));
+  GlobalUnlock(global);
+  return !png->empty();
+}
+
+}  // namespace
+
 bool host_desktop_picture(void* context,
                           void (*png)(void* context, const uint8_t* data, size_t size)) {
-  return false;
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  std::wstring file;
+  COLORREF colour = RGB(0, 0, 0);
+  RECT screen{};
+  std::vector<uint8_t> pixels, encoded;
+  const bool shown = DesktopShown(&file, &colour, &screen);
+  const UINT width = static_cast<UINT>(screen.right - screen.left);
+  const UINT height = static_cast<UINT>(screen.bottom - screen.top);
+  const bool found = shown && width && height &&
+                     DesktopPixels(file, colour, width, height, &pixels) &&
+                     EncodePng(pixels, width, height, &encoded);
+  if (SUCCEEDED(com)) {
+    CoUninitialize();
+  }
+  if (!found) {
+    if (shown) {
+      fprintf(stderr, "browser: desktop picture none, unread\n");
+    }
+    return false;
+  }
+  // check.sh reads this line: the picture's size, and whether it's a file's or a colour.
+  if (file.empty()) {
+    fprintf(stderr, "browser: desktop picture %ux%u, colour %02x%02x%02x\n", width, height,
+            GetRValue(colour), GetGValue(colour), GetBValue(colour));
+  } else {
+    fprintf(stderr, "browser: desktop picture %ux%u, a picture\n", width, height);
+  }
+  png(context, encoded.data(), encoded.size());
+  return true;
 }
 
 void host_copy_png(const uint8_t* png, size_t size) {
@@ -4226,7 +4445,7 @@ void host_share_png(const uint8_t* png,
 }
 
 void host_add_toast(void* toast_view) {
-  Adopt(g_toast, toast_view, true, nullptr);
+  Adopt(g_toast, toast_view, "toast", true, nullptr);
   g_toast.plate = RECT{};
 }
 
@@ -4253,11 +4472,19 @@ void host_show_toast(void* ui_view) {
 void host_hide_toast(void) {
   g_toast_over = nullptr;
   g_toast.plate = RECT{};
+  const bool shown = g_toast.hwnd && IsWindowVisible(g_toast.hwnd);
   Hide(g_toast);
+  // GPUI keeps where the pointer was when the toast hid, and Windows tells a hidden window nothing
+  // of the pointer leaving: a toast clicked away and the next shown in its place took itself as
+  // hovered and stayed past its time (#2544, as #2076 on the Mac). It hears the pointer leave as it
+  // hides, posted, as GPUI drops what a window hears while the UI is busy, as it is here.
+  if (shown) {
+    PostMessageW(g_toast.hwnd, WM_MOUSELEAVE, 0, 0);
+  }
 }
 
 void host_add_foot_bar(void* foot_bar_view) {
-  Adopt(g_foot_bar, foot_bar_view, false, nullptr);
+  Adopt(g_foot_bar, foot_bar_view, "foot bar", false, nullptr);
   // A click on its buttons leaves the keyboard where it was, with the browser window and the page,
   // where the mode has its keys, as the hover card's does.
   SetWindowLongPtrW(g_foot_bar.hwnd, GWL_EXSTYLE,
@@ -4290,7 +4517,7 @@ void host_hide_foot_bar(void) {
 }
 
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
-  Adopt(g_tooltip, tooltip_view, true, nullptr);
+  Adopt(g_tooltip, tooltip_view, "tooltip", true, nullptr);
   g_tooltip_away = away;
   g_tooltip_margin = margin;
 }
@@ -4319,7 +4546,7 @@ void host_hide_tooltip(double fade) {
 
 // shortcut: the card ends only as the pointer leaves it or the UI ends it, as a key does.
 void host_add_hover_card(void* card_view, double margin, void (*)(void)) {
-  Adopt(g_card, card_view, false, nullptr);
+  Adopt(g_card, card_view, "hover card", false, nullptr);
   // A click on its buttons leaves the keyboard where it was.
   SetWindowLongPtrW(g_card.hwnd, GWL_EXSTYLE,
                     GetWindowLongPtrW(g_card.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
@@ -4368,7 +4595,7 @@ void host_watch_memory_pressure(void (*pressed)(void)) {
 }
 
 void host_add_link_target(void* link_view, double margin, void (*pointer)(double x, double y)) {
-  Adopt(g_link_target, link_view, true, nullptr);
+  Adopt(g_link_target, link_view, "link target", true, nullptr);
   g_link_margin = margin;
   g_link_pointer = pointer;
 }
@@ -4381,6 +4608,10 @@ void host_show_link_target(void* ui_view, double left, double top, double fade) 
 
 void host_hide_link_target(double fade) {
   FadeOut(g_link_target, fade, MaybeStopWatchingPointer);
+}
+
+bool host_mouse_down(void) {
+  return Pressed();
 }
 
 void host_focus(void* view) {
@@ -4499,6 +4730,7 @@ void host_show_menu_window(void* ui_view,
     SendMessageW(g_menu.hwnd, WM_PAINT, 0, 0);
     PlaceAndShow(g_menu.hwnd, frame.left, frame.top, wide, high,
                  Step(g_menu.life, OverlayEvent::kShow, kKeyboard));
+    g_menu.resting = GetCursorPos(&g_menu.rest);
     InstallMenuHooks();
     // check.sh reads this line.
     fprintf(stderr, "browser: menu window at %.0f,%.0f %.0fx%.0f\n", left, top, width, height);
@@ -4692,7 +4924,7 @@ void host_add_reveal(void* ui_view,
                      void* reveal_view,
                      void (*pointer_moved)(void* ui_view, double x)) {
   Reveal& reveal = g_reveals[ui_view];
-  Adopt(reveal.floating, reveal_view, false, nullptr);
+  Adopt(reveal.floating, reveal_view, "reveal", false, nullptr);
   reveal.pointer_moved = pointer_moved;
 }
 
@@ -4757,11 +4989,12 @@ bool host_close_other_window(void) {
   }
   DWORD process = 0;
   GetWindowThreadProcessId(window, &process);
-  // Our own, but neither a browser window (Ctrl+W closes its tab) nor one of the UI's floating
-  // windows: a Chrome window of its own, such as the Task Manager or undocked DevTools, which carry
+  // Our own, but neither a browser window (Ctrl+W closes its tab), one of the UI's floating windows
+  // nor a window another owns, such as a tab's dialog, whose Ctrl+W closes its tab as in Chrome
+  // (#2651): a Chrome window of its own, such as the Task Manager or undocked DevTools, which carry
   // a system close button. Closing it is that button's click.
   if (process != GetCurrentProcessId() || UiViewOf(window) || FloatingByHwnd().count(window) ||
-      !(GetWindowLongPtrW(window, GWL_STYLE) & WS_SYSMENU)) {
+      GetWindow(window, GW_OWNER) || !(GetWindowLongPtrW(window, GWL_STYLE) & WS_SYSMENU)) {
     return false;
   }
   PostMessageW(window, WM_CLOSE, 0, 0);
@@ -4939,6 +5172,11 @@ void* host_drop_target(void* hwnd) {
 // The driver's: carries the app's own drags in place of DoDragDrop (g_drive_drag).
 void host_drive_drags(HRESULT (*drag)(IDataObject*, DWORD, DWORD*, POINT*)) {
   g_drive_drag = drag;
+}
+
+// The driver's: its input is real, which the menu hooks then hear as a hand's (#2544).
+void host_drive_real_input(void) {
+  g_drive_real = true;
 }
 
 bool host_trash(const char* path) {
@@ -5424,31 +5662,23 @@ bool host_drive_key(unsigned vk, long lparam) {
 // What check.sh calls the window |hwnd| the host floats over a browser window, for the driver's
 // stack, or nothing if it's none of those.
 const char* host_floating_name(void* hwnd) {
-  const std::pair<const Floating*, const char*> named[] = {
-      {&g_link_target, "link target"}, {&g_tooltip, "tooltip"},
-      {&g_card, "hover card"},         {&g_toast, "toast"},
-      {&g_capture, "capture"},         {&g_hud, "hud"},
-      {&g_dialog, "dialog"},           {&g_site_controls, "site controls"},
-      {&g_link_preview.floating, "link preview"}};
-  for (const auto& [floating, name] : named) {
-    if (floating->hwnd && floating->hwnd == hwnd) {
-      return name;
-    }
-  }
-  for (size_t index = 0; index < std::size(g_overlays); ++index) {
-    if (g_overlays[index].hwnd && g_overlays[index].hwnd == hwnd) {
-      return kOverlayNames[index];
-    }
-  }
-  for (const auto& [corners, name] :
-       {std::pair{&g_find_bars, "find bar"}, std::pair{&g_offers, "offer"}}) {
-    for (const auto& [ui_view, corner] : *corners) {
-      if (corner.floating.hwnd && corner.floating.hwnd == hwnd) {
-        return name;
-      }
-    }
+  if (auto it = FloatingByHwnd().find(static_cast<HWND>(hwnd)); it != FloatingByHwnd().end()) {
+    return it->second->name;
   }
   return g_menu.hwnd && g_menu.hwnd == hwnd ? "menu" : nullptr;
+}
+
+// Each window the host floats over a browser window, made so far, and the menu, by its name, its
+// window and where it is in its life (Life), for the driver's lives (#2563). Every one is made
+// through Adopt, which names it, so a new one is in the list without being added to it.
+void host_floating_lives(void (*each)(void* context, const char* name, void* hwnd, int life),
+                         void* context) {
+  for (const auto& [hwnd, floating] : FloatingByHwnd()) {
+    each(context, floating->name, hwnd, static_cast<int>(floating->life));
+  }
+  if (g_menu.hwnd) {
+    each(context, "menu", g_menu.hwnd, static_cast<int>(g_menu.life));
+  }
 }
 
 }  // extern "C"

@@ -42,7 +42,7 @@
 # Reconnected, its next call is a card of its own, whose Stop answers the call under way and closes
 # the client's connection. Turning Settings › Agents off takes the socket away and drops a client
 # connected. Relaunched, a call with a tab's id from before is refused as one from before ilo
-# restarted.
+# restarted. Its tools offer it nothing of Boosts, which are the user's alone.
 # It scrolls in a panel and in another site's frame by their refs, until each answers that
 # nothing scrolled. A table's rows and a menu's items have refs it clicks by, and an answer says what
 # changed in an element, as a button now enabled.
@@ -300,8 +300,10 @@ grep -q '"protocolVersion":"2025-06-18"' "$out/mcp-initialize.json" ||
   fail "initialize didn't answer in the client's version"
 await_log '^browser: agent mcp-client hello from check$' "the app didn't hear the client's hello"
 mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-mcp '{"jsonrpc":"2.0","id":100,"method":"tools/list"}' | grep -q '"name":"read_page"' ||
-  fail "tools/list didn't list read_page"
+mcp '{"jsonrpc":"2.0","id":100,"method":"tools/list"}' > "$out/mcp-tools.json"
+grep -q '"name":"read_page"' "$out/mcp-tools.json" || fail "tools/list didn't list read_page"
+# A Boost is the user's alone (decision 8), so no tool reads, writes or turns one on.
+grep -qi 'boost' "$out/mcp-tools.json" && fail "tools/list named a Boost among the agent's tools: $(grep -o '"name":"[^"]*"' "$out/mcp-tools.json" | tr '\n' ' ')"
 
 listed=$(call list_tabs '{}')
 await_log '^browser: made space [1-9][0-9]* for agent mcp-client$' "list_tabs didn't make the agent's Space"
@@ -1990,6 +1992,8 @@ if [ "$driven" = 1 ]; then
       await_log "^browser: needs you $needing while active\$" "the need with ilo active wasn't held back"
       if [ "$(uname)" = Darwin ]; then
         await_more '^browser: dock badge 1$' "$badges" || fail "the Dock's badge didn't count the need"
+      else
+        echo "skip: the need with ilo in the background, and its count on a badge: here no other app's window takes the keyboard from ilo, or no notification server takes the notification, which X11's run has, and Linux has no badge every desktop reads."
       fi
       ;;
   esac
@@ -2115,9 +2119,9 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "${toast_skip:-}" ]; then
   echo "skip: the needs' toast showing, as Windows shows toasts only for an installed copy, which the run's isn't: it counted on the taskbar button and asked for the toast."
