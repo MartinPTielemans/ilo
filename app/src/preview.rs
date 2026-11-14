@@ -4691,6 +4691,15 @@ mod web {
     }
 
     impl command_bar::Host for Bar {
+        // The web preview's tabs aren't closed into an archive.
+        fn archived(&self, _: &str, _: &App) -> Option<(u64, f64)> {
+            None
+        }
+
+        fn restore_archived(&self, _: u64, _: &mut App) -> bool {
+            false
+        }
+
         fn suggest(&self, _: Option<&str>, text: &str, _: bool) {
             let text = text.to_string();
             let search = self.search_url(None, &text).filter(|_| !text.is_empty());
