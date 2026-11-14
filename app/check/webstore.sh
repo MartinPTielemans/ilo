@@ -33,13 +33,12 @@ store_shown() {
 # Opens the find with ⌘F, failing with $1. While the store's card is up it keeps the page's
 # shortcuts, ⌘F too (#2520), and ilo runs a shortcut the page kept on a second press within a
 # second of the first (shell/keys.rs), so the run presses again, as a user who sees nothing open does.
+# It looks once before, not for a while: under Git Bash on Windows five looks took the second press
+# 1047 ms after the first (#2845). A second ⌘F on a find bar that opened late only selects its text.
 open_find() {
   send key f cmd
   first=$step
-  for _ in $(seq 5); do
-    logged '^browser: find bar shown$' "$first" && return 0
-    sleep 0.1
-  done
+  logged '^browser: find bar shown$' "$first" && return 0
   send key f cmd
   expect '^browser: find bar shown$' "$1" "$first"
 }
