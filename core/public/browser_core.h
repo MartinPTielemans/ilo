@@ -2588,10 +2588,11 @@ BC_EXPORT size_t bc_search_url(bc_id window,
 // page asks.
 
 // Opens |url| in a tab in no Space, in |opener|'s window and profile, loading it at once as the link
-// in |opener|'s page would have, for the app to show with bc_tab_show_in. bc_tab_close closes it,
-// which no archive or ⇧⌘T keeps, and bc_window_keep_preview keeps it. Quitting closes it. Returns 0
-// if |opener|'s window is closing or gone.
-BC_EXPORT bc_id bc_tab_open_preview(bc_id opener, const char* url);
+// in |opener|'s page would have, for the app to show with bc_tab_show_in at |frame|, whose size its
+// page has from before it loads, so its first script reads it. bc_tab_close closes it, which no
+// archive or ⇧⌘T keeps, and bc_window_keep_preview keeps it. Quitting closes it. Returns 0 if
+// |opener|'s window is closing or gone.
+BC_EXPORT bc_id bc_tab_open_preview(bc_id opener, const char* url, bc_rect frame);
 
 // Shows the page of |tab|, which no window shows, such as bc_tab_open_preview's, in |view|, an
 // NSView of the app's on the Mac, which keeps it from then on: at |frame| in points from the view's
