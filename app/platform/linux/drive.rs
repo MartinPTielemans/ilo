@@ -755,7 +755,11 @@ fn button_mask(button: u8) -> u16 {
 /// held, telling the window it was in that it left, and `to` that it came.
 fn hover(to: Target, state: u16) -> Option<()> {
     if !SENT_PRESS.get() {
-        HOVERED.set(Some(to));
+        // Probe for #2736: no motion to where the pointer is already.
+        let from = HOVERED.replace(Some(to));
+        if from.is_some_and(|from| (from.root_x, from.root_y) == (to.root_x, to.root_y)) {
+            return Some(());
+        }
         return xtest_event(xproto::MOTION_NOTIFY_EVENT, 0, to.root_x, to.root_y);
     }
     let x = server()?;
