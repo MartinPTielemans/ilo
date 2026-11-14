@@ -331,6 +331,8 @@ pub(crate) fn open_window_as(
                 BrowserWindow {
                     id,
                     ui_view,
+                    #[cfg(target_os = "linux")]
+                    view: ns_view(window),
                     shell: shell.downgrade(),
                     handle: Window::window_handle(window),
                     children: Vec::new(),
