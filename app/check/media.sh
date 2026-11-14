@@ -799,12 +799,15 @@ v.onenterpictureinpicture = () => document.title = "floating";
 v.onleavepictureinpicture = () => document.title = "landed";
 onkeydown = e => e.key == "x" && document.exitPictureInPicture();
 </script>' > "$out/site/video.html"
+# Proof only (#2803): the video from a long host, which Chromium takes to the loopback as it does
+# every *.localhost name, so the Mini Player's origin has to elide.
+vsite=$(echo "$site" | sed 's/127\.0\.0\.1/a-rather-long-host-name-for-the-origin.mini-player.localhost/')
 send key t cmd
 expect '^browser: command bar shown$' "the command bar didn't open for the video"
-send type "${site}video.html"
+send type "${vsite}video.html"
 send key return
-expect "^browser: loaded [0-9]* ${site}video.html\$" "the video's page didn't load"
-v=$(grep "^browser: loaded [0-9]* ${site}video.html\$" "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: loaded [0-9]* ${vsite}video.html\$" "the video's page didn't load"
+v=$(grep "^browser: loaded [0-9]* ${vsite}video.html\$" "$log" | tail -1 | cut -d' ' -f3)
 expect "^browser: title $v playing\$" "the video didn't play"
 post rightclick $page_point
 expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
