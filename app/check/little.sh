@@ -18,7 +18,9 @@
 # closing the window. Closed over
 # another app's window, one leaves that window in front and its app active, with a stand-in for the
 # app that the run opens itself. Turned off in Settings ›
-# Features, ⌥⌘N opens nothing and ⌥⌘-click on a link opens it behind.
+# Features, ⌥⌘N opens nothing and ⌥⌘-click on a link opens it behind, also when ⌥⌘ and the
+# press come as the pointer reaches the link and stay down past the link target's delay, its
+# window waiting for the release (#2666).
 
 serve
 # The page ⌘O moves, live: a field holding text, and music, silence a second at a time, which the
@@ -199,7 +201,15 @@ frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layo
   grep -o 'WebContentsViewCocoa [0-9,]*' | head -1 | cut -d' ' -f2)
 x=${frame%%,*}
 y=${frame#*,}
+# The pointer rests on the link until its bubble shows, then ⌥⌘ go down and it clicks. On Windows'
+# real input, with the keys down before the pointer came onto the link, the page opened nothing
+# about half the time (#2666).
+rest_on_link() {
+  send move $((x + 20)) $((y + 20))
+  expect '^browser: link target window shown$' "the pointer resting on the page's link showed no bubble"
+}
 send click $page_point
+rest_on_link
 # Grown in from under the pointer, which the driver's clicks leave where it was.
 record little-click-open 2
 send click $((x + 20)) $((y + 20)) alt cmd
@@ -299,6 +309,8 @@ if [ "$(uname)" = Darwin ]; then
   send window 1
   send fullscreen
   expect '^browser: window left full screen$' "the main window didn't leave full screen"
+else
+  echo "skip: ⌥⌘N over a window in full screen: only on the Mac is full screen a desktop of its own, which the Little ilo window has to open on."
 fi
 
 # The Dock's menu, the Mac's alone: ilo's New Window and New Incognito Window, File's, in place of
@@ -386,6 +398,8 @@ if [ "$(uname)" = Darwin ]; then
   send key w cmd
   expect "^browser: window closed $little\$" "⌘W didn't close the Dock's Little ilo window"
   send window 1
+else
+  echo "skip: the Dock's menu: the Dock is the Mac's."
 fi
 
 # The menu bar's button, and on Windows the notification area's icon: none until Settings ›
@@ -453,6 +467,8 @@ if [ "$(uname)" = Darwin ] || windows; then
   post clickkey $close
   expect '^browser: settings hidden$' "the close button didn't hide Settings"
   send window 1
+else
+  echo "skip: Little ilo's button in the menu bar or the notification area: Linux's host makes none yet."
 fi
 
 # The taskbar's jump list, Windows' alone: ilo writes its task, New Little ilo Window, which runs
@@ -800,9 +816,66 @@ frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layo
 x=${frame%%,*}
 y=${frame#*,}
 send click $page_point
+rest_on_link
 send click $((x + 20)) $((y + 20)) alt cmd
 expect '^browser: tab [0-9]* opened by [0-9]* in the background$' \
   "with Little ilo off, ⌥⌘-click on a link didn't open it behind"
+# ⌥⌘ and the press as the pointer comes onto a link, held until the plate is due, eight times
+# (#2666). Its window waits for the release, then shows: on Windows a window showing makes a move
+# at the pointer, which with the button down Blink takes as a drag, so an Alt-press on a link was a
+# selection and lost its click. Within 400 ms of a plate going the next shows at once, as the
+# pointer arrives and before the press, so the page says when 600 ms have passed since the pointer
+# left its link, and each press waits for that. Only real input holds the button where the plate
+# can ask.
+printf '%s' '<title>loading</title>
+<body style="margin:0;height:100vh">
+<a id=l href="notes.txt" style="position:fixed;left:0;top:0;width:40px;height:40px"></a>
+<script>
+let entered = 0, rest;
+l.addEventListener("mouseenter", () => {
+  entered++;
+  clearTimeout(rest);
+  document.title = "on " + entered;
+});
+l.addEventListener("mouseleave", () => {
+  clearTimeout(rest);
+  rest = setTimeout(() => document.title = "rested " + entered, 600);
+});
+requestAnimationFrame(() => setTimeout(() => document.title = "held ready"));
+</script>' > "$out/site/little-held.html"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar for the held press's page"
+send insert "${site}little-held.html"
+send key return
+expect '^browser: title [0-9]* held ready$' "the held press's page didn't draw"
+# A click on the page first, as before the hovers above: with Windows' real input, a move onto a
+# link in a page loaded from the command bar reached neither the page nor the link target. Real
+# input sets the cursor, and two sets in a row make one move, so the page says when the pointer
+# reached its link before it leaves.
+send click $page_point
+send move $((x + 20)) $((y + 20))
+await '^browser: title [0-9]* on 1$' ||
+  fail "the held press's page didn't say the pointer reached its link"
+send move $page_point
+await '^browser: title [0-9]* rested 1$' ||
+  fail "the held press's page didn't say the pointer had left its link 600 ms before"
+for try in 1 2 3 4 5 6 7 8; do
+  send press $((x + 20)) $((y + 20)) alt cmd
+  # Elsewhere the driver posts the press to the window, which neither moves the pointer onto the
+  # link nor holds a button the plate can ask about.
+  real=0
+  logged '^browser: drive: real press' && real=1
+  [ $real = 0 ] || expect '^browser: link target waits for the release$' \
+    "press $try: the plate didn't come due while ⌥⌘ and the button were down on the link"
+  send release $((x + 20)) $((y + 20)) alt cmd
+  expect '^browser: tab [0-9]* opened by [0-9]* in the background$' \
+    "press $try: ⌥⌘ and the press as the pointer came onto a link, held past the plate's delay, opened nothing behind"
+  [ $real = 0 ] || expect '^browser: link target window shown$' \
+    "press $try: the plate didn't show at the release with the pointer still on the link"
+  send move $page_point
+  await "^browser: title [0-9]* rested $((try + 1))\$" ||
+    fail "press $try: the held press's page didn't say the pointer had left its link 600 ms before"
+done
 ! sed -n "/^browser: drive $off_from: /,\$p" "$log" | grep -q '^browser: little window opened ' ||
   fail "with Little ilo off, ⌥⌘N or ⌥⌘-click opened a Little ilo window"
 send menu Settings…

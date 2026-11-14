@@ -938,6 +938,8 @@ second=$(grep -c '^browser: window opened ' "$log")
 if [ "$(uname)" != Linux ]; then
   opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
   expect "^browser: window $opened main true\$" "the window ⌘N opened didn't become the main one"
+else
+  echo "skip: the window ⌘N opened becoming the main one: Linux's host doesn't say which is."
 fi
 send window 1
 expect 'browser: mini player back in its tab$' \

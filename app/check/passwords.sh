@@ -135,15 +135,18 @@ sed -n "/^browser: drive $back: /,\$p" "$log" | grep -q '^browser: offer shown$'
 grep -q "^browser: key $tab offer\$" "$log" || fail "the offer gave its tab no key"
 # Where the key was drawn last, its centre in the window.
 key_at() { grep '^browser: key drawn at ' "$log" | tail -1 | cut -d' ' -f5-6; }
-[ -n "$(key_at)" ] || fail "the key wasn't drawn"
-../tools/window-screenshot.sh "$pid" "$out/password-key.png" || fail "no window to capture"
 # The pointer on the key hovers the sidebar, whose tools come out in the URL field and move the
 # key: it's clicked where it is with them out, or the press can land on what took its place.
-if [ "$(grep '^browser: sidebar tools ' "$log" | tail -1)" != "browser: sidebar tools shown" ]; then
-  send move $(key_at)
-  expect '^browser: sidebar tools shown$' "the pointer on the key didn't bring the sidebar's tools out"
-fi
-send click $(key_at)
+click_key() {
+  if [ "$(grep '^browser: sidebar tools ' "$log" | tail -1)" != "browser: sidebar tools shown" ]; then
+    send move $(key_at)
+    expect '^browser: sidebar tools shown$' "the pointer on the key didn't bring the sidebar's tools out"
+  fi
+  send click $(key_at)
+}
+[ -n "$(key_at)" ] || fail "the key wasn't drawn"
+../tools/window-screenshot.sh "$pid" "$out/password-key.png" || fail "no window to capture"
+click_key
 expect "^browser: key $tab clicked\$" "a click on the key didn't reach it"
 offered save
 skip_on_sway_xwayland "the offer's keys and the steps after them"
@@ -188,7 +191,7 @@ go_from_bar "${site#http://}login.html"
 expect "^browser: title $tab filled\$" "the login page didn't fill the saved password in"
 # The saved login gives the page a key, and a click on it opens the Site Controls, which list it.
 await "^browser: key $tab saved\$" || fail "the saved login gave the page no key"
-send click $(key_at)
+click_key
 expect "^browser: key $tab clicked\$" "a click on the saved login's key didn't reach it"
 expect '^browser: command site-controls via key$' \
   "the saved login's key didn't open the Site Controls"
@@ -565,6 +568,8 @@ if [ "$(uname)" = Darwin ]; then
   settings_drew Passwords
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings after Edit › AutoFill"
+else
+  echo "skip: Edit › AutoFill: the menu bar is the Mac's alone."
 fi
 # Settings' Passwords tab, which ⌘, shows again, lists the saved address under the logins, and its
 # Remove asks first, as a login's does, and removes it, which Settings hears. The card declined
