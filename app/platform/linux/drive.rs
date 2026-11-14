@@ -803,13 +803,22 @@ fn hover(to: Target, state: u16) -> Option<()> {
 /// modifiers, which go sent with it, as the keys `flags` holds do, till the drive moves them too.
 fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
     let modifiers = (state | FLAGS.get()) & MODIFIERS;
-    if !SENT_PRESS.get() && !(press && modifiers != 0) {
+    // Probe for #2736: a press with modifiers goes through XTEST too, its modifiers as key presses
+    // before it, let go after its release.
+    if !SENT_PRESS.get() {
         hover(at, state)?;
+        if press {
+            xtest_modifiers(modifiers)?;
+        }
         let kind = match press {
             true => xproto::BUTTON_PRESS_EVENT,
             false => xproto::BUTTON_RELEASE_EVENT,
         };
-        return xtest_event(kind, button, at.root_x, at.root_y);
+        xtest_event(kind, button, at.root_x, at.root_y)?;
+        if !press && modifiers != 0 {
+            xtest_modifiers(0)?;
+        }
+        return Some(());
     }
     // The display's pointer goes to the press first, so its crossings are the press's, and comes
     // to the release after it, as the sent drag doesn't move it.
