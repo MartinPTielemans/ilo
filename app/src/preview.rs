@@ -857,12 +857,19 @@ impl Browser for Fake {
 
     fn open_preview(
         &self,
-        _: u64,
-        _: SharedString,
-        _: Point<Pixels>,
-        _: (Bounds<Pixels>, f32),
-        _: &mut App,
+        over: u64,
+        url: SharedString,
+        link: Point<Pixels>,
+        page: (Bounds<Pixels>, f32),
+        cx: &mut App,
     ) {
+        // As open_archived_preview's, for a page with no tab behind it, as History's visited rows
+        // show one (#2337 mock).
+        cx.defer(move |cx| {
+            let bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
+            link_preview::open_at(Rc::new(PreviewPeek), bounds, true, cx);
+            link_preview::show(1, 99, over, url, page, link, None, cx);
+        });
     }
 
     fn open_archived_preview(
