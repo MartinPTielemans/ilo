@@ -476,6 +476,7 @@ source_set("browser_core") {
     ":ad_block_page",
     ":archive_rule",
     ":arrangement",
+    ":boost_script",
     ":drm_request",
     ":idle_check",
     ":mini_player_place",

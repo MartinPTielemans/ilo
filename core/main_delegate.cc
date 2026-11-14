@@ -32,6 +32,7 @@
 #include "browser_core/device_chooser.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/downloads.h"
+#include "browser_core/boosts.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
 #include "browser_core/hooks.h"
@@ -243,6 +244,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     RegisterArchivePrefs();
     RegisterDownloadPrefs();
     developer_mode::RegisterProfilePrefs();
+    Boosts::RegisterPrefs();
     notes::RegisterProfilePrefs();
     Arrange::RegisterProfilePrefs();
     RegisterWebRtc();

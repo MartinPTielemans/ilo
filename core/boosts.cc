@@ -1,5 +1,8 @@
 #include "browser_core/boosts.h"
 
+#include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -11,9 +14,14 @@
 #include "browser_core/arrange.h"
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
+#include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
+#include "components/keyed_service/core/keyed_service.h"
+#include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
@@ -129,6 +137,47 @@ bc_id ProfileIdOf(content::WebContents* contents) {
   return profile ? ProfileId(DirOf(profile->GetOriginalProfile())) : 0;
 }
 
+// The script the app read from each profile's Boost files, by profile and site. It runs only while
+// the record says these bytes are the ones turned on.
+std::map<bc_id, std::map<std::string, std::string, std::less<>>>& Scripts() {
+  static base::NoDestructor<std::map<bc_id, std::map<std::string, std::string, std::less<>>>>
+      scripts;
+  return *scripts;
+}
+
+// Builds no service: Chrome registers a profile's prefs through its factories.
+class PrefsFactory : public ProfileKeyedServiceFactory {
+ public:
+  static PrefsFactory* GetInstance() {
+    static base::NoDestructor<PrefsFactory> instance;
+    return instance.get();
+  }
+
+  PrefsFactory() : ProfileKeyedServiceFactory("BrowserCoreBoostScripts") {}
+
+ private:
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
+      content::BrowserContext* context) const override {
+    return nullptr;
+  }
+
+  void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) override {
+    boost_script::RegisterPrefs(registry);
+  }
+};
+
+// Whether |frame| and every frame it's in show |site|: a script never runs in a frame another
+// site's page holds, nor in one whose origin is opaque, as a sandboxed or srcdoc frame's is.
+bool AllOf(content::RenderFrameHost* frame, std::string_view site) {
+  for (; frame; frame = frame->GetParentOrOuterDocument()) {
+    if (frame->GetLastCommittedOrigin().opaque() ||
+        Boosts::SiteOf(frame->GetLastCommittedURL()) != site) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::string_view CssFor(bc_id profile, std::string_view site) {
   if (site.empty()) {
     return {};
@@ -213,6 +262,84 @@ void Boosts::Set(bc_id profile, std::string_view site, std::string_view css) {
       }
     });
   }
+}
+
+// static
+boost_script::State Boosts::SetScript(bc_id profile,
+                                      std::string_view site,
+                                      std::optional<std::string_view> script) {
+  auto& scripts = Scripts()[profile];
+  // One too large never runs, so it isn't kept.
+  if (!script || site.empty() || script->size() > boost_script::kMaxBytes) {
+    scripts.erase(std::string(site));
+  } else {
+    scripts.insert_or_assign(std::string(site), std::string(*script));
+  }
+  return ScriptState(profile, site, script.value_or(std::string_view()));
+}
+
+// static
+boost_script::State Boosts::ScriptState(bc_id profile,
+                                        std::string_view site,
+                                        std::string_view script) {
+  if (script.size() > boost_script::kMaxBytes) {
+    return boost_script::State::kTooLarge;
+  }
+  Profile* loaded = ProfileOrLoad(profile);
+  return loaded ? boost_script::Check(*loaded->GetPrefs(), site, script)
+                : boost_script::State::kNew;
+}
+
+// static
+bool Boosts::TurnOnScript(bc_id profile, std::string_view site, std::string_view script) {
+  Profile* loaded = ProfileOrLoad(profile);
+  if (!loaded || !boost_script::TurnOn(*loaded->GetPrefs(), site, script)) {
+    return false;
+  }
+  // What runs is what the user was shown, even if the file changed while the dialog was open.
+  Scripts()[profile].insert_or_assign(std::string(site), std::string(script));
+  LOG(ERROR) << "browser: boost script turned on " << site;
+  return true;
+}
+
+// static
+void Boosts::ForgetScript(bc_id profile, std::string_view site) {
+  if (Profile* loaded = ProfileOrLoad(profile)) {
+    boost_script::Forget(*loaded->GetPrefs(), site);
+    LOG(ERROR) << "browser: boost script turned off " << site;
+  }
+}
+
+// static
+void Boosts::RegisterPrefs() {
+  PrefsFactory::GetInstance();
+}
+
+void Boosts::RunScript(content::RenderFrameHost* frame) {
+  content::WebContents* contents = web_contents();
+  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
+  if (!profile || profile->IsOffTheRecord()) {
+    return;
+  }
+  // An agent's tab acts in the user's sessions, never with the user's own code (#2297's 1.5).
+  if (Space* space = Space::Holding(tab_); space && space->agent()) {
+    return;
+  }
+  const std::string site = SiteOf(frame->GetLastCommittedURL());
+  auto scripts = Scripts().find(ProfileIdOf(contents));
+  if (site.empty() || scripts == Scripts().end()) {
+    return;
+  }
+  auto script = scripts->second.find(site);
+  if (script == scripts->second.end() || !AllOf(frame, site) ||
+      boost_script::Check(*profile->GetPrefs(), site, script->second) != boost_script::State::kOn) {
+    return;
+  }
+  // The bytes that were hashed, as UTF-8: an invalid sequence becomes U+FFFD, as a file would.
+  frame->ExecuteJavaScriptInIsolatedWorld(base::UTF8ToUTF16(script->second),
+                                          content::RenderFrameHost::JavaScriptResultCallback(),
+                                          ISOLATED_WORLD_ID_BOOST_SCRIPT);
+  LOG(ERROR) << "browser: tab " << tab_ << " boost script ran " << site;
 }
 
 void Boosts::Apply(content::RenderFrameHost* frame) {
@@ -318,6 +445,10 @@ void Boosts::DidFinishNavigation(content::NavigationHandle* navigation) {
        !CssFor(ProfileIdOf(web_contents()), SiteOf(frame->GetLastCommittedURL())).empty())) {
     Apply(frame);
   }
+}
+
+void Boosts::DOMContentLoaded(content::RenderFrameHost* frame) {
+  RunScript(frame);
 }
 
 void Boosts::RenderFrameCreated(content::RenderFrameHost* frame) {
