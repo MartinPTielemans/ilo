@@ -51,9 +51,9 @@ serve
 # as the driver's does, and Chrome then takes its window as hidden, whose new tab reports no paint
 # (#2385), so the display stays on.
 ! windows || powercfg -change -monitor-timeout-ac 0 || echo "perf: the display's timeout stays"
-# #2324's spike: every launch has the memory on, as a profile whose user said yes has it, so each row
-# is what it costs; spike/memory-2324-2 runs the same app with it off.
-memory=on
+# #2324's spike, the memory-off copy: every launch has the memory off, so its rows are the baseline
+# spike/memory-2324-3's rows, with it on, are measured against.
+memory=off
 export BROWSER_MEMORY=$memory
 perf_dir="$out/perf"
 engine_switch=
