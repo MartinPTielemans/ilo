@@ -206,6 +206,17 @@ constexpr char16_t kScript[] =
       if (el.style.getPropertyValue(prop) === value && el.style.getPropertyPriority(prop) === 'important') return;
       el.style.setProperty(prop, value, 'important');
     }
+    // How a lifted element, carried or floating, stands off the page: the app's shadow
+    // (bc_arrange_set_lift), under the page's own, which stays as the page had it before the
+    // runtime set any.
+    let liftShadow = '';
+    const ownShadow = new WeakMap();
+    function stand(el) {
+      if (!liftShadow) return;
+      if (!(saved.get(el) && saved.get(el).has('box-shadow'))) ownShadow.set(el, getComputedStyle(el).boxShadow);
+      const own = ownShadow.get(el);
+      set(el, 'box-shadow', own && own !== 'none' ? own + ', ' + liftShadow : liftShadow);
+    }
     function restore(el) {
       if (lifted.has(el)) {
         lifted.delete(el);
@@ -631,6 +642,7 @@ constexpr char16_t kScript[] =
       set(el, 'margin', '0');
       set(el, 'z-index', '2147483000');
       lift(el, s);
+      stand(el);
       if (c.pin === 'screen') {
         set(el, 'position', 'fixed');
         set(el, 'left', px(c.at.x));
@@ -742,10 +754,10 @@ constexpr char16_t kScript[] =
         .line::after{left:100%}
         .line.v::before{left:50%;top:0}.line.v::after{left:50%;top:100%}
         .label{font:500 11px/16px system-ui,sans-serif;color:${hex(look.label)};background:${hex(look.accent)};
-          padding:0 6px;border-radius:${radius}px;white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
+          padding:0 5px;border-radius:${radius}px;white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
       </style><div class="old"></div><div class="fill"></div><div class="outline"></div><div class="line"></div><div class="label"></div>`;
       const part = (n) => root.querySelector('.' + n);
-      return { host, outline: part('outline'), fill: part('fill'), old: part('old'), line: part('line'), label: part('label') };
+      return { host, w, outline: part('outline'), fill: part('fill'), old: part('old'), line: part('line'), label: part('label') };
     }
     function raise() {
       const h = mode.marks.host;
@@ -762,25 +774,32 @@ constexpr char16_t kScript[] =
       const k = roleOf(el);
       return (mode.look.kinds && mode.look.kinds[k]) || mode.look.other || k;
     };
+    // |r| grown by |by| on every side.
+    const grown = (r, by) => r && { left: r.left - by, top: r.top - by, width: r.width + 2 * by, height: r.height + 2 * by };
     function draw() {
       const m = mode.marks;
-      const el = carry ? null : mode.selected || mode.pointed;
-      box(m.outline, el && rect(el));
+      // The element marked: the one pointed at or selected, or while the page shows a drop, the one
+      // carried, where it would land. Its mark is the app's for Point (#2352), so the two read as
+      // one: a line outside its box, and its label 4 px over the box at the line's left, or inside
+      // the box's top where the viewport's top cuts it.
+      // While the page moves to show or make a drop, each mark is where its element comes to rest.
+      const at = (e) => (motion.size ? still(() => rect(e)) : rect(e));
+      const el = carry ? (mode.previewing ? carry.el : null) : mode.selected || mode.pointed;
+      box(m.outline, el && grown(at(el), m.w));
       if (el) {
-        const r = rect(el), name = nameOf(el);
+        const r = at(el), name = nameOf(el);
         m.label.textContent = word(el) + (name ? ' · ' + name : '');
-        Object.assign(m.label.style, { display: 'block', left: px(r.left), top: px(Math.max(0, r.top - 20)) });
+        Object.assign(m.label.style, { display: 'block', left: px(r.left - m.w), top: px(r.top - 20 < 0 ? r.top + 4 : r.top - 20) });
       } else m.label.style.display = 'none';
       const d = carry && !mode.previewing ? carry.drop : null;
       box(m.old, carry && !mode.previewing ? carry.from : null);
-      box(m.fill, d && d.change === CHANGE.TRADES && rect(d.ref));
+      box(m.fill, d && d.change === CHANGE.TRADES && grown(at(d.ref), m.w));
       if (d && d.change === CHANGE.SETTLES) {
         const r = rect(d.ref), row = d.axis === 'row';
         m.line.className = row ? 'line v' : 'line';
         const at = d.before ? (row ? r.left : r.top) : row ? r.right : r.bottom;
         box(m.line, row ? { left: at - 1.5, top: r.top, width: 3, height: r.height } : { left: r.left, top: at - 1.5, width: r.width, height: 3 });
       } else box(m.line, null);
-      if (mode.previewing && carry) box(m.outline, rect(carry.el));
     }
     // What the press would take at |x|, |y|: the page's element there, never the document, the
     // body or the marks, and a frame from another site whole.
@@ -859,6 +878,7 @@ constexpr char16_t kScript[] =
         set(el, 'transform-origin', `${px(carry.grab.x)} ${px(carry.grab.y)}`);
         set(el, 'z-index', '2147483000');
         lift(el, null);
+        stand(el);
         carry.scale = Math.min(1, 360 / Math.max(f.width, 1), 240 / Math.max(f.height, 1));
       }
       set(el, 'transform', `translate(${px(x - carry.grab.x - f.left)}, ${px(y - carry.grab.y - f.top)}) scale(${carry.scale})`);
@@ -983,6 +1003,7 @@ constexpr char16_t kScript[] =
       // The arrangement for this page, checked by the core: placed, and the changes that found no
       // element said.
       load(a) {
+        if (typeof a.lift === 'string') liftShadow = a.lift;
         committed = a.changes || [];
         undo = [];
         holdUntil = performance.now() + HOLD;
@@ -1001,6 +1022,7 @@ constexpr char16_t kScript[] =
       },
       on(a) {
         if (mode) return state();
+        if (typeof a.lift === 'string') liftShadow = a.lift;
         mode = { look: a.look || {}, marks: null, pointed: null, selected: null, base: null, previewing: null, refused: 0 };
         undo = [];
         mode.marks = marks(mode.look);
@@ -1229,6 +1251,12 @@ gfx::PointF InPage(content::RenderWidgetHost* widget, const blink::WebMouseEvent
               : event.PositionInWidget();
 }
 
+// How lifted elements stand off the page, which the app gives once for every tab.
+arrangement::Lift& TheLift() {
+  static arrangement::Lift lift;
+  return lift;
+}
+
 base::DictValue LookOf(const Arrange::Look& look) {
   base::DictValue kinds;
   for (const auto& [kind, word] : look.kinds) {
@@ -1331,6 +1359,11 @@ std::string Arrange::Placed() const {
   return bytes->second;
 }
 
+// static
+void Arrange::SetLift(const arrangement::Lift& lift) {
+  TheLift() = lift;
+}
+
 void Arrange::Load() {
   hold_.Stop();
   const std::string placed = Placed();
@@ -1342,7 +1375,8 @@ void Arrange::Load() {
     }
     return;
   }
-  // What the page's script parses is the file rebuilt from its checked fields.
+  // What the page's script parses is the file rebuilt from its checked fields, with the app's lift.
+  file->Set("lift", arrangement::Shadow(TheLift()));
   Run("load", std::move(*file), base::BindOnce(&Arrange::Fits, weak_factory_.GetWeakPtr()));
   hold_.Start(FROM_HERE, kHold, base::BindOnce(&Arrange::HoldEnded, base::Unretained(this)));
 }
@@ -1388,7 +1422,7 @@ bool Arrange::Start(const Look& look) {
   rest_after_ = base::Seconds(look.rest);
   contents->ForEachRenderFrameHost(
       [this](content::RenderFrameHost* frame) { Hook(frame->GetRenderWidgetHost()); });
-  Run("on", base::DictValue().Set("look", LookOf(look)),
+  Run("on", base::DictValue().Set("look", LookOf(look)).Set("lift", arrangement::Shadow(TheLift())),
       base::BindOnce(&Arrange::Answered, weak_factory_.GetWeakPtr()));
   LOG(ERROR) << "browser: tab " << tab_ << " arrange on";
   return true;
