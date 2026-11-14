@@ -550,8 +550,10 @@ send move 300 111
 expect '^browser: history pointed closed [0-9][0-9]*$' \
   "the pointer on History's first row, the tab ⌘W closed, didn't point at it"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-closed.png" || fail "no window to capture"
+# The run's closed tabs come first, newest first, so its visited pages can start low on the list:
+# each row the window shows, down to its foot.
 visited_y=
-for y in 167 223 279 335 391 447; do
+for y in 167 223 279 335 391 447 503 559 615 671 727; do
   send move 300 $y
   expect '^browser: history pointed \(closed\|visited\) [0-9][0-9]*$' \
     "the pointer on History's row at y $y didn't point at it"
@@ -560,7 +562,7 @@ for y in 167 223 279 335 391 447; do
     break
   fi
 done
-[ -n "$visited_y" ] || fail "History listed no visited page in its first seven rows"
+[ -n "$visited_y" ] || fail "History listed no visited page in the rows the window shows; they were: $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: history pointed ' | cut -d' ' -f4- | tr '\n' ' ')"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-visited.png" || fail "no window to capture"
 send click 300 $visited_y
 expect '^browser: history page in preview$' "a click on a visited page's row didn't open it in Peek"
