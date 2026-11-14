@@ -12,7 +12,7 @@
 use std::{rc::Rc, sync::Arc};
 
 use gpui::{
-    App, Bounds, Context, Entity, Focusable, Global, Hsla, Image, ImageFormat, KeyBinding, Pixels,
+    App, Bounds, Context, Entity, Focusable, Global, Hsla, KeyBinding, Pixels, RenderImage,
     SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
     WindowKind, WindowOptions, accesskit::Role, actions, canvas, div, img, point, prelude::*, px,
     rgb, rgba, size, svg,
@@ -63,10 +63,12 @@ pub struct Panel {
 struct Shown {
     window: u64,
     panel: Panel,
-    picture: Option<Arc<Image>>,
+    picture: Option<Arc<RenderImage>>,
     /// Whether it shows the rows that go, rather than the line that says what goes.
     opened: bool,
     bounds: Bounds<Pixels>,
+    /// The height its window last took from its content, once it drew that tall.
+    settled: Option<f32>,
 }
 
 pub struct NotePanel {
@@ -179,8 +181,7 @@ pub fn show(window: u64, panel: Panel, cx: &mut App) {
                 "shown"
             }
         );
-        let picture = (panel.element.png.as_ref())
-            .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png.to_vec())));
+        let picture = panel.element.png.as_deref().and_then(decoded);
         // The caret and the selection in the Space's accent, as its marks.
         let accent = panel.palette.accent;
         note.input.update(cx, |input, cx| {
@@ -198,6 +199,7 @@ pub fn show(window: u64, panel: Panel, cx: &mut App) {
             picture,
             opened: false,
             bounds,
+            settled: None,
         });
         note.host.show(window, bounds);
         cx.notify();
@@ -260,6 +262,19 @@ fn fold_drawn(origin: gpui::Point<Pixels>, size: gpui::Size<Pixels>) {
             f32::from(size.height)
         );
     }
+}
+
+/// The element's picture, decoded as the panel opens so its first frame has it: GPUI decodes an
+/// `Image` a frame or more after it's first drawn, and the panel showed without it until then.
+fn decoded(png: &[u8]) -> Option<Arc<RenderImage>> {
+    let mut pixels = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+        .ok()?
+        .into_rgba8();
+    // GPUI draws BGRA.
+    for pixel in pixels.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])))
 }
 
 /// How tall it is folded: the field, and the thumbnail's line under it.
@@ -328,6 +343,10 @@ impl NotePanel {
         };
         let height = height.min(MOST).ceil();
         if (f32::from(shown.bounds.size.height) - height).abs() < 0.5 {
+            if shown.settled.replace(height) != Some(height) {
+                // check.sh reads this line, to capture the panel as it stays.
+                log!("browser: note panel drawn {height:.0} tall");
+            }
             return;
         }
         let bounds = place(shown.panel.at, shown.panel.page, height);

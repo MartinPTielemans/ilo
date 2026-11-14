@@ -72,6 +72,19 @@ impl Host for Recorder {
 }
 
 /// The panel's window, and what its note's Add and its closing told the shell.
+/// The element's picture is drawable on the panel's first frame, in the BGRA GPUI draws.
+#[test]
+fn the_picture_is_decoded_as_it_opens() {
+    let red = image::RgbaImage::from_pixel(3, 2, image::Rgba([255, 0, 0, 255]));
+    let mut png = Vec::new();
+    red.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let picture = decoded(&png).expect("a PNG decodes");
+    assert_eq!(picture.size(0), size(3.into(), 2.into()));
+    assert_eq!(&picture.as_bytes(0).unwrap()[..4], &[0, 0, 255, 255]);
+    assert!(decoded(b"not a png").is_none());
+}
+
 fn panel_window(
     cx: &mut TestAppContext,
 ) -> (
