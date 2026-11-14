@@ -23,6 +23,7 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/dialog_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/session.h"
@@ -171,6 +172,10 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   // HWND focused, which it needs to take the input method's text. Not while another of the app's
   // windows is in front, such as the command bar.
   void OnWindowFocused(aura::Window* gained_focus, aura::Window*) override {
+    // A click on a page whose tab shows a dialog focuses its view here, but the page, which ignores
+    // input under the dialog, doesn't say so, and every key it then has is lost: the dialog takes
+    // the keyboard back, as on the Mac (#2625).
+    dialog_keys::PageViewFocused(gained_focus);
     const bool take =
         gained_focus && GetFocus() != hwnd_ && GetActiveWindow() == GetAncestor(hwnd_, GA_ROOT);
     VLOG(1) << "pane " << hwnd_ << " focuses " << Describe(gained_focus)
