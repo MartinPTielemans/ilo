@@ -289,15 +289,32 @@ fn a_request_waits_for_the_engine_asked_for() {
     let folder = folder("blocker");
     let blocker = Arc::new(Blocker::new());
     blocker.use_setup(setup(&folder, ""), None);
-    let engine = blocker.engine().expect("the engine, once loaded");
+    let first = blocker.engine().expect("the first engine, waited for");
     let page = "https://news.example/";
     assert_eq!(
-        check(&engine, "https://ads.example/a.js", page, "script"),
+        check(&first, "https://ads.example/a.js", page, "script"),
         Verdict::Block
     );
-    // A setup with the user's filter: the next request waits for it.
+    // A setup with the user's filter, held from coming in once loaded: a request has the last
+    // engine, where it waited for the next and got none once FIRST_WAIT ran out (#2826).
+    let held = blocker.swap.lock().unwrap();
     blocker.use_setup(setup(&folder, "||mine.example^"), None);
-    let engine = blocker.engine().unwrap();
+    let engine = (blocker.engine()).expect("the last engine, while the next loads");
+    assert!(Arc::ptr_eq(&engine, &first));
+    assert_eq!(
+        check(&engine, "https://mine.example/x", page, "image"),
+        Verdict::Allow
+    );
+    drop(held);
+    // Once it's in, it answers.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let engine = loop {
+        let engine = blocker.engine().unwrap();
+        if !Arc::ptr_eq(&engine, &first) || Instant::now() > deadline {
+            break engine;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     assert_eq!(
         check(&engine, "https://mine.example/x", page, "image"),
         Verdict::Block
