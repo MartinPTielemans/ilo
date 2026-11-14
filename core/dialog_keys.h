@@ -27,9 +27,9 @@ void Watch(views::Widget* window);
 void PageFocused(content::WebContents* page);
 
 #if !BUILDFLAG(IS_MAC)
-// The same, for the page whose view holds |view|, which took aura's focus. A page view that aura
-// focuses while its tab ignores input, as it does under a dialog, doesn't tell its tab, so the
-// platform layer, which hears aura's focus, says it (#2625).
+// The same, for the page whose view holds |view|, or is held by it, which took aura's focus. A page
+// whose tab ignores input, as it does under a dialog, doesn't tell its tab it was focused, and its
+// view doesn't take the focus, so the platform layer, which hears aura's focus, says it (#2625).
 void PageViewFocused(gfx::NativeView view);
 #endif
 
