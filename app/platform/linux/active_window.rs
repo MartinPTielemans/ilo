@@ -99,6 +99,11 @@ fn pump() {
         let mut changed = false;
         while let Ok(Some(event)) = watch.connection.poll_for_event() {
             match event {
+                Event::PropertyNotify(notify) if notify.window != watch.root => {
+                    if Some(notify.atom) == probe_atom(&watch, b"_NET_WM_USER_TIME") {
+                        crate::log!("browser: probe user time {:#x} {} at {}", notify.window, probe_card(&watch, notify.window, notify.atom), notify.time);
+                    }
+                }
                 Event::PropertyNotify(notify) => {
                     if notify.window == watch.root && notify.atom == watch.active {
                         changed = true;
@@ -109,6 +114,11 @@ fn pump() {
                 Event::ClientMessage(message) if message.type_ == watch.active => {
                     let data = message.data.as_data32();
                     crate::log!("browser: probe active asked for {:#x} source {} time {} current {:#x}", message.window, data[0], data[1], data[2]);
+                    PROBED.with_borrow(|probed| for &window in probed {
+                        if let Some(atom) = probe_atom(&watch, b"_NET_WM_USER_TIME") {
+                            crate::log!("browser: probe user time then {window:#x} {}", probe_card(&watch, window, atom));
+                        }
+                    });
                 }
                 // PROBE #2763: each override-redirect window as it maps, and the pointer's
                 // crossings of it.
@@ -234,9 +244,27 @@ fn probe_select(watch: &Watch, ui_view: *mut c_void) {
     SEEN.with_borrow_mut(|seen| seen.push(view));
     let parent = watch.connection.query_tree(view).ok().and_then(|c| c.reply().ok()).map_or(0, |t| t.parent);
     let events = ChangeWindowAttributesAux::new().event_mask(EventMask::FOCUS_CHANGE);
-    for window in [view, parent] {
-        _ = watch.connection.change_window_attributes(window, &events).map(|c| c.check());
-    }
+    _ = watch.connection.change_window_attributes(view, &events).map(|c| c.check());
+    let events = ChangeWindowAttributesAux::new()
+        .event_mask(EventMask::FOCUS_CHANGE | EventMask::PROPERTY_CHANGE);
+    _ = watch.connection.change_window_attributes(parent, &events).map(|c| c.check());
+    PROBED.with_borrow_mut(|probed| probed.push(parent));
     let id = crate::browser_windows::window_with_view(ui_view);
     crate::log!("browser: probe window {id} ui {view:#x} in {parent:#x}");
+}
+
+thread_local! {
+    /// PROBE #2762: the browser windows' own X windows, Chromium's.
+    static PROBED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+}
+
+/// PROBE #2762: the atom named `name`.
+fn probe_atom(watch: &Watch, name: &[u8]) -> Option<xproto::Atom> {
+    Some(watch.connection.intern_atom(true, name).ok()?.reply().ok()?.atom)
+}
+
+/// PROBE #2762: the CARDINAL `window` has in `property`, or "none".
+fn probe_card(watch: &Watch, window: u32, property: xproto::Atom) -> String {
+    let reply = watch.connection.get_property(false, window, property, AtomEnum::CARDINAL, 0, 1).ok().and_then(|c| c.reply().ok());
+    reply.and_then(|r| r.value32().and_then(|mut v| v.next())).map_or("none".into(), |v| v.to_string())
 }
