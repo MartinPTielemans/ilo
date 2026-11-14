@@ -1527,7 +1527,10 @@ history_suggested() {
   echo "$suggested" | grep -q "$page[^,]* removable"
 }
 history_suggested || fail "the command bar didn't suggest $visited from history: $suggested"
-# The page Peek shows is history the command bar suggests, as a tab's page is.
+# The page Peek shows is history the command bar suggests, as a tab's page is. The ad block can
+# hold the launch's page after the bar's first answer, and its link is there once it's drawn.
+await '^browser: title [0-9]* ready$' ||
+  fail "the page with the link didn't draw in Clear browsing data's launch"
 peek_notes
 notes_suggested() { history_suggested "127.0.0.1:$port/notes" "$notes"; }
 notes_suggested ||
