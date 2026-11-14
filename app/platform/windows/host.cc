@@ -3281,6 +3281,9 @@ namespace {
 bool g_jump_list_wanted = false;
 bool g_jump_list_set = false;
 void WriteJumpList();
+// How long after the first window shows the list is written: past the launch's first page, as
+// Chrome waits 2 s (kLongDelayForUpdate) before it writes its own.
+constexpr double kJumpListAfter = 2;
 }  // namespace
 
 void host_show_window(void* ui_view) {
@@ -3289,7 +3292,7 @@ void host_show_window(void* ui_view) {
   ShowWindow(root, SW_SHOW);
   SetForegroundWindow(root);
   if (g_jump_list_wanted && !std::exchange(g_jump_list_set, true)) {
-    WriteJumpList();
+    After(kJumpListAfter, WriteJumpList);
   }
   // The launch window stays over it until the UI has drawn (host_close_launch_window).
   if (g_launch.hwnd) {
@@ -3365,11 +3368,11 @@ std::wstring BrowserModelId();
 }  // namespace
 
 // Windows has no Dock menu; its jump list holds New window, New incognito window and New Little ilo
-// Window instead, written as the first window shows (WriteJumpList).
+// Window instead, written once the first window has shown (WriteJumpList).
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {
   g_jump_list_wanted = true;
   if (!UiViews().empty() && !std::exchange(g_jump_list_set, true)) {
-    WriteJumpList();
+    After(kJumpListAfter, WriteJumpList);
   }
 }
 
@@ -5728,7 +5731,7 @@ void host_set_little_status_item(void (*clicked)(void)) {
 void host_set_little_task(const char* title, const char* arguments) {
   g_little_title = Wide(title);
   g_little_arguments = Wide(arguments);
-  // Before the first window shows, it's written with the rest of the list then.
+  // Before the list is first written, it's written with the rest then.
   if (g_jump_list_set) {
     WriteJumpList();
   }
@@ -5815,9 +5818,11 @@ void WriteJumpListNow(const std::wstring& id,
 
 // The taskbar's jump list, Windows' stand-in for the Mac's Dock menu, under the AppUserModelID the
 // windows have, so it's the one their taskbar button shows, which is why it waits for the first
-// window to show. COM's shell objects take tens of milliseconds the first window's first frame
-// would wait for (#2384), so they're written on a thread of their own, as Chrome writes its list
-// off the UI thread. The newest write wins: one that finds a newer one asked for leaves it alone.
+// window to show. COM's shell objects take tens of milliseconds (#2384): on the main thread the
+// first window waited for them, and on a thread of their own while the launch's page loads, that
+// page did. So they're written on a thread of their own, as Chrome writes its list off the UI
+// thread, and at launch kJumpListAfter later. The newest write wins: one that finds a newer one
+// asked for leaves it alone.
 void WriteJumpList() {
   const std::wstring id = BrowserModelId();
   if (id.empty()) {
