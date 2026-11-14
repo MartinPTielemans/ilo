@@ -1922,7 +1922,7 @@ pub struct Shell {
 
 impl Shell {
     /// What the window's pages show until they draw their first frame, as last given to the core.
-    pub(crate) fn page_color(&self) -> Option<u32> {
+    pub fn page_color(&self) -> Option<u32> {
         self.page_color
     }
 
