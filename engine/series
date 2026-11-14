@@ -40,6 +40,7 @@ ours/chromium-core-offline-game.patch
 ours/chromium-core-native-host-fallback.patch
 ours/chromium-crashpad-start.patch
 ours/chromium-crash-keys-no-home.patch
+ours/chromium-crashpad-flatpak-dumps.patch
 ours/chromium-windows-product-folder.patch
 ours/chromium-windows-app-names.patch
 ours/chromium-windows-package-app-id.patch
