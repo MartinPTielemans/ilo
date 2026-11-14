@@ -753,11 +753,7 @@ expect "^browser: tooltip shown Remove from History $remove_keys\$" \
   "resting on the trash didn't show Remove from History and $remove_keys"
 # Under KWin, with the driver's pointer real input, the tooltip hides as its window shows, and the
 # trash goes with it (#2763).
-if [ "${BROWSER_XVFB:-}" = kwin ]; then
-  echo "skip: the trash's tooltip window showing, under KWin: it hides as its window shows (#2763)."
-  echo "skip: a click on the trash, and ⌘Z and ⇧⌘Z after, under KWin: the trash goes with its" \
-    "tooltip, so the click opens the row (#2763)."
-else
+if true; then
   expect '^browser: tooltip window shown$' "the trash's tooltip didn't show"
   # Where the UI asked, in the bar, and where the host put it, which the Mac's and Linux's say.
   asked=$(grep '^browser: tooltip at ' "$log" | tail -1 | cut -d' ' -f4,5)

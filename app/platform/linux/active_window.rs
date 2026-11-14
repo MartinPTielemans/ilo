@@ -110,6 +110,17 @@ fn pump() {
                     let data = message.data.as_data32();
                     crate::log!("browser: probe active asked for {:#x} source {} time {} current {:#x}", message.window, data[0], data[1], data[2]);
                 }
+                // PROBE #2763: each override-redirect window as it maps, and the pointer's
+                // crossings of it.
+                Event::MapNotify(map) if map.override_redirect => {
+                    let events = ChangeWindowAttributesAux::new()
+                        .event_mask(EventMask::ENTER_WINDOW | EventMask::LEAVE_WINDOW);
+                    _ = watch.connection.change_window_attributes(map.window, &events).map(|c| c.check());
+                    crate::log!("browser: probe map {:#x} override", map.window);
+                }
+                Event::UnmapNotify(unmap) => crate::log!("browser: probe unmap {:#x}", unmap.window),
+                Event::EnterNotify(cross) => crate::log!("browser: probe enter {:#x} mode {:?} detail {:?} child {:#x} at {} {} time {}", cross.event, cross.mode, cross.detail, cross.child, cross.root_x, cross.root_y, cross.time),
+                Event::LeaveNotify(cross) => crate::log!("browser: probe leave {:#x} mode {:?} detail {:?} child {:#x} at {} {} time {}", cross.event, cross.mode, cross.detail, cross.child, cross.root_x, cross.root_y, cross.time),
                 Event::FocusIn(focus) => crate::log!("browser: probe focus in {:#x} mode {:?} detail {:?}, focus {}", focus.event, focus.mode, focus.detail, probe_focus(&watch)),
                 Event::FocusOut(focus) => crate::log!("browser: probe focus out {:#x} mode {:?} detail {:?}", focus.event, focus.mode, focus.detail),
                 _ => {}
