@@ -13,9 +13,10 @@
 # × closes it; on the Mac the run answers macOS's question for the local network that looking for
 # devices brings, and any it asks as the call starts. A video's page menu floats it in Picture in
 # Picture, the Mini Player, 10 in from the top right of the screen, which a scroll or a drag moves,
-# ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
-# shows where it was left, after a relaunch too, and coming back to its tab's window from another
-# window, or from another app with a menu open, puts it back in the tab.
+# ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. On the Mac a throw
+# settles it 10 in at a corner, and a slow release near a side 10 in along it. The next shows where
+# it was left, after a relaunch too, and coming back to its tab's window from another window, or
+# from another app with a menu open, puts it back in the tab.
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
 # Shared without its picker; the question for the camera is answered with Allow, as the user would,
 # since the fake question Chromium can put in its place never tells the browser what's captured.
@@ -770,7 +771,7 @@ fi
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
-# tab and lands it. X11 alone, as pip_driven says.
+# tab and lands it. X11 alone, as pip_driven says; on the Mac drive.mm throws it, below.
 if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
@@ -805,6 +806,38 @@ if pip_driven; then
     "a double-click on the Mini Player didn't show its tab"
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
   expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
+elif [ "$(uname)" = Darwin ]; then
+  # A throw, or a release near a side, settles it 10 in from the screen's visible frame, on Dia's
+  # spring: a throw at the corner within 45° of it, a release near a side along that side (#2099).
+  px=0 py=0 pw=0 ph=0
+  send pip
+  mini_player_at "x + w == $((wx + ww - 10)) && y == $((wy + 10))" \
+    "the floating video had no Mini Player 10 in from the top right of the screen"
+  # Off its controls, as the Linux drag. Down and left at 2000 pt/s from the top right: the bottom
+  # left corner is within 45° of it, the top left and bottom right aren't the nearest.
+  send pip drag $((pw / 8)) $((ph / 2)) -300 200 150
+  expect 'browser: mini player let go at .*, settling at ' "a throw didn't settle the Mini Player"
+  mini_player_at "x == $((wx + 10)) && y + h == $((wy + wh - 10))" \
+    "a throw down and left didn't settle the Mini Player 10 in at the bottom left of the screen"
+  ../tools/window-screenshot.sh "$pid" "$out/mini-player-corner.png" screen ||
+    fail "no window to capture"
+  # Up at 100 pt/s, let go 30 in from its place along the left side: it's caught there, 10 in.
+  send pip drag $((pw / 8)) $((ph / 2)) 30 -300 3000
+  expect 'browser: mini player let go at .*, settling at ' \
+    "a slow release near the left side didn't settle the Mini Player"
+  mini_player_at "x == $((wx + 10)) && (y - (py - 300)) ^ 2 <= 4 && w == pw && h == ph" \
+    "a slow release near the left side didn't settle the Mini Player 10 in along it"
+  ../tools/window-screenshot.sh "$pid" "$out/mini-player-side.png" screen ||
+    fail "no window to capture"
+  # And one let go slowly away from the sides stays where it's let go.
+  send pip drag $((pw / 8)) $((ph / 2)) 300 0 3000
+  expect 'browser: mini player let go at .*, staying$' \
+    "a slow release away from the sides didn't leave the Mini Player where it was let go"
+  mini_player_at "(x - (px + 300)) ^ 2 <= 4 && y == py" \
+    "a slow release away from the sides moved the Mini Player"
+  send click $page_point
+  send key x
+  expect "^browser: title $v landed\$" "the floating video didn't come back"
 else
   if [ "${BROWSER_XVFB:-}" = kwin ]; then
     echo "skip: the Mini Player's place, and moving, sizing and double-clicking it, under KWin:" \
