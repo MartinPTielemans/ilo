@@ -442,10 +442,18 @@ index 98a13f304c..22267df7e8 100644
  
  #[inline]
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..9de2c0e12a 100644
+index 08f91bd626..fd6ab97682 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
-@@ -103,13 +103,14 @@ impl WindowsWindowInner {
+@@ -28,6 +28,7 @@ pub(crate) const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = WM_USER + 5;
+ pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
+ pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
+ pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
++pub(crate) const WM_GPUI_VSYNC_FRAME: u32 = WM_USER + 11;
+ 
+ const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
+ 
+@@ -103,13 +104,14 @@ impl WindowsWindowInner {
              WM_TIMER => self.handle_timer_msg(handle, wparam),
              WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
              WM_DPICHANGED => self.handle_dpi_changed_msg(handle, wparam, lparam),
@@ -461,7 +469,7 @@ index 08f91bd626..9de2c0e12a 100644
              WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
              // Treat double click as a second single click, since we track the double clicks ourselves.
              // If you don't interact with any elements, this will fall through to the windows default
-@@ -146,11 +147,18 @@ impl WindowsWindowInner {
+@@ -146,11 +148,18 @@ impl WindowsWindowInner {
              }
              WM_MOUSEWHEEL => self.handle_mouse_wheel_msg(handle, wparam, lparam),
              WM_MOUSEHWHEEL => self.handle_mouse_horizontal_wheel_msg(handle, wparam, lparam),
@@ -480,7 +488,15 @@ index 08f91bd626..9de2c0e12a 100644
              WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
              WM_SETTINGCHANGE => self.handle_system_settings_changed(handle, wparam, lparam),
              WM_INPUTLANGCHANGE => self.handle_input_language_changed(),
-@@ -169,7 +177,7 @@ impl WindowsWindowInner {
+@@ -159,6 +168,7 @@ impl WindowsWindowInner {
+             WM_GETOBJECT => self.handle_wm_getobject(wparam, lparam),
+             WM_GPUI_CURSOR_STYLE_CHANGED
+             | WM_GPUI_FORCE_UPDATE_WINDOW
++            | WM_GPUI_VSYNC_FRAME
+             | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(handle, msg, wparam, lparam),
+             _ => None,
+         };
+@@ -169,7 +179,7 @@ impl WindowsWindowInner {
          }
      }
  
@@ -489,7 +505,25 @@ index 08f91bd626..9de2c0e12a 100644
          let origin = logical_point(
              lparam.signed_loword() as f32,
              lparam.signed_hiword() as f32,
-@@ -381,8 +389,28 @@ impl WindowsWindowInner {
+@@ -315,6 +325,17 @@ impl WindowsWindowInner {
+         self.draw_window(handle, false)
+     }
+ 
++    /// The vsync thread's frame. Input already queued is handled first, as it is ahead of
++    /// WM_PAINT, so the frame shows it: the window is invalidated for the paint after it instead.
++    fn handle_vsync_frame(&self, handle: HWND) -> Option<isize> {
++        self.state.frame_want.unqueue();
++        if unsafe { GetQueueStatus(QS_INPUT) } >> 16 != 0 {
++            unsafe { RedrawWindow(Some(handle), None, None, RDW_INVALIDATE).ok().log_err() };
++            return Some(0);
++        }
++        self.draw_window(handle, false)
++    }
++
+     fn handle_close_msg(&self) -> Option<isize> {
+         let mut callback = self.state.callbacks.should_close.take()?;
+         let should_close = callback();
+@@ -381,8 +402,28 @@ impl WindowsWindowInner {
          if handled { Some(0) } else { Some(1) }
      }
  
@@ -519,7 +553,7 @@ index 08f91bd626..9de2c0e12a 100644
          // The next window's `WM_SETCURSOR` picks its own cursor, so we just clear
          // the flag for tight `is_cursor_visible()` semantics.
          self.state.cursor_visible.store(true, Ordering::Relaxed);
-@@ -413,7 +441,14 @@ impl WindowsWindowInner {
+@@ -413,7 +454,14 @@ impl WindowsWindowInner {
      // It's a known bug that you can't trigger `ctrl-shift-0`. See:
      // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
      pub(crate) fn handle_keydown_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
@@ -535,7 +569,7 @@ index 08f91bd626..9de2c0e12a 100644
              wparam,
              lparam,
              &self.state,
-@@ -424,19 +459,56 @@ impl WindowsWindowInner {
+@@ -424,19 +472,56 @@ impl WindowsWindowInner {
                      prefer_character_input,
                  })
              },
@@ -603,7 +637,7 @@ index 08f91bd626..9de2c0e12a 100644
      }
  
      fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-@@ -710,6 +782,72 @@ impl WindowsWindowInner {
+@@ -710,6 +795,72 @@ impl WindowsWindowInner {
          }
      }
  
@@ -676,7 +710,7 @@ index 08f91bd626..9de2c0e12a 100644
      fn handle_ime_composition(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          let ctx = ImeContext::get(handle)?;
          self.handle_ime_composition_inner(*ctx, lparam)
-@@ -933,7 +1071,35 @@ impl WindowsWindowInner {
+@@ -933,7 +1084,35 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -713,7 +747,7 @@ index 08f91bd626..9de2c0e12a 100644
          let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
          if new_monitor.is_invalid() {
              log::error!("No monitor detected!");
-@@ -944,12 +1110,21 @@ impl WindowsWindowInner {
+@@ -944,12 +1123,21 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -740,7 +774,7 @@ index 08f91bd626..9de2c0e12a 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1021,6 +1196,12 @@ impl WindowsWindowInner {
+@@ -1021,6 +1209,12 @@ impl WindowsWindowInner {
      }
  
      fn handle_nc_mouse_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
@@ -753,7 +787,15 @@ index 08f91bd626..9de2c0e12a 100644
          self.start_tracking_mouse(handle, TME_LEAVE | TME_NONCLIENT);
          self.restore_cursor_after_hide();
  
-@@ -1335,6 +1516,8 @@ impl WindowsWindowInner {
+@@ -1306,6 +1500,7 @@ impl WindowsWindowInner {
+         match message {
+             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
+             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
++            WM_GPUI_VSYNC_FRAME => self.handle_vsync_frame(handle),
+             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
+             _ => unreachable!(),
+         }
+@@ -1335,6 +1530,8 @@ impl WindowsWindowInner {
  
      fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {
          self.state.direct_manipulation.on_pointer_hit_test(wparam);
@@ -762,7 +804,7 @@ index 08f91bd626..9de2c0e12a 100644
          None
      }
  
-@@ -1347,16 +1530,28 @@ impl WindowsWindowInner {
+@@ -1347,16 +1544,28 @@ impl WindowsWindowInner {
              }
              // Validate the region so a nested message pump doesn't keep
              // re-dispatching WM_PAINT for the still-invalid region in a busy
@@ -793,7 +835,7 @@ index 08f91bd626..9de2c0e12a 100644
  
          let events = self.state.direct_manipulation.drain_events();
          if !events.is_empty() {
-@@ -1823,3 +2018,70 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +2032,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -999,7 +1041,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..7088748947 100644
+index 095e009e23..bbb5dcc35d 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -20,7 +20,10 @@ use windows::{
@@ -1135,7 +1177,7 @@ index 095e009e23..7088748947 100644
                      if stop.load(Ordering::Acquire) {
                          break;
                      }
-@@ -468,11 +504,33 @@ impl WindowsPlatform {
+@@ -468,25 +504,66 @@ impl WindowsPlatform {
                          ) {
                              panic!("Device lost: {err}");
                          }
@@ -1167,9 +1209,48 @@ index 095e009e23..7088748947 100644
 +                            continue;
 +                        }
                          unsafe {
++                            let shown = IsWindowVisible(hwnd.as_raw()).as_bool()
++                                && !IsIconic(hwnd.as_raw()).as_bool();
                              if let Some(signal_at) = signal_at {
-                                 if IsWindowVisible(hwnd.as_raw()).as_bool()
-@@ -495,6 +553,84 @@ impl WindowsPlatform {
+-                                if IsWindowVisible(hwnd.as_raw()).as_bool()
+-                                    && !IsIconic(hwnd.as_raw()).as_bool()
+-                                {
++                                if shown {
+                                     hwnd.frame_signal.record(signal_at, signal_source);
+                                 } else {
+                                     // Hidden windows may not consume WM_PAINT until shown again.
+                                     hwnd.frame_signal.take();
+                                 }
+                             }
+-                            RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE)
+-                                .ok()
+-                                .log_err();
++                            // A shown window's frame is a message of its own: Windows hands out
++                            // WM_PAINT only once nothing else is queued, so in an embedder's busy
++                            // loop, such as Chromium's at launch, it waited 18–24 ms after the
++                            // vsync. A hidden window is invalidated, so it draws once it's shown.
++                            if !shown {
++                                RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE)
++                                    .ok()
++                                    .log_err();
++                            } else if hwnd.frame_want.queue()
++                                && PostMessageW(
++                                    Some(hwnd.as_raw()),
++                                    WM_GPUI_VSYNC_FRAME,
++                                    WPARAM(validation_number),
++                                    LPARAM(0),
++                                )
++                                .is_err()
++                            {
++                                hwnd.frame_want.unqueue();
++                                RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE)
++                                    .ok()
++                                    .log_err();
++                            }
+                         }
+                     }
+                 }
+@@ -495,6 +572,84 @@ impl WindowsPlatform {
      }
  }
  
@@ -1254,7 +1335,7 @@ index 095e009e23..7088748947 100644
  fn encode_restart_arguments(arguments: &[OsString]) -> OsString {
      // `Start-Process` accepts a single native command line, so quote each argument according to
      // the Windows argv parsing rules before passing the complete string through the environment.
-@@ -587,6 +723,11 @@ impl Platform for WindowsPlatform {
+@@ -587,6 +742,11 @@ impl Platform for WindowsPlatform {
          }
          on_finish_launching();
  
@@ -1266,7 +1347,7 @@ index 095e009e23..7088748947 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -748,6 +889,14 @@ impl Platform for WindowsPlatform {
+@@ -748,6 +908,14 @@ impl Platform for WindowsPlatform {
              .map(|inner| inner.handle)
      }
  
@@ -1281,7 +1362,7 @@ index 095e009e23..7088748947 100644
      fn open_window(
          &self,
          handle: AnyWindowHandle,
-@@ -761,6 +910,7 @@ impl Platform for WindowsPlatform {
+@@ -761,6 +929,7 @@ impl Platform for WindowsPlatform {
          self.raw_window_handles.write().push(TrackedWindow {
              handle: handle.into(),
              frame_signal: window.state.frame_signal.clone(),
@@ -1289,7 +1370,7 @@ index 095e009e23..7088748947 100644
          });
  
          Ok(Box::new(window))
-@@ -1253,21 +1403,11 @@ impl WindowsPlatformInner {
+@@ -1253,21 +1422,11 @@ impl WindowsPlatformInner {
          Some(0)
      }
  
@@ -1315,7 +1396,7 @@ index 095e009e23..7088748947 100644
          Some(0)
      }
  
-@@ -1409,7 +1549,7 @@ impl WindowsPlatformInner {
+@@ -1409,7 +1568,7 @@ impl WindowsPlatformInner {
  impl Drop for WindowsPlatform {
      fn drop(&mut self) {
          if let Some(stop) = self.vsync_stop.borrow_mut().take() {
@@ -1324,7 +1405,7 @@ index 095e009e23..7088748947 100644
          }
          unsafe {
              if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
-@@ -1637,10 +1777,43 @@ fn file_save_dialog(
+@@ -1637,10 +1796,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -1369,7 +1450,7 @@ index 095e009e23..7088748947 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1763,6 +1936,8 @@ fn handle_gpu_device_lost(
+@@ -1763,6 +1955,8 @@ fn handle_gpu_device_lost(
              }
          }
      }
@@ -1378,7 +1459,7 @@ index 095e009e23..7088748947 100644
      Ok(())
  }
  
-@@ -1980,3 +2155,52 @@ mod tests {
+@@ -1980,3 +2174,52 @@ mod tests {
          );
      }
  }
@@ -1432,7 +1513,7 @@ index 095e009e23..7088748947 100644
 +    thread.join().ok()
 +}
 diff --git a/crates/gpui_windows/src/vsync.rs b/crates/gpui_windows/src/vsync.rs
-index 5121c41b61..3d7c019c33 100644
+index 5121c41b61..8f35f1ab32 100644
 --- a/crates/gpui_windows/src/vsync.rs
 +++ b/crates/gpui_windows/src/vsync.rs
 @@ -1,5 +1,9 @@
@@ -1446,7 +1527,7 @@ index 5121c41b61..3d7c019c33 100644
      time::{Duration, Instant},
  };
  
-@@ -23,6 +27,45 @@ static QPC_TICKS_PER_SECOND: LazyLock<u64> = LazyLock::new(|| {
+@@ -23,6 +27,65 @@ static QPC_TICKS_PER_SECOND: LazyLock<u64> = LazyLock::new(|| {
  const VSYNC_INTERVAL_THRESHOLD: Duration = Duration::from_millis(1);
  const DEFAULT_VSYNC_INTERVAL: Duration = Duration::from_micros(16_666); // ~60Hz
  
@@ -1465,13 +1546,33 @@ index 5121c41b61..3d7c019c33 100644
 +pub(crate) struct FrameWant {
 +    /// Milliseconds after `FRAME_EPOCH`, plus one so that 0 means never.
 +    at: AtomicU64,
++    /// When the frame message in the window's queue was posted, as `at` is, or 0 for none: the
++    /// vsync thread posts one at a time, and posts again if one hasn't come in `FRAME_RUN_ON`.
++    queued: AtomicU64,
 +}
 +
 +impl FrameWant {
 +    pub(crate) fn new() -> Self {
 +        Self {
 +            at: AtomicU64::new(0),
++            queued: AtomicU64::new(0),
 +        }
++    }
++
++    /// Notes a frame message as posted; false if one already is, and not lost.
++    pub(crate) fn queue(&self) -> bool {
++        let now = FRAME_EPOCH.elapsed().as_millis() as u64 + 1;
++        let posted = self.queued.load(Ordering::Acquire);
++        if posted != 0 && now - posted <= FRAME_RUN_ON.as_millis() as u64 {
++            return false;
++        }
++        self.queued.store(now, Ordering::Release);
++        true
++    }
++
++    /// The posted frame message has come, or wasn't posted.
++    pub(crate) fn unqueue(&self) {
++        self.queued.store(0, Ordering::Release);
 +    }
 +
 +    pub(crate) fn wake(&self) {
@@ -1492,10 +1593,21 @@ index 5121c41b61..3d7c019c33 100644
  pub(crate) struct VSyncProvider {
      interval: Duration,
      f: Box<dyn Fn() -> bool>,
-@@ -88,6 +131,16 @@ fn retrieve_duration(counts: u64, ticks_per_second: u64) -> Duration {
+@@ -88,6 +151,27 @@ fn retrieve_duration(counts: u64, ticks_per_second: u64) -> Duration {
  mod tests {
      use super::*;
  
++    #[test]
++    fn a_window_has_one_frame_message_posted_at_a_time_until_it_comes_or_is_lost() {
++        let want = FrameWant::new();
++        assert!(want.queue());
++        assert!(!want.queue());
++        want.unqueue();
++        assert!(want.queue());
++        std::thread::sleep(FRAME_RUN_ON + Duration::from_millis(20));
++        assert!(want.queue());
++    }
++
 +    #[test]
 +    fn a_window_wants_frames_only_for_a_while_after_it_asks() {
 +        let want = FrameWant::new();
