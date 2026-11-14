@@ -765,6 +765,7 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
     }
   }
 
+  friend class content::WebContentsUserData<PopupHeld>;
   std::unique_ptr<GoneWatch> opener_;
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
