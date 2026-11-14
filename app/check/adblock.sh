@@ -429,6 +429,19 @@ for name in sorted(os.listdir(sys.argv[1])):
 print(digest.hexdigest())' "$store"
 }
 kept=$(store_digest)
+# The row among its neighbours in each tone, as the review of its look asks, named $1.
+way_back_captures() {
+  local tone light
+  for tone in light dark; do
+    if [ $tone = light ]; then light=true; else light=false; fi
+    if ! grep '^browser: window light ' "$log" | tail -1 | grep -q " $light\$"; then
+      send menu "Appearance › $([ $tone = light ] && echo Light || echo Dark)"
+      expect "^browser: window light $light\$" "View › Appearance didn't make the window $tone"
+    fi
+    ../tools/window-screenshot.sh "$pid" "$out/adblock-way-back-$1-$tone.png" all ||
+      fail "no window to capture"
+  done
+}
 for engine in native ublock; do
   log="$out/adblock-way-back-$engine.log"
   step=0
@@ -460,6 +473,8 @@ for engine in native ublock; do
   settings_drew "Ad Blocking"
   none_since '^browser: settings ad blocker restart at ' ||
     fail "the way back: the row offered a restart before a choice"
+  # The row before a choice, its line saying what going back means, in each tone.
+  [ "$engine" = ublock ] || way_back_captures before
   click_in_sight "switch ad blocker"
   if [ "$engine" = native ]; then
     expect '^browser: ad blocker on$' "a click on Block with uBlock Origin didn't turn it on"
@@ -469,21 +484,16 @@ for engine in native ublock; do
     expect '^browser: ad blocker native chosen$' "the switch didn't keep the way forward"
   fi
   drawn "ad blocker restart" > /dev/null || fail "the way back: the row offered no restart"
-  # The row among its neighbours, in each tone, as the review of its look asks.
-  for tone in light dark; do
-    [ "$engine" = native ] || [ "$tone" = light ] || continue
-    if [ $tone = light ]; then light=true; else light=false; fi
-    if ! grep '^browser: window light ' "$log" | tail -1 | grep -q " $light\$"; then
-      send menu "Appearance › $([ $tone = light ] && echo Light || echo Dark)"
-      expect "^browser: window light $light\$" "View › Appearance didn't make the window $tone"
-    fi
-    ../tools/window-screenshot.sh "$pid" "$out/adblock-way-back-$engine-$tone.png" all ||
+  if [ "$engine" = native ]; then
+    way_back_captures chosen
+  else
+    ../tools/window-screenshot.sh "$pid" "$out/adblock-way-back-ublock-chosen.png" all ||
       fail "no window to capture"
-  done
+  fi
   [ "$engine" = ublock ] || [ "$(store_digest)" = "$kept" ] ||
     fail "the browser's own engine changed uBlock Origin's storage"
   quit
 done
 [ -d "$store" ] || fail "uBlock Origin's storage went with the way back"
 
-echo "ok: a new profile blocks ads from its first page, with uBlock Origin in no extension list: My filters given through its managed settings block the page's ad script and hide its ad; its own lists take fbclid out of an address. The Site Controls' shield, the action row's last tile, says it blocked $blocked_count on the page, and turns it off for the site and on again, reloading the page and counting it afresh, and Settings › Ad Blocking lists the site while it's off, with a Turn On that lets it block there again; its switch turns it off everywhere, taking it out of the Site Controls, and on again. A rule added in My filters hides an element, and its Remove shows it again; uBlock filters – Annoyances, switched on from Settings' search, is fetched and blocks its script. A private window blocks too, and uBlock Origin ships at ublock.ini's $pinned_version without the timers that woke an idle browser, trusting no site, YouTube neither. The browser's own engine never loaded. Launched again three times, the existing profile blocks from each first page. With the browser's own as the default, Block with uBlock Origin goes back to the extension, which blocks after the restart the row offers, its storage as the browser's own left it, and turned off goes forward again. The first launch blocked within $first_block s. Windows: $out/adblock-blocked.png, $out/adblock-off-for-site.png, $out/adblock-off-sites.png, $out/adblock-settings.png, $out/adblock-my-filters.png, $out/adblock-list-on.png, $out/adblock-private.png, $out/adblock-existing.png, $out/adblock-way-back-native-light.png, $out/adblock-way-back-native-dark.png, $out/adblock-way-back-ublock-light.png"
+echo "ok: a new profile blocks ads from its first page, with uBlock Origin in no extension list: My filters given through its managed settings block the page's ad script and hide its ad; its own lists take fbclid out of an address. The Site Controls' shield, the action row's last tile, says it blocked $blocked_count on the page, and turns it off for the site and on again, reloading the page and counting it afresh, and Settings › Ad Blocking lists the site while it's off, with a Turn On that lets it block there again; its switch turns it off everywhere, taking it out of the Site Controls, and on again. A rule added in My filters hides an element, and its Remove shows it again; uBlock filters – Annoyances, switched on from Settings' search, is fetched and blocks its script. A private window blocks too, and uBlock Origin ships at ublock.ini's $pinned_version without the timers that woke an idle browser, trusting no site, YouTube neither. The browser's own engine never loaded. Launched again three times, the existing profile blocks from each first page. With the browser's own as the default, Block with uBlock Origin goes back to the extension, which blocks after the restart the row offers, its storage as the browser's own left it, and turned off goes forward again. The first launch blocked within $first_block s. Windows: $out/adblock-blocked.png, $out/adblock-off-for-site.png, $out/adblock-off-sites.png, $out/adblock-settings.png, $out/adblock-my-filters.png, $out/adblock-list-on.png, $out/adblock-private.png, $out/adblock-existing.png, $out/adblock-way-back-before-light.png, $out/adblock-way-back-before-dark.png, $out/adblock-way-back-chosen-light.png, $out/adblock-way-back-chosen-dark.png, $out/adblock-way-back-ublock-chosen.png"
