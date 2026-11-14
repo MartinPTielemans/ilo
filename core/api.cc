@@ -59,6 +59,7 @@
 #include "browser_core/passwords.h"
 #include "browser_core/permission_question.h"
 #include "browser_core/platform/playready.h"
+#include "browser_core/platform/sandbox.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/profiles.h"
 #include "browser_core/public/browser_core.h"
@@ -1714,6 +1715,14 @@ void bc_set_auto_picture_in_picture(bool on) {
 
 size_t bc_crash_reports_collector(char* host, size_t capacity) {
   return CopyString(browser_core::crash_reports::CollectorHost(), host, capacity);
+}
+
+size_t bc_last_crash_report(char* id, size_t capacity) {
+  return CopyString(browser_core::crash_reports::LastReport(), id, capacity);
+}
+
+bool bc_sandboxed(void) {
+  return browser_core::platform::Sandboxed();
 }
 
 bool bc_send_crash_reports(void) {

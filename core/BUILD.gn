@@ -426,6 +426,7 @@ source_set("browser_core") {
     "platform/keychain.h",
     "platform/native_hosts.h",
     "platform/playready.h",
+    "platform/sandbox.h",
     "platform/system_page.h",
     "platform/window_views.h",
     "popular_sites.cc",
@@ -626,6 +627,7 @@ source_set("browser_core") {
     "//components/zoom",
     "//content/public/browser",
     "//content/public/common",
+    "//sandbox/policy",
     "//crypto",
     "//extensions/browser",
     "//extensions/common",
@@ -692,6 +694,9 @@ source_set("browser_core") {
   if (!is_win && !is_linux) {
     sources += [ "platform/battery_none.cc" ]
   }
+  if (!is_linux) {
+    sources += [ "platform/sandbox_none.cc" ]
+  }
   if (is_win || is_linux) {
     sources += [
       "platform/app_library.h",
@@ -732,6 +737,7 @@ source_set("browser_core") {
     sources += [
       "platform/linux/app_library.cc",
       "platform/linux/keyboard.cc",
+      "platform/linux/sandbox.cc",
       "platform/linux/ui_text_input.cc",
       "platform/linux/ui_text_input.h",
       "platform/linux/upower.cc",

@@ -40,6 +40,11 @@ void LeaveOutFolders();
 // The collector's host, or empty with none, when nothing is sent and Settings doesn't offer to.
 std::string CollectorHost();
 
+// The id of the last report the collector took while Send Crash Reports was on, as 32 hex digits,
+// which a Sentry collector files it under, or empty: before one was taken, and once the switch is
+// turned off, which deletes it.
+std::string LastReport();
+
 // Whether the user has Send Crash Reports on. Turning it on sends the reports not yet sent, and off
 // deletes them.
 bool Sending();
