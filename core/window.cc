@@ -1568,7 +1568,14 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener, const GU
   // No Space takes it until the app keeps it, so the app isn't told of it as a tab opened.
   base::AutoReset<bool> opening(&opening_tab_, true);
   Navigate(&params);
-  return params.navigated_or_inserted_contents;
+  content::WebContents* contents = params.navigated_or_inserted_contents;
+  // The app shows it in its card until it draws, so it shows the window's page colour until then,
+  // as the panes do, not Chromium's white (#2742).
+  if (Tab* tab = contents ? Tab::FromWebContents(contents) : nullptr; tab && page_color_) {
+    tab->SetPageColor(
+        SkColorSetRGB(*page_color_ >> 16, *page_color_ >> 8 & 0xff, *page_color_ & 0xff));
+  }
+  return contents;
 }
 
 void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
