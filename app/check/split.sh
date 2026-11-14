@@ -331,7 +331,17 @@ send key 2 cmd
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" \
   "⌘2 didn't show the split with its pane focused last"
 expect "^browser: panes $a $b\$" "⌘2 didn't show both panes"
-send click 205 $(row 1 | cut -d' ' -f2)
+if windows; then
+  # The driver's pointer is real there (#2544), heard before the press as a hand's is, so a frame
+  # draws the row's ✕ under it first and the right favicon sits left of the ✕'s room, as a hand
+  # finds it.
+  send move 205 $(row 1 | cut -d' ' -f2)
+  expect '^browser: hover tab [0-9]* close 1 ' \
+    "resting on the split's row at 205 didn't show its ✕ (wanted a \"hover tab … close 1\" line): $(grep '^browser: hover ' "$log" | tail -3 | tr '\n' ';')"
+  send click 170 $(row 1 | cut -d' ' -f2)
+else
+  send click 205 $(row 1 | cut -d' ' -f2)
+fi
 expect "^browser: selected $b\( in .*\)\{0,1\}\$" \
   "a click on the split's right segment didn't focus it"
 read_keyboard
@@ -618,7 +628,9 @@ drawn_smaller() {
 # which has no compositor: the capture is the targets' window alone, black where it's clear.
 if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; then
   echo "skip: the pages drawn smaller, in pixels: under Xvfb the capture is the targets' window alone"
-elif ! windows && [ "$still" != on ]; then
+elif windows; then
+  echo "skip: the pages drawn smaller, in pixels: on Windows each page is a window of its own and keeps its size."
+elif [ "$still" != on ]; then
   # The app logs the scale as it tells the core, and the page draws at it a frame or more later,
   # so a capture taken at once can still show it at its size, as on Wayland in #2493's runs.
   for _ in $(seq 20); do

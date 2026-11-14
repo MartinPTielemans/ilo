@@ -189,6 +189,8 @@ if [ "$(uname)" = Darwin ]; then
   expect '^browser: made theme picker key$' "the theme picker wasn't made key as its shrink started"
   expect '^browser: theme picker hidden, its browser window takes the keyboard$' \
     "the theme picker, made key as it shrank, kept the keyboard"
+else
+  echo "skip: the theme picker made key as it shrinks away: AppKit making a shrinking panel key is the Mac's (#2594)."
 fi
 send state
 in_browser AccessKitSubclassOfGPUIView "after the theme picker, in the new Space's form"
@@ -1245,6 +1247,8 @@ if [ "$(uname)" = Darwin ]; then
   shadow=$(grep '^browser: theme picker shadow off by' "$log" | tail -1)
   [ "$shadow" = "browser: theme picker shadow off by 0 0 0 0" ] ||
     fail "the theme picker's shadow isn't round it: ${shadow#browser: theme picker }"
+else
+  echo "skip: the theme picker's shadow round it: only the Mac's host draws its own."
 fi
 # Between the swatches and the wave there's nothing: a drag from there changes nothing.
 themes=$(grep -c "^browser: themed space $first " "$log" || true)

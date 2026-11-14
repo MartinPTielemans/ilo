@@ -698,6 +698,17 @@ expect "^browser: selected $c in " "the tab chosen in the folder's preview didn'
 recorded
 # The folder staying closed logs no new outline, so the last one is the folder's state.
 [ "$(outline)" = "$f-[$c]" ] || fail "showing a tab from the preview opened the folder: $(outline)"
+# A click on its row chooses that tab as ↩ does. The pointer leaves the row and rests on it again.
+send move $page_point
+send move $(pinned_row 0)
+expect "^browser: folder preview shown $f at " "resting on the closed folder again didn't preview it"
+read -r px py pw _ << EOF
+$(grep "^browser: folder preview shown $f at " "$log" | tail -1 | cut -d' ' -f7-)
+EOF
+# The first row's middle: under the search (48), its line (1) and the padding (4), half its fill.
+send click $((px + pw / 2)) $((py + 75))
+expect "^browser: folder preview chose $c\$" "a click on the folder preview's row didn't choose its tab"
+expect '^browser: folder preview hidden$' "a click on the folder preview's row left it up"
 send move $page_point
 switch "9 cmd" "$a"
 quit_by_key
