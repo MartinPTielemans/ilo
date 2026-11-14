@@ -190,7 +190,7 @@ print(r[0] + r[2] // 2, r[1] + r[3] // 2)')
   sleep 0.3
   send key c cmd shift
   until_field "$toast" viewable true || true
-  [ -n "$tiling" ] || covered "$b" "$toast" toast
+  [ -n "$tiling" ] || covered "$b" "$toast" toast 1180 50 # the plate's middle, top right of the 1280 by 800 screen
 fi
 
 # The foot bar, which stays.
