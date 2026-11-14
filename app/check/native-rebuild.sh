@@ -101,7 +101,8 @@ for r in 1 2 3 4 5 6; do
   added=$(now_ms)
   send key return
   send key w cmd
-  expect "^browser: ad block filter added 127\.0\.0\.1##\.probe-$r\$" "rule $r didn't go in"
+  # Sent before ⌘W, so its line can be before the last command's: the rule is named once.
+  await "^browser: ad block filter added 127\.0\.0\.1##\.probe-$r\$" || fail "rule $r didn't go in"
   expect '^browser: settings hidden$' "⌘W didn't hide Settings after rule $r"
   if [ $((r % 2)) = 1 ]; then nr_open http "r$r"; else nr_open file "r$r"; fi
   for _ in $(seq 100); do
