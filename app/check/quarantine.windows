@@ -3,3 +3,4 @@
 # <run> #<issue> <YYYY-MM-DD> [<its FAIL line's start, as the summary shows it>]
 # Only the memory rows at 10 and 20 tabs fail perf's gate (check/perf.sh), so this names them alone.
 perf #2138 2026-11-10 ilo took more than 10 % over Chrome on this runner: memory,
+trouble #2676 2026-11-13 the run didn't end at the first column

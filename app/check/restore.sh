@@ -562,6 +562,8 @@ expect '^browser: library shown$' "View Media… didn't open the Library"
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: media video playing clip.mp4$' "the video's tile didn't play it"
   ../tools/window-screenshot.sh "$pid" "$out/media-video.png" || fail "no window to capture"
+else
+  echo "skip: the Media tile's video playing, and stopping with the Library closed: only the Mac's platform plays one."
 fi
 send menu 'View Media…'
 expect '^browser: library hidden$' "View Media… didn't close the Library"
@@ -635,7 +637,14 @@ expect_tabs "$e" "$e" "back in the second Space after the kept preview"
 # the UI's buttons are minimize, maximize and close, so close is the third (appearance.sh).
 close_button="20 24"
 if windows; then close_button="66 24"; fi
-echo "click $close_button" >&3
+# Under KWin the close button gets no click from the driver's real pointer (#2765), so ⇧⌘W closes
+# the window there.
+if [ "${BROWSER_XVFB:-}" = kwin ]; then
+  echo "skip: a click on the close button, under KWin: it gets no click from the driver's pointer (#2765)."
+  echo "key w cmd shift" >&3
+else
+  echo "click $close_button" >&3
+fi
 exec 3>&-
 await '^browser: window closed ' || fail "a click on the close button didn't close the window"
 exited

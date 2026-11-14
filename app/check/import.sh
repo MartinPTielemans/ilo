@@ -632,22 +632,18 @@ expect '^browser: import drawn done$' "Brave's import's end didn't draw"
 # a line of its own, with Add Anyway.
 send state
 ../tools/window-screenshot.sh "$pid" "$out/import-extensions.png" || fail "no window to capture"
-if windows; then
-  echo "skip: adding the listed extension from a .crx: Windows' driver doesn't answer its install dialog yet."
-else
-  click_in_sight "import-add-extension $pinned_id"
-  expect "^browser: import add extension $pinned_id\$" "Add… didn't take the extension off the list"
-  send key w cmd
-  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-  go_from_bar "${site}pinned.crx"
-  expect '^browser: dialog shown Add "Check Pinned"?$' "the .crx didn't ask to add Check Pinned"
-  expect '^browser: dialog takes input$' "the install dialog never took input"
-  send key return
-  expect '^browser: dialog confirmed$' "return didn't add Check Pinned"
-  await "^browser: extension $pinned_id pinned as it was in the browser imported from\$" ||
-    fail "the extension Brave pinned wasn't pinned once it came in"
-  ../tools/window-screenshot.sh "$pid" "$out/import-pinned-extension.png" || fail "no window to capture"
-fi
+click_in_sight "import-add-extension $pinned_id"
+expect "^browser: import add extension $pinned_id\$" "Add… didn't take the extension off the list"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+go_from_bar "${site}pinned.crx"
+expect '^browser: dialog shown Add "Check Pinned"?$' "the .crx didn't ask to add Check Pinned"
+expect '^browser: dialog takes input$' "the install dialog never took input"
+send key return
+expect '^browser: dialog confirmed$' "return didn't add Check Pinned"
+await "^browser: extension $pinned_id pinned as it was in the browser imported from\$" ||
+  fail "the extension Brave pinned wasn't pinned once it came in"
+../tools/window-screenshot.sh "$pid" "$out/import-pinned-extension.png" || fail "no window to capture"
 # On the Mac a made-up Safari comes in last, its Bookmarks.plist kept from the app as macOS keeps
 # ~/Library/Safari until the app has Full Disk Access. Picking it waits for that access, with Open
 # System Settings; back in the app without it, it says it's still waiting; with it, coming back
@@ -732,6 +728,8 @@ if [ "$(uname)" = Darwin ]; then
   await '^browser: history added 0 to profile [0-9]*$' || fail "the core added Safari's pages again"
   expect '^browser: import done: Everything from Safari is here already\.$' \
     "the second import from Safari said it added something"
+else
+  echo "skip: importing from Safari, with Full Disk Access: Safari is the Mac's."
 fi
 quit
 [ -n "$arc" ] || echo "skip: import's Arc steps. Arc has no Linux build, so it's never found there."
