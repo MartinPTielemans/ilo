@@ -357,6 +357,8 @@ if [ "$(uname)" = Darwin ]; then
   in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
   send clickkey $at
   expect '^browser: haptics off$' "a click on the haptics switch didn't turn them off"
+else
+  echo "skip: the haptics switch: Settings draws it on the Mac alone."
 fi
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -768,6 +770,8 @@ if [ "$(uname)" = Darwin ]; then
   in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
   send clickkey $at
   expect '^browser: haptics on$' "Settings didn't keep the haptics off across the quit"
+else
+  echo "skip: the haptics switch kept across the quit: Settings draws it on the Mac alone."
 fi
 # The driver's done for a click that closes its window can be lost with the window, as it always
 # was in a VM, so the click isn't waited for; Settings going is.

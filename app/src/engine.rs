@@ -1743,8 +1743,10 @@ impl Browser for Engine {
         );
     }
 
+    /// The Mac's and Windows' hosts read the desktop's picture. Linux has no way an app in its
+    /// sandbox can, so there it's never offered (#2682).
     fn desktop_picture_offered(&self) -> bool {
-        cfg!(target_os = "macos")
+        cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
     fn page_picture(&self, tab: u64, request: u64, _: &mut App) {

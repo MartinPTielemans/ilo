@@ -329,6 +329,8 @@ if [ "$major" -ge 157 ]; then
     send state
     [ "$key" = GPUIPanel ] && [ "$focus" = GPUIView ] ||
       fail "⌘T on Chrome's warning before http opened the command bar without the keyboard, which is in $key, on $focus"
+  else
+    echo "skip: which window has the keyboard as the command bar opens and closes over Chrome's warning before http: the warning is a window of its own on the Mac alone, and here the second tab's address typed into the bar shows the bar has it."
   fi
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened"
