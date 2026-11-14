@@ -126,6 +126,137 @@ fn hostnames_anchored(text: String) -> String {
     out
 }
 
+/// What a list's `!#if` tokens stand for, as uBlock Origin 1.75's preparser maps them.
+const IF_TOKENS: &[(&str, &str)] = &[
+    ("ext_ublock", "ublock"),
+    ("ext_ubol", "ubol"),
+    ("ext_devbuild", "devbuild"),
+    ("env_brave", "brave"),
+    ("env_chromium", "chromium"),
+    ("env_edge", "edge"),
+    ("env_firefox", "firefox"),
+    ("env_legacy", "legacy"),
+    ("env_mobile", "mobile"),
+    ("env_mv3", "mv3"),
+    ("env_safari", "safari"),
+    ("cap_html_filtering", "html_filtering"),
+    ("cap_ipaddress", "ipaddress"),
+    ("false", "false"),
+    ("ext_abp", "false"),
+    ("adguard", "adguard"),
+    ("adguard_app_android", "false"),
+    ("adguard_app_cli", "false"),
+    ("adguard_app_ios", "false"),
+    ("adguard_app_mac", "false"),
+    ("adguard_app_windows", "false"),
+    ("adguard_ext_android_cb", "false"),
+    ("adguard_ext_chromium", "chromium"),
+    ("adguard_ext_chromium_mv3", "mv3"),
+    ("adguard_ext_edge", "edge"),
+    ("adguard_ext_firefox", "firefox"),
+    ("adguard_ext_opera", "chromium"),
+    ("adguard_ext_safari", "false"),
+];
+
+/// What holds for uBlock Origin on Chromium, its webextFlavor's soup there.
+const IF_HOLDS: &[&str] = &["ublock", "webext", "ipaddress", "chromium"];
+
+/// Whether `token` of an `!#if` holds, or None for one that's unknown, as the preparser's
+/// evaluateExprToken: an unknown `cap_` token is false.
+fn if_token(token: &str) -> Option<bool> {
+    let (not, token) = match token.strip_prefix('!') {
+        Some(token) => (true, token),
+        None => (false, token),
+    };
+    let state = match IF_TOKENS.iter().find(|(name, _)| *name == token) {
+        Some((_, state)) => *state,
+        None if token.starts_with("cap_") => "false",
+        None => return None,
+    };
+    Some(state == "false" && not || IF_HOLDS.contains(&state) != not)
+}
+
+/// Whether the condition `expression` of an `!#if` holds, or None where it's unknown, as the
+/// preparser's evaluateExpr: tokens joined by `&&` and `||` read left to right, in one pair of
+/// brackets or none. An unknown first token stays unknown through `&&` and gives way to `||`, as
+/// in JavaScript; any other unknown token makes it all unknown.
+fn if_holds(expression: &str) -> Option<bool> {
+    let expression = expression
+        .strip_prefix('(')
+        .and_then(|inner| inner.strip_suffix(')'))
+        .unwrap_or(expression);
+    let tokens: Vec<&str> = expression.split_whitespace().collect();
+    let first = tokens.first()?;
+    if first.starts_with(['|', '&']) {
+        return None;
+    }
+    let mut result = if_token(first);
+    for pair in tokens[1..].chunks(2) {
+        let [operator, operand] = pair else {
+            return None;
+        };
+        let state = if_token(operand)?;
+        result = match *operator {
+            "||" if result == Some(true) => result,
+            "||" => Some(state),
+            "&&" if result == Some(true) => Some(state),
+            "&&" => result,
+            _ => return None,
+        };
+    }
+    result
+}
+
+/// Which of `!#if`, `!#else` and `!#endif` `line` is, if any, and what follows the word.
+fn if_directive(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix("!#")?;
+    ["if", "else", "endif"].into_iter().find_map(|word| {
+        let after = rest.strip_prefix(word)?;
+        let ends = !after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+        ends.then_some((word, after))
+    })
+}
+
+/// `text` without the lines its `!#if` conditions leave out for uBlock Origin on Chromium, as its
+/// preparser prunes every list before compiling it. adblock-rust reads the directives as comments,
+/// so it would compile every branch, Firefox's, Safari's and uBO Lite's too (#2760). A condition
+/// that's unknown keeps its lines.
+fn if_evaluated(text: String) -> String {
+    if !text.contains("!#if") {
+        return text;
+    }
+    // Each open `!#if`: whether its condition is known, and whether the branch it's in goes.
+    let mut open: Vec<(bool, bool)> = Vec::new();
+    let mut discard = false;
+    let goes = |open: &[(bool, bool)]| open.iter().any(|&(known, goes)| known && goes);
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        match if_directive(line) {
+            None if !discard => {
+                out.push_str(line);
+                out.push('\n');
+            }
+            None => {}
+            Some(("if", condition)) => {
+                let holds = if_holds(condition.trim());
+                open.push((holds.is_some(), holds == Some(false)));
+                discard = goes(&open);
+            }
+            Some(("else", _)) => {
+                if let Some((_, branch_goes)) = open.last_mut() {
+                    *branch_goes = !*branch_goes;
+                    discard = goes(&open);
+                }
+            }
+            Some(_) => {
+                open.pop();
+                discard = goes(&open);
+            }
+        }
+    }
+    out
+}
+
 /// The request types a filter's options can name, as uBlock Origin and adblock-rust write them.
 const TYPES: &[&str] = &[
     "doc",
@@ -217,13 +348,14 @@ pub fn compile(setup: &Setup) -> Engine {
     for list in &setup.lists {
         match fs::read_to_string(list) {
             Ok(text) => {
+                let text = if_evaluated(text);
                 let options = options(&setup.folder, list, &text);
                 add(text, options);
             }
             Err(error) => crate::log!("browser: ad block list {}: {error}", list.display()),
         }
     }
-    add(setup.filters.clone(), ParseOptions::default());
+    add(if_evaluated(setup.filters.clone()), ParseOptions::default());
     let mut rules = Rules::new_with_filter_set(set);
     rules.use_resources(resources(&setup.folder));
     Engine {
@@ -452,7 +584,8 @@ pub fn hide(engine: &Engine, classes: &[String], ids: &[String], exceptions: &[S
 /// What `compile` makes of the same lists: one more each time it reads them differently, so an
 /// engine the last compile made isn't loaded. 2: bare hostnames anchored. 3: pop-ups' filters apart,
 /// the file the two engines, the first's length before it. 4: procedural filters read as such.
-const COMPILED: u32 = 4;
+/// 5: `!#if` conditions evaluated as uBlock Origin on Chromium does.
+const COMPILED: u32 = 5;
 
 /// The compiled engine's name in the cache folder, for `setup` as its files are now: a change to
 /// a list, the filters, adblock-rust's version or COMPILED names another.
