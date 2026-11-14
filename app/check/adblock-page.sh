@@ -75,7 +75,10 @@ expect "^browser: title $tab the opener pressed\$" "the opener page didn't take 
 send release $page_point
 expect "^browser: ad block closed a pop-up at ${site}popup.html\$" \
   "the pop-up filter didn't close the tab the link opened"
-# Its tab may close before the app lists it, so this reads the Today the app shows last.
+# The filter decides before the app lists the pop-up's tab, so reads of Today before that tab
+# closes can show it as before the click, then with the tab (#2801). Once the tab has closed,
+# Today only loses it, if the app listed it at all.
+expect '^browser: tab [0-9]* closed$' "the pop-up's tab didn't close"
 for _ in $(seq 30); do
   [ "$(today)" = "$tab" ] && break
   sleep 0.1
