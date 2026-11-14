@@ -746,8 +746,20 @@ expect '^browser: command redo via \(ui\|page\)$' "⇧⌘Z didn't redo the split
 expect "^browser: splits $onto+$dragged\$" "⇧⌘Z didn't join the tab again: \"$(splits)\""
 # ⌥-click on the split row's ✕ takes its tabs out of the split and closes neither, as Arc's does,
 # and ⌘Z joins them again.
-close="202 $(row "$(row_of "$onto")" | cut -d' ' -f2)"
+# The ✕ shows only under the pointer, and a ⇧⌘Z the page handed back hides the row under it until
+# the pointer moves, so the click waits for the row's hover line. The pointer rests on another row
+# first, so the move onto the ✕ draws a new one whether the ✕ showed before it or not (#2846).
+onto_row=$(row_of "$onto")
+other_row=$((onto_row == 0 ? 1 : 0))
+other=
+for id in $(today); do
+  [ "$(row_of "$id")" = "$other_row" ] && other=$id && break
+done
+send move $(row "$other_row")
+expect "^browser: hover tab $other " "the pointer on row $other_row didn't hover tab $other"
+close="202 $(row "$onto_row" | cut -d' ' -f2)"
 send move $close
+expect "^browser: hover tab $onto close 1 " "the split's row under the pointer didn't draw its ✕"
 send click $close alt
 expect '^browser: command separate-split via sidebar$' "⌥-click on the split's ✕ didn't reach it"
 expect '^browser: splits $' "⌥-click on the split row's ✕ didn't separate it: \"$(splits)\""
