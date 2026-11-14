@@ -496,6 +496,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
     let app = application.run_embedded(move |cx| {
         gpui::launch_mark("app run_embedded");
         browser::face::register(cx);
+        gpui::launch_mark("app faces registered");
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
         settings::read_look(cx);
@@ -576,7 +577,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         if little_launch::asks_for_little(std::env::args()) {
             cx.defer(|cx| new_little_window("command line", cx));
         }
+        gpui::launch_mark("app launched closure ends");
     });
+    gpui::launch_mark("app run_embedded returned");
     // On Chromium's Wayland display, GPUI's windows and their surfaces are on a display Chromium
     // has closed by the time the thread-locals go at exit, and dropping them there crashes (#474).
     #[cfg(target_os = "linux")]
@@ -594,6 +597,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         }
         unsafe { platform::host_watch_fd(fd, ready) };
     }
+    gpui::launch_mark("app started returns");
 }
 
 /// AppKit has finished launching the app, and so has handed over the links that launched it.

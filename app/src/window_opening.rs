@@ -314,6 +314,7 @@ pub(crate) fn open_window_as(
         });
         gpui::launch_mark("ow shell made");
         window.focus(&shell.focus_handle(cx), cx);
+        gpui::launch_mark("ow shell focused");
         // As Settings › Features has it, which the core read with the Spaces.
         let little = unsafe { crate::bc::bc_little_windows() };
         shell.update(cx, |shell, cx| shell.set_little_windows(little, cx));
@@ -357,6 +358,7 @@ pub(crate) fn open_window_as(
         // As at a launch below 20 %, before there was a window to hear it.
         let battery = BATTERY_SAVER.get();
         shell.update(cx, |shell, cx| shell.set_battery_saver(battery, cx));
+        gpui::launch_mark("ow shell set up");
         shell
     });
     gpui::launch_mark("ow gpui open_window returned");
