@@ -1,6 +1,6 @@
 // The core's API: what the app calls in Chrome's framework. Plain C, so the app binds it without
 // sharing a C++ toolchain with Chromium. Everything runs on the main thread, callbacks included,
-// but the three of bc_host's that ask the ad blocker about a page (ad_block_request).
+// but the four of bc_host's that ask the ad blocker about a page (ad_block_request).
 
 #ifndef BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
 #define BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
@@ -816,6 +816,10 @@ typedef struct bc_history_page {
 // Sends it to another address instead: its own, with the tracking parameters a $removeparam
 // filter names taken out.
 #define BC_AD_BLOCK_REWRITE 3
+// Lets it go ahead for now, and asks ad_block_response about each of its responses, a redirect's
+// too, before any of it reaches the page: uBlock Origin's filters on a response's headers. It
+// writes the names of the headers whose values the question gives, one a line.
+#define BC_AD_BLOCK_AT_RESPONSE 4
 
 // Hands the core |size| bytes of UTF-8 a callback answers with, into |out|, which the callback
 // passes back as it was given. It may be called more than once, each adding to what came before.
@@ -1333,7 +1337,7 @@ typedef struct bc_host {
   // |lists| is the files of the filter lists turned on (bc_ad_block_lists), one a line, and
   // |filters| the user's own (bc_ad_block_filters). The engine is ready for the next call to ask.
   void (*ad_block_use)(void* context, const char* folder, const char* lists, const char* filters);
-  // The three that ask, alone of every callback, come on a sequence of the core's own, never the
+  // The four that ask, alone of every callback, come on a sequence of the core's own, never the
   // main thread, and at the same time as the main thread's: a page's requests never wait on the
   // UI, nor the UI on matching. Each answers at once from the engine it has, never waiting for
   // the main thread. The one ad_block_use asked for may still be loading, which the call waits
@@ -1343,9 +1347,16 @@ typedef struct bc_host {
   // "subdocument", "script", "stylesheet", "image", "font", "media", "object", "xmlhttprequest",
   // "ping" or "other"), from the page at |source_url|: a BC_AD_BLOCK_ value. For
   // BC_AD_BLOCK_REDIRECT it writes the stand-in's data: URL, for BC_AD_BLOCK_REWRITE the address
-  // the request goes to instead.
+  // the request goes to instead, and for BC_AD_BLOCK_AT_RESPONSE the header names to ask with.
   int (*ad_block_request)(void* context, const char* url, const char* source_url, const char* type,
                           bc_writer write, void* out);
+  // Whether a response to the request for |url| that ad_block_request answered
+  // BC_AD_BLOCK_AT_RESPONSE, a redirect's or the last, is blocked: BC_AD_BLOCK_BLOCK or
+  // BC_AD_BLOCK_ALLOW. |url| is where the response came from, |method| the request's, and
+  // |headers| lines of "name: value", the first of each header the answer named that the response
+  // has, and none of the others. Nothing of them is kept.
+  int (*ad_block_response)(void* context, const char* url, const char* source_url,
+                           const char* type, const char* method, const char* headers);
   // What the page at |url| hides and runs from the start, written as a JSON object: "hide", the
   // CSS selectors of what it hides; "procedural", the filters that hide or style by more than a
   // selector, each a JSON string as adblock-rust gives it; "exceptions", the generic selectors it

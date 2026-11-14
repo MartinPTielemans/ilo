@@ -53,6 +53,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The browser's own ad blocker (src/ad_block.rs), Brave's, MPL-2.0. Without its single-thread
 # feature its engine is Send and Sync, as the core asks it on a sequence of its own.
 adblock = { version = "0.13.5", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling", "css-validation"] }
+# uBlock Origin's response-time filters (src/ad_block/responses.rs), whose regular expressions are
+# JavaScript's and some look ahead or behind, which the regex crate doesn't. MIT.
+fancy-regex = "0.14"
 # The screenshots a task's trace shows, which the core hands over in base64. GPUI's dependencies
 # bring it already.
 base64 = "0.22"

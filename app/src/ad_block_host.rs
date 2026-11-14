@@ -75,6 +75,25 @@ pub(crate) unsafe extern "C" fn ad_block_request(
         }
         Verdict::Redirect(stand_in) => answer(bc::BC_AD_BLOCK_REDIRECT, &stand_in),
         Verdict::Rewrite(url) => answer(bc::BC_AD_BLOCK_REWRITE, &url),
+        Verdict::AtResponse(names) => answer(bc::BC_AD_BLOCK_AT_RESPONSE, &names.join("\n")),
+    }
+}
+
+pub(crate) unsafe extern "C" fn ad_block_response(
+    _: *mut c_void,
+    url: *const c_char,
+    source_url: *const c_char,
+    kind: *const c_char,
+    method: *const c_char,
+    headers: *const c_char,
+) -> c_int {
+    let Some(engine) = BLOCKER.engine() else {
+        return bc::BC_AD_BLOCK_ALLOW as c_int;
+    };
+    let (url, source, kind) = (text(url), text(source_url), text(kind));
+    match ad_block::at_response(&engine, &url, &source, &kind, &text(method), &text(headers)) {
+        true => bc::BC_AD_BLOCK_BLOCK as c_int,
+        false => bc::BC_AD_BLOCK_ALLOW as c_int,
     }
 }
 

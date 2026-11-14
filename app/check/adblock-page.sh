@@ -4,7 +4,9 @@
 # them, blocks the host's pages, and the tab shows a warning in the page's place, which never
 # reached the server. Its Open anyway, pressed from the keyboard, opens the page, and the host's
 # pages for a while after. A pop-up filter closes the tab a page's link opens, before its page
-# reaches the server, as uBlock Origin does.
+# reaches the server, as uBlock Origin does. A filter on a response's header (#2758) fails a script
+# whose response has it before the page runs any of it, and a redirect's response too, whose target
+# is never asked for.
 
 # An engine from before the page warning lets the page through.
 if ! engine_has ../core/native_ad_block.cc ../core/ad_block.cc; then
@@ -18,9 +20,17 @@ printf '%s' '<title>the opener</title>
 <a href="popup.html" target="_blank" style="position:fixed;inset:0">a pop-up</a>' \
   > "$out/site/opener.html"
 printf '%s' '<title>the pop-up</title>' > "$out/site/popup.html"
+# Three scripts: a's response has the filter's header, b's another value, and c is where a
+# redirect with the header goes. Its title names those that ran.
+printf '%s' '<title>headers</title>
+<script>var ran = [];</script>
+<script src="headed?x-ad=1&n=a"></script>
+<script src="headed?x-ad=0&n=b"></script>
+<script src="headed?x-ad=1&to=headed%3Fn%3Dc"></script>
+<script>document.title = "ran " + ran.join(" ");</script>' > "$out/site/headers.html"
 # localhost, where the check's server is too, as a list writes a host: a line of its own.
 blocked="http://localhost:$port/blocked.html"
-filters="$(printf '%s\n' localhost '/popup.html$popup')"
+filters="$(printf '%s\n' localhost '/popup.html$popup' '/headed?$script,header=x-ad:1')"
 profile_dir="$PWD/$out/adblock-page/profile"
 rm -rf "$profile_dir"
 mkdir -p "$profile_dir"
@@ -67,8 +77,20 @@ done
 [ "$(today)" = "$tab" ] || fail "the pop-up's tab stayed: Today is \"$(today)\""
 grep -q '/popup\.html' "$out/site.log" && fail "the pop-up's page reached the server"
 
+# The header filter: only b runs. a reached the server, as its header comes only with its answer.
+go_from_bar "${site#http://}headers.html"
+expect "^browser: title $tab ran" "the headers page didn't run its scripts"
+ran=$(grep "^browser: title $tab ran" "$log" | tail -1 | sed "s/^browser: title $tab //")
+[ "$ran" = "ran b" ] || fail "the header filter let through what it names: the page says \
+\"$ran\", where only b, whose x-ad header is 0, should run; a's is 1, and c is where a redirect \
+whose x-ad is 1 goes"
+served '/headed?x-ad=1&n=a' "a's request never reached the server"
+grep -q '/headed?n=c' "$out/site.log" &&
+  fail "the redirect whose response has the header went on to c"
+
 quit
 echo "ok: a host a list names on a line of its own never reached the server: the tab showed the" \
   "warning, whose Open anyway, from the keyboard, opened the page. A pop-up filter closed the tab" \
-  "a link opened before its page reached the server. Windows: $out/adblock-page.png," \
+  "a link opened before its page reached the server. A header filter failed a script and a" \
+  "redirect by their responses' header. Windows: $out/adblock-page.png," \
   "$out/adblock-page-opened.png"
