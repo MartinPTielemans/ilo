@@ -4,8 +4,8 @@
 //! read as Chromium starts, never polled, and never sent anywhere. Neither engine deletes the
 //! other's data, so going either way loses nothing.
 //!
-//! Settings › Ad blocking offers the choice only in a build whose default is the browser's own, so
-//! no user is offered an engine before it has passed #2111's gate.
+//! The browser's own is the default since #2111's gate held. Settings › Ad blocking offers uBlock
+//! Origin back only in a build whose default is the browser's own, the way back for one release.
 
 use std::rc::Rc;
 
@@ -21,8 +21,8 @@ pub const MARK: &str = "--ad-block-engine-by-app";
 pub const DEFAULT_SWITCH: &str = "--ad-block-default";
 /// The user's choice, in the app's folder.
 pub const FILE: &str = "Ad Blocker";
-/// What a launch runs when the user hasn't chosen.
-pub const DEFAULT: Engine = Engine::UBlockOrigin;
+/// What a launch runs when the user hasn't chosen: the browser's own, since #2111's gate held.
+pub const DEFAULT: Engine = Engine::Native;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Engine {
@@ -241,12 +241,13 @@ mod tests {
             Engine::UBlockOrigin,
             "as the core reads it"
         );
-        let default = ["--ad-block-default=native"];
-        assert_eq!(launch(&default, None), Engine::Native, "a check's default");
+        let default = ["--ad-block-default=ublock"];
         assert_eq!(
-            launch(&default, Some(Engine::UBlockOrigin)),
-            Engine::UBlockOrigin
+            launch(&default, None),
+            Engine::UBlockOrigin,
+            "a check's default"
         );
+        assert_eq!(launch(&default, Some(Engine::Native)), Engine::Native);
         let prod = Launch::new(&args(&default), None, true);
         assert_eq!(
             prod.default, DEFAULT,
@@ -324,21 +325,24 @@ mod tests {
     #[test]
     fn the_row_shows_only_once_the_default_is_the_browsers_own() {
         assert!(
-            !row(&[]).1.shown(),
-            "before the flip no user is offered an engine"
+            row(&[]).1.shown(),
+            "the build's default is the browser's own"
         );
         assert!(
-            !row(&["--ad-block-engine=native"]).1.shown(),
-            "nor with a check's switch alone"
+            row(&["--ad-block-engine=ublock"]).1.shown(),
+            "a check's switch changes the launch, not the default"
         );
-        assert!(row(&["--ad-block-default=native"]).1.shown());
+        assert!(
+            !row(&["--ad-block-default=ublock"]).1.shown(),
+            "a build whose default is uBlock Origin offers no engine"
+        );
     }
 
     #[gpui::test]
     fn the_row_goes_back_to_the_extension_and_forward_again_each_with_its_restart(
         cx: &mut TestAppContext,
     ) {
-        let (host, mut row) = row(&["--ad-block-default=native"]);
+        let (host, mut row) = row(&[]);
         assert!(
             !row.on() && !row.restart_offered(),
             "the browser's own blocks, nothing to restart"
@@ -369,7 +373,7 @@ mod tests {
 
         // After the restart, uBlock Origin blocks, and the same row goes forward.
         let host = Rc::new(Recorded::default());
-        let given = args(&["--ad-block-default=native"]);
+        let given = args(&[]);
         let launch = Launch::new(&given, Some(Engine::UBlockOrigin), false);
         let mut row = EngineRow::new(host.clone(), launch);
         assert!(row.shown() && row.on() && !row.restart_offered());
