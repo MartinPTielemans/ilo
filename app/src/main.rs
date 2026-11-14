@@ -211,6 +211,8 @@ thread_local! {
     static MENUS: RefCell<Menus> = RefCell::default();
     // Whether a menu bar built from MENUS waits for the menu open to close.
     static MENUS_HELD: Cell<bool> = const { Cell::new(false) };
+    // Whether the UI runs on Wayland, which it learns as it starts; never off Linux.
+    static WAYLAND: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The keys area's line for `key`, which a page had, `when` the page sees it or after, gone to
@@ -477,6 +479,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 gpui_linux::watch_embedder_swipes(system::swiped);
             }
         }
+        WAYLAND.set(!display.is_null());
         !display.is_null()
     };
     let application = gpui_platform::application().with_assets(shell::Assets);
@@ -1069,6 +1072,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         ad_block_request: Some(ad_block_host::ad_block_request),
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
+        tab_shown_in: Some(tab_shown_in),
         ..Default::default()
     };
     (args, host)
