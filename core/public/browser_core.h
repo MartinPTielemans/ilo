@@ -107,8 +107,9 @@ typedef struct bc_tab_state {
   bool share_instead;
   // The page's media, as Chrome's media controls show it: whether it has a session the browser
   // can play, pause and skip (bc_tab_media), whether that's playing, its title and artist, each
-  // empty without one, whether it has a previous and a next track, and whether it can float in
-  // Picture in Picture while nothing of the page floats.
+  // empty without one, whether it has a previous and a next track, whether it can float in
+  // Picture in Picture while nothing of the page floats or its card shows its video, and whether
+  // it has a video its card can show (bc_tab_show_video), which a page in a call hasn't.
   bool media;
   bool media_playing;
   const char* media_title;
@@ -116,6 +117,7 @@ typedef struct bc_tab_state {
   bool media_previous;
   bool media_next;
   bool media_picture_in_picture;
+  bool media_video;
   // The tab shows its page in Developer Mode (bc_tab_set_developer_mode): the user turned it on for
   // the page's site, or it's localhost, as Chrome counts it, and they didn't turn it off there.
   bool developer_mode;
@@ -188,6 +190,12 @@ typedef struct bc_archived_tab {
   // Whether it closed in a Little ilo window, by its window closing or auto-archive, as the
   // Library's filter picks them out (Arc's Little Arc filter).
   bool little;
+  // When it comes back by itself, as bc_tab_snooze put it, in milliseconds since the Unix epoch,
+  // or 0 for a tab that stays until it's reopened.
+  double snoozed_until;
+  // The Space it closed in, which it goes back to, as the Library's row names it, or 0 once that
+  // Space is gone.
+  bc_id space;
 } bc_archived_tab;
 
 // One of an extension's keyboard commands that has a key, as Chrome's Keyboard Shortcuts page
@@ -1370,6 +1378,9 @@ typedef struct bc_host {
   // and the list's dimmed rows.
   void (*tab_arrangement_fits)(void* context, bc_id tab, const char* site,
                                const uint32_t* misfits, size_t count);
+  // A snoozed tab came back by itself (bc_tab_snooze): |tab| is at the top of its Space's Today
+  // tabs, unloaded, and nothing shows it, so the app marks it unread until it's shown.
+  void (*tab_unsnoozed)(void* context, bc_id tab);
   // The element under the pointer in the tab's Point (bc_tab_point), or the one ↑ or ↓ moved to:
   // its kind and name as Arrange names them, for the label, and its border in points from the
   // top-left of the page's view, for the outline the app draws over the page; |box| 0 wide when
@@ -2295,6 +2306,23 @@ BC_EXPORT void bc_extensions_report(void);
 // bc_archive_undo_remove, or 0 if the archive was empty.
 BC_EXPORT bc_id bc_archive_clear(void);
 
+// Closes the Today tab as bc_tab_close does, into the archive snoozed until |until|, in
+// milliseconds since the Unix epoch. Then, or at the first launch after it with the window on
+// screen, it comes back by itself at the top of its Space's Today tabs, unloaded, and leaves the
+// archive: then space_changed, archive_changed and tab_unsnoozed. If its Space is gone by then, it
+// stays in the archive as a tab closed then. Till then it's an archived tab like the rest, with its
+// time in bc_archived_tab.snoozed_until, which auto-archive's 30 days don't drop, and
+// bc_window_reopen_tab and bc_window_restore_archived bring it back sooner. Returns false and
+// leaves it open if it isn't a Today tab of the user's own Spaces, such as a pinned tab, a
+// favorite, a private window's or an agent's, or |until| has passed. The user's: an agent's closed
+// pages don't go in the archive (#1408), so agents get no call for it.
+BC_EXPORT bool bc_tab_snooze(bc_id tab, double until);
+
+// Changes when the snoozed archived tab comes back, to |until|, or with 0 leaves it in the archive
+// as a tab closed now. Returns false if the archive has no such tab, or |until| has passed. Then
+// archive_changed. The user's, as bc_tab_snooze.
+BC_EXPORT bool bc_archive_snooze(bc_id archived, double until);
+
 // Takes the archived tab out of the archive, as bc_archive_clear does with all of them. Its tab,
 // if it closed since the browser started, still reopens with bc_window_reopen_closed_tab. Then
 // archive_changed, unless the archive has no such tab. Returns the removal's id, as
@@ -2583,6 +2611,13 @@ BC_EXPORT bool bc_window_redo_remove_suggestion(bc_id window, bc_id removal);
 // 0 if the window is closing or gone.
 BC_EXPORT bc_id bc_tab_open(bc_id window, const char* url, bool when_shown);
 
+// As bc_tab_open, for the address the user typed as |typed|, which the core reads as Chrome's
+// address bar does: written with http://, |url| loads over http as written, not tried over https
+// first by HTTPS-Upgrades or by HTTPS-First, which Chrome's bar lets a typed http:// skip too.
+// Typed without a scheme, or null, it's bc_tab_open's load.
+BC_EXPORT bc_id bc_tab_open_typed(bc_id window, const char* url, bool when_shown,
+                                  const char* typed);
+
 // Copies up to |capacity| bytes of the URL Chrome's address bar goes to for |text| typed in it into
 // |url|, UTF-8 and ending in a NUL, and returns the URL's length without it: the page |text| names,
 // else a search for it with the default search engine of the profile |window| shows, DuckDuckGo
@@ -2605,16 +2640,29 @@ BC_EXPORT size_t bc_search_url(bc_id window,
 // page asks.
 
 // Opens |url| in a tab in no Space, in |opener|'s window and profile, loading it at once as the link
-// in |opener|'s page would have, for the app to show with bc_tab_show_in. bc_tab_close closes it,
-// which no archive or ⇧⌘T keeps, and bc_window_keep_preview keeps it. Quitting closes it. Returns 0
-// if |opener|'s window is closing or gone.
-BC_EXPORT bc_id bc_tab_open_preview(bc_id opener, const char* url);
+// in |opener|'s page would have, for the app to show with bc_tab_show_in at |frame|, whose size its
+// page has from before it loads, so its first script reads it. bc_tab_close closes it, which no
+// archive or ⇧⌘T keeps, and bc_window_keep_preview keeps it. Quitting closes it. Returns 0 if
+// |opener|'s window is closing or gone.
+BC_EXPORT bc_id bc_tab_open_preview(bc_id opener, const char* url, bc_rect frame);
 
 // Shows the page of |tab|, which no window shows, such as bc_tab_open_preview's, in |view|, an
 // NSView of the app's on the Mac, which keeps it from then on: at |frame| in points from the view's
 // top-left, over what the view draws, with corners of |corner_radius|, and with the keyboard. Call
 // it again as the frame changes.
 BC_EXPORT void bc_tab_show_in(bc_id tab, void* view, bc_rect frame, double corner_radius);
+
+// Draws the page bc_tab_show_in shows of |tab| at |scale| of its frame's size about (|about_x|,
+// |about_y|), in points from the view's top-left as its frame is, and at |opacity|, without laying
+// it out again: its size, and the size its page reads, stay its frame's. Each call replaces the
+// last, and another page shown in the view draws as it is. Where the page shows under the app's
+// view, on Windows and Linux; the Mac's is in the view, which scales and fades it with what the app
+// draws, and this does nothing.
+BC_EXPORT void bc_tab_draw_preview(bc_id tab,
+                                   double scale,
+                                   double about_x,
+                                   double about_y,
+                                   double opacity);
 
 // Puts |tab|, a link preview, at the top of the Today tabs of the Space the window shows, and shows
 // it there, as it is: its page doesn't load again. Then space_changed and window_selected.
@@ -2636,6 +2684,10 @@ BC_EXPORT void bc_tab_show(bc_id tab, bc_rect frame);
 // opens in a tab it opened, at the top of its Space's Today tabs, shown if its window shows that
 // Space, and closing that tab shows the pinned one again.
 BC_EXPORT void bc_tab_navigate(bc_id tab, const char* url);
+
+// As bc_tab_navigate, for the address the user typed as |typed|, read as bc_tab_open_typed reads
+// it.
+BC_EXPORT void bc_tab_navigate_typed(bc_id tab, const char* url, const char* typed);
 
 // Goes back, or forward, in the tab's history, if it has a page that way.
 BC_EXPORT void bc_tab_go_back(bc_id tab);
@@ -3014,7 +3066,7 @@ BC_EXPORT void bc_profile_forget_boost_script(bc_id profile, const char* site);
 // with its own code, the same for every site: one element settled before or after another, two
 // traded, one floating over the page, and none other. Hiding is Zap's rule in the Boost's CSS. The
 // user's alone: no agent, page, sync, link or import starts the mode or changes an arrangement, and
-// an agent's call in a tab while it's arranging is refused, in the activity log.
+// a tab in an agent's Space never arranges.
 
 // How Arrange's marks in the page look, from the app's tokens and the Space's accent: the outline,
 // the drop line, a trade's fill and the label over the element, in |accent| with |label| for the
@@ -3409,6 +3461,18 @@ BC_EXPORT void bc_tab_share_instead(bc_id tab);
 // Then tab_state_changed. The user's: agents act in the page instead.
 BC_EXPORT void bc_tab_media(bc_id tab, int action);
 
+// Shows the video of |tab|'s media live in |window|, for its media card while no window shows the
+// tab and its state has media_video: at |frame| in points from the top-left of the window's
+// content, over what the app draws there, with corners of |corner_radius|, fitted in black. It's
+// the page's own video, as Picture in Picture shows it, so a paused one shows the frame it stopped
+// on, and it's black until the page sends its first frame. Call it again as the frame changes, and
+// with an empty frame once the card's gone. One video shows at a time, across windows: the last
+// asked for. While another Picture in Picture window is open, a page's own, a call's or the Mini
+// Player, it keeps its video, and the app's drawing shows at |frame|. bc_tab_media's Picture in
+// Picture floats the card's video into Chrome's window. The page sees its video go into Picture in
+// Picture and leave it. The user's: agents get no media cards.
+BC_EXPORT void bc_tab_show_video(bc_id tab, bc_id window, bc_rect frame, double corner_radius);
+
 // Closes the Today tabs below the tab, each as bc_tab_close does, bottom up. A window showing one
 // shows the tab first. Then tab_closed for each, and space_changed.
 BC_EXPORT void bc_tab_close_below(bc_id tab);
@@ -3478,6 +3542,14 @@ BC_EXPORT void bc_tab_close(bc_id tab, bool split);
 // Space too. A close the page asks for then closes the tab as the user's would, and tab_closed
 // follows. The user's alone: an agent's tab never has it.
 BC_EXPORT void bc_tab_set_page_may_close(bc_id tab, bool may);
+
+// Keeps nothing of the page the tab shows, as the UI asks for a sign-in's callback page in a
+// Little ilo window another app's link opened, whose address carries a single-use code: its URL
+// leaves the profile's history, with every visit to it, and so the command bar's suggestions. If
+// the tab closes while it still shows that page, it isn't archived or among the tabs
+// bc_window_reopen_closed_tab reopens. One that has gone on to another page closes as any does.
+// The user's alone: an agent's tab never shows such a page.
+BC_EXPORT void bc_tab_forget_page(bc_id tab);
 
 // Windows. Every window shows the same Spaces, and a tab's page is live in one window at a time:
 // the one that showed it last. The reads are for the UI and agents alike.
@@ -3681,6 +3753,15 @@ BC_EXPORT size_t bc_window_child_title(bc_id window, char* title, size_t capacit
 // own read of the clipboard waits, as the owner it asks can be Chromium, which answers on the UI's
 // thread.
 BC_EXPORT void bc_answer_clipboard_requests(void);
+
+// Reads the clipboard's text through Chromium's clipboard and hands it to |done| with |context|,
+// UTF-8, empty for none, on the UI's thread from a task of its own, never during the call. For the
+// UI's own fields under Wayland, where the UI shares Chromium's connection to the compositor:
+// there the UI can't read a selection Chromium holds, and a compositor may hand the selection to
+// the connection's first data device alone, which is Chromium's (#2463). Nothing an agent asks
+// reaches it.
+BC_EXPORT void bc_clipboard_read_text(void (*done)(void* context, const char* text),
+                                      void* context);
 
 // Moves the folder, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
 // as bc_tab_move_to_space moves a pinned tab: the folders keep their names, icons and whether

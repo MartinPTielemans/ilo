@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -38,6 +39,8 @@
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
@@ -56,6 +59,7 @@
 #include "net/base/data_url.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/cpp/url_loader_factory_builder.h"
@@ -145,6 +149,154 @@ int Ask(const network::ResourceRequest& request, std::string* answer) {
                                TypeOf(request), &Append, answer);
 }
 
+// How many pages of a tab it counts for at a time: the page it shows and those the back-forward
+// cache keeps, six at most by default.
+constexpr size_t kPagesCounted = 8;
+
+// The longest Site Controls waits for a count that changed, so a page's burst of blocked requests
+// wakes the main thread once a second, not at each.
+constexpr base::TimeDelta kCountEvery = base::Seconds(1);
+
+// The requests it blocked on a page, by its UKM source id. On Sequence().
+struct Counted {
+  int64_t page = ukm::kInvalidSourceId;
+  int blocked = 0;
+};
+
+// What it blocked on each open tab's last few pages, the latest last, by CountedTab's id. On
+// Sequence().
+std::map<int, std::vector<Counted>>& Counts() {
+  static base::NoDestructor<std::map<int, std::vector<Counted>>> counts;
+  return *counts;
+}
+
+// The page Site Controls watches, if any. On Sequence().
+struct Watched {
+  int tab = 0;
+  int64_t page = ukm::kInvalidSourceId;
+  // Which of the main thread's watches it is, so a count sent for one before the next is dropped.
+  int watch = 0;
+  base::TimeTicks sent;
+  bool waiting = false;
+};
+Watched& Watching() {
+  static Watched watched;
+  return watched;
+}
+
+// What the main thread hears the count with, and which watch that is. On the main thread.
+base::RepeatingCallback<void(int)>& Watcher() {
+  static base::NoDestructor<base::RepeatingCallback<void(int)>> watcher;
+  return *watcher;
+}
+int g_watch = 0;
+
+// On the main thread.
+void Heard(int watch, int blocked) {
+  if (watch == g_watch && Watcher()) {
+    Watcher().Run(blocked);
+  }
+}
+
+// Sends the watched page's count to the main thread. On Sequence().
+void SendCount() {
+  Watched& watched = Watching();
+  if (!watched.tab) {
+    return;
+  }
+  int blocked = 0;
+  if (const auto tab = Counts().find(watched.tab); tab != Counts().end()) {
+    if (const auto it = std::ranges::find(tab->second, watched.page, &Counted::page);
+        it != tab->second.end()) {
+      blocked = it->blocked;
+    }
+  }
+  watched.sent = base::TimeTicks::Now();
+  content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE,
+                                               base::BindOnce(&Heard, watched.watch, blocked));
+}
+
+// Watches |page| of |tab|, or nothing for 0. On Sequence().
+void Watch(int tab, int64_t page, int watch) {
+  Watched& watched = Watching();
+  watched.tab = tab;
+  watched.page = page;
+  watched.watch = watch;
+  SendCount();
+}
+
+// Counts a request blocked on |page| of |tab|, and sends the count if Site Controls watches it:
+// now if it last did a while ago, else once kCountEvery has passed since. On Sequence().
+void CountBlocked(int tab, int64_t page) {
+  if (!tab || page == ukm::kInvalidSourceId) {
+    return;
+  }
+  // A request that ends after its tab closed counts for none.
+  const auto counts = Counts().find(tab);
+  if (counts == Counts().end()) {
+    return;
+  }
+  std::vector<Counted>& pages = counts->second;
+  auto it = std::ranges::find(pages, page, &Counted::page);
+  if (it == pages.end()) {
+    if (pages.size() == kPagesCounted) {
+      pages.erase(pages.begin());
+    }
+    pages.push_back(Counted{.page = page});
+    it = std::prev(pages.end());
+  } else {
+    // A page shown again from the back-forward cache is the latest.
+    it = std::rotate(it, it + 1, pages.end());
+  }
+  ++it->blocked;
+  Watched& watched = Watching();
+  if (watched.tab != tab || watched.page != page || watched.waiting) {
+    return;
+  }
+  const base::TimeDelta wait = watched.sent + kCountEvery - base::TimeTicks::Now();
+  if (!wait.is_positive()) {
+    SendCount();
+    return;
+  }
+  watched.waiting = true;
+  Sequence()->PostDelayedTask(FROM_HERE, base::BindOnce([] {
+                                Watching().waiting = false;
+                                SendCount();
+                              }),
+                              wait);
+}
+
+// Gives a tab the id its counts are kept by, from before its first proxy starts, and lets go of
+// them as it closes.
+class CountedTab : public content::WebContentsUserData<CountedTab> {
+ public:
+  ~CountedTab() override {
+    Sequence()->PostTask(FROM_HERE, base::BindOnce([](int id) { Counts().erase(id); }, id_));
+  }
+
+  int id() const { return id_; }
+
+ private:
+  friend WebContentsUserData;
+  explicit CountedTab(content::WebContents* contents)
+      : WebContentsUserData(*contents), id_(++next_id_) {
+    Sequence()->PostTask(FROM_HERE, base::BindOnce([](int id) { Counts().try_emplace(id); }, id_));
+  }
+
+  static inline int next_id_ = 0;
+  const int id_;
+
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(CountedTab);
+
+// The id |contents|' counts are kept by.
+int CountedTabOf(content::WebContents* contents) {
+  CountedTab::CreateForWebContents(contents);
+  return CountedTab::FromWebContents(contents)->id();
+}
+
 // Fails a request as blocked.
 void Block(mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
   mojo::Remote<network::mojom::URLLoaderClient>(std::move(client))
@@ -187,10 +339,12 @@ class Proxy : public network::mojom::URLLoaderFactory {
   Proxy(const Proxy&) = delete;
   Proxy& operator=(const Proxy&) = delete;
 
-  // Owns itself, until both ends have gone.
+  // Owns itself, until both ends have gone. What it blocks counts for |page| of |tab|, if any.
   static void Start(mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
-                    mojo::PendingRemote<network::mojom::URLLoaderFactory> target) {
-    new Proxy(std::move(receiver), std::move(target));
+                    mojo::PendingRemote<network::mojom::URLLoaderFactory> target,
+                    int tab,
+                    int64_t page) {
+    new Proxy(std::move(receiver), std::move(target), tab, page);
   }
 
   // network::mojom::URLLoaderFactory:
@@ -204,9 +358,12 @@ class Proxy : public network::mojom::URLLoaderFactory {
     std::string answer;
     switch (Ask(request, &answer)) {
       case BC_AD_BLOCK_BLOCK:
+        CountBlocked(tab_, page_);
         Block(std::move(client));
         return;
+      // A stand-in is blocked too, as uBlock Origin counts it.
       case BC_AD_BLOCK_REDIRECT:
+        CountBlocked(tab_, page_);
         StandIn(GURL(answer), std::move(client));
         return;
       case BC_AD_BLOCK_REWRITE:
@@ -230,8 +387,10 @@ class Proxy : public network::mojom::URLLoaderFactory {
 
  private:
   Proxy(mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
-        mojo::PendingRemote<network::mojom::URLLoaderFactory> target)
-      : target_(std::move(target)) {
+        mojo::PendingRemote<network::mojom::URLLoaderFactory> target,
+        int tab,
+        int64_t page)
+      : target_(std::move(target)), tab_(tab), page_(page) {
     receivers_.Add(this, std::move(receiver));
     receivers_.set_disconnect_handler(
         base::BindRepeating(&Proxy::OnProxyGone, base::Unretained(this)));
@@ -248,6 +407,8 @@ class Proxy : public network::mojom::URLLoaderFactory {
 
   mojo::ReceiverSet<network::mojom::URLLoaderFactory> receivers_;
   mojo::Remote<network::mojom::URLLoaderFactory> target_;
+  const int tab_;
+  const int64_t page_;
 };
 
 // What a page hides and runs from its start (ad_block_page.mojom).
@@ -810,10 +971,29 @@ void SetNativeAdBlockOn(bool on) {
   g_on.store(on, std::memory_order_relaxed);
 }
 
-void ProxyForNativeAdBlock(network::URLLoaderFactoryBuilder& factory_builder) {
+void ProxyForNativeAdBlock(network::URLLoaderFactoryBuilder& factory_builder,
+                           content::RenderFrameHost* frame,
+                           int64_t page) {
+  // A worker's requests are no tab's, as uBlock Origin counts them.
+  content::WebContents* contents =
+      frame ? content::WebContents::FromRenderFrameHost(frame) : nullptr;
+  const int tab = contents ? CountedTabOf(contents) : 0;
   auto [receiver, target] = factory_builder.Append();
-  Sequence()->PostTask(FROM_HERE,
-                       base::BindOnce(&Proxy::Start, std::move(receiver), std::move(target)));
+  Sequence()->PostTask(
+      FROM_HERE, base::BindOnce(&Proxy::Start, std::move(receiver), std::move(target), tab, page));
+}
+
+void WatchNativeAdBlocked(content::WebContents* contents,
+                          base::RepeatingCallback<void(int)> blocked) {
+  Watcher() = std::move(blocked);
+  Sequence()->PostTask(
+      FROM_HERE, base::BindOnce(&Watch, CountedTabOf(contents),
+                                contents->GetPrimaryMainFrame()->GetPageUkmSourceId(), ++g_watch));
+}
+
+void StopWatchingNativeAdBlocked() {
+  Watcher().Reset();
+  Sequence()->PostTask(FROM_HERE, base::BindOnce(&Watch, 0, ukm::kInvalidSourceId, ++g_watch));
 }
 
 void AddNativeAdBlockPage(content::NavigationThrottleRegistry& registry) {

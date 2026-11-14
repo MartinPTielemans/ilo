@@ -1196,6 +1196,9 @@ media-glyph = 14.0
 media-drawer = 33.0
 media-slider-track = 4.0
 media-slider-knob = 12.0
+# Ours, as Arc's card has no picture (#2100): open, the newest card whose page has a video shows it
+# live over its title row, media-open-gap in from the card's edges, this wide for its height.
+media-video-aspect = 1.7777778
 # Favorites taller than this much of the window scroll with the list instead of staying put
 # (Ardia), so they never leave the rows too little room.
 tall-favorites = 0.4

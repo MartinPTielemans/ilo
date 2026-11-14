@@ -109,6 +109,21 @@ void ShowPageIn(views::Widget* widget,
                 const gfx::Rect& frame,
                 double corner_radius);
 
+// Draws |page|, which ShowPageIn shows, at |scale| of its frame's size about |about|, in the
+// frame's coordinates, and at |opacity|, without laying it out again, until the next call or
+// another page shown. Where it shows in the window, under the app's view; the Mac's page is in that
+// view, which scales and fades it, and this does nothing.
+void DrawPageIn(views::Widget* widget,
+                gfx::NativeView page,
+                float scale,
+                const gfx::PointF& about,
+                float opacity);
+
+// Lets the pointer through |widget|, a window of the core's over the browser window's UI that
+// shows something but takes nothing, such as a media card's video, to the UI under it. Views'
+// accept_events does it on the Mac and Wayland, but not on X11 or Windows.
+void PassPointerThrough(views::Widget* widget);
+
 // Whether a page's dialog, such as Chrome's passkey dialog, needs a native window of its own to
 // show over the pages, rather than being drawn in the window's own.
 bool PageDialogsInOwnWindow();

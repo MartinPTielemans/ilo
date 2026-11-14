@@ -58,6 +58,10 @@ class Tab : public content::WebContentsObserver,
   static bc_id IdOf(content::WebContents* contents);
   // |contents|'s tab, or null if nothing asked for its id.
   static Tab* FromWebContents(content::WebContents* contents);
+  // |contents| has Chrome's tab helpers now, as its tab strip took it: its tab, if it has one yet,
+  // observes what they make. A tab made before them, as a pop-up an agent's page opens is
+  // (DidOpenRequestedURL), observes nothing of theirs until then.
+  static void HelpersArrived(content::WebContents* contents);
   // |id|'s tab, with its page or without, or null.
   static Tab* Get(bc_id id);
   // |id|'s page, or null, as for a tab without one.
@@ -104,16 +108,34 @@ class Tab : public content::WebContentsObserver,
   // icon, mute and when it was last seen. Tells the app its state, title and the favicon the
   // profile has for its URL. Returns its id, or 0 without history.
   static bc_id Restore(Profile* profile, const SavedTab& saved);
+  // The same in the profile in |dir|, ProfileFor's. While the core waits for that profile
+  // (ProfileExpected), the tab waits with it, without a profile until ProfileArrived: it has its
+  // place, title and history, and can't be woken. Returns 0 without history or a profile.
+  static bc_id Restore(const std::string& dir, const SavedTab& saved);
+  // Gives the tabs waiting for |dir|'s profile |profile|, as each would have had it from Restore:
+  // its page's sessionStorage and its favicon. Returns them.
+  static std::vector<bc_id> ProfileArrived(const std::string& dir, Profile* profile);
 
   Tab(const Tab&) = delete;
   Tab& operator=(const Tab&) = delete;
   ~Tab() override;
 
   bc_id id() const { return id_; }
-  // Its profile, or null once that's gone.
+  // Its profile, or null once that's gone or while the tab waits for it.
   Profile* profile() const { return profile_.get(); }
+  // The directory of its profile, or of the one it waits for.
+  std::string profile_dir() const;
+  // Whether it waits for its profile to load (Restore).
+  bool waiting_for_profile() const { return !waiting_for_.empty(); }
   // The URL of the page it's at, loaded or not, else of the one it's loading.
   GURL Url() const;
+  // Whether it's at |url|, or where loading |url| took it: through the redirects the load
+  // followed, such as a sign-in hop, or after the page replaced its own address. So a pinned tab
+  // that goes back to a pinned URL that always redirects is home, not away from it (#2338).
+  bool At(const GURL& url) const;
+  // Keeps nothing of the page it's at (bc_tab_forget_page): its URL leaves the profile's history,
+  // and it isn't archived or reopenable if it closes while still there.
+  void ForgetPage();
   // Its history, with its name, icon and mute, as the session keeps it.
   SavedTab Save() const;
   // The id of its page's sessionStorage in its profile, loaded or not, which the session file keeps
@@ -182,6 +204,10 @@ class Tab : public content::WebContentsObserver,
   void Media(int action);
   bool muted() const;
 
+  // Whether the page may close the tab with window.close(), as bc_tab_set_page_may_close.
+  void SetPageMayClose(bool may);
+  bool page_may_close() const { return page_may_close_; }
+
   // The page the system's engine shows in place of Chromium's (system_engine.h), else null. Its
   // WebContents stays, unloaded, with the history it had.
   platform::SystemPage* system_page() const { return system_page_.get(); }
@@ -249,9 +275,17 @@ class Tab : public content::WebContentsObserver,
 
  private:
   Tab(bc_id id, Profile* profile);
+  // Restore's tab, in |profile|, else waiting for |waiting_for|'s.
+  static bc_id Make(Profile* profile, const std::string& waiting_for, const SavedTab& saved);
+  // Gives it the last launch's sessionStorage |storage| in its profile, or keeps the id while it
+  // waits for that, unless another tab has it.
+  void TakeStorage(const std::string& storage);
 
   // Makes |contents| the tab's page.
   void Attach(content::WebContents* contents);
+  // Observes what Chrome's tab helpers made for its page, the favicon driver, sound, infobars,
+  // autofill and translate, those it doesn't yet.
+  void ObserveHelpers();
   // Tells the app the tab closed, as its page did or as Close closes it.
   void ReportClosed();
   // Finds the favicon the profile has for |url|, for a tab whose page hasn't loaded, as Chrome's
@@ -260,6 +294,14 @@ class Tab : public content::WebContentsObserver,
 
   // content::WebContentsObserver:
   void DidStartNavigation(content::NavigationHandle* navigation) override;
+  void DidOpenRequestedURL(content::WebContents* new_contents,
+                           content::RenderFrameHost* source_render_frame_host,
+                           const GURL& url,
+                           const content::Referrer& referrer,
+                           WindowOpenDisposition disposition,
+                           ui::PageTransition transition,
+                           bool started_from_context_menu,
+                           bool renderer_initiated) override;
   void DidFinishNavigation(content::NavigationHandle* navigation) override;
   void DidStartLoading() override;
   void DidStopLoading() override;
@@ -275,6 +317,7 @@ class Tab : public content::WebContentsObserver,
   void DidUpdateAudioMutingState(bool muted) override;
   void DidGetUserInteraction(const blink::WebInputEvent& event) override;
   void OnVisibilityChanged(content::Visibility visibility) override;
+  void OnWebContentsFocused(content::RenderWidgetHost* render_widget_host) override;
   void MediaStartedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id) override;
   void WebContentsDestroyed() override;
 
@@ -367,6 +410,10 @@ class Tab : public content::WebContentsObserver,
 
   const bc_id id_;
   base::WeakPtr<Profile> profile_;
+  // While it waits for its profile (Restore): that profile's directory, and the id of the
+  // sessionStorage the last launch saved it with, which the profile recreates once it's here.
+  std::string waiting_for_;
+  std::string waiting_storage_;
   // Without its page, its history and mute.
   std::optional<SavedTab> unloaded_;
   // Without its page, its page's sessionStorage, kept for its next page, where a site may keep its
@@ -387,6 +434,7 @@ class Tab : public content::WebContentsObserver,
   bool last_press_held_command_ = false;
   // Whether the app was last told the page is full screen.
   bool fullscreen_ = false;
+  bool page_may_close_ = false;
   // Whether the app was last told the pointer is on a link.
   bool link_target_ = false;
   // The favicon the app was last told of.
