@@ -10,6 +10,12 @@ fi
 . check/probe2790.sh
 : > "$out/probe2790.txt"
 note session "{\"wm\": \"$wm\"}"
+# Which config i3 runs: the session's own has no bar, and i3tile's tiles dialogs.
+if [ -n "$tiling" ]; then
+  i3cfg=$(i3-msg -t get_config 2> /dev/null)
+  note i3 "{\"version\": \"$(i3 --version | head -1 | cut -d" " -f3)\", \"bar\": $(printf %s "$i3cfg" | grep -c "^bar"), \"tiles_dialogs\": $(printf %s "$i3cfg" | grep -c "floating disable"), \"lines\": $(printf "%s\n" "$i3cfg" | wc -l)}"
+  grep -i "error" "$(cat /tmp/i3-2790.where 2> /dev/null)" 2> /dev/null | head -5 | sed "s/^/probe2790 i3 log /" >> "$out/probe2790.txt"
+fi
 
 # An input method, as ime.sh's: fcitx5 with quick phrase on Ctrl+;, its composition drawn by the
 # app, on a bus of its own.
