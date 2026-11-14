@@ -73,6 +73,43 @@ fn a_field_has_its_caret_after_what_it_holds(cx: &mut TestAppContext) {
     );
 }
 
+// A press or a focus gives a field the keyboard, but text gets into it only from the frame that
+// draws it so, which check.sh waits for before it sends any (#2847).
+#[gpui::test]
+fn text_gets_in_from_the_frame_that_draws_the_field_with_the_keyboard(cx: &mut TestAppContext) {
+    cx.update(bind_keys);
+    let (shows, cx) =
+        cx.add_window_view(|_, cx| Shows(cx.new(|cx| TextInput::new("example.com##.banner", cx))));
+    let input = cx.read(|cx| shows.read(cx).0.clone());
+    cx.run_until_parked();
+    let drawn = |cx: &mut VisualTestContext| input.read_with(cx, |input, _| input.keyboard_drawn());
+    assert!(
+        !drawn(cx),
+        "a field drawn without the keyboard says it has it"
+    );
+    let at_focus = input.update_in(cx, |input, window, cx| {
+        window.focus(&input.focus_handle(cx), cx);
+        input.keyboard_drawn()
+    });
+    assert!(
+        !at_focus,
+        "the field says text gets in before a frame has drawn it focused"
+    );
+    cx.run_until_parked();
+    assert!(
+        drawn(cx),
+        "a frame drew the field focused, and it doesn't say text gets in"
+    );
+    cx.simulate_input("x");
+    assert_eq!(input.read_with(cx, |input, _| input.text().to_owned()), "x");
+    cx.update(|window, cx| window.blur(cx));
+    cx.run_until_parked();
+    assert!(
+        !drawn(cx),
+        "a frame drew the field without the keyboard, and it says it has it"
+    );
+}
+
 /// The field and its text run, as an assistive app reads them.
 fn read(cx: &mut VisualTestContext) -> (Node, Node, NodeId) {
     let tree: TreeUpdate = cx.a11y_tree().expect("GPUI built a tree");
