@@ -1583,7 +1583,13 @@ fn stack() -> Option<()> {
             break;
         }
         let Some(at) = bounds(top) else { continue };
-        if !viewable(connection, top)
+        // A window for input alone draws nothing, so it's in front of nothing, such as KWin's at
+        // the screen's corner for its edge actions (#2756).
+        let input_only = (connection.get_window_attributes(top).ok())
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|a| a.class == xproto::WindowClass::INPUT_ONLY);
+        if input_only
+            || !viewable(connection, top)
             || at[0] >= over[2]
             || over[0] >= at[2]
             || at[1] >= over[3]
