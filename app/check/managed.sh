@@ -145,6 +145,7 @@ if [ -n "$toast" ]; then
   at=$(python3 -I -c 'import json,sys
 t, b = json.loads(sys.argv[1])["rect"], json.loads(sys.argv[2])["rect"]
 print(t[0] - b[0] + t[2] // 2, t[1] - b[1] + t[3] // 2)' "$(line_of "$s6" "$toast")" "$(line_of "$s6" "$b")")
+  note toast "shape $(p2790 shape "$toast")"
   downs=$(grep -c "^browser: title $page down " "$log")
   # shellcheck disable=SC2086
   send click $at
