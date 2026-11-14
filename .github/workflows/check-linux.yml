@@ -62,7 +62,7 @@ env:
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
-    favorites cards extensions adblock adblock-lists adblock-cosmetic private little capture
+    favorites cards extensions adblock adblock-lists adblock-cosmetic adblock-page private little capture
     passwords preview access dialogs crash import quit onboarding passkeys appearance about
     sync sync-account sync-devices
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count

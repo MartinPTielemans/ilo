@@ -1545,8 +1545,9 @@ fi
 # one. EWMH's _NET_SHOWING_DESKTOP asks either, as openbox's Super+D, KWin's Ctrl+F12 and a
 # pager's button do. sway has no desktop to show and hides a window on another workspace: under
 # Wayland the bar is part of the window's surface and goes with it, and closes as the app goes
-# inactive, as on leaving it for another app's window. On sway's Xwayland nothing
-# tells an X client its window left the screen (#2720), so the step doesn't run there.
+# inactive, as on leaving it for another app's window. sway's Xwayland, where the app is only when
+# X11 is forced in a Wayland session, draws the bar on every workspace and tells no X client its
+# window left the screen (#2720), so the step doesn't run there.
 if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; }; then
   # The share, in thousandths, of the capture's most common colour: the empty screen's, with the
   # pointer the only other thing on it.
@@ -1619,6 +1620,8 @@ if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${BROWSER_HEA
     fi
     send desktop shell off
   fi
+elif [ "$(uname)" = Linux ]; then
+  echo "skip: another workspace with the command bar open, on sway's Xwayland: sway draws the bar on every workspace and tells no X client its window left the screen; the app is there only when X11 is forced (#2720)."
 fi
 
 # Arc's bar commands that call what the menus do: Mute All Tabs mutes every tab, and Unmute All

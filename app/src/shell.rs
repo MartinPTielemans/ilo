@@ -1338,9 +1338,9 @@ pub struct Shell {
     held_row: Option<HeldRow>,
     /// The header button the pointer pressed, for its shrinking and growing back.
     held_nav: Option<HeldNav>,
-    /// GPUI's clock, which the list's motion is timed by (`since`): the real one in the app, and
-    /// in a test one only the test moves, so a slide holds on a slow runner until the test moves
-    /// it on, as the Space's settle does (#2265, #2630).
+    /// GPUI's clock, which the list's and the Library's motion are timed by (`since`): the real one
+    /// in the app, and in a test one only the test moves, so a slide holds on a slow runner until
+    /// the test moves it on, as the Space's settle does (#2265, #2630).
     clock: BackgroundExecutor,
     /// Rows on their way to their place: how far from it each started, and when.
     slides: HashMap<Slot, (f32, Instant, Curve)>,
@@ -2876,7 +2876,7 @@ impl Shell {
         }
         // The Spaces section springs to its width as cards come and go, as on a section's change.
         if self.library.is_some() && self.library_width() != width {
-            self.library_resize = Some((width, crate::motion::start(cx)));
+            self.library_resize = Some((width, crate::motion::start_at(self.clock.now(), cx)));
         }
         if self.show_favorites() {
             self.log_favorites();
