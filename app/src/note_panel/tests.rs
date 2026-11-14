@@ -224,3 +224,61 @@ fn a_rows_picture_is_as_tall_as_it_is_drawn() {
     assert_eq!(fitted((100., 400.), 1., 250., 160.), (40., 160.));
     assert_eq!(fitted((120., 60.), 1., 250., 160.), (120., 60.));
 }
+
+/// Scrolled to their end, the rows show the picture whole, its foot inside theirs (#2462's capture
+/// had it cut by the first row's gap, which the scroll's end leaves out).
+#[gpui::test]
+fn at_the_rows_end_the_picture_shows_whole(cx: &mut TestAppContext) {
+    let (_, told, window) = panel_window(cx);
+    let mut long = panel(&told);
+    long.element.text = (1..=40)
+        .map(|n| format!("Line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let shot = image::RgbaImage::from_pixel(536, 336, image::Rgba([255, 255, 255, 255]));
+    let mut png = Vec::new();
+    shot.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    long.element.png = Some(png.into());
+    cx.update(|cx| show(4, long, cx));
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let drawn = |visual: &mut VisualTestContext| {
+        for _ in 0..2 {
+            visual.update(|window, _| window.refresh());
+            visual.run_until_parked();
+        }
+    };
+    _ = window.update(&mut visual, |note, _, cx| note.toggle(cx));
+    drawn(&mut visual);
+    _ = window.update(&mut visual, |note, _, cx| {
+        let end = note.rows.max_offset().y;
+        assert!(end > px(0.), "the rows pass the panel's height");
+        note.rows.set_offset(point(px(0.), -end));
+        cx.notify();
+    });
+    drawn(&mut visual);
+    window
+        .update(&mut visual, |note, _, _| {
+            let (rows, end) = (note.rows.bounds(), note.rows.max_offset().y);
+            let last = note.rows.children_count() - 1;
+            // The child's bounds are laid out unscrolled; the picture's row is the last.
+            let row = note.rows.bounds_for_item(last).expect("the picture's row");
+            let picture = fitted(
+                (536., 336.),
+                1.,
+                WIDTH - INSET * 2. - NAME_WIDTH,
+                PICTURE_MOST,
+            );
+            assert!(
+                row.size.height >= px(picture.1),
+                "the row holds the picture"
+            );
+            let foot = row.bottom() - end;
+            assert!(
+                foot <= rows.bottom() + px(0.5),
+                "at their end the picture's foot {foot:?} is under the rows' {:?}",
+                rows.bottom()
+            );
+        })
+        .unwrap();
+}
