@@ -181,7 +181,7 @@ class HistoryRemovalTest : public testing::Test,
   // history::HistoryServiceObserver:
   void OnHistoryDeletions(history::HistoryService* history,
                           const history::DeletionInfo& info) override {
-    deletions_.push_back(info);
+    deletions_.push_back({info.is_from_expiration(), info.time_range(), info.restrict_urls()});
   }
   void OnURLVisited(history::HistoryService* history,
                     const history::VisitedURLInfo& visited) override {
@@ -196,7 +196,13 @@ class HistoryRemovalTest : public testing::Test,
   const base::Time day_ = base::Time::Now().LocalMidnight() - base::Days(1);
   const base::Time yesterday_[2] = {day_ + base::Hours(9), day_ + base::Hours(15)};
   const base::Time before_ = day_ - base::Days(1) + base::Hours(10);
-  std::vector<history::DeletionInfo> deletions_;
+  // What the tests read of each deletion, as a DeletionInfo can't be copied.
+  struct Deletion {
+    bool from_expiration;
+    history::DeletionTimeRange time_range;
+    std::optional<std::set<GURL>> restrict_urls;
+  };
+  std::vector<Deletion> deletions_;
   std::vector<GURL> visited_;
   base::OnceClosure quit_;
   base::ScopedObservation<history::HistoryService, history::HistoryServiceObserver> observation_{
@@ -267,13 +273,13 @@ TEST_F(HistoryRemovalTest, NothingHasARemovedVisitUntilTheUndo) {
 
   scoped_refptr<RemovedHistory> removed = RemoveYesterday(GURL(kPage));
   ASSERT_EQ(deletions_.size(), 1u);
-  const history::DeletionInfo& deletion = deletions_[0];
-  EXPECT_FALSE(deletion.is_from_expiration());
-  ASSERT_TRUE(deletion.time_range().IsValid());
-  EXPECT_EQ(deletion.time_range().begin(), day_);
-  EXPECT_EQ(deletion.time_range().end(), day_ + base::Days(1));
-  ASSERT_TRUE(deletion.restrict_urls().has_value());
-  EXPECT_EQ(*deletion.restrict_urls(), std::set<GURL>{GURL(kPage)});
+  const Deletion& deletion = deletions_[0];
+  EXPECT_FALSE(deletion.from_expiration);
+  ASSERT_TRUE(deletion.time_range.IsValid());
+  EXPECT_EQ(deletion.time_range.begin(), day_);
+  EXPECT_EQ(deletion.time_range.end(), day_ + base::Days(1));
+  ASSERT_TRUE(deletion.restrict_urls.has_value());
+  EXPECT_EQ(*deletion.restrict_urls, std::set<GURL>{GURL(kPage)});
   for (const history::VisitRow& visit : Visits(GURL(kPage)).visits) {
     EXPECT_FALSE(visit.visit_time >= day_ && visit.visit_time < day_ + base::Days(1));
   }
