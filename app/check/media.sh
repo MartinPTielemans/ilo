@@ -851,11 +851,12 @@ fi
 # tab and lands it. X11 alone, as pip_driven says; on the Mac drive.mm throws it, below.
 # Proof only (#2803): the display's pointer over the Mini Player, off its controls, so Chrome
 # shows them, then every window of the browser captured, with the look line the core logged last.
+# Captured while the press holds the pointer there: the release sends it back where it was.
 proof_shot() {
   send pip press $((pw / 8)) $((ph / 2))
-  send pip release $((pw / 8)) $((ph / 2))
   sleep 1
   ../tools/window-screenshot.sh "$pid" "$out/$1" all || fail "no window to capture"
+  send pip release $((pw / 8)) $((ph / 2))
   grep 'browser: mini player look ' "$log" | tail -1 > "$out/${1%.png}.look"
 }
 if pip_driven; then
