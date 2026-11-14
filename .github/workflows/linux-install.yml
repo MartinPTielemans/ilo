@@ -1,0 +1,184 @@
+# The native Linux install (#2453), as a user runs its line, from a copy of a release served in the
+# run: the tarball tools/linux-tarball.sh makes, its .sha256 and install.sh. tools/install-check.sh
+# runs the line in a clean container of each of Arch, Fedora and Ubuntu, given what a desktop has
+# for chrome and Xvfb, starts ilo and finds its renderers sandboxed, runs the line again, then
+# --uninstall. On GitHub's Ubuntu 24.04, whose AppArmor lets only programs with a profile make user
+# namespaces, the line first has to stop and name the one step the user takes; the job takes it and
+# runs the check. A container is let make user namespaces as a desktop does (seccomp unconfined), and
+# keeps docker's AppArmor profile, which allows them.
+# release.yml calls it on the release's own tarball, the artifact ilo-linux-native that flatpak.yml
+# packs. A push builds one as flatpak.yml does, and a push whose header no published Linux engine
+# has is skipped, as flatpak.yml skips it.
+name: Linux install
+
+on:
+  push:
+    branches: ['**']
+    paths: [app/platform/linux/native/**, tools/linux-tarball.sh, tools/install-check.sh,
+      .github/workflows/linux-install.yml]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      prebuilt:
+        description: The run has the tarball already, as the artifact ilo-linux-native
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  tarball:
+    if: ${{ !inputs.prebuilt }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      found: ${{ steps.engine.outputs.found }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: engine
+        run: |
+          status=0
+          engine/fetch.sh > /dev/null 2> "$RUNNER_TEMP/fetch.log" || status=$?
+          cat "$RUNNER_TEMP/fetch.log" >&2
+          case $status in
+          0) echo "found=true" >> "$GITHUB_OUTPUT" ;;
+          2)
+            echo "::notice::No Linux engine fits this commit, so the install isn't checked. $(tail -1 "$RUNNER_TEMP/fetch.log")"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            ;;
+          *) exit "$status" ;;
+          esac
+      - if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+      # flatpak.yml's build cache, which main saves.
+      - if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: flatpak-${{ hashFiles('app/Cargo.lock', 'app/linux/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
+          restore-keys: flatpak-
+      - if: ${{ steps.engine.outputs.found == 'true' }}
+        run: |
+          rustup update stable --no-self-update
+          app/build.sh prod
+          tools/linux-tarball.sh app/build/Browser "$RUNNER_TEMP/native"
+      - if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ilo-linux-native
+          path: ${{ runner.temp }}/native
+          retention-days: 3
+
+  container:
+    needs: tarball
+    if: ${{ !cancelled() && (inputs.prebuilt || needs.tarball.outputs.found == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: arch
+            image: archlinux:latest
+            setup: >-
+              pacman -Syu --noconfirm --needed curl xz nss atk at-spi2-core libcups mesa alsa-lib
+              libxcomposite libxdamage libxrandr libxfixes pango cairo libxkbcommon libxkbcommon-x11
+              fontconfig wayland dbus xorg-server-xvfb vulkan-swrast ttf-dejavu procps-ng imagemagick
+          - distro: fedora
+            image: fedora:latest
+            setup: >-
+              dnf install -y curl xz nss atk at-spi2-atk cups-libs mesa-libgbm alsa-lib libXcomposite
+              libXdamage libXrandr libXfixes pango cairo libxkbcommon libxkbcommon-x11 libX11-xcb
+              fontconfig libwayland-client dbus-daemon xorg-x11-server-Xvfb mesa-vulkan-drivers
+              dejavu-sans-fonts procps-ng util-linux ImageMagick shadow-utils
+          - distro: ubuntu
+            image: ubuntu:24.04
+            setup: >-
+              apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends
+              ca-certificates curl xz-utils libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64
+              libgbm1 libasound2t64 libxcomposite1 libxdamage1 libxrandr2 libxfixes3 libpango-1.0-0
+              libcairo2 libxkbcommon0 libxkbcommon-x11-0 libx11-xcb1 libfontconfig1 libwayland-client0
+              dbus xvfb mesa-vulkan-drivers fonts-dejavu-core procps imagemagick
+    name: container (${{ matrix.distro }})
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: ilo-linux-native
+          path: ${{ runner.temp }}/release
+      # The distro as it comes, with a desktop's libraries and an ordinary user, user 1000.
+      - env:
+          IMAGE: ${{ matrix.image }}
+          SETUP: ${{ matrix.setup }}
+        run: |
+          # ubuntu:24.04 has its own user 1000, ubuntu, which goes.
+          docker run --name setup "$IMAGE" sh -c "$SETUP && { userdel -r \$(id -nu 1000 2>/dev/null) 2>/dev/null || true; } && useradd -m -u 1000 user"
+          docker commit setup distro
+      - run: |
+          mkdir -m 777 "$RUNNER_TEMP/out"
+          python3 -m http.server 8123 --bind 127.0.0.1 --directory "$RUNNER_TEMP/release" > /dev/null 2>&1 &
+          docker run --rm --network host --user 1000:1000 --shm-size=1g --security-opt seccomp=unconfined \
+            -v "$PWD/tools:/tools:ro" -v "$RUNNER_TEMP/out:/out" distro \
+            bash /tools/install-check.sh http://127.0.0.1:8123 /out
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: linux-install-${{ matrix.distro }}
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+
+  # The runner itself, as a user's Ubuntu 24.04: the line stops at AppArmor's rule and names the step,
+  # which the job takes, as the user would, before the check.
+  ubuntu-apparmor:
+    needs: tarball
+    if: ${{ !cancelled() && (inputs.prebuilt || needs.tarball.outputs.found == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tools
+            .github/actions
+      - uses: actions/download-artifact@v4
+        with:
+          name: ilo-linux-native
+          path: ${{ runner.temp }}/release
+      - uses: ./.github/actions/apt-install
+        with:
+          packages: xvfb mesa-vulkan-drivers imagemagick libxkbcommon-x11-0
+      - run: |
+          [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ] ||
+            { echo "::error::The runner no longer restricts user namespaces, so the step isn't checked."; exit 1; }
+          python3 -m http.server 8123 --bind 127.0.0.1 --directory "$RUNNER_TEMP/release" > /dev/null 2>&1 &
+          sleep 1
+          export ILO_RELEASE_URL=http://127.0.0.1:8123
+          if curl -fsSL "$ILO_RELEASE_URL/install.sh" | sh > "$RUNNER_TEMP/refused.log" 2>&1; then
+            cat "$RUNNER_TEMP/refused.log"
+            echo "::error::The line installed where AppArmor keeps Chromium's sandbox from starting."
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/refused.log"
+          [ ! -e ~/.local/share/ilo ] || { echo "::error::The line stopped but left ~/.local/share/ilo."; exit 1; }
+          step=$(sed -n 's/^  \(printf .*apparmor_parser.*\)$/\1/p' "$RUNNER_TEMP/refused.log")
+          [ -n "$step" ] || { echo "::error::The line stopped without naming the step."; exit 1; }
+          bash -c "$step"
+          mkdir "$RUNNER_TEMP/out"
+          bash tools/install-check.sh "$ILO_RELEASE_URL" "$RUNNER_TEMP/out"
+          cp "$RUNNER_TEMP/refused.log" "$RUNNER_TEMP/out/"
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: linux-install-ubuntu-apparmor
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore

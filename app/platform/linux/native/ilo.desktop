@@ -1,0 +1,27 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=ilo
+GenericName=Web Browser
+Comment=a good tool.
+Exec=ilo %U
+Icon=ilo
+Terminal=false
+StartupNotify=true
+StartupWMClass=ilo
+Categories=Network;WebBrowser;
+Keywords=web;browser;internet;
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+Actions=new-window;new-private-window;new-little-window;
+
+[Desktop Action new-window]
+Name=New window
+Exec=ilo --new-window
+
+[Desktop Action new-private-window]
+Name=New incognito window
+Exec=ilo --incognito
+
+[Desktop Action new-little-window]
+Name=New Little ilo Window
+Exec=ilo --new-little-window

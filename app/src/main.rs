@@ -1151,7 +1151,9 @@ pub extern "C" fn bc_app_host(
     let given = (given.iter()).map(|&arg| unsafe { CStr::from_ptr(arg) }.to_string_lossy().into());
     // Chromium names the windows' X11 class and Wayland app id after this desktop entry, and the
     // desktop takes their icon from the entry it matches: ilo's, not "chromium-browser" (#1350).
-    // The Flatpak's launcher sets the same. Chromium reads it later, when it opens a window.
+    // The native install's launcher names its own, ilo.desktop, which the default browser and
+    // notifications follow too (host.cc, needs_you/desktop.rs). Chromium reads it later, when it
+    // opens a window.
     #[cfg(target_os = "linux")]
     if std::env::var_os("CHROME_DESKTOP").is_none_or(|desktop| desktop.is_empty()) {
         let desktop = format!("{}.desktop", include_str!("../branding/id").trim());

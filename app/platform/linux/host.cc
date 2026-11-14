@@ -139,9 +139,13 @@ void CheckAppActive() {
   });
 }
 
-// The desktop entry the desktop knows the browser by, which the Flatpak installs, from
-// branding/id (build.rs).
-constexpr char kDesktopId[] = APP_ID ".desktop";
+// The desktop entry the desktop knows the browser by: the one CHROME_DESKTOP names, which the native
+// install's launcher sets to its own, or else the Flatpak's, from branding/id (build.rs), which
+// main.rs sets it to.
+std::string DesktopId() {
+  const char* id = getenv("CHROME_DESKTOP");
+  return id && *id ? id : APP_ID ".desktop";
+}
 
 std::vector<std::string> Split(const char* list, const char* fallback) {
   std::vector<std::string> parts;
@@ -420,15 +424,16 @@ bool host_app_active(void) {
 // Read as xdg-settings reads it on most desktops. A Flatpak sees its own config rather than the
 // desktop's, and no portal reads the setting, so there it reads as not the default.
 bool host_is_default_browser(void) {
-  return DefaultFor("x-scheme-handler/http") == kDesktopId &&
-         DefaultFor("x-scheme-handler/https") == kDesktopId;
+  return DefaultFor("x-scheme-handler/http") == DesktopId() &&
+         DefaultFor("x-scheme-handler/https") == DesktopId();
 }
 
 // xdg-settings sets it as each desktop keeps it, as Chromium does on Linux, and asks the user
 // nothing. A Flatpak has no xdg-settings and no portal that sets it, so there the answer comes
 // with nothing changed, and the row's detail says where to set it.
 void host_make_default_browser(void (*answered)(void)) {
-  const char* argv[] = {"xdg-settings", "set", "default-web-browser", kDesktopId, nullptr};
+  std::string id = DesktopId();
+  const char* argv[] = {"xdg-settings", "set", "default-web-browser", id.c_str(), nullptr};
   pid_t pid = 0;
   if (!g_child_watch_add ||
       posix_spawnp(&pid, argv[0], nullptr, nullptr, const_cast<char**>(argv), environ) != 0) {

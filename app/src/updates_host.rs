@@ -48,6 +48,10 @@ pub(crate) fn start_updates(cx: &mut App) {
         updates::Updater::Own
     } else if updated_by_store() {
         updates::Updater::Store
+    } else if updated_by_script() {
+        // Read by tools/install-check.sh, as the native install's sign it knows what updates it.
+        log!("browser: updated by install.sh");
+        updates::Updater::Script
     } else {
         updates::Updater::None
     };
@@ -187,6 +191,13 @@ pub(crate) fn updated_by_store() -> bool {
     return unsafe { platform::host_updated_by_store() };
     #[cfg(target_os = "linux")]
     false
+}
+
+/// Whether install.sh made this copy, the native Linux install, which keeps the script beside
+/// chrome (tools/linux-tarball.sh) and is updated by running its line again.
+fn updated_by_script() -> bool {
+    cfg!(target_os = "linux")
+        && std::env::current_exe().is_ok_and(|exe| exe.with_file_name("install.sh").is_file())
 }
 
 /// The system's updater, as Settings › About's row asks it.
