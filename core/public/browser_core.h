@@ -3041,6 +3041,23 @@ typedef struct bc_arrange_look {
 // ends it, with tab_arrange_ended.
 BC_EXPORT bool bc_tab_arrange(bc_id tab, bool on, const bc_arrange_look* look);
 
+// How an element Arrange lifts off the page stands over it, while it's carried and while it floats,
+// with Arrange on or off: the app's popover elevation from tokens.toml, colours as 0xRRGGBBAA as
+// the tokens have them. |rim| is a line inside the element's edge, |outline| one round its outside
+// blurred |outline_blur|, and |shadow| falls |shadow_y| down blurred |shadow_blur|, in CSS pixels
+// from 0 to 64, else 0. A colour with no alpha draws nothing. The page's own box-shadow on the
+// element stays, over ours. The app gives it once, before the first page loads, and for every
+// profile; until then a lifted element stands off the page by nothing.
+typedef struct bc_arrange_lift {
+  uint32_t rim;
+  uint32_t outline;
+  uint32_t shadow;
+  double outline_blur;
+  double shadow_y;
+  double shadow_blur;
+} bc_arrange_lift;
+BC_EXPORT void bc_arrange_set_lift(const bc_arrange_lift* lift);
+
 // What the user asks of Arrange, by the keys the app takes before the page and the bars' buttons:
 // point at the box around the one pointed at (↑) or inside it (↓); undo the last change of the
 // mode's; hide the selected element, as Zap does, with tab_boost_zapped for the app to add to the
