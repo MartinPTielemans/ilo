@@ -153,6 +153,7 @@ def describe(w, frame, order):
 
 
 def snap():
+    seen = set()
     for order, frame in enumerate(children(root)):
         fa = attrs(frame)
         if not fa:
@@ -166,6 +167,16 @@ def snap():
             if not client:
                 continue
         info = describe(client, frame, order)
+        if info:
+            seen.add(client)
+            print(json.dumps(info))
+    # The clients in frames the manager made override-redirect, as i3's are.
+    tops = children(root)
+    for client in prop(root, "_NET_CLIENT_LIST", "raw") or []:
+        if client in seen:
+            continue
+        frame = frame_of(client)
+        info = describe(client, frame, tops.index(frame) if frame in tops else -1)
         if info:
             print(json.dumps(info))
     focus, revert = ul(), ci()
