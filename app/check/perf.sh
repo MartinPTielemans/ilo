@@ -324,21 +324,46 @@ if [ -n "$held" ]; then
     "the launches below are on it"
   selfied=", on uBlock Origin's selfie"
 fi
-for n in 1 2 3 4 5; do
-  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
-  perf_launch "$page?link$n" "link$n" "link$n"
-  echo "$painted" >> "$perf_dir/link"
-  echo "$on_screen" >> "$perf_dir/on-screen"
-  echo "$browser_on_screen" >> "$perf_dir/browser-on-screen"
-  echo "${held:-0}" >> "$perf_dir/held"
+# Proof only (#2384): each launch alternates before (BROWSER_PROOF_BEFORE, the launch window shown
+# and activated in one ShowWindow, as main does) and after, 10 of each kind each way, each way's
+# numbers in files of their own, with rows for each below; then the rest of perf is skipped.
+for n in 1 2 3 4 5 6 7 8 9 10; do
+  for when in before after; do
+    if [ $when = before ]; then export BROWSER_PROOF_BEFORE=1; else unset BROWSER_PROOF_BEFORE; fi
+    rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+    perf_launch "$page?link$n$when" "link$n$when" "link$n-$when"
+    echo "$painted" >> "$perf_dir/link-$when"
+    echo "$on_screen" >> "$perf_dir/on-screen-$when"
+    echo "$browser_on_screen" >> "$perf_dir/browser-on-screen-$when"
+    echo "${held:-0}" >> "$perf_dir/held-$when"
+  done
 done
-for n in 1 2 3 4 5; do
-  perf_launch "" link5 "restore$n"
-  echo "$painted" >> "$perf_dir/restore"
-  echo "$on_screen" >> "$perf_dir/on-screen"
-  echo "$browser_on_screen" >> "$perf_dir/browser-on-screen"
-  echo "${held:-0}" >> "$perf_dir/held"
+for n in 1 2 3 4 5 6 7 8 9 10; do
+  for when in before after; do
+    if [ $when = before ]; then export BROWSER_PROOF_BEFORE=1; else unset BROWSER_PROOF_BEFORE; fi
+    perf_launch "" link10after "restore$n-$when"
+    echo "$painted" >> "$perf_dir/restore-$when"
+    echo "$on_screen" >> "$perf_dir/on-screen-$when"
+    echo "$browser_on_screen" >> "$perf_dir/browser-on-screen-$when"
+    echo "${held:-0}" >> "$perf_dir/held-$when"
+  done
 done
+unset BROWSER_PROOF_BEFORE
+for when in before after; do
+  perf_row "launch-link-$when" "Launch, link to page painted${selfied:-}, $when" \
+    "$(perf_stats '%.0f' < "$perf_dir/link-$when") ms" "proof only"
+  perf_row "launch-window-$when" "Launch, window on screen, $when" \
+    "$(perf_stats '%.0f' < "$perf_dir/on-screen-$when") ms" "proof only"
+  perf_row "launch-browser-window-$when" "Launch, browser window on screen, $when" \
+    "$(perf_stats '%.0f' < "$perf_dir/browser-on-screen-$when") ms" "proof only"
+  perf_row "launch-restore-$when" "Launch, restored page painted${selfied:-}, $when" \
+    "$(perf_stats '%.0f' < "$perf_dir/restore-$when") ms" "proof only"
+  perf_row "launch-held-$when" "Launch, the page held for uBlock Origin${selfied:-}, $when" \
+    "$(perf_stats '%.0f' < "$perf_dir/held-$when") ms" "proof only"
+done
+echo "ok: proof only (#2384): 40 launches alternating before and after the launch window's show," \
+  "logs in $perf_dir/launch-*.log; the rest of perf skipped"
+return 0
 perf_row launch-link "Launch, link to page painted${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/link") ms" "Ardia 413 ms, Chrome 484 ms"
 perf_row launch-window "Launch, window on screen" "$(perf_stats '%.0f' < "$perf_dir/on-screen") ms" \

@@ -3112,8 +3112,9 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   // Maximized on the screen of the frame it was made at, which it un-maximizes to, which Windows
   // can't do without activating it. Otherwise shown, then brought to the front: showing and
   // activating it in one ShowWindow took 7 ms more, before Chromium starts (#2384).
-  if (maximized) {
-    ShowWindow(window, SW_SHOWMAXIMIZED);
+  // Proof only (#2384): BROWSER_PROOF_BEFORE shows it as main does, activated in one ShowWindow.
+  if (maximized || getenv("BROWSER_PROOF_BEFORE")) {
+    ShowWindow(window, maximized ? SW_SHOWMAXIMIZED : SW_SHOW);
   } else {
     ShowWindow(window, SW_SHOWNA);
     SetForegroundWindow(window);
