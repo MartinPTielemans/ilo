@@ -14,11 +14,16 @@ printf '{"download": {"default_directory": "%s", "prompt_for_download": false}}'
   "$(native_path "$PWD/$out/downloads" | sed 's/\\/\\\\/g')" > "$profile_dir/Default/Preferences"
 # Chromium's log of the update checks, which an official build writes only when asked.
 updates="--enable-logging=stderr --vmodule=extension_downloader=2,extension_updater=2"
+# On Linux, removing the extension runs xdg-icon-resource for its icons, here in the run's own data
+# folder, never the runner's home. Without a hicolor folder its error lands in the log, and once
+# came in the middle of the app's line that ⌘Q's wait reads (Check on Linux 43492843229, X11).
+data_dir="$PWD/$out/store/data"
+mkdir -p "$data_dir/icons/hicolor"
 # Launches the app on the store's page for the extension, with the log $1.
 open_store() {
   log="$out/$1.log"
   step=0
-  BROWSER_DRIVE=1 BROWSER_URL="$store" BROWSER_PROFILE_DIR="$profile_dir" \
+  BROWSER_DRIVE=1 BROWSER_URL="$store" BROWSER_PROFILE_DIR="$profile_dir" XDG_DATA_HOME="$data_dir" \
     "$browser" $updates < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"

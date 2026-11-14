@@ -121,10 +121,11 @@ struct SavedSpace {
 // Puts the Today tabs it saved in |today| if it isn't null.
 SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today = nullptr);
 
-// Makes |saved| a Space, its tabs unloaded in |window| and |profile|, with the id |id|, a deleted
+// Makes |saved| a Space in the profile in the directory |profile|, its tabs unloaded in |window|
+// and waiting for that profile if it's still loading (Tab::Restore), with the id |id|, a deleted
 // Space's, if it isn't 0. The window shows its shown tab there. Returns it.
 Space* RestoreSpace(Window& window,
-                    Profile* profile,
+                    const std::string& profile,
                     const SavedSpace& saved,
                     bc_id id = 0,
                     size_t at = SIZE_MAX);
