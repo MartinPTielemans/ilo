@@ -69,7 +69,7 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
         # names its property on the root window (#2134).
         config=$(mktemp -d)
         printf "[Plugins]\nblurEnabled=true\n" > "$config/kwinrc"
-        # Spike (#2790): KWin's window open and close animations off, to tell them from the app's.
+        # Spike (#2790): the open and close animations of KWin off, to tell them from those of the app.
         case "${CHECK_TRACE_CATEGORIES:-}" in *noanim*)
           printf "scaleEnabled=false\nfadeEnabled=false\nglideEnabled=false\n" >> "$config/kwinrc" ;;
         esac
