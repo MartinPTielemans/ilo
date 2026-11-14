@@ -110,6 +110,7 @@ pub fn log_handover(stage: &str, detail: &str) {
 }
 
 pub mod account;
+pub mod ad_block;
 pub mod agent_history;
 pub mod agents;
 pub mod boost_editor;
@@ -118,6 +119,7 @@ pub mod boosts;
 pub mod build_info;
 pub mod capture;
 pub mod child;
+pub mod clipboard;
 pub mod command_bar;
 pub mod daily_count;
 pub mod default_browser;

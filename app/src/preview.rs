@@ -39,7 +39,7 @@ use browser::theme::{Appearance, Theme};
 use browser::theme_picker;
 use gpui::{
     App, AppContext, Bounds, Focusable, Pixels, Point, SharedString, Size, TitlebarOptions,
-    WeakEntity, WindowBounds, WindowOptions, point, px, size,
+    TouchPhase, WeakEntity, WindowBounds, WindowOptions, point, px, size,
 };
 
 thread_local! {
@@ -971,6 +971,9 @@ impl Browser for Fake {
     // The made-up pages share nothing.
     fn share_instead(&self, _: u64, _: &mut App) {}
 
+    // The made-up pages have no video.
+    fn show_video(&self, _: u64, _: Option<Bounds<Pixels>>, _: f32, _: &mut App) {}
+
     fn set_volume(&self, tab: u64, volume: f32, cx: &mut App) {
         self.later(cx, move |shell, cx| {
             let page = Page {
@@ -1666,8 +1669,8 @@ impl Browser for Fake {
     // The preview leaves the clipboard alone, and shares nothing.
     fn copy(&self, _: &str, _: &mut App) {}
 
-    fn pasted(&self, _: &App) -> Option<String> {
-        None
+    fn pasted(&self, cx: &mut App, done: browser::clipboard::Done) {
+        cx.defer(move |cx| done(None, cx));
     }
 
     fn share_services(&self, _: &str) -> Vec<SharedString> {
@@ -1854,9 +1857,9 @@ impl command_bar::Host for PreviewBar {
         Some(format!("https://duckduckgo.com/?q={text}"))
     }
     fn page_favicon(&self, _: &str) {}
-    fn open_tab(&self, _: &str, _: bool) {}
-    fn open_window(&self, _: &str, _: &mut App) {}
-    fn navigate(&self, _: u64, _: &str) {}
+    fn open_tab(&self, _: &str, _: &str, _: bool) {}
+    fn open_window(&self, _: &str, _: &str, _: &mut App) {}
+    fn navigate(&self, _: u64, _: &str, _: &str) {}
     fn reload(&self, _: u64) {}
     fn select(&self, _: u64) {}
     fn tab_window(&self, _: u64) -> Option<u64> {
@@ -1864,7 +1867,7 @@ impl command_bar::Host for PreviewBar {
     }
     fn activate(&self, _: u64, _: u64, _: &mut App) {}
     fn split(&self, _: u64, _: u64, _: &mut App) {}
-    fn open_split(&self, _: &str, _: u64, _: &mut App) {}
+    fn open_split(&self, _: &str, _: &str, _: u64, _: &mut App) {}
     fn copy(&self, _: &str, _: &mut App) {}
     fn show(&self, _: bool, _: f32, _: f32, _: f32, _: f32, _: browser::elevation::Level) {}
     fn set_height(&self, _: f32) {}
@@ -1905,6 +1908,20 @@ impl command_bar::Host for PreviewBar {
     fn set_up_agents(&self, _: &mut App) {}
 
     fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
+
+    /// PREVIEW_BAR=places's closed tabs, one closed two hours ago and one three days ago.
+    fn archived(&self, url: &str, _: &App) -> Option<(u64, f64)> {
+        let hours = match url {
+            "https://doc.rust-lang.org/std/collections/struct.HashMap.html" => 2.,
+            "https://crates.io/" => 72.,
+            _ => return None,
+        };
+        Some((1, self.now() - hours * 3_600_000.))
+    }
+
+    fn restore_archived(&self, _: u64, _: &mut App) -> bool {
+        false
+    }
 }
 
 /// A made-up page's request for a device, as PREVIEW_CHOOSER names it.
@@ -2198,6 +2215,53 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
                 ),
             ];
             ("clear", rows)
+        }
+        // Where a result is (#2337): an open tab, a tab in the archive and a page only in the
+        // history.
+        "places" => {
+            let now = command_bar::Host::now(&PreviewBar);
+            let history = |hours: f64, row: Suggestion| Suggestion {
+                removable: true,
+                last_visit: ((now - hours * 3_600_000.) * 1000.) as i64,
+                ..row
+            };
+            let rows = vec![
+                page(
+                    "Rust Programming Language",
+                    "",
+                    "https://www.rust-lang.org/",
+                    4,
+                ),
+                search("rust"),
+                history(
+                    2.,
+                    page(
+                        "HashMap in std::collections - Rust",
+                        "doc.rust-lang.org",
+                        "https://doc.rust-lang.org/std/collections/struct.HashMap.html",
+                        0,
+                    ),
+                ),
+                history(
+                    24.,
+                    page(
+                        "The Rust Programming Language",
+                        "doc.rust-lang.org",
+                        "https://doc.rust-lang.org/book/",
+                        0,
+                    ),
+                ),
+                history(
+                    72.,
+                    page(
+                        "crates.io: Rust Package Registry",
+                        "crates.io",
+                        "https://crates.io/",
+                        0,
+                    ),
+                ),
+            ];
+            ("rust", rows)
         }
         // The bar adds Open Library… itself, whose glyph the sidebar foot's button shares.
         "library" => ("library", vec![search("library")]),
@@ -2780,8 +2844,8 @@ fn main() {
                     cx.quit();
                 }
             }
-            // PREVIEW_BAR=tabs, sites, commands or library shows the command bar over the window, with
-            // made-up suggestions.
+            // PREVIEW_BAR=tabs, sites, commands, library or places shows the command bar over the window,
+            // with made-up suggestions.
             if let Ok(mode) = std::env::var("PREVIEW_BAR") {
                 let left = x + (width - command_bar::WIDTH as f64) / 2.;
                 let top = y as f32 + command_bar::centered_top(height as f32);
@@ -2909,6 +2973,51 @@ fn main() {
                             shell.run(Command::SiteControls, "preview", cx)
                         })
                         .ok();
+                })
+                .detach();
+            }
+            // PREVIEW_SWIPE=1 brings the Library out with fingers going right on the first Space, and
+            // takes it back with them going left, through the gesture's own code, then does the
+            // same with clicks, for a recording of its motion (#2375).
+            if let Some(shell) =
+                shell_window.filter(|_| std::env::var_os("PREVIEW_SWIPE").is_some())
+            {
+                cx.spawn(async move |cx| {
+                    let executor = cx.background_executor().clone();
+                    let wait = |ms| executor.timer(Duration::from_millis(ms));
+                    wait(1000).await;
+                    // Fingers 1.2 Library widths each way in half a second, a frame at a time.
+                    for way in [1., -1.] {
+                        log!(
+                            "browser: preview swipe {}",
+                            if way > 0. { "in" } else { "out" }
+                        );
+                        let step = |phase, x| {
+                            move |shell: &mut Shell,
+                                  window: &mut gpui::Window,
+                                  cx: &mut gpui::Context<Shell>| {
+                                shell.preview_fingers(x, phase, window, cx)
+                            }
+                        };
+                        shell.update(cx, step(TouchPhase::Started, 0.)).ok();
+                        for _ in 0..30 {
+                            wait(16).await;
+                            let x = way * 1.2 * 417. / 30. / 0.5;
+                            shell.update(cx, step(TouchPhase::Moved, x)).ok();
+                        }
+                        shell.update(cx, step(TouchPhase::Ended, 0.)).ok();
+                        wait(2000).await;
+                    }
+                    for stage in ["in", "out"] {
+                        log!("browser: preview click {stage}");
+                        shell
+                            .update(cx, |shell, _, cx| {
+                                shell.run(Command::ViewLibrary, "preview", cx)
+                            })
+                            .ok();
+                        wait(2000).await;
+                    }
+                    log!("browser: preview swipe done");
                 })
                 .detach();
             }
@@ -4586,6 +4695,15 @@ mod web {
     }
 
     impl command_bar::Host for Bar {
+        // The web preview's tabs aren't closed into an archive.
+        fn archived(&self, _: &str, _: &App) -> Option<(u64, f64)> {
+            None
+        }
+
+        fn restore_archived(&self, _: u64, _: &mut App) -> bool {
+            false
+        }
+
         fn suggest(&self, _: Option<&str>, text: &str, _: bool) {
             let text = text.to_string();
             let search = self.search_url(None, &text).filter(|_| !text.is_empty());
@@ -4626,7 +4744,7 @@ mod web {
         }
         fn page_favicon(&self, _: &str) {}
         // A new tab at the top of Today, shown.
-        fn open_tab(&self, url: &str, behind: bool) {
+        fn open_tab(&self, url: &str, _: &str, behind: bool) {
             let (tab, url) = (self.next_tab.get(), url.to_string());
             self.next_tab.set(tab + 1);
             self.later_shell(move |shell, cx| {
@@ -4648,10 +4766,10 @@ mod web {
             });
         }
         // The demo has the one window.
-        fn open_window(&self, url: &str, _: &mut App) {
-            self.open_tab(url, false);
+        fn open_window(&self, url: &str, typed: &str, _: &mut App) {
+            self.open_tab(url, typed, false);
         }
-        fn navigate(&self, tab: u64, url: &str) {
+        fn navigate(&self, tab: u64, url: &str, _: &str) {
             let url = url.to_string();
             self.later_shell(move |shell, cx| {
                 shell.set_title(tab, title(&url), cx);
@@ -4674,8 +4792,8 @@ mod web {
         }
         fn activate(&self, _: u64, _: u64, _: &mut App) {}
         fn split(&self, _: u64, _: u64, _: &mut App) {}
-        fn open_split(&self, url: &str, _: u64, _: &mut App) {
-            self.open_tab(url, false);
+        fn open_split(&self, url: &str, typed: &str, _: u64, _: &mut App) {
+            self.open_tab(url, typed, false);
         }
         fn copy(&self, _: &str, _: &mut App) {}
         fn show(

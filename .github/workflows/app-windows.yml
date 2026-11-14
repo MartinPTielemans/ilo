@@ -16,6 +16,13 @@ on:
     paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, '!**/*.md']
   # A branch's head before its pull request is ready, such as a lane's Windows code.
   workflow_dispatch:
+  # CI's run for a branch's push that touches what only Windows compiles (.github/scripts/ci-changes.cjs).
+  workflow_call:
+    inputs:
+      from_ci:
+        description: Called by CI's run for a push, which never cancels another
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,9 +30,10 @@ permissions:
 # A pull request's newer push cancels its older run, as does a branch's newer dispatch. Main's runs
 # each get a group of their own, so none is cancelled, or replaced while it waits. So does a run
 # another label started, which skips its job: in the pull request's group it would cancel the run
-# in progress, which the merge queue reads as a failure (#1506).
+# in progress, which the merge queue reads as a failure (#1506). CI's call gets one of its own, as
+# a push's CI run is never cancelled: the next push's would check only what that push added.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.label && github.event.label.name != 'queue:ready' && github.run_id || github.event.pull_request.number || github.ref != 'refs/heads/main' && github.ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ inputs.from_ci && github.run_id || github.event.label && github.event.label.name != 'queue:ready' && github.run_id || github.event.pull_request.number || github.ref != 'refs/heads/main' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:

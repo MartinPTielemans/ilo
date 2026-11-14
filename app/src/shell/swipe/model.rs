@@ -314,8 +314,9 @@ impl Run {
 }
 
 /// The fingers' and momentum's events, each `(ms, what)` as `send` gives it to the shell, which
-/// shows a Space as soon as it asks to, as the core does, with the page's place each step.
-fn run(cx: &mut TestAppContext, end_ms: f64, mut events: Vec<(f64, Send)>) -> Run {
+/// shows a Space as soon as it asks to, as the core does, with the page's place each step. The
+/// window draws at `frames`, in ms, after the events up to each.
+fn run(cx: &mut TestAppContext, end_ms: f64, mut events: Vec<(f64, Send)>, frames: &[f64]) -> Run {
     let (shell, host, cx) = five_spaces(cx);
     let start = cx.executor().now();
     let at = |ms: f64| start + Duration::from_secs_f64(ms / 1000.);
@@ -343,14 +344,28 @@ fn run(cx: &mut TestAppContext, end_ms: f64, mut events: Vec<(f64, Send)>) -> Ru
             }
         });
     };
+    // The Library's motion, among others, ends only as it's drawn: undrawn, a closed Library
+    // stayed in motion, and the next swipe moved it instead of the Spaces.
+    let mut frames = frames.iter().copied().peekable();
+    let draw = |cx: &mut gpui::VisualTestContext, frame: f64| {
+        to(cx, frame);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    };
     let mut ms = 0.;
     while ms <= end_ms {
         while let Some((when, send)) = events.next_if(|(when, _)| *when <= ms) {
+            // A browser hands on the events a frame heard before it draws that frame.
+            while let Some(frame) = frames.next_if(|&frame| frame < when) {
+                draw(cx, frame);
+            }
             to(cx, when);
             show(cx, when, &mut first_shown_ms);
             let now = at(when);
             shell.update_in(cx, |shell, window, cx| send(shell, now, window, cx));
             show(cx, when, &mut first_shown_ms);
+        }
+        while let Some(frame) = frames.next_if(|&frame| frame <= ms) {
+            draw(cx, frame);
         }
         to(cx, ms);
         show(cx, ms, &mut first_shown_ms);
@@ -407,7 +422,7 @@ fn in_app(cx: &mut TestAppContext, events: &[Event], end_ms: f64) -> Run {
             (event.at_ms, send)
         })
         .collect();
-    run(cx, end_ms, sends)
+    run(cx, end_ms, sends, &[])
 }
 
 /// The site's demo: the browser's wheel events, each at its stamp, and the quiet timers they set.
@@ -428,7 +443,7 @@ fn in_demo_wheels(cx: &mut TestAppContext, wheels: Vec<Wheel>, end_ms: f64) -> R
             (at_ms, send)
         })
         .collect();
-    run(cx, end_ms, sends)
+    run(cx, end_ms, sends, &[])
 }
 
 /// The deliveries the demo is compared in.
@@ -554,8 +569,9 @@ impl Run {
 }
 
 /// How much further than the app's a hard flick may take the page past its Space, in Spaces: a
-/// browser's lift comes some events late, and that much is a few pixels.
-const PAST_SLACK: f32 = 0.02;
+/// browser's lift comes some events late, and at 60 Hz the frame that straddles it can read as the
+/// fingers' fastest and stretch the band a pixel.
+const PAST_SLACK: f32 = 0.005;
 
 /// A hard flick lands on the next Space, as the app's does, goes no further past it than the app's
 /// give or take PAST_SLACK, and once the demo finds the fingers lifted, the page settles there
@@ -990,7 +1006,14 @@ fn replay(cx: &mut TestAppContext, trace: &serde_json::Value, space: u64) -> (Ru
         sends.push((heard, send));
     }
     let end = sends.last().map_or(0., |(heard, _)| *heard) + 1000.;
-    let run = run(cx, end, sends);
+    let frames: Vec<f64> = trace["frames"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|frame| Some(frame.as_f64()? - first))
+        .filter(|&frame| frame >= 0.)
+        .collect();
+    let run = run(cx, end, sends, &frames);
     let decided = decided.borrow().clone();
     (run, decided)
 }
@@ -1088,4 +1111,36 @@ fn a_replayed_trace_tells_the_demos_decisions(cx: &mut TestAppContext) {
     );
     assert!(land < axis && axis < lift && lift < space, "{decided:?}");
     assert_eq!(run.shown, vec![4], "{decided:?}");
+}
+
+/// A trace of flicks that open the Library from the first Space, close it and go on to the next
+/// Space, replayed with the frames the page drew, goes on to that Space as the demo does: the
+/// Library at rest once closed, not still on its way (#2409).
+#[gpui::test]
+fn a_replayed_trace_swipes_on_after_the_library(cx: &mut TestAppContext) {
+    let mut events = Vec::new();
+    let mut from = 0.;
+    // Toward the Library, back, then on.
+    for way in [-1., 1., 1.] {
+        for (heard, stamp, dx, dy) in Delivery::Frames(60.).wheels(&flick(2)) {
+            let (x, y) = (-dx * way, -dy);
+            let (heard, stamp) = (from + heard, from + stamp);
+            events.push(
+                serde_json::json!({ "stamp": stamp, "heard": heard, "x": x, "y": y, "mode": 0 }),
+            );
+        }
+        from += 1500.;
+    }
+    let frames: Vec<f64> = (0..(from / (1000. / 60.)) as usize)
+        .map(|frame| frame as f64 * 1000. / 60.)
+        .collect();
+    let trace = serde_json::json!({ "version": 2, "events": events, "frames": frames });
+    let (run, decided) = replay(cx, &trace, 1);
+    let said: Vec<&str> = decided
+        .iter()
+        .filter(|(_, kind, _)| kind == "library" || kind == "space")
+        .map(|(_, _, what)| what.as_str())
+        .collect();
+    assert_eq!(said, ["open", "closed", "+1"], "{decided:?}");
+    assert_eq!(run.shown, vec![2], "{decided:?}");
 }

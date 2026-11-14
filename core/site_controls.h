@@ -75,6 +75,9 @@ class SiteControls : public PageInfoUI,
                                 content::BrowserContext* context) override;
   void OnShuttingDown() override;
 
+  // The browser's own ad blocker's count, which it sends as WatchNativeAdBlocked says.
+  void NativeAdBlocked(int blocked);
+
   // Tells the app from a task of its own: PageInfo reports inside the app's calls that change a
   // permission, and a burst of changes is one call.
   void Changed();
@@ -99,6 +102,8 @@ class SiteControls : public PageInfoUI,
   bool system_engine_ = false;
   bool system_engine_offered_ = false;
   bool reporting_ = false;
+  // How many requests the browser's own ad blocker blocked on the page, -1 until it says.
+  int native_blocked_ = -1;
   base::ScopedObservation<extensions::ExtensionActionDispatcher,
                           extensions::ExtensionActionDispatcher::Observer>
       actions_{this};

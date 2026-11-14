@@ -35,8 +35,10 @@
 # the run reads the player from the load on, to say whether an ad showed before the video played
 # 5 s, and it fails where the baseline's played with no ad and this run's showed one or didn't
 # play. It needs the network and the sites, so it runs only when named: ./check.sh adblock-parity.
-# It leaves adblock-parity/sites.tsv, a capture a site, the requests recorded, and in hidden/ what
-# each site hid, which a run with uBlock Origin copies beside its table for the next to compare.
+# Both engines block with one copy of each list, downloaded once by the baseline's run.
+# It leaves adblock-parity/sites.tsv, a capture a site, the requests recorded, in hidden/ what
+# each site hid, and in lists/ the lists it blocked with, which a run with uBlock Origin copies
+# beside its table for the next to compare.
 engine=${engine:-ublock}
 
 serve
@@ -65,9 +67,87 @@ ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
 scratch=$(mktemp -d)
 engine_switch=
 case $engine in ublock | off) ;; *) engine_switch=--ad-block-engine=$engine ;; esac
+# Both engines block with the same copy of each list, or a list's authors' edits between the two
+# runs read as one engine's miss: foxnews let rockspreading.com through on the Mac, which only that
+# day's EasyPrivacy named (#2111). The baseline's run downloads each list it starts with once, into
+# lists/ beside its table, and a run held to it takes those: uBlock Origin from the check's server,
+# through --ad-block-lists, and the browser's own engine as the copies it downloaded itself, too
+# new to download again.
+if [ -d "$app/ublock" ]; then
+  ublock="$app/ublock"
+else
+  ublock="$(echo "$app"/Contents/Frameworks/*Framework.framework)/Resources/ublock"
+fi
+lists="$dir/lists"
+held_lists=
+[ -z "${ADBLOCK_PARITY_BASELINE:-}" ] || held_lists="${ADBLOCK_PARITY_BASELINE%sites.tsv}lists"
+if [ -n "$held_lists" ] && [ -s "$held_lists/snapshot.txt" ]; then
+  cp -R "$held_lists" "$lists"
+else
+  python3 -I - "$ublock/assets/assets.json" "$lists" > "$scratch/lists.txt" 2>&1 << 'PY' ||
+import json, os, sys, time, urllib.request
+
+assets_json, folder = sys.argv[1:]
+os.makedirs(folder)
+# uBlock Origin's file is UTF-8, which Windows' Python doesn't read by default (#872).
+with open(assets_json, encoding="utf-8") as f:
+    assets = json.load(f)
+kept = []
+for key, entry in assets.items():
+    if entry.get("content") != "filters" or entry.get("off"):
+        continue
+    urls = entry.get("contentURL", [])
+    urls = entry.get("cdnURLs", []) + ([urls] if isinstance(urls, str) else urls)
+    for url in (u for u in urls if u.startswith("https:")):
+        try:
+            body = urllib.request.urlopen(url, timeout=30).read()
+        except OSError:
+            continue
+        # A server's page about an error isn't a list, as the core's own download checks.
+        if body.lstrip()[:1] not in (b"", b"<"):
+            with open(os.path.join(folder, key + ".txt"), "wb") as f:
+                f.write(body)
+            kept.append(key)
+            break
+with open(os.path.join(folder, "snapshot.txt"), "w") as f:
+    f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ\n", time.gmtime()) + "\n".join(kept) + "\n")
+print(f"{len(kept)} lists downloaded: {', '.join(kept)}")
+PY
+    fail "the lists didn't download for both engines to share: $(tail -3 "$scratch/lists.txt")"
+fi
+[ "$(sed 1d "$lists/snapshot.txt" | grep -c .)" -gt 0 ] ||
+  fail "no list downloaded for both engines to share: $(cat "$scratch/lists.txt")"
+mkdir -p "$out/site/parity-lists" "$dir/profile/Ad Blocking/Lists"
+python3 -I - "$ublock/assets/assets.json" "$lists" "${site}parity-lists/" \
+  > "$out/site/parity-lists/assets.json" << 'PY' || fail "the lists' assets.json wasn't written"
+import json, os, sys
+
+assets_json, folder, served = sys.argv[1:]
+with open(assets_json, encoding="utf-8") as f:
+    assets = json.load(f)
+with open(os.path.join(folder, "snapshot.txt")) as f:
+    kept = set(f.read().split()[1:])
+# Every list the snapshot has only from the check's server, as uBlock Origin would block with the
+# copy it comes with first and the newer one only once it updates, partway through the sites; the
+# rest only from the copy it comes with. Nothing it blocks with comes from the network.
+for key, entry in assets.items():
+    urls = entry.get("contentURL", [])
+    local = [u for u in ([urls] if isinstance(urls, str) else urls)
+             if not u.startswith(("http:", "https:"))]
+    entry.pop("cdnURLs", None)
+    entry["contentURL"] = [served + key + ".txt"] if key in kept else local
+json.dump(assets, sys.stdout, indent=1)
+PY
+for list in $(sed 1d "$lists/snapshot.txt"); do
+  cp "$lists/$list.txt" "$out/site/parity-lists/"
+  # Copied now, so younger than any list's updateAfter: the core's update finds none due.
+  cp "$lists/$list.txt" "$dir/profile/Ad Blocking/Lists/"
+done
+# Its own switch: a set engine_switch is what says this run asked for an engine of the browser's.
+lists_switch="--ad-block-lists=${site}parity-lists/assets.json"
 # A site's ask to show notifications or the like would hold the keyboard from the next ⌘L, so
 # Chrome answers each with no; without uBlock Origin's lists, sites' scripts ask (nypost.com).
-start_with_cdp "${site}parity.html" "$PWD/$dir/profile" /parity.html --deny-permission-prompts $engine_switch
+start_with_cdp "${site}parity.html" "$PWD/$dir/profile" /parity.html --deny-permission-prompts $engine_switch "$lists_switch"
 await_load
 tab=$(today | cut -d' ' -f1)
 await "^browser: title $tab ad script " || fail "the probe didn't say whether the ad script loaded"
@@ -471,9 +551,10 @@ echo "$run: $(cat "$result")$memory. Per site: $dir/sites.tsv"
 # uBlock Origin's, for adblock-native's to compare with in a check of its own.
 if [ "$engine" = ublock ]; then
   cp "$dir/sites.tsv" build/adblock-parity-sites.tsv
-  rm -rf build/adblock-parity-hidden
+  rm -rf build/adblock-parity-hidden build/adblock-parity-lists
   cp -R "$hides" build/adblock-parity-hidden
+  cp -R "$lists" build/adblock-parity-lists
 fi
 captured="with the window captured 8 s after each site loaded in $dir"
 [ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || captured="its sites in $dir"
-echo "ok: $run, ${ADBLOCK_PARITY_BASELINE:+no worse than $ADBLOCK_PARITY_BASELINE, }$captured"
+echo "ok: $run, ${ADBLOCK_PARITY_BASELINE:+no worse than $ADBLOCK_PARITY_BASELINE, }on the lists downloaded at $(head -1 "$lists/snapshot.txt"), $captured"

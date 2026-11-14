@@ -255,9 +255,9 @@ fn it_shows_the_site() {
 
 /// Where its page shows under the window, it's laid out at its size from the first and never
 /// resized by the motion: out of sight while the card grows with a plate in its place, under the
-/// plate as the card comes to rest, and through the hole from the next frame. As it closes, the
-/// plate fills the hole the frame before the hole closes and the page leaves, before the window's
-/// page has the keyboard back (#2519).
+/// plate the frame after the card first draws at rest, and through the hole from the frame after
+/// that. As it closes, the plate fills the hole the frame before the hole closes and the page
+/// leaves, before the window's page has the keyboard back (#2519).
 #[gpui::test]
 fn a_page_under_the_window_waits_for_the_card(cx: &mut TestAppContext) {
     let host = Recorder::default();
@@ -267,6 +267,9 @@ fn a_page_under_the_window_waits_for_the_card(cx: &mut TestAppContext) {
     assert_eq!(calls[..2], [OUT_OF_SIGHT, "show 1"]);
     assert!(calls[2..].iter().all(|call| call == NO_HOLE), "{calls:?}");
     rest(&mut shown);
+    // The card's first frame at rest, which the page comes in under only once it's on screen.
+    frame(&mut shown);
+    assert_eq!(shown.calls(), [NO_HOLE]);
     frame(&mut shown);
     assert_eq!(shown.calls(), [PLACED, NO_HOLE]);
     frame(&mut shown);
@@ -297,7 +300,8 @@ fn under_reduce_motion_a_page_under_the_window_waits_for_the_card(cx: &mut TestA
     rest(&mut shown);
     frame(&mut shown);
     frame(&mut shown);
-    assert_eq!(shown.calls(), [PLACED, NO_HOLE, HOLE]);
+    frame(&mut shown);
+    assert_eq!(shown.calls(), [NO_HOLE, PLACED, NO_HOLE, HOLE]);
 }
 
 /// Where a page under the window waits: at its size, left of the window.

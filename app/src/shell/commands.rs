@@ -1377,6 +1377,16 @@ pub fn window_became_key(shell: WeakEntity<Shell>) -> impl FnOnce(&mut App) + 's
     }
 }
 
+/// Whether a window made key since `shell` was has yet to be heard, so `shell` hearing late mustn't
+/// take the shortcuts back from it (#2648).
+pub(super) fn key_moved_on(shell: &WeakEntity<Shell>) -> bool {
+    MADE_KEY.with_borrow(|made_key| {
+        made_key
+            .as_ref()
+            .is_some_and(|made_key| made_key != shell && made_key.upgrade().is_some())
+    })
+}
+
 /// The shell made key has heard, so the ShellHandle names it.
 pub(super) fn heard_key(shell: &WeakEntity<Shell>) {
     MADE_KEY.with_borrow_mut(|made_key| {
@@ -2003,22 +2013,34 @@ impl Shell {
     /// does. The clipboard is read only now, and text that isn't one http(s) link opens nothing,
     /// as a drop of it doesn't. No agent path: the clipboard is the user's.
     fn paste_url_as_tab(&mut self, cx: &mut Context<Self>) {
-        if let Some(urls) = self.pasted_urls(cx) {
-            self.browser.open_at(&urls, false, 0, 0, cx);
-        }
+        self.pasted_urls(cx, |shell, urls, cx| {
+            shell.browser.open_at(&urls, false, 0, 0, cx);
+        });
     }
 
-    /// The clipboard's web link, read now, as one URL to open, or None for anything else.
-    pub(super) fn pasted_urls(&self, cx: &App) -> Option<Vec<String>> {
+    /// Hands `then` the clipboard's web link, read now, as one URL to open, and nothing for
+    /// anything else.
+    pub(super) fn pasted_urls(
+        &self,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, Vec<String>, &mut Context<Self>) + 'static,
+    ) {
+        let shell = cx.entity().downgrade();
         // From the host, where Copy Link put it: a driven Mac run's pasteboard is its own.
-        let text = self.browser.pasted(cx).unwrap_or_default();
-        // Text that isn't a web link opens nothing here, not a search, as Arc's ⌥⌘V does.
-        let urls = dropped_urls([(text.trim(), false)], |_| None);
-        if urls.is_empty() {
-            // check.sh reads this line.
-            log!("browser: pasted no URL");
-        }
-        Some(urls).filter(|urls| !urls.is_empty())
+        self.browser.pasted(
+            cx,
+            Box::new(move |text, cx| {
+                let text = text.unwrap_or_default();
+                // Text that isn't a web link opens nothing here, not a search, as Arc's ⌥⌘V does.
+                let urls = dropped_urls([(text.trim(), false)], |_| None);
+                if urls.is_empty() {
+                    // check.sh reads this line.
+                    log!("browser: pasted no URL");
+                    return;
+                }
+                shell.update(cx, |shell, cx| then(shell, urls, cx)).ok();
+            }),
+        );
     }
 
     /// File › Share… and the command bar's Share…: the system's share sheet for the page shown,
@@ -3267,5 +3289,41 @@ mod tests {
             ["select 11"],
             "and still does once the shell has heard"
         );
+    }
+
+    /// A window opened in front keeps the shortcuts when the window made key before it, as one
+    /// closed, hears only after it opened, as macOS reports no key change for the window opened
+    /// in front: ⌘N right after ⇧⌘W, then ⇧⌘W, closes the new window, not the one behind (#2648).
+    #[gpui::test]
+    fn a_window_opened_in_front_keeps_the_shortcuts_from_one_made_key_before(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(bind_keys);
+        let (behind, behind_host) = shell_with_today(cx, vec![11]);
+        cx.run_until_parked();
+
+        // A window closed and left this one key, and its shell hears once the executor turns.
+        let behind_heard = window_became_key(behind.downgrade());
+        // ⌘N's window opens before that turn, and is key from when it opens, as the app makes it.
+        let (opened, opened_host) = shell_with_today(cx, vec![21]);
+        let opened_heard = window_became_key(opened.downgrade());
+        cx.update(behind_heard);
+        behind_host.take();
+        opened_host.take();
+        let closed = |host: &super::super::recorder::Recorder| {
+            host.take().iter().any(|call| call == "close window")
+        };
+
+        cx.update(|cx| cx.dispatch_action(&Run(Command::CloseWindow)));
+        assert!(closed(&opened_host), "⇧⌘W closed the window opened");
+        assert!(!closed(&behind_host), "and not the one behind");
+
+        cx.update(opened_heard);
+        cx.update(|cx| cx.dispatch_action(&Run(Command::CloseWindow)));
+        assert!(
+            closed(&opened_host),
+            "and still does once the window opened has heard"
+        );
+        assert!(!closed(&behind_host), "the one behind still isn't closed");
     }
 }

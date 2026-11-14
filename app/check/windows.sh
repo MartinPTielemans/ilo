@@ -174,6 +174,8 @@ expect '^browser: front driven, main driven, key driven, ax focused driven, ax m
 send window 1
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: desktop space changed$' "the first window's full-screen Space didn't come forward"
+else
+  echo "skip: the full-screen window's Space coming forward, and the desktop's coming back: elsewhere full screen is no Space of its own."
 fi
 # Sway takes a full-screen window out of it as another on its workspace takes the focus, so there
 # the first left as the second came forward.
@@ -746,10 +748,32 @@ else
   echo "skip: a tab's row dragged out of its window: this system has no drag of a tab (#1798)."
 fi
 
+# ⌘N right after ⇧⌘W closed a window, escape and ⇧⌘W close the window ⌘N opened, not the one the
+# close left key: no key change comes for a window opened in front, and the window left key may
+# hear it was made key only after ⌘N's opened (#2648). A race, so in rounds, as a user goes, with
+# no window picked by the driver, which would make it key.
+send key n cmd
+expect '^browser: window opened [0-9]' "⌘N didn't open a window for the closes in a row"
+closing=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
+for round in 1 2 3 4; do
+  send key w cmd shift
+  expect '^browser: window closed [0-9]' "⇧⌘W closed no window in round $round"
+  closed=$(since | sed -n 's/^browser: window closed //p' | head -1)
+  [ "$closed" = "$closing" ] ||
+    fail "⇧⌘W after ⌘N and escape closed window $closed, not ⌘N's $closing, in round $round (#2648)"
+  [ "$round" = 4 ] && break
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N right after ⇧⌘W didn't open a window in round $round"
+  closing=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  new_window_bar
+done
+closes_in_a_row=", ⌘N right after ⇧⌘W, escape and ⇧⌘W close ⌘N's window"
+
 # ⇧⌘W in the last window quits. It's the driver's last command: the app doesn't report it done.
 post key w cmd shift
 exec 3>&-
 await "^browser: window closed $first\$" || fail "⇧⌘W didn't close the last window"
 exited
 forget_engine_sites
-echo "ok: ⌘N opens a window on the same Spaces with no page, whose card shows its one line, and a click on it with the command bar open only closes the bar, which never takes another window's page on a Space switch, is the one other apps take for the window in front with the first in full screen, the Spaces menu acts on it, a click on a row moves its page there live and the window it left draws a picture of the page, a click on which takes the page back, a window switching away from the page gives it back to the one with its picture and keeps the keyboard, ⇧⌘W gives the closed window's tabs back to the other, live, and quits from the last, ⇧↩ in the command bar opens a new window, and Switch to Tab brings forward the window showing the tab${webkit_moved:-}${dragged_out:-}. Each stage of a page's move between windows: $out/handover-summary.txt. Windows: $out/windows-new.png, $out/empty-window.png, $out/windows-moved.png, $out/windows-pictured.png, $out/windows-pictured-back.png, $out/windows-handed-back.png, $out/windows-closed.png, $out/windows-shift-return.png, $out/windows-switch.png${webkit_moved:+, $out/windows-webkit-pictured.png}"
+echo "ok: ⌘N opens a window on the same Spaces with no page, whose card shows its one line, and a click on it with the command bar open only closes the bar, which never takes another window's page on a Space switch, is the one other apps take for the window in front with the first in full screen, the Spaces menu acts on it, a click on a row moves its page there live and the window it left draws a picture of the page, a click on which takes the page back, a window switching away from the page gives it back to the one with its picture and keeps the keyboard, ⇧⌘W gives the closed window's tabs back to the other, live, and quits from the last, ⇧↩ in the command bar opens a new window, and Switch to Tab brings forward the window showing the tab${webkit_moved:-}${dragged_out:-}${closes_in_a_row}. Each stage of a page's move between windows: $out/handover-summary.txt. Windows: $out/windows-new.png, $out/empty-window.png, $out/windows-moved.png, $out/windows-pictured.png, $out/windows-pictured-back.png, $out/windows-handed-back.png, $out/windows-closed.png, $out/windows-shift-return.png, $out/windows-switch.png${webkit_moved:+, $out/windows-webkit-pictured.png}"

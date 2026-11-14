@@ -318,6 +318,8 @@ pub struct TextInput {
     menu_shown: bool,
     /// What an assistive app calls it, where its placeholder, such as "https://", doesn't say.
     spoken: Option<SharedString>,
+    /// The frame last drawn gave its window the field's input handler, which text needs to get in.
+    keyboard_drawn: bool,
 }
 
 impl TextInput {
@@ -344,6 +346,7 @@ impl TextInput {
             secure: false,
             menu_shown: false,
             spoken: None,
+            keyboard_drawn: false,
         }
     }
 
@@ -351,6 +354,20 @@ impl TextInput {
     pub fn spoken(mut self, name: impl Into<SharedString>) -> Self {
         self.spoken = Some(name.into());
         self
+    }
+
+    /// What it's called: what an assistive app calls it, or its placeholder.
+    fn name(&self) -> String {
+        match &self.spoken {
+            Some(name) => name.to_string(),
+            None => self.placeholder.trim_end_matches('…').to_owned(),
+        }
+    }
+
+    /// Whether the frame last drawn let text into the field: a press or a focus that gives it the
+    /// keyboard does only from the next frame.
+    pub fn keyboard_drawn(&self) -> bool {
+        self.keyboard_drawn
     }
 
     /// As `spoken`, once it's made, as a list's field does when its row moves; None goes back to
@@ -905,16 +922,27 @@ impl TextInput {
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            let text = text.replace("\n", " ");
-            let text = if self.paste_and_go {
-                without_javascript(&text)
-            } else {
-                &text
-            };
-            self.replace_text_in_range(None, text, window, cx);
-            self.pasted = true;
-        }
+        let field = cx.entity().downgrade();
+        let window = window.window_handle();
+        crate::clipboard::read_text(cx, move |text, cx| {
+            let Some(text) = text else { return };
+            window
+                .update(cx, |_, window, cx| {
+                    field.update(cx, |field, cx| field.paste_text(&text, window, cx))
+                })
+                .ok();
+        });
+    }
+
+    fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let text = text.replace("\n", " ");
+        let text = if self.paste_and_go {
+            without_javascript(&text)
+        } else {
+            &text
+        };
+        self.replace_text_in_range(None, text, window, cx);
+        self.pasted = true;
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
@@ -1542,9 +1570,17 @@ impl Element for TextElement {
             }
         });
 
+        let focused = focus_handle.is_focused(window);
         self.input.update(cx, |input, _cx| {
             input.last_layout = Some(line);
             input.last_bounds = Some(bounds);
+            // GPUI gives the window the field's input handler only in a frame that draws it
+            // focused, so text sent between the press that focuses it and that frame is lost.
+            // check.sh waits for this line before it sends any (#2847).
+            if focused && !input.keyboard_drawn {
+                crate::log!("browser: field {} has the keyboard", input.name());
+            }
+            input.keyboard_drawn = focused;
         });
     }
 }
@@ -1559,10 +1595,7 @@ impl Render for TextInput {
             // as AT-SPI's Text, which Orca reads, has text only from runs. A secure field gives
             // its dots, never what was typed.
             .when(window.is_a11y_active(), |field| {
-                let name = match &self.spoken {
-                    Some(name) => name.to_string(),
-                    None => self.placeholder.trim_end_matches('…').to_owned(),
-                };
+                let name = self.name();
                 let role = if self.secure {
                     Role::PasswordInput
                 } else {

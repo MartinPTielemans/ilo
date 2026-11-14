@@ -24,7 +24,7 @@ ungoogled-chromium built as Chrome's framework from `engine/series`, with embedd
 
 Sidebar, Spaces (with the Agent Space kind in the data model), command bar, split view, archive, profiles, extensions (including install prompts and popups), ad blocking on from the first page, passwords and autofill, downloads, find in page, DevTools, import from Arc and Chrome, Sparkle updates, signing and notarization.
 
-**Done when** the parity checklist's MVP items pass and the performance gate holds. **Partly met:** everything ships in 0.1.13, signed and notarized, and Sparkle updates it. 454 of 477 MVP rows pass, and #2178 lists the open rows no other issue tracks. The gate doesn't hold.
+**Done when** the parity checklist's MVP items pass and the performance gate holds. **Partly met:** everything ships in 0.1.13, signed and notarized, and Sparkle updates it. 454 of 480 MVP rows pass, and #2178 lists the open rows no other issue tracks. The gate doesn't hold.
 
 ## Phase 4: polish, parity and agents
 
@@ -32,7 +32,7 @@ Peek, Little Arc, link rules (Arc's Air Traffic Control), themes, Boosts, end-to
 
 Agents (decision 8): the built-in local MCP server, agent sessions (#1080), their hidden tabs unthrottled as Chrome's captured tabs are, engine-native page access, per-agent and per-site permissions with an activity log, and handoff to the human. Then tasks asked from ⌘T, which the user's own `claude` or `codex` CLI runs through the same server.
 
-**Partly met** (33 of 48 rows). Built:
+**Partly met** (37 of 51 rows). Built:
 
 - Peek, link rules, Little ilo, themes and passkeys;
 - the agents' parts (#1481, #1750, #1858).

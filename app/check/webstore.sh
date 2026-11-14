@@ -33,13 +33,12 @@ store_shown() {
 # Opens the find with ⌘F, failing with $1. While the store's card is up it keeps the page's
 # shortcuts, ⌘F too (#2520), and ilo runs a shortcut the page kept on a second press within a
 # second of the first (shell/keys.rs), so the run presses again, as a user who sees nothing open does.
+# It looks once before, not for a while: under Git Bash on Windows five looks took the second press
+# 1047 ms after the first (#2845). A second ⌘F on a find bar that opened late only selects its text.
 open_find() {
   send key f cmd
   first=$step
-  for _ in $(seq 5); do
-    logged '^browser: find bar shown$' "$first" && return 0
-    sleep 0.1
-  done
+  logged '^browser: find bar shown$' "$first" && return 0
   send key f cmd
   expect '^browser: find bar shown$' "$1" "$first"
 }
@@ -55,7 +54,10 @@ no_thanks() {
 }
 # Answers the store's card with No thanks, from the open find that went to it, until the find no
 # longer finds it. The card can redraw under the find, and closing the find then focuses nothing,
-# so the return leaves the card up, and with it the ⌘F it keeps (#2520).
+# so the return leaves the card up, and with it the ⌘F it keeps (#2520). Since 2026-11-13 the store
+# can keep a No thanks in its page with no card on screen, under a "Switch to Chrome to install"
+# banner, which no answer takes away (#2684): three answers that leave it go on to the page, and an
+# Add to Chrome the card did hold up fails at its own wait.
 answer_card() {
   for _ in 1 2 3; do
     send key escape
@@ -69,7 +71,9 @@ answer_card() {
       return 0
     fi
   done
-  fail "No thanks didn't close the store's Switch to Chrome? card"
+  send key escape
+  expect '^browser: find [0-9]* closed$' "escape didn't close the find"
+  echo "store: the page still names No thanks after three answers, with no card it closes, so the run goes on"
 }
 # Gives the keyboard to the store page's button with the text $1, lowercase, as the user who finds
 # it and closes the find does: Chrome focuses the button the match is in. Its place on the page
@@ -86,6 +90,15 @@ focus_button() {
   fi
   send key escape
   expect '^browser: find [0-9]* closed$' "escape didn't close the find"
+  # The store's page adds a history entry once a find takes the keyboard from it, and goes back
+  # once the match the find leaves gives its button the keyboard. A key before that back can reach
+  # the page before the button has the keyboard, and does nothing (#2798), so it waits for it.
+  find_tab=$(sed -n "/^browser: drive $step: /,\$s/^browser: find \([0-9]*\) closed\$/\1/p" "$log" | tail -1)
+  if grep "^browser: page $find_tab back " "$log" | tail -1 |
+    grep -q ' back [1-9][0-9]* forward 0 loading 0 https://chromewebstore\.google\.com/'; then
+    expect "^browser: page $find_tab back [0-9]* forward [1-9]" \
+      "the store's page didn't go back from the entry it added for the find, as it does once \"$1\" has the keyboard"
+  fi
   send state
   in_browser RenderWidgetHostViewCocoa "after the find for \"$1\""
 }

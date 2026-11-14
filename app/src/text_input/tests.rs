@@ -73,6 +73,43 @@ fn a_field_has_its_caret_after_what_it_holds(cx: &mut TestAppContext) {
     );
 }
 
+// A press or a focus gives a field the keyboard, but text gets into it only from the frame that
+// draws it so, which check.sh waits for before it sends any (#2847).
+#[gpui::test]
+fn text_gets_in_from_the_frame_that_draws_the_field_with_the_keyboard(cx: &mut TestAppContext) {
+    cx.update(bind_keys);
+    let (shows, cx) =
+        cx.add_window_view(|_, cx| Shows(cx.new(|cx| TextInput::new("example.com##.banner", cx))));
+    let input = cx.read(|cx| shows.read(cx).0.clone());
+    cx.run_until_parked();
+    let drawn = |cx: &mut VisualTestContext| input.read_with(cx, |input, _| input.keyboard_drawn());
+    assert!(
+        !drawn(cx),
+        "a field drawn without the keyboard says it has it"
+    );
+    let at_focus = input.update_in(cx, |input, window, cx| {
+        window.focus(&input.focus_handle(cx), cx);
+        input.keyboard_drawn()
+    });
+    assert!(
+        !at_focus,
+        "the field says text gets in before a frame has drawn it focused"
+    );
+    cx.run_until_parked();
+    assert!(
+        drawn(cx),
+        "a frame drew the field focused, and it doesn't say text gets in"
+    );
+    cx.simulate_input("x");
+    assert_eq!(input.read_with(cx, |input, _| input.text().to_owned()), "x");
+    cx.update(|window, cx| window.blur(cx));
+    cx.run_until_parked();
+    assert!(
+        !drawn(cx),
+        "a frame drew the field without the keyboard, and it says it has it"
+    );
+}
+
 /// The field and its text run, as an assistive app reads them.
 fn read(cx: &mut VisualTestContext) -> (Node, Node, NodeId) {
     let tree: TreeUpdate = cx.a11y_tree().expect("GPUI built a tree");
@@ -171,6 +208,31 @@ fn cmd_and_option_backspace_delete_back_to_the_start_and_a_word(cx: &mut TestApp
     assert_eq!(keys("cmd-backspace", cx), composing);
     assert_eq!(keys("alt-backspace", cx), composing);
     assert!(input.read_with(cx, |input, _| input.composing()));
+}
+
+thread_local! {
+    static ASKED: std::cell::RefCell<Option<crate::clipboard::Done>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// With the browser's reader, as under Wayland, a field pastes what the reader hands it once it
+/// has it, not what GPUI's clipboard holds: GPUI there can't read a copy Chromium holds (#2463).
+#[gpui::test]
+fn a_paste_lands_once_the_browsers_reader_answers(cx: &mut TestAppContext) {
+    crate::clipboard::read_through(|done| ASKED.set(Some(done)));
+    let (input, mut cx) = shown("go ", cx);
+    let text =
+        |cx: &mut VisualTestContext| input.read_with(cx, |input, _| input.text().to_string());
+    cx.write_to_clipboard(ClipboardItem::new_string("gpui's".into()));
+    cx.simulate_keystrokes("cmd-v");
+    cx.run_until_parked();
+    assert_eq!(text(&mut cx), "go ");
+    let done = ASKED.take().expect("the field asked the reader");
+    // From the app, outside any window's update, as the core hands it from a task of its own.
+    cx.cx.update(|cx| done(Some("chromium's".into()), cx));
+    cx.run_until_parked();
+    assert_eq!(text(&mut cx), "go chromium's");
+    assert!(input.read_with(&cx, |input, _| input.pasted()));
 }
 
 /// A window showing a field 120 wide that fades its edges, focused.

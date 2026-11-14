@@ -26,6 +26,9 @@ struct Recorder {
     dialog: RefCell<Option<Entity<dialog::Dialog>>>,
     /// What activity answers.
     activity: RefCell<Activity>,
+    /// Whether it copies a secret as Linux's host does, which can't itself: through GPUI's
+    /// clipboard, with the clear after (copy_for).
+    copies_through_gpui: Cell<bool>,
 }
 
 impl Recorder {
@@ -95,12 +98,15 @@ impl Host for Recorder {
         self.record(format!("choose {what:?} {on}"));
     }
 
-    fn copy_secret(&self, text: &str, kept: Duration, _: &mut App) {
+    fn copy_secret(&self, text: &str, kept: Duration, cx: &mut App) {
         self.record(format!(
             "copy secret {} {}",
             text.split(' ').count(),
             kept.as_secs()
         ));
+        if self.copies_through_gpui.get() {
+            copy_for(text, kept, cx);
+        }
     }
 
     fn confirm(
@@ -390,6 +396,55 @@ fn the_clipboard_lets_the_words_go(cx: &mut TestAppContext) {
         Some("mine"),
         "the user's own copy stays"
     );
+}
+
+thread_local! {
+    /// How often the browser's reader was asked, and the text GPUI holds the clipboard with.
+    static READS: Cell<u32> = const { Cell::new(0) };
+    static HELD: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Under Wayland, Chromium's reader read the app's own copy of the words as empty while the app
+/// hadn't the keyboard, and the clear, which asked it, left them on the clipboard (sync-devices on
+/// batch 1113-1114). The clear asks what GPUI holds the clipboard with instead and never the
+/// reader: the words go after the minute and a half, and a copy made elsewhere since stays.
+#[gpui::test]
+fn the_words_go_by_what_the_app_holds_not_the_browsers_reader(cx: &mut TestAppContext) {
+    // A reader that never answers, as the clear never heard the words back.
+    crate::clipboard::read_through(|_| READS.set(READS.get() + 1));
+    crate::clipboard::held_through(|| HELD.with_borrow(Clone::clone));
+    let mut tab = shown(state(Status::FirstDevice), cx);
+    tab.host.copies_through_gpui.set(true);
+    tab.host.take();
+    let clipboard = |tab: &mut Shown| tab.cx.read(|cx| cx.read_from_clipboard()?.text());
+
+    tab.click("copy");
+    assert_eq!(tab.host.take(), ["copy secret 24 90"]);
+    assert_eq!(clipboard(&mut tab).as_deref(), Some(WORDS));
+    HELD.set(Some(WORDS.into()));
+    tab.cx.executor().advance_clock(Duration::from_secs(89));
+    tab.cx.run_until_parked();
+    assert_eq!(clipboard(&mut tab).as_deref(), Some(WORDS), "still there");
+    tab.cx.executor().advance_clock(Duration::from_secs(2));
+    tab.cx.run_until_parked();
+    assert_eq!(
+        clipboard(&mut tab).unwrap_or_default(),
+        "",
+        "the words have gone"
+    );
+
+    // Another app copied since, so GPUI's source was cancelled and it holds nothing: the clear
+    // leaves the clipboard alone, whatever GPUI last wrote.
+    tab.click("copy");
+    HELD.set(None);
+    tab.cx.executor().advance_clock(WORDS_KEPT * 2);
+    tab.cx.run_until_parked();
+    assert_eq!(
+        clipboard(&mut tab).as_deref(),
+        Some(WORDS),
+        "the clear wrote nothing"
+    );
+    assert_eq!(READS.get(), 0, "the clear never asked the browser's reader");
 }
 
 /// A new device asks the others to add it once, by itself, and shows the code once one answers.
