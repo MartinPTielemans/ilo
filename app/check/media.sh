@@ -274,9 +274,10 @@ EOF
   fail "$2"
 }
 # pip_driven: whether the driver finds a Picture in Picture window, which it does through X11
-# alone: drive.mm has no pip, and under Wayland no client sees another's windows.
+# alone: drive.mm has no pip, and under Wayland no client sees another's windows. Under KWin it
+# finds none (#2757).
 pip_driven() {
-  [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]
+  [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${BROWSER_XVFB:-}" != kwin ]
 }
 # kept_keys [what]: waits for the browser window to have the keyboard once <what> has floated, the
 # call as its tab hid if none, as it keeps it on the Mac and X11. Wayland's compositor gives the
@@ -805,9 +806,14 @@ if pip_driven; then
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
   expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
 else
-  echo "skip: moving, sizing and double-clicking the Mini Player on" \
-    "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
-    "there."
+  if [ "${BROWSER_XVFB:-}" = kwin ]; then
+    echo "skip: the Mini Player's place, and moving, sizing and double-clicking it, under KWin:" \
+      "the driver finds no window for it (#2757)."
+  else
+    echo "skip: moving, sizing and double-clicking the Mini Player on" \
+      "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
+      "there."
+  fi
   # Clear of the page's middle, where sway floats the Mini Player wherever the core asks for it.
   send click 300 200
   send key x
