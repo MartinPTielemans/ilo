@@ -351,6 +351,13 @@ perf_row launch-held "Launch, the page held for uBlock Origin${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
 
 log="$perf_dir/session.log"
+# #2316, not for merge: Chromium's memory-infra, a detailed dump every 20 s, for ilo.
+trace_result="$PWD/$perf_dir/trace-ilo.json"
+trace_config="$PWD/$perf_dir/trace-ilo.config"
+! windows || trace_result=$(cygpath -w "$trace_result")
+printf '{"trace_config":{"included_categories":["disabled-by-default-memory-infra"],"excluded_categories":["*"],"record_mode":"record-until-full","trace_buffer_size_in_kb":400000,"memory_dump_config":{"triggers":[{"mode":"detailed","periodic_interval_ms":20000}]}},"startup_duration":245,"result_file":"%s"}\n' \
+  "$(printf '%s' "$trace_result" | sed 's/\\/\\\\/g')" > "$trace_config"
+! windows || trace_config=$(cygpath -w "$trace_config")
 step=0
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
 started=$(date +%s)
@@ -359,7 +366,7 @@ crlset_dir=$profile_dir
 crlset_who="ilo's"
 # shellcheck disable=SC2046,SC2086 # the flags, a word each
 BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch \
-  $(crlset_flags "$crlset_log") < "$out/drive" > "$log" 2>&1 &
+  $(crlset_flags "$crlset_log") --trace-config-file="$trace_config" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await "^browser: title [0-9]* p1 fcp " || fail "the session's first page didn't paint"
