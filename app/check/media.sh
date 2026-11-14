@@ -443,8 +443,9 @@ elif pip_driven; then
   ../tools/window-screenshot.sh "$pid" "$out/media-call-floating.png" all ||
     fail "no window to capture"
   # A press on the call's window gives it the keys, as Chrome's does, so a click gives the
-  # browser window them back for the tab switch below.
-  send click $page_point
+  # browser window them back for the tab switch below, clear of the page's middle, where sway
+  # floats the call.
+  send click 300 200
 elif windows; then
   # Windows moves and sizes a window itself, with the desktop's pointer, from what the window's
   # hit test says is under it, so the driver, which never moves that pointer, asks the hit test.
