@@ -1,0 +1,180 @@
+diff --git a/crates/gpui/src/gpui.rs b/crates/gpui/src/gpui.rs
+index 2328e954df..c3bdd69d85 100644
+--- a/crates/gpui/src/gpui.rs
++++ b/crates/gpui/src/gpui.rs
+@@ -413,3 +413,51 @@ pub struct GpuSpecs {
+     /// Further information about the driver, as reported by Vulkan.
+     pub driver_info: String,
+ }
++
++/// Proof only (#2384): a launch mark on stderr, in ms from the process's creation as the app's
++/// milestones are (host_since_launch), for the first 400 marks.
++#[cfg(target_os = "windows")]
++pub fn launch_mark(what: &str) {
++    use std::sync::atomic::{AtomicUsize, Ordering};
++    #[repr(C)]
++    #[derive(Default)]
++    struct FileTime {
++        low: u32,
++        high: u32,
++    }
++    #[link(name = "kernel32")]
++    unsafe extern "system" {
++        fn GetCurrentProcess() -> isize;
++        fn GetProcessTimes(
++            process: isize,
++            created: *mut FileTime,
++            exited: *mut FileTime,
++            kernel: *mut FileTime,
++            user: *mut FileTime,
++        ) -> i32;
++        fn GetSystemTimePreciseAsFileTime(now: *mut FileTime);
++    }
++    static COUNT: AtomicUsize = AtomicUsize::new(0);
++    if COUNT.fetch_add(1, Ordering::Relaxed) >= 400 {
++        return;
++    }
++    let mut created = FileTime::default();
++    let mut exited = FileTime::default();
++    let mut kernel = FileTime::default();
++    let mut user = FileTime::default();
++    let mut now = FileTime::default();
++    unsafe {
++        GetProcessTimes(GetCurrentProcess(), &mut created, &mut exited, &mut kernel, &mut user);
++        GetSystemTimePreciseAsFileTime(&mut now);
++    }
++    let ticks = |t: &FileTime| ((t.high as u64) << 32 | t.low as u64) as f64;
++    eprintln!(
++        "browser: mark {what} at {:.1} ms on {:?}",
++        (ticks(&now) - ticks(&created)) / 1e4,
++        std::thread::current().id()
++    );
++}
++
++/// Proof only (#2384): marks only on Windows.
++#[cfg(not(target_os = "windows"))]
++pub fn launch_mark(_: &str) {}
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index af067cbfec..f707a858c8 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1913,7 +1913,20 @@ impl Window {
+             let next_frame_callbacks = next_frame_callbacks.clone();
+             let input_rate_tracker = input_rate_tracker.clone();
+             let mut deferred_force_render = false;
++            let mut frame_mark = 0usize;
+             move |request_frame_options| {
++                frame_mark += 1;
++                let frame_mark = frame_mark;
++                if frame_mark <= 8 {
++                    crate::launch_mark(&format!(
++                        "frame {frame_mark} asked, force {} presentation {} callbacks {} dirty {} active {}",
++                        request_frame_options.force_render,
++                        request_frame_options.require_presentation,
++                        next_frame_callbacks.borrow().len(),
++                        invalidator.is_dirty(),
++                        active.get()
++                    ));
++                }
+                 #[cfg(feature = "profiler")]
+                 let (_foreground_turn, window_id) = {
+                     let foreground_turn = profiler::journal::foreground_turn();
+@@ -1994,6 +2007,9 @@ impl Window {
+                     {
+                         // Don't lose a pending forced render to throttling.
+                         deferred_force_render |= force_render;
++                        if frame_mark <= 8 {
++                            crate::launch_mark(&format!("frame {frame_mark} throttled, inactive or thermal"));
++                        }
+                         // Deferred by throttling: ask demand-driven platforms to retry.
+                         handle
+                             .update(&mut cx, |_, window, _| {
+@@ -2063,8 +2079,17 @@ impl Window {
+                                     // atlas tile references after a GPU device recovery.
+                                     window.refresh();
+                                 }
++                                if frame_mark <= 8 {
++                                    crate::launch_mark(&format!("frame {frame_mark} drawing"));
++                                }
+                                 let arena_clear_needed = window.draw(cx);
++                                if frame_mark <= 8 {
++                                    crate::launch_mark(&format!("frame {frame_mark} drawn"));
++                                }
+                                 window.present();
++                                if frame_mark <= 8 {
++                                    crate::launch_mark(&format!("frame {frame_mark} presented"));
++                                }
+                                 arena_clear_needed.clear(cx);
+                             })
+                             .log_err();
+diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
+index ca96f169ff..62aec022d0 100644
+--- a/crates/gpui_windows/src/platform.rs
++++ b/crates/gpui_windows/src/platform.rs
+@@ -186,6 +186,7 @@ impl Drop for PowerRequest {
+ 
+ impl WindowsPlatform {
+     pub fn new(headless: bool) -> Result<Self> {
++        gpui::launch_mark("gw platform new");
+         unsafe {
+             OleInitialize(None).context("unable to initialize Windows OLE")?;
+         }
+@@ -422,10 +423,12 @@ impl WindowsPlatform {
+ 
+     /// Creates the DirectX devices that windows draw with, and starts vsync.
+     fn attach_gpu(&self) -> Result<()> {
++        gpui::launch_mark("gw devices making");
+         let devices = DirectXDevices::new().context("Creating DirectX devices")?;
+         if let Some(text_system) = &self.direct_write_text_system {
+             text_system.handle_gpu_lost(&devices)?;
+         }
++        gpui::launch_mark("gw devices made");
+         *self.inner.state.directx_devices.borrow_mut() = Some(devices);
+         self.begin_vsync_thread();
+         Ok(())
+@@ -2148,5 +2151,6 @@ pub(crate) static EMBEDDED: std::sync::atomic::AtomicBool = std::sync::atomic::A
+ /// `Application::run_embedded` returns once GPUI has launched, rather than running a loop of its
+ /// own, and windows take their key presses from the embedder's dispatch. Call it before starting.
+ pub fn embed() {
++    gpui::launch_mark("gw embed");
+     EMBEDDED.store(true, std::sync::atomic::Ordering::Relaxed);
+ }
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index 6977a8c79d..e4eb14ee32 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -159,8 +159,10 @@ impl WindowsWindowState {
+         };
+         let border_offset = WindowBorderOffset::default();
+         let restore_from_minimized = None;
++        gpui::launch_mark("gw renderer making");
+         let renderer = DirectXRenderer::new(hwnd, directx_devices, disable_direct_composition)
+             .context("Creating DirectX renderer")?;
++            gpui::launch_mark("gw renderer made");
+         let callbacks = Callbacks::default();
+         let input_handler = None;
+         let pending_surrogate = None;
+@@ -479,6 +481,7 @@ impl WindowsWindow {
+             invalidate_devices,
+             draw_coordinator,
+         } = creation_info;
++        gpui::launch_mark("gw window new");
+         register_window_class(icon);
+         let parent_hwnd = if params.kind == WindowKind::Dialog {
+             let parent_window = unsafe { GetActiveWindow() };
+@@ -590,6 +593,7 @@ impl WindowsWindow {
+             }
+             None => (CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT),
+         };
++        gpui::launch_mark("gw hwnd creating");
+         let creation_result = unsafe {
+             CreateWindowExW(
+                 dwexstyle,
+@@ -614,6 +618,7 @@ impl WindowsWindow {
+         // so check the inner result first.
+         let this = context.inner.take().transpose()?;
+         let hwnd = creation_result?;
++        gpui::launch_mark("gw hwnd made");
+         let this = this.unwrap();
+ 
+         // A window in a host leaves the drags over it to the host, which registers its own target
