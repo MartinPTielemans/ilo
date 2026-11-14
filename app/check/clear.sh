@@ -490,8 +490,12 @@ if [ "$(uname)" = Darwin ]; then
     fail "Copy Build Info has no macOS version: $info"
   echo "$info" | grep -q '^Apple ' || fail "Copy Build Info has no chip: $info"
 elif windows; then
-  echo "$info" | grep -q '^Windows 1[01] ' ||
-    fail "Copy Build Info has no Windows version: $info"
+  # Its edition and build as the registry has them: a runner's is Windows Server's.
+  version='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+  build=$(powershell -NoProfile -Command "(Get-ItemProperty '$version').CurrentBuildNumber" |
+    tr -d '\r ')
+  echo "$info" | grep -q "^Windows .* (build $build)\$" ||
+    fail "Copy Build Info has no Windows version with build $build: $info"
   processor='HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0'
   copied_line "$(powershell -NoProfile -Command "(Get-ItemProperty '$processor').ProcessorNameString" |
     tr -d '\r' | sed 's/^ *//; s/ *$//')"
