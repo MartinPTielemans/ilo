@@ -180,7 +180,10 @@ print(("error: " if result.get("isError") else "") + result["content"][0]["text"
   more '^browser: agent logged mcp-client pointed ' "$logged_before" ||
     fail "the answer didn't reach the activity log"
   more "browser: tab $tab point off\$" "$off_before" || fail "Point didn't turn off in the page once sent"
-  grep -q "^browser: title $tab changed\$" "$log" && fail "the page's DOM changed while the user pointed"
+  # An if, as this is the round's last command, and a grep finding nothing mustn't be its status.
+  if grep -q "^browser: title $tab changed\$" "$log"; then
+    fail "the page's DOM changed while the user pointed"
+  fi
 }
 round 1 ""
 send menu "Appearance › Dark"
