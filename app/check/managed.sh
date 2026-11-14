@@ -89,9 +89,6 @@ note dialog "{\"id\": \"$dlg\", \"all\": \"$(new_windows "$s2" "$s3" "$b" | tr '
 [ -n "$dlg" ] || fail "no window came with the prompt"
 p2790 snap > "$s3"
 note dialog "focus-at-open $(grep '"root"' "$s3")"
-# The page's sidebar beside the card, before and with the dialog, for a dim of the manager's.
-battery "$b" "$dlg" dialog
-note dialog "focus-after $(p2790 snap | grep '"root"')"
 if [ -n "$ime" ]; then
   xdotool key ctrl+semicolon 2> /dev/null
   sleep 0.3
@@ -112,6 +109,19 @@ if await "^browser: title $page prompt grace\$"; then
 else
   note dialog "typed {\"ok\": false, \"title\": \"$(grep "^browser: title $page " "$log" | tail -1)\"}"
   send key escape
+fi
+# The battery on the prompt asked again, after the typing, as Chromium withdraws a page's prompt
+# once its window is minimised or on another desktop.
+expect '^browser: dialog hidden$' "the answered prompt didn't go"
+send key p
+expect '^browser: dialog settled$' "the prompt asked again didn't settle"
+p2790 snap > "$s3"
+# The page's sidebar beside the card, before and with the dialog, for a dim of the manager's.
+battery "$b" "$dlg" dialog
+note dialog "focus-after $(p2790 snap | grep '"root"')"
+if [ "$(grep -E '^browser: dialog (settled|hidden)$' "$log" | tail -1)" = "browser: dialog settled" ]; then
+  send key escape
+  expect '^browser: dialog hidden$' "the prompt didn't go after the battery"
 fi
 # Its open time, five times: from the key to the first changed pixel at the dialog's middle.
 mid=$(field_of "$s3" "$dlg" rect | python3 -I -c 'import json,sys
