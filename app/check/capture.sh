@@ -526,15 +526,8 @@ capture_mode page
 send click 100 400
 expect '^browser: capture left (dismissed)$' "a click on the sidebar didn't leave capture mode"
 # The click gives the keyboard to the UI, as on the Mac: GPUI hears the press itself and takes it,
-# on X11 too now that the driver's press is real input (#2721). Under KWin the page can keep it,
-# when Capture goes before the window hears the pointer (#2789).
-if [ "${BROWSER_XVFB:-}" = kwin ]; then
-  echo "skip: the click on the sidebar that left Capture giving the UI the keyboard, under KWin:" \
-    "the page can keep it (#2789)."
-  capture_mode '\(ui\|page\)'
-else
-  capture_mode ui
-fi
+# on X11 too now that the driver's press is real input (#2721).
+capture_mode ui
 send resize 1200 760
 expect '^browser: capture left (dismissed)$' "a resize didn't leave capture mode"
 
