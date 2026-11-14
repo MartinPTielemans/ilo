@@ -644,12 +644,18 @@ impl Shell {
         }
     }
 
-    /// How far the Library pushes the card right of `card_left`, at the same width.
+    /// How far the Library pushes the card right of `card_left`, at the same width, or left of it
+    /// on the right, where the Library stops at the window's edge: fingers past where it opens
+    /// take nothing further there, with nothing past the edge to take it to.
     pub fn card_push(&self) -> f32 {
         if self.page_fullscreen {
             return 0.;
         }
-        (self.library_width() - self.card_left()) * self.library_out()
+        let out = match self.right {
+            true => self.library_edge(),
+            false => self.library_out(),
+        };
+        (self.library_width() - self.card_left()) * out
     }
 
     /// How wide the Library is with `section` in it: Spaces as wide as its cards, in this window.
@@ -667,7 +673,7 @@ impl Shell {
         let Some((from, start)) = self.library_resize else {
             return to;
         };
-        let t = start.elapsed().as_secs_f32();
+        let t = self.since(start);
         spring_to(t, from, to, 0., LIBRARY_RESPONSE, LIBRARY_DAMPING).map_or(to, |(width, _)| width)
     }
 
@@ -676,7 +682,7 @@ impl Shell {
     fn library_step(&self) -> Option<(f32, f32)> {
         let (from, speed, start) = self.library_motion?;
         let to = if self.library_open { 1. } else { 0. };
-        let t = start.elapsed().as_secs_f32();
+        let t = self.since(start);
         spring_to(t, from, to, speed, LIBRARY_RESPONSE, LIBRARY_DAMPING)
     }
 
@@ -717,7 +723,7 @@ impl Shell {
     /// The sidebar's opacity under the Library: receding with the card, or, after a click, gone
     /// fast as the Library comes and back late as it goes.
     pub(super) fn sidebar_opacity(&self) -> f32 {
-        self.sidebar_opacity_at(Instant::now())
+        self.sidebar_opacity_at(self.clock.now())
     }
 
     /// The sidebar's opacity at `now`.
@@ -767,12 +773,49 @@ impl Shell {
         (self.library_edge() - 1.) * self.library_width()
     }
 
-    /// How far, in points, fingers past where the Library opens have taken it on with the card.
+    /// How far, in points, fingers past where the Library opens have taken it on with the card:
+    /// nowhere on the right, where it opens at the window's edge (`card_push`).
     fn library_past(&self) -> f32 {
         match self.clicked_fade() {
             Some(_) => 0.,
+            None if self.right => 0.,
             None => past_end(self.library_out(), self.library_width()),
         }
+    }
+
+    /// Where the Library's panel starts across the window. On the left its column comes in from
+    /// the window's edge with the card's (`library_column_left`), and fingers past where it opens
+    /// take it on with the card. On the right it follows the sidebar's Space pages in from the
+    /// page side, as fingers going right take them: its right edge on the sidebar's left, both
+    /// going right from the card's edge until the Library's reaches the window's (#2375).
+    pub(super) fn library_x(&self) -> f32 {
+        match self.right {
+            true => f32::from(self.viewport.width) - self.library_width() - self.library_behind(),
+            false => self.library_column_left() + self.library_past(),
+        }
+    }
+
+    /// On the right, how far the sidebar's Space pages, and the Library after them, have yet to go
+    /// right to where the Library opens: the card's edge's way in from the window's edge while
+    /// it's shut, and none once it's open.
+    fn library_behind(&self) -> f32 {
+        (1. - self.library_edge()) * self.card_left()
+    }
+
+    /// How far right the sidebar has gone with the Library coming in after it on the right, from
+    /// none to its whole way out of the window. The Library takes its place from the left, where
+    /// the sidebar recedes in place on the left.
+    pub(super) fn sidebar_shift(&self) -> f32 {
+        match self.right {
+            true => self.card_left() - self.library_behind(),
+            false => 0.,
+        }
+    }
+
+    /// The Library's visible span across the window on the right: from the card's edge, which it
+    /// comes out from behind, to the window's.
+    pub(super) fn library_shown_from(&self) -> f32 {
+        f32::from(self.viewport.width) - self.card_left() - self.card_push()
     }
 
     /// The Library's opacity: what the sidebar under it has lost, on every way in and out. Arc's
@@ -822,8 +865,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         // Under Reduce Motion the card is where it goes at once, and the sidebar still fades.
-        self.library_motion = Some((out, speed, crate::motion::start(cx)));
-        self.sidebar_fade = opacity.map(|opacity| (opacity, Instant::now()));
+        self.library_motion = Some((out, speed, crate::motion::start_at(self.clock.now(), cx)));
+        self.sidebar_fade = opacity.map(|opacity| (opacity, self.clock.now()));
         self.library_open = open;
         if open {
             self.conceal_now(cx);
@@ -881,7 +924,10 @@ impl Shell {
         // Ours: the Library goes to the new section's width on the push's spring, as Arc's
         // isn't recorded.
         if self.library.is_some() && self.section_width(section) != self.library_width() {
-            self.library_resize = Some((self.library_width(), crate::motion::start(cx)));
+            self.library_resize = Some((
+                self.library_width(),
+                crate::motion::start_at(self.clock.now(), cx),
+            ));
         }
         self.section = section;
         let placeholder = match section {
@@ -952,10 +998,7 @@ impl Shell {
             window.request_animation_frame();
         }
         if let Some((from, start)) = self.library_resize {
-            let (t, to) = (
-                start.elapsed().as_secs_f32(),
-                self.section_width(self.section),
-            );
+            let (t, to) = (self.since(start), self.section_width(self.section));
             match spring_to(t, from, to, 0., LIBRARY_RESPONSE, LIBRARY_DAMPING) {
                 Some(_) => window.request_animation_frame(),
                 None => {
@@ -980,6 +1023,13 @@ impl Shell {
         self.sidebar_fade = None;
         // check.sh waits for these lines.
         if self.library_open {
+            // check/sidebar-right.sh reads which side it opened on.
+            let left = self.library_x();
+            log!(
+                "browser: library across {left:.0} to {:.0} of {:.0}",
+                left + self.library_width(),
+                f32::from(self.viewport.width)
+            );
             log!("browser: library shown");
         } else {
             log!("browser: library hidden");
@@ -1507,10 +1557,22 @@ impl Shell {
         // Taken on past where it opens, the column's fill reaches back to the window's edge, so
         // the window's own background never shows left of it.
         let past = self.library_past();
+        let width = self.library_width();
+        // On the right the columns swap, list then sections, so the sections and the window's
+        // buttons on them stay at the window's edge, and what's across the list moves the column's
+        // width left.
+        let right = self.right;
+        let list_x = |x: f32| match right {
+            true => x - COLUMN_WIDTH,
+            false => x,
+        };
         let back = div()
             .id("library-back")
             .absolute()
-            .left(px(LIBRARY_BACK_INSET + past))
+            .map(|back| match right {
+                true => back.right(px(LIBRARY_BACK_INSET)),
+                false => back.left(px(LIBRARY_BACK_INSET + past)),
+            })
             .bottom(px(LIBRARY_BACK_INSET))
             .size(px(NAV_SIZE))
             .flex()
@@ -1535,23 +1597,29 @@ impl Shell {
             .text_color(self.palette.text(SECTION_LABEL));
         let column = div()
             .absolute()
-            .left(px(-past))
+            .left(px(if right { width - COLUMN_WIDTH } else { -past }))
             .top_0()
             .bottom_0()
             .w(px(COLUMN_WIDTH + past))
             .bg(self.palette.plate(COLUMN))
             .flex()
             .items_center()
-            .pl(px(SECTION_X + past))
+            .map(|column| match right {
+                true => column.justify_end().pr(px(SECTION_X)),
+                false => column.pl(px(SECTION_X + past)),
+            })
             .child(heading)
             .child(sections)
             .child(back)
             // Where the window's own sit, so they slide in with the panel, and stay put on the
-            // column when fingers take it past its end.
-            .children(buttons.then(|| self.window_buttons(None, cx)));
+            // column when fingers take it past its end; mirrored across it on the right.
+            .children(buttons.then(|| self.window_buttons(px(COLUMN_WIDTH), cx)));
         let edge = div()
             .absolute()
-            .left(px(COLUMN_WIDTH))
+            .left(px(match right {
+                true => width - COLUMN_WIDTH - 1.,
+                false => COLUMN_WIDTH,
+            }))
             .top_0()
             .bottom_0()
             .w(px(1.))
@@ -1567,7 +1635,7 @@ impl Shell {
         let field = div()
             .id("library-search")
             .absolute()
-            .left(px(SEARCH_X))
+            .left(px(list_x(SEARCH_X)))
             .top(px(SEARCH_TOP))
             .w(px(field_width))
             .h(px(SEARCH_HEIGHT))
@@ -1606,7 +1674,7 @@ impl Shell {
             div()
                 .id("library-filter")
                 .absolute()
-                .left(px(FILTER_X))
+                .left(px(list_x(FILTER_X)))
                 .top(px(SEARCH_TOP))
                 .w(px(FILTER_WIDTH))
                 .h(px(SEARCH_HEIGHT))
@@ -1671,32 +1739,51 @@ impl Shell {
                 .size_full()
                 .into_any_element()
         };
-        let width = self.library_width();
+        // On the right it comes out from behind the card, which shows none of it past its edge,
+        // in its insets or round its corners.
+        let (clip, x) = match right {
+            true => {
+                let from = self.library_shown_from();
+                (Some(from), self.library_x() - from)
+            }
+            false => (None, self.library_x()),
+        };
         let panel = div()
             .absolute()
-            .left(px(self.library_column_left() + past))
+            .left(px(x))
             .top_0()
             .bottom_0()
             .w(px(width))
             .opacity(Shell::library_opacity(sidebar_opacity))
             .child(column)
             .child(edge);
-        if spaces {
-            return panel.child(self.space_cards(cx));
+        let panel = match spaces {
+            true => panel.child(self.space_cards(cx)),
+            false => panel
+                .child(field)
+                .children(filter)
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(list_x(COLUMN_WIDTH)))
+                        .top(px(ARCHIVE_TOP))
+                        .bottom_0()
+                        .w(px(ARCHIVE_WIDTH))
+                        .child(archive),
+                )
+                .children(self.download_press_listeners(cx)),
+        };
+        match clip {
+            Some(from) => div()
+                .absolute()
+                .left(px(from))
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .overflow_hidden()
+                .child(panel),
+            None => panel,
         }
-        panel
-            .child(field)
-            .children(filter)
-            .child(
-                div()
-                    .absolute()
-                    .left(px(COLUMN_WIDTH))
-                    .top(px(ARCHIVE_TOP))
-                    .bottom_0()
-                    .w(px(ARCHIVE_WIDTH))
-                    .child(archive),
-            )
-            .children(self.download_press_listeners(cx))
     }
 
     /// The Spaces section: a card for each Space of the window's profile set, in the switcher's
@@ -1745,13 +1832,19 @@ impl Shell {
                     .size(px(PLUS_GLYPH))
                     .text_color(self.palette.accent_label),
             );
+        // On the right the cards are left of the column, still in the switcher's order, left to
+        // right, as Spaces read.
+        let (left, right) = match self.right {
+            true => (0., COLUMN_WIDTH),
+            false => (COLUMN_WIDTH, 0.),
+        };
         div()
             .id("library-spaces")
             .absolute()
-            .left(px(COLUMN_WIDTH))
+            .left(px(left))
             .top_0()
             .bottom_0()
-            .right_0()
+            .right(px(right))
             .overflow_hidden()
             .child(
                 div()
