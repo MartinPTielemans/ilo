@@ -27,6 +27,7 @@
 #include "browser_core/page_press.h"
 #include "browser_core/page_translate.h"
 #include "browser_core/password_offer.h"
+#include "browser_core/pinned_url.h"
 #include "browser_core/platform/keyboard.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/script_dialog.h"
@@ -502,6 +503,22 @@ GURL Tab::Url() const {
     return PageUrl(web_contents());
   }
   return unloaded_ ? unloaded_->history[unloaded_->current].virtual_url() : GURL();
+}
+
+bool Tab::At(const GURL& url) const {
+  if (content::WebContents* contents = web_contents()) {
+    // A page in the system's engine, or one waiting to load, is only at its own URL.
+    content::NavigationEntry* entry =
+        system_page_ || waiting_ ? nullptr : contents->GetController().GetLastCommittedEntry();
+    const GURL requested =
+        entry && !entry->IsInitialEntry() ? entry->GetOriginalRequestURL() : GURL();
+    return AtPinnedUrl(url, PageUrl(contents), requested);
+  }
+  if (!unloaded_ || unloaded_->history.empty()) {
+    return false;
+  }
+  const sessions::SerializedNavigationEntry& entry = unloaded_->history[unloaded_->current];
+  return AtPinnedUrl(url, entry.virtual_url(), entry.original_request_url());
 }
 
 std::string Tab::SessionStorageId() const {
@@ -1147,7 +1164,7 @@ void Tab::ReportState() {
         .can_go_forward = current + 1 < count,
         .loading = false,
         .unloaded = true,
-        .away_from_pinned_url = pinned_url.is_valid() && Url() != pinned_url,
+        .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
         .audible = false,
         .muted = muted(),
         .icon = icon_.c_str(),
@@ -1190,7 +1207,7 @@ void Tab::ReportState() {
       .can_go_forward = CanGoForward(),
       .loading = page ? page->loading() : contents->ShouldShowLoadingUI(),
       .unloaded = !page && (history.NeedsReload() || waiting_),
-      .away_from_pinned_url = pinned_url.is_valid() && PageUrl(contents) != pinned_url,
+      .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
       .audible = page ? page->audible() : audible && audible->WasRecentlyAudible(),
       .muted = page ? page->muted() : contents->IsAudioMuted(),
       .volume = volume_,

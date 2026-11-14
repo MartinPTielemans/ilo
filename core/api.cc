@@ -1905,8 +1905,8 @@ void bc_tab_back_to_pinned_url(bc_id id) {
   if (!url.is_valid() || !tab) {
     return;
   }
-  // A tab already there doesn't load it again.
-  if (tab->Url() != url) {
+  // A tab already there, or where it redirects, doesn't load it again.
+  if (!tab->At(url)) {
     LoadInTab(id, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
   }
 }
