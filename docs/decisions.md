@@ -143,3 +143,9 @@ Where a page's web platform default differs from Chrome's, it's listed here, eac
 |---|---|---|---|---|
 | Screen sharing needs a gesture | A page calls `getDisplayMedia()` whenever it likes, and the picker comes up unasked | Only within a click's or a key's activation, as the spec and the other two engines have it. Otherwise the page's promise is refused with `InvalidStateError`, and ilo shows nothing. An administrator's `ScreenCaptureWithoutGestureAllowedForOrigins` exempts an origin (the orchestrator's call, listed for the owner, 2026-11-12, #2456) | No page can put a share picker in front of the user they didn't ask for | Chrome turns `GetDisplayMediaRequiresUserActivation` on, or a named site breaks on it |
 | WebRTC addresses | `default` | `default_public_interface_only` | Decision 10 | Decision 10 |
+
+## 13. Ad blocking: the browser's own engine
+
+The browser blocks with its own engine, Brave's adblock-rust in the app, on the lists uBlock Origin comes with, and the core asks it about each request (owner, 2026-11-10: "i want to go native", #2111). Earlier, on 2026-11-08: "as long as we do it at least as good". uBlock Origin is an extension process of its own, which ran out of memory on Windows (#2069), held a launch's first page until it was ready, and runs only while Manifest V2 lives on in our engine patches. The native engine passed the parity gate first: the same sites blocked on one list snapshot on three OSes, no protection lost (the warning page for a blocked page, pop-ups, response filters), My filters and lists carried over, and launch, memory and idle no worse (#2111 lists the runs). Settings › Ad Blocking's Block with uBlock Origin goes back to the extension for one release, and the browser's own leaves its data as it was.
+
+Revisit if adblock-rust stops being maintained, or a list's authors ship filters it can't run that uBlock Origin can.
