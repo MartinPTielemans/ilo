@@ -459,9 +459,16 @@ unsafe extern "C" fn started(_: *mut c_void) {
             true => {
                 // A click in the UI takes the keyboard there, to keep, as Wayland's does: moving
                 // X's input focus into GPUI's window tells the core nothing while it's there,
-                // as after ⌘W, where the UI holds the keys for the page shown next (#1209).
-                fn pressed(ui_view: *mut c_void) {
-                    if let Some(window) = window_in(ui_view) {
+                // as after ⌘W, where the UI holds the keys for the page shown next (#1209), nor
+                // while an overlay has the keyboard, where a window manager activating the window
+                // can put it back up to the window's own after GPUI moved it (#2789). GPUI names
+                // its own window, inside the one the core holds.
+                fn pressed(view: *mut c_void) {
+                    let window = WINDOWS.with(|windows| {
+                        let windows = windows.try_borrow().ok()?;
+                        windows.iter().find(|w| w.view == view).map(|w| w.id)
+                    });
+                    if let Some(window) = window {
                         unsafe { bc::bc_window_ui_takes_keyboard(window) };
                     }
                 }
