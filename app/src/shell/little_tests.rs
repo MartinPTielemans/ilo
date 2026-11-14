@@ -808,6 +808,41 @@ fn a_question_hangs_under_the_bar_and_the_page_makes_room(cx: &mut TestAppContex
     assert_eq!(page_top(cx), px(LITTLE_BAR), "the page takes its room back");
 }
 
+/// The frame that lays the page out under a question can come while the App is in an update, as
+/// Windows' nested message pumps deliver it. It waits for the next frame then rather than going,
+/// or the page covers the question until something else draws the window (#2685).
+#[gpui::test]
+fn a_question_s_next_frame_asked_mid_update_still_makes_room(cx: &mut TestAppContext) {
+    use crate::shell::Question;
+    use gpui::{RequestFrameOptions, VisualContext as _, px};
+
+    let (shell, cx, _) = drawn_little(cx);
+    // As the app is, so the frames aren't throttled as a background window's are.
+    cx.set_app_active(Some(true));
+    shell.update(cx, |shell, cx| {
+        let question = Question {
+            site: "signin.example".into(),
+            permissions: vec!["Access other apps and services on this device".into()],
+        };
+        shell.set_question(10, Some(question), cx);
+    });
+    cx.run_until_parked();
+    let card = shell.read_with(cx, |shell, _| shell.question_drawn.get());
+    let card = card.expect("the question wasn't drawn");
+    let platform = cx.test_window(cx.window_handle());
+    shell.update(cx, |_, _| {
+        platform.simulate_frame_request(RequestFrameOptions::default())
+    });
+    platform.simulate_frame_request(RequestFrameOptions::default());
+    cx.run_until_parked();
+    let laid = shell.read_with(cx, |shell, _| shell.page_laid.map(|(frame, _)| frame.top()));
+    assert_eq!(
+        laid,
+        Some(card.bottom() + px(crate::shell::CARD_INSET)),
+        "the page wasn't laid out under the question"
+    );
+}
+
 /// A tab the window's page opened goes behind, where no window shows it, so when its page asks to
 /// open another app, as a sign-in's pop-up hands back to its app, the Little ilo window asks
 /// instead, over its page (#1914). Its own page's dialog comes first, and the other's other dialogs
@@ -1001,4 +1036,25 @@ fn off_nothing_offers_or_opens_a_little_window(cx: &mut TestAppContext) {
         Some("new little window 1")
     );
     assert!(main.read_with(cx, |shell, cx| !shell.menu_bar(cx).little_off));
+}
+
+#[gpui::test]
+fn its_bar_says_a_sign_in_page_is_closing_and_how_to_bring_it_back(cx: &mut TestAppContext) {
+    let url = "http://127.0.0.1:8976/callback?code=x";
+    let (shell, host) = little(cx, url);
+    let title = |shell: &Entity<Shell>, cx: &mut TestAppContext| {
+        shell.read_with(cx, |shell, cx| {
+            shell.little_bar_title(10, "127.0.0.1", url, cx).to_string()
+        })
+    };
+    let before = title(&shell, cx);
+    shell.update(cx, |shell, cx| shell.set_little_closing(true, cx));
+    let closing = title(&shell, cx);
+    assert!(closing.starts_with("Signed in, closing · "), "{closing}");
+    assert!(closing.ends_with(" reopens"), "{closing}");
+    // Turned off, or the page moved on, before it closed: the bar is the page's again, and nothing
+    // was asked of the core.
+    shell.update(cx, |shell, cx| shell.set_little_closing(false, cx));
+    assert_eq!(title(&shell, cx), before);
+    assert!(host.take().is_empty());
 }

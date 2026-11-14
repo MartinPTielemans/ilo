@@ -1,3 +1,4 @@
+# check.sh runs this at 360.
 # A new profile's first launch plays the onboarding over the window, captured at each step in a
 # light and a dark appearance: the intro draws ilo's wordmark and its line and goes on by itself, or
 # at any key; the import step lists the made-up Arc in src/import/fixture (a made-up Chrome on
@@ -220,6 +221,15 @@ case " $steps " in
       done
       [ "$made" = "${entry##*/}" ] ||
         fail "dark: the default browser's button left the default '$made', not ${entry##*/}"
+      # xdg-settings sets each type with its own xdg-mime, each reading the lists and writing them
+      # back: one still going once http reads as ilo's writes ilo back over the lists put back
+      # below, and the replay found ilo the default (#2773). On the VM only the app's runs it.
+      for _ in $(seq 100); do
+        pgrep -x xdg-settings > /dev/null || break
+        sleep 0.1
+      done
+      ! pgrep -x xdg-settings > /dev/null ||
+        fail "dark: the app's xdg-settings was still setting the default 10 s after it read as ilo"
       at=0
       for list in $lists; do
         at=$((at + 1))

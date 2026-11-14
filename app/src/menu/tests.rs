@@ -10,8 +10,8 @@ use gpui::{
 };
 
 use super::{
-    CHECK, Closed, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X, Request, Swatch,
-    Tracking, as_held, described, described_held, key_of, lay_out, lay_out_over,
+    CHECK, Closed, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X, Request,
+    Swatch, Tracking, as_held, described, described_held, key_of, lay_out, lay_out_over,
 };
 use crate::elevation::Level as Elevation;
 use crate::shell::MenuEntry;
@@ -378,6 +378,24 @@ fn a_long_title_widens_the_menu_to_the_most() {
     let title = "A very long page title that goes on and on and on, as page titles do";
     let menu = lay_out(&[item(title)], at(10., 10.), area(), &width_of);
     assert_eq!(f32::from(level_of(&menu, None).size.width), 320.);
+}
+
+#[test]
+fn an_items_detail_widens_the_menu_and_is_described_after_its_title() {
+    // Wide enough for both, past the narrowest a menu is.
+    let title = "A title of thirty characters..";
+    let plain = lay_out(&[item(title)], at(10., 10.), area(), &width_of);
+    let detailed = [MenuEntry {
+        detail: Some("A detail".into()),
+        ..item(title)
+    }];
+    let wider = lay_out(&detailed, at(10., 10.), area(), &width_of);
+    let width = |menu| f32::from(level_of(menu, None).size.width);
+    assert_eq!(
+        width(&wider) - width(&plain),
+        DETAIL_GAP + width_of("A detail")
+    );
+    assert_eq!(described(&detailed), format!("{title} [A detail]"));
 }
 
 #[test]

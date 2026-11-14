@@ -57,7 +57,7 @@ fn report_a_problem_fills_the_issue_with_the_builds_details(cx: &mut TestAppCont
     shell.update(cx, |shell, cx| {
         shell.run(Command::ReportProblem, "menu", cx)
     });
-    let here = BuildInfo::here();
+    let here = cx.update(|cx| BuildInfo::here(cx));
     assert_eq!(
         host.opened_pages.take(),
         [here.issue_url(build_info::NEW_ISSUE)]

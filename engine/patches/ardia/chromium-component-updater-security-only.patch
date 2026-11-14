@@ -15,6 +15,7 @@ Chromium's own, not Helium's. The hunks that undo Helium's component-updates.pat
 reenable-update-checks (components_handler.cc, component_installer.cc, configurator_impl.cc) are
 left out, since our tree is already as they leave it. The downloader test passes the progress
 callback that Chromium 156 adds to CrxDownloader::StartDownload().
+The unit test's include has two lines of context, which Chromium 156 and 157 share.
 
 --- a/chrome/browser/component_updater/chrome_component_updater_configurator.cc
 +++ b/chrome/browser/component_updater/chrome_component_updater_configurator.cc
@@ -511,14 +512,12 @@ callback that Chromium 156 adds to CrxDownloader::StartDownload().
  }
 --- a/components/component_updater/component_updater_service_unittest.cc
 +++ b/components/component_updater/component_updater_service_unittest.cc
-@@ -21,6 +21,7 @@
- #include "base/memory/ref_counted.h"
+@@ -22,4 +22,5 @@
  #include "base/run_loop.h"
  #include "base/task/sequenced_task_runner.h"
 +#include "base/test/bind.h"
  #include "base/test/metrics/histogram_tester.h"
  #include "base/test/task_environment.h"
- #include "base/time/time.h"
 @@ -704,6 +705,59 @@
  
    EXPECT_TRUE(component_updater().GetComponentDetails(id, &item));

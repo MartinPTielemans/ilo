@@ -3,7 +3,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui::{Modifiers, PlatformInput, TestAppContext, VisualTestContext, point, px};
 
 use super::*;
 use crate::tokens::theme_picker::ARROW;
@@ -86,6 +86,32 @@ impl Editor {
         self.cx.run_until_parked();
         self.cx
             .simulate_mouse_up(Self::at(to.0, to.1), left, Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
+    /// A drag whose press and first move come in one frame, as a quick flick's or the driver's
+    /// do, with the editor drawn only before it's let go (#2605).
+    fn quick_drag(&mut self, from: (f32, f32), to: (f32, f32)) {
+        let (from, to) = (Self::at(from.0, from.1), Self::at(to.0, to.1));
+        self.cx.update(|window, cx| {
+            let down = MouseDownEvent {
+                position: from,
+                modifiers: Modifiers::none(),
+                button: MouseButton::Left,
+                click_count: 1,
+                first_mouse: false,
+            };
+            window.dispatch_event(PlatformInput::MouseDown(down), cx);
+            let moved = MouseMoveEvent {
+                position: to,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::none(),
+            };
+            window.dispatch_event(PlatformInput::MouseMove(moved), cx);
+        });
+        self.cx.run_until_parked();
+        self.cx
+            .simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -251,6 +277,30 @@ fn a_drag_shows_as_it_goes_and_is_kept_as_it_ends(cx: &mut TestAppContext) {
     );
     assert!(style.dragged, "the hint stays after the first drag");
     assert_eq!(style.links, None, "the links' dot wasn't placed");
+}
+
+/// A dot and a slider still move when the drag's first move comes before the editor has drawn
+/// the press (#2605).
+#[gpui::test]
+fn a_drag_that_moves_before_the_press_is_drawn_still_moves(cx: &mut TestAppContext) {
+    let open = Style {
+        advanced: true,
+        ..Style::default()
+    };
+    let mut editor = Editor::new(open, cx);
+    editor.quick_drag(in_card(REST[0]), in_card(Dot { x: 0.5, y: 0.5 }));
+    let ground = editor
+        .style()
+        .ground
+        .expect("the dot dragged left no ground");
+    assert!(
+        (ground.x - 0.5).abs() < 0.02 && (ground.y - 0.5).abs() < 0.02,
+        "{ground:?}"
+    );
+    let y = slider_y(Adjust::Contrast);
+    let middle = (TRACK.0 + TRACK.1) / 2.;
+    editor.quick_drag((middle, y), (TRACK.0 + (TRACK.1 - TRACK.0) * 0.76, y));
+    assert_eq!(editor.style().adjust[0], 125);
 }
 
 #[gpui::test]

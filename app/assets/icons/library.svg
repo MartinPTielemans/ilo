@@ -1,4 +1,4 @@
-<!-- Lucide's library (https://github.com/lucide-icons/lucide, commit 7faf87628a1ad6175975bc595344337ce14a7db4), ISC License; see NOTICE. -->
+<!-- The Library (ours): three books on a shelf, the middle one solid and the last leaning, as the Spaces glyph has one card solid. Drawn in points on Lucide's 24 grid and stroke. -->
 <svg
   xmlns="http://www.w3.org/2000/svg"
   width="24"
@@ -10,8 +10,7 @@
   stroke-linecap="round"
   stroke-linejoin="round"
 >
-  <path d="m16 6 4 14" />
-  <path d="M12 6v14" />
-  <path d="M8 8v12" />
-  <path d="M4 4v16" />
+  <path d="M3.5 4v16" />
+  <rect width="5" height="13" x="7.75" y="7" rx="1.5" fill="currentColor" />
+  <path d="m16.75 6.5 3.25 13.5" />
 </svg>

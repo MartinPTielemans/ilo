@@ -62,27 +62,27 @@ impl command_bar::Host for Bar {
         }
     }
 
-    fn open_tab(&self, url: &str, behind: bool) {
+    fn open_tab(&self, url: &str, typed: &str, behind: bool) {
         match behind {
             // ⌘↩'s tab loads once it's first shown, as a link opened behind does (Dia).
-            true => _ = open_tab_behind(front().0, url, true),
-            false => open_tab(front().0, url),
+            true => _ = open_typed(front().0, url, typed, true),
+            false => open_tab_typed(front().0, url, typed),
         }
     }
 
-    fn open_window(&self, url: &str, cx: &mut App) {
-        let (id, url) = (front().0, url.to_string());
+    fn open_window(&self, url: &str, typed: &str, cx: &mut App) {
+        let (id, url, typed) = (front().0, url.to_string(), typed.to_string());
         // Outside the bar's update, as ⌘N's window opens outside the shell's.
         cx.defer(move |cx| {
             if let Some(window) = open_window_after(id, cx) {
-                open_tab(window, &url);
+                open_tab_typed(window, &url, &typed);
             }
         });
     }
 
-    fn navigate(&self, tab: u64, url: &str) {
-        if let Ok(url) = CString::new(url) {
-            unsafe { bc::bc_tab_navigate(tab, url.as_ptr()) };
+    fn navigate(&self, tab: u64, url: &str, typed: &str) {
+        if let (Ok(url), Ok(typed)) = (CString::new(url), CString::new(typed)) {
+            unsafe { bc::bc_tab_navigate_typed(tab, url.as_ptr(), typed.as_ptr()) };
         }
     }
 
@@ -120,8 +120,8 @@ impl command_bar::Host for Bar {
         split_tab(front().0, tab, with, false, cx);
     }
 
-    fn open_split(&self, url: &str, with: u64, cx: &mut App) {
-        open_split(front().0, url, with, cx);
+    fn open_split(&self, url: &str, typed: &str, with: u64, cx: &mut App) {
+        open_split(front().0, url, typed, with, cx);
     }
 
     fn copy(&self, text: &str, cx: &mut App) {

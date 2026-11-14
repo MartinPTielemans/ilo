@@ -13,9 +13,7 @@ use web_time::Instant;
 
 use gpui::{Context, MouseButton, SharedString, div, prelude::*, px, svg};
 
-use super::{
-    FOOTER_HEIGHT, HOVERED, PRESSED, Shell, access::Accessible, permission::card_listener, plate,
-};
+use super::{HOVERED, PRESSED, Shell, access::Accessible, permission::card_listener, plate};
 use crate::dialog::{MOVE, ease_in_out};
 use crate::tokens::settings::{CONTROL_HEIGHT, CONTROL_RADIUS};
 use crate::tokens::shell::{
@@ -375,7 +373,7 @@ impl Shell {
                 .absolute()
                 .left(px(PLATE_INSET))
                 .w(px(self.width() - 2. * PLATE_INSET))
-                .bottom(px(FOOTER_HEIGHT + UPDATE_BANNER_GAP))
+                .bottom(px(self.over_safe_start() + UPDATE_BANNER_GAP))
                 .h(px(height))
                 .rounded(px(PLATE_RADIUS))
                 .overflow_hidden()

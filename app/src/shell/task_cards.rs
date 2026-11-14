@@ -875,7 +875,7 @@ impl Shell {
 
     /// Where the media players end, over Restart to Update, the foot's plates over them.
     pub(super) fn media_top(&self) -> f32 {
-        FOOTER_HEIGHT + self.update_banner_room() + self.media_room()
+        self.over_safe_start() + self.update_banner_room() + self.media_room()
     }
 
     /// The most room the opened foot takes before it scrolls: the closed foot never does.
@@ -2003,7 +2003,7 @@ fn logged(bounds: Bounds<Pixels>) -> String {
 
 /// A chip on a card, the sidebar's scale: the URL field's plate at a control's corners, as wide
 /// as its words, cut to the room it has.
-fn card_chip(
+pub(super) fn card_chip(
     palette: &Palette,
     id: impl Into<gpui::ElementId>,
     label: SharedString,

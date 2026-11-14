@@ -66,17 +66,70 @@ LOGOS
   rm -f "$png"
 }
 
+# A platform repository that hasn't tagged a Chromium major within a few days of Stable builds on
+# ungoogled-chromium's tag with its last platform patches, and goes back to its own tag when one
+# appears. Its patches and other files that need it are rebased by ilo, in
+# engine/patches/<repository>/ laid out as in the repository, each saying in a comment at its top
+# what changed from the platform's and why; a patch's copy with no hunks is a patch left out. The directory goes when the platform tags the major; until
+# then, copies for a platform whose pin is on [chromium]'s version again are left alone.
+rebased_platform() {
+  local tag
+  tag=$(git config -f "$engine/pins.ini" "$1.tag") || return 1
+  [ -d "$engine/patches/$1" ] && [ "${tag%%-*}" != "$(git config -f "$engine/pins.ini" chromium.version)" ]
+}
+
+# Puts a platform repository's clone on the pinned ungoogled-chromium tag, with ilo's rebased
+# copies over its patches and other files and the patches left out off its series, if ilo rebased
+# it. Safe to run again
+# on the same clone. Takes the clone's path and the repository's name.
+rebase_platform() {
+  local dir=$1 name=$2 copies=$engine/patches/$2 uc_tag file
+  rebased_platform "$name" || return 0
+  uc_tag=$(git config -f "$engine/pins.ini" ungoogled-chromium.tag)
+  git -C "$dir/ungoogled-chromium" fetch -q --depth 1 origin "refs/tags/$uc_tag:refs/tags/$uc_tag"
+  git -C "$dir/ungoogled-chromium" -c advice.detachedHead=false checkout -q "refs/tags/$uc_tag"
+  for file in $(cd "$copies" && find patches -name '*.patch' -type f | sort); do
+    if [ ! -f "$dir/$file" ]; then
+      echo "$name has no $file for ilo's rebased copy to replace" >&2
+      return 1
+    fi
+    if grep -q '^--- ' "$copies/$file"; then
+      cp "$copies/$file" "$dir/$file"
+    else
+      grep -vxF "${file#patches/}" "$dir/patches/series" >"$dir/patches/series.new" || true
+      mv "$dir/patches/series.new" "$dir/patches/series"
+    fi
+  done
+  for file in $(cd "$copies" && find . -type f ! -path './patches/*' | sed 's|^\./||' | sort); do
+    if [ ! -f "$dir/$file" ]; then
+      echo "$name has no $file for ilo's rebased copy to replace" >&2
+      return 1
+    fi
+    cp "$copies/$file" "$dir/$file"
+  done
+}
+
+# What a tree prepared from a platform's tag is made from: the tag, and for a platform ilo rebased,
+# the ungoogled-chromium tag and the rebased copies too, so a change to either prepares it again.
+# Takes the repository's name and its tag.
+platform_stamp() {
+  local sum
+  rebased_platform "$1" || { echo "$2" && return; }
+  sum=$(cd "$engine/patches/$1" && find . -type f | sort | xargs cat | cksum | cut -d' ' -f1)
+  echo "$2 on ungoogled-chromium $(git config -f "$engine/pins.ini" ungoogled-chromium.tag), rebased $sum"
+}
+
 # Checks that a platform repository's ungoogled-chromium submodule builds the pinned tag, or a
 # later commit after it (ungoogled-chromium-macos 156.0.8078.47 builds one that fixes the tag's
-# patches), for the pinned Chromium version. A platform whose tag names another version lags the
-# Mac's point release, and is checked against its tag alone. Takes the submodule's path and
-# "<repository> <tag>".
+# patches), for the pinned Chromium version. A platform whose tag names another version, and that
+# ilo didn't rebase, is behind or ahead of the pins while they straddle a release, and is checked
+# against its tag alone. Takes the submodule's path and "<repository> <tag>".
 check_ungoogled() {
   local uc=$1 platform_tag=$2 version uc_tag pinned tag_version
   version=$(git config -f "$engine/pins.ini" chromium.version)
   tag_version=${platform_tag##* }
   tag_version=${tag_version%%-*}
-  if [ "$tag_version" != "$version" ]; then
+  if [ "$tag_version" != "$version" ] && ! rebased_platform "${platform_tag%% *}"; then
     if [ "$(cat "$uc/chromium_version.txt")" != "$tag_version" ]; then
       echo "$platform_tag builds Chromium $(cat "$uc/chromium_version.txt"), not $tag_version" >&2
       exit 1
@@ -103,12 +156,14 @@ check_ungoogled() {
 # a later run on a kept tree takes out, newest first, the patches from the first one that changed
 # or left the series, and applies the series again from there. A patch already in the tree is
 # skipped, so this is safe to run again; one that neither applies cleanly nor is in the tree has
-# drifted from it. In the Mac's bash 3.2, which has no mapfile and calls an empty array unbound.
+# drifted from it. Takes the tree's path, then "mac" for the Mac's tree (series_for). In the Mac's
+# bash 3.2, which has no mapfile and calls an empty array unbound.
 apply_series() {
-  local src=$1 kept=$1/.browser_core-series name patch first=0 i
+  local src=$1 platform=${2:-} kept=$1/.browser_core-series name patch first=0 i list
   local -a names=() applied=()
   ln -sfn "$(dirname "$engine")/core" "$src/browser_core"
-  while read -r name; do names+=("$name"); done < <(grep -v -e '^#' -e '^$' "$engine/series")
+  list=$(series_for "$(sed -n 's/^MAJOR=//p' "$src/chrome/VERSION")" "$platform") || exit 1
+  while read -r name; do [ -z "$name" ] || names+=("$name"); done <<<"$list"
   if [ -f "$kept/series" ]; then
     while read -r name; do applied+=("$name"); done <"$kept/series"
   elif ! series_fits "$src" "${names[@]}"; then
@@ -141,6 +196,24 @@ apply_series() {
     cp "$patch" "$kept/$name"
     echo "$name" >>"$kept/series"
   done
+}
+
+# The series' patches for a tree on a Chromium major, in order. The mac/ section is the Mac's alone,
+# for "mac". A line ending in "<N" or ">=N" is for a tree before Chromium N, or from it: the two
+# versions of a patch whose context differs across a major, while the platforms' pins straddle it.
+series_for() {
+  local major=$1 platform=${2:-} name when
+  [ -n "$major" ] || { echo "series: no Chromium major for the tree" >&2 && return 1; }
+  while read -r name when; do
+    [ "${name%%/*}" != mac ] || [ "$platform" = mac ] || continue
+    case $when in
+      '') ;;
+      '<'*) [ "$major" -lt "${when#<}" ] || continue ;;
+      '>='*) [ "$major" -ge "${when#>=}" ] || continue ;;
+      *) echo "series: $name ends in $when, which is neither <N nor >=N" >&2 && return 1 ;;
+    esac
+    echo "$name"
+  done < <(grep -v -e '^#' -e '^$' "$engine/series")
 }
 
 # Whether each of the series, in order, applies to the tree or is in it already, tried on a copy

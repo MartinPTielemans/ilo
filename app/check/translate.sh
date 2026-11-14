@@ -1,3 +1,4 @@
+# check.sh runs this at 630.
 # A page in another language, translated on the device (#671), with the check's stand-in for the
 # Mac's translator (BROWSER_TRANSLATE=stand-in, src/translate_host.rs), which marks each text "[en]",
 # so the run proves the page's words go to the translator and back on any platform. A page that
@@ -43,10 +44,18 @@ await '^browser: title [0-9]* Hola mundo$' || fail "the Spanish page didn't draw
 tab=$(grep '^browser: title [0-9]* Hola mundo$' "$log" | tail -1 | cut -d' ' -f3)
 await "^browser: language $tab es\$" || fail "Chrome didn't find the page's language, Spanish"
 await '^browser: translate mark drawn at ' || fail "the URL field drew no mark for a Spanish page"
-read -r mx my << EOF
-$(sed -n 's/^browser: translate mark drawn at //p' "$log" | tail -1)
-EOF
-send click "$mx" "$my"
+# Where the mark was drawn last, its centre in the window.
+mark_at() { sed -n 's/^browser: translate mark drawn at //p' "$log" | tail -1; }
+# The pointer on the mark hovers the sidebar, whose tools come out in the URL field and move the
+# mark: it's clicked where it is with them out, or the press can land on what took its place.
+click_mark() {
+  if [ "$(grep '^browser: sidebar tools ' "$log" | tail -1)" != "browser: sidebar tools shown" ]; then
+    send move $(mark_at)
+    expect '^browser: sidebar tools shown$' "the pointer on the mark didn't bring the sidebar's tools out"
+  fi
+  send click $(mark_at)
+}
+click_mark
 expect "^browser: translate mark $tab clicked\$" "the mark's press didn't reach it"
 expect "^browser: translate card $tab at " "the mark's press opened no card"
 ../tools/window-screenshot.sh "$pid" "$out/translate-offer.png" || fail "no window to capture"
@@ -93,10 +102,7 @@ expect "^browser: original $tab\$" "the menu's Use Original didn't ask for the p
 
 # Always Translate Spanish, the card's row under its answers, translates the page and the next in
 # Spanish as it comes.
-read -r mx my << EOF
-$(sed -n 's/^browser: translate mark drawn at //p' "$log" | tail -1)
-EOF
-send click "$mx" "$my"
+click_mark
 expect "^browser: translate card $tab at " "the mark's press opened no card again"
 read -r cx cy cw ch << EOF
 $(grep "^browser: translate card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
@@ -111,7 +117,7 @@ send key r cmd
 expect "^browser: language $tab es\$" "the reloaded page's language didn't come"
 expect "^browser: translating $tab from es to en\$" "always translated, the reloaded page didn't translate"
 expect "^browser: title $tab \[en\] Hola mundo\$" "always translated, the reloaded page's title wasn't"
-send click "$mx" "$my"
+click_mark
 expect "^browser: translate card $tab at " "the translated page's mark opened no card"
 ../tools/window-screenshot.sh "$pid" "$out/translate-always.png" || fail "no window to capture"
 send key escape

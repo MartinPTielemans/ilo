@@ -373,11 +373,10 @@ impl FindBar {
     /// Finds the text as the user types it, as Chrome's find bar does, once an input method has
     /// committed it.
     fn edited(&mut self, cx: &mut Context<Self>) {
-        let input = self.input.read(cx);
-        if input.composing() || input.text() == self.searched {
+        let Some(text) = self.input.read(cx).committed_change(&self.searched) else {
             return;
-        }
-        self.searched = input.text().to_string();
+        };
+        self.searched = text.to_string();
         find(self.tab, &self.searched, true);
     }
 

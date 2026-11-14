@@ -1,3 +1,4 @@
+# check.sh runs this at 520.
 # A tab in a call keeps its page however long it's unseen, as Arc never puts one to sleep (#686):
 # one using the camera and microphone, answered with Allow as the user would, and one holding a
 # WebRTC connection that takes nothing and makes no sound, two peers of its page on a data channel.

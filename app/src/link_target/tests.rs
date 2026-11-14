@@ -1,8 +1,16 @@
-use gpui::{Bounds, point, px, size};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
+
+use gpui::{Bounds, TestAppContext, point, px, size};
 
 use super::{
-    HEIGHT, MARGIN, NEAR, PAD_X, Side, Target, WINDOW_WIDTH, near, place, plate, window_left,
+    DELAY, GRACE, HEIGHT, Host, MARGIN, NEAR, PAD_X, Plate, RELEASE_POLL, Side, Target,
+    WINDOW_WIDTH, near, place, plate, window_left,
 };
+use crate::palette::Palette;
 
 /// Every character 7 points wide, so a test counts characters.
 fn measure(text: &str) -> f32 {
@@ -174,4 +182,128 @@ fn the_plates_window_stays_inside_a_card_wider_than_it_from_either_corner() {
         );
         assert!(left <= f32::from(frame.left()) && left + WINDOW_WIDTH >= f32::from(frame.right()));
     }
+}
+
+/// What the plate asks of its window, and a mouse button the test holds down or lets go.
+#[derive(Default)]
+struct Recorder {
+    asked: RefCell<Vec<String>>,
+    pressed: Cell<bool>,
+}
+
+impl Host for Recorder {
+    fn show(&self, window: u64, left: f32, top: f32) {
+        self.asked
+            .borrow_mut()
+            .push(format!("show {left} {top} over {window}"));
+    }
+
+    fn hide(&self) {
+        self.asked.borrow_mut().push("hide".into());
+    }
+
+    fn pressed(&self) -> bool {
+        self.pressed.get()
+    }
+}
+
+fn open_plate(cx: &mut TestAppContext) -> Rc<Recorder> {
+    let host = Rc::new(Recorder::default());
+    cx.update(|cx| super::open(host.clone(), |_| (gpui::black(), Palette::default()), cx))
+        .expect("no link target window");
+    host
+}
+
+/// The pointer comes onto a link in browser window 1, whose plate goes at `frame`.
+fn on_link(cx: &mut TestAppContext, frame: Bounds<gpui::Pixels>) {
+    let plate = Plate {
+        before: "".into(),
+        site: "example.com".into(),
+        after: "/docs".into(),
+        width: 120.,
+    };
+    cx.update(|cx| super::show(1, plate, frame, Side::Left, cx));
+    cx.run_until_parked();
+}
+
+fn off_link(cx: &mut TestAppContext) {
+    cx.update(super::hide);
+    cx.run_until_parked();
+}
+
+fn after(cx: &mut TestAppContext, host: &Recorder, time: Duration) -> Vec<String> {
+    cx.executor().advance_clock(time);
+    cx.run_until_parked();
+    host.asked.take()
+}
+
+fn shown_at(frame: Bounds<gpui::Pixels>) -> String {
+    format!(
+        "show {} {} over 1",
+        f32::from(frame.left()),
+        f32::from(frame.top())
+    )
+}
+
+#[gpui::test]
+fn the_plate_shows_after_its_delay_with_no_button_down(cx: &mut TestAppContext) {
+    let host = open_plate(cx);
+    let frame = place(card(), 120., Side::Left);
+    on_link(cx, frame);
+    assert_eq!(after(cx, &host, DELAY / 2), Vec::<String>::new());
+    assert_eq!(after(cx, &host, DELAY), vec![shown_at(frame)]);
+}
+
+#[gpui::test]
+fn a_plate_due_while_a_button_is_down_shows_at_its_release(cx: &mut TestAppContext) {
+    let host = open_plate(cx);
+    let frame = place(card(), 120., Side::Left);
+    on_link(cx, frame);
+    host.pressed.set(true);
+    assert_eq!(
+        after(cx, &host, DELAY * 3),
+        Vec::<String>::new(),
+        "the plate's window showed under a press, which on Windows is a move at the pointer that \
+         takes an Alt-click on a link away"
+    );
+    host.pressed.set(false);
+    assert_eq!(after(cx, &host, RELEASE_POLL), vec![shown_at(frame)]);
+}
+
+#[gpui::test]
+fn a_plate_whose_link_the_pointer_left_during_the_press_never_shows(cx: &mut TestAppContext) {
+    let host = open_plate(cx);
+    on_link(cx, place(card(), 120., Side::Left));
+    host.pressed.set(true);
+    assert_eq!(after(cx, &host, DELAY * 2), Vec::<String>::new());
+    off_link(cx);
+    host.pressed.set(false);
+    assert_eq!(after(cx, &host, RELEASE_POLL * 4), Vec::<String>::new());
+}
+
+#[gpui::test]
+fn a_shown_plate_stays_through_a_press_and_goes_at_its_release(cx: &mut TestAppContext) {
+    let host = open_plate(cx);
+    let frame = place(card(), 120., Side::Left);
+    on_link(cx, frame);
+    assert_eq!(after(cx, &host, DELAY), vec![shown_at(frame)]);
+    host.pressed.set(true);
+    off_link(cx);
+    assert_eq!(after(cx, &host, GRACE), Vec::<String>::new());
+    host.pressed.set(false);
+    assert_eq!(after(cx, &host, RELEASE_POLL), vec!["hide".to_string()]);
+}
+
+#[gpui::test]
+fn a_shown_plate_moves_only_at_the_release(cx: &mut TestAppContext) {
+    let host = open_plate(cx);
+    let frame = place(card(), 120., Side::Left);
+    on_link(cx, frame);
+    assert_eq!(after(cx, &host, DELAY), vec![shown_at(frame)]);
+    host.pressed.set(true);
+    let moved = place(card(), 120., Side::Right);
+    on_link(cx, moved);
+    assert_eq!(after(cx, &host, DELAY), Vec::<String>::new());
+    host.pressed.set(false);
+    assert_eq!(after(cx, &host, RELEASE_POLL), vec![shown_at(moved)]);
 }

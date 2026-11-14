@@ -1,3 +1,4 @@
+# check.sh runs this at 720, only when named.
 # With the lists uBlock Origin ships and nothing given for the check, a page's script from Google's
 # ad network doesn't load, and an ad server's own page doesn't open: uBlock Origin shows its page
 # saying it blocked it instead. uBlock Origin fails the script's request, or answers it with a
@@ -27,9 +28,9 @@ log="$out/adblock-live.log"
 memory="$out/adblock-live/ublock-memory.txt"
 rm -f "$memory"
 step=0
-# uBlock Origin's process, once there is one, within 10 s.
+# uBlock Origin's process, once there is one, within $1 tenths of a second.
 ublock_process() {
-  for _ in $(seq 100); do
+  for _ in $(seq "$1"); do
     pgrep -f "$procs.*--extension-process" | head -1 | grep . && return 0
     sleep 0.1
   done
@@ -73,12 +74,12 @@ BROWSER_DRIVE=1 BROWSER_URL="${site}live.html" BROWSER_PROFILE_DIR="$profile_dir
   "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
-# The time to blocking counts from here, as uBlock Origin is loaded into the profile.
-await "^browser: extensions 1 .*$ublock\$" || fail "uBlock Origin wasn't loaded"
+# The time to blocking counts from uBlock Origin's process starting, as it's loaded into the
+# profile: no extension list names it since #2113, the app's log line among them (#2650).
+ublock_id=$(ublock_process 600) || fail "uBlock Origin had no process 60 s after the launch"
 loaded=$(date +%s)
 if ! [ "$(uname)" = Darwin ]; then
   loaded_ms=$(date +%s%3N)
-  ublock_id=$(ublock_process) || fail "uBlock Origin had no process 10 s after it loaded"
   sample_ublock "$ublock_id" &
   # Not $sampler, which quit clears (lib.sh's exited).
   ublock_sampler=$!
@@ -123,17 +124,13 @@ expect "^browser: loaded $tab chrome-extension://$ublock/document-blocked\.html"
 if [ -n "${ublock_sampler:-}" ]; then
   # 53 s after its lists last changed it writes its filters' selfie into its cache, the largest
   # value it writes, which ran its process out of memory on Windows (#2069). It writes each value
-  # to its IndexedDB, whose keys are UTF-16, and to its extension storage, and the peaks are read
-  # once both have the selfie, or 180 s on.
+  # to its IndexedDB and to its extension storage, and the peaks are read once both have the
+  # selfie (lib.sh's ublock_selfie), or 180 s on.
   idb="$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb"
   local_storage="$profile_dir/Default/Local Extension Settings/$ublock"
-  has_selfie() {
-    cat "$1"/*.log "$1"/*.ldb 2> /dev/null | LC_ALL=C tr -d '\000' |
-      grep -q 'selfie/staticNetFilteringEngine'
-  }
   selfie="no selfie within 180 s"
   for _ in $(seq 180); do
-    if has_selfie "$idb.leveldb" && has_selfie "$local_storage"; then
+    if ublock_selfie; then
       selfie="its selfie in its cache $(($(date +%s) - loaded)) s after it loaded"
       break
     fi

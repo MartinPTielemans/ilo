@@ -121,6 +121,7 @@ mod reveal;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/reveal_window.rs"]
 mod reveal_window;
+mod safe_start_host;
 mod settings;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/settings_window.rs"]
@@ -156,6 +157,7 @@ use agent_events::*;
 mod links;
 use links::*;
 mod little_ilo;
+mod sign_in_close;
 use little_ilo::*;
 mod keys;
 use keys::*;
@@ -175,6 +177,7 @@ use updates_host::*;
 mod quitting;
 mod scripting_host;
 use quitting::*;
+mod ad_block_host;
 mod battery_saver_host;
 use battery_saver_host::*;
 mod other_tabs_host;
@@ -456,9 +459,16 @@ unsafe extern "C" fn started(_: *mut c_void) {
             true => {
                 // A click in the UI takes the keyboard there, to keep, as Wayland's does: moving
                 // X's input focus into GPUI's window tells the core nothing while it's there,
-                // as after ⌘W, where the UI holds the keys for the page shown next (#1209).
-                fn pressed(ui_view: *mut c_void) {
-                    if let Some(window) = window_in(ui_view) {
+                // as after ⌘W, where the UI holds the keys for the page shown next (#1209), nor
+                // while an overlay has the keyboard, where a window manager activating the window
+                // can put it back up to the window's own after GPUI moved it (#2789). GPUI names
+                // its own window, inside the one the core holds.
+                fn pressed(view: *mut c_void) {
+                    let window = WINDOWS.with(|windows| {
+                        let windows = windows.try_borrow().ok()?;
+                        windows.iter().find(|w| w.view == view).map(|w| w.id)
+                    });
+                    if let Some(window) = window {
                         unsafe { bc::bc_window_ui_takes_keyboard(window) };
                     }
                 }
@@ -472,6 +482,8 @@ unsafe extern "C" fn started(_: *mut c_void) {
             false => {
                 gpui_linux::embed_wayland(display, keyboard);
                 gpui_linux::watch_embedder_swipes(system::swiped);
+                browser::clipboard::read_through(system::read_through_core);
+                browser::clipboard::held_through(gpui_linux::held_clipboard_text);
             }
         }
         !display.is_null()
@@ -554,6 +566,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         }
         needs_you_host::start(cx);
         daily_count_host::start(cx);
+        safe_start_host::start(cx);
         open_window(None, None, cx);
         // Launched by New Incognito Window while ilo wasn't running, the private window opens
         // over the first.
@@ -673,9 +686,18 @@ unsafe extern "C" fn agent_request_done(
 }
 
 unsafe extern "C" fn launching(_: *mut c_void) {
-    // While Chromium starts, about 280 ms before the first window opens (#2384).
+    safe_start_host::launching();
+    ad_block_host::launching();
+    // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
+    // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
     #[cfg(target_os = "linux")]
-    gpui_wgpu::WgpuContext::make_instance_early();
+    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+        gpui_wgpu::WgpuContext::make_instance_early();
+    }
+    #[cfg(target_os = "windows")]
+    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+        gpui_windows::make_early();
+    }
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
@@ -857,8 +879,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     let mut args: Vec<String> = vec![
         format!("--user-data-dir={profile}"),
         // Chrome would copy the app bundle to check its signature against, which an
-        // ad-hoc-signed build doesn't need.
-        "--disable-features=MacAppCodeSignClone".into(),
+        // ad-hoc-signed build doesn't need. And off the Mac, every switch would copy and encode
+        // the tab it leaves for the hover cards of Chrome's tab strip, which ilo never shows: its
+        // own hover card takes its own picture (core/capture.cc, #2377).
+        "--disable-features=MacAppCodeSignClone,TabHoverCardImages".into(),
         // An idle browser shouldn't wake: Chrome's stack sampling feeds metrics nobody receives,
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
@@ -866,10 +890,16 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // On the Mac, child processes start from Apéritif helpers, as Chrome's field trial has
         // them: those link the framework at launch, so the kernel binds its constant data clean
         // and shared, where the other helpers load it late and dyld dirties 11.7 MiB of it in each.
+        // On Windows a tab's dialog from Chromium's TabDialogManager, such as 157's warning before
+        // http, takes a window of its own, as the core has the older ones take
+        // (PageDialogsInOwnWindow): drawn in the browser window's, it would be under the pages'
+        // windows, out of sight, and a click on it would reach the page (#2651).
         format!(
             "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval{}",
             if cfg!(target_os = "macos") {
                 ",AperitifHelpers"
+            } else if cfg!(target_os = "windows") {
+                ",TabModalUsesDesktopWidget"
             } else {
                 ""
             }
@@ -894,6 +924,13 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     {
         args.push(format!("{TEST_HOST}={host}"));
     }
+    // A process that crashes prints its stack to the stderr the browser shares with its child
+    // processes, a piece at a time, so a line of the browser's written meanwhile lands in the
+    // middle of one, where the checks reading the log don't find it (#2496). check.sh keeps
+    // those stacks out with BROWSER_STACK_TRACES=off; a crash still ends the process as before.
+    if std::env::var("BROWSER_STACK_TRACES").is_ok_and(|traces| traces.trim() == "off") {
+        args.push("--disable-in-process-stack-traces".into());
+    }
     // The checks' crash, which has Crashpad write a minidump (core/crash_reports.h).
     const CRASH_TEST: &str = "--crash-after-start";
     // Where the user's crash reports go if they send them, a default service URL that a fork or a
@@ -917,8 +954,18 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     if !sync_server.is_empty() && !given.iter().any(|arg| arg.starts_with("--sync-url=")) {
         args.push(format!("--sync-url={sync_server}"));
     }
+    // Whether this launch holds the extensions, which the app decides from its own mark and says
+    // at every launch, so a restart that gives the browser its switches again decides afresh.
+    args.push(safe_start_host::prepare());
+    // Which ad blocker this launch runs, from the user's choice in Settings, decided afresh at
+    // every launch as safe start's is.
+    let ad_blocker = ad_block_host::prepare(&given, &profile);
+    args.extend(ad_blocker.switches());
     let given = given.into_iter().filter(|arg| {
-        !cfg!(feature = "prod") || !(arg.starts_with(TEST_HOST) || arg.starts_with(CRASH_TEST))
+        !arg.starts_with(browser::safe_start::SWITCH)
+            && ad_blocker.passes(arg)
+            && (!cfg!(feature = "prod")
+                || !(arg.starts_with(TEST_HOST) || arg.starts_with(CRASH_TEST)))
     });
     // On Windows and Linux Chromium has started already, with what it was given.
     let chromium_started = cfg!(any(target_os = "windows", target_os = "linux"));
@@ -927,6 +974,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         .into_iter()
         .filter_map(|arg| CString::new(arg).ok())
         .collect();
+    ad_block_host::keep_cache_in(&args);
     if std::env::var_os("BROWSER_DRIVE").is_some() {
         #[cfg(target_os = "linux")]
         drive::start();
@@ -1042,6 +1090,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_frozen: Some(tab_frozen),
         other_tabs_changed: Some(other_tabs_changed),
         app_new_window: Some(app_new_window),
+        ad_block_use: Some(ad_block_host::ad_block_use),
+        ad_block_request: Some(ad_block_host::ad_block_request),
+        ad_block_page: Some(ad_block_host::ad_block_page),
+        ad_block_hide: Some(ad_block_host::ad_block_hide),
         ..Default::default()
     };
     (args, host)

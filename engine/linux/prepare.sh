@@ -1,8 +1,9 @@
 #!/bin/bash
 # Prepares Chromium for Linux in <work>/src, the way ungoogled-chromium-portablelinux's x64
 # releases are built, at the tag pins.ini names: its source tarball, ungoogled-chromium's patches
-# and domain substitution, its GN args and toolchain. Then links the core in as //browser_core,
-# applies our series and puts ilo's icon in Chromium's place (tree.sh). Prints the tree's path.
+# and its own (ilo's rebase of them while it lags, tree.sh), domain substitution, its GN args and
+# toolchain. Then links the core in as //browser_core, applies our series and puts ilo's icon in
+# Chromium's place (tree.sh). Prints the tree's path.
 # check-linux.sh and build.sh build from it, and .github/workflows/engine-linux.yml keeps one on its
 # runner. Needs about 40 GB, and as much again while a new version comes in.
 #
@@ -10,8 +11,15 @@
 # point release leaves every file it doesn't change as it was and the next build recompiles only
 # what changed. With the tag already in the tree, only the series and the GN args are brought up
 # to date.
+#
+# With --kept, it only brings the tree it has up to date, for a head whose core tests run on the
+# engine's tree (.github/workflows/core-tests.yml). Where it would prepare another tag or rebuild
+# the tree whole for other GN args, hours that would also change the next engine's tree, it stops
+# with status 3 instead.
 set -euo pipefail
-[ $# -eq 1 ] || { echo "usage: prepare.sh <work directory>" >&2 && exit 2; }
+kept=
+[ "${1:-}" != --kept ] || { kept=1 && shift; }
+[ $# -eq 1 ] || { echo "usage: prepare.sh [--kept] <work directory>" >&2 && exit 2; }
 work=$(mkdir -p "$1" && cd "$1" && pwd)
 . "$(dirname "$0")/../tree.sh"
 src=$work/src
@@ -21,6 +29,11 @@ exec 3>&1 1>&2
 fail() {
   echo "prepare: $*" >&2
   exit 1
+}
+
+not_kept() {
+  echo "prepare: $*" >&2
+  exit 3
 }
 
 for tool in ninja node gperf go clang-format rsync; do
@@ -33,18 +46,23 @@ done
 flags=("${CFLAGS:-}" "${CXXFLAGS:-}" "${CPPFLAGS:-}")
 
 tag=$(git config -f "$engine/pins.ini" ungoogled-chromium-portablelinux.tag)
+stamp=$(platform_stamp ungoogled-chromium-portablelinux "$tag")
+[ -z "$kept" ] || [ "$(cat "$src/.portablelinux-tag" 2>/dev/null)" = "$stamp" ] ||
+  not_kept "the tree is prepared from '$(cat "$src/.portablelinux-tag" 2>/dev/null || echo nothing)', and this head pins '$stamp'"
 ucl=$work/ucl
-if [ "$(git -C "$ucl" describe --tags --exact-match 2>/dev/null)" != "$tag" ]; then
+if [ "$(cat "$ucl/.ilo-platform" 2>/dev/null)" != "$stamp" ]; then
   rm -rf "$ucl"
   git clone -q -c advice.detachedHead=false --depth 1 --branch "$tag" --recurse-submodules \
     --shallow-submodules https://github.com/ungoogled-software/ungoogled-chromium-portablelinux.git "$ucl"
+  rebase_platform "$ucl" ungoogled-chromium-portablelinux || exit 1
+  echo "$stamp" >"$ucl/.ilo-platform"
 fi
 check_ungoogled "$ucl/ungoogled-chromium" "ungoogled-chromium-portablelinux $tag"
 
 . "$ucl/scripts/shared.sh"
 setup_paths
 
-if [ "$(cat "$src/.portablelinux-tag" 2>/dev/null)" != "$tag" ]; then
+if [ "$(cat "$src/.portablelinux-tag" 2>/dev/null)" != "$stamp" ]; then
   # Their scripts/build.sh, up to its build, in the scratch tree. Each step leaves a stamp there,
   # so a run that stopped goes on where it was.
   _src_dir=$work/next
@@ -59,7 +77,7 @@ if [ "$(cat "$src/.portablelinux-tag" 2>/dev/null)" != "$tag" ]; then
   remove_agent_instructions "$_src_dir"
   apply_series "$_src_dir"
   linux_icons "$_src_dir"
-  echo "$tag" >"$_src_dir/.portablelinux-tag"
+  echo "$stamp" >"$_src_dir/.portablelinux-tag"
   if [ -d "$src" ]; then
     # Without the scratch tree's dates: a changed file gets the time it's written, so ninja sees
     # it as newer than what was built from it. An unchanged one isn't touched.
@@ -83,7 +101,10 @@ _out_dir=$args write_gn_args >/dev/null
 # Google's Widevine module downloads at the user's yes (core/widevine.cc), with Chromium's Widevine
 # support, which ungoogled-chromium's flags.gn turns on. Only a Chrome-branded build bundles it.
 grep -qx 'enable_widevine=true' "$args/args.gn" || fail "ungoogled-chromium's GN args no longer turn Widevine on"
-cmp -s "$args/args.gn" "$src/out/Default/args.gn" || cp "$args/args.gn" "$src/out/Default/args.gn"
+if ! cmp -s "$args/args.gn" "$src/out/Default/args.gn"; then
+  [ -z "$kept" ] || not_kept "the GN args differ from the tree's: $(diff "$src/out/Default/args.gn" "$args/args.gn" | grep '^[<>]' | tr '\n' ' ')"
+  cp "$args/args.gn" "$src/out/Default/args.gn"
+fi
 
 # The toolchain as setup_toolchain gives it to gn's bootstrap, in the tree it's now in.
 clang=$src/third_party/llvm-build/Release+Asserts/bin

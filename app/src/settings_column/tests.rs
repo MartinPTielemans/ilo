@@ -12,6 +12,7 @@ use crate::tokens::shell::library::SEARCH_HEIGHT;
 
 /// The column alone, showing what it last picked.
 struct Shown {
+    sections: Sections,
     shown: Section,
     logged: Rc<RefCell<Vec<String>>>,
     picked: Rc<RefCell<Vec<Section>>>,
@@ -33,6 +34,7 @@ impl Render for Shown {
         let foot = self.foot.clone();
         let foot: Foot = Rc::new(move |_, _| foot.set(foot.get() + 1));
         div().size_full().child(column(
+            &self.sections,
             self.shown,
             true,
             self.logged.clone(),
@@ -47,6 +49,7 @@ impl Render for Shown {
 
 fn shown(cx: &mut TestAppContext) -> (gpui::Entity<Shown>, &mut VisualTestContext) {
     let (view, cx) = cx.add_window_view(|_, _| Shown {
+        sections: Sections::default(),
         shown: Section::General,
         logged: Rc::default(),
         picked: Rc::default(),
@@ -76,7 +79,7 @@ fn plate_y(section: Section) -> f32 {
     unreachable!()
 }
 
-/// The twelve sections run down the column in their three groups, and a click on each shows it.
+/// The thirteen sections run down the column in their three groups, and a click on each shows it.
 #[gpui::test]
 fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
     let (view, cx) = shown(cx);
@@ -93,6 +96,7 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
             "Profiles",
             "Passwords",
             "Privacy",
+            "Ad Blocking",
             "Sync",
             "Import & Export",
             "About"
@@ -114,7 +118,7 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
     }
     // Each click picked once: none reached the ground, whose press moves the window, which the
     // test window can't.
-    assert_eq!(view.read_with(cx, |view, _| view.picked.borrow().len()), 12);
+    assert_eq!(view.read_with(cx, |view, _| view.picked.borrow().len()), 13);
 }
 
 /// Chromium's settings sit at the column's foot, 8 up from the window's bottom, and a click there
@@ -129,7 +133,7 @@ fn the_foot_opens_chromiums_settings(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view.picked.borrow().is_empty()));
 }
 
-/// At Settings' 720 × 480 minimum the twelve sections don't fit over the foot: they scroll above
+/// At Settings' 720 × 480 minimum the thirteen sections don't fit over the foot: they scroll above
 /// it, so the last, scrolled to, shows clear of the foot, and a click on the foot is the foot's.
 #[gpui::test]
 fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContext) {
@@ -170,7 +174,7 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
     );
 }
 
-/// VoiceOver reads the column as a tab list of the twelve sections, the one shown selected, and
+/// VoiceOver reads the column as a tab list of the thirteen sections, the one shown selected, and
 /// Chromium settings as a button; its press on a section shows it, as a click does (#1381).
 #[gpui::test]
 fn voiceover_reads_the_sections_as_tabs(cx: &mut TestAppContext) {
@@ -276,6 +280,7 @@ impl Render for Stops {
             .size_full()
             .flex()
             .child(column(
+                &Sections::default(),
                 Section::General,
                 true,
                 Rc::default(),
@@ -290,7 +295,7 @@ impl Render for Stops {
 }
 
 /// Every place ⇥ stops in Settings is one VoiceOver can name: each has a role and a name, and ⇥
-/// goes round all nineteen, the twelve sections, the field, the card's five and the foot.
+/// goes round all twenty, the thirteen sections, the field, the card's five and the foot.
 #[gpui::test]
 fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
     use gpui::accesskit::{NodeId, Role};
@@ -346,7 +351,7 @@ fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
     ] {
         assert!(names.contains(&name), "⇥ never reached {name}: {names:?}");
     }
-    assert_eq!(stops.len(), 19, "{names:?}");
+    assert_eq!(stops.len(), 20, "{names:?}");
 }
 
 /// Settings in small for the keyboard: the column with the search field, and the card with a
@@ -355,6 +360,7 @@ struct Keyed {
     focus: gpui::FocusHandle,
     input: gpui::Entity<crate::text_input::TextInput>,
     card: crate::settings_card::Card,
+    sections: Sections,
     shown: Section,
     pressed: Rc<Cell<usize>>,
 }
@@ -395,6 +401,7 @@ impl Render for Keyed {
             .size_full()
             .flex()
             .child(column(
+                &self.sections,
                 self.shown,
                 true,
                 Rc::default(),
@@ -434,6 +441,7 @@ fn the_keyboard_goes_through_settings_in_reading_order(cx: &mut TestAppContext) 
             focus: cx.focus_handle(),
             input,
             card: Default::default(),
+            sections: Default::default(),
             shown: Section::General,
             pressed: Rc::default(),
         }
@@ -640,4 +648,71 @@ fn after_a_control_goes_cmd_w_reaches_settings(cx: &mut TestAppContext) {
         1,
         "⌘W didn't reach Settings"
     );
+}
+
+/// At Settings' least height the sections scroll above the foot, and the keys keep the one they
+/// move to in sight: ⇧⇥ from the field to About, the last, scrolls the list to it, and ↑ back to
+/// General scrolls it back (#2506).
+#[gpui::test]
+fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        crate::text_input::bind_keys(cx);
+        crate::settings_search::bind_keys(cx);
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let input = cx.new(|cx| crate::text_input::TextInput::new("Search", cx));
+        let _ = input.read(cx).focus_handle(cx).tab_stop(true);
+        Keyed {
+            focus: cx.focus_handle(),
+            input,
+            card: Default::default(),
+            sections: Default::default(),
+            shown: Section::General,
+            pressed: Rc::default(),
+        }
+    });
+    cx.simulate_resize(size(px(720.), px(480.)));
+    cx.update(|window, cx| {
+        window.activate_window();
+        let field = view.read(cx).input.read(cx).focus_handle(cx);
+        window.focus(&field, cx);
+    });
+    let settle = |cx: &mut VisualTestContext| {
+        for _ in 0..3 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+    };
+    settle(cx);
+    let scroll = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            let scroll = &view.sections.scroll;
+            (
+                f32::from(scroll.offset().y),
+                f32::from(scroll.max_offset().y),
+            )
+        })
+    };
+    let (offset, most) = scroll(cx);
+    assert_eq!(offset, 0.);
+    assert!(
+        most > PLATE_HEIGHT,
+        "the sections fit at the least height: {most}"
+    );
+    cx.simulate_keystrokes("shift-tab");
+    settle(cx);
+    let (offset, _) = scroll(cx);
+    assert!(
+        offset <= PLATE_GAP - most,
+        "⇧⇥ to About left it under the foot: {offset} of {most}"
+    );
+    press("enter", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::About);
+    for _ in 1..Section::all().count() {
+        cx.simulate_keystrokes("up");
+    }
+    settle(cx);
+    assert_eq!(scroll(cx).0, 0., "↑ to General left it above the list");
+    press("enter", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::General);
 }
