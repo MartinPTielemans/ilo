@@ -232,7 +232,8 @@ covered() {
 r = json.loads(sys.argv[1])
 w, h = min(r[2], 400), max(min(r[3], 300), 120)
 x, y = (map(int, sys.argv[2].split(","))) if sys.argv[2] else (r[0] + r[2] // 2, r[1] + r[3] // 2)
-print(x - w // 2, y - h // 2, w, h, x, y)' "$rect" "$at")
+# On the 1280 by 800 screen, as KWin keeps the top of a window from going above it.
+print(min(max(x - w // 2, 0), 1280 - w), min(max(y - h // 2, 0), 800 - h), w, h, x, y)' "$rect" "$at")
   sleep 0.3
   p2790 moveresize "$other" "$1" "$2" "$3" "$4"
   sleep 0.3
