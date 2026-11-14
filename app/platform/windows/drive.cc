@@ -19,6 +19,7 @@
 // drag loop dispatches none of the driver's steps: the stand-in takes the moves and the release.
 //
 // The commands are drive.mm's, with what Windows has: click, doubleclick, rightclick, middleclick,
+// sideclick, a mouse's back or forward side button, which Windows calls X buttons 1 and 2,
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, resizekey, place, minimize, window, order, layout, state, title, pasteboard, front, menu,
@@ -409,6 +410,7 @@ LRESULT CALLBACK HearRealPointer(int code, WPARAM wparam, LPARAM lparam) {
       case WM_LBUTTONDOWN:
       case WM_RBUTTONDOWN:
       case WM_MBUTTONDOWN:
+      case WM_XBUTTONDOWN:
       case WM_LBUTTONDBLCLK:
       case WM_NCLBUTTONDOWN:
       case WM_NCRBUTTONDOWN:
@@ -652,6 +654,11 @@ void RealMoveTo(POINT at, bool again) {
   g_real_move_number = g_real_sent;
 }
 
+// Which of Windows' X buttons |button| is, a mouse's back or forward side button, or 0 for none.
+WORD XButton(UINT button) {
+  return button == MK_XBUTTON1 ? XBUTTON1 : button == MK_XBUTTON2 ? XBUTTON2 : 0;
+}
+
 // A real button's or wheel's event where the pointer is: |flags| as SendInput takes them.
 void RealPointer(DWORD flags, DWORD data = 0) {
   INPUT input{};
@@ -667,6 +674,9 @@ DWORD RealFlags(UINT button, bool up) {
   }
   if (button == MK_MBUTTON) {
     return up ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_MIDDLEDOWN;
+  }
+  if (XButton(button)) {
+    return up ? MOUSEEVENTF_XUP : MOUSEEVENTF_XDOWN;
   }
   return up ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_LEFTDOWN;
 }
@@ -691,6 +701,8 @@ void HoldKeys(int modifiers, UINT buttons = 0) {
   set(VK_LBUTTON, buttons & MK_LBUTTON);
   set(VK_RBUTTON, buttons & MK_RBUTTON);
   set(VK_MBUTTON, buttons & MK_MBUTTON);
+  set(VK_XBUTTON1, buttons & MK_XBUTTON1);
+  set(VK_XBUTTON2, buttons & MK_XBUTTON2);
   SetKeyboardState(state);
 }
 
@@ -757,11 +769,20 @@ void Move(const Target& to, int modifiers, UINT buttons) {
 UINT Down(UINT button) {
   return button == MK_RBUTTON   ? WM_RBUTTONDOWN
          : button == MK_MBUTTON ? WM_MBUTTONDOWN
+         : XButton(button)      ? WM_XBUTTONDOWN
                                 : WM_LBUTTONDOWN;
 }
 
 UINT Up(UINT button) {
-  return button == MK_RBUTTON ? WM_RBUTTONUP : button == MK_MBUTTON ? WM_MBUTTONUP : WM_LBUTTONUP;
+  return button == MK_RBUTTON   ? WM_RBUTTONUP
+         : button == MK_MBUTTON ? WM_MBUTTONUP
+         : XButton(button)      ? WM_XBUTTONUP
+                                : WM_LBUTTONUP;
+}
+
+// A button message's wParam: the keys and buttons held, and in its high word which X button it is.
+WPARAM ButtonParam(int modifiers, UINT held, UINT button) {
+  return MouseKeys(modifiers, held) | (static_cast<WPARAM>(XButton(button)) << 16);
 }
 
 // Posts |button| going down at |target|, as Windows sends a press: its window's root decides
@@ -773,7 +794,7 @@ void Press(const Target& at, UINT button, int modifiers, bool second) {
   if (g_real) {
     // Windows activates the window, tells its parents and makes a second press a double click.
     RealPointerTo(at.screen);
-    RealPointer(RealFlags(button, false));
+    RealPointer(RealFlags(button, false), XButton(button));
     return;
   }
   const UINT down = Down(button);
@@ -794,8 +815,8 @@ void Press(const Target& at, UINT button, int modifiers, bool second) {
   // activates: what the windows post as they activate comes after the press, as an overlay's
   // dismissal does, which the press reads the bar still open before (#872).
   if (!eaten) {
-    PostMessageW(target.hwnd, double_click ? WM_LBUTTONDBLCLK : down, MouseKeys(modifiers, button),
-                 ClientParam(target));
+    PostMessageW(target.hwnd, double_click ? WM_LBUTTONDBLCLK : down,
+                 ButtonParam(modifiers, button, button), ClientParam(target));
   }
   if ((activate == MA_ACTIVATE || activate == MA_ACTIVATEANDEAT) && GetActiveWindow() != root) {
     SetActiveWindow(root);
@@ -813,7 +834,8 @@ void Press(const Target& at, UINT button, int modifiers, bool second) {
     }
     POINT in = target.screen;
     ScreenToClient(parent, &in);
-    SendMessageW(parent, WM_PARENTNOTIFY, MAKEWPARAM(down, 0), MAKELPARAM(in.x, in.y));
+    SendMessageW(parent, WM_PARENTNOTIFY, MAKEWPARAM(down, XButton(button)),
+                 MAKELPARAM(in.x, in.y));
     child = parent;
   }
 }
@@ -823,7 +845,7 @@ void Release(const Target& at, UINT button, int modifiers) {
   HoldKeys(modifiers);
   if (g_real) {
     RealPointerTo(at.screen);
-    RealPointer(RealFlags(button, true));
+    RealPointer(RealFlags(button, true), XButton(button));
     // Its keys stay held past the button, as a hand's do, until the next step's.
     return;
   }
@@ -831,7 +853,7 @@ void Release(const Target& at, UINT button, int modifiers) {
     return;
   }
   const Target target = Captured(at);
-  PostMessageW(target.hwnd, Up(button), MouseKeys(modifiers, 0), ClientParam(target));
+  PostMessageW(target.hwnd, Up(button), ButtonParam(modifiers, 0, button), ClientParam(target));
 }
 
 // How long a press at |target| waits, so GPUI, which counts every press, a drag's too, doesn't
@@ -1679,12 +1701,13 @@ bool Run(const std::string& line) {
   // click after ⌘T is no Ctrl-click. A key takes it from there, and flags lets it go itself. So does
   // a real key, which names its own: Win+D after ⌘T was Ctrl+Win+D, a new virtual desktop (#2616).
   static const char* const kInput[] = {
-      "click",         "rightclick",     "middleclick", "doubleclick", "clickkey",
-      "rightclickkey", "doubleclickkey", "drag",        "dragover",    "dragdrop",
-      "dragleave",     "press",          "dragto",      "release",     "rightpress",
-      "rightdragto",   "rightrelease",   "move",        "scroll",      "swipe",
-      "wheel",         "keydown",        "keyup",       "type",        "ime",
-      "insert",        "choose",         "dismiss",     "savepanel",   "realkey"};
+      "click",      "rightclick",    "middleclick",    "doubleclick", "clickkey",
+      "sideclick",  "rightclickkey", "doubleclickkey", "drag",        "dragover",
+      "dragdrop",   "dragleave",     "press",          "dragto",      "release",
+      "rightpress", "rightdragto",   "rightrelease",   "move",        "scroll",
+      "swipe",      "wheel",         "keydown",        "keyup",       "type",
+      "ime",        "insert",        "choose",         "dismiss",     "savepanel",
+      "realkey"};
   for (const char* input : kInput) {
     if (action == input) {
       g_steps.push_back({[] { LetGoKeyCtrl(); }});
@@ -2082,6 +2105,19 @@ bool Run(const std::string& line) {
                                                          : MK_LBUTTON;
     AddClick(target, button, in_key ? 0 : PointerModifiers(words),
              action.rfind("double", 0) == 0);
+    return true;
+  }
+  // A mouse's side buttons, which GPUI reads as back and forward and Chromium's pages as going back
+  // and forward, as the Mac's and Linux's drivers press them.
+  if (action == "sideclick") {
+    double x, y;
+    std::string way;
+    Target target;
+    if (!(words >> x >> y >> way) || (way != "back" && way != "forward") ||
+        !TargetAt(x, y, &target)) {
+      return false;
+    }
+    AddClick(target, way == "back" ? MK_XBUTTON1 : MK_XBUTTON2, 0, false);
     return true;
   }
   if (action == "drag") {

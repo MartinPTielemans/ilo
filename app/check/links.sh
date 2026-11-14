@@ -551,9 +551,12 @@ else
   # below opens as a tab.
   printf 'otherwise\t1\n' > "$rules_file"
 fi
-# The sidebar's picture, which the launches below show until their UI has drawn.
+# The sidebar's picture, which the launches below show until their UI has drawn, on the Mac and
+# Windows.
 mac=
 [ "$(uname)" = Darwin ] && mac=1
+pictures=$mac
+! windows || pictures=1
 if [ -n "$mac" ]; then
   # A window the screen has less room for at the next launch opens smaller, and past
   # launch_picture.rs's tolerance with no picture. One filling the hosted Mac's 1024 by 768 screen
@@ -563,16 +566,14 @@ if [ -n "$mac" ]; then
   corner=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4,5)
   send place $((${corner% *} + 40)) $((${corner#* } + 60)) 900 560
   expect '^browser: drawn at 900x560$' "the window didn't draw at 900 by 560"
-elif windows; then
-  echo "skip: the sidebar's picture ⌘Q keeps, shown by the launches after: Windows' isn't checked yet."
-else
+elif [ -z "$pictures" ]; then
   echo "skip: the sidebar's picture ⌘Q keeps, shown by the launches after: Linux has no launch picture."
 fi
 quit_by_key
-[ -z "$mac" ] || grep -q '^browser: launch picture taken$' "$log" ||
+[ -z "$pictures" ] || grep -q '^browser: launch picture taken$' "$log" ||
   fail "⌘Q didn't keep the sidebar's picture for the next launch"
 exited
-[ -z "$mac" ] || ls "$(dirname "$saved")"/launch-picture-*.png > /dev/null 2>&1 ||
+[ -z "$pictures" ] || ls "$(dirname "$saved")"/launch-picture-*.png > /dev/null 2>&1 ||
   fail "the sidebar's picture ⌘Q took wasn't on disk once the app quit"
 # The next launch opens 3 points shorter than the picture, as when the Dock or the menu bar has
 # grown since the quit (#1450), and still shows it, its foot at the window's bottom: the launch
@@ -591,6 +592,9 @@ with open(sys.argv[1], "w") as file:
 ' "$saved" || fail "the window kept in $saved has no frame to make shorter"
   # Whole: `open` starts the app in /.
   capture="$PWD/$out/links-launch-shorter.png"
+elif windows; then
+  # In Windows' terms, which the app opens it by.
+  capture=$(cygpath -w "$PWD/$out/links-launch.png")
 fi
 
 # Launched as the system launches the default browser, by `open` on the Mac and by the command
@@ -614,8 +618,9 @@ launch() {
     registered exec "$2" < /dev/null > "$log" 2>&1 &
     pid=$!
   else
-    "$browser" ${2:+"$2"} > "$log" 2>&1 &
+    BROWSER_LAUNCH_CAPTURE=$capture "$browser" ${2:+"$2"} > "$log" 2>&1 &
     pid=$!
+    capture=
   fi
   [ -n "$pid" ] || fail "open didn't launch the app"
   await '^browser: first frame at ' || fail "the window didn't draw"
@@ -639,10 +644,10 @@ quit_launched() {
 at() {
   grep -m1 "^browser: $1 at " "$log" | sed 's/.* at \([0-9.]*\) ms$/\1/'
 }
-# On the Mac, fails with $1 unless the launch showed the sidebar's picture, which it leaves out
-# when it opens at another size than the picture's, so the failure names both.
+# On the Mac and Windows, fails with $1 unless the launch showed the sidebar's picture, which it
+# leaves out when it opens at another size than the picture's, so the failure names both.
 pictured() {
-  [ -z "$mac" ] || grep -q '^browser: launch picture shown$' "$log" || {
+  [ -z "$pictures" ] || grep -q '^browser: launch picture shown$' "$log" || {
     kept=$(ls "$(dirname "$saved")" | grep '^launch-picture-' | tr '\n' ' ')
     fail "$1: it opened at $(grep -m1 '^browser: launch window frame ' "$log" | cut -d' ' -f5-), the pictures kept being ${kept:-none}"
   }
@@ -658,6 +663,7 @@ pictured "the launch without a link didn't show the sidebar's picture"
   fail "the launch opened at $(grep -m1 '^browser: launch window frame ' "$log" | cut -d' ' -f5-), not 3 points shorter at $shorter"
 plain="launch window $(at 'launch window') ms, started $(at 'started') ms, first frame $(at 'first frame') ms, UI shown $(at 'UI shown') ms"
 quit_launched
+! windows || [ -s "$out/links-launch.png" ] || fail "the launch window wasn't captured as it closed"
 
 # The link that launches the browser opens over the Spaces it brings back, before the UI comes out
 # from under the launch picture, so the restored tab never shows selected first. The UI's first
@@ -794,7 +800,7 @@ else
 fi
 [ -z "$msix" ] || echo "ok: a link sent to the Store's MSIX, which Windows activates for it, opens" \
   "once, in Little ilo, and loads there, the package's chrome.exe handing it over and ending."
-echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png${mac:+, the launch window 3 points shorter than its picture: $out/links-launch-shorter.png}"
+echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png${mac:+, the launch window 3 points shorter than its picture: $out/links-launch-shorter.png}$(! windows || echo ", the launch window: $out/links-launch.png")"
 [ -z "$toasted" ] || echo "ok: a click on a site's notification, which notification_helper.exe hands" \
   "chrome.exe as a launch with the toast's id, reaches the page, in the browser running."
 [ -z "$mac" ] || echo "ok: an update's notes open as a tab in the window at its first launch, with links from other apps going to Little ilo, and only then."

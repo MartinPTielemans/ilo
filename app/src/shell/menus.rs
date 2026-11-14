@@ -1018,11 +1018,10 @@ impl Shell {
     /// A folder's Paste URL as New Tab: the clipboard's web link as a tab at the folder's top,
     /// opened and shown, as ⌥⌘V opens one at the top of Today.
     fn paste_url_into(&mut self, folder: u64, cx: &mut Context<Self>) {
-        let Some(urls) = self.pasted_urls(cx) else {
-            return;
-        };
-        self.browser.set_folder_open(folder, true, cx);
-        self.browser.open_at(&urls, true, folder, 0, cx);
+        self.pasted_urls(cx, move |shell, urls, cx| {
+            shell.browser.set_folder_open(folder, true, cx);
+            shell.browser.open_at(&urls, true, folder, 0, cx);
+        });
     }
 
     /// A pinned tab's menu (ours: Arc's isn't recorded).

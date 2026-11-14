@@ -71,8 +71,13 @@ codes=0
 # capture the window with the address typed.
 sign_in() {
   sign_in_window=
-  # The page focuses its field once it's there.
-  sign_in_keys type "$email"
+  focus_logged=
+  if engine_has ../core/sync.cc; then
+    focus_logged=1
+  else
+    echo "note: the engine predates the sign-in page's focus line, so its fields are typed into once they load"
+  fi
+  sign_in_type /authorize "$email"
   [ -z "${2:-}" ] || [ -z "$sign_in_window" ] || import -window "$sign_in_window" "$2" || true
   sign_in_keys key return
   await 'browser: sync sign-in loaded /authorize/email$' || fail "the server didn't take the address"
@@ -85,13 +90,30 @@ sign_in() {
   [ "$sent" -gt "$codes" ] || fail "ilo-server logged no sign-in code"
   codes=$sent
   code=$(grep -o '[0-9]\{6\} is your ilo sign-in code' "$server_log" | tail -1 | cut -c1-6)
-  sign_in_keys type "$code"
+  sign_in_type /authorize/email "$code"
   sign_in_keys key return
   [ "${1:-}" = first ] || [ "${1:-}" = passkey ] || return 0
   await 'browser: sync sign-in loaded /authorize/code$' || fail "the server didn't take the code"
   [ "$1" = first ] || return 0
   sign_in_keys key tab
   sign_in_keys key return
+}
+# Types $2 into the sign-in page at $1 once the page has put its focus in its field, as the core
+# logs (core/sync.cc): keys typed before land nowhere, and Return then sends an empty form, which
+# the server refuses (#2554). The wait reads what was logged since the command before, as the
+# focus can come before the page's load is logged. On the driver's keys, the focus is then looked
+# for between that command and the typing, so typing on the load alone, the old order, fails here
+# whenever the focus came later.
+sign_in_type() {
+  local before=$step typed
+  [ -z "$focus_logged" ] ||
+    expect "browser: sync sign-in focused a field on $1\$" "the sign-in page at $1 didn't put its focus in its field"
+  sign_in_keys type "$2"
+  [ -n "$focus_logged" ] && [ "$step" != "$before" ] || return 0
+  typed=$step
+  sed -n "/^browser: drive $before: /,/^browser: drive $typed: /p" "$log" |
+    grep -q "browser: sync sign-in focused a field on $1\$" ||
+    fail "the keys for the sign-in page at $1 went in before the page put its focus in its field"
 }
 # Once the sign-in window has closed, Settings has the keyboard again: on Linux as the window
 # manager would give it, from xdotool or sway, as Settings' window is titled by its tab; the Mac's

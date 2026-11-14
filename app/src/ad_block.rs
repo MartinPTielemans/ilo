@@ -663,6 +663,9 @@ fn read(bytes: &[u8]) -> Option<Engine> {
 pub struct Blocker {
     state: Mutex<State>,
     ready: Condvar,
+    /// Held by a test to keep a loaded engine from coming in.
+    #[cfg(test)]
+    swap: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -686,11 +689,14 @@ impl Blocker {
                 ..Default::default()
             }),
             ready: Condvar::new(),
+            #[cfg(test)]
+            swap: Mutex::new(()),
         }
     }
 
-    /// Blocks with `setup` from now, once it's loaded, on a thread of its own: the next request
-    /// waits for it. The same setup again changes nothing.
+    /// Blocks with `setup` once it's loaded, on a thread of its own. The engine before it answers
+    /// until then, so a list change holds no page's requests (#2826): only a launch's first engine
+    /// is waited for. The same setup again changes nothing.
     pub fn use_setup(self: &Arc<Self>, setup: Setup, cache: Option<PathBuf>) {
         {
             let mut state = self.state.lock().unwrap();
@@ -698,11 +704,12 @@ impl Blocker {
                 return;
             }
             state.wanted = Some(setup.clone());
-            state.engine = None;
         }
         let blocker = self.clone();
         std::thread::spawn(move || {
             let engine = Arc::new(load(&setup, cache.as_deref()));
+            #[cfg(test)]
+            let _swap = blocker.swap.lock().unwrap();
             let mut state = blocker.state.lock().unwrap();
             // A later setup replaced this one while it loaded.
             if state.wanted.as_ref() == Some(&setup) {
@@ -713,8 +720,8 @@ impl Blocker {
         });
     }
 
-    /// The engine to ask now: the one loading waited for, for as long as it takes, or after launch,
-    /// for the first, up to FIRST_WAIT. None lets the request go.
+    /// The engine to ask now: the last one loaded, or after launch, the first, waited for up to
+    /// FIRST_WAIT. None lets the request go.
     pub fn engine(&self) -> Option<Arc<Engine>> {
         let mut state = self.state.lock().unwrap();
         let deadline = Instant::now() + FIRST_WAIT;
