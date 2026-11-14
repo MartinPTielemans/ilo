@@ -70,13 +70,15 @@ class AgentPage : public content::WebContentsObserver,
   static uint64_t TakeJob(content::WebContents* contents);
 
   // A picture of |contents|' page, or of its |area| in the view's coordinates, as an agent is shown
-  // it: what the outline withholds, the picture withholds. Each field whose contents an agent
-  // doesn't see (Withheld) and each frame whose fields can't be read, as an extension's own, is
-  // hatched over in its own background, with no label. |done| hears, posted, the picture or why
-  // there's none. A page no agent acts on lets DevTools go once it's pictured.
+  // it: what the outline withholds, the picture withholds. Each field |hatched| names and each
+  // frame whose fields can't be read, as an extension's own, is hatched over in its own background,
+  // with no label. |done| hears, posted, the picture or why there's none. A page no agent acts on
+  // lets DevTools go once it's pictured.
   using Pictured = base::OnceCallback<void(base::expected<SkBitmap, std::string>)>;
+  using Hatched = browser_core::Hatched;
   static void Picture(content::WebContents& contents,
                       std::optional<gfx::Rect> area,
+                      Hatched hatched,
                       Pictured done);
 
  private:
@@ -129,6 +131,7 @@ class AgentPage : public content::WebContentsObserver,
     // they're in and their DevTools id.
     std::vector<std::pair<int, std::string>> unread;
     std::vector<std::pair<int64_t, FieldFacts>> fields;
+    Hatched hatched = Hatched::kWithheld;
     Boxes boxes;
     base::OnceCallback<void(std::optional<Boxes>)> then;
   };
@@ -206,9 +209,12 @@ class AgentPage : public content::WebContentsObserver,
   // Picture's, once DevTools is attached to each level of the page's frames (Attach), so none is
   // hatched only for being heard of late: the page's surface, copied once the boxes before it are
   // read, if they could be (Copy), then painted over from each box before to its box after (Paint).
-  void Draw(std::optional<gfx::Rect> area, Pictured done);
+  void Draw(std::optional<gfx::Rect> area, Hatched hatched, Pictured done);
   void Attach(size_t slot, base::OnceClosure then);
-  void Copy(std::optional<gfx::Rect> area, Pictured done, std::optional<Boxes> before);
+  void Copy(std::optional<gfx::Rect> area,
+            Hatched hatched,
+            Pictured done,
+            std::optional<Boxes> before);
   void Paint(gfx::Rect source,
              Pictured done,
              Boxes before,
@@ -220,7 +226,7 @@ class AgentPage : public content::WebContentsObserver,
   // none if a frame's fields couldn't be read: each frame's filled fields (ReadFields), each frame
   // whose fields can't be read (Cover), then each field's attributes and markup (NextField), and a
   // withheld one's box (Withhold).
-  void WithheldBoxes(base::OnceCallback<void(std::optional<Boxes>)> then);
+  void WithheldBoxes(Hatched hatched, base::OnceCallback<void(std::optional<Boxes>)> then);
   void ReadFields(std::unique_ptr<Withholding> withholding, size_t next);
   void Cover(std::unique_ptr<Withholding> withholding, size_t next);
   void NextField(std::unique_ptr<Withholding> withholding, size_t next);
