@@ -357,6 +357,9 @@ thread_local! {
     static PIP_HELD: Cell<Option<HeldPip>> = const { Cell::new(None) };
     /// The window the pointer is in, which hears it leave.
     static HOVERED: Cell<Option<Target>> = const { Cell::new(None) };
+    /// Where in the root the display's own pointer is while a press in a page has it, out of the
+    /// corner (`lend_pointer`).
+    static LENT: Cell<Option<(i16, i16)>> = const { Cell::new(None) };
     /// The modifiers the flags command holds, in an X state, which the keys go with until it lets
     /// them go.
     static FLAGS: Cell<u16> = const { Cell::new(0) };
@@ -388,17 +391,53 @@ fn server() -> Option<Rc<(RustConnection, xproto::Window)>> {
             // screen's corner, out of the pages: in a page, the X server tells GPUI's window the
             // pointer left it each time its shape changes around the pages, as a panel's drag
             // changes it, and GPUI takes that for the pointer leaving.
-            let corner = (
-                root.width_in_pixels as i16 - 1,
-                root.height_in_pixels as i16 - 1,
-            );
+            let (x_at, y_at) = corner(root);
             let root = root.root;
-            _ = connection.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, corner.0, corner.1);
+            _ = connection.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, x_at, y_at);
             _ = connection.flush();
             *x = Some(Rc::new((connection, root)));
         }
         x.clone()
     })
+}
+
+/// The screen's corner, where the display's own pointer waits (`server`).
+fn corner(screen: &xproto::Screen) -> (i16, i16) {
+    (screen.width_in_pixels as i16 - 1, screen.height_in_pixels as i16 - 1)
+}
+
+/// Puts the display's own pointer at the press `at` in a page, as a hand's would be. Chromium grabs
+/// the pointer for the press, and the X server tells its window the pointer came in from where the
+/// display has it and went back there at the release: from the corner, the page took the pointer
+/// for leaving its link and coming back at the release, and entered it again (#2778).
+fn lend_pointer(at: Target) -> Option<()> {
+    let x = server()?;
+    let (connection, root) = &*x;
+    connection
+        .warp_pointer(x11rb::NONE, *root, 0, 0, 0, 0, at.root_x, at.root_y)
+        .ok()?;
+    LENT.set(Some((at.root_x, at.root_y)));
+    Some(())
+}
+
+/// The display's own pointer goes back to the corner from where a press in a page had it, once
+/// the driver's goes elsewhere, as a hand's would leave with it.
+fn take_back_pointer(to: Target) -> Option<()> {
+    let Some(lent) = LENT.get() else {
+        return Some(());
+    };
+    if PRESSED.get().is_some() || lent == (to.root_x, to.root_y) {
+        return Some(());
+    }
+    LENT.set(None);
+    let x = server()?;
+    let (connection, root) = &*x;
+    let screen = connection.setup().roots.iter().find(|s| s.root == *root)?;
+    let (x_at, y_at) = corner(screen);
+    connection
+        .warp_pointer(x11rb::NONE, *root, 0, 0, 0, 0, x_at, y_at)
+        .ok()?;
+    Some(())
 }
 
 /// The views of the app's windows that show over a browser window: the overlays, the Site Controls
@@ -743,6 +782,7 @@ fn button_mask(button: u8) -> u16 {
 
 /// Moves the pointer into `to`, telling the window it was in that it left, and `to` that it came.
 fn hover(to: Target, state: u16) -> Option<()> {
+    take_back_pointer(to)?;
     let x = server()?;
     let (connection, root) = &*x;
     let from = HOVERED.replace(Some(to));
@@ -2384,8 +2424,12 @@ fn run_command(line: &str) -> Option<()> {
             let held = button_mask(which) | keys;
             if step == "press" {
                 let at = target_at(x, y)?;
+                take_back_pointer(at)?;
                 PRESSED.set(Some(at));
                 first_press(at, which, false);
+                if at.window == driven()?.window {
+                    lend_pointer(at)?;
+                }
                 return button(at, which, true, none | keys);
             }
             let to = target_in(driven()?.window, x, y)?;
@@ -2396,8 +2440,10 @@ fn run_command(line: &str) -> Option<()> {
             if step == "dragto" {
                 return motion(to, held);
             }
+            // Still pressed for the release's own crossing, so the pointer stays where it's lent.
+            let released = button(to, which, false, held);
             PRESSED.set(None);
-            button(to, which, false, held)
+            released
         }
         "move" => {
             let (x, y) = point(&mut words)?;
