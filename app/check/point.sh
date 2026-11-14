@@ -130,10 +130,12 @@ round() {
   # Over the section, its mark; a click opens the note panel at it, saying a field's value in it
   # is withheld. Show what's sent opens the rows, which say the password's value never goes.
   send move $page_point
-  expect "browser: tab $tab point over region\$" "the section under the pointer wasn't marked"
+  # An element's kind is its own role, else its tag, as Arrange's is (core/point.cc's KindOf), so
+  # the section with its name and no role is a section.
+  expect "browser: tab $tab point over section\$" "the section under the pointer wasn't marked"
   ../tools/window-screenshot.sh "$pid" "$out/point-hover$2.png" || fail "no window to capture"
   send click $page_point
-  expect '^browser: point picked region section withheld$' \
+  expect '^browser: point picked section section withheld$' \
     "a click on the section didn't pick it, with its fields' values withheld"
   expect '^browser: note panel 1 withheld$' "the note panel didn't open at the section"
   expect '^browser: note panel fold at ' "the note panel drew no Show what's sent"
