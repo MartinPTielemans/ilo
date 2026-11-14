@@ -1490,10 +1490,15 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
             // tools/headless.sh floats every window, so sway raises the browser window over it as
             // the core gives that the keyboard back, where on a desktop the browser window tiles
             // and a floating one stays over it. sway raises the one it focuses, and the press
-            // gives it the keyboard anyway, as it does on X11.
-            if front_at(at_x, at_y) != Some(pip.id) {
+            // gives it the keyboard anyway, as it does on X11. Asked inside its frame, as a press
+            // on the shadow it sizes from, outside sway's frame, is the Mini Player's too.
+            let inside = (
+                at_x.clamp(pip.x, pip.x + pip.width - 1.),
+                at_y.clamp(pip.y, pip.y + pip.height - 1.),
+            );
+            if front_at(inside.0, inside.1) != Some(pip.id) {
                 sway_command(&format!("[con_id={}] focus", pip.id))?;
-                if front_at(at_x, at_y) != Some(pip.id) {
+                if front_at(inside.0, inside.1) != Some(pip.id) {
                     log!("browser: pip press: another window is over the Mini Player there");
                     return Some(());
                 }
