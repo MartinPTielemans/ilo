@@ -1582,7 +1582,7 @@ if [ "$(uname)" = Darwin ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
   expect '^browser: window entered full screen$' "the window didn't go full screen again"
   # The shell hears of full screen after the window does, and its note says it has: an Esc before
   # that is no press it counts, so the repeat after it isn't one held.
-  expect '^browser: toast shown To exit full screen' "the window full screen again didn't say how to leave"
+  expect "^browser: toast shown $note" "the window full screen again didn't say how to leave"
   send keydown escape
   expect "^browser: title $keeps kept [0-9]*\$" "the page didn't get the held Esc's press"
   sleep 0.7 # Esc held past the key repeat's delay
