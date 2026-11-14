@@ -22,11 +22,11 @@ agents_file="$(dirname "$saved")/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
 printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
 chmod 600 "$agents_file"
-# The section fills the page under its heading and fields, so the page's middle is the section's
-# own. Its title says it's ready once the fields are filled; the observer starts after that title,
+# The section is a box in the page's middle, so the page's middle is the section's own and its
+# mark shows whole round it. Its title says it's ready once the fields are filled; the observer starts after that title,
 # so the only title it sets is "changed", once, on anything added, removed or changed in the page.
 printf '%s' '<!doctype html><meta charset=utf-8><title>-</title>
-<style>body { margin: 0 } section { height: 100vh; padding: 20px; box-sizing: border-box }</style>
+<style>body { margin: 0 } section { width: 50%; min-height: 40vh; margin: 25vh auto 0; padding: 20px; box-sizing: border-box; border: 1px solid #ccc }</style>
 <section aria-label="Sign in"><h1>Sign in</h1>
 <input id=email type=email autocomplete=email> <input id=password type=password>
 <p>Forgot your password?</p></section>
