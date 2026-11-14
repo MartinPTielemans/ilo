@@ -286,6 +286,12 @@ impl Shell {
         true
     }
 
+    /// Whether Point's frame is on screen: its mode is on and its tab's page shows. The window over
+    /// the page draws it, so that window shows while this holds.
+    pub(super) fn point_shown(&self) -> bool {
+        (self.point.as_ref()).is_some_and(|pointing| self.pane_of(pointing.mode.tab).is_some())
+    }
+
     /// What the window over the page draws of Point: the frame and its tab, the mark under the
     /// pointer, and each note's numbered mark.
     pub(super) fn point_drawn(&self) -> Option<AnyElement> {

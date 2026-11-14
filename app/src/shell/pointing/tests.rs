@@ -171,6 +171,33 @@ fn the_mode_shows_only_with_its_tab(cx: &mut TestAppContext) {
     assert!(bar(&shell, cx).is_some());
 }
 
+/// The frame and marks are drawn in the window over the page, so it shows while Point does, and
+/// goes with the mode or its tab.
+#[gpui::test]
+fn the_window_over_the_page_shows_while_pointing(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell(cx);
+    cx.run_until_parked();
+    assert!(!host.over_page_shown.get());
+    shell.update(cx, |shell, cx| shell.set_point_mode(Some(mode(7)), cx));
+    cx.run_until_parked();
+    assert!(
+        host.over_page_shown.get(),
+        "pointing shows the window over the page"
+    );
+    shell.update(cx, |shell, cx| shell.set_selected(11, cx));
+    cx.run_until_parked();
+    assert!(!host.over_page_shown.get(), "another tab in front hides it");
+    shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+    cx.run_until_parked();
+    assert!(
+        host.over_page_shown.get(),
+        "its tab in front again shows it"
+    );
+    shell.update(cx, |shell, cx| shell.set_point_mode(None, cx));
+    cx.run_until_parked();
+    assert!(!host.over_page_shown.get(), "the mode's end hides it");
+}
+
 #[gpui::test]
 fn esc_answers_not_now_and_cmd_enter_sends_the_notes(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell(cx);

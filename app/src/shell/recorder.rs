@@ -72,6 +72,8 @@ pub(super) struct Recorder {
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
+    /// Whether the window over the page is shown, as the last `show_drop_targets` asked.
+    pub(super) over_page_shown: Cell<bool>,
     /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
     /// answer.
     pub(super) safe_start: Cell<bool>,
@@ -530,7 +532,9 @@ impl Browser for Recorder {
         self.record(format!("open split {url} {with} {left} {stacked}"))
     }
 
-    fn show_drop_targets(&self, _: bool, _: &mut App) {}
+    fn show_drop_targets(&self, shown: bool, _: &mut App) {
+        self.over_page_shown.set(shown)
+    }
 
     fn pointer(&self, _: &mut App) -> Option<Point<Pixels>> {
         self.pointer.get()
