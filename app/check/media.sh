@@ -849,11 +849,21 @@ fi
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
 # tab and lands it. X11 alone, as pip_driven says; on the Mac drive.mm throws it, below.
+# Proof only (#2803): the display's pointer over the Mini Player, off its controls, so Chrome
+# shows them, then every window of the browser captured, with the look line the core logged last.
+proof_shot() {
+  send pip press $((pw / 8)) $((ph / 2))
+  send pip release $((pw / 8)) $((ph / 2))
+  sleep 1
+  ../tools/window-screenshot.sh "$pid" "$out/$1" all || fail "no window to capture"
+  grep 'browser: mini player look ' "$log" | tail -1 > "$out/${1%.png}.look"
+}
 if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at "x + w == $((wx + ww - 10)) && y == $((wy + 10))" \
     "the floating video had no Mini Player 10 in from the top right of the screen"
+  proof_shot mini-player-narrowest.png
   # Two notches up move it down as far as the content would go, 120 a notch: it starts at the top.
   send pip wheel $((pw / 2)) $((ph / 3)) -2
   mini_player_at "x == px && y == py + 240 && w == pw && h == ph" \
@@ -875,6 +885,18 @@ if pip_driven; then
   mini_player_at "w > pw * 1.15 && h > ph * 1.15 && (2 * x + w - 2 * px - pw) ^ 2 <= 16 &&
     (2 * y + h - 2 * py - ph) ^ 2 <= 16" "Ctrl with a scroll didn't grow the Mini Player in place"
   ../tools/window-screenshot.sh "$pid" "$out/mini-player.png" || fail "no window to capture"
+  # Proof only (#2803): Ctrl with a scroll until it grows no more, the widest.
+  send pip wheel $((pw / 2)) $((ph / 3)) -30 cmd
+  last=
+  for _ in $(seq 40); do
+    sleep 0.3
+    send pip
+    now=$(grep '^browser: pip at ' "$log" | tail -1)
+    [ "$now" = "$last" ] && break
+    last=$now
+  done
+  mini_player_at "w >= pw" "the Mini Player shrank as it grew"
+  proof_shot mini-player-widest.png
   # By its row: ⌘ and a number in the page whose video floats shows no tab on Linux yet.
   send click $(row $(($(today | tr ' ' '\n' | grep -nx "$b" | cut -d: -f1) - 1)))
   expect "^browser: selected $b in " "a click on its row didn't show tab $b of \"$(today)\""
