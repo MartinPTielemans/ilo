@@ -9,7 +9,7 @@
 # for want of a server loads again by itself, through Chromium's auto-reload, once the server is
 # there. Offline, the page offers ilo's game, which Space starts and a click doesn't, at
 # chrome://dino too, with ⌘L still the browser's over a run; and a page whose network comes back
-# mid-run loads once the run ends.
+# mid-run loads once the run ends, while the user's own ⌘R mid-run loads at once.
 
 serve
 # Typing w in it keeps its renderer busy for 20 s, past Chrome's 15 s hang timeout, then the title
@@ -220,7 +220,9 @@ grep -q 'browser: tab [0-9]* game running$' "$log" && fail "Space started a game
 # Offline. A DevTools session on the tab, which DevTools' own Offline is, fails its loads with
 # ERR_INTERNET_DISCONNECTED until it says online. Its cache is off, as DevTools offers, since the
 # throttle sits under the HTTP cache and a fresh copy of a page loaded earlier would still load. It
-# takes "offline" or "online" on its input and says each back once Chromium has it.
+# takes "offline" or "online" on its input and says each back once Chromium has it. "hold" holds the
+# next request for the page $3 the tab loads, and says so once there is one; "online" answers it
+# with the page first, as Chromium answers no change of network while a request is held.
 cat > "$out/network.py" <<'PY'
 import base64, json, os, socket, struct, sys, urllib.request
 
@@ -259,12 +261,15 @@ def receive():
         elif size == 127:
             size = struct.unpack(">Q", read(8))[0]
         data = read(size)
+        if first & 0x0F == 8:
+            sys.exit(f"DevTools closed the session: {data[2:].decode(errors='replace')}")
         if first & 0x0F in (0, 1, 2):
             message += data
             if first & 0x80:
                 return message
 
 calls = 0
+events = []
 def call(method, **params):
     global calls
     calls += 1
@@ -278,11 +283,33 @@ def call(method, **params):
             if "error" in reply:
                 sys.exit(f"{method}: {reply['error']}")
             return
+        if "method" in reply:
+            events.append(reply)
+
+def paused():
+    while not events or events[0]["method"] != "Fetch.requestPaused":
+        if events:
+            events.pop(0)
+        else:
+            events.append(json.loads(receive()))
+    return events.pop(0)["params"]["requestId"]
 
 call("Network.enable")
 call("Network.setCacheDisabled", cacheDisabled=True)
+held = None
 for line in sys.stdin:
     state = line.strip()
+    if state == "hold":
+        call("Fetch.enable", patterns=[{"urlPattern": sys.argv[3], "resourceType": "Document"}])
+        held = paused()
+        print(state, flush=True)
+        continue
+    if held:
+        page = base64.b64encode(urllib.request.urlopen(sys.argv[3]).read()).decode()
+        call("Fetch.fulfillRequest", requestId=held, responseCode=200, body=page,
+             responseHeaders=[{"name": "Content-Type", "value": "text/html"}])
+        call("Fetch.disable")
+        held = None
     call("Network.emulateNetworkConditions", offline=state == "offline", latency=0,
          downloadThroughput=-1, uploadThroughput=-1)
     print(state, flush=True)
@@ -293,14 +320,14 @@ mkfifo "$out/network"
 # as windows_bridge does (git-bash.sh); a plain pipe, as the Mac's bash 3.2 parses this file --posix.
 if windows; then
   cat "$out/network" | python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" \
-    > "$out/network.log" 2>&1 &
+    "${site}index.html" > "$out/network.log" 2>&1 &
 else
-  python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < "$out/network" \
-    > "$out/network.log" 2>&1 &
+  python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" "${site}index.html" \
+    < "$out/network" > "$out/network.log" 2>&1 &
 fi
 network=$!
 exec 4> "$out/network"
-# Takes the tab $1, offline or online.
+# Takes the tab $1, offline or online, or holds its page's next request; $2 says what a miss means.
 network() {
   echo "$1" >&4
   for _ in $(seq 100); do
@@ -308,7 +335,9 @@ network() {
     kill -0 "$network" 2>/dev/null || fail "DevTools didn't take the tab $1: $(cat "$out/network.log")"
     sleep 0.1
   done
-  fail "DevTools didn't take the tab $1"
+  [ -n "${2:-}" ] || set -- "$1" "DevTools didn't take the tab $1"
+  fail "$2. The DevTools session's last lines:
+$(tail -3 "$out/network.log")"
 }
 network offline
 send key l cmd
@@ -316,21 +345,50 @@ expect '^browser: command bar shown$' "⌘L didn't open the command bar"
 send insert "${site}index.html"
 send key return
 expect "^browser: page $tab trouble network -106\$" "offline, a load wasn't ERR_INTERNET_DISCONNECTED"
+# Chromium's auto-reload, due a second after the page and every few after, is under way when the
+# run starts, as it is for someone who presses Space as the page shows (#2676): DevTools holds its
+# request.
+network hold "no auto-reload of the offline page came in 10 s for DevTools to hold"
 ../tools/window-screenshot.sh "$pid" "$out/offline.png" || fail "no window to capture"
 # A click focuses the page and starts nothing: the run comes in Space's step, not the click's.
 send click $page_point
 send key space
 expect "browser: tab $tab game running\$" "Space didn't start a run on the offline page"
-# The network comes back mid-run. Chromium's auto-reload, due a second after the page or every
-# few after, waits for the run, which ends at the first column with no more hops.
+# The network comes back mid-run and the reload gets the page, which waits for the run. The run ends
+# at the first column with no more hops.
 network online
 ../tools/window-screenshot.sh "$pid" "$out/offline-game.png" || fail "no window to capture"
-expect "browser: tab $tab game over\$" "the run didn't end at the first column"
+expect "browser: tab $tab game over\$\|^browser: loaded $tab ${site}index.html\$" \
+  "the run didn't end at the first column, and the page didn't come back"
 sed -n "/browser: tab $tab game running\$/,/browser: tab $tab game over\$/p" "$log" |
   grep -q "^browser: page $tab trouble fine\$\|^browser: loaded $tab ${site}index.html\$" &&
-  fail "the page came back mid-run"
+  fail "the page came back mid-run, which ended the run: the reload under way when it started didn't wait for it"
+expect "browser: tab $tab game over\$" "the run didn't end at the first column"
 expect "^browser: loaded $tab ${site}index.html\$" "the page didn't load once the run ended"
 expect "^browser: page $tab trouble fine\$" "the page that came back wasn't fine"
+# Only the auto-reload waits for a run. Offline again with its reload held, the user's own ⌘R
+# mid-run, which the page doesn't keep, loads the page at once: Chromium's throttle is on any
+# navigation to the offline page's address while an auto-reload is under way, and the user's
+# replaces the auto-reload's, which never comes back over it (counted after chrome://dino's run).
+network offline
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+send insert "${site}index.html"
+send key return
+expect "^browser: page $tab trouble network -106\$" "offline again, a load wasn't ERR_INTERNET_DISCONNECTED"
+network hold "offline again, no auto-reload of the offline page came in 10 s for DevTools to hold"
+send click $page_point
+send key space
+expect "browser: tab $tab game running\$" "Space didn't start a second run on the offline page"
+second_run=$(grep -n "browser: tab $tab game running\$" "$log" | tail -1 | cut -d: -f1)
+network online
+send key r cmd
+expect "^browser: loaded $tab ${site}index.html\$\|browser: tab $tab game over\$" \
+  "⌘R mid-run neither loaded the page nor did the run end"
+tail -n +"$second_run" "$log" |
+  grep -m1 "^browser: loaded $tab ${site}index.html\$\|browser: tab $tab game over\$" |
+  grep -q "^browser: loaded " ||
+  fail "⌘R mid-run waited for the run to end: the user's own reload was held with the auto-reload"
 exec 4>&-
 wait "$network" || fail "DevTools' session ended badly: $(cat "$out/network.log")"
 
@@ -354,6 +412,9 @@ run="$(grep -E "browser: tab $tab game (running|over)\$" "$log" | tail -2 |
   awk '{ t = $1 * 3600 + $2 * 60 + $3 } NR == 2 { printf "%.2f", t - last } { last = t }')"
 awk -v run="$run" 'BEGIN { exit !(run != "" && run < 2) }' ||
   fail "the run at chrome://dino lasted ${run:-?} s: the command bar didn't end it"
+loads=$(tail -n +"$second_run" "$log" | grep -c "^browser: loaded $tab ${site}index.html\$")
+[ "$loads" = 1 ] ||
+  fail "the page loaded $loads times after ⌘R mid-run: the held auto-reload came back over the user's"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
@@ -380,4 +441,4 @@ expect "^browser: loaded $opened ${site}index.html\$" "/json/new's tab didn't lo
 
 quit_by_key
 exited
-echo "ok: a page that stops answering gets Not responding with Wait and Reload and goes by itself once it answers, Wait gives it longer and Reload ends its renderer and loads it again without the crash card, a dead page's pane shows This page stopped, whose Reload loads it again, a tab behind whose renderer dies is unloaded and loads once shown, a host that doesn't resolve shows the core's error page, readable in Light too, and a refused page loads by itself once its server comes. Offline, Space starts the game and a click doesn't, a page whose network comes back mid-run loads only once the run ends, chrome://dino opens it, and ⌘L opens the bar over a run, which ends it. DevTools' /json/new opens its tab at the top of the window's Today, with the Space empty. Windows: $out/hung.png, $out/crashed.png, $out/network-error.png, $out/network-error-light.png, $out/offline.png, $out/offline-game.png"
+echo "ok: a page that stops answering gets Not responding with Wait and Reload and goes by itself once it answers, Wait gives it longer and Reload ends its renderer and loads it again without the crash card, a dead page's pane shows This page stopped, whose Reload loads it again, a tab behind whose renderer dies is unloaded and loads once shown, a host that doesn't resolve shows the core's error page, readable in Light too, and a refused page loads by itself once its server comes. Offline, Space starts the game and a click doesn't, a page whose network comes back mid-run loads only once the run ends while ⌘R mid-run loads at once, chrome://dino opens it, and ⌘L opens the bar over a run, which ends it. DevTools' /json/new opens its tab at the top of the window's Today, with the Space empty. Windows: $out/hung.png, $out/crashed.png, $out/network-error.png, $out/network-error-light.png, $out/offline.png, $out/offline-game.png"
