@@ -109,6 +109,8 @@ Every other release in this repository, such as `updates` and `nightly`, is made
 
 ## Secrets and variables
 
+The signing, notarization, update, Flatpak, R2, site and announcement secrets live in the `release` environment, not the repository, so a workflow on a lane's branch can't read them. Only release tags (`v*`), `release/*` branches, where the cut's dry runs go, and `main`, the nightly's, may deploy to it, and only the jobs that sign or publish name it: `mac`, `appcast`, `flatpak-repo`, `publish`, `site` and `announce`. `SENTRY_AUTH_TOKEN` stays a repository secret, as branches' Flatpak builds upload symbols too.
+
 **Mac.** The DMG is built only with all of these; without them, no DMG, signed or not, is uploaded:
 
 | Secret | What |

@@ -309,6 +309,7 @@ jobs:
   # keeps the repository in the run, to try it.
   flatpak-repo:
     needs: [version, linux]
+    environment: release
     if: ${{ needs.version.outputs.nightly != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -422,6 +423,7 @@ jobs:
 
   mac:
     needs: version
+    environment: release
     if: ${{ needs.version.outputs.go == 'true' }}
     runs-on: macos-26
     timeout-minutes: 180
@@ -562,6 +564,7 @@ jobs:
   # after both: the Mac's build runs beside Windows's rather than after it.
   appcast:
     needs: [version, windows, mac]
+    environment: release
     if: ${{ !cancelled() && needs.mac.result == 'success' && needs.mac.outputs.signed == 'true' }}
     runs-on: macos-26
     timeout-minutes: 45
@@ -833,6 +836,7 @@ jobs:
   # built before the previous one went live doesn't build on it, so publish each before the next.
   # Its appcast.xml becomes the updates feed, the file the Mac and Windows builds read.
   publish:
+    environment: release
     if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-24.04
     permissions:
@@ -883,6 +887,7 @@ jobs:
   # another repository's workflow, so SITE_DISPATCH_TOKEN is a fine-grained token with Contents
   # read and write on MartinPTielemans/ilo-site alone (docs/releasing.md).
   site:
+    environment: release
     if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-24.04
     steps:
@@ -900,6 +905,7 @@ jobs:
   # The owner published a draft: the bot that announces releases hears of it now, rather than at its
   # next check-in, and its answer never fails or holds up the release (docs/releasing.md).
   announce:
+    environment: release
     if: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 2
