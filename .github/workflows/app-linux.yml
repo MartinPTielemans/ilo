@@ -60,6 +60,22 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup component add rustfmt
       - run: git ls-files -z 'app/*.rs' | xargs -0 rustfmt --check
+      # std's Instant and SystemTime build for the web and panic there when read, so the library the
+      # site's demo runs reads web_time's, which are std's off the web. Tests, and the browser's own
+      # main.rs and the modules it declares, are left out: the demo builds none of them.
+      - name: The demo's code reads web_time's clock
+        working-directory: app
+        run: |
+          set -f
+          skip=":!src/main.rs :!*tests.rs :!*/tests/*"
+          for module in $(sed -nE 's/^mod ([a-z0-9_]+);/\1/p' src/main.rs); do
+            skip="$skip :!src/$module.rs :!src/$module/*"
+          done
+          if git grep -nE '^use std::time::(\{[^}]*\b(Instant|SystemTime|UNIX_EPOCH)\b|(Instant|SystemTime|UNIX_EPOCH);)|^    time::(\{[^}]*\b(Instant|SystemTime|UNIX_EPOCH)\b|(Instant|SystemTime|UNIX_EPOCH)\b)' \
+            -- 'src/*.rs' $skip; then
+            echo "::error::Use web_time::{Instant, SystemTime, UNIX_EPOCH} for these, not std::time's."
+            exit 1
+          fi
       - uses: ./.github/actions/tree-proof
         with:
           job: app-linux-fmt
@@ -111,6 +127,10 @@ jobs:
       # function main.rs builds on the Mac and Windows alone.
       - run: cargo check --release --manifest-path linux/Cargo.toml --target-dir target
       - run: cargo build --release --bin preview
+      # The site's demo is the preview built for the web (demo.yml), which only a release builds, so
+      # a change that breaks it is caught here. A check, not demo.yml's build: no LTO or wasm-bindgen.
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo check --release --target wasm32-unknown-unknown --bin preview
       # What follows decides nothing, so this tree has passed.
       - uses: ./.github/actions/tree-proof
         with:

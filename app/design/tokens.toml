@@ -46,9 +46,11 @@ rule = 0.12
 label-width = 52.0
 # The labels' and the hint's ink, raised to the overlay's text floor where it needs more.
 dim = 0.6
-# The chips' widths, fixed so a press lands by where they lie: Invert lightness, Edit CSS… and Zap.
+# The chips' widths, fixed so a press lands by where they lie: Invert lightness, Edit CSS…, Edit
+# Script… and Zap.
 invert-width = 140.0
 edit-width = 84.0
+script-width = 96.0
 zap-width = 56.0
 # The face tiles, as many as the computer has, sharing the line.
 tiles-top = 305.0
@@ -68,6 +70,23 @@ segment-padding = 2.0
 # The name's menu, under the name.
 menu-left = 14.0
 menu-top = 44.0
+# Advanced (#695 call a, ours, as Arc's isn't recorded): its chip at Invert lightness's line's
+# right end and, while it's open, Reset left of it and three sliders under the line, from
+# slider-y, slider-pitch apart. The card grows by advanced-height and all under them moves down.
+advanced-width = 96.0
+reset-width = 56.0
+slider-y = 280.0
+slider-pitch = 32.0
+advanced-height = 104.0
+# A slider's track runs from the controls' left edge to its value's box, whose % is right-aligned
+# at the controls' right edge, as Size's. Its track, fill and knob are the media player's volume
+# slider's, filled from a tick at 100 %, in the middle.
+slider-value = 48.0
+slider-track-ink = 0.25
+slider-fill-ink = 0.62
+slider-tick = 10.0
+# The focused slider's knob's ring, in the accent: the one the arrow keys move.
+slider-ring = 2.0
 
 [capture]
 # Arc's layout, measured at 1× (docs/ux-spec.md › Capture): the ring around what's chosen and the
@@ -352,6 +371,51 @@ not-found = 0xdb1929
 # The command bar's.
 placeholder = 0xffff_ff87
 
+[foot-bar]
+# The bar a mode of the page shows over its bottom centre, Arrange's (#2347) and pointing's (#2352):
+# ours, from their accepted mocks, in the find bar's material (find-bar.fill, the popover level's
+# rim and the system's shadow). Its bottom is this far over the page's.
+bottom = 16.0
+ink = 0xffffffeb
+quiet = 0xffffff8c
+# One line, such as Arrange's: its words, then the buttons. Its corners are a row's, concentric with
+# its last button's over the inset to its right.
+height = 40.0
+radius = 12.0
+left = 16.0
+right = 6.0
+gap = 6.0
+# More room after the words than between the buttons.
+line-gap = 10.0
+text = 13.0
+# Two lines, such as pointing's: who's asking, small and quiet, over its words, then a hint and the
+# buttons. Its words wrap to a second line past `words-width`, and end in an ellipsis after it, so
+# the bar never grows wider. Its corners are a floating card's, concentric with its last button's
+# too, where the mocks had 14 and 8.
+tall-height = 56.0
+tall-radius = 16.0
+tall-left = 16.0
+tall-right = 10.0
+tall-gap = 16.0
+lead = 11.0
+lead-glyph = 12.0
+lead-glyph-gap = 5.0
+lines-gap = 3.0
+hint = 12.0
+words-width = 300.0
+# The words' line, so a second one adds this much.
+words-line = 17.0
+# The buttons: a plate of white over the fill, the key after its label in the quiet ink, and the
+# main one in the accent, its key at `primary-key` of its label.
+button-height = 28.0
+button-pad = 10.0
+# A control's, where the mocks had 8.
+button-radius = 6.0
+button-plate = 0xffffff1a
+key-gap = 6.0
+disabled = 0.38
+primary-key = 0.65
+
 [icon-picker]
 # Arc's, measured at 2× (docs/ux-spec.md › Spaces › Icon). The card is square, and the window
 # holds the arrow over it too.
@@ -557,6 +621,9 @@ text = 13.0
 header-text = 11.0
 # Between the check, the title and what trails it.
 gap = 6.0
+# Between an item's title and its detail in the secondary ink, as Default's model follows
+# "Default": a word space at 13 pt.
+detail-gap = 4.0
 check = 12.0
 chevron = 12.0
 min-width = 200.0
@@ -848,8 +915,6 @@ control-hovered-light = 0.1
 control-pressed = 0.16
 control-pressed-light = 0.135
 popup-width = 155.0
-# Ours: the favorites' longest choice, "In Each Profile's Spaces", needs more than 155.
-favorites-popup-width = 195.0
 popup-end = 0.0
 # Buttons under the groups are 11 below them.
 buttons-top = 11.0
@@ -921,6 +986,95 @@ on-hovered = 0.14
 on-pressed = 0.18
 on-switch-off = 0.13
 on-detail = 0.77
+# Ours (#2326): an agent's request in the activity log opens in place under its title, in the
+# small size: "To" and its whole address, then "Sent", or "Not sent" for a refused one, each label
+# in a column 64 wide, a line each, 4 apart, nested fields 12 further in a level, the opened part
+# 4 into the row's bottom padding. Eight lines show, the eighth "Show all" when there are more,
+# which opens the rest in place, a value cut at the row's edge until then. Every row of the list
+# keeps the chevron's 12 at its end, so the times end on one edge (the orchestrator, 2026-11-10).
+sent-label = 64.0
+sent-gap = 4.0
+sent-indent = 12.0
+sent-tuck = 4.0
+sent-lines = 8
+sent-chevron = 12.0
+# Ours (#2407): Sidebar position is two drawings of the window, under its row's line, 6 down from
+# it with their ring's room around them. Each is 128 by 80 at the window's radius, 20 apart, named
+# 6 under it in the row's small text, the chosen one's name in the row's ink at medium. A drawing
+# is the window's material, the sidebar 30% of it, with five bars for its rows under the window's
+# buttons, then the page's card 4 in from the other edges at radius 5, a heading's line and four
+# of text on it. The chosen one is ringed in the accent 2 off its edge, 2 wide, and the other has
+# a hairline. The buttons are 4 across, 2.5 apart, the Windows glyphs 4 at 3 apart, at a row 6
+# tall 5 down, 4 in. Appearance (#2429) is three of them, the sidebar on the left: Automatic, Light
+# and Dark, Light's and Dark's in that look whatever Settings' own, and Automatic's Light's with
+# Dark's right half over it.
+side-width = 128.0
+side-height = 80.0
+side-radius = 8.0
+side-gap = 20.0
+side-top = 6.0
+side-room = 6.0
+side-label-gap = 6.0
+side-sidebar = 0.3
+side-inset = 4.0
+side-page-radius = 5.0
+side-page-padding = 7.0
+side-sidebar-padding = 5.0
+side-rows-gap = 5.0
+side-ring = 2.0
+side-ring-gap = 2.0
+side-other = 0.14
+side-window = 0x0e0e0e
+side-window-light = 0xdcdcdc
+side-page = 0x36332c
+side-page-light = 0xffffff
+side-page-ring = 0.1
+side-bar = 0.28
+side-bar-first = 0.4
+side-heading = 0.3
+side-text = 0.16
+side-buttons = 6.0
+side-button = 4.0
+side-button-gap = 2.5
+side-glyph-gap = 3.0
+side-glyph = 0.8
+# The Mac's buttons are AppKit's own, so the drawing takes their colours.
+side-mac-close = 0xff5f57
+side-mac-minimize = 0xfebc2e
+side-mac-zoom = 0x28c840
+# Ours (#2430): Share favorites is three drawings at the side-* size, ring and window, each three
+# Spaces' sidebars, the first two on one profile's plate and the third on another's, 6 apart.
+# A sidebar is 32 by 60 at radius 4, tinted with its Space's colour, with four favorites' tiles
+# 13 by 10 at radius 3, 2 apart, over three tabs' bars. Spaces that share favorites show the same
+# four marks, in the same colours and the same shape, which is a list's alone: dots, squares or
+# rings 1.5 wide, so who shares reads without the colours.
+share-space-width = 32.0
+share-space-height = 60.0
+share-space-radius = 4.0
+share-space-padding = 3.0
+share-space-padding-x = 2.0
+share-space-gap = 4.0
+share-tint = 0.22
+share-tint-light = 0.16
+share-tile-width = 13.0
+share-tile-height = 10.0
+share-tile-radius = 3.0
+share-tile-gap = 2.0
+share-tile = 0.1
+share-tile-light = 0xffffff
+share-tile-rim = 0.07
+share-mark = 5.0
+share-mark-square = 1.0
+share-ring = 1.5
+share-tab-height = 3.0
+share-tab-gap = 3.0
+share-plate-radius = 6.0
+share-plate-padding = 3.0
+share-plate-gap = 3.0
+share-plate = 0.06
+share-profiles-gap = 6.0
+# The Spaces' colours: ilo's green, then two of Edit's marks' (capture.markup).
+share-spaces = [0x289054, 0x0a84ff, 0xff9500]
 
 [shell]
 # The docked sidebar's width at first, where the card starts.
@@ -1036,6 +1190,9 @@ pinned-caret-gap = 2.0
 # is this far in from the plate's (Arc 1.171). Rename Space… puts Done there (Arc 1.171).
 space-more = 24.0
 space-more-inset = 6.0
+# Ours (#2339): while there's more than one profile the Space's name is followed, this far after
+# it, by its profile's in the secondary ink, which gives way first.
+space-profile-gap = 6.0
 space-done-width = 32.0
 space-done-height = 26.0
 icon-placeholder = 24.0
@@ -1084,12 +1241,16 @@ favicon-size = 18.0
 favicon-drawn = 16.0
 # An emoji's text size in a favicon's place, for its glyph to fill what a favicon does.
 emoji-size = 13.0
+# A pinned tab's or favorite's return mark while it's away from its pinned URL (#2338; ours, as
+# Arc and Dia show nothing at rest): Lucide's undo-2 at `return-glyph` in the secondary ink, in a
+# round notch `return-notch` across cut out of the icon's bottom right, its edge `return-out` past
+# the favicon slot's corner. The glyph is 9 so its hook keeps its shape at 1x.
+return-notch = 11.0
+return-glyph = 9.0
+return-out = 3.0
 # The slot at a row's end for its status dot, where Arc's loading ring was, so the title doesn't
 # move as a load starts or ends.
 loading-size = 12.0
-# A row narrower than this, such as a split's segment in a narrow sidebar, leaves the dot out
-# (Dia), as it would leave the title no room.
-loading-row-min = 48.0
 # The status dot (ours, #321): the row's text at 0.6 while its page loads. Breathing, from 0.35
 # of its strength to all of it, says it's loading. Signal green is an agent at work, as a task's
 # card shows it.
@@ -1112,12 +1273,14 @@ close-glyph = 14.0
 # pinned tabs (owner, 2026-11-02, #1349): Lucide's trash, the icon picker's remove, drawn in the
 # close glyph's box, so it reads as remove beside ✕ and − without growing past them.
 remove-glyph = 14.0
-# A split's row (Arc): a segment per tab, all as wide, each after the first behind a line. Its
-# favicon is 7 pt after the line, its title 10 pt after the favicon, and it ends 5 pt before the
-# next line.
+# A split's row: a segment per tab, each after the first behind a line. Its favicon is 7 pt after the
+# line, its title 10 pt after the favicon, and it ends 5 pt before the next line (Arc). The pane
+# with the keyboard has the row's width and its title; the others fold to their favicon, with its
+# speaker and loading dot 4 pt after it, so a folded pane still says it plays or loads (#2340).
 segment-favicon-x = 7.0
 segment-title-gap = 10.0
 segment-end = 5.0
+segment-mark-gap = 4.0
 segment-line = 16.0
 # Arc's divider line is one device pixel, 18 in from each side of the sidebar. GPUI widens a border
 # under one device pixel to one, so borders use this 0.5 pt; a line that's a box's height has to
@@ -2210,14 +2373,31 @@ plus-glyph = 16.5
 heading-size = 13.0
 link-size = 11.0
 name-size = 13.0
-state-size = 13.0
-circle = 32.0
-row-pitch = 43.0
-# A permission's circle when it isn't allowed, a plate with the ink's glyph on it; allowed, it's
-# the accent with its label (#350), where Arc's is white with its glyph cut out.
-off = 0.3
-off-glyph = 0.9
-row-glyph = 17.0
+# Ours (#2334): the action row's last tile is the shield, and under the row go only the switches
+# special to the site. One alone is a strip as tall as a tile, its state in words; two or more are
+# tiles this tall, two to a line, a glyph over its name.
+switch-height = 52.0
+switch-glyph = 16.0
+switch-name-gap = 5.0
+strip-left = 12.0
+strip-name-gap = 10.0
+# A switch while on, and the shield while it blocks: the accent over the plate at this, a step
+# more under the pointer and another pressed. Off is the plain plate.
+tint = 0.16
+tint-hovered = 0.22
+tint-pressed = 0.28
+# Ours (#2334): "This site"'s lines, each a glyph, a name and its value at the right in the
+# secondary ink, in place of Arc's 43 pt rows with a circle and a second line.
+item-height = 28.0
+item-pitch = 30.0
+item-inset = 8.0
+item-glyph = 16.0
+# The name's widest, past which the value gives way first.
+item-name = 132.0
+# The glyph's ink while its value isn't on or Allow; on, it's the accent.
+item-glyph-off = 0.6
+heading-to-items = 17.0
+items-to-divider = 9.0
 # Ours: a policy's row, which the user can't change.
 managed-opacity = 0.5
 divider = 0.17
@@ -2228,6 +2408,13 @@ lock-slot = 10.0
 lock-glyph = 15.0
 lock-text-gap = 6.0
 lock-right = 8.0
+# Ours (#2339): the profile's chip, against "…" while there's more than one profile: the Profiles
+# glyph, the name, and this chevron this far after it, in the secondary ink.
+profile-chevron = 12.0
+profile-chevron-gap = 4.0
+# Beside a lock in words the chip's name cuts at its end, and with less room than this it goes,
+# the glyph and chevron left, as a letter and an ellipsis say nothing.
+profile-name-min = 24.0
 # The lock's words' cap top in its plate.
 lock-cap = 11.5
 # Ours: the lock button with no certificate to show.
@@ -2235,7 +2422,6 @@ disabled-opacity = 0.5
 more-fill = 0.05
 more-glyph = 17.5
 heading-to-tiles = 23.0
-heading-to-rows = 25.0
 divider-to-footer = 11.0
 # SF's ascent, descent and cap height for its size, which put a line's cap where it was measured.
 ascent = 0.967

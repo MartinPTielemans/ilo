@@ -1,3 +1,4 @@
+# check.sh runs this at 70.
 # New Space in the Spaces menu makes a Space and shows it, empty and without a page, with a form
 # that takes the keyboard from the page. Japanese input composes in its field, return while
 # composing only commits, and return names the Space and sends the form away; ⌘T then opens a tab in
@@ -38,23 +39,29 @@
 # Spaces. A new one is empty, and each keeps its tabs and the one it showed last. The page puts
 # "hidden" in its title as it hides, and "visible <n>" as it shows again, with the n animation
 # frames it ran while hidden, where Chrome runs none, and "in <ms>" from the first to the last.
+# Hidden, it says "hidden f<frames> t<ticks>" at each frame and each second its timer ticks, so the
+# log has each frame in order with what the app asked of the page (ran_hidden).
 page='data:text/html,<title>loading</title>
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
-let frames = 0, first = 0, last = 0;
+let frames = 0, ticks = 0, first = 0, last = 0, ticking = 0;
+const say = () => document.title = "hidden f" + frames + " t" + ticks;
 const count = (now) => {
   if (document.hidden) {
     if (!frames) first = now;
     frames++;
     last = now;
+    say();
     requestAnimationFrame(count);
   }
 };
 document.onvisibilitychange = () => {
+  clearInterval(ticking);
   document.title = document.hidden ? "hidden"
     : "visible " + frames + (frames ? " in " + Math.round(last - first) : "");
   if (document.hidden) {
-    frames = 0;
+    frames = ticks = 0;
+    ticking = setInterval(() => (ticks++, say()), 1000);
     requestAnimationFrame(count);
   }
 };
@@ -169,9 +176,22 @@ expect "^browser: themed space $second $red\$" "the core didn't keep the Space's
 send clickkey 211.5 316.5
 expect "^browser: themed space $second $red_at colors=2 $rest\$" "+ didn't add a second colour"
 ../tools/window-screenshot.sh "$pid" "$out/theme-picker.png" || fail "no window to capture"
+# On the Mac, AppKit can make an overlay's panel key as it shrinks away after the UI hid it, and
+# what the user typed went to it unseen (#2594). The driver makes the picker key as its shrink
+# starts: the keyboard still comes back to the form, for the return below.
+if [ "$(uname)" = Darwin ]; then
+  send makekey theme picker
+fi
 send key escape
 expect '^browser: theme picker dismissed$' "escape didn't close the theme picker"
 expect '^browser: theme picker hidden$' "escape didn't hide the theme picker"
+if [ "$(uname)" = Darwin ]; then
+  expect '^browser: made theme picker key$' "the theme picker wasn't made key as its shrink started"
+  expect '^browser: theme picker hidden, its browser window takes the keyboard$' \
+    "the theme picker, made key as it shrank, kept the keyboard"
+else
+  echo "skip: the theme picker made key as it shrinks away: AppKit making a shrinking panel key is the Mac's (#2594)."
+fi
 send state
 in_browser AccessKitSubclassOfGPUIView "after the theme picker, in the new Space's form"
 send key return
@@ -278,38 +298,72 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back afte
 # But for the frames its hover card's picture draws. The tabs a switch hides are pictured once the
 # switches have been quiet for 0.4 s (shell/hover_cards.rs), and the core has a hidden page draw,
 # still hidden to it, until the copy answers (capture.cc), as Chrome does a background tab's
-# preview. That's one run of frames once the app asks for the tab's picture, which may answer
-# only after the tab is shown again, so a step that keeps it hidden past 0.4 s sees one. On runners
-# it has lasted 0.25 s in these steps and 0.41 s once in an earlier one (#2239), so frames over less
-# than 0.35 s pass: a page that went on running would run from its hiding through the 0.4 s before
-# any picture, over 0.38 s at least. A picture as slow as that one still fails here (#2239).
-# Any other frame while hidden fails. The hidden stretch starts at whichever comes first,
-# the core showing another tab or the page's "hidden", which can reach the log after the picture
-# (#1678), so a picture between the two counts and one from before them doesn't.
+# preview. How long that takes is the machine's: 2 s once on a slow runner (#2239). So no time is
+# judged here, only order. Each frame the hidden page runs is in the log, and it has a reason only
+# once the app has asked for the tab's picture ("tab <a> picturing"). It keeps that reason past the
+# picture's answer ("tab <a> pictured"), which may come with no copy, until the page has been quiet
+# for a whole tick of its 1 s timer, as the copy's last frames can reach the log after it. A frame
+# with no picture asked for fails, and so does a page that never goes quiet. The page counts afresh
+# at each "hidden". The hidden stretch starts at whichever comes first, the core showing another
+# tab or the page's "hidden", which can reach the log after the picture (#1678), so a picture
+# between the two counts and one from before them doesn't.
+hidden_state() {
+  awk -v a="$a" '
+    function start() { asked = drawing = 0; why = ""; counts() }
+    function counts() { quiet = visible = frames = ticks = 0; tick_frames = -1 }
+    BEGIN { start() }
+    /^browser: selected [0-9]+( in |$)/ { if ($3 == a) shown = 1; else if (shown) { shown = 0; start() } }
+    $0 == "browser: title " a " hidden" { if (shown) { shown = 0; start() } else counts() }
+    index($0, "browser: title " a " visible ") == 1 { visible = 1; asked = 0 }
+    index($0, "browser: tab " a " picturing ") == 1 { asked = drawing = 1; tick_frames = -1 }
+    index($0, "browser: tab " a " pictured ") == 1 { drawing = 0; tick_frames = -1 }
+    index($0, "browser: title " a " hidden f") == 1 {
+      split(substr($0, length("browser: title " a " hidden f") + 1), n, " t")
+      if (n[1] > frames && !asked && why == "")
+        why = "frame " n[1] " came with no picture asked for, " (quiet ? "after the page had gone quiet" : "since it hid")
+      if (n[2] > ticks && !drawing) {
+        if (tick_frames == n[1]) { asked = 0; quiet = 1 } else tick_frames = n[1]
+      }
+      frames = n[1]; ticks = n[2]
+    }
+    END {
+      state = why != "" ? "ran: " why : visible ? "visible" : quiet ? "quiet" : "running"
+      print state, "(" frames " frames, " ticks " ticks)"
+    }' "$log"
+}
+# Before the tab shows again: the page has gone quiet, with no frame it had no reason for, or it's
+# shown already.
+hidden_quiet() {
+  local state
+  for _ in $(seq 300); do
+    state=$(hidden_state)
+    case $state in
+    ran:*) fail "$1: $state" ;;
+    quiet* | visible*) return 0 ;;
+    esac
+    kill -0 "$pid" 2>/dev/null || gone
+    sleep 0.1
+  done
+  fail "$1: it didn't go quiet, $state"
+}
+# Once it shows: nothing ran between its going quiet and its showing.
 ran_hidden() {
-  local seen
-  seen=$(awk -v a="$a" '
-    /^browser: selected [0-9]+( in |$)/ { if ($3 == a) shown = 1; else if (shown) shown = pictured = 0 }
-    $0 == "browser: title " a " hidden" { if (shown) shown = pictured = 0 }
-    index($0, "browser: tab " a " picturing ") == 1 { pictured = 1 }
-    /^browser: handover picture copied / && index($0, "(tab " a ")") { pictured = 1 }
-    index($0, "browser: title " a " visible ") == 1 { title = substr($0, 17 + length(a)); was = pictured }
-    END { print was + 0, title }' "$log")
-  case $seen in
-  *" visible 0") ;;
-  "1 visible "*" in "[0-9] | "1 visible "*" in "[0-9][0-9] | "1 visible "*" in "[12][0-9][0-9]) ;;
-  "1 visible "*" in "3[0-4][0-9]) ;;
-  *) fail "$1: $seen" ;;
+  local state
+  state=$(hidden_state)
+  case $state in
+  ran:*) fail "$1: $state" ;;
   esac
 }
 open_from_bar example.org
 expect "^browser: title $a hidden\$" "the tab behind the one shown isn't hidden"
+hidden_quiet "the tab behind the one shown ran frames while hidden, other than its picture's"
 send key w cmd
 expect_tabs "$a" "$a" "after closing the tab over the page"
 expect "^browser: title $a visible " "the tab shown again isn't visible"
 ran_hidden "the tab shown again ran frames while hidden, other than its picture's"
 show_space "click 131 $dots_y" select-space sidebar "$second" "$b"
 expect "^browser: title $a hidden\$" "the tab in the Space not shown isn't hidden"
+hidden_quiet "the tab in the Space not shown ran frames while hidden, other than its picture's"
 show_space "click 97 $dots_y" select-space sidebar "$first" "$a"
 expect "^browser: title $a visible " "the tab in the Space shown again isn't visible"
 ran_hidden "the tab in the Space shown again ran frames while hidden, other than its picture's"
@@ -1156,10 +1210,22 @@ expect "^browser: iconed space $first none\$" "Remove Icon didn't take the Space
 # its own hex, at its hue and lightness in the field, and the wave's knob dragged left washes the
 # window's colours out, the window following as it goes; the core keeps the theme once it's let go.
 # A click outside the picker closes it.
-post rightclick $name_point
+# The menu opens as a hand opens it, the release once it shows, which the menu takes: on Windows the
+# press left the browser window holding the mouse captured, so every drag in the picker went to it
+# and moved it (#2516). The picker's drags, and one from where it has nothing, leave the window's
+# frame where it was.
+post rightpress $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name didn't offer Edit Theme Color…"
+send rightrelease $name_point
+send order
+window_frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+frame_kept() {
+  send order
+  [ "$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)" = "$window_frame" ] ||
+    fail "$1 moved the window from $window_frame: $(grep '^browser: frame window 1 ' "$log" | tail -1)"
+}
 record space-theme-open 2
 send choose "$(cased 'Edit Theme Color…')"
 expect "^browser: theme picker for $first\$" "Edit Theme Color… didn't open the theme picker"
@@ -1181,7 +1247,21 @@ if [ "$(uname)" = Darwin ]; then
   shadow=$(grep '^browser: theme picker shadow off by' "$log" | tail -1)
   [ "$shadow" = "browser: theme picker shadow off by 0 0 0 0" ] ||
     fail "the theme picker's shadow isn't round it: ${shadow#browser: theme picker }"
+else
+  echo "skip: the theme picker's shadow round it: only the Mac's host draws its own."
 fi
+# Between the swatches and the wave there's nothing: a drag from there changes nothing.
+themes=$(grep -c "^browser: themed space $first " "$log" || true)
+empty=$(echo "$at" | awk '{ print $1 + 13 + 178.5, $2 + 410 }')
+emptied=$(echo "$at" | awk '{ print $1 + 13 + 218.5, $2 + 410 }')
+send press $empty
+send dragto $emptied
+send release $emptied
+frame_kept "a drag from the picker's empty space"
+[ "$(grep -c "^browser: themed space $first " "$log")" = "$themes" ] ||
+  fail "a drag from the picker's empty space changed the theme: $(grep "^browser: themed space $first " "$log" | tail -1)"
+[ "$(grep '^browser: theme picker \(shown\|hidden\)$' "$log" | tail -1)" = "browser: theme picker shown" ] ||
+  fail "a drag from the picker's empty space closed it"
 send clickkey "$(swatch_x 7)" $swatch_y
 blue='x=-0.619[0-9] y=-0.242[0-9] colors=1'
 expect "^browser: theme picker set $first $blue intensity=0.810 " "the blue swatch gave no colour"
@@ -1201,6 +1281,16 @@ expect "^browser: theme picker set $first $blue intensity=0.3[45][0-9] " \
   "the wave's knob dragged left didn't wash the colour out"
 expect "^browser: themed space $first $blue intensity=0.3[45][0-9] " \
   "the core didn't keep the theme's intensity"
+frame_kept "a drag on the wave's knob"
+# The grain's dial, 298.5 across the card and 452 down, turns for a drag across its top.
+dial=$(echo "$at" | awk '{ print $1 + 13 + 298.5, $2 + 425 }')
+turned=$(echo "$at" | awk '{ print $1 + 13 + 338.5, $2 + 425 }')
+send press $dial
+send dragto $turned
+send release $turned
+expect "^browser: themed space $first $blue intensity=0.3[45][0-9] grain=0\.[0-9]*[1-9]" \
+  "a drag on the grain's dial didn't give the theme grain"
+frame_kept "a drag on the grain's dial"
 # + twice puts three colours round the blue, the others 150° and 210° on, and the third dragged
 # alone goes to a place of its own, the other two staying, which the core keeps.
 send clickkey 211.5 316.5
@@ -1221,6 +1311,7 @@ send release $placed
 alone="x=-0.619[0-9] y=-0.242[0-9] colors=3 .* places=150.00,0.0000,9[6-8]\.[0-9]*,-0.0[2-5][0-9]*"
 expect "^browser: theme picker set $first $alone\$" "the third colour dragged alone didn't go to its own place"
 expect "^browser: themed space $first $alone\$" "the core didn't keep the third colour's place"
+frame_kept "a drag on a colour's dot"
 ../tools/window-screenshot.sh "$pid" "$out/space-theme.png" || fail "no window to capture"
 send click $page_point
 # The host closes the picker for a click outside it, and only escape's own dismissal logs one.
@@ -1441,6 +1532,7 @@ expect '^browser: theme picker hidden$' "escape didn't hide the theme picker fro
 # The page shown is hidden while its window is minimized, and while the app is hidden, as Chrome's
 # is, and visible once they're back. Last, as the app may not be active after it's been hidden.
 # Today is the tab ⇧⌘T reopened over the page's.
+hidden_quiet "the page behind Today's tab ran frames while hidden, other than its picture's"
 send click "$(row 1)"
 last_title=$(grep "^browser: title $a " "$log" | tail -1 | cut -d' ' -f4-)
 [ "${last_title%% *}" = visible ] ||

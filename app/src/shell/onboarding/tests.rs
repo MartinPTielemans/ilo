@@ -480,6 +480,9 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     skip_to(&shell, cx, Step::OptIns);
     assert_eq!(offered(&shell, cx), vec![(OptIn::Agents, false)]);
     host.take();
+    // It's set once the Shell's update is over, as turning agents off ends their ask, which reads
+    // every Shell (#2459).
+    host.reads_shell(shell.downgrade());
     shell.update(cx, |shell, cx| shell.onboarding_switch(OptIn::Agents, cx));
     assert_eq!(host.take(), vec!["agents true".to_string()]);
     assert_eq!(offered(&shell, cx), vec![(OptIn::Agents, true)]);
@@ -1171,4 +1174,69 @@ fn a_passwords_file_from_onboarding_is_offered_for_deletion(cx: &mut TestAppCont
     cx.run_until_parked();
     assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser), "Done goes on");
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+/// How the import step's button is pressed.
+#[derive(Clone, Copy)]
+enum Press {
+    Return,
+    Click,
+}
+
+/// Import from a browser already read, with open tabs to place, goes on through its step whether
+/// Return or the button presses it. The Shell presses the step from inside its own update, and
+/// placing the tabs asks the browser what it has, which reads each window's Shell for its Today
+/// tabs: read there, it panicked and aborted the launch (#2428).
+fn imports_open_tabs_on(press: Press, cx: &mut TestAppContext) {
+    use crate::import::sources::{Os, Roots};
+    use crate::import::tests::{Browser, chrome};
+    let name = match press {
+        Press::Return => "onboarding-tabs-return",
+        Press::Click => "onboarding-tabs-click",
+    };
+    let home = chrome(name, &[("Default", "Me")], std::time::SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
+    let (shell, cx, view) = importing_from(browser.clone(), cx);
+    let weak = shell.downgrade();
+    browser.reads_shell(move |cx| {
+        if let Some(shell) = weak.upgrade() {
+            shell.read(cx);
+        }
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.guide().title),
+        "What comes from Chrome.",
+        "Chrome wasn't read"
+    );
+    match press {
+        Press::Return => cx.simulate_keystrokes("enter"),
+        Press::Click => {
+            let at = shell.read_with(cx, |shell, _| {
+                (shell.onboarding.as_ref()).and_then(|onboarding| onboarding.button.get())
+            });
+            cx.simulate_click(at.expect("the button drawn").center(), Modifiers::none());
+        }
+    }
+    cx.run_until_parked();
+    // Mail's tab is pinned, as its bookmark on the bar is.
+    assert_eq!(
+        browser.today(),
+        ["https://open.example.com/"],
+        "the open tab wasn't placed"
+    );
+    waited(cx, IMPORT_HOLD);
+    assert_ne!(step(&shell, cx), Some(Step::Import), "placed, it went on");
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[gpui::test]
+fn return_imports_open_tabs(cx: &mut TestAppContext) {
+    imports_open_tabs_on(Press::Return, cx);
+}
+
+#[gpui::test]
+fn the_button_imports_open_tabs(cx: &mut TestAppContext) {
+    imports_open_tabs_on(Press::Click, cx);
 }

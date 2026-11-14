@@ -23,10 +23,45 @@ jobs:
           go-version: '1.26'
           cache: false
 
+      # A run reads no Ubuntu mirror's index: GitHub's runners couldn't resolve
+      # azure.archive.ubuntu.com for hours on 11-11 (#2425), which no retry outlasts. The runner image
+      # has clang-format and ninja. gperf's .deb is kept in the Actions cache under its own version,
+      # which Ubuntu 24.04 hasn't changed since release, so the key outlives image updates. A miss
+      # fetches that one file from whichever of three hosts answers, checked against the SHA-256
+      # that noble's signed index gives it, and saves it for the runs after.
+      - id: gperf
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/gperf
+          key: gperf_3.1-1build1_amd64
+      - if: steps.gperf.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/gperf"
+          cd "$RUNNER_TEMP/gperf"
+          deb=gperf_3.1-1build1_amd64.deb
+          for host in archive.ubuntu.com/ubuntu mirrors.edge.kernel.org/ubuntu azure.archive.ubuntu.com/ubuntu; do
+            if curl -fsS --retry 3 --max-time 60 -o "$deb" "http://$host/pool/universe/g/gperf/$deb" &&
+              echo "f6701027304592fe819d219a5ee00d8b56ba4b2a05a7623dd923f1884d595042  $deb" | sha256sum -c --quiet; then
+              echo "gperf from $host"
+              exit 0
+            fi
+            echo "::warning::gperf didn't come from $host, so the next host is tried (#2425)."
+          done
+          echo "::error::No host gave gperf 3.1-1build1 (#2425)."
+          exit 1
+      - if: steps.gperf.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/gperf
+          key: ${{ steps.gperf.outputs.cache-primary-key }}
+
       - name: Install tools
         run: |
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq gperf clang-format ninja-build
+          sudo dpkg -i "$RUNNER_TEMP"/gperf/gperf_*.deb
+          for tool in clang-format ninja; do
+            command -v "$tool" >/dev/null || { echo "::error::The runner image no longer has $tool (#2425)."; exit 1; }
+            echo "$tool $("$tool" --version | head -1), from the runner image"
+          done
           sudo npm install -g --prefix /usr esbuild typescript
 
       # The tree takes about 40 GB. The runner's second disk has more room than its first.

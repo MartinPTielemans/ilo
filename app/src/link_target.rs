@@ -5,11 +5,8 @@
 //! its window goes through `Host`; where it goes, what it says and when the pointer is near it are
 //! the shell's, which calls `plate` and `place`.
 
-use std::{
-    ops::Range,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{ops::Range, rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, FontWeight, Global, Hsla, Pixels, SharedString, Task, TitlebarOptions,
@@ -33,6 +30,9 @@ pub const FADE_OUT: Duration = Duration::from_millis(120);
 /// Arc's, from its release notes and help centre: the pointer resting on a link this long shows its
 /// whole address. Chrome's status bubble waits 1.6 s.
 pub const WHOLE_AFTER: Duration = Duration::from_millis(1500);
+/// How often it asks whether the button is still down, while a press holds back what its window
+/// would do. No OS tells the UI of a release in a page, and the plate should follow it within a frame.
+pub const RELEASE_POLL: Duration = Duration::from_millis(16);
 pub use crate::tokens::link_target::HEIGHT;
 pub use crate::tokens::link_target::MARGIN;
 pub use crate::tokens::link_target::NEAR;
@@ -237,6 +237,11 @@ pub trait Host {
     fn show(&self, window: u64, left: f32, top: f32);
     /// Hides it.
     fn hide(&self);
+    /// Whether a mouse button is down. While one is, the window doesn't show, move or hide. On
+    /// Windows a window that does makes a move at the pointer, which a page with the button down
+    /// takes as a drag. A press on a link with Alt held is then a selection, and its click is
+    /// lost (#2666). Nothing should appear under a press on any OS.
+    fn pressed(&self) -> bool;
 }
 
 /// The plate that waits for its delay, and where it goes.
@@ -262,6 +267,10 @@ pub struct LinkTarget {
     wait: Option<Task<()>>,
     /// When the plate last went.
     went: Option<Instant>,
+    /// The plate went while a button was down, and its window waits for the release to go.
+    hide_held: bool,
+    /// Asks every RELEASE_POLL whether the button is up, while a press holds back the window.
+    release: Option<Task<()>>,
 }
 
 struct LinkTargetWindow(WindowHandle<LinkTarget>);
@@ -306,6 +315,8 @@ pub fn open(
             pending: None,
             wait: None,
             went: None,
+            hide_held: false,
+            release: None,
         })
     });
     match window {
@@ -325,6 +336,7 @@ pub fn open(
 /// one timer that `hide` cancels, or at once if a plate shows or went less than GRACE ago. A call
 /// while the timer runs changes what it shows, and where.
 pub fn show(window: u64, plate: Plate, frame: Bounds<Pixels>, side: Side, cx: &mut App) {
+    crate::lazy_window::ready::<LinkTarget>(cx);
     let Some(target) = cx.try_global::<LinkTargetWindow>().map(|target| target.0) else {
         return;
     };
@@ -377,6 +389,9 @@ pub fn over(cx: &App) -> Option<u64> {
 
 impl LinkTarget {
     fn reveal(&mut self, cx: &mut Context<Self>) {
+        if self.pending.is_some() && self.host.pressed() {
+            return self.await_release(cx);
+        }
         let Some(Pending {
             window,
             plate,
@@ -393,6 +408,8 @@ impl LinkTarget {
         }
         self.shown = Some(window);
         self.drawn = Some((plate, side));
+        // Showing it moves it from where it went, so it needn't go first.
+        self.hide_held = false;
         self.host.show(window, left, top);
         cx.notify();
     }
@@ -403,10 +420,51 @@ impl LinkTarget {
         self.pending = None;
         if self.shown.take().is_some() {
             self.went = Some(cx.background_executor().now());
-            self.host.hide();
-            // check.sh reads this line.
-            log!("browser: link target hidden");
+            if self.host.pressed() {
+                self.hide_held = true;
+                return self.await_release(cx);
+            }
+            self.hide_window();
         }
+    }
+
+    fn hide_window(&mut self) {
+        self.hide_held = false;
+        self.host.hide();
+        // check.sh reads this line.
+        log!("browser: link target hidden");
+    }
+
+    /// Once no button is down, does what the press held back: the plate due shows, if the pointer
+    /// is still on its link, or else the window goes if the plate did.
+    fn await_release(&mut self, cx: &mut Context<Self>) {
+        if self.release.is_some() {
+            return;
+        }
+        // check.sh reads this line.
+        log!("browser: link target waits for the release");
+        self.release = Some(cx.spawn(async move |target, cx| {
+            loop {
+                cx.background_executor().timer(RELEASE_POLL).await;
+                let released = target
+                    .update(cx, |target, cx| {
+                        if target.host.pressed() {
+                            return false;
+                        }
+                        target.release = None;
+                        if target.pending.is_some() {
+                            target.reveal(cx);
+                        } else if target.hide_held {
+                            target.hide_window();
+                        }
+                        true
+                    })
+                    .unwrap_or(true);
+                if released {
+                    break;
+                }
+            }
+        }));
     }
 }
 

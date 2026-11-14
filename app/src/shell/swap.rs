@@ -2,7 +2,8 @@
 //! starts loading: the old one fades and shrinks as the new one fades and grows in, as Arc's do.
 //! Lucide's check draws itself along its stroke.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, Hsla, PathBuilder, Transformation, Window, canvas, div, fill, point,
@@ -25,11 +26,14 @@ pub(super) enum Swapped {
     CopyUrl,
     /// The arrow before a Space's Clear, while Clear would close its last Today tabs.
     Clear(u64),
+    /// A pinned tab's or favorite's return mark, while it's away from its pinned URL.
+    Away(u64),
 }
 
 pub(super) const CHECK: &str = "icons/check.svg";
 pub(super) const LINK: &str = "icons/link.svg";
 pub(super) const ARROW_DOWN: &str = "icons/arrow-down.svg";
+pub(super) const UNDO: &str = "icons/undo-2.svg";
 /// No glyph, for one that comes and goes.
 pub(super) const NONE: &str = "";
 // Both glyphs move from the same moment, linearly, about the glyph's middle: the old one fades
@@ -100,7 +104,7 @@ impl Swaps {
     }
 
     /// Starts what a report on `tab`'s page changes: the header's reload or stop, only for the tab
-    /// shown, and the tab's speaker, only while it stays shown.
+    /// shown, the tab's speaker, only while it stays shown, and its return mark.
     pub(super) fn page_changed(
         &mut self,
         tab: u64,
@@ -117,6 +121,17 @@ impl Swaps {
         if speaker(before) && speaker(after) {
             let (from, to) = (speaker_glyph(before.muted), speaker_glyph(after.muted));
             self.start(Swapped::Speaker(tab), from, to, now);
+        }
+        // A tab's first report draws its row, whose mark shows at once.
+        if !before.url.is_empty() {
+            let mark = |page: &Page| {
+                if page.away_from_pinned_url {
+                    UNDO
+                } else {
+                    NONE
+                }
+            };
+            self.start(Swapped::Away(tab), mark(before), mark(after), now);
         }
     }
 
@@ -339,7 +354,9 @@ pub(crate) fn drawing_check(way: f32, color: Hsla) -> impl IntoElement {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{COME, LEAVE, Page, SWAP, Swapped, Swaps, check_line, coming, grown, leaving};
+    use super::{
+        COME, LEAVE, Page, SWAP, Swapped, Swaps, UNDO, check_line, coming, grown, leaving,
+    };
 
     fn near(a: (f32, f32), b: (f32, f32)) -> bool {
         (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3
@@ -416,6 +433,42 @@ mod tests {
         );
         swaps.page_changed(3, 1, &audible, &muted, now);
         assert!(swaps.changing(Swapped::Speaker(3)));
+    }
+
+    /// A pinned tab leaving its pinned URL, or going back, moves its return mark, on any tab, as
+    /// its row shows whichever is shown; a tab's first report shows it at once.
+    #[test]
+    fn a_return_mark_comes_and_goes_but_shows_at_once_on_a_new_row() {
+        let now = Instant::now();
+        let home = Page {
+            url: "https://example.com/".into(),
+            ..Page::default()
+        };
+        let away = Page {
+            url: "https://example.com/notes".into(),
+            away_from_pinned_url: true,
+            ..Page::default()
+        };
+        let mut swaps = Swaps::default();
+        swaps.page_changed(4, 1, &Page::default(), &away, now);
+        assert!(
+            !swaps.changing(Swapped::Away(4)),
+            "a new row's mark shows at once"
+        );
+        swaps.page_changed(4, 1, &home, &away, now);
+        // It's read against the clock, a moment after the change started.
+        assert!(
+            swaps
+                .toward(Swapped::Away(4), UNDO)
+                .is_some_and(|way| way < 0.5)
+        );
+        swaps.page_changed(5, 1, &away, &home, now);
+        assert!(
+            swaps
+                .toward(Swapped::Away(5), UNDO)
+                .is_some_and(|way| way > 0.5),
+            "going, it starts whole"
+        );
     }
 
     /// Changed back mid-way, a glyph goes back from where it was: the one coming in leaves from

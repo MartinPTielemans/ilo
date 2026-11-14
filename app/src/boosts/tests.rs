@@ -236,6 +236,41 @@ fn edit_starts_a_file_saying_what_it_is_and_leaves_one_there_as_it_is() {
     assert_eq!(boosts.file(2, "example.com"), None);
 }
 
+/// A script starts with a line saying it runs only once turned on, and starts its site's Boost
+/// with it; one already there is left as it is, and Delete… takes it with the CSS (#2297).
+#[test]
+fn a_script_starts_its_boost_and_goes_with_it() {
+    let folder = Folder::new();
+    let mut boosts = Boosts::default();
+    boosts.load(1, folder.0.clone());
+    let path = boosts.script_file(1, "example.com").unwrap();
+    assert_eq!(path, folder.0.join("Boosts/example.com.js"));
+    let start = std::fs::read_to_string(&path).unwrap();
+    assert!(start.starts_with("// example.com: "), "{start}");
+    assert!(start.contains("once you turn it on"), "{start}");
+    let css = folder
+        .read("Boosts/example.com.css")
+        .expect("no Boost started");
+    assert!(css.starts_with("/* example.com: "), "{css}");
+
+    folder.write("Boosts/example.com.js", "mine();\n");
+    boosts.script_file(1, "example.com").unwrap();
+    assert_eq!(
+        folder.read("Boosts/example.com.js").as_deref(),
+        Some("mine();\n")
+    );
+    assert_eq!(
+        folder.read("Boosts/example.com.css").as_deref(),
+        Some(css.as_str())
+    );
+
+    boosts.reload(1);
+    boosts.delete(1, "example.com");
+    assert_eq!(folder.read("Boosts/example.com.css"), None);
+    assert_eq!(folder.read("Boosts/example.com.js"), None);
+    assert_eq!(boosts.script_file(2, "example.com"), None);
+}
+
 #[test]
 fn the_watcher_tells_of_a_write_in_the_folder() {
     let folder = Folder::new();

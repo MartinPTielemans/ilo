@@ -587,7 +587,7 @@ bool host_copy_secret(const char* text, uint32_t seconds) {
 // hands a secret to no clipboard manager.
 void host_forget_secret(void) {}
 
-void host_open_in_safari(const char* url) {}
+void host_open_elsewhere(const char* url) {}
 
 void host_open_full_disk_access(void) {}
 

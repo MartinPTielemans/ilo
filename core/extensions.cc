@@ -186,8 +186,12 @@ class CrashWatch : public content::RenderProcessHostCreationObserver,
 
 // Extension |id| if it's turned on in |profile| and runs there: in a private window's profile only
 // if the user allowed it in Incognito, as in Chrome, whose off-the-record registry is the
-// original's and lists every extension.
+// original's and lists every extension. Never the ad blocker, whose popup and commands are uBlock
+// Origin's own UI, which Settings › Ad blocking stands for.
 const extensions::Extension* RunsIn(Profile* profile, const std::string& id) {
+  if (IsAdBlocker(id)) {
+    return nullptr;
+  }
   const extensions::Extension* extension =
       extensions::ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(id);
   if (extension && profile->IsOffTheRecord() &&
@@ -416,7 +420,9 @@ class ProfileExtensions : public extensions::ExtensionRegistryObserver,
     std::vector<scoped_refptr<const extensions::Extension>> listed;
     for (const scoped_refptr<const extensions::Extension>& extension :
          registry->GenerateInstalledExtensionsSet()) {
-      if (extensions::ui_util::ShouldDisplayInExtensionSettings(*extension)) {
+      // The ad blocker is Settings › Ad blocking, not an extension of the user's.
+      if (extensions::ui_util::ShouldDisplayInExtensionSettings(*extension) &&
+          !IsAdBlocker(extension->id())) {
         listed.push_back(extension);
       }
     }
@@ -609,7 +615,8 @@ void WindowActions::Report() {
           extension ? extensions::ExtensionActionManager::Get(profile_)->GetExtensionAction(
                           *extension)
                     : nullptr;
-      if (!action) {
+      // Nor its action, pinned before it left the lists or not.
+      if (!action || IsAdBlocker(extension->id())) {
         return;
       }
       std::unique_ptr<Icon>& icon = icons_[extension->id()];

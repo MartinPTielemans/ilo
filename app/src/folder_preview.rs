@@ -125,14 +125,17 @@ pub fn height(count: usize) -> f32 {
 }
 
 /// Where a preview `height` tall has its top left: BESIDE right of the sidebar, whose edge is
-/// PLATE_INSET past its row's plate, centred on the row, and INSIDE the window, the top and left
-/// first if it can't be both.
+/// PLATE_INSET past its row's plate, or as far left of a sidebar on the right, centred on the row,
+/// and INSIDE the window, the top and left first if it can't be both.
 pub fn place(anchor: Anchor, height: f32) -> (f32, f32) {
     let (width, tall) = (
         f32::from(anchor.window.width),
         f32::from(anchor.window.height),
     );
-    let left = f32::from(anchor.row.right()) + PLATE_INSET + BESIDE;
+    let left = match anchor.left {
+        true => f32::from(anchor.row.left()) - PLATE_INSET - BESIDE - WIDTH,
+        false => f32::from(anchor.row.right()) + PLATE_INSET + BESIDE,
+    };
     let top = (f32::from(anchor.row.center().y) - height / 2.).round();
     (
         left.min(width - WIDTH - INSIDE).max(INSIDE),
@@ -243,6 +246,9 @@ fn update(
 /// once while another shows; the pointer leaving that row, which ends it after LEAVE unless it's
 /// onto the preview or something was typed in it; or its end.
 pub fn ask(ask: Ask, cx: &mut App) {
+    if matches!(ask, Ask::Rest(_)) {
+        crate::lazy_window::ready::<FolderPreview>(cx);
+    }
     update(cx, |preview, window, cx| match ask {
         Ask::Rest(rest) => preview.rest(rest, window, cx),
         Ask::Left(folder) => preview.left(folder, cx),

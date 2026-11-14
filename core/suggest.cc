@@ -106,7 +106,8 @@ struct Page {
   history::URLRow row;
   history::VisitVector visits;
   history::VisitSourceMap sources;
-  history::KeywordID keyword = 0;
+  // Chromium 157 makes this an IdType, whose default is the invalid ID, 0.
+  history::KeywordID keyword{};
   std::u16string term;
 };
 

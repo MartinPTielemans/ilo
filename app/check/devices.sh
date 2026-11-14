@@ -1,3 +1,4 @@
+# check.sh runs this at 470.
 # A page asking for a device, with a click, gets ilo's chooser in its question card (#1649), and
 # the browser lives through it, as it didn't Chrome's bubble (#1640). The HID, USB and serial
 # requests each show the card, whose × ends them as Chrome's Cancel does: HID's with no device, USB's
@@ -23,15 +24,24 @@ page=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
 # The page can draw before its load ends, and a click before then may never reach it.
 await "^browser: page $page back 0 forward 0 loading 0 ${site}devices.html\$" ||
   fail "the devices test page didn't finish loading"
-# A click on the page asks for the next device.
+# A click on the page asks for the next device. Chromium takes the activation the request needs
+# from what the page told the browser of its press, which comes on another pipe than the request
+# (#2510): a request on a click straight after its press can reach the browser first, which then
+# refuses it without a chooser, as the press of a hand, some 100 ms before its release, doesn't. So
+# the click is a press, then the release once the browser has the page's title from the press,
+# which comes after the activation on the same pipe.
+presses=0
 ask() {
-  send click $page_point
+  presses=$((presses + 1))
+  send press $page_point
   if [ "$active" != 1 ]; then
     exec 3>&-
     quit
     echo "skip: devices. Browser wasn't the active app, so the page ignored the click."
     exit 0
   fi
+  expect "^browser: title $page pressed $presses\$" "the page didn't take the press for its $1 request"
+  send release $page_point
 }
 # The card shows for the page's $1 request, which the core reports as $2.
 card() {

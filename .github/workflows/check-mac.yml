@@ -22,6 +22,8 @@
 # And one part of a run that passes here, which skips it, saying so:
 # - window's sidebar against Dia's composite: the runner's AppKit material is darker than the one
 #   Dia was measured over (#1554).
+# sync-devices runs here, in about 200 s, against the run's own ilo-server, its copies handing each
+# other the active app as each needs the keyboard (#589).
 # Of the runs check.sh does only when named, the runner passes store, sync-extensions, adblock-live,
 # adblock-parity, adblock-native, passwords-live, updates, nightly, update-checks, shots, and
 # keychain asked for alone, which builds the prod build it needs. perf and adblock-cost measure, so
@@ -42,6 +44,11 @@ on:
         description: Build the app, even if a check of this commit kept one
         type: boolean
         default: false
+      trace:
+        description: >-
+          The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
+          #2377's, latency among them; empty for latency alone in tabs and no traced switches
+        default: ''
 
 # Main's running check finishes, with only the newest dispatch or night waiting behind it; a branch's
 # dispatch replaces the one before it.
@@ -85,7 +92,7 @@ jobs:
       matrix:
         shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || '[0]') }}
     runs-on: macos-26
-    # The default runs take about 70 min here, after about 6 of setting up.
+    # The default runs take about 73 min here, after about 6 of setting up.
     timeout-minutes: 120
     permissions:
       contents: read
@@ -142,7 +149,7 @@ jobs:
           case $RUNS in
           '')
             runs=
-            for run in $(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p' check.sh); do
+            for run in $(sh check.sh --runs default); do
               case " $VM_RUNS " in *" $run "*) ;; *) runs="$runs $run" ;; esac
             done
             ;;
@@ -346,6 +353,7 @@ jobs:
           RUNS: ${{ steps.runs.outputs.list }}
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
+          CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
@@ -393,13 +401,21 @@ jobs:
             *" $run "*)
               start=$SECONDS
               status=0
-              ${limit:+$limit 20m} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
+              # Perf measures Chrome beside the app.
+              minutes=20m
+              [ "$run" != perf ] || minutes=40m
+              ${limit:+$limit $minutes} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               [ ! -d build/check ] || mv build/check "$out/$run"
               pkill -9 -f "$PWD/build/Browser.app/" || true
               # A run that passes may have skipped steps, or all of itself, such as when the app
               # wasn't the active one.
               skipped=$(grep '^skip: ' "$out/$run.log" | cut -c7- | tr '|\n' '/;' | sed 's/;$//')
-              if [ "$status" = 0 ]; then
+              # A run that skips all of itself, as one whose build lacks what it checks, says why on a
+              # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
+              whole=$(grep -m1 '^skip all: ' "$out/$run.log" | cut -c11- | tr '|' '/') || true
+              if [ "$status" = 0 ] && [ -n "$whole" ]; then
+                result="skip: $whole"
+              elif [ "$status" = 0 ]; then
                 result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
               else
                 said=$(grep -m1 '^FAIL' "$out/$run.log" | cut -c7- | tr '|' '/') || true

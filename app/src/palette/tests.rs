@@ -228,15 +228,17 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
         }
         check(
             "site controls off glyph",
-            on(palette.on_overlay_glyph(OFF_GLYPH), &on_overlay(&[OFF])),
+            on(palette.on_overlay_glyph(ITEM_GLYPH_OFF), &[overlay]),
             GLYPH,
         );
-        check("site controls on circle", against(&[overlay]), GLYPH);
-        check(
-            "site controls on glyph",
-            contrast(palette.accent_label, accent),
-            GLYPH,
-        );
+        check("site controls on line glyph", against(&[overlay]), GLYPH);
+        // A switch or the shield while on: the accent's glyph on the tile tinted with it, at rest,
+        // as the action tiles' glyphs are checked on their resting plate.
+        let tinted: Vec<Rgba> = on_overlay(&[TILE_TOP, TILE_BOTTOM])
+            .iter()
+            .map(|&at| over(at, accent, crate::tokens::site_controls::TINT))
+            .collect();
+        check("site controls on switch glyph", against(&tinted), GLYPH);
     }
     // Every surface's controls in each of the ladder's states over their resting fills (#318):
     // the text on them at 4.5:1 and the glyphs at 3:1.
@@ -911,16 +913,21 @@ fn a_swatch_is_ringed_only_where_it_fades_into_its_ground() {
     );
 }
 
-/// The palette is worked out once a theme changes, not while drawing, so it has to be quick.
+/// The palette is worked out once a theme changes, not while drawing, so it has to be quick. The
+/// fastest of 20 is timed: a busy machine only ever adds time to a run, so one of them still runs
+/// with the processor to itself, where a mean of them failed under load (#2470).
 #[test]
 fn a_palette_takes_well_under_a_frame() {
     let theme = theme(3, 1., "automatic", 300., 1., 0.95, 1.);
-    let start = std::time::Instant::now();
-    for _ in 0..10 {
-        std::hint::black_box(Palette::of(Some(&theme), Tone::Dark));
-    }
-    let each = start.elapsed() / 10;
-    assert!(each < std::time::Duration::from_millis(4), "{each:?}");
+    let fastest = (0..20)
+        .map(|_| {
+            let start = std::time::Instant::now();
+            std::hint::black_box(Palette::of(Some(&theme), Tone::Dark));
+            start.elapsed()
+        })
+        .min()
+        .unwrap();
+    assert!(fastest < std::time::Duration::from_millis(4), "{fastest:?}");
 }
 
 /// A shimmer's highlight goes from where the floor puts the text to the ink, so it shows on a

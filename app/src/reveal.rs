@@ -32,9 +32,12 @@ impl Render for Reveal {
             let (moved, left) = (self.shell.clone(), self.shell.clone());
             gpui::div()
                 .size_full()
-                .on_mouse_move(move |event, _, cx| {
-                    let x = event.position.x.into();
-                    moved.update(cx, |shell, cx| shell.pointer_at(x, cx));
+                .on_mouse_move(move |event, window, cx| {
+                    let (x, width) = (event.position.x.into(), window.viewport_size().width);
+                    moved.update(cx, |shell, cx| {
+                        let x = shell.from_reveal(x, width.into());
+                        shell.pointer_at(x, cx)
+                    });
                 })
                 // The window's own leave rather than the div's hover, which GPUI counts only after
                 // a move over it: a press with none before it, on a panel that came out under a

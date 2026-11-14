@@ -1,3 +1,4 @@
+# check.sh runs this at 420.
 # About ilo shows Settings on its About tab, and the Open of each of its Licence, Notices and
 # Libraries rows opens the file the build carries for it (tools/licences.sh) in a tab, which loads.
 # Sync, which fits its card, doesn't scroll under a scroll.
