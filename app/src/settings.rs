@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use browser::account::{self, Account};
+use browser::ad_block::choice::{self as ad_blocker, EngineRow};
 use browser::agents::ready::Ready;
 use browser::agents::runner::Cli;
 use browser::agents::{self, Agents, Client};
@@ -513,6 +514,8 @@ pub struct Settings {
     #[cfg(target_os = "linux")]
     dialog: Entity<dialog::Dialog>,
     widevine: Entity<WidevineRow>,
+    /// Ad Blocking's way between the browser's own blocker and uBlock Origin.
+    ad_blocker: Entity<EngineRow>,
     /// About's first row, which says where the update stands.
     version: Entity<VersionRow>,
     /// About's second row, where the build carries a nightly feed: Get nightly builds.
@@ -1240,6 +1243,9 @@ fn view(cx: &mut App) -> Entity<Settings> {
         cx.observe(&account, |_, _, cx| cx.notify()).detach();
         let widevine = cx.new(|_| WidevineRow::new(Rc::new(Module)));
         cx.observe(&widevine, |_, _, cx| cx.notify()).detach();
+        let launch = crate::ad_block_host::launch();
+        let ad_blocker = cx.new(|_| EngineRow::new(Rc::new(crate::ad_block_host::Choice), launch));
+        cx.observe(&ad_blocker, |_, _, cx| cx.notify()).detach();
         let version = cx.new(|cx| {
             let mut row = VersionRow::new(version(cx), cx);
             row.set_look(look, cx);
@@ -1274,6 +1280,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             dialog,
             default_browser,
             widevine,
+            ad_blocker,
             version,
             nightly,
             _agents: agents,
@@ -2686,12 +2693,11 @@ impl Settings {
         const NAME: &str = "Block ads and trackers";
         let switch = self.toggle("ad blocking", NAME, on, set_ad_blocking, accent, cx);
         let line = "A site's Site Controls turn it off there, and say how much it blocked.";
-        let mut blocks = vec![Block::Rows(vec![setting(
-            look,
-            NAME,
-            Some(line.into()),
-            vec![switch],
-        )])];
+        let mut rows = vec![setting(look, NAME, Some(line.into()), vec![switch])];
+        if self.ad_blocker.read(cx).shown() {
+            rows.push(self.ad_blocker_row(accent, cx));
+        }
+        let mut blocks = vec![Block::Rows(rows)];
         if !off_sites.is_empty() {
             blocks.push(Block::Heading("Ads are shown on".into()));
             blocks.push(Block::Group(self.off_sites(off_sites, cx)));
@@ -2723,11 +2729,51 @@ impl Settings {
                 blocks.push(Block::Rows(rows));
             }
         }
-        let lede = match locked {
-            true => "uBlock Origin, built in, with the filter lists your organization chose.",
-            false => "uBlock Origin, built in, with the filter lists you turn on.",
+        let native = crate::ad_block_host::launch().engine == ad_blocker::Engine::Native;
+        let lede = match (native, locked) {
+            (false, true) => {
+                "uBlock Origin, built in, with the filter lists your organization chose."
+            }
+            (false, false) => "uBlock Origin, built in, with the filter lists you turn on.",
+            (true, true) => concat!(
+                env!("APP_NAME"),
+                "'s own ad blocker, with the filter lists your organization chose."
+            ),
+            (true, false) => concat!(
+                env!("APP_NAME"),
+                "'s own ad blocker, with the filter lists you turn on."
+            ),
         };
         Page::new(Section::AdBlocking, lede, blocks)
+    }
+
+    /// Block with uBlock Origin: the way back to the extension and forward again, each taking
+    /// effect at the next launch, with the restart beside the switch once one is chosen.
+    fn ad_blocker_row(&self, accent: Rgba, cx: &mut Context<Self>) -> Row {
+        let row = self.ad_blocker.read(cx);
+        let (title, detail, on) = (row.title(), row.detail(), row.on());
+        let mut controls = Vec::new();
+        if row.restart_offered() {
+            let restart = cx.listener(|settings: &mut Self, _, _, cx| {
+                log!("browser: settings ad blocker restart");
+                settings.ad_blocker.update(cx, |row, cx| row.restart(cx));
+            });
+            let button = self
+                .button("ad blocker restart", ad_blocker::RESTART)
+                .relative()
+                .child(self.drawn("ad blocker restart".into()))
+                .on_click(restart);
+            controls.push(button.into_any_element());
+        }
+        let entity = self.ad_blocker.clone();
+        let set = move |on, cx: &mut App| {
+            entity.update(cx, |row, cx| {
+                row.set(on);
+                cx.notify();
+            })
+        };
+        controls.push(self.toggle("ad blocker", title.clone(), on, set, accent, cx));
+        setting(&self.look, title, Some(detail), controls)
     }
 
     /// My filters: the user's own, one a row with Remove, then the field that adds one; or an

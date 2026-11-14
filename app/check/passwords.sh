@@ -198,6 +198,36 @@ expect '^browser: command site-controls via key$' \
 expect '^browser: site controls settled$' "the Site Controls the key opened didn't settle"
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls the key opened"
+# Sets listed to the browser window's child windows, a frame a line, Chrome's dropdown among them,
+# and children to how many. In this shell, never in $(…), where send's count of the driver's steps
+# would be lost.
+count_children() {
+  send layout
+  listed=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: layout child' || true)
+  children=$(printf '%s' "$listed" | grep -c . || true)
+}
+# Waits up to 30 s for a child window $before didn't list, Chrome's dropdown, or fails with $1. A
+# key sent before the dropdown shows opens it instead of reaching it (#2772). By its frame, not the
+# count: a dropdown in another field can still be closing as the new one shows.
+dropdown_shown() {
+  wait_begins
+  while :; do
+    count_children
+    printf '%s\n' "$listed" | grep . | grep -qvxF -e "$before" && return
+    [ $((${SECONDS:-$(date +%s)} - wait_began)) -lt 30 ] || break
+  done
+  seen="the child windows before the click: ${before:-none}; at the last look: ${listed:-none}"
+  fail "$1 in 30 s; $seen"
+}
+# Waits for Chrome's dropdown to close, after escape, or fails with $1.
+dropdown_gone() {
+  send key escape
+  for _ in $(seq 30); do
+    count_children
+    [ "$children" = "$shown" ] && return
+  done
+  fail "$1"
+}
 # With the password cleared, a click in the username field shows Chrome's dropdown under it, where
 # down previews the saved login and return fills it in again.
 send click 600 60
@@ -205,7 +235,10 @@ send key tab
 send key a cmd
 send key backspace
 expect "^browser: title $tab cleared\$" "clearing the password didn't undo the fill"
+count_children
+before=$listed
 send click 600 60
+dropdown_shown "a click in the username field showed no dropdown of logins under it"
 send key down
 expect "^browser: title $tab filled\$" "down didn't preview the saved login"
 ../tools/window-screenshot.sh "$pid" "$out/password-fill.png" || fail "no window to capture"
@@ -475,7 +508,10 @@ expect "^browser: offer $tab answered Accept \$" "return didn't save the address
 expect "^browser: offer $tab gone\$" "saving the address left Chrome's offer open"
 go_from_bar "${site#http://}address.html"
 expect "^browser: title $tab address\$" "the address page didn't load again"
+count_children
+before=$listed
 send click 600 60
+dropdown_shown "a click in the address field showed no dropdown of saved addresses"
 send key down
 expect "^browser: title $tab filled\$" "Chrome's dropdown didn't offer the saved address"
 ../tools/window-screenshot.sh "$pid" "$out/address-fill.png" || fail "no window to capture"
@@ -499,34 +535,11 @@ if [ "$(uname)" = Darwin ]; then
     "Edit lacks ilo's AutoFill after Find: $(grep "$edit" "$log" | tail -1)"
   [ "$(grep "$edit" "$log" | tail -1 | grep -o 'AutoFill ›' | wc -l)" -eq 3 ] ||
     fail "Edit has the system's AutoFill too: $(grep "$edit" "$log" | tail -1)"
-  # Sets children to how many child windows the browser window has, Chrome's dropdown among them.
-  # In this shell, never in $(…), where send's count of the driver's steps would be lost.
-  count_children() {
-    send layout
-    children=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
-      grep -c '^browser: layout child' || true)
-  }
-  # Waits for the browser window to have more child windows than $shown, or fails with $1.
-  dropdown_shown() {
-    for _ in $(seq 30); do
-      count_children
-      [ "$children" -gt "$shown" ] && return
-    done
-    fail "$1"
-  }
-  # Waits for Chrome's dropdown to close, after escape, or fails with $1.
-  dropdown_gone() {
-    send key escape
-    for _ in $(seq 30); do
-      count_children
-      [ "$children" = "$shown" ] && return
-    done
-    fail "$1"
-  }
   go_from_bar "${site#http://}address.html"
   expect "^browser: title $tab address\$" "the address page didn't load for Edit › AutoFill"
   count_children
   shown=$children
+  before=$listed
   send click 600 60
   dropdown_shown "a click in the address field showed no dropdown"
   dropdown_gone "escape didn't close the dropdown the click showed"

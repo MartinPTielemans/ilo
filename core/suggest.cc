@@ -1,6 +1,7 @@
 #include "browser_core/suggest.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -13,6 +14,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "browser_core/favorites.h"
 #include "browser_core/host.h"
 #include "browser_core/popular_sites.h"
@@ -63,6 +65,18 @@ GURL Stripped(const GURL& url, const TemplateURLService* engines) {
   return AutocompleteMatch::GURLToStrippedGURL(url, AutocompleteInput(), engines,
                                                /*keyword=*/std::u16string(),
                                                /*keep_search_intent_params=*/true);
+}
+
+// When the profile's history last saw a visit to |match|'s page, in microseconds since 1970, or 0
+// (#2337). engine/patches/ours/chromium-omnibox-match-last-visit.patch fills last_visit on the
+// matches HistoryURL and HistoryQuick make from a history row, and a bookmark's or a shortcut's
+// match that won over one has it among its duplicates. No history lookup: the bar is a hot path.
+int64_t LastVisit(const AutocompleteMatch& match) {
+  base::Time last = match.last_visit;
+  for (const AutocompleteMatch& duplicate : match.duplicate_matches) {
+    last = std::max(last, duplicate.last_visit);
+  }
+  return last.is_null() ? 0 : (last - base::Time::UnixEpoch()).InMicroseconds();
 }
 
 // A tab at |url|, stripped, other than |shown|: a favorite first, which every Space of its profile
@@ -445,6 +459,7 @@ void Suggestions::Report() {
     bool typed_search = false;
     bool typed_url = false;
     bool removable = false;
+    int64_t last_visit = 0;
   };
   std::vector<Row> rows;
   const AutocompleteResult& result = controller_.result();
@@ -476,6 +491,7 @@ void Suggestions::Report() {
         .typed_search = match.type == omnibox::AutocompleteMatchType::kSearchWhatYouTyped,
         .typed_url = match.type == omnibox::AutocompleteMatchType::kUrlWhatYouTyped,
         .removable = match.SupportsDeletion(),
+        .last_visit = search ? 0 : LastVisit(match),
     });
   }
   // Typed with its scheme, the address goes first, where ↩ goes, though Chrome's address bar puts
@@ -536,7 +552,8 @@ void Suggestions::Report() {
                            .completion = row.completion.c_str(),
                            .removable = row.removable,
                            .keyword = row.keyword.c_str(),
-                           .site = row.site.c_str()});
+                           .site = row.site.c_str(),
+                           .last_visit = row.last_visit});
   }
   const std::string text =
       base::UTF16ToUTF8(keyword_.empty() ? text_ : keyword_ + u' ' + text_);

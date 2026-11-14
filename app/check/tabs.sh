@@ -751,38 +751,46 @@ remove_keys=⌥⌘⌫
 [ "$(uname)" = Darwin ] || remove_keys=Shift+Del
 expect "^browser: tooltip shown Remove from History $remove_keys\$" \
   "resting on the trash didn't show Remove from History and $remove_keys"
-expect '^browser: tooltip window shown$' "the trash's tooltip didn't show"
-# Where the UI asked, in the bar, and where the host put it, which the Mac's and Linux's say.
-asked=$(grep '^browser: tooltip at ' "$log" | tail -1 | cut -d' ' -f4,5)
-placed=$(grep '^browser: tooltip window at ' "$log" | tail -1 | cut -d' ' -f5,6)
-[ -z "$placed" ] || echo "$asked $placed" | awk '{ exit !(($1 - $3)^2 < 1 && ($2 - $4)^2 < 1) }' ||
-  fail "the trash's tooltip is at $placed in the bar, not at $asked where the UI asked"
-../tools/window-screenshot.sh "$pid" "$out/remove-tooltip.png" || fail "no window to capture"
-send clickkey $(cross "$row")
-expect '^browser: command bar removes https://example.com/$' "a click on the trash didn't take example.com's row out"
-expect '^browser: tooltip hidden$' "a click on the trash didn't end its tooltip"
-expect '^browser: command bar suggestions "example" in ' \
-  "the command bar didn't list its rows again after the trash"
-none_since '^browser: command bar \(go\|switch to tab\|behind\)' || fail "a click on the trash took its row too"
-suggestions | grep -q '^https://example.com/' && fail "example.com's row stayed after its trash"
-# The removal is the window's step: ⌘Z in the field puts it back as it was, its visits with it,
-# and the core lists it again, and ⇧⌘Z takes it out again, as the rest of the run has it (#1394).
-send key z cmd
-expect '^browser: put back removal [0-9]*$' "⌘Z in the command bar didn't put example.com back"
-expect '^browser: undo done$' "⌘Z in the command bar didn't undo the removal"
-for _ in $(seq 50); do
-  suggestions | grep -q '^https://example.com/' && break
-  sleep 0.1
-done
-suggestions | grep -q '^https://example.com/' ||
-  fail "⌘Z didn't list example.com's row again: $(suggestions | tr '\n' ' ')"
-send key z shift cmd
-expect '^browser: remove again removal [0-9]*$' "⇧⌘Z in the command bar didn't take example.com out again"
-for _ in $(seq 50); do
-  suggestions | grep -q '^https://example.com/' || break
-  sleep 0.1
-done
-suggestions | grep -q '^https://example.com/' && fail "example.com's row stayed after ⇧⌘Z"
+# Under KWin, with the driver's pointer real input, the tooltip hides as its window shows, and the
+# trash goes with it (#2763).
+if [ "${BROWSER_XVFB:-}" = kwin ]; then
+  echo "skip: the trash's tooltip window showing, under KWin: it hides as its window shows (#2763)."
+  echo "skip: a click on the trash, and ⌘Z and ⇧⌘Z after, under KWin: the trash goes with its" \
+    "tooltip, so the click opens the row (#2763)."
+else
+  expect '^browser: tooltip window shown$' "the trash's tooltip didn't show"
+  # Where the UI asked, in the bar, and where the host put it, which the Mac's and Linux's say.
+  asked=$(grep '^browser: tooltip at ' "$log" | tail -1 | cut -d' ' -f4,5)
+  placed=$(grep '^browser: tooltip window at ' "$log" | tail -1 | cut -d' ' -f5,6)
+  [ -z "$placed" ] || echo "$asked $placed" | awk '{ exit !(($1 - $3)^2 < 1 && ($2 - $4)^2 < 1) }' ||
+    fail "the trash's tooltip is at $placed in the bar, not at $asked where the UI asked"
+  ../tools/window-screenshot.sh "$pid" "$out/remove-tooltip.png" || fail "no window to capture"
+  send clickkey $(cross "$row")
+  expect '^browser: command bar removes https://example.com/$' "a click on the trash didn't take example.com's row out"
+  expect '^browser: tooltip hidden$' "a click on the trash didn't end its tooltip"
+  expect '^browser: command bar suggestions "example" in ' \
+    "the command bar didn't list its rows again after the trash"
+  none_since '^browser: command bar \(go\|switch to tab\|behind\)' || fail "a click on the trash took its row too"
+  suggestions | grep -q '^https://example.com/' && fail "example.com's row stayed after its trash"
+  # The removal is the window's step: ⌘Z in the field puts it back as it was, its visits with it,
+  # and the core lists it again, and ⇧⌘Z takes it out again, as the rest of the run has it (#1394).
+  send key z cmd
+  expect '^browser: put back removal [0-9]*$' "⌘Z in the command bar didn't put example.com back"
+  expect '^browser: undo done$' "⌘Z in the command bar didn't undo the removal"
+  for _ in $(seq 50); do
+    suggestions | grep -q '^https://example.com/' && break
+    sleep 0.1
+  done
+  suggestions | grep -q '^https://example.com/' ||
+    fail "⌘Z didn't list example.com's row again: $(suggestions | tr '\n' ' ')"
+  send key z shift cmd
+  expect '^browser: remove again removal [0-9]*$' "⇧⌘Z in the command bar didn't take example.com out again"
+  for _ in $(seq 50); do
+    suggestions | grep -q '^https://example.com/' || break
+    sleep 0.1
+  done
+  suggestions | grep -q '^https://example.com/' && fail "example.com's row stayed after ⇧⌘Z"
+fi
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 # ⇧⌘↩ searches for what was typed even when it names a page, as Chrome's does.
@@ -1299,7 +1307,6 @@ expect "^browser: chosen $c $b $a\$" "⌘-clicks didn't choose the rows once mor
 send key w cmd
 expect "^browser: today $rest\$" "⌘W with rows chosen didn't close them all: $(today)"
 send key z cmd
-reopened=$step
 expect "^browser: today [0-9][0-9]* [0-9][0-9]* [0-9][0-9]* $rest\$" \
   "⌘Z after ⌘W didn't bring the three chosen tabs back: $(today)"
 
@@ -1628,14 +1635,8 @@ fi
 # Tabs, listed while one is muted, unmutes them; Enter Full Screen puts the window full screen and
 # reads Exit Full Screen there, which takes it out; and there Exit, View › Exit's, with ⎋'s key,
 # takes it out too.
-# The ⌘Z above gave the tab shown a fresh page, and a key typed into a page whose renderer is still
-# starting is lost (#1519), which the Wayland pass hits. There ⌘L waits for the page to load. #1974
-# fixes the race in the core and removes this.
-if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-  echo "skip: ⌘L in the page ⌘Z brought back before it has loaded: the key is lost while its renderer starts (#1519)."
-  reopened_tab=$(sed -n "/^browser: drive $reopened: /,\$p" "$log" | grep '^browser: tab [0-9]* has its page$' | tail -1 | cut -d' ' -f3)
-  expect "^browser: loaded ${reopened_tab:-[0-9]*} " "the tab ⌘Z brought back didn't load" "$reopened"
-fi
+# The ⌘Z above gave the tab shown a fresh page, and ⌘L reaches the browser while its renderer is
+# still starting (#1519).
 send click $page_point
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar for Mute All Tabs"

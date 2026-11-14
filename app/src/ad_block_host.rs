@@ -3,9 +3,54 @@
 //! main thread, so they touch nothing of GPUI's.
 
 use super::*;
+use browser::ad_block::choice::{self, Engine, Launch};
 use browser::ad_block::{self, Blocker, Setup, Verdict};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, OnceLock};
+
+/// Which ad blocker this launch runs, decided as Chromium starts.
+static LAUNCH: OnceLock<Launch> = OnceLock::new();
+
+/// As Chromium starts, from the arguments the process was `given` and the user's choice in the
+/// `profile` folder: which ad blocker this launch runs. Read here alone, once a launch.
+pub(crate) fn prepare(given: &[String], profile: &str) -> Launch {
+    let chosen = std::fs::read_to_string(std::path::Path::new(profile).join(choice::FILE))
+        .ok()
+        .and_then(|text| Engine::read(&text));
+    *LAUNCH.get_or_init(|| Launch::new(given, chosen, cfg!(feature = "prod")))
+}
+
+/// This launch's ad blocker, for Settings' row.
+pub(crate) fn launch() -> Launch {
+    LAUNCH
+        .get()
+        .copied()
+        .unwrap_or_else(|| Launch::new(&[], None, true))
+}
+
+/// The launch window is showing.
+pub(crate) fn launching() {
+    // check.sh reads this line.
+    log!("browser: ad blocker {} at launch", launch().engine.word());
+}
+
+/// Settings' row keeps the choice in the app's folder, and restarts as Widevine's does.
+pub(crate) struct Choice;
+
+impl choice::Host for Choice {
+    fn save(&self, engine: Engine) {
+        let file = std::path::Path::new(&profile_dir()).join(choice::FILE);
+        match std::fs::write(file, engine.word()) {
+            // check.sh reads this line.
+            Ok(()) => log!("browser: ad blocker {} chosen", engine.word()),
+            Err(error) => log!("browser: ad blocker {} not kept: {error}", engine.word()),
+        }
+    }
+
+    fn restart(&self, cx: &mut App) {
+        crate::restart_browser(cx);
+    }
+}
 
 static BLOCKER: LazyLock<Arc<Blocker>> = LazyLock::new(|| Arc::new(Blocker::new()));
 
