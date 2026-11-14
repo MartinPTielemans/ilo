@@ -732,6 +732,8 @@ if [ "$(uname)" = Darwin ]; then
   await '^browser: history added 0 to profile [0-9]*$' || fail "the core added Safari's pages again"
   expect '^browser: import done: Everything from Safari is here already\.$' \
     "the second import from Safari said it added something"
+else
+  echo "skip: importing from Safari, with Full Disk Access: Safari is the Mac's."
 fi
 quit
 [ -n "$arc" ] || echo "skip: import's Arc steps. Arc has no Linux build, so it's never found there."

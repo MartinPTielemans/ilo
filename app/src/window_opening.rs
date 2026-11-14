@@ -318,7 +318,13 @@ pub(crate) fn open_window_as(
         }
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         emoji::keep(cx);
-        // In front, as it's about to be key, or a saved one behind the others.
+        // In front, as it's about to be key, or a saved one behind the others. One in front is the
+        // key shell from now, as macOS reports no key change for the window first in the list, so
+        // a window made key before it, such as the one left as another closed, hears too late to
+        // take the shortcuts back (#2648).
+        if saved.is_none() {
+            update_app_later(shell::window_became_key(shell.downgrade()));
+        }
         WINDOWS.with_borrow_mut(|windows| {
             windows.insert(
                 if saved.is_some() { windows.len() } else { 0 },

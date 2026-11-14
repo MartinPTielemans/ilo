@@ -177,6 +177,7 @@ use updates_host::*;
 mod quitting;
 mod scripting_host;
 use quitting::*;
+mod ad_block_host;
 mod battery_saver_host;
 use battery_saver_host::*;
 mod other_tabs_host;
@@ -864,8 +865,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     let mut args: Vec<String> = vec![
         format!("--user-data-dir={profile}"),
         // Chrome would copy the app bundle to check its signature against, which an
-        // ad-hoc-signed build doesn't need.
-        "--disable-features=MacAppCodeSignClone".into(),
+        // ad-hoc-signed build doesn't need. And off the Mac, every switch would copy and encode
+        // the tab it leaves for the hover cards of Chrome's tab strip, which ilo never shows: its
+        // own hover card takes its own picture (core/capture.cc, #2377).
+        "--disable-features=MacAppCodeSignClone,TabHoverCardImages".into(),
         // An idle browser shouldn't wake: Chrome's stack sampling feeds metrics nobody receives,
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
@@ -873,10 +876,16 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // On the Mac, child processes start from Apéritif helpers, as Chrome's field trial has
         // them: those link the framework at launch, so the kernel binds its constant data clean
         // and shared, where the other helpers load it late and dyld dirties 11.7 MiB of it in each.
+        // On Windows a tab's dialog from Chromium's TabDialogManager, such as 157's warning before
+        // http, takes a window of its own, as the core has the older ones take
+        // (PageDialogsInOwnWindow): drawn in the browser window's, it would be under the pages'
+        // windows, out of sight, and a click on it would reach the page (#2651).
         format!(
             "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval{}",
             if cfg!(target_os = "macos") {
                 ",AperitifHelpers"
+            } else if cfg!(target_os = "windows") {
+                ",TabModalUsesDesktopWidget"
             } else {
                 ""
             }
@@ -946,6 +955,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         .into_iter()
         .filter_map(|arg| CString::new(arg).ok())
         .collect();
+    ad_block_host::keep_cache_in(&args);
     if std::env::var_os("BROWSER_DRIVE").is_some() {
         #[cfg(target_os = "linux")]
         drive::start();
@@ -1061,6 +1071,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_frozen: Some(tab_frozen),
         other_tabs_changed: Some(other_tabs_changed),
         app_new_window: Some(app_new_window),
+        ad_block_use: Some(ad_block_host::ad_block_use),
+        ad_block_request: Some(ad_block_host::ad_block_request),
+        ad_block_page: Some(ad_block_host::ad_block_page),
+        ad_block_hide: Some(ad_block_host::ad_block_hide),
         ..Default::default()
     };
     (args, host)
