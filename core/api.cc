@@ -622,6 +622,9 @@ bool bc_agent_hand_off(const char* agent, bc_id tab) {
     return false;
   }
   browser_core::Hold(tab);
+  // What the agent started there stops with the handoff, as Take Over stops it, so none of it
+  // lands in the page the user has now. Its session stays, for when they hand the tab back.
+  browser_core::AgentPage::SessionEnded(tab);
   return true;
 }
 
