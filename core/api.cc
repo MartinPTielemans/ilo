@@ -92,6 +92,8 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/page_zoom.h"
+#include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -366,6 +368,29 @@ void bc_answer_clipboard_requests(void) {
 #if BUILDFLAG(IS_LINUX)
   browser_core::platform::AnswerClipboardRequests();
 #endif
+}
+
+void bc_clipboard_read_text(void (*done)(void* context, const char* text), void* context) {
+  if (!done) {
+    return;
+  }
+  // The context as a number, as the core never reads what it points to. Chromium answers during
+  // the read when it holds the selection itself, so the answer goes in a task of its own.
+  ui::Clipboard::GetForCurrentThread()->ReadText(
+      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/std::nullopt,
+      base::BindOnce(
+          [](void (*done)(void* context, const char* text), uintptr_t context,
+             std::u16string text) {
+            base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+                FROM_HERE,
+                base::BindOnce(
+                    [](void (*done)(void* context, const char* text), uintptr_t context,
+                       const std::string& text) {
+                      done(reinterpret_cast<void*>(context), text.c_str());
+                    },
+                    done, context, base::UTF16ToUTF8(text)));
+          },
+          done, reinterpret_cast<uintptr_t>(context)));
 }
 
 void bc_window_overlay_takes_keyboard(bc_id id, bool takes) {

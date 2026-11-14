@@ -3588,6 +3588,15 @@ BC_EXPORT size_t bc_window_child_title(bc_id window, char* title, size_t capacit
 // thread.
 BC_EXPORT void bc_answer_clipboard_requests(void);
 
+// Reads the clipboard's text through Chromium's clipboard and hands it to |done| with |context|,
+// UTF-8, empty for none, on the UI's thread from a task of its own, never during the call. For the
+// UI's own fields under Wayland, where the UI shares Chromium's connection to the compositor:
+// there the UI can't read a selection Chromium holds, and a compositor may hand the selection to
+// the connection's first data device alone, which is Chromium's (#2463). Nothing an agent asks
+// reaches it.
+BC_EXPORT void bc_clipboard_read_text(void (*done)(void* context, const char* text),
+                                      void* context);
+
 // Moves the folder, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
 // as bc_tab_move_to_space moves a pinned tab: the folders keep their names, icons and whether
 // they're open, and the tabs their order, pinned URLs, split views and pages. A window showing one

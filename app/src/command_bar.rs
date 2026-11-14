@@ -1309,11 +1309,22 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
         .ok();
 }
 
-/// The clipboard's text as a paste puts it in the input: on one line, without a leading
-/// `javascript:`, trimmed. None if it has none.
-fn pasted(cx: &App) -> Option<String> {
-    let text = cx.read_from_clipboard()?.text()?.replace('\n', " ");
-    Some(without_javascript(&text).trim().to_string()).filter(|text| !text.is_empty())
+/// Hands the bar the clipboard's text as a paste puts it in the input: on one line, without a
+/// leading `javascript:`, trimmed. Not if it has none.
+fn pasted(
+    cx: &mut Context<CommandBar>,
+    then: impl FnOnce(&mut CommandBar, &str, &mut Context<CommandBar>) + 'static,
+) {
+    let bar = cx.entity().downgrade();
+    crate::clipboard::read_text(cx, move |text, cx| {
+        let Some(text) = text.map(|text| text.replace('\n', " ")) else {
+            return;
+        };
+        let text = without_javascript(&text).trim();
+        if !text.is_empty() {
+            bar.update(cx, |bar, cx| then(bar, text, cx)).ok();
+        }
+    });
 }
 
 /// Whether a word of `tab`'s title, or of its site's name, starts with `typed`, lowercase. A site's
@@ -2373,9 +2384,11 @@ impl CommandBar {
     /// Paste and Go, from the input's menu: goes where ↩ would for the clipboard's text, as
     /// Chrome does.
     fn paste_and_go(&mut self, _: &PasteAndGo, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(url) = pasted(cx).and_then(|text| self.typed_url(&text)) {
-            self.go_to(&url, cx);
-        }
+        pasted(cx, |bar, text, cx| {
+            if let Some(url) = bar.typed_url(text) {
+                bar.go_to(&url, cx);
+            }
+        });
     }
 
     /// Paste and Search: searches for the clipboard's text, even if it names a page, as ⇧⌘↩
@@ -2384,10 +2397,12 @@ impl CommandBar {
         if self.lists_own() || self.commands.is_some() || self.ask.is_some() {
             return;
         }
-        let site = self.site.as_ref().map(|site| site.keyword.as_str());
-        if let Some(url) = pasted(cx).and_then(|text| self.host.search_url(site, &text)) {
-            self.go_to(&url, cx);
-        }
+        let site = self.site.as_ref().map(|site| site.keyword.clone());
+        pasted(cx, move |bar, text, cx| {
+            if let Some(url) = bar.host.search_url(site.as_deref(), text) {
+                bar.go_to(&url, cx);
+            }
+        });
     }
 
     /// Shows `url` where the bar shows the page chosen, and closes the bar.
