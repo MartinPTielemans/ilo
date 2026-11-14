@@ -1730,10 +1730,7 @@ impl Shell {
                 return;
             }
             Command::Welcome => return self.welcome_again(cx),
-            Command::ReportProblem => {
-                let url = BuildInfo::here(cx).issue_url(build_info::NEW_ISSUE);
-                return self.browser.open_page(&url, cx);
-            }
+            Command::ReportProblem => return self.report_problem(cx),
             Command::CopyBuildInfo => {
                 return self.copy(&BuildInfo::here(cx).text(), "Copied Build Info", cx);
             }
@@ -2084,6 +2081,23 @@ impl Shell {
                 .ok();
         }));
         cx.notify();
+    }
+
+    /// Report a Problem…: the sheet with the build's details, whose Continue opens a new issue
+    /// with them, titled with what the user typed. While another dialog shows, the issue opens
+    /// at once, as the user can still read and change all of it in GitHub's form.
+    fn report_problem(&mut self, cx: &mut Context<Self>) {
+        let info = BuildInfo::here(cx);
+        let question = info.report();
+        let browser = self.browser.clone();
+        let file = Box::new(move |typed: Vec<String>, cx: &mut App| {
+            let title = typed.first().map_or("", String::as_str);
+            browser.open_page(&info.issue_url(build_info::NEW_ISSUE, title), cx);
+        });
+        if !self.browser.tell(question, file, cx) {
+            let url = BuildInfo::here(cx).issue_url(build_info::NEW_ISSUE, "");
+            self.browser.open_page(&url, cx);
+        }
     }
 
     /// Copies `text` and shows `toast`.

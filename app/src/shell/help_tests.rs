@@ -49,19 +49,37 @@ fn help_center_whats_new_and_privacy_open_the_sites_pages(cx: &mut TestAppContex
     assert!(pages.iter().all(|page| page.starts_with("https://")));
 }
 
-/// Report a Problem… opens a new issue on the bug report form with the build's details filled
-/// in, and sends nothing itself. Copy Build Info copies the same details and says so.
+/// Report a Problem… shows the sheet first and opens nothing; Continue opens a new issue on the
+/// bug report form with the build's details filled in and what the user typed as its title, and
+/// sends nothing itself. Cancel opens nothing. Copy Build Info copies the same details and says
+/// so.
 #[gpui::test]
 fn report_a_problem_fills_the_issue_with_the_builds_details(cx: &mut TestAppContext) {
     let (shell, host) = window(cx);
-    shell.update(cx, |shell, cx| {
-        shell.run(Command::ReportProblem, "menu", cx)
-    });
+    let report = |cx: &mut TestAppContext| {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::ReportProblem, "menu", cx)
+        })
+    };
+    report(cx);
+    assert_eq!(host.told.take(), ["Report a Problem: Continue / Cancel / "]);
+    assert!(host.opened_pages.take().is_empty());
     let here = cx.update(|cx| BuildInfo::here(cx));
+    let cont = host.told_action.take().expect("the sheet's Continue");
+    cx.update(|cx| cont(vec!["  Tabs vanish after sleep ".into()], cx));
     assert_eq!(
         host.opened_pages.take(),
-        [here.issue_url(build_info::NEW_ISSUE)]
+        [here.issue_url(build_info::NEW_ISSUE, "Tabs vanish after sleep")]
     );
+
+    // Another dialog showing, it opens the issue at once, without a title.
+    host.dialog_busy.set(true);
+    report(cx);
+    assert_eq!(
+        host.opened_pages.take(),
+        [here.issue_url(build_info::NEW_ISSUE, "")]
+    );
+    host.dialog_busy.set(false);
 
     shell.update(cx, |shell, cx| {
         shell.run(Command::CopyBuildInfo, "menu", cx)

@@ -42,6 +42,8 @@ screens=(
   "site-controls|site controls settled|PREVIEW_SITE_CONTROLS=1"
   "icon-picker|icon picker for|PREVIEW_ICON_PICKER="
   "dialog|dialog settled|PREVIEW_DIALOG=1 PREVIEW_MENU=40,205,up,enter"
+  "report-problem-dark|dialog settled|PREVIEW_DIALOG=1 PREVIEW_REPORT=1 PREVIEW_APPEARANCE=dark"
+  "report-problem-light|dialog settled|PREVIEW_DIALOG=1 PREVIEW_REPORT=1 PREVIEW_APPEARANCE=light"
   "space-theme|drawn at|PREVIEW_THEME='x=0.5 y=0 colors=3'"
   "peek|link preview settled|PREVIEW_PEEK=1"
   "many-spaces|drawn at|PREVIEW_SPACES=16 PREVIEW_SIDEBAR=300"

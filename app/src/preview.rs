@@ -1758,16 +1758,17 @@ impl Browser for Fake {
 
     fn tell(
         &self,
-        _: dialog::Question,
-        _: Box<dyn FnOnce(Vec<String>, &mut App)>,
-        _: &mut App,
+        question: dialog::Question,
+        confirmed: Box<dyn FnOnce(Vec<String>, &mut App)>,
+        cx: &mut App,
     ) -> bool {
-        false
+        if !preview_dialog(cx) {
+            return false;
+        }
+        dialog::pose(None, question, confirmed, cx);
+        true
     }
 
-    // The dialog's window is one the app's host lays over the browser window. With PREVIEW_DIALOG=1
-    // it opens over the preview's the first time it asks, on top of it, such as when the Space
-    // menu's Delete Space, through PREVIEW_MENU, asks.
     fn confirm(
         &self,
         message: String,
@@ -1776,14 +1777,9 @@ impl Browser for Fake {
         confirmed: Box<dyn FnOnce(&mut App)>,
         cx: &mut App,
     ) {
-        if std::env::var_os("PREVIEW_DIALOG").is_none() {
-            return;
+        if preview_dialog(cx) {
+            dialog::ask(None, message, detail, action, confirmed, cx);
         }
-        if !DIALOG_OPEN.replace(true) {
-            let bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
-            dialog::open_at(Rc::new(PreviewDialog), bounds, true, cx);
-        }
-        dialog::ask(None, message, detail, action, confirmed, cx);
     }
 
     fn quit(&self, cx: &mut App) {
@@ -1831,6 +1827,20 @@ impl Browser for Fake {
     fn close_window(&self, cx: &mut App) {
         cx.quit();
     }
+}
+
+/// The dialog's window is one the app's host lays over the browser window. With PREVIEW_DIALOG=1
+/// it opens over the preview's the first time it asks, on top of it, such as when the Space
+/// menu's Delete Space, through PREVIEW_MENU, asks: true once it's there.
+fn preview_dialog(cx: &mut App) -> bool {
+    if std::env::var_os("PREVIEW_DIALOG").is_none() {
+        return false;
+    }
+    if !DIALOG_OPEN.replace(true) {
+        let bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
+        dialog::open_at(Rc::new(PreviewDialog), bounds, true, cx);
+    }
+    true
 }
 
 /// The command bar's requests, for the preview: it goes nowhere, but a search goes to a search.
@@ -2979,6 +2989,16 @@ fn main() {
             if let Ok(what) = std::env::var("PREVIEW_MENU") {
                 if let Some(shell) = shell_window {
                     preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Right, cx);
+                }
+            }
+            // PREVIEW_REPORT=1, with PREVIEW_DIALOG=1, shows Help › Report a Problem…'s sheet.
+            if std::env::var_os("PREVIEW_REPORT").is_some() {
+                if let Some(shell) = shell_window {
+                    shell
+                        .update(cx, |shell, _, cx| {
+                            shell.run(Command::ReportProblem, "preview", cx)
+                        })
+                        .ok();
                 }
             }
             // PREVIEW_CLICK=<x>,<y> clicks there in the window, as on an archived tab's row.
