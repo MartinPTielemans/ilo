@@ -5,6 +5,9 @@
 # (engine/core_syntax.py). This takes the newest pack of pins.ini's Chromium major and runs clang
 # -fsyntax-only, with the build's own flags, on each core file the engine compiled, as the branch
 # has it. A .mm the branch adds, or a .cc outside platform/, is checked with the core's flags.
+# The pack's headers are first brought from the engine patches its engine was built with to the
+# branch's, so a core change that needs a new or changed patch is checked with it (#2747); one whose
+# headers don't apply fails as needing an engine with that patch, not as a compile error.
 # Not checked: a file the branch adds in platform/, which may be another OS's, a changed .mojom or
 # .proto (the pack has the engine's generated headers), a BUILD.gn change to a target's flags, and
 # the link.
@@ -17,6 +20,8 @@ on:
     paths:
       - core/**
       - engine/core_syntax.py
+      - engine/series
+      - engine/patches/**
       - .github/workflows/core-mac-syntax.yml
   # A push runs it only for commits new to the repo; this runs it on any ref.
   workflow_dispatch:
@@ -44,6 +49,8 @@ jobs:
             core
             engine/core_syntax.py
             engine/pins.ini
+            engine/series
+            engine/patches
 
       # The newest unexpired pack of pins.ini's major, from the newest Engine on macOS run that has
       # one. None yet means no Mac engine has been built since the packs began: nothing to check.
@@ -57,8 +64,9 @@ jobs:
             name=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" --jq \
               ".artifacts[] | select((.expired | not) and (.name | startswith(\"engine-mac-core-$major.\"))) | .name" | tail -1)
             if [ -n "$name" ]; then
-              printf 'run=%s\nname=%s\n' "$id" "$name" >> "$GITHUB_OUTPUT"
-              echo "Checking against run $id's $name." | tee -a "$GITHUB_STEP_SUMMARY"
+              sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .head_sha)
+              printf 'run=%s\nname=%s\nsha=%s\n' "$id" "$name" "$sha" >> "$GITHUB_OUTPUT"
+              echo "Checking against run $id's $name, built at $sha." | tee -a "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
           done
@@ -71,6 +79,16 @@ jobs:
           run-id: ${{ steps.find.outputs.run }}
           github-token: ${{ github.token }}
 
+      # The engine patches the pack's engine was built with: its run's commit's series and patches.
+      - if: steps.find.outputs.run != ''
+        name: The engine's patches
+        env:
+          SHA: ${{ steps.find.outputs.sha }}
+        run: |
+          git fetch -q --depth=1 --no-tags origin "$SHA"
+          mkdir -p "$RUNNER_TEMP/built"
+          git archive "$SHA" engine/series engine/patches | tar -xf - -C "$RUNNER_TEMP/built"
+
       # Each error also shows on the commit as an annotation at its line.
       - if: steps.find.outputs.run != ''
         name: Check
@@ -81,4 +99,4 @@ jobs:
           sdk=${sdk#MacOSX}
           sdk=${sdk%.sdk}
           [ ! -d "/Applications/Xcode_$sdk.app" ] || sudo xcode-select --switch "/Applications/Xcode_$sdk.app"
-          python3 engine/core_syntax.py check "$RUNNER_TEMP/pack" "$GITHUB_WORKSPACE"
+          python3 engine/core_syntax.py check "$RUNNER_TEMP/pack" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/built/engine"

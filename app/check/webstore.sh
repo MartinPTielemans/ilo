@@ -91,6 +91,15 @@ focus_button() {
   fi
   send key escape
   expect '^browser: find [0-9]* closed$' "escape didn't close the find"
+  # The store's page adds a history entry once a find takes the keyboard from it, and goes back
+  # once the match the find leaves gives its button the keyboard. A key before that back can reach
+  # the page before the button has the keyboard, and does nothing (#2798), so it waits for it.
+  find_tab=$(sed -n "/^browser: drive $step: /,\$s/^browser: find \([0-9]*\) closed\$/\1/p" "$log" | tail -1)
+  if grep "^browser: page $find_tab back " "$log" | tail -1 |
+    grep -q ' back [1-9][0-9]* forward 0 loading 0 https://chromewebstore\.google\.com/'; then
+    expect "^browser: page $find_tab back [0-9]* forward [1-9]" \
+      "the store's page didn't go back from the entry it added for the find, as it does once \"$1\" has the keyboard"
+  fi
   send state
   in_browser RenderWidgetHostViewCocoa "after the find for \"$1\""
 }

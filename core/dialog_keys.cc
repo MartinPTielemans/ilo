@@ -3,9 +3,13 @@
 #include <map>
 #include <memory>
 
+#include "base/functional/bind.h"
+#include "base/location.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
+#include "base/task/single_thread_task_runner.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "components/input/native_web_keyboard_event.h"
@@ -92,6 +96,33 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
     }
   }
 
+  // The page |page| took the keyboard: if this dialog shows over it, the dialog takes it back, as
+  // Chrome's dialog manager does on a key or wheel the page ignored. A click the page ignores isn't
+  // reported, and on the Mac AppKit makes the clicked page view first responder all the same.
+  void PageFocused(content::WebContents* page) {
+    if (!dialog_->IsVisible() || ShownPage(window_) != page) {
+      return;
+    }
+    // Posted, so it's after AppKit's click and once the window says it's active: AppKit may tell
+    // the page before the window, and a window that isn't active doesn't take the keyboard.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](base::WeakPtr<views::Widget> dialog, base::WeakPtr<views::Widget> window) {
+              if (!dialog || !window || dialog->IsClosed() || !dialog->IsVisible() ||
+                  !window->IsActive()) {
+                return;
+              }
+              if (views::WidgetDelegate* delegate = dialog->widget_delegate()) {
+                if (views::View* first = delegate->GetInitiallyFocusedView()) {
+                  first->RequestFocus();
+                }
+              }
+              dialog->Activate();
+            },
+            dialog_->GetWeakPtr(), window_->GetWeakPtr()));
+  }
+
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override {
     // Erasing deletes this, so it's the last thing done.
@@ -120,6 +151,12 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 };
 
 }  // namespace
+
+void PageFocused(content::WebContents* page) {
+  for (auto& watched : Watched()) {
+    watched.second->PageFocused(page);
+  }
+}
 
 void Watch(views::Widget* window) {
   if (!window) {

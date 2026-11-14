@@ -85,8 +85,12 @@ std::optional<base::TimeDelta> ArchiveAfter(Profile* profile) {
   return given ? given : ProfileArchiveAfter(profile);
 }
 
-// |space|'s time: its profile's, or for one not loaded, the profile its tabs open in's.
+// |space|'s time: its profile's, or for one not loaded, the profile its tabs open in's. None while
+// its profile is still loading: its own time may be longer, or Never (LaterProfileArrived).
 std::optional<base::TimeDelta> ArchiveAfter(const Space& space) {
+  if (ProfileExpected(space.profile())) {
+    return std::nullopt;
+  }
   return ArchiveAfter(ProfileFor(space.profile()));
 }
 
