@@ -1,8 +1,11 @@
 #ifndef BROWSER_CORE_NATIVE_AD_BLOCK_H_
 #define BROWSER_CORE_NATIVE_AD_BLOCK_H_
 
+#include <cstdint>
 #include <string>
 #include <vector>
+
+#include "base/functional/callback_forward.h"
 
 namespace base {
 class FilePath;
@@ -10,6 +13,8 @@ class FilePath;
 
 namespace content {
 class NavigationThrottleRegistry;
+class RenderFrameHost;
+class WebContents;
 }  // namespace content
 
 namespace network {
@@ -39,8 +44,20 @@ void UseNativeAdBlock(const base::FilePath& folder,
 void SetNativeAdBlockOn(bool on);
 
 // Puts it between the requests of the factory |factory_builder| builds and the network, from
-// ContentBrowserClient::WillCreateURLLoaderFactory.
-void ProxyForNativeAdBlock(network::URLLoaderFactoryBuilder& factory_builder);
+// ContentBrowserClient::WillCreateURLLoaderFactory. The requests it blocks count for |frame|'s tab
+// and |page|, the UKM source id of the page they're for, which is the next page's for the
+// document a main frame's navigation commits.
+void ProxyForNativeAdBlock(network::URLLoaderFactoryBuilder& factory_builder,
+                           content::RenderFrameHost* frame,
+                           int64_t page);
+
+// Tells |blocked| how many requests it blocked or gave a stand-in on the page |contents| shows now,
+// since that page's document committed: at once, then at most once a second while that changes,
+// and never while it doesn't, until the next call or StopWatchingNativeAdBlocked. One page at a
+// time: Site Controls'.
+void WatchNativeAdBlocked(content::WebContents* contents,
+                          base::RepeatingCallback<void(int)> blocked);
+void StopWatchingNativeAdBlocked();
 
 // Gives the page |registry|'s navigation loads what the app's engine hides on it and runs in it
 // from its start, sent to its frame before it commits (ad_block_page.mojom), from

@@ -462,6 +462,11 @@ impl Walk<'_> {
         if INTERACTIVE.contains(&role(node)) {
             return None;
         }
+        self.text_inside(node, levels)
+    }
+
+    /// The text of what the node holds, if that's all it holds.
+    fn text_inside(&self, node: &Value, levels: usize) -> Option<String> {
         let mut text = Vec::new();
         let children = node.get("childIds").and_then(Value::as_array);
         for child in children.into_iter().flatten() {
@@ -510,6 +515,12 @@ impl Walk<'_> {
             ("listitem" | "row", true) => (self.text_of(node, 0))
                 .map(|text| clip(&text, 160))
                 .unwrap_or_default(),
+            // A label the core shows as the radio or checkbox the page hid behind it, as choice
+            // tiles do, which Chromium leaves unnamed.
+            (_, true) if node.get("label").is_some_and(|label| label == true) => {
+                let text = self.text_inside(node, 0);
+                text.map(|text| clip(&text, 160)).unwrap_or_default()
+            }
             _ => name,
         };
         let (mut next, mut next_name) = (depth, parent_name.to_string());
@@ -574,6 +585,16 @@ impl Walk<'_> {
             for state in &states {
                 line.push_str(&format!(" ({state})"));
             }
+            // A native select's choices, the page's own: the core leaves out which one is chosen.
+            let choices = node.get("choices").and_then(Value::as_array);
+            let choices: Vec<_> = choices
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            if !choices.is_empty() {
+                line.push_str(&format!(" (options: {})", listed(&choices)));
+            }
             let before = (self.lines.len(), self.size);
             self.add(Line {
                 depth,
@@ -626,6 +647,21 @@ pub fn clip(text: &str, chars: usize) -> String {
         Some((end, _)) => format!("{}…", &text[..end]),
         None => text.into(),
     }
+}
+
+/// How many of a select's choices its line names: enough for any form's, while a country list's
+/// says how many more there are, which `select` finds by name.
+const CHOICES_NAMED: usize = 40;
+
+/// A select's choices as its line names them, each quoted.
+fn listed(choices: &[&str]) -> String {
+    let mut named: Vec<_> = (choices.iter().take(CHOICES_NAMED))
+        .map(|choice| format!("\"{}\"", clip(choice, 80)))
+        .collect();
+    if choices.len() > CHOICES_NAMED {
+        named.push(format!("and {} more", choices.len() - CHOICES_NAMED));
+    }
+    named.join(", ")
 }
 
 /// Words that pay or order, as a button's name has them.
@@ -746,6 +782,32 @@ mod tests {
             "name": { "value": name },
             "childIds": children,
         })
+    }
+
+    /// A native select's line names its choices, the page's own, as the core gives them without
+    /// which one is chosen, and a long list says how many more there are (#2355).
+    #[test]
+    fn a_selects_line_names_its_choices() {
+        let countries: Vec<String> = (1..=45).map(|n| format!("Country {n}")).collect();
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Form", &["2", "3"]),
+            node("2", "combobox", "Answer", &[]),
+            node("3", "combobox", "Country", &[]),
+        ];
+        nodes[1]["backendDOMNodeId"] = json!(20);
+        nodes[1]["choices"] = json!(["Yes", "No"]);
+        nodes[2]["backendDOMNodeId"] = json!(30);
+        nodes[2]["choices"] = json!(countries);
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
+        assert!(
+            outline.contains("- combobox \"Answer\" [e1] (options: \"Yes\", \"No\")\n"),
+            "{outline}"
+        );
+        assert!(
+            outline.contains("\"Country 39\", \"Country 40\", and 5 more)"),
+            "{outline}"
+        );
+        assert!(!outline.contains("Country 41"), "{outline}");
     }
 
     /// The outline names what an agent can act on with refs that stay while the page does, gives
@@ -977,6 +1039,45 @@ mod tests {
         );
         assert_eq!(refs.get("e1").map(|element| element.node), Some(3));
         assert_eq!(refs.get("e4").map(|element| element.node), Some(6));
+    }
+
+    /// Choice tiles whose radios the page hid have refs, as the radios the core shows their labels
+    /// as, named by what they say and with which is chosen.
+    #[test]
+    fn hidden_choices_are_named_by_their_labels() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Sign up", &["2"]),
+            node("2", "group", "Account type", &["3", "6"]),
+            // As the core marks a label whose radio has display: none.
+            node("3", "radio", "", &["4", "5"]),
+            node("4", "heading", "Personal", &["41"]),
+            node("41", "StaticText", "Personal", &[]),
+            node("5", "paragraph", "", &["51"]),
+            node("51", "StaticText", "For you", &[]),
+            node("6", "radio", "", &["7"]),
+            node("7", "heading", "Business", &["71"]),
+            node("71", "StaticText", "Business", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        for (at, checked) in [(2, "true"), (7, "false")] {
+            nodes[at]["label"] = json!(true);
+            nodes[at]["properties"] =
+                json!([{ "name": "checked", "value": { "type": "tristate", "value": checked } }]);
+        }
+        let mut refs = Refs::default();
+        assert_eq!(
+            outline(&tab(), &nodes, &mut refs, None).text(),
+            "Tab 20: Sign up\nURL: https://shop.example/\n\n\
+             - group \"Account type\"\n\
+             \x20 - radio \"Personal For you\" [e1] (checked)\n\
+             \x20   - heading \"Personal\"\n\
+             \x20 - radio \"Business\" [e2]\n\
+             \x20   - heading \"Business\""
+        );
+        assert_eq!(refs.get("e2").map(|element| element.node), Some(6));
     }
 
     /// A new page, by its address or its document, answers whole, as do changes to more than half
