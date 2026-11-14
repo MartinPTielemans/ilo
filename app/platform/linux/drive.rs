@@ -884,6 +884,7 @@ fn motion(at: Target, state: u16) -> Option<()> {
 /// A click of `which` (1 the left, 3 the right, 4 to 7 the wheel's) at `at`, the second of a
 /// double click with `again`.
 fn click(at: Target, which: u8, state: u16, again: bool) -> Option<()> {
+    take_back_pointer(at)?;
     first_press(at, which, again);
     button(at, which, true, state)?;
     button(at, which, false, state | button_mask(which))
@@ -2352,6 +2353,8 @@ fn run_command(line: &str) -> Option<()> {
                     .ok()?;
                 connection.get_input_focus().ok()?.reply().ok().map(drop)
             };
+            // The display's pointer goes where the hand's click is, and stays there.
+            LENT.set(None);
             fake(xproto::MOTION_NOTIFY_EVENT, 0, (at.root_x, at.root_y))?;
             fake(xproto::BUTTON_PRESS_EVENT, 1, (at.root_x, at.root_y))?;
             fake(xproto::BUTTON_RELEASE_EVENT, 1, (at.root_x, at.root_y))
