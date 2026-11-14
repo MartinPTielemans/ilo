@@ -169,6 +169,8 @@ enum Keys {
     Fixed(&'static str),
     /// A run of them, from the first keystroke to the last.
     Span(&'static str, &'static str),
+    /// The click that opens a link, a tab or + New Tab in a split view, which no command holds.
+    SplitClick,
     FavoritesNumbered,
     LastTabNinth,
 }
@@ -179,12 +181,23 @@ impl Keys {
         match *self {
             Keys::Of(_) | Keys::FavoritesNumbered | Keys::LastTabNinth => None,
             Keys::Fixed(keys) => Some(shell::keystroke_label(keys)),
+            Keys::SplitClick => Some(split_click().into()),
             Keys::Span(first, last) => Some(format!(
                 "{} – {}",
                 shell::keystroke_label(first),
                 shell::keystroke_label(last)
             )),
         }
+    }
+}
+
+/// The click that splits: ⌥-click, and on Linux Shift+Alt-click too, since Openbox and Xfce take
+/// every Alt-click for themselves but leave one with Shift (the owner's call, #2755).
+fn split_click() -> &'static str {
+    match (cfg!(target_os = "macos"), cfg!(target_os = "linux")) {
+        (true, _) => "⌥-click",
+        (_, true) => "Alt-click or Shift+Alt-click",
+        _ => "Alt-click",
     }
 }
 
@@ -318,6 +331,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
         "Split View",
         &[
             ("Add Split View", Keys::Of(Command::AddSplit)),
+            ("Open a Link or Tab in Split View", Keys::SplitClick),
             ("New Note Split", Keys::Of(Command::NewNoteSplit)),
             ("Close this Split Pane", Keys::Of(Command::CloseSplitPane)),
             ("Next Pane", Keys::Of(Command::NextPane)),

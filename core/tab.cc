@@ -1528,6 +1528,7 @@ void Tab::DidGetUserInteraction(const blink::WebInputEvent& event) {
     const int command =
         BUILDFLAG(IS_MAC) ? blink::WebInputEvent::kMetaKey : blink::WebInputEvent::kControlKey;
     last_press_held_command_ = event.GetModifiers() & command;
+    last_press_held_alt_ = event.GetModifiers() & blink::WebInputEvent::kAltKey;
   }
   // A click, not the keyboard coming to the page: the core moves the keyboard between the pages of
   // a split view itself, and focus reports posted from those moves arrive after the next one.

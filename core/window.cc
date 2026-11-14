@@ -909,6 +909,16 @@ void Window::AdjustNavigate(NavigateParams& params) {
     return;
   }
   Tab* source = params.source_contents ? Tab::FromWebContents(params.source_contents) : nullptr;
+#if BUILDFLAG(IS_LINUX)
+  // ⇧⌥-click on a link opens it in a split view on Linux, as ⌥-click does, since Openbox and Xfce
+  // take every Alt-click for themselves but leave one with Shift (the owner's call, #2755). Blink
+  // asks for a new window, as for ⇧-click, so the press it came from tells them apart.
+  if (source && params.disposition == WindowOpenDisposition::NEW_WINDOW &&
+      !params.started_from_context_menu && params.user_gesture && !params.contents_to_insert &&
+      !params.post_data && source->last_press_held_alt()) {
+    params.disposition = WindowOpenDisposition::NEW_SPLIT_VIEW;
+  }
+#endif
   // A page in an agent's Space the user isn't looking at opens its tabs and windows there, behind,
   // loading at once, as the agent's own: it works in its own tabs and never changes what the user
   // sees (#1470). Chrome gives a tab opened from a link the tab it shows as its opener, so the
