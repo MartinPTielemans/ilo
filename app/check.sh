@@ -90,7 +90,7 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
         config=$(mktemp)
         printf "font pango:monospace 8\nfocus_follows_mouse no\n" > "$config"
         [ "$BROWSER_XVFB" = i3 ] ||
-          printf 'for_window [window_type="dialog"] floating disable\n' >> "$config"
+          printf "for_window [window_type=\"dialog\"] floating disable\n" >> "$config"
         i3 -c "$config" > "$ready.log" 2>&1 &
         tries=0
         until i3-msg -t get_version > /dev/null 2>&1; do
