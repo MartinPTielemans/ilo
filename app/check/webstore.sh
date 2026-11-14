@@ -21,27 +21,66 @@ store_shown() {
   # and while it's up, return on Add to Chrome does nothing, though a click works (#1297). No thanks
   # closes it, as a user would. Once it's been answered the store may not show it again, so the
   # run goes on without it.
-  send key f cmd
-  expect '^browser: find bar shown$' "⌘F didn't open the find bar"
+  open_find "⌘F didn't open the find bar"
   send type "no thanks"
-  card=
-  for _ in $(seq 50); do
-    sed -n "/^browser: drive $step: /,\$p" "$log" |
-      grep -q '^browser: find [0-9]* open [1-9][0-9]* of [0-9]* no thanks$' && { card=1; break; }
+  if no_thanks; then
+    answer_card
+  else
+    send key escape
+    expect '^browser: find [0-9]* closed$' "escape didn't close the find"
+  fi
+}
+# Opens the find with ⌘F, failing with $1. While the store's card is up it keeps the page's
+# shortcuts, ⌘F too (#2520), and ilo runs a shortcut the page kept on a second press within a
+# second of the first (shell/keys.rs), so the run presses again, as a user who sees nothing open does.
+open_find() {
+  send key f cmd
+  first=$step
+  for _ in $(seq 5); do
+    logged '^browser: find bar shown$' "$first" && return 0
     sleep 0.1
+  done
+  send key f cmd
+  expect '^browser: find bar shown$' "$1" "$first"
+}
+# Whether the open find for "no thanks", typed last, goes to one: the store's card is up. The card
+# can draw after the find's first count, so it's given 5 s.
+no_thanks() {
+  typed=$step
+  for _ in $(seq 50); do
+    logged '^browser: find [0-9]* open [1-9][0-9]* of [0-9]* no thanks$' "$typed" && return 0
+    sleep 0.1
+  done
+  return 1
+}
+# Answers the store's card with No thanks, from the open find that went to it, until the find no
+# longer finds it. The card can redraw under the find, and closing the find then focuses nothing,
+# so the return leaves the card up, and with it the ⌘F it keeps (#2520). Since 2026-11-13 the store
+# can keep a No thanks in its page with no card on screen, under a "Switch to Chrome to install"
+# banner, which no answer takes away (#2684): three answers that leave it go on to the page, and an
+# Add to Chrome the card did hold up fails at its own wait.
+answer_card() {
+  for _ in 1 2 3; do
+    send key escape
+    expect '^browser: find [0-9]* closed$' "escape didn't close the find"
+    send key return
+    open_find "⌘F didn't open the find bar after No thanks on the store's Switch to Chrome? card"
+    send type "no thanks"
+    if ! no_thanks; then
+      send key escape
+      expect '^browser: find [0-9]* closed$' "escape didn't close the find"
+      return 0
+    fi
   done
   send key escape
   expect '^browser: find [0-9]* closed$' "escape didn't close the find"
-  if [ -n "$card" ]; then
-    send key return
-  fi
+  echo "store: the page still names No thanks after three answers, with no card it closes, so the run goes on"
 }
 # Gives the keyboard to the store page's button with the text $1, lowercase, as the user who finds
 # it and closes the find does: Chrome focuses the button the match is in. Its place on the page
 # changes with the store's layout and language; its text doesn't.
 focus_button() {
-  send key f cmd
-  expect '^browser: find bar shown$' "⌘F didn't open the find bar"
+  open_find "⌘F didn't open the find bar"
   send type "$1"
   expect "^browser: find [0-9]* open 1 of [0-9]* $1\$" "the store's page has no \"$1\""
   # With "last", the last match, as a page whose text names its button before it has the button

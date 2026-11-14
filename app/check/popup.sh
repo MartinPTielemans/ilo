@@ -1,3 +1,4 @@
+# check.sh runs this at 50.
 # A page's popup opens as a tab in the window, under the page. The page's context menu is Chrome's
 # without the items the window can't do, shown in ilo's menu at the click: a dismiss leaves the page
 # free to show another, and a text field's has its spelling and writing direction items and Select

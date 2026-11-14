@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{
     Bounds, Context, Corners, ElementId, Entity, Focusable, FontStyle, FontWeight, HighlightStyle,

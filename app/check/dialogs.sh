@@ -1,3 +1,4 @@
+# check.sh runs this at 320.
 # A page's own dialogs ask with the browser's dialog over the tab's card, in Chrome's words, each
 # captured while it's up: alert(), confirm() and prompt() from the served page's keys. ↩ answers
 # OK, with what was typed in a prompt, and Esc Cancel, and the page puts the answer in its title.
@@ -431,6 +432,8 @@ SCREEN
   send move $page_point
   expect '^browser: hover card hidden$' "leaving the first window's rows didn't hide its card"
   two_windows=1
+else
+  echo "skip: the hover card over the window behind another: Linux's driver can't drive a window behind another without bringing it forward."
 fi
 exec 3>&-
 quit

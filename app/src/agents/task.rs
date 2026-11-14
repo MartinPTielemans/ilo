@@ -11,7 +11,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
+use web_time::{Instant, SystemTime};
 
 use futures::StreamExt;
 use gpui::{App, AppContext, Context, SharedString};
@@ -20,6 +21,7 @@ use serde_json::Value;
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::{Agents, Client, Question, ToolResult, page, site, tools};
+use crate::shell::MenuEntry;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
@@ -879,7 +881,13 @@ impl Agents {
             let found = looked.await;
             _ = agents.update(cx, |agents, cx| {
                 agents.tasks.looking = false;
-                agents.tasks.found.extend(found);
+                for (cli, mut found) in found {
+                    // A CLI that didn't answer this time keeps the list it gave last.
+                    if found.models.is_none() && found.ready == Ready::SignedIn {
+                        found.models = agents.cli_models(cli).cloned();
+                    }
+                    agents.tasks.found.insert(cli, found);
+                }
                 agents.save();
                 // The first ready is the default until the user picks one.
                 if agents
@@ -903,21 +911,36 @@ impl Agents {
         self.tasks.default
     }
 
-    /// The models `cli`'s Model pop-up offers after its own default, as id and name: Claude's
-    /// aliases, and the models Codex listed when it was last looked for.
+    /// The models `cli`'s Model pop-up offers after its own default, which is the empty id, as id
+    /// and name in the CLI's order: those it listed when last looked for. ilo runs the CLI without
+    /// the user's settings files, so the default is the CLI's, not theirs.
     pub fn task_models(&self, cli: Cli) -> Vec<(String, String)> {
-        match cli.models() {
-            [] => self
-                .tasks
-                .found
-                .get(&cli)
-                .map(|found| found.models.clone())
-                .unwrap_or_default(),
-            models => models
-                .iter()
+        match self.cli_models(cli) {
+            Some(models) => models.listed.clone(),
+            None => (cli.unlisted_models().iter())
                 .map(|(id, name)| (id.to_string(), name.to_string()))
                 .collect(),
         }
+    }
+
+    /// `cli`'s Model menu, as its ids and items: its own default first, saying which model it is
+    /// where the CLI says, then its models, as the CLI last listed them, so the menu never waits
+    /// on the CLI.
+    pub fn task_model_menu(&self, cli: Cli) -> (Vec<(String, String)>, Vec<MenuEntry>) {
+        model_menu(
+            self.task_model(cli),
+            self.task_default_model(cli),
+            self.task_models(cli),
+        )
+    }
+
+    /// Which model `cli`'s own default is, by name, where it said when last looked for.
+    pub fn task_default_model(&self, cli: Cli) -> Option<&str> {
+        self.cli_models(cli)?.default.as_deref()
+    }
+
+    fn cli_models(&self, cli: Cli) -> Option<&super::ready::Models> {
+        self.tasks.found.get(&cli)?.models.as_ref()
     }
 
     /// Run tasks on, in Settings › Agents.
@@ -927,22 +950,20 @@ impl Agents {
         cx.notify();
     }
 
-    /// The model `cli` runs tasks with, empty for its own default.
+    /// The model `cli` runs tasks with, empty for its own default, which a saved model the CLI no
+    /// longer lists falls back to. It stays saved, so it's back if the CLI lists it again.
     pub fn task_model(&self, cli: Cli) -> &str {
-        self.tasks.models.get(&cli).map_or("", String::as_str)
+        let chosen = self.tasks.models.get(&cli).map_or("", String::as_str);
+        match self.task_models(cli).iter().any(|(id, _)| id == chosen) {
+            true => chosen,
+            false => "",
+        }
     }
 
     /// The model `cli` runs tasks with, by name, such as Haiku, or None for its own default.
     pub fn task_model_name(&self, cli: Cli) -> Option<SharedString> {
         let chosen = self.task_model(cli);
-        if chosen.is_empty() {
-            return None;
-        }
-        let models = self.task_models(cli);
-        let name = models
-            .into_iter()
-            .find(|(id, _)| id == chosen)
-            .map_or(chosen.to_string(), |(_, name)| name);
+        let (_, name) = (self.task_models(cli).into_iter()).find(|(id, _)| id == chosen)?;
         Some(name.into())
     }
 
@@ -1882,6 +1903,9 @@ impl Agents {
                     action: entry.action.to_string(),
                     site: entry.site.to_string(),
                     refused: entry.refused.to_string(),
+                    target: entry.target.to_string(),
+                    url: entry.url.to_string(),
+                    sent: entry.sent.clone(),
                 })
                 .collect();
             let over = steps.len().saturating_sub(crate::agent_history::STEPS);
@@ -2830,4 +2854,28 @@ fn receipt(session: &Session, ended: &str) -> String {
         true => format!("Done {ended}").trim_end().to_string(),
         false => format!("Done · {}", did.join(" · ")),
     }
+}
+
+/// A CLI's Model menu, as its ids and items, with `chosen` checked: Default first, followed by the
+/// name of the model it is where the CLI says, then `models`.
+pub fn model_menu(
+    chosen: &str,
+    default: Option<&str>,
+    models: Vec<(String, String)>,
+) -> (Vec<(String, String)>, Vec<MenuEntry>) {
+    let default = default.map(|name| SharedString::from(name.to_string()));
+    let mut all = vec![(String::new(), MenuEntry::label("Default").to_string())];
+    all.extend(models);
+    let items = (all.iter().enumerate())
+        .map(|(at, (id, name))| {
+            let on = id == chosen;
+            MenuEntry {
+                checked: on,
+                over: on,
+                detail: default.clone().filter(|_| at == 0),
+                ..MenuEntry::named(name.clone(), true)
+            }
+        })
+        .collect();
+    (all, items)
 }

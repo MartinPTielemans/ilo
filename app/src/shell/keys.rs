@@ -3,7 +3,8 @@
 //! bindings, the menus, the command bar and the keys the page hands back all ask this store, so a
 //! change reaches them at once.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{
     Action, App, Global, KeyBinding, KeyBindingContextPredicate, Keystroke, Modifiers, NoAction,
@@ -258,6 +259,14 @@ pub fn view_binding(key: &str, action: Box<dyn Action>, context: &str, cx: &App)
         .ok()
         .map(std::rc::Rc::new);
     KeyBinding::load(&pressed, action, context, false, None, cx).expect("a valid key")
+}
+
+/// The core's answer for a key the page has: `ask`'s, unless the App is in an update, as when an
+/// agent's key or an event loop nested in one delivers it. An update of ours would panic there,
+/// inside the core's callback, and abort ilo, so the key goes to the page and only ilo's shortcut
+/// for it is missed (#2705).
+pub fn page_key_answer(cx: Option<&gpui::AsyncApp>, ask: impl FnOnce() -> bool) -> bool {
+    !cx.is_some_and(gpui::AsyncApp::is_updating) && ask()
 }
 
 /// A key the core names (bc_key) as a keystroke in GPUI's terms, with the modifiers in the order
@@ -808,6 +817,17 @@ mod tests {
     };
 
     use super::{super::commands::ShellHandle, *};
+
+    /// A key the page has, asked about while the App is in an update, goes to the page without an
+    /// update of ours, which would panic in the core's callback and abort ilo (#2705). Once the
+    /// update is over, the ask is answered as before.
+    #[gpui::test]
+    fn a_page_key_asked_mid_update_goes_to_the_page(cx: &mut TestAppContext) {
+        let app = cx.to_async();
+        let asked = || page_key_answer(Some(&app), || app.update(|_| true));
+        assert!(!cx.update(|_| asked()), "ilo kept a key asked mid-update");
+        assert!(asked(), "ilo didn't keep a key it takes");
+    }
 
     /// Whether the Shortcuts tab's search for `typed` finds each of `rows`, a name and the
     /// command's keystroke as a binding writes it, or none.

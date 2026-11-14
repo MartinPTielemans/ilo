@@ -76,13 +76,20 @@
 //                                         Settings, which a run can't do: macOS lets no background
 //                                         process make an app active, and a hidden app on a runner
 //                                         with nothing else in front stays the active one
+//   yield <pid>                           hands the app's activation to the app of process <pid>,
+//                                         another copy of the app, as the Little ilo window does
+//                                         to the app behind it, logging "browser: yielded to
+//                                         <pid>": the active app may give it away, though no
+//                                         background process can take it
 //   place <x> <y> <width> <height>        moves and resizes the window to that frame, in points
 //                                         from the main display's top-left corner
 //   screen                                logs the screen the app opens windows on, the main
 //                                         display or with BROWSER_DISPLAY=builtin the Mac's own
 //                                         (host_screens), as "browser: screen at <x> <y> <width>
 //                                         <height>" in place's terms, so a check places windows
-//                                         there and not on the main display it may be kept off
+//                                         there and not on the main display it may be kept off,
+//                                         after "browser: screen visible <x> <y> <width> <height>",
+//                                         its visible area in the same terms
 //   order                                 logs the browser windows on screen front to back and
 //                                         the key one, as "browser: order window <n> window <m>
 //                                         …, key window <n>|none", numbered as window numbers
@@ -107,7 +114,8 @@
 //                                         no key window titled <text>, windows <title> | <title>",
 //                                         the app's windows shown, the key one marked "(key)"
 //   pasteboard                            logs the text on the run's pasteboard, which stands in
-//                                         for the clipboard, as "browser: pasteboard text <text>"
+//                                         for the clipboard, as "browser: pasteboard text <text>",
+//                                         after its types, as "browser: pasteboard types <types>"
 //   savepanel <path>                      picks <path> in the save panel the app began, once it
 //                                         has, through the panel's completion handler, logging
 //                                         "browser: save panel answered", or "browser: no save
@@ -168,10 +176,15 @@
 //                                         alert shown, Chrome's too
 //   dismiss                               closes the menu a right click or openmenu showed,
 //                                         choosing none
-//   ime on|off                            the scripted input method, for keys to the UI or the
-//                                         page, Chromium's or Safari's engine's: letters add to a
-//                                         composition, space converts it to 日本語, return
-//                                         commits it and escape cancels it
+//   makekey <overlay>                     makes the window of <overlay>, such as theme picker,
+//                                         key at its next hide, as its fade out starts, as
+//                                         AppKit can, logging "browser: made <overlay> key"
+//   ime on|ko|off                         the scripted input method, for keys to the UI or the
+//                                         page, Chromium's or Safari's engine's: on, letters add
+//                                         to a composition, space converts it to 日本語, return
+//                                         commits it and escape cancels it; ko, a 2-set Korean
+//                                         keyboard, where gksrmf types 한글, and any other key
+//                                         commits and goes on
 //   window <n> [behind]                   drives the n-th browser window opened, from 1, from
 //                                         now, bringing it to the front with the keyboard as a
 //                                         click on it does, logging "browser: drive window <n>",
@@ -181,6 +194,9 @@
 //                                         <agent> and the name <name>, as agent code will once
 //                                         there is some, logging "browser: made space <space> for
 //                                         agent <agent>"
+//   agentopen <agent> <url>               the agent opens <url> in a tab of its Space, as its
+//                                         MCP tool does, logging "browser: agent <agent> opened
+//                                         <tab>"
 //   agentmayact <agent> <tab> [action]    logs whether the agent may do the action, "navigate" if none,
 //                                         to the tab, as "browser: agent <agent> may act on
 //                                         <tab>: <0|1>", and if not "browser: agent <agent>
@@ -309,6 +325,8 @@ NSStatusBarButton* HostLittleStatusButton();
 // host.mm's: where this driver's pointer last was, which host_pointer answers.
 extern NSPoint g_driven_pointer;
 extern bool g_driven_pointer_known;
+// host.mm's, for makekey.
+bool HostMakeOverlayKey(const char* name);
 
 namespace {
 
@@ -810,12 +828,125 @@ IMP g_handle_event;
 IMP g_interpret_key_events;
 IMP g_handle_event_by_input_method;
 
+// ime ko's 2-set (dubeolsik) Korean keyboard, as macOS's 2-Set Korean makes the calls (#2457):
+// each key rebuilds the syllable it composes, a key that can't join it commits it and starts the
+// next, and a vowel after a final consonant takes that consonant into the next syllable (핫 then
+// ㅔ gives 하 and 세). Any other key commits what's composing and goes on to the view, return
+// too, unlike Japanese input; backspace takes the last letter off. Only the plain consonants and
+// vowels, without the compound ones, which "한글" and "안녕하세요" don't need.
+bool g_korean = false;
+struct Jamo {
+  char key;
+  unichar alone;  // Its compatibility letter, for it composing alone.
+  int initial;    // As a syllable's first consonant, or -1 for a vowel.
+  int final;      // As its last, or 0.
+  int vowel;      // As its vowel, or -1 for a consonant.
+};
+constexpr Jamo kJamo[] = {
+    {'r', 0x3131, 0, 1, -1},   {'s', 0x3134, 2, 4, -1},   {'e', 0x3137, 3, 7, -1},
+    {'f', 0x3139, 5, 8, -1},   {'a', 0x3141, 6, 16, -1},  {'q', 0x3142, 7, 17, -1},
+    {'t', 0x3145, 9, 19, -1},  {'d', 0x3147, 11, 21, -1}, {'w', 0x3148, 12, 22, -1},
+    {'c', 0x314A, 14, 23, -1}, {'z', 0x314B, 15, 24, -1}, {'x', 0x314C, 16, 25, -1},
+    {'v', 0x314D, 17, 26, -1}, {'g', 0x314E, 18, 27, -1}, {'k', 0x314F, -1, 0, 0},
+    {'o', 0x3150, -1, 0, 1},   {'i', 0x3151, -1, 0, 2},   {'j', 0x3153, -1, 0, 4},
+    {'p', 0x3154, -1, 0, 5},   {'u', 0x3155, -1, 0, 6},   {'h', 0x3157, -1, 0, 8},
+    {'y', 0x315B, -1, 0, 12},  {'n', 0x315C, -1, 0, 13},  {'b', 0x3160, -1, 0, 17},
+    {'m', 0x3161, -1, 0, 18},  {'l', 0x3163, -1, 0, 20},
+};
+// The syllable composing: its first consonant, vowel and last consonant, each null if none.
+const Jamo* g_first = nullptr;
+const Jamo* g_vowel = nullptr;
+const Jamo* g_last = nullptr;
+
+NSString* Syllable(const Jamo* first, const Jamo* vowel, const Jamo* last) {
+  unichar c;
+  if (first && vowel) {
+    c = 0xAC00 + (first->initial * 21 + vowel->vowel) * 28 + (last ? last->final : 0);
+  } else if (first || vowel) {
+    c = (first ?: vowel)->alone;
+  } else {
+    return @"";
+  }
+  return [NSString stringWithCharacters:&c length:1];
+}
+
+void MarkKorean(id<NSTextInputClient> client) {
+  NSString* text = Syllable(g_first, g_vowel, g_last);
+  g_composition = text.length ? text : nil;
+  [client setMarkedText:text
+          selectedRange:NSMakeRange(text.length, 0)
+       replacementRange:NSMakeRange(NSNotFound, 0)];
+}
+
+// Commits |first|, |vowel| and |last| as a syllable, and composes nothing.
+void CommitKorean(id<NSTextInputClient> client,
+                  const Jamo* first,
+                  const Jamo* vowel,
+                  const Jamo* last) {
+  [client insertText:Syllable(first, vowel, last) replacementRange:NSMakeRange(NSNotFound, 0)];
+  g_first = g_vowel = g_last = nullptr;
+  g_composition = nil;
+}
+
+bool KoreanKey(id<NSTextInputClient> client, NSEvent* event) {
+  NSString* characters = event.characters;
+  const Jamo* jamo = nullptr;
+  for (const Jamo& each : kJamo) {
+    if (characters.length == 1 && [characters characterAtIndex:0] == each.key) {
+      jamo = &each;
+    }
+  }
+  if (!jamo) {
+    if (!g_composition) {
+      return false;
+    }
+    if (event.keyCode == 51) {  // backspace
+      if (g_last) {
+        g_last = nullptr;
+      } else if (g_first && g_vowel) {
+        g_vowel = nullptr;
+      } else {
+        g_first = g_vowel = nullptr;
+      }
+      MarkKorean(client);
+      return true;
+    }
+    CommitKorean(client, g_first, g_vowel, g_last);
+    return false;
+  }
+  if (jamo->vowel < 0) {
+    if (g_first && g_vowel && !g_last && jamo->final) {
+      g_last = jamo;
+    } else {
+      if (g_composition) {
+        CommitKorean(client, g_first, g_vowel, g_last);
+      }
+      g_first = jamo;
+    }
+  } else if (g_first && !g_vowel) {
+    g_vowel = jamo;
+  } else {
+    // The last consonant moves on to start the syllable this vowel is in.
+    const Jamo* moving = g_last;
+    if (g_composition) {
+      CommitKorean(client, g_first, g_vowel, nullptr);
+    }
+    g_first = moving;
+    g_vowel = jamo;
+  }
+  MarkKorean(client);
+  return true;
+}
+
 // Returns false for a key the input method leaves to the view.
 bool ImeKey(id<NSTextInputClient> client, NSEvent* event) {
   constexpr NSEventModifierFlags kShortcut =
       NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption;
   if (!g_ime_on || event.type != NSEventTypeKeyDown || (event.modifierFlags & kShortcut)) {
     return false;
+  }
+  if (g_korean) {
+    return KoreanKey(client, event);
   }
   NSString* characters = event.characters;
   bool letter = characters.length == 1 && [NSCharacterSet.lowercaseLetterCharacterSet
@@ -1275,6 +1406,24 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "yield") {
+    pid_t pid;
+    if (!(words >> pid)) {
+      return false;
+    }
+    NSRunningApplication* to = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    if (!to) {
+      return false;
+    }
+    // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
+    if (@available(macOS 14, *)) {
+      [NSApp yieldActivationToApplication:to];
+      [to activateFromApplication:NSRunningApplication.currentApplication options:0];
+    }
+    fprintf(stderr, "browser: yielded to %d\n", pid);
+    done();
+    return true;
+  }
   if (action == "hide") {
     if (NSApp.hidden) {
       [NSApp unhide:nil];
@@ -1630,6 +1779,9 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (host_screens(visible, 1) < 1) {
       return false;
     }
+    // What the app's own AppKit leaves of the screen, which a zoom fills (#2633).
+    fprintf(stderr, "browser: screen visible %.0f %.0f %.0f %.0f\n", visible[0], visible[1],
+            visible[2], visible[3]);
     // host_screens gives the screen's visible area, from the main display's top-left; the screen
     // holding its middle is the one.
     const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
@@ -1702,6 +1854,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     const bc_id space = bc_space_create_for_agent(name.c_str(), agent.c_str(), name.c_str());
     fprintf(stderr, "browser: made space %llu for agent %s\n", (unsigned long long)space,
             agent.c_str());
+    done();
+    return true;
+  }
+  if (action == "agentopen") {
+    std::string agent, url;
+    if (!(words >> agent >> url)) {
+      return false;
+    }
+    const bc_id tab = bc_agent_open_tab(agent.c_str(), url.c_str());
+    if (!tab) {
+      return false;
+    }
+    fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
     done();
     return true;
   }
@@ -1851,6 +2016,8 @@ bool Run(const std::string& line, void (^done)(void)) {
     return true;
   }
   if (action == "pasteboard") {
+    fprintf(stderr, "browser: pasteboard types %s\n",
+            [g_pasteboard.types componentsJoinedByString:@" "].UTF8String ?: "");
     fprintf(stderr, "browser: pasteboard text %s\n",
             [g_pasteboard stringForType:NSPasteboardTypeString].UTF8String ?: "");
     done();
@@ -2056,6 +2223,14 @@ bool Run(const std::string& line, void (^done)(void)) {
     dispatch_async(dispatch_get_main_queue(), done);
     return true;
   }
+  if (action == "makekey") {
+    std::string name = line.substr(std::min(line.size(), action.size() + 1));
+    if (!HostMakeOverlayKey(name.c_str())) {
+      return false;
+    }
+    done();
+    return true;
+  }
   if (action == "dismiss") {
     if (!host_menu_window_dismiss()) {
       NSMenu* menu = g_tracked;
@@ -2070,12 +2245,14 @@ bool Run(const std::string& line, void (^done)(void)) {
   if (action == "ime") {
     std::string state;
     words >> state;
-    if (state != "on" && state != "off") {
+    if (state != "on" && state != "off" && state != "ko") {
       return false;
     }
     HookIme();
-    g_ime_on = state == "on";
+    g_ime_on = state != "off";
+    g_korean = state == "ko";
     g_composition = nil;
+    g_first = g_vowel = g_last = nullptr;
     done();
     return true;
   }

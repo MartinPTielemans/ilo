@@ -1,0 +1,22 @@
+Clearing browsing history from Clear browsing data, and dismissing the dialog, tell the
+BrowserView's element, which Chrome CHECKs is there. A window of the core's has no BrowserView, so
+Delete with history ticked crashed the browser (#1821), and on Chromium 157 so would Cancel, which
+tells the element too. 157 does both through NotifyBrowserViewCustomEvent(), so the event is skipped
+there when there's no element. Chromium 156's version is chromium-core-clear-history-element.patch.
+
+--- a/chrome/browser/ui/webui/settings/settings_clear_browsing_data_handler.cc
++++ b/chrome/browser/ui/webui/settings/settings_clear_browsing_data_handler.cc
+@@ -88,7 +88,12 @@
+   ui::TrackedElement* const browser_element =
+       ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+           kBrowserViewElementId, context);
+-  CHECK(browser_element);
++  // browser_core: a window of the core's has no BrowserView, so there's no
++  // element to tell, and the history is cleared, or the dialog dismissed, all
++  // the same.
++  if (!browser_element) {
++    return;
++  }
+   ui::ElementTracker::GetFrameworkDelegate()->NotifyCustomEvent(browser_element,
+                                                                 event_type);
+ }

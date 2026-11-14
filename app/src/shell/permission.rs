@@ -176,9 +176,21 @@ pub(super) fn card_close(palette: &Palette, id: &'static str) -> Stateful<Div> {
 pub(super) fn card_button(
     palette: &Palette,
     id: impl Into<gpui::ElementId>,
-    label: impl Into<gpui::SharedString>,
+    label: impl IntoElement,
 ) -> Stateful<Div> {
     card_button_as(palette, id, label, Look::Quiet)
+}
+
+/// A card's lone button whose words wrap inside the card, for a label wider than the narrowest
+/// sidebar's card, as the protected-playback card's Open in Default Browser (#2468). GPUI's text
+/// measures its narrowest as one line, so without a min width of 0 on the button and its words they
+/// run past the card.
+pub(super) fn card_button_wrapping(
+    palette: &Palette,
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+) -> Stateful<Div> {
+    card_button(palette, id, div().min_w_0().child(label.into())).min_w_0()
 }
 
 /// How a card's or a strip's button looks, by what its press does (#1080): the one answer the
@@ -198,7 +210,7 @@ pub(super) enum Look {
 pub(super) fn card_button_as(
     palette: &Palette,
     id: impl Into<gpui::ElementId>,
-    label: impl Into<gpui::SharedString>,
+    label: impl IntoElement,
     look: Look,
 ) -> Stateful<Div> {
     let button = div()
@@ -230,7 +242,7 @@ pub(super) fn card_button_as(
             .active(|style| style.bg(palette.plate(STATE_PRESSED)))
             .text_color(palette.text(TITLE)),
     }
-    .child(label.into())
+    .child(label)
 }
 
 impl Shell {
@@ -330,11 +342,16 @@ fn logged_at(
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::{cell::Cell, rc::Rc};
 
-    use gpui::{Modifiers, Pixels, Point, TestAppContext, point, px};
+    use gpui::{
+        Bounds, Context, IntoElement, Modifiers, ParentElement, Pixels, Point, Render, Styled,
+        TestAppContext, Window, canvas, div, point, px,
+    };
 
+    use super::{BUTTON_HEIGHT, LINE, card_button_wrapping};
     use crate::{
+        palette::Palette,
         settling::SETTLING,
         shell::{Folders, Question, Shell, recorder::Recorder},
     };
@@ -397,5 +414,40 @@ mod tests {
         cx.simulate_click(close, Modifiers::none());
         cx.run_until_parked();
         assert_eq!(host.take(), ["answer 10 Dismiss"]);
+    }
+
+    /// A wrapping button whose words are wider than the card wraps them, growing as tall as they
+    /// need, rather than running past the card, as Open in Default Browser would in the narrowest
+    /// sidebar's protected-playback card (#2468).
+    #[gpui::test]
+    fn a_buttons_long_label_wraps_inside_its_row(cx: &mut TestAppContext) {
+        const ROW: f32 = 120.;
+        struct Row(Rc<Cell<Option<Bounds<Pixels>>>>);
+        impl Render for Row {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let drawn = self.0.clone();
+                let probe = canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {});
+                let label = "Open in Default Browser, not private";
+                let button = card_button_wrapping(&Palette::default(), "button", label);
+                div()
+                    .w(px(ROW))
+                    .flex()
+                    .items_start()
+                    .child(button.child(probe.absolute().size_full()))
+            }
+        }
+        let drawn = Rc::new(Cell::new(None));
+        let (_, cx) = cx.add_window_view(|_, _| Row(drawn.clone()));
+        cx.run_until_parked();
+        let button = drawn.get().expect("the button wasn't drawn");
+        assert!(
+            button.size.width <= px(ROW),
+            "the button ran past its row: {button:?}"
+        );
+        // Its words take two lines or more, where without wrapping they'd take one.
+        assert!(
+            button.size.height >= px(BUTTON_HEIGHT + LINE),
+            "the long label didn't wrap: {button:?}"
+        );
     }
 }

@@ -32,6 +32,7 @@ fn row(folder: u64) -> Anchor {
     Anchor {
         row: Bounds::new(point(px(8.), px(top)), size(px(224.), px(34.))),
         window: window(),
+        left: false,
     }
 }
 
@@ -393,4 +394,20 @@ fn it_stays_18_inside_the_window_beside_a_row_high_or_low_in_it() {
         ..row(1)
     };
     assert_eq!(place(narrow, height(3)).0, 400. - WIDTH - 18.);
+}
+
+/// With the sidebar on the right, the preview opens on the folder's left, toward the page, as far
+/// from the sidebar's edge as on the left (#2375).
+#[test]
+fn a_preview_opens_toward_the_page_from_a_sidebar_on_the_right() {
+    let left = place(row(1), height(3)).0;
+    let mirrored = Anchor {
+        row: Bounds::new(
+            point(px(1000. - 8. - 224.), px(136.)),
+            size(px(224.), px(34.)),
+        ),
+        left: true,
+        ..row(1)
+    };
+    assert_eq!(place(mirrored, height(3)).0, 1000. - left - WIDTH);
 }

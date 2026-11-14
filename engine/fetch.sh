@@ -69,7 +69,9 @@ if [ -n "$only_commit" ]; then
   exit 0
 fi
 url=$repo/releases/download/engine-$platform-${commit:0:12}/$asset
-sha256=$(curl -fsSL "$url.sha256") || none "the release engine-$platform-${commit:0:12} has no $asset yet."
+# --retry tries a host's 5xx again, as GitHub's 503 that stopped a whole Check on Linux (#2074),
+# but not a 404, a release without its engine yet.
+sha256=$(curl -fsSL --retry 5 "$url.sha256") || none "the release engine-$platform-${commit:0:12} has no $asset yet."
 
 # The engine holds the core of the commit it was built from. A different header would bind the app
 # to functions or layouts the engine doesn't have. One that differs only in its comments is the same
@@ -90,7 +92,7 @@ if [ ! -d "$dir" ]; then
   name=${url##*/}
   archive=$dir.${name#*.}
   echo "fetch: downloading the prebuilt engine (${commit:0:12})" >&2
-  curl -fL --progress-bar -o "$archive" "$url"
+  curl -fL --retry 5 --progress-bar -o "$archive" "$url"
   echo "$sha256  $archive" | sha256sum -c --status ||
     { rm -f "$archive"; fail "the download doesn't match its sha256."; }
   rm -rf "$dir.part"

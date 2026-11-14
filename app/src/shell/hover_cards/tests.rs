@@ -292,7 +292,7 @@ fn a_picker_closes_the_card(cx: &mut TestAppContext) {
     };
     rest_on(&shell, cx, &host, 3);
     let at = theme_picker::At::Row(point(200., 100.));
-    shell.update(cx, |shell, cx| shell.show_theme_picker(1, at, cx));
+    shell.update(cx, |shell, cx| shell.show_theme_picker(1, at, false, cx));
     assert!(host.take().contains(&"card close".to_string()));
     assert!(!rests(cx, 4), "the theme picker shows");
     cx.update(|_, cx| theme_picker::dismissed(cx));

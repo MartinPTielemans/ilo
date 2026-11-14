@@ -1,3 +1,4 @@
+# check.sh runs this at 300.
 # VoiceOver reads ilo's own tree: the sidebar's Space name is a heading, and the tab shown a
 # selected tab named by its page's title in the Today tab group, after New Tab. ⌘T's bar has the
 # keyboard in a text field called "Search or Enter URL", lists its suggestions with the first

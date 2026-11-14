@@ -95,6 +95,11 @@ void ExtensionCrashTold(Profile* profile, const std::string& id);
 // it's on.
 bool TurnOnExtension(Profile* profile, const std::string& id);
 
+// After two crashes at launch in a row, the app starts the browser safe (docs/ux-spec.md › Safe
+// start): |profile|'s extensions, the ad blocker too, are held for this launch, before any of them
+// runs, and its next launch loads them as they were.
+void HoldExtensionsForSafeStart(Profile* profile);
+
 // Removes extension |id| from |profile|, as the user does. Returns false if it can't be.
 bool RemoveExtension(Profile* profile, const std::string& id);
 

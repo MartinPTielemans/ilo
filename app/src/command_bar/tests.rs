@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use super::*;
-use crate::text_input::{self, Chosen, FieldMenu};
+use crate::text_input::{self, Chosen, FieldMenu, korean};
 
 /// A host that records what the bar asks of it, but its suggestions and its window's height, and
 /// apart from the rest, where it shows the window. A text with a dot names a page there; any other
@@ -1361,6 +1361,120 @@ fn the_input_method_composes_and_commits_in_the_bar(cx: &mut TestAppContext) {
     bar.input_method(|input, window, cx| input.unmark_text(window, cx));
     assert!(!bar.composing());
     assert_eq!(bar.input(), ("ねこ".into(), 6..6));
+}
+
+/// `key` pressed and released as Wayland's platform hands it to the window: down, then its
+/// character typed into the field if the window didn't take the key, then up. A macro, since
+/// GPUI's test window can't be named here.
+macro_rules! press {
+    ($platform:expr, $key:expr) => {{
+        use gpui::PlatformWindow as _;
+        let keystroke = gpui::Keystroke::parse($key).unwrap().with_simulated_ime();
+        let down = gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        if !$platform.simulate_input(down) {
+            let mut field = $platform.take_input_handler().expect("no input handler");
+            field.replace_text_in_range(None, keystroke.key_char.as_deref().unwrap());
+            $platform.set_input_handler(field);
+        }
+        $platform.simulate_input(gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
+    }};
+}
+
+/// A character typed while the App is in an update, as a nested event pump delivers it, lands in
+/// the bar once the update is over, and ahead of the one typed after it (#2672).
+#[gpui::test]
+fn a_character_typed_mid_update_lands_in_the_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    let mut platform = bar.cx.cx.test_window(bar.window.into());
+    (bar.window)
+        .update(&mut bar.cx.cx, |_, _, _| press!(platform, "a"))
+        .unwrap();
+    press!(platform, "b");
+    bar.cx.run_until_parked();
+    assert_eq!(bar.input(), ("ab".into(), 2..2));
+}
+
+/// Japanese the input method composes and commits while the App is in an update, with no key of
+/// its own, as a candidate picked with the pointer is: once the update is over the bar has the
+/// committed text and nothing marked (#2672).
+#[gpui::test]
+fn a_japanese_commit_mid_update_lands_in_the_bar(cx: &mut TestAppContext) {
+    use gpui::PlatformWindow as _;
+    let mut bar = Bar::new(cx);
+    bar.compose("にほん");
+    let mut platform = bar.cx.cx.test_window(bar.window.into());
+    (bar.window)
+        .update(&mut bar.cx.cx, |_, _, _| {
+            let mut ime = platform.take_input_handler().expect("no input handler");
+            ime.replace_and_mark_text_in_range(None, "にほんご", None);
+            ime.replace_text_in_range(None, "日本語");
+            platform.set_input_handler(ime);
+        })
+        .unwrap();
+    bar.cx.run_until_parked();
+    assert!(!bar.composing());
+    assert_eq!(bar.input(), ("日本語".into(), 9..9));
+    assert_eq!(bar.calls(), Vec::<String>::new());
+}
+
+/// Korean from a 2-set keyboard, where one key can commit a syllable and start the next (#2457):
+/// in a new tab's bar and over the URL the bar opened on. The core is asked only for committed
+/// text, and ↩, which AppKit's, IBus's and Windows' Korean input methods pass on once they've
+/// committed the last syllable, goes with the whole word.
+#[gpui::test]
+fn korean_composes_syllable_by_syllable_in_the_bar(cx: &mut TestAppContext) {
+    let search = |word| format!("https://search.test/?q={word}");
+    for (word, calls, url, went) in [
+        (
+            "한글",
+            korean::HANGEUL,
+            None,
+            format!("open {}", search("한글")),
+        ),
+        (
+            "안녕하세요",
+            korean::ANNYEONG,
+            None,
+            format!("open {}", search("안녕하세요")),
+        ),
+        (
+            "한글",
+            korean::HANGEUL,
+            Some("https://example.com/"),
+            format!("navigate 1 {}", search("한글")),
+        ),
+    ] {
+        let mut bar = Bar::new(cx);
+        if let Some(url) = url {
+            bar.edit(url, None);
+        }
+        bar.host.asked.take();
+        for call in calls {
+            bar.input_method(|input, window, cx| call.apply(input, window, cx));
+        }
+        assert!(bar.composing());
+        let last = word.chars().last().unwrap().to_string();
+        bar.input_method(|input, window, cx| input.replace_text_in_range(None, &last, window, cx));
+        assert_eq!(bar.input(), (word.to_string(), word.len()..word.len()));
+        let asked: Vec<String> = (bar.host.asked.take().into_iter())
+            .map(|(text, _)| text)
+            .collect();
+        let mut syllables = String::new();
+        let committed: Vec<String> = (word.chars())
+            .map(|syllable| {
+                syllables.push(syllable);
+                syllables.clone()
+            })
+            .collect();
+        assert_eq!(asked, committed, "{word} over {url:?}");
+        bar.calls();
+        bar.keys("enter");
+        assert_eq!(bar.calls(), [went, "hide".into()], "{word} over {url:?}");
+    }
 }
 
 /// Esc goes to the input method while it composes, which cancels, putting back the text from
@@ -3182,8 +3296,20 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     assert_eq!(bar.chip_and_hint(), (None, false, false));
     bar.keys("tab");
     assert_eq!(bar.agent_rows(), [SET_UP]);
+    // ↩ on it ends the ask as the bar hides, so Today's slot closes with it, and the next ⌘T,
+    // which the Shell opens from inside its own update, has no ask to end (#2459).
     bar.keys("enter");
-    assert_eq!(bar.calls(), ["asking true", "hide", "set up agents"]);
+    assert_eq!(
+        bar.calls(),
+        ["asking true", "asking false", "hide", "set up agents"]
+    );
+    bar.cx
+        .update(|_, cx| show(None, Vec::new(), Vec::new(), None, cx));
+    bar.cx.run_until_parked();
+    assert!(
+        !bar.calls().iter().any(|call| call.starts_with("asking")),
+        "the bar opened again ended an ask"
+    );
 
     let mut bar = Bar::new(cx);
     bar.type_text("summarise this");

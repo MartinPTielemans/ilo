@@ -3,7 +3,8 @@
 //! when the page keeps it, as Arc's does, so a page that keeps Esc, a game or an editor's vim mode,
 //! never keeps the user in full screen (docs/ux-spec.md › Window full screen).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::Context;
 

@@ -1,6 +1,8 @@
 # Applied in order after ungoogled-chromium's own series. One patch per line, relative to engine/patches/.
-# Sections: upstream/ (Chromium backports), helium/ (picks), ardia/ (picks), ours/.
+# Sections: upstream/ (Chromium backports), helium/ (picks), ardia/ (picks), ours/, mac/ (the Mac's alone).
+# A line ending in <N or >=N is for trees before Chromium N, or from it (series_for in tree.sh).
 upstream/chromium-xkb-no-state-guard.patch
+upstream/chromium-rust-std-prebuilt-libs.patch
 ardia/chromium-component-updater-security-only.patch
 ardia/chromium-extension-omaha-attributes.patch
 ours/chromium-core-link.patch
@@ -20,7 +22,6 @@ ours/chromium-core-permission-prompt.patch
 ours/chromium-core-extension-install.patch
 ours/chromium-extensions-web-store.patch
 ours/chromium-core-password-prompt.patch
-ours/chromium-rust-std-component-link.patch
 ours/chromium-prefs-passwords-autofill-on.patch
 ours/chromium-passwords-generation-this-device.patch
 ours/chromium-search-default-duckduckgo.patch
@@ -38,8 +39,6 @@ ours/chromium-core-error-page.patch
 ours/chromium-core-offline-game.patch
 ours/chromium-core-native-host-fallback.patch
 ours/chromium-crashpad-start.patch
-ours/chromium-crashpad-mac-handler.patch
-ours/chromium-crashpad-mac-async-start.patch
 ours/chromium-crash-keys-no-home.patch
 ours/chromium-windows-product-folder.patch
 ours/chromium-windows-app-names.patch
@@ -48,6 +47,7 @@ ours/chromium-xcode-build-define.patch
 ours/chromium-core-login-dialog.patch
 ours/chromium-core-external-protocol-dialog.patch
 ours/chromium-core-ad-block.patch
+ours/chromium-core-ad-block-page.patch
 ours/chromium-core-split-switch.patch
 ours/chromium-sync-service.patch
 ours/chromium-sync-hooks.patch
@@ -69,9 +69,11 @@ ours/chromium-core-page-bubbles.patch
 ours/chromium-core-notification-click.patch
 ours/chromium-battery-saver-sampled-power.patch
 ours/chromium-policy-windows-key.patch
-ours/chromium-core-clear-history-element.patch
+ours/chromium-core-clear-history-element.patch <157
+ours/chromium-core-clear-history-element-157.patch >=157
 ours/chromium-freezing-measure-on-battery-saver.patch
 ours/chromium-no-page-resource-monitor.patch
+ours/chromium-leveldb-release-evicts.patch
 ours/chromium-private-downloads-save.patch
 ours/chromium-core-agent-accessibility.patch
 ours/chromium-core-download-completion-hold.patch
@@ -79,3 +81,10 @@ ours/chromium-session-cookies-window-close.patch
 ours/chromium-core-bluetooth-pair.patch
 ours/chromium-customize-chrome-private.patch
 ours/chromium-omnibox-match-last-visit.patch
+ours/chromium-agent-extension-nodes.patch
+ours/chromium-agent-extension-listeners.patch <157
+ours/chromium-agent-extension-listeners-157.patch >=157
+ours/chromium-agent-field-sources.patch
+# mac/: applied only to the Mac's tree (setup.sh and build.sh say so), after the rest.
+mac/chromium-crashpad-mac-handler.patch
+mac/chromium-crashpad-mac-async-start.patch

@@ -8,7 +8,8 @@
 //! GPUI can't draw over a page. The core shows the task's tab only while its page is watched, and
 //! the user's again as it goes. Nothing here runs for a window that shows no task.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -715,6 +716,7 @@ impl Shell {
             | Command::ToggleSidebar
             | Command::RecordTrace
             | Command::StayOnTop
+            | Command::MoveSidebar
             | Command::TaskManager
             | Command::Settings
             | Command::KeyboardShortcuts

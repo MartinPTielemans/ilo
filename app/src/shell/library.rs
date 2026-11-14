@@ -8,8 +8,8 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     rc::Rc,
     sync::Arc,
-    time::Instant,
 };
+use web_time::Instant;
 
 use gpui::{
     AnyElement, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity, Focusable,
@@ -20,10 +20,10 @@ use gpui::{
 };
 
 use super::{
-    Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT,
-    MenuEntry, NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
-    SECONDARY, SEGMENT_FAVICON_X, SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space,
-    UNSELECTED_TITLE, URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
+    Command, DRAG_START, Edit, FAVICON_SIZE, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry,
+    NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, SECONDARY,
+    SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH,
+    URL_BUTTON_SIZE, What,
     access::Accessible,
     dashed_square,
     display_face::{cap_top, display_text},
@@ -303,6 +303,12 @@ enum DownloadChoice {
     Clear,
 }
 
+/// Where a download's Trash puts the file, by Windows' own name for it there (#2468).
+const TRASH: &str = match cfg!(all(target_os = "windows", not(test))) {
+    true => "Move to Recycle Bin",
+    false => "Move to Trash",
+};
+
 /// The menu a right-click on `download`'s row shows, what can be done with it where it is, with
 /// Clear List enabled if any download is `finished`.
 fn download_menu_items(
@@ -341,7 +347,7 @@ fn download_menu_items(
                 DownloadAction::Show,
             ),
             (
-                MenuEntry::new("Move to Trash", true).destructive(),
+                MenuEntry::new(TRASH, true).destructive(),
                 Some(DownloadChoice::Trash),
             ),
         ],
@@ -430,6 +436,10 @@ pub(super) struct Library {
     sites: Vec<(String, Option<bool>)>,
     /// Where the page's controls were drawn, as the log said, for check.sh to click them.
     drawn: Rc<RefCell<Vec<String>>>,
+    /// The page's requests opened to show where each went and what it sent (#2326), by their
+    /// past task's id and step, and those of them showing every line.
+    steps_opened: Vec<(String, usize)>,
+    steps_all: Vec<(String, usize)>,
     _search: Subscription,
 }
 
@@ -634,12 +644,18 @@ impl Shell {
         }
     }
 
-    /// How far the Library pushes the card right of `card_left`, at the same width.
+    /// How far the Library pushes the card right of `card_left`, at the same width, or left of it
+    /// on the right, where the Library stops at the window's edge: fingers past where it opens
+    /// take nothing further there, with nothing past the edge to take it to.
     pub fn card_push(&self) -> f32 {
         if self.page_fullscreen {
             return 0.;
         }
-        (self.library_width() - self.card_left()) * self.library_out()
+        let out = match self.right {
+            true => self.library_edge(),
+            false => self.library_out(),
+        };
+        (self.library_width() - self.card_left()) * out
     }
 
     /// How wide the Library is with `section` in it: Spaces as wide as its cards, in this window.
@@ -657,7 +673,7 @@ impl Shell {
         let Some((from, start)) = self.library_resize else {
             return to;
         };
-        let t = start.elapsed().as_secs_f32();
+        let t = self.since(start);
         spring_to(t, from, to, 0., LIBRARY_RESPONSE, LIBRARY_DAMPING).map_or(to, |(width, _)| width)
     }
 
@@ -666,7 +682,7 @@ impl Shell {
     fn library_step(&self) -> Option<(f32, f32)> {
         let (from, speed, start) = self.library_motion?;
         let to = if self.library_open { 1. } else { 0. };
-        let t = start.elapsed().as_secs_f32();
+        let t = self.since(start);
         spring_to(t, from, to, speed, LIBRARY_RESPONSE, LIBRARY_DAMPING)
     }
 
@@ -707,7 +723,7 @@ impl Shell {
     /// The sidebar's opacity under the Library: receding with the card, or, after a click, gone
     /// fast as the Library comes and back late as it goes.
     pub(super) fn sidebar_opacity(&self) -> f32 {
-        self.sidebar_opacity_at(Instant::now())
+        self.sidebar_opacity_at(self.clock.now())
     }
 
     /// The sidebar's opacity at `now`.
@@ -757,12 +773,49 @@ impl Shell {
         (self.library_edge() - 1.) * self.library_width()
     }
 
-    /// How far, in points, fingers past where the Library opens have taken it on with the card.
+    /// How far, in points, fingers past where the Library opens have taken it on with the card:
+    /// nowhere on the right, where it opens at the window's edge (`card_push`).
     fn library_past(&self) -> f32 {
         match self.clicked_fade() {
             Some(_) => 0.,
+            None if self.right => 0.,
             None => past_end(self.library_out(), self.library_width()),
         }
+    }
+
+    /// Where the Library's panel starts across the window. On the left its column comes in from
+    /// the window's edge with the card's (`library_column_left`), and fingers past where it opens
+    /// take it on with the card. On the right it follows the sidebar's Space pages in from the
+    /// page side, as fingers going right take them: its right edge on the sidebar's left, both
+    /// going right from the card's edge until the Library's reaches the window's (#2375).
+    pub(super) fn library_x(&self) -> f32 {
+        match self.right {
+            true => f32::from(self.viewport.width) - self.library_width() - self.library_behind(),
+            false => self.library_column_left() + self.library_past(),
+        }
+    }
+
+    /// On the right, how far the sidebar's Space pages, and the Library after them, have yet to go
+    /// right to where the Library opens: the card's edge's way in from the window's edge while
+    /// it's shut, and none once it's open.
+    fn library_behind(&self) -> f32 {
+        (1. - self.library_edge()) * self.card_left()
+    }
+
+    /// How far right the sidebar has gone with the Library coming in after it on the right, from
+    /// none to its whole way out of the window. The Library takes its place from the left, where
+    /// the sidebar recedes in place on the left.
+    pub(super) fn sidebar_shift(&self) -> f32 {
+        match self.right {
+            true => self.card_left() - self.library_behind(),
+            false => 0.,
+        }
+    }
+
+    /// The Library's visible span across the window on the right: from the card's edge, which it
+    /// comes out from behind, to the window's.
+    pub(super) fn library_shown_from(&self) -> f32 {
+        f32::from(self.viewport.width) - self.card_left() - self.card_push()
     }
 
     /// The Library's opacity: what the sidebar under it has lost, on every way in and out. Arc's
@@ -812,8 +865,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         // Under Reduce Motion the card is where it goes at once, and the sidebar still fades.
-        self.library_motion = Some((out, speed, crate::motion::start(cx)));
-        self.sidebar_fade = opacity.map(|opacity| (opacity, Instant::now()));
+        self.library_motion = Some((out, speed, crate::motion::start_at(self.clock.now(), cx)));
+        self.sidebar_fade = opacity.map(|opacity| (opacity, self.clock.now()));
         self.library_open = open;
         if open {
             self.conceal_now(cx);
@@ -871,7 +924,10 @@ impl Shell {
         // Ours: the Library goes to the new section's width on the push's spring, as Arc's
         // isn't recorded.
         if self.library.is_some() && self.section_width(section) != self.library_width() {
-            self.library_resize = Some((self.library_width(), crate::motion::start(cx)));
+            self.library_resize = Some((
+                self.library_width(),
+                crate::motion::start_at(self.clock.now(), cx),
+            ));
         }
         self.section = section;
         let placeholder = match section {
@@ -898,6 +954,8 @@ impl Shell {
             logged: None,
             opened: None,
             sites: Vec::new(),
+            steps_opened: Vec::new(),
+            steps_all: Vec::new(),
             drawn: Rc::default(),
             _search: observe,
         });
@@ -940,10 +998,7 @@ impl Shell {
             window.request_animation_frame();
         }
         if let Some((from, start)) = self.library_resize {
-            let (t, to) = (
-                start.elapsed().as_secs_f32(),
-                self.section_width(self.section),
-            );
+            let (t, to) = (self.since(start), self.section_width(self.section));
             match spring_to(t, from, to, 0., LIBRARY_RESPONSE, LIBRARY_DAMPING) {
                 Some(_) => window.request_animation_frame(),
                 None => {
@@ -968,6 +1023,13 @@ impl Shell {
         self.sidebar_fade = None;
         // check.sh waits for these lines.
         if self.library_open {
+            // check/sidebar-right.sh reads which side it opened on.
+            let left = self.library_x();
+            log!(
+                "browser: library across {left:.0} to {:.0} of {:.0}",
+                left + self.library_width(),
+                f32::from(self.viewport.width)
+            );
             log!("browser: library shown");
         } else {
             log!("browser: library hidden");
@@ -1513,10 +1575,22 @@ impl Shell {
         // Taken on past where it opens, the column's fill reaches back to the window's edge, so
         // the window's own background never shows left of it.
         let past = self.library_past();
+        let width = self.library_width();
+        // On the right the columns swap, list then sections, so the sections and the window's
+        // buttons on them stay at the window's edge, and what's across the list moves the column's
+        // width left.
+        let right = self.right;
+        let list_x = |x: f32| match right {
+            true => x - COLUMN_WIDTH,
+            false => x,
+        };
         let back = div()
             .id("library-back")
             .absolute()
-            .left(px(LIBRARY_BACK_INSET + past))
+            .map(|back| match right {
+                true => back.right(px(LIBRARY_BACK_INSET)),
+                false => back.left(px(LIBRARY_BACK_INSET + past)),
+            })
             .bottom(px(LIBRARY_BACK_INSET))
             .size(px(NAV_SIZE))
             .flex()
@@ -1541,23 +1615,29 @@ impl Shell {
             .text_color(self.palette.text(SECTION_LABEL));
         let column = div()
             .absolute()
-            .left(px(-past))
+            .left(px(if right { width - COLUMN_WIDTH } else { -past }))
             .top_0()
             .bottom_0()
             .w(px(COLUMN_WIDTH + past))
             .bg(self.palette.plate(COLUMN))
             .flex()
             .items_center()
-            .pl(px(SECTION_X + past))
+            .map(|column| match right {
+                true => column.justify_end().pr(px(SECTION_X)),
+                false => column.pl(px(SECTION_X + past)),
+            })
             .child(heading)
             .child(sections)
             .child(back)
             // Where the window's own sit, so they slide in with the panel, and stay put on the
-            // column when fingers take it past its end.
-            .children(buttons.then(|| self.window_buttons(cx)));
+            // column when fingers take it past its end; mirrored across it on the right.
+            .children(buttons.then(|| self.window_buttons(px(COLUMN_WIDTH), cx)));
         let edge = div()
             .absolute()
-            .left(px(COLUMN_WIDTH))
+            .left(px(match right {
+                true => width - COLUMN_WIDTH - 1.,
+                false => COLUMN_WIDTH,
+            }))
             .top_0()
             .bottom_0()
             .w(px(1.))
@@ -1573,7 +1653,7 @@ impl Shell {
         let field = div()
             .id("library-search")
             .absolute()
-            .left(px(SEARCH_X))
+            .left(px(list_x(SEARCH_X)))
             .top(px(SEARCH_TOP))
             .w(px(field_width))
             .h(px(SEARCH_HEIGHT))
@@ -1612,7 +1692,7 @@ impl Shell {
             div()
                 .id("library-filter")
                 .absolute()
-                .left(px(FILTER_X))
+                .left(px(list_x(FILTER_X)))
                 .top(px(SEARCH_TOP))
                 .w(px(FILTER_WIDTH))
                 .h(px(SEARCH_HEIGHT))
@@ -1677,32 +1757,51 @@ impl Shell {
                 .size_full()
                 .into_any_element()
         };
-        let width = self.library_width();
+        // On the right it comes out from behind the card, which shows none of it past its edge,
+        // in its insets or round its corners.
+        let (clip, x) = match right {
+            true => {
+                let from = self.library_shown_from();
+                (Some(from), self.library_x() - from)
+            }
+            false => (None, self.library_x()),
+        };
         let panel = div()
             .absolute()
-            .left(px(self.library_column_left() + past))
+            .left(px(x))
             .top_0()
             .bottom_0()
             .w(px(width))
             .opacity(Shell::library_opacity(sidebar_opacity))
             .child(column)
             .child(edge);
-        if spaces {
-            return panel.child(self.space_cards(cx));
+        let panel = match spaces {
+            true => panel.child(self.space_cards(cx)),
+            false => panel
+                .child(field)
+                .children(filter)
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(list_x(COLUMN_WIDTH)))
+                        .top(px(ARCHIVE_TOP))
+                        .bottom_0()
+                        .w(px(ARCHIVE_WIDTH))
+                        .child(archive),
+                )
+                .children(self.download_press_listeners(cx)),
+        };
+        match clip {
+            Some(from) => div()
+                .absolute()
+                .left(px(from))
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .overflow_hidden()
+                .child(panel),
+            None => panel,
         }
-        panel
-            .child(field)
-            .children(filter)
-            .child(
-                div()
-                    .absolute()
-                    .left(px(COLUMN_WIDTH))
-                    .top(px(ARCHIVE_TOP))
-                    .bottom_0()
-                    .w(px(ARCHIVE_WIDTH))
-                    .child(archive),
-            )
-            .children(self.download_press_listeners(cx))
     }
 
     /// The Spaces section: a card for each Space of the window's profile set, in the switcher's
@@ -1751,13 +1850,19 @@ impl Shell {
                     .size(px(PLUS_GLYPH))
                     .text_color(self.palette.accent_label),
             );
+        // On the right the cards are left of the column, still in the switcher's order, left to
+        // right, as Spaces read.
+        let (left, right) = match self.right {
+            true => (0., COLUMN_WIDTH),
+            false => (COLUMN_WIDTH, 0.),
+        };
         div()
             .id("library-spaces")
             .absolute()
-            .left(px(COLUMN_WIDTH))
+            .left(px(left))
             .top_0()
             .bottom_0()
-            .right_0()
+            .right(px(right))
             .overflow_hidden()
             .child(
                 div()
@@ -1816,7 +1921,15 @@ impl Shell {
                 let panes = space.panes(tab);
                 if panes.len() == 1 {
                     let label = title(&palette, self.title(tab), false).pr(px(PLATE_INSET));
-                    let plate = plate(self.tab_icon_in(&palette, tab), label);
+                    let icon = self.with_return_mark(
+                        &palette,
+                        tab,
+                        FAVICON_SIZE,
+                        self.tab_bitmap_in(&palette, tab),
+                        || self.tab_icon_in(&palette, tab),
+                        cx,
+                    );
+                    let plate = plate(icon, label);
                     let dragged = CardTab {
                         tab,
                         space: id,
@@ -1834,16 +1947,28 @@ impl Shell {
                             });
                     return card_row(depth, plate);
                 }
-                let plate = CARD_WIDTH - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
-                let plate = plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X);
-                let width = plate / panes.len() as f32;
-                let segments = panes
-                    .iter()
-                    .enumerate()
-                    .map(|(index, &pane)| self.segment(&palette, pane, width, index == 0, false));
+                let weights = self.rest_weights(&panes, self.browser.space_tab(id));
+                let segments =
+                    panes
+                        .iter()
+                        .zip(weights)
+                        .enumerate()
+                        .map(|(index, (&pane, weight))| {
+                            let speaker = self.still_speaker(&palette, pane);
+                            self.segment(
+                                &palette,
+                                pane,
+                                (weight, 0.),
+                                index == 0,
+                                false,
+                                speaker,
+                                cx,
+                            )
+                        });
                 card_row(depth, split_plate(segments))
             }
         });
+        let rows: Vec<_> = rows.collect();
         let field = self.card_field(space, &palette, window_at(0.), cx);
         // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
         // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
@@ -2266,7 +2391,7 @@ impl Shell {
             Item::Clear => return self.agents_clear_item(cx),
             Item::PastHead(past) => return self.past_head_item(past, cx),
             Item::PastSite(site) => return self.past_site_item(site, cx),
-            Item::PastStep(past, step) => return self.past_step_item(past, step),
+            Item::PastStep(past, step) => return self.past_step_item(past, step, cx),
             Item::Boost(boost) => return self.boost_item(boost, cx),
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
@@ -2719,53 +2844,140 @@ impl Shell {
     }
 
     /// A step of the past task, in the words Settings › Agents' activity log has, over when it
-    /// came and why it was refused, if it was.
-    fn past_step_item(&mut self, index: usize, step: usize) -> AnyElement {
-        let Some(step) = (self.agent_history.get(index)).and_then(|past| past.steps.get(step))
-        else {
+    /// came and why it was refused, if it was. A request opens, as it does there, to show where it
+    /// went and what it sent (#2326).
+    fn past_step_item(&mut self, index: usize, step: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(past) = self.agent_history.get(index) else {
+            return div().into_any_element();
+        };
+        let Some(each) = past.steps.get(step) else {
             return div().into_any_element();
         };
         let did = crate::agents::tools::Did {
-            tool: step.action.clone(),
-            site: step.site.clone(),
+            tool: each.action.clone(),
+            site: each.site.clone(),
+            target: each.target.clone(),
             ..Default::default()
         };
-        let tense = match step.refused.is_empty() {
+        let tense = match each.refused.is_empty() {
             true => crate::agents::tools::Tense::Done,
             false => crate::agents::tools::Tense::Failed,
         };
-        let when = crate::agents::local_time(step.at);
-        let under = match step.refused.is_empty() {
+        let when = crate::agents::local_time(each.at);
+        let under = match each.refused.is_empty() {
             true => when,
-            false => format!("{when} · Refused: {}", step.refused),
+            false => format!("{when} · Refused: {}", each.refused),
         };
-        div()
+        let title = crate::agents::tools::step_title(&did, tense);
+        let key = (past.id.clone(), step);
+        let opens = !each.url.is_empty();
+        let (opened, all) = match &self.library {
+            Some(library) => (
+                library.steps_opened.contains(&key),
+                library.steps_all.contains(&key),
+            ),
+            None => (false, false),
+        };
+        let secondary = self.palette.text(SECONDARY);
+        let head = div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
-            .pr(px(ARCHIVED_RIGHT))
+            .pr(px(ARCHIVED_RIGHT + 8.))
             .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .flex()
+            .items_center()
             .child(
                 div()
-                    .size_full()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
                     .flex()
                     .flex_col()
                     .justify_center()
                     .pl(px(ARCHIVED_TEXT_X))
                     .pr(px(8.))
                     .child(text_line(
-                        crate::agents::tools::step_title(&did, tense).into(),
+                        title.clone().into(),
                         text::BODY,
                         17.,
                         self.palette.text(UNSELECTED_TITLE),
                     ))
-                    .child(text_line(
-                        under.into(),
-                        text::SMALL,
-                        15.,
-                        self.palette.text(SECONDARY),
-                    )),
+                    .child(text_line(under.into(), text::SMALL, 15., secondary)),
             )
-            .into_any_element()
+            .child(crate::settings_rows::chevron_slot(
+                opens.then_some(opened),
+                secondary,
+            ));
+        if !opens {
+            return head.into_any_element();
+        }
+        let drawn = (self.library.as_ref()).map(|library| {
+            crate::settings_rows::drawn(format!("library step {step}"), library.drawn.clone())
+        });
+        let head = head
+            .id(("past-step", step))
+            .relative()
+            .children(drawn)
+            .role(gpui::accesskit::Role::Button)
+            .aria_label(title)
+            .aria_expanded(opened)
+            .on_click(cx.listener(move |shell, _, _, cx| shell.open_past_step(step, false, cx)));
+        let part = opened.then(|| {
+            let more = cx.listener(move |shell, _: &gpui::ClickEvent, _, cx| {
+                shell.open_past_step(step, true, cx)
+            });
+            crate::settings_rows::sent_part(
+                ("past-step-all", step),
+                &each.url,
+                &each.sent,
+                !each.refused.is_empty(),
+                all,
+                (self.palette.text(UNSELECTED_TITLE), secondary),
+                true,
+                move |window, cx| more(&gpui::ClickEvent::default(), window, cx),
+            )
+            .pl(px(ARCHIVED_LEFT + ARCHIVED_TEXT_X))
+            .pr(px(ARCHIVED_RIGHT + 8.))
+            .pb(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+        });
+        div().child(head).children(part).into_any_element()
+    }
+
+    /// Opens the opened past task's request at `step`, or closes it, or with `all` shows every
+    /// line of what it sent, and measures its line of the list again.
+    pub(super) fn open_past_step(&mut self, step: usize, all: bool, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        let Some(id) = library.opened.clone() else {
+            return;
+        };
+        let key = (id, step);
+        let place = |keys: &[(String, usize)]| keys.iter().position(|each| *each == key);
+        let said = match (all, place(&library.steps_opened)) {
+            (true, _) => {
+                library.steps_all.push(key.clone());
+                "shows all"
+            }
+            (false, Some(at)) => {
+                library.steps_opened.remove(at);
+                "closed"
+            }
+            (false, None) => {
+                library.steps_opened.push(key.clone());
+                "opened"
+            }
+        };
+        let past = (library.items.iter()).position(|item| match item {
+            Item::PastStep(_, each) => *each == step,
+            _ => false,
+        });
+        if let Some(at) = past {
+            library.list.splice(at..at + 1, 1);
+        }
+        // check.sh waits for this line.
+        log!("browser: library step {step} {said}");
+        cx.notify();
     }
 
     /// Reads the window's profile's Boosts, as Library › Boosts lists them.
@@ -2861,7 +3073,12 @@ impl Shell {
     }
 
     /// A Boost's menu in Library › Boosts.
-    fn boost_menu(&mut self, site: SharedString, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn boost_menu(
+        &mut self,
+        site: SharedString,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(profile) = self.learning_profile() else {
             return;
         };
@@ -2876,6 +3093,7 @@ impl Shell {
         };
         let entries = vec![
             MenuEntry::new("Edit CSS…", true),
+            MenuEntry::new("Edit Script…", true),
             MenuEntry::new(if on { "Turn Off" } else { "Turn On" }, true),
             MenuEntry::new(show, true),
             MenuEntry::line(),
@@ -2894,9 +3112,10 @@ impl Shell {
                 shell
                     .update(cx, |shell, cx| match chosen {
                         Some(0) => shell.edit_boost_file(profile, &site, cx),
-                        Some(1) => shell.set_boost_on(profile, &site, !on, cx),
-                        Some(2) => shell.show_boost_file(profile, &site, cx),
-                        Some(4) => shell.delete_boost(profile, &site, cx),
+                        Some(1) => shell.edit_boost_script_file(profile, &site, cx),
+                        Some(2) => shell.set_boost_on(profile, &site, !on, cx),
+                        Some(3) => shell.show_boost_file(profile, &site, cx),
+                        Some(5) => shell.delete_boost(profile, &site, cx),
                         _ => {}
                     })
                     .ok();
@@ -3628,9 +3847,9 @@ impl Shell {
             )
             // A task's card folding into it bumps its glyph as it lands.
             .child({
-                let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
+                let (scale, alpha) = self.archive_glyph(web_time::Instant::now());
                 svg()
-                    .path("icons/archive.svg")
+                    .path("icons/library.svg")
                     .size(px(16.))
                     .text_color(self.palette.glyph(alpha))
                     .when(scale != 1., |glyph| {
