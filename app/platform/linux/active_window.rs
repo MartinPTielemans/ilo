@@ -73,7 +73,9 @@ fn watch() -> Option<Watch> {
         .reply()
         .ok()?
         .atom;
-    let events = ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE);
+    // PROBE #2762: also the _NET_ACTIVE_WINDOW requests clients send the window manager.
+    let events = ChangeWindowAttributesAux::new()
+        .event_mask(EventMask::PROPERTY_CHANGE | EventMask::SUBSTRUCTURE_NOTIFY);
     connection
         .change_window_attributes(root, &events)
         .ok()?
@@ -96,8 +98,21 @@ fn pump() {
     loop {
         let mut changed = false;
         while let Ok(Some(event)) = watch.connection.poll_for_event() {
-            if let Event::PropertyNotify(notify) = event {
-                changed |= notify.window == watch.root && notify.atom == watch.active;
+            match event {
+                Event::PropertyNotify(notify) => {
+                    if notify.window == watch.root && notify.atom == watch.active {
+                        changed = true;
+                        let active = window_in(&watch, watch.root, watch.active);
+                        crate::log!("browser: probe active now {:#x} at {}, focus {}", active.unwrap_or(0), notify.time, probe_focus(&watch));
+                    }
+                }
+                Event::ClientMessage(message) if message.type_ == watch.active => {
+                    let data = message.data.as_data32();
+                    crate::log!("browser: probe active asked for {:#x} source {} time {} current {:#x}", message.window, data[0], data[1], data[2]);
+                }
+                Event::FocusIn(focus) => crate::log!("browser: probe focus in {:#x} mode {:?} detail {:?}, focus {}", focus.event, focus.mode, focus.detail, probe_focus(&watch)),
+                Event::FocusOut(focus) => crate::log!("browser: probe focus out {:#x} mode {:?} detail {:?}", focus.event, focus.mode, focus.detail),
+                _ => {}
             }
         }
         if !changed {
@@ -167,6 +182,7 @@ fn tell_all() {
         return;
     }
     for ui_view in views {
+        probe_select(&watch, ui_view);
         tell(ui_view, is_active(&watch, ui_view, active));
     }
 }
@@ -188,4 +204,28 @@ fn tell(ui_view: *mut c_void, main: bool) {
 /// Forgets the window of `ui_view`, closed.
 pub(crate) fn forget_window(ui_view: *mut c_void) {
     TOLD.with_borrow_mut(|told| told.retain(|(each, _)| *each != ui_view));
+}
+
+/// PROBE #2762: the input focus and the window it's in.
+fn probe_focus(watch: &Watch) -> String {
+    let focus = watch.connection.get_input_focus().ok().and_then(|c| c.reply().ok()).map_or(0, |r| r.focus);
+    let parent = watch.connection.query_tree(focus).ok().and_then(|c| c.reply().ok()).map_or(0, |t| t.parent);
+    format!("{focus:#x} in {parent:#x}")
+}
+
+/// PROBE #2762: hears each focus change on GPUI's window `ui_view` and the window it's in, once.
+fn probe_select(watch: &Watch, ui_view: *mut c_void) {
+    thread_local! { static SEEN: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) }; }
+    let view = ui_view as usize as u32;
+    if SEEN.with_borrow(|seen| seen.contains(&view)) {
+        return;
+    }
+    SEEN.with_borrow_mut(|seen| seen.push(view));
+    let parent = watch.connection.query_tree(view).ok().and_then(|c| c.reply().ok()).map_or(0, |t| t.parent);
+    let events = ChangeWindowAttributesAux::new().event_mask(EventMask::FOCUS_CHANGE);
+    for window in [view, parent] {
+        _ = watch.connection.change_window_attributes(window, &events).map(|c| c.check());
+    }
+    let id = crate::browser_windows::window_with_view(ui_view);
+    crate::log!("browser: probe window {id} ui {view:#x} in {parent:#x}");
 }
