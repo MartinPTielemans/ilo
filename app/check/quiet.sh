@@ -61,7 +61,8 @@ expect "^browser: page $tab asks ${site%/} to .*notifications, quietly\$" \
 expect "^browser: notification bell $tab at " "the held request's bell wasn't drawn"
 send layout
 none_since "^browser: question $tab \(at \|takes input\)" "$from" || fail "a request on load brought the card"
-[ "$(sed -n "s/^browser: title $tab //p" "$log" | tail -1)" = notifications\ default ] ||
+# The page titles itself with the answer, so while the request is held it keeps its own title.
+[ "$(sed -n "s/^browser: title $tab //p" "$log" | tail -1)" = quiet ] ||
   fail "the held request was answered by itself: $(grep "^browser: title $tab " "$log" | tail -1)"
 read -r bx by bw bh << EOF
 $(grep "^browser: notification bell $tab at " "$log" | tail -1 | cut -d' ' -f6-)
@@ -134,7 +135,7 @@ for focus in page ui; do
   none_since "^browser: page $tab asks nothing\$" "$from" ||
     fail "leaving the Site Controls with the $focus focused answered the held request"
 done
-[ "$(sed -n "s/^browser: title $tab //p" "$log" | tail -1)" = notifications\ default ] ||
+[ "$(sed -n "s/^browser: title $tab //p" "$log" | tail -1)" = quiet ] ||
   fail "the request left alone was answered: $(grep "^browser: title $tab " "$log" | tail -1)"
 
 # A click on the URL field opens the command bar over the field (tabs.sh), the bell under it with
