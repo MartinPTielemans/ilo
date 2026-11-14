@@ -334,6 +334,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // bc_window_undo_remove_suggestion and bc_window_redo_remove_suggestion.
   bool UndoRemoveSuggestion(bc_id removal);
   bool RedoRemoveSuggestion(bc_id removal);
+  // Deletes |profile|'s visits to |url| in the span, among the window's removals, which are then
+  // for |profile|. See bc_window_remove_history.
+  bc_id RemoveHistory(Profile* profile, const GURL& url, base::Time begin, base::Time end);
   // Lets go of what each window built on |profile|, which is about to go.
   static void LetProfileGo(Profile* profile);
 

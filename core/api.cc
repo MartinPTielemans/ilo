@@ -951,10 +951,6 @@ bool bc_profile_list_history(bc_id profile,
   return browser_core::ListHistory(LoadedProfile(profile), profile, request, before, text, max);
 }
 
-bool bc_profile_remove_history(bc_id profile, const char* url, int64_t begin, int64_t end) {
-  return browser_core::RemoveHistory(LoadedProfile(profile), url, begin, end);
-}
-
 bool bc_profile_add_addresses(bc_id profile, const bc_address* addresses, size_t count) {
   return (addresses || !count) &&
          browser_core::AddImportedAddresses(LoadedProfile(profile), profile, addresses, count);
@@ -1845,6 +1841,20 @@ bool bc_window_undo_remove_suggestion(bc_id window_id, bc_id removal) {
 bool bc_window_redo_remove_suggestion(bc_id window_id, bc_id removal) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   return window && window->RedoRemoveSuggestion(removal);
+}
+
+bc_id bc_window_remove_history(bc_id window_id,
+                               bc_id profile,
+                               const char* url,
+                               int64_t begin,
+                               int64_t end) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  const auto time = [](int64_t microseconds) {
+    return base::Time::UnixEpoch() + base::Microseconds(microseconds);
+  };
+  return window && url ? window->RemoveHistory(LoadedProfile(profile), GURL(url), time(begin),
+                                               time(end))
+                       : 0;
 }
 
 static bc_id OpenTyped(bc_id window_id, const char* url, bool when_shown, const char* typed) {

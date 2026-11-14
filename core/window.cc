@@ -1682,6 +1682,18 @@ bool Window::RedoRemoveSuggestion(bc_id removal) {
   return suggestions_ && suggestions_->RemoveAgain(removal);
 }
 
+bc_id Window::RemoveHistory(Profile* profile, const GURL& url, base::Time begin, base::Time end) {
+  // Closing, it may have let its profile go.
+  if (closing_ || !profile) {
+    return 0;
+  }
+  // The removals live with the window's suggestions, so one ⌘Z path undoes both.
+  if (!suggestions_ || suggestions_->profile() != profile) {
+    suggestions_ = std::make_unique<Suggestions>(id_, profile);
+  }
+  return suggestions_->RemoveVisits(url, begin, end);
+}
+
 content::WebContents* Window::OpenTab(Profile* profile,
                                       const GURL& url,
                                       bool when_shown,
