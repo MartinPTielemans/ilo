@@ -210,6 +210,12 @@ impl Shell {
         };
         if *pointed != now {
             *pointed = now;
+            // check.sh waits for this line, which tells it which kind of row is under the pointer.
+            match now {
+                Some(Pointed::Closed(id)) => log!("browser: history pointed closed {id}"),
+                Some(Pointed::Visited(line)) => log!("browser: history pointed visited {line}"),
+                None => log!("browser: history pointed none"),
+            }
             cx.notify();
         }
     }
