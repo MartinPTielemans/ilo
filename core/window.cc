@@ -794,7 +794,7 @@ void Window::AdjustNavigate(NavigateParams& params) {
   Tab* source = params.source_contents ? Tab::FromWebContents(params.source_contents) : nullptr;
 #if BUILDFLAG(IS_LINUX)
   // ⇧⌥-click on a link opens it in a split view on Linux, as ⌥-click does, since Openbox and Xfce
-  // take every Alt-click for themselves but leave one with Shift (the owner's call, #2755). Blink
+  // take every Alt-click for themselves but leave one with Shift (#2755). Blink
   // asks for a new window, as for ⇧-click, so the press it came from tells them apart.
   if (source && params.disposition == WindowOpenDisposition::NEW_WINDOW &&
       !params.started_from_context_menu && params.user_gesture && !params.contents_to_insert &&

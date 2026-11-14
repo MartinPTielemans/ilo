@@ -193,7 +193,7 @@ impl Keys {
 }
 
 /// The click that splits: ⌥-click, and on Linux Shift+Alt-click too, since Openbox and Xfce take
-/// every Alt-click for themselves but leave one with Shift (the owner's call, #2755).
+/// every Alt-click for themselves but leave one with Shift (#2755).
 fn split_click() -> &'static str {
     match (cfg!(target_os = "macos"), cfg!(target_os = "linux")) {
         (true, _) => "⌥-click",
