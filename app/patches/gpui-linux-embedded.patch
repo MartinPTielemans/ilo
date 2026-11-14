@@ -6218,7 +6218,7 @@ index e21f019c64..c0c8f3d0f2 100644
 +    }
 +
 +    /// Spike (#2790): has the window manager manage the overlay `view` over `parent`'s window: no
-+    /// frame, transient for the browser's window, which a manager keeps it over and with, a utility
++    /// frame, transient for the browser's window, which a manager keeps it over and with, a dialog
 +    /// that a tiling manager floats, out of the taskbar and pager, taking no keyboard focus.
 +    fn manage_overlay(&self, view: xproto::Window, parent: xproto::Window) -> anyhow::Result<()> {
 +        let xcb = &self.xcb_connection;
@@ -6255,7 +6255,7 @@ index e21f019c64..c0c8f3d0f2 100644
 +            AtomEnum::WINDOW,
 +            &[client],
 +        )?;
-+        let utility = atom(b"_NET_WM_WINDOW_TYPE_UTILITY")?;
++        let utility = atom(b"_NET_WM_WINDOW_TYPE_DIALOG")?;
 +        xcb.change_property32(
 +            xproto::PropMode::REPLACE,
 +            view,

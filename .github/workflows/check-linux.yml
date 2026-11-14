@@ -320,8 +320,8 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: kwin-x11 x11-utils dbus-bin
-      # Spike (#2790): i3, a tiling manager.
-      - if: ${{ steps.engine.outputs.found == 'true' && matrix.session == 'i3' }}
+      # Spike (#2790): i3, a tiling manager, and the probe's window tree under Openbox.
+      - if: ${{ steps.engine.outputs.found == 'true' && (matrix.session == 'i3' || matrix.session == 'xvfb') }}
         uses: ./.github/actions/apt-install
         with:
           packages: i3-wm x11-utils
