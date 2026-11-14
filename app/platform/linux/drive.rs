@@ -40,8 +40,9 @@
 //! drive.mm's scripted input method does, in the UI's fields alone, as a page's input method is
 //! Chromium's, and it can't compose in a page. dragover and dragdrop are XDND's source, as
 //! another app's drag is, to the browser window's top-level window or its proxy, and wait for its
-//! answer; under Wayland, the data device's, from a client of the driver's own (drive_drags.rs). swipe is Wayland's alone, as X11 sends no touchpad's phases. The others, such as
-//! displays, the driver can't do yet, and says so as drive.mm does. pip, which drive.mm doesn't
+//! answer; under Wayland, the data device's, from a client of the driver's own (drive_drags.rs). swipe is Wayland's alone, as X11 sends no touchpad's phases. display add and remove
+//! are Wayland's alone too: an output of sway's headless backend, beside the others, as the
+//! session's (drive_wayland.rs). The others the driver can't do yet, and says so as drive.mm does. pip, which drive.mm doesn't
 //! have yet, finds a video's Picture in Picture window, the Mini Player, or a page's, as a call
 //! floats in, and logs "browser: pip at <x> <y> <width> <height>" as it is and each time it moves
 //! or resizes, then "browser: pip gone", or "browser: pip none" without one. pip doubleclick, pip
