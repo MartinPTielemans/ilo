@@ -10,8 +10,9 @@
 //! What XTEST can't do still goes as X events sent to the app's own windows, which each window's
 //! client handles as the device's (Chromium takes core events, and GPUI a sent core pointer event
 //! for the XInput 2 one it selects): a held key's repeat, which the server makes only of a key held
-//! past its delay; and, until the drive moves them too, a press with ⌃, ⌥ or ⇧ held and the keys
-//! while `flags` holds one, whose modifiers an XKB lock holds.
+//! past its delay; and, until the drive moves them too, a press with ⌃, ⌥ or ⇧ held, a key with
+//! Alt, which the window manager may take, and the keys while `flags` holds a modifier, whose
+//! modifiers an XKB lock holds.
 //!
 //! Under Wayland no client can hand another's surfaces input, so there the pointer and keys are
 //! sway's virtual devices, in tools/headless.sh's session alone (drive_wayland.rs).
@@ -804,6 +805,12 @@ fn hover(to: Target, state: u16) -> Option<()> {
 fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
     let modifiers = (state | FLAGS.get()) & MODIFIERS;
     if !SENT_PRESS.get() && !(press && modifiers != 0) {
+        // A hand lifts the ⌘ of its last chord before it clicks: the Control a key left down
+        // would make the press a Ctrl-click, where the sent press carried no modifier.
+        if press && XTEST_MODIFIERS.get() != 0 {
+            KEY_FLAGS.set(0);
+            xtest_modifiers(0)?;
+        }
         hover(at, state)?;
         let kind = match press {
             true => xproto::BUTTON_PRESS_EVENT,
@@ -1313,14 +1320,17 @@ fn key_on_return(key: String, until: std::time::Instant, done: Box<dyn FnOnce()>
 }
 
 /// The key `code`'s events of `kinds`, with the modifiers `state`, as `key_events` does: through
-/// XTEST, with the modifier keys `state` has going down before the press, unless it's a repeat or
-/// `flags` holds a modifier.
+/// XTEST, with the modifier keys `state` has going down before the press, unless it's a repeat, a
+/// chord with Alt, or `flags` holds a modifier.
 fn code_events(code: u8, state: u16, kinds: &[u8]) -> Option<()> {
     // A held key's repeat, a press of a key down already, is what XTEST can't send: the server
     // makes repeats only of a key held past its delay, which is a wait on time.
     let repeat =
         kinds == [xproto::KEY_PRESS_EVENT] && XTEST_KEYS.with_borrow(|down| down.contains(&code));
-    if repeat || FLAGS.get() != 0 {
+    // A chord with Alt, the Mac's ⌃ or ⌥, is slice 2's class (#2721): under Xvfb Openbox takes
+    // Ctrl+Alt with an arrow for itself, so it stays sent, as presses with modifiers do.
+    let alt = state & u16::from(KeyButMask::MOD1) != 0;
+    if repeat || alt || FLAGS.get() != 0 {
         return sent_code_events(code, state, kinds);
     }
     let held = (FLAGS.get() | KEY_FLAGS.get()) & u16::from(KeyButMask::CONTROL);
