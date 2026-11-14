@@ -123,6 +123,10 @@ jobs:
     env:
       # The areas of the app's debug log a dispatch asks for, on stderr, so in each run's log.
       BROWSER_LOG: ${{ inputs.log }}
+      # The driver sends the pointer and the keys as real input, as a hand's go through Windows'
+      # capture, foreground and hit test (platform/windows/drive.cc, #2544). The runner's desktop is
+      # the check's own, which the driver asks before it takes it.
+      BROWSER_DRIVE_REAL: 1
       # How many jobs the runs are dealt across, for runs.sh shard.
       SHARDS: ${{ inputs.runs == 'all' && 3 || 2 }}
       # The runs the Windows driver (platform/windows/drive.cc) is meant to pass so far.
@@ -130,14 +134,17 @@ jobs:
         load tabs dialogs crash about onboarding import agents access passkeys passwords quit relaunch
         private blank links capture spaces pinned profiles devices pair history appearance adblock-live find
         mcp keys sync sync-account sync-devices split trouble window clear handback restore little
-        battery-os adblock adblock-lists battery calls cards count everyday extensions favorites hosts
+        battery-os adblock adblock-lists adblock-cosmetic adblock-page
+        battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
-        pictures boosts foot-bar peek-motion safe-start
+        pictures boosts foot-bar peek-motion rules overlays safe-start
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
         scripting: AppleScript is the Mac's alone
         filled: it hides the Dock and the menu bar, so it runs only in a Mac check VM
+        later-launch: a lock left on the keyboard is the X server's
+        sidebar-right: it checks AppKit's window buttons, the Mac's alone
     steps:
       # setup.sh and the patches it applies need the repository's line endings.
       - run: git config --global core.autocrlf false

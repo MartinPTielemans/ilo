@@ -1316,6 +1316,9 @@ impl Browser for Engine {
         unsafe {
             bc::bc_window_start_move(self.window)
         };
+        // The check's driver lets go of a drag only once the window manager has the pointer.
+        #[cfg(target_os = "linux")]
+        crate::drive::window_move_asked();
     }
 
     fn window_maximized(&self) -> bool {
@@ -1736,8 +1739,10 @@ impl Browser for Engine {
         );
     }
 
+    /// The Mac's and Windows' hosts read the desktop's picture. Linux has no way an app in its
+    /// sandbox can, so there it's never offered (#2682).
     fn desktop_picture_offered(&self) -> bool {
-        cfg!(target_os = "macos")
+        cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
     fn page_picture(&self, tab: u64, request: u64, _: &mut App) {

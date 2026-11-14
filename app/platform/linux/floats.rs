@@ -668,6 +668,11 @@ pub extern "C" fn host_hide_link_target(fade: f64) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn host_mouse_down() -> bool {
+    gpui_linux::pointer_pressed()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn host_add_hover_card(card_view: *mut c_void, margin: f64, away: extern "C" fn()) {
     CARD.set((margin, Some(away)));
     add(Kind::Card, card_view);

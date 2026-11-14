@@ -114,14 +114,10 @@ expect "^browser: loaded $tab https://example.org/\$" "a click on reload didn't 
 # A mouse's side buttons over the page go back and forward, as Chrome's do (#688). Over the sidebar
 # they show another Space, which the spaces run checks.
 # A side button's click gives the page the keyboard, so this comes after the keys with the UI focused.
-if windows; then
-  echo "skip: side buttons over the page: the Windows driver can't press them yet."
-else
-  send sideclick $page_point back
-  expect_page example.com 1 1 "after the back side button over the page"
-  send sideclick $page_point forward
-  expect_page example.org 1 0 "after the forward side button over the page"
-fi
+send sideclick $page_point back
+expect_page example.com 1 1 "after the back side button over the page"
+send sideclick $page_point forward
+expect_page example.org 1 0 "after the forward side button over the page"
 
 # While a page loads, the URL field shows where it's going and reload is stop.
 send click $page_point
@@ -309,6 +305,8 @@ if [ "$major" -ge 157 ]; then
     send state
     [ "$key" = GPUIPanel ] && [ "$focus" = GPUIView ] ||
       fail "⌘T on Chrome's warning before http opened the command bar without the keyboard, which is in $key, on $focus"
+  else
+    echo "skip: which window has the keyboard as the command bar opens and closes over Chrome's warning before http: the warning is a window of its own on the Mac alone, and here the second tab's address typed into the bar shows the bar has it."
   fi
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened"
