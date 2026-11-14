@@ -59,7 +59,7 @@ page=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
 await '^browser: foot bar shown over [0-9]*$' || fail "BROWSER_FOOT_BAR didn't show the foot bar"
 sleep 1
 p2790 snap > "$out/probe2790-sb.json"
-i3-msg -t get_tree > "$out/probe2790-sb-i3.json" 2>/dev/null
+i3-msg -t get_tree > "$out/probe2790-sb-i3.json" 2>/dev/null || true
 b=$(browser_window "$pid")
 [ -n "$b" ] || fail "no browser window with the app's pid"
 note browser "{\"id\": \"$b\"}"
