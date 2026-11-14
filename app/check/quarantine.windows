@@ -4,3 +4,4 @@
 # Only the memory rows at 10 and 20 tabs fail perf's gate (check/perf.sh), so this names them alone.
 perf #2138 2026-11-10 ilo took more than 10 % over Chrome on this runner: memory,
 trouble #2676 2026-11-13 the run didn't end at the first column
+history #2855 2026-11-14 ⌘T after a click on the page beside Chrome's warning before http didn't open the command bar
