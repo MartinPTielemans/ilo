@@ -2599,6 +2599,18 @@ BC_EXPORT bc_id bc_tab_open_preview(bc_id opener, const char* url);
 // it again as the frame changes.
 BC_EXPORT void bc_tab_show_in(bc_id tab, void* view, bc_rect frame, double corner_radius);
 
+// Draws the page bc_tab_show_in shows of |tab| at |scale| of its frame's size about (|about_x|,
+// |about_y|), in points from the view's top-left as its frame is, and at |opacity|, without laying
+// it out again: its size, and the size its page reads, stay its frame's. Each call replaces the
+// last, and another page shown in the view draws as it is. Where the page shows under the app's
+// view, on Windows and Linux; the Mac's is in the view, which scales and fades it with what the app
+// draws, and this does nothing.
+BC_EXPORT void bc_tab_draw_preview(bc_id tab,
+                                   double scale,
+                                   double about_x,
+                                   double about_y,
+                                   double opacity);
+
 // Puts |tab|, a link preview, at the top of the Today tabs of the Space the window shows, and shows
 // it there, as it is: its page doesn't load again. Then space_changed and window_selected.
 BC_EXPORT void bc_window_keep_preview(bc_id window, bc_id tab);
