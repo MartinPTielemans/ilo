@@ -31,6 +31,7 @@ for l in sys.stdin:
 print(best["id"] if best else "")' "$1"
 }
 # The windows viewable in snap $2 that weren't in snap $1, inside browser $3's rect, one id a line.
+# Not i3's frames, which are override-redirect windows of its own.
 new_windows() {
   python3 -I -c 'import json,sys
 def load(p):
@@ -40,6 +41,7 @@ br = b.get(sys.argv[3], {}).get("rect", [0, 0, 99999, 99999])
 for i, o in b.items():
     r = o["rect"]
     if o["viewable"] and not a.get(i, {}).get("viewable") and i != sys.argv[3] and r[2] > 1 \
+            and not str(o.get("name") or "").startswith("[i3 con]") \
             and r[0] >= br[0] - 2 and r[1] >= br[1] - 2:
         print(i)' "$1" "$2" "$3"
 }
