@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 #include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
@@ -161,6 +162,10 @@ void StretchOnResize(content::RenderWidgetHostView* view, bool stretch);
 // On Linux and Windows: the frame of a tab's dialog, such as print preview, shown in |widget|'s
 // window, from its content's top-left, if one shows (bc_window_dialog).
 std::optional<gfx::Rect> DialogFrame(views::Widget* widget);
+
+// On Linux and Windows: where DevTools docked in a page of |widget|'s window show, the first
+// pane's with them, and the page beside them, from its content's top-left (bc_window_devtools).
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget);
 
 // On Windows: the widget of a tab's dialog, such as print preview, shown over |widget|'s window in
 // a window of its own (PageDialogsInOwnWindow), or null.

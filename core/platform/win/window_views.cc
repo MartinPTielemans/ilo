@@ -1036,6 +1036,23 @@ std::optional<gfx::Rect> DialogFrame(views::Widget* widget) {
   return frame;
 }
 
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget) {
+  // Aura windows in the pane's window, which Windows doesn't see as windows of their own.
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return std::nullopt;
+  }
+  for (Slot& slot : views->panes()) {
+    if (slot.widget && slot.page && slot.devtools && slot.devtools->IsVisible()) {
+      gfx::Rect frame(views->ContentSize());
+      frame.Inset(slot.insets);
+      const gfx::Vector2d at = frame.OffsetFromOrigin();
+      return std::pair(slot.devtools->bounds() + at, slot.page->bounds() + at);
+    }
+  }
+  return std::nullopt;
+}
+
 bool FocusSettledOnActivation() {
   // Windows activates a window inside SetForegroundWindow, which the core can call part way
   // through a change, and it hasn't been measured there: as before, from a posted task.
