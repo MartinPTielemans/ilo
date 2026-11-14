@@ -163,6 +163,11 @@ esac
 if [ -n "$p2790on" ]; then
   . check/probe2790.sh
   p2790 snap > "$out/probe2790-p0.json"
+  # Where the manager has Peek a second after it shows, whatever comes of the motion.
+  (until grep -q '^browser: link preview shown$' "$log" 2>/dev/null; do sleep 0.2; done
+    sleep 1
+    p2790 snap > "$out/probe2790-pshown.json"
+    i3-msg -t get_tree > "$out/probe2790-pshown-i3.json" 2>/dev/null) &
 fi
 open_preview "from the pinned tab"
 first_frame=$(grep -m1 '^browser: link preview first frame in ' "$log" | sed 's/.* in //')
