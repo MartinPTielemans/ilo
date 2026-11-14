@@ -1316,6 +1316,9 @@ impl Browser for Engine {
         unsafe {
             bc::bc_window_start_move(self.window)
         };
+        // The check's driver lets go of a drag only once the window manager has the pointer.
+        #[cfg(target_os = "linux")]
+        crate::drive::window_move_asked();
     }
 
     fn window_maximized(&self) -> bool {

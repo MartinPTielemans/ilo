@@ -1659,10 +1659,10 @@ expect '^browser: page [0-9]* audible [01] muted 0$' "Unmute All Tabs unmuted no
 # under sway or Hyprland, so the UI can't wait for a resize to hear it (#1864). The headless sway
 # session's window fills its output already; under Xvfb, openbox's tiled case is a window
 # maximized to the screen, so there it's maximized first.
-# The double-click is the window manager's to answer with the real pointer, which is #2721's
-# slice 2, so for now the window goes full screen from its own size there.
 if [ "${BROWSER_HEADLESS:-}" = xvfb ]; then
-  echo "skip: a double-click on the header maximizing the window first, under Xvfb: #2721 slice 2."
+  send doubleclick 115 24
+  expect '^browser: window maximized true$' "a double-click on the header didn't maximize the window"
+  expect '^browser: drawn at 1280x800$' "the maximized window didn't draw at Xvfb's 1280 by 800 screen"
 fi
 bar_command toggle-full-screen "Enter Full Screen" "enter full"
 expect '^browser: window entered full screen$' "Enter Full Screen didn't put the window full screen"
