@@ -28,7 +28,7 @@ on:
           Where check.sh runs the app: on X11 under Xvfb or sway's Xwayland, or under Xvfb and KWin,
           which blurs, then on Wayland with no runs named, or on Wayland alone
         type: choice
-        options: [xvfb, sway, kwin, wayland, i3]
+        options: [xvfb, sway, kwin, wayland, i3, i3tile]
         default: xvfb
       rebuild:
         description: Build the app, even if a check of this commit kept one
@@ -321,7 +321,7 @@ jobs:
         with:
           packages: kwin-x11 x11-utils dbus-bin
       # Probe (#2790): i3, a tiling manager, and the probe's window tree under openbox.
-      - if: ${{ steps.engine.outputs.found == 'true' && (matrix.session == 'i3' || matrix.session == 'xvfb') }}
+      - if: ${{ steps.engine.outputs.found == 'true' && (matrix.session == 'i3' || matrix.session == 'i3tile' || matrix.session == 'xvfb') }}
         uses: ./.github/actions/apt-install
         with:
           packages: i3-wm x11-utils
@@ -462,6 +462,7 @@ jobs:
           xvfb) export BROWSER_XVFB=1 ;;
           kwin) export BROWSER_XVFB=kwin ;;
           i3) export BROWSER_XVFB=i3 ;;
+          i3tile) export BROWSER_XVFB=i3tile ;;
           wayland) export BROWSER_WAYLAND=1; where=wayland/ ;;
           esac
           dir=$out/$where

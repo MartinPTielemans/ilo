@@ -136,6 +136,13 @@ for round in 1 2 3 4 5; do
   expect '^browser: dialog hidden$' "the prompt didn't go (round $round)"
   sleep 0.5
 done
+# Its open filmed: every change of the screen from just before the key, with the manager's maps and
+# configures, for where the dialog's pixels first are.
+film_open dialog 1.2 send key p
+expect '^browser: dialog settled$' "the filmed prompt didn't settle"
+send key escape
+expect '^browser: dialog hidden$' "the filmed prompt didn't go"
+sleep 0.5
 
 # The toast: ⇧⌘C's, which lets the pointer through all over, as it has no buttons.
 s5="$out/probe2790-s5.json"
@@ -175,6 +182,15 @@ print(r[0] + r[2] // 2, r[1] + r[3] // 2)')
     t=$(time_open $tmid send key c cmd shift)
     note toast "open {\"round\": $round, \"ms\": \"$t\"}"
   done
+  # Its open filmed, then another app's window raised over it.
+  for _ in 1 2 3; do until_field "$toast" viewable false && break; done
+  sleep 0.3
+  film_open toast 1.0 send key c cmd shift
+  for _ in 1 2 3; do until_field "$toast" viewable false && break; done
+  sleep 0.3
+  send key c cmd shift
+  until_field "$toast" viewable true || true
+  [ -n "$tiling" ] || covered "$b" "$toast" toast
 fi
 
 # The foot bar, which stays.
