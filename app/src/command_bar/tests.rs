@@ -42,6 +42,10 @@ struct Recorder {
     settings_read: std::cell::Cell<usize>,
     /// The tabs open on the account's other computers.
     others: Vec<OtherTab>,
+    /// The archive, newest first: each tab's id, page and when it closed, in milliseconds.
+    archive: RefCell<Vec<(u64, String, f64)>>,
+    /// Now, in milliseconds since 1970.
+    now: f64,
 }
 
 impl Recorder {
@@ -177,6 +181,24 @@ impl Host for Recorder {
 
     fn other_tabs(&self, _: &App) -> Rc<Vec<OtherTab>> {
         Rc::new(self.others.clone())
+    }
+
+    fn archived(&self, url: &str, _: &App) -> Option<(u64, f64)> {
+        (self.archive.borrow().iter())
+            .find(|(_, page, _)| page == url)
+            .map(|&(id, _, closed)| (id, closed))
+    }
+
+    fn restore_archived(&self, archived: u64, _: &mut App) -> bool {
+        let kept = (self.archive.borrow().iter()).any(|&(id, _, _)| id == archived);
+        if kept {
+            self.record(format!("restore archived {archived}"));
+        }
+        kept
+    }
+
+    fn now(&self) -> f64 {
+        self.now
     }
 
     fn settings_index(&self, _: &App) -> Option<Rc<Vec<settings_search::Entry>>> {
@@ -376,6 +398,27 @@ impl Bar {
     fn accent(&mut self) -> (Hsla, Hsla) {
         self.window
             .read_with(&self.cx.cx, |bar, cx| bar.accent(&palette::current(cx)))
+            .unwrap()
+    }
+
+    /// What each row says at its end about where its result is, and the glyph on its tile.
+    fn ends(&mut self) -> Vec<(String, Option<&'static str>)> {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                (bar.rows.iter())
+                    .filter_map(|row| bar.end(row))
+                    .map(|(said, glyph)| (said.to_string(), glyph))
+                    .collect()
+            })
+            .unwrap()
+    }
+
+    /// Each row's icon.
+    fn icons(&mut self) -> Vec<Icon> {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                bar.rows.iter().map(Suggestion::icon).collect()
+            })
             .unwrap()
     }
 
@@ -3643,4 +3686,213 @@ fn another_computers_tabs_wait_for_two_letters_of_a_name(cx: &mut TestAppContext
         bar.suggest(typed, vec![searching(typed)]);
         assert_eq!(bar.rows(), [(search(typed), 0)], "{typed}");
     }
+}
+
+/// Midnight at the start of `day` November 2026 in the user's time zone, in milliseconds since
+/// 1970: the 10th is a Tuesday.
+fn november(day: u32) -> f64 {
+    use chrono::{Local, TimeZone};
+    let midnight = Local.with_ymd_and_hms(2026, 11, day, 0, 0, 0).earliest();
+    midnight
+        .expect("a time zone with that midnight")
+        .timestamp_millis() as f64
+}
+
+const HOUR: f64 = 3_600_000.;
+
+/// A page from the profile's history, last visited at `at`, in milliseconds since 1970.
+fn visited(url: &str, at: f64) -> Suggestion {
+    Suggestion {
+        last_visit: (at * 1000.) as i64,
+        ..page(url)
+    }
+}
+
+/// The bar, opened for a new tab at noon on Tuesday 10 November, over a Space with `tabs`, with
+/// `archive` in the archive: each tab's id, page and when it closed.
+fn with_archive(
+    cx: &mut TestAppContext,
+    tabs: Vec<shell::BarTab>,
+    archive: &[(u64, &str, f64)],
+) -> Bar {
+    let archive = (archive.iter())
+        .map(|&(id, url, closed)| (id, url.to_string(), closed))
+        .collect();
+    let host = Recorder {
+        archive: RefCell::new(archive),
+        now: november(10) + 12. * HOUR,
+        ..Recorder::default()
+    };
+    Bar::open(cx, tabs, host)
+}
+
+/// A page's row says where its result is (#2337): an open tab's Switch to Tab on the arrow's
+/// tile, a closed tab's day and Reopen on ↺'s, with its favicon for the clock, and a visited
+/// page's day in words alone, keeping the clock. A page with no visit known says nothing.
+#[gpui::test]
+fn each_row_says_where_its_result_is(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("pa");
+    let rows = vec![
+        searching("pa"),
+        Suggestion {
+            tab: 7,
+            ..page("https://open.test/")
+        },
+        visited("https://closed.test/", now - 2. * HOUR),
+        visited("https://visited.test/", november(9) + 8. * HOUR),
+        page("https://unknown.test/"),
+    ];
+    bar.suggest("pa", rows);
+    assert_eq!(
+        bar.ends(),
+        [
+            ("Switch to Tab".into(), Some("icons/arrow-right.svg")),
+            ("Closed today · Reopen".into(), Some("icons/rotate-ccw.svg")),
+            ("Visited yesterday".into(), None),
+        ]
+    );
+    assert_eq!(
+        bar.icons()[1..],
+        [
+            Icon::Favicon,
+            Icon::Favicon,
+            Icon::Glyph("icons/clock.svg"),
+            Icon::Glyph("icons/clock.svg"),
+        ]
+    );
+}
+
+/// ↩ on a closed tab's row brings the tab back as it was, with its history, rather than loading
+/// its page afresh.
+#[gpui::test]
+fn return_on_a_closed_row_reopens_its_tab(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("pa");
+    bar.suggest("pa", vec![searching("pa"), page("https://closed.test/")]);
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["restore archived 5", "hide"]);
+}
+
+/// A closed tab's row whose tab has left the archive since it was listed loads its page, as any
+/// page's row does.
+#[gpui::test]
+fn a_closed_row_gone_from_the_archive_loads_its_page(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("pa");
+    bar.suggest("pa", vec![searching("pa"), page("https://closed.test/")]);
+    bar.host.archive.borrow_mut().clear();
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["open https://closed.test/", "hide"]);
+}
+
+/// A row says the day in words: today from midnight, yesterday from the midnight before, then
+/// the weekday for the five days before that, so it's never last week's, then the date. A visit
+/// after now, from a clock set back, is today's.
+#[gpui::test]
+fn a_row_says_its_day_in_words_at_each_boundary(cx: &mut TestAppContext) {
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", november(8))]);
+    let days = [
+        (november(10) + 13. * HOUR, "today"),
+        (november(10), "today"),
+        (november(10) - 1., "yesterday"),
+        (november(9), "yesterday"),
+        (november(9) - 1., "Sunday"),
+        (november(4), "Wednesday"),
+        (november(4) - 1., "3 Nov"),
+        (november(1), "1 Nov"),
+    ];
+    bar.type_text("pa");
+    for (at, day) in days {
+        bar.suggest(
+            "pa",
+            vec![searching("pa"), visited("https://visited.test/", at)],
+        );
+        assert_eq!(bar.ends(), [(format!("Visited {day}"), None)], "{day}");
+    }
+    bar.suggest("pa", vec![searching("pa"), page("https://closed.test/")]);
+    assert_eq!(
+        bar.ends(),
+        [(
+            "Closed Sunday · Reopen".into(),
+            Some("icons/rotate-ccw.svg")
+        )]
+    );
+}
+
+/// A page that's both open and in the archive shows as open: a tab elsewhere's row switches to
+/// it, and one open in the Space or shown is never offered back from the archive.
+#[gpui::test]
+fn a_page_both_open_and_closed_shows_as_open(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let archive = [
+        (5, "https://elsewhere.test/", now - HOUR),
+        (6, "https://here.test/", now - HOUR),
+    ];
+    let mut bar = with_archive(cx, vec![tab(3, "https://here.test/")], &archive);
+    bar.type_text("pa");
+    let rows = vec![
+        searching("pa"),
+        Suggestion {
+            tab: 7,
+            ..page("https://elsewhere.test/")
+        },
+        visited("https://here.test/", now - HOUR),
+    ];
+    bar.suggest("pa", rows);
+    assert_eq!(
+        bar.ends(),
+        [
+            ("Switch to Tab".into(), Some("icons/arrow-right.svg")),
+            ("Visited today".into(), None),
+        ]
+    );
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["select 7", "hide"]);
+}
+
+/// An address typed loads where ↩ goes, as it does when it's an open tab's page, though a tab at
+/// it closed.
+#[gpui::test]
+fn an_address_typed_loads_though_its_tab_closed(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("closed.test");
+    bar.suggest("closed.test", vec![page("https://closed.test/")]);
+    assert_eq!(bar.ends(), []);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://closed.test/", "hide"]);
+}
+
+/// A page completed from what's typed reopens its closed tab, as a completion to an open tab's
+/// page switches to it.
+#[gpui::test]
+fn a_completion_to_a_closed_tab_reopens_it(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("closed.t");
+    bar.suggest("closed.t", vec![completing("https://closed.test/", "est")]);
+    assert_eq!(
+        bar.ends(),
+        [("Closed today · Reopen".into(), Some("icons/rotate-ccw.svg"))]
+    );
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["restore archived 5", "hide"]);
+}
+
+/// A visited page's day, with no tile after it, ends at the right edge of the glyph a closed tab's
+/// ↺ tile draws, inside the tile's plate, whatever the tile's size (the orchestrator, 11-14).
+#[test]
+fn a_day_alone_ends_where_the_tiles_glyph_does() {
+    let end = super::bare_end();
+    let plate = (super::END_TILE_RIGHT, super::END_TILE_RIGHT + ICON_BOX);
+    assert!(
+        plate.0 < end && end < plate.1,
+        "the day ends {end} from the row's end, outside the tile's plate, {plate:?}"
+    );
+    // The glyph's box is centred on the plate, so its right edge is as far inside it as its left.
+    assert_eq!(end - plate.0, plate.1 - (end + super::END_GLYPH));
 }

@@ -1901,6 +1901,20 @@ impl command_bar::Host for PreviewBar {
     fn set_up_agents(&self, _: &mut App) {}
 
     fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
+
+    /// PREVIEW_BAR=places's closed tabs, one closed two hours ago and one three days ago.
+    fn archived(&self, url: &str, _: &App) -> Option<(u64, f64)> {
+        let hours = match url {
+            "https://doc.rust-lang.org/std/collections/struct.HashMap.html" => 2.,
+            "https://crates.io/" => 72.,
+            _ => return None,
+        };
+        Some((1, self.now() - hours * 3_600_000.))
+    }
+
+    fn restore_archived(&self, _: u64, _: &mut App) -> bool {
+        false
+    }
 }
 
 /// A made-up page's request for a device, as PREVIEW_CHOOSER names it.
@@ -2194,6 +2208,53 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
                 ),
             ];
             ("clear", rows)
+        }
+        // Where a result is (#2337): an open tab, a tab in the archive and a page only in the
+        // history.
+        "places" => {
+            let now = command_bar::Host::now(&PreviewBar);
+            let history = |hours: f64, row: Suggestion| Suggestion {
+                removable: true,
+                last_visit: ((now - hours * 3_600_000.) * 1000.) as i64,
+                ..row
+            };
+            let rows = vec![
+                page(
+                    "Rust Programming Language",
+                    "",
+                    "https://www.rust-lang.org/",
+                    4,
+                ),
+                search("rust"),
+                history(
+                    2.,
+                    page(
+                        "HashMap in std::collections - Rust",
+                        "doc.rust-lang.org",
+                        "https://doc.rust-lang.org/std/collections/struct.HashMap.html",
+                        0,
+                    ),
+                ),
+                history(
+                    24.,
+                    page(
+                        "The Rust Programming Language",
+                        "doc.rust-lang.org",
+                        "https://doc.rust-lang.org/book/",
+                        0,
+                    ),
+                ),
+                history(
+                    72.,
+                    page(
+                        "crates.io: Rust Package Registry",
+                        "crates.io",
+                        "https://crates.io/",
+                        0,
+                    ),
+                ),
+            ];
+            ("rust", rows)
         }
         // The bar adds Open Library… itself, whose glyph the sidebar foot's button shares.
         "library" => ("library", vec![search("library")]),
@@ -2776,8 +2837,8 @@ fn main() {
                     cx.quit();
                 }
             }
-            // PREVIEW_BAR=tabs, sites, commands or library shows the command bar over the window, with
-            // made-up suggestions.
+            // PREVIEW_BAR=tabs, sites, commands, library or places shows the command bar over the window,
+            // with made-up suggestions.
             if let Ok(mode) = std::env::var("PREVIEW_BAR") {
                 let left = x + (width - command_bar::WIDTH as f64) / 2.;
                 let top = y as f32 + command_bar::centered_top(height as f32);
@@ -4627,6 +4688,15 @@ mod web {
     }
 
     impl command_bar::Host for Bar {
+        // The web preview's tabs aren't closed into an archive.
+        fn archived(&self, _: &str, _: &App) -> Option<(u64, f64)> {
+            None
+        }
+
+        fn restore_archived(&self, _: u64, _: &mut App) -> bool {
+            false
+        }
+
         fn suggest(&self, _: Option<&str>, text: &str, _: bool) {
             let text = text.to_string();
             let search = self.search_url(None, &text).filter(|_| !text.is_empty());

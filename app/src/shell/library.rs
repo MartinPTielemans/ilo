@@ -1260,6 +1260,24 @@ impl Shell {
         self.set_library(false, cx);
     }
 
+    /// The newest tab in the archive at `url`, its id and when it closed, which the command bar's
+    /// row for the page reopens (#2337).
+    pub fn archived_at(&self, url: &str) -> Option<(u64, f64)> {
+        (self.archive.iter())
+            .find(|tab| *tab.url == *url)
+            .map(|tab| (tab.id, tab.archived))
+    }
+
+    /// The command bar's ↩ on a closed tab's row: it comes back as the Library's Reopen brings it,
+    /// if it's still in the archive, and whether it was (#2337).
+    pub fn reopen_archived(&mut self, id: u64, cx: &mut Context<Self>) -> bool {
+        let kept = self.archive.iter().any(|tab| tab.id == id);
+        if kept {
+            self.restore_archived(id, cx);
+        }
+        kept
+    }
+
     /// Opens the archived tab `id` at the top of the Space's Today tabs and closes the Library.
     fn restore_archived(&mut self, id: u64, cx: &mut Context<Self>) {
         // check.sh waits for this line.
