@@ -289,9 +289,9 @@ EOF
   fail "$2"
 }
 # pip_driven: whether the driver finds a Picture in Picture window, which it does through X11 or
-# sway's tree: drive.mm has no pip. Under KWin it finds none (#2757).
+# sway's tree: drive.mm has no pip.
 pip_driven() {
-  [ "$(uname)" = Linux ] && [ "${BROWSER_XVFB:-}" != kwin ]
+  [ "$(uname)" = Linux ]
 }
 # Under Wayland the compositor places a window, not the app, so the core's place for the Mini
 # Player is where it asked, not where it shows.
@@ -429,9 +429,7 @@ kept_keys
 # manager does both, with the display's pointer, and sway from where the pointer is as it starts,
 # which keeps the drag's threshold. The driver as pip_driven says; Windows answers with its hit
 # test below, and a Mac in CI drags it with check/pointer.mm.
-if [ "${BROWSER_XVFB:-}" = kwin ]; then
-  echo "skip: moving and sizing the floating call, under KWin: the driver finds no window for it (#2757)."
-elif pip_driven; then
+if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at 1 "the floating call had no window"
@@ -939,14 +937,9 @@ elif [ "$(uname)" = Darwin ]; then
   send key x
   expect "^browser: title $v landed\$" "the floating video didn't come back"
 else
-  if [ "${BROWSER_XVFB:-}" = kwin ]; then
-    echo "skip: the Mini Player's place, and moving, sizing and double-clicking it, under KWin:" \
-      "the driver finds no window for it (#2757)."
-  else
-    echo "skip: moving, sizing and double-clicking the Mini Player on" \
-      "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
-      "there."
-  fi
+  echo "skip: moving, sizing and double-clicking the Mini Player on" \
+    "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
+    "there."
   # Clear of the page's middle, where the Mini Player can float.
   send click 300 200
   send key x
@@ -1006,8 +999,11 @@ expect 'browser: mini player back in its tab$' \
 expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
 # The same with a menu open as the user goes to another app: the menu closes as the app's window
 # takes the keyboard, and coming back puts the Mini Player back (#1614). On X11, as in mcp.sh, a
-# window of another client's takes it from xdotool.
-if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+# window of another client's takes it from xdotool, and ilo's window takes it back as the driver
+# makes it active. On Windows, as in mcp.sh, another app's window away from ilo's takes the
+# foreground, and gives it back to ilo's as a click on its taskbar button does.
+x11_other_app() { [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; }
+if x11_other_app || windows; then
   post rightclick $page_point
   expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
     "the video's menu had no Picture in Picture the third time"
@@ -1015,20 +1011,37 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
   expect "^browser: title $v floating\$" "the video didn't float a third time"
   post rightclick $page_point
   expect "^browser: menu shown " "the video's page had no menu over its Mini Player"
-  rm -f "$out/other-in"
-  mkfifo "$out/other-in"
-  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
-  other=$!
-  exec 7> "$out/other-in"
-  for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
-  xdotool windowactivate --sync "$(head -1 "$out/other-window.log")" 2> /dev/null ||
-    fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+  if windows; then
+    rm -f "$out/cover-front"
+    python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" away \
+      "$(cygpath -w "$out/cover-front")" > "$out/other-window.log" 2>&1 &
+    other=$!
+    for _ in $(seq 100); do
+      grep -q '^cover ' "$out/other-window.log" || ! kill -0 "$other" 2>/dev/null && break
+      sleep 0.1
+    done
+    grep -q '^cover .*, foreground away$' "$out/other-window.log" ||
+      fail "another app's window didn't open and take the foreground: $(cat "$out/other-window.log")"
+  else
+    rm -f "$out/other-in"
+    mkfifo "$out/other-in"
+    python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+    other=$!
+    exec 7> "$out/other-in"
+    for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+    xdotool windowactivate --sync "$(head -1 "$out/other-window.log")" 2> /dev/null ||
+      fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+  fi
   expect '^browser: menu window hidden$' "the menu stayed open as another app took the keyboard"
-  send window 1
+  if windows; then
+    touch "$out/cover-front"
+  else
+    send window 1
+  fi
   expect 'browser: mini player back in its tab$' \
     "coming back from another app with a menu open didn't put the Mini Player back in its tab"
   expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
-  exec 7>&-
+  windows || exec 7>&-
   wait "$other" 2> /dev/null || true
 else
   echo "skip: coming back from another app with a menu open, on $(uname) ${WAYLAND_DISPLAY:+Wayland}: no other app's window to go to."
