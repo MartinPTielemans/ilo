@@ -25,6 +25,8 @@
 #include "base/no_destructor.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/supports_user_data.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -50,12 +52,14 @@
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "net/base/data_url.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
+#include "net/url_request/redirect_info.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/cpp/url_loader_factory_builder.h"
@@ -130,19 +134,30 @@ const char* TypeOf(const network::ResourceRequest& request) {
   }
 }
 
-// What the app's engine does with |request|, and the address its answer writes into |answer|.
-int Ask(const network::ResourceRequest& request, std::string* answer) {
+// The page a request comes from, as the app's engine reads it.
+std::string SourceOf(const network::ResourceRequest& request) {
+  return request.request_initiator ? request.request_initiator->GetURL().spec() : std::string();
+}
+
+// What the app's engine does with the request for |url| of |type| from the page at |source|, and
+// the address or header names its answer writes into |answer|.
+int Ask(const GURL& url, const std::string& source, const char* type, std::string* answer) {
   const bc_host& host = Host();
-  // A page itself was asked about before its request started, by its navigation (PageThrottle).
   if (!g_on.load(std::memory_order_relaxed) || !host.ad_block_request ||
-      !request.url.SchemeIsHTTPOrHTTPS() ||
-      request.destination == network::mojom::RequestDestination::kDocument) {
+      !url.SchemeIsHTTPOrHTTPS()) {
     return BC_AD_BLOCK_ALLOW;
   }
-  const std::string source =
-      request.request_initiator ? request.request_initiator->GetURL().spec() : std::string();
-  return host.ad_block_request(host.context, request.url.spec().c_str(), source.c_str(),
-                               TypeOf(request), &Append, answer);
+  return host.ad_block_request(host.context, url.spec().c_str(), source.c_str(), type, &Append,
+                               answer);
+}
+
+// What the app's engine does with |request|.
+int Ask(const network::ResourceRequest& request, std::string* answer) {
+  // A page itself was asked about before its request started, by its navigation (PageThrottle).
+  if (request.destination == network::mojom::RequestDestination::kDocument) {
+    return BC_AD_BLOCK_ALLOW;
+  }
+  return Ask(request.url, SourceOf(request), TypeOf(request), answer);
 }
 
 // Fails a request as blocked.
@@ -180,8 +195,146 @@ void StandIn(const GURL& url, mojo::PendingRemote<network::mojom::URLLoaderClien
   client->OnComplete(status);
 }
 
+// Between the network and a request's client, on Sequence(), for a request the app's engine
+// answered BC_AD_BLOCK_AT_RESPONSE: asks it about each response, a redirect's too, before any of
+// it goes on, and fails the request as blocked where it says so. The page's loader talks to the
+// network's as it would, so pausing, priorities and following a redirect are untouched.
+class AtResponse : public network::mojom::URLLoaderClient {
+ public:
+  AtResponse(const AtResponse&) = delete;
+  AtResponse& operator=(const AtResponse&) = delete;
+
+  // The client for the network to answer, in place of |client|, for |request|, whose answer
+  // |names| the headers to ask with, one a line. Owns itself, until either end has gone.
+  static mojo::PendingRemote<network::mojom::URLLoaderClient> Watch(
+      const network::ResourceRequest& request,
+      const std::string& names,
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
+    mojo::PendingRemote<network::mojom::URLLoaderClient> watched;
+    new AtResponse(request, names, watched.InitWithNewPipeAndPassReceiver(), std::move(client));
+    return watched;
+  }
+
+  // network::mojom::URLLoaderClient:
+  void OnReceiveEarlyHints(network::mojom::EarlyHintsPtr early_hints) override {
+    client_->OnReceiveEarlyHints(std::move(early_hints));
+  }
+  void OnReceiveResponse(network::mojom::URLResponseHeadPtr head,
+                         mojo::ScopedDataPipeConsumerHandle body,
+                         std::optional<mojo_base::BigBuffer> cached_metadata) override {
+    if (Blocks(*head)) {
+      Fail();
+      return;
+    }
+    client_->OnReceiveResponse(std::move(head), std::move(body), std::move(cached_metadata));
+  }
+  void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
+                         network::mojom::URLResponseHeadPtr head) override {
+    if (Blocks(*head)) {
+      Fail();
+      return;
+    }
+    // uBlock Origin asks again about the address a redirect goes to.
+    std::string answer;
+    switch (Ask(redirect_info.new_url, source_, type_, &answer)) {
+      case BC_AD_BLOCK_BLOCK:
+      case BC_AD_BLOCK_REDIRECT:
+        Fail();
+        return;
+      case BC_AD_BLOCK_AT_RESPONSE:
+        names_ = Names(answer);
+        break;
+      default:
+        asking_ = false;
+        break;
+    }
+    url_ = redirect_info.new_url;
+    method_ = redirect_info.new_method;
+    client_->OnReceiveRedirect(redirect_info, std::move(head));
+  }
+  void OnUploadProgress(int64_t current_position,
+                        int64_t total_size,
+                        OnUploadProgressCallback callback) override {
+    client_->OnUploadProgress(current_position, total_size, std::move(callback));
+  }
+  void OnTransferSizeUpdated(int32_t transfer_size_diff) override {
+    client_->OnTransferSizeUpdated(transfer_size_diff);
+  }
+  void OnComplete(const network::URLLoaderCompletionStatus& status) override {
+    client_->OnComplete(status);
+    delete this;
+  }
+
+ private:
+  AtResponse(const network::ResourceRequest& request,
+             const std::string& names,
+             mojo::PendingReceiver<network::mojom::URLLoaderClient> receiver,
+             mojo::PendingRemote<network::mojom::URLLoaderClient> client)
+      : source_(SourceOf(request)),
+        type_(TypeOf(request)),
+        url_(request.url),
+        method_(request.method),
+        names_(Names(names)),
+        receiver_(this, std::move(receiver)),
+        client_(std::move(client)) {
+    receiver_.set_disconnect_handler(base::BindOnce(&AtResponse::Gone, base::Unretained(this)));
+    client_.set_disconnect_handler(base::BindOnce(&AtResponse::Gone, base::Unretained(this)));
+  }
+  ~AtResponse() override = default;
+
+  static std::vector<std::string> Names(const std::string& names) {
+    return base::SplitString(names, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+  }
+
+  // Whether the app's engine blocks the response |head| to the request for url_. It's handed the
+  // first value of each header names_ has, as Chromium's webRequest lists them, comma-separated
+  // values apart, and nothing else of the response. None of it is kept.
+  bool Blocks(const network::mojom::URLResponseHead& head) const {
+    const bc_host& host = Host();
+    if (!asking_ || !g_on.load(std::memory_order_relaxed) || !host.ad_block_response) {
+      return false;
+    }
+    std::string headers;
+    if (head.headers) {
+      for (const std::string& wanted : names_) {
+        size_t iter = 0;
+        std::string name;
+        std::string value;
+        while (head.headers->EnumerateHeaderLines(&iter, &name, &value)) {
+          if (base::EqualsCaseInsensitiveASCII(name, wanted)) {
+            base::StrAppend(&headers, {wanted, ": ", value, "\n"});
+            break;
+          }
+        }
+      }
+    }
+    return host.ad_block_response(host.context, url_.spec().c_str(), source_.c_str(), type_,
+                                  method_.c_str(), headers.c_str()) == BC_AD_BLOCK_BLOCK;
+  }
+
+  // Fails the request as blocked before any of the response reaches the page, and drops the
+  // network's end, which cancels its load.
+  void Fail() {
+    client_->OnComplete(network::URLLoaderCompletionStatus(net::ERR_BLOCKED_BY_CLIENT));
+    delete this;
+  }
+  void Gone() { delete this; }
+
+  const std::string source_;
+  // TypeOf's, a string of its own.
+  const char* const type_;
+  GURL url_;
+  std::string method_;
+  std::vector<std::string> names_;
+  // Until a redirect goes to an address the app's engine lets go as it is.
+  bool asking_ = true;
+  mojo::Receiver<network::mojom::URLLoaderClient> receiver_;
+  mojo::Remote<network::mojom::URLLoaderClient> client_;
+};
+
 // Between a factory's requests and Chrome's factory, on Sequence(): each goes to the app's engine
-// first. One allowed goes on as it came, with nothing of ours in its way once it's started.
+// first. One allowed goes on as it came, with nothing of ours in its way once it's started, but
+// one asked about again at its responses.
 class Proxy : public network::mojom::URLLoaderFactory {
  public:
   Proxy(const Proxy&) = delete;
@@ -218,6 +371,11 @@ class Proxy : public network::mojom::URLLoaderFactory {
           return;
         }
         break;
+      case BC_AD_BLOCK_AT_RESPONSE:
+        target_->CreateLoaderAndStart(std::move(loader), request_id, options, request,
+                                      AtResponse::Watch(request, answer, std::move(client)),
+                                      traffic_annotation);
+        return;
       default:
         break;
     }
