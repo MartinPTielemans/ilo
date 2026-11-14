@@ -42,6 +42,16 @@ v.onleavepictureinpicture = () => document.title = "landed";
 onkeydown = e => e.key == "x" && document.exitPictureInPicture();
 </script>' > "$out/site/look.html"
 
+log="$out/pip-look-app.log"
+step=0
+rm -f "$saved" "$launch_frame"
+BROWSER_DRIVE=1 BROWSER_URL="${site}look.html" "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await_load
+send click $page_point
+[ "$active" = 1 ] || fail "the probe needs the browser active, for the page's menu"
+
 # Chromium takes any name under .localhost for this machine, so the site answers a long one too.
 port=${site##*:}
 long="http://the-origin-of-a-floating-video-on-a-long-host-name.localhost:$port"
@@ -65,12 +75,14 @@ looks() {
   mini_player_at 1 "the video from $2 had no Mini Player"
   # Smaller than its smallest, where it stays, the pointer over it.
   send pip wheel $((pw / 2)) $((ph / 2)) 3 cmd
+  # Waits out the Mini Player's resize, which logs no end.
   sleep 1
   ../tools/window-screenshot.sh "$pid" "$out/look-$1-narrowest.png" || fail "no window to capture"
   echo "$1 narrowest: $(grep 'mini player look ' "$log" | tail -1 | sed 's/.*mini player look //')" >> "$out/looks.txt"
   send pip
   mini_player_at 1 "the Mini Player from $2 went"
   send pip wheel $((pw / 2)) $((ph / 2)) -40 cmd
+  # Waits out the Mini Player's resize, which logs no end.
   sleep 1
   ../tools/window-screenshot.sh "$pid" "$out/look-$1-widest.png" || fail "no window to capture"
   echo "$1 widest: $(grep 'mini player look ' "$log" | tail -1 | sed 's/.*mini player look //')" >> "$out/looks.txt"
@@ -80,5 +92,7 @@ looks() {
 }
 looks short "$site"
 looks long "$long"
+exec 3>&-
+quit
 cat "$out/looks.txt"
 echo "ok: probe: the Mini Player's look at its narrowest and widest, from a short host and a long one."
