@@ -73,6 +73,18 @@ fn lock_exits(lock: &str, host: &str, own: u32, runs_this_program: impl Fn(u32) 
     !lock_host.is_empty() && (held || lock_host != host)
 }
 
+/// exits_at_lock on Windows, where the ilo that holds the `profile` keeps its "lockfile" open
+/// with no one else let write to it (ProcessSingleton::Create): an ilo that has quit, even
+/// crashed, has closed it.
+#[cfg(target_os = "windows")]
+pub fn exits_at_lock(profile: &std::path::Path) -> bool {
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(profile.join("lockfile"))
+        .is_err_and(|error| error.raw_os_error() == Some(ERROR_SHARING_VIOLATION))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +123,28 @@ mod tests {
         std::os::unix::fs::symlink(format!("{}-{}", host.trim(), std::process::id()), &lock)
             .unwrap();
         assert!(!exits_at_lock(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_launch_exits_at_a_lockfile_a_running_ilo_holds() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_SHARE_READ: u32 = 1;
+        let dir = std::env::temp_dir().join(format!("ilo-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!exits_at_lock(&dir), "no lockfile");
+        // As Chromium holds it: open for writing, others only let read.
+        let held = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(dir.join("lockfile"))
+            .unwrap();
+        assert!(exits_at_lock(&dir), "held by a running ilo");
+        drop(held);
+        assert!(!exits_at_lock(&dir), "left by an ilo that quit");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
