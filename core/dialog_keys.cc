@@ -132,7 +132,13 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
 #if !BUILDFLAG(IS_MAC)
   void PageViewFocused(gfx::NativeView view) {
     content::WebContents* page = ShownPage(window_);
-    if (page && view && page->GetNativeView()->Contains(view)) {
+    if (!page || !view) {
+      return;
+    }
+    // Aura focuses the window holding the page when the page's own view, ignoring input under the
+    // dialog, won't take it, as the pane's on Windows.
+    gfx::NativeView page_view = page->GetNativeView();
+    if (page_view->Contains(view) || view->Contains(page_view)) {
       PageFocused(page);
     }
   }

@@ -172,8 +172,8 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   // HWND focused, which it needs to take the input method's text. Not while another of the app's
   // windows is in front, such as the command bar.
   void OnWindowFocused(aura::Window* gained_focus, aura::Window*) override {
-    // A click on a page whose tab shows a dialog focuses its view here, but the page, which ignores
-    // input under the dialog, doesn't say so, and every key it then has is lost: the dialog takes
+    // A click on a page whose tab shows a dialog focuses the pane here, as the page, ignoring input
+    // under the dialog, won't take it, and every key the pane then has is lost: the dialog takes
     // the keyboard back, as on the Mac (#2625).
     dialog_keys::PageViewFocused(gained_focus);
     const bool take =
