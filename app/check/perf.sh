@@ -324,6 +324,13 @@ if [ -n "$held" ]; then
     "the launches below are on it"
   selfied=", on uBlock Origin's selfie"
 fi
+# ilo's warm launch, not measured: it checks for updates 10 s in and stays until its CRLSet is in, so
+# the launches and the session after are on it, as a user's are. The updater's first check is a
+# minute into a launch otherwise, which only the selfie's launch above lasts, so with no selfie,
+# under the browser's own ad blocker, the set came a minute into the session, after its 1-tab
+# sample (#2111).
+rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+perf_launch "$page?warm" warm warm
 for n in 1 2 3 4 5; do
   rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
   perf_launch "$page?link$n" "link$n" "link$n"
