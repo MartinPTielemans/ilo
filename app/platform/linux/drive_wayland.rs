@@ -109,6 +109,8 @@ thread_local! {
     static LAST_CLICK: Cell<Option<(Instant, f64, f64, u32)>> = const { Cell::new(None) };
     /// Where in sway's layout the pointer was last put.
     static POINTER: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
+    /// The output `display add` plugged in, which `display remove` takes out.
+    static ADDED: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Makes the driver's pointer and keyboard under Wayland, before the app's windows, so Chromium
@@ -165,14 +167,7 @@ fn open() -> Result<Session, String> {
     if outputs.is_empty() || !outputs.iter().all(headless) {
         return Err("sway's outputs aren't all headless".into());
     }
-    let extent = outputs
-        .iter()
-        .fold((0f64, 0f64), |(width, height), output| {
-            let rect = &output["rect"];
-            let right = number(&rect["x"]) + number(&rect["width"]);
-            let bottom = number(&rect["y"]) + number(&rect["height"]);
-            (width.max(right), height.max(bottom))
-        });
+    let extent = extent(outputs);
     let connection = Connection::connect_to_env().map_err(|e| e.to_string())?;
     let (globals, mut queue) =
         registry_queue_init::<State>(&connection).map_err(|e| e.to_string())?;
@@ -216,6 +211,66 @@ fn open() -> Result<Session, String> {
         extent,
         started: Instant::now(),
     })
+}
+
+/// The size of sway's layout of `outputs`.
+fn extent(outputs: &[Value]) -> (f64, f64) {
+    outputs
+        .iter()
+        .fold((0f64, 0f64), |(width, height), output| {
+            let rect = &output["rect"];
+            let right = number(&rect["x"]) + number(&rect["width"]);
+            let bottom = number(&rect["y"]) + number(&rect["height"]);
+            (width.max(right), height.max(bottom))
+        })
+}
+
+/// sway's outputs' names, once `done` holds of them, for up to 2 s, as sway adds or takes out an
+/// output a moment after the command.
+fn outputs_once(done: impl Fn(&[String]) -> bool) -> Option<Vec<String>> {
+    let until = Instant::now() + Duration::from_secs(2);
+    loop {
+        let outputs = sway(GET_OUTPUTS, "")?;
+        let names: Vec<String> = (outputs.as_array()?.iter())
+            .filter_map(|output| Some(output["name"].as_str()?.to_owned()))
+            .collect();
+        if done(&names) {
+            let extent = extent(outputs.as_array()?);
+            SESSION.with_borrow_mut(|session| session.as_mut().map(|s| s.extent = extent));
+            return Some(names);
+        }
+        if Instant::now() > until {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A display plugged in, `width` by `height`, as an output of sway's headless backend beside the
+/// others, as the Mac's driver plugs in a virtual one, logged where in place's terms, sway's layout.
+/// Under Wayland no output is the main one, so the Mac's "main" means nothing here.
+fn display_add(width: f64, height: f64) -> Option<()> {
+    let before = outputs_once(|_| true)?;
+    let (right, _) = SESSION.with_borrow(|session| session.as_ref().map(|s| s.extent))?;
+    sway_command("create_output")?;
+    let names = outputs_once(|names| names.iter().any(|name| !before.contains(name)))?;
+    let name = names.into_iter().find(|name| !before.contains(name))?;
+    sway_command(&format!(
+        "output {name} resolution {width}x{height} position {right} 0 scale 1"
+    ))?;
+    outputs_once(|_| true)?;
+    log!("browser: display added at {right:.0} 0 {width:.0} {height:.0}");
+    ADDED.set(Some(name));
+    Some(())
+}
+
+/// The display `display_add` plugged in, unplugged, which sway moves its windows off.
+fn display_remove() -> Option<()> {
+    let name = ADDED.take()?;
+    sway_command(&format!("output {name} unplug"))?;
+    outputs_once(|names| !names.contains(&name))?;
+    log!("browser: display removed");
+    Some(())
 }
 
 fn number(value: &Value) -> f64 {
@@ -494,7 +549,8 @@ pub(crate) fn key_title() -> Option<String> {
 
 /// Moves the driven browser window's content to (`x`, `y`) in sway's layout, or keeps it where it
 /// is, as sway sizes a floating window about its centre, and sizes it `width` by `height`, which
-/// the command waits for the UI to have.
+/// the command waits for the UI to have. The layout's, not its workspace's, as the tree reports
+/// it, so it lands on a display `display add` plugged in too.
 fn frame(at: Option<(f64, f64)>, width: f64, height: f64) -> Option<()> {
     let (id, node) = driven()?;
     let handle =
@@ -506,7 +562,7 @@ fn frame(at: Option<(f64, f64)>, width: f64, height: f64) -> Option<()> {
     let (x, y) = at.unwrap_or((node.x, node.y));
     let con = node.id;
     sway_command(&format!(
-        "[con_id={con}] resize set width {width} px height {height} px, move position {x} {y}"
+        "[con_id={con}] resize set width {width} px height {height} px, move absolute position {x} {y}"
     ))?;
     drive::resizing(view as usize, width, height);
     Some(())
@@ -1420,6 +1476,13 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
         })(),
         "layout" => layout(),
         "scales" => scales(),
+        "display" => match words.next() {
+            Some("add") => {
+                (|| display_add(words.next()?.parse().ok()?, words.next()?.parse().ok()?))()
+            }
+            Some("remove") => display_remove(),
+            _ => None,
+        },
         _ => return None,
     })
 }

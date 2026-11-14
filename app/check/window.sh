@@ -611,12 +611,16 @@ sidebar_back "$out/green-button-again.png" ||
 # escape and the page's full screen work. The check VM's AppKit keeps the window full screen, and
 # finishes a way out it started, but on the owner's Mac it took the window out without finishing,
 # and the page stayed laid out full screen, for good (#415).
+# The Mac's is the main display, at 0 0; sway's an output beside the session's.
 second_display() {
   send display add 1280 800 main
   added=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: display ')
-  [ "$added" = "browser: display added at 0 0 1280 800" ] ||
-    fail "no second display for the page's full screen: $added"
-  send place 40 40 1000 700
+  case "$added" in
+  "browser: display added at "*" 1280 800") set -- ${added#browser: display added at } ;;
+  *) fail "no second display for the page's full screen: $added" ;;
+  esac
+  [ "$(uname)" != Darwin ] || [ "$1 $2" = "0 0" ] || fail "the second display isn't the main one: $added"
+  send place $(($1 + 40)) $(($2 + 40)) 1000 700
   send key f
   expect '^browser: page entered full screen$' "the page didn't go full screen on the second display"
   expect '^browser: window entered full screen$' "the page didn't take the window full screen on the second display"
@@ -681,8 +685,19 @@ windowed_again() {
   sidebar_back "$out/$2-again.png" ||
     fail "after the page's next full screen the sidebar is $sidebar_now, not $sidebar: the page still covers it"
 }
-if [ "$(uname)" = Linux ]; then
-  echo "skip: second display: the Linux driver can't add one yet."
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  # sway takes a window full screen and out in one step, with no way in or out for the display to
+  # go during, so those steps are the Mac's.
+  send order
+  frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+  second_display
+  send display remove
+  from=$step
+  together "in full screen" display-gone
+  send place $frame
+  echo "skip: the second display going as the window leaves or enters full screen: sway does either in one step."
+elif [ "$(uname)" = Linux ]; then
+  echo "skip: second display: the X11 driver can't add one yet."
 elif windows; then
   echo "skip: second display: the Windows driver can't add one yet."
 else
@@ -757,7 +772,7 @@ expect '^browser: window entered full screen$' "the window didn't go full screen
 check_layout "full screen with the sized page"
 full=$content
 await_drawn sized-full-screen "$orange" "the sized page in full screen"
-if [ "$(uname)" = Darwin ]; then
+if [ "$(uname)" = Darwin ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
   send display add 1280 800
   added=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: display ')
   case "$added" in "browser: display added at "*) ;; *) fail "no display to plug in: $added" ;; esac
@@ -770,7 +785,7 @@ if [ "$(uname)" = Darwin ]; then
   [ "$content" = "$full" ] || fail "the plugged-in display going took the full-screen window from $full to $content"
   await_drawn display-unplugged "$orange" "full screen as the plugged-in display went away"
 else
-  driver=Linux
+  driver=X11
   ! windows || driver=Windows
   echo "skip: a display plugged in while full screen: the $driver driver can't add one yet."
 fi
