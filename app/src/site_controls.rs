@@ -206,6 +206,9 @@ pub struct Site {
     /// there: a page that isn't http(s), one Safari's engine shows, a private window, or with
     /// blocking off in Settings.
     pub ad_blocking: Option<bool>,
+    /// How many requests it blocked on the page, such as "12" or ">1k", empty while it blocked
+    /// none or isn't on there.
+    pub ad_blocked: SharedString,
     /// Whether the site's tabs show in Developer Mode, none where that isn't the user's to change:
     /// a page that isn't http(s), or a private window.
     pub developer_mode: Option<bool>,
@@ -779,12 +782,14 @@ fn switch_area(count: usize) -> f32 {
     }
 }
 
-/// The shield's words, its tooltip and what an assistive app reads.
-fn shield_label(on: bool) -> &'static str {
-    match on {
-        true => "Ads and trackers blocked",
-        false => "Ads and trackers allowed",
-    }
+/// The shield's words, its tooltip and what an assistive app reads, with how many requests it
+/// blocked on the page while it blocks any, as uBlock Origin's badge counts them.
+fn shield_label(site: &Site) -> Option<SharedString> {
+    Some(match site.ad_blocking? {
+        true if site.ad_blocked.is_empty() => "Ads and trackers blocked".into(),
+        true => format!("Ads and trackers blocked, {} on this page", site.ad_blocked).into(),
+        false => "Ads and trackers allowed".into(),
+    })
 }
 
 /// The panel's corners in its window, clockwise from the beak's tip, or its top left without one.
@@ -1043,8 +1048,11 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
 /// The site for the log: Chrome's words for the connection, then each row and its value, in their
 /// order, which check.sh clicks by.
 fn describe(site: &Site) -> String {
-    let ad_blocking = (site.ad_blocking.iter())
-        .map(|&on| format!("Ad blocking {}", if on { "On" } else { "Off" }));
+    let ad_blocking = (site.ad_blocking.iter()).map(|&on| match on {
+        true if site.ad_blocked.is_empty() => "Ad blocking On".to_string(),
+        true => format!("Ad blocking On ({} blocked)", site.ad_blocked),
+        false => "Ad blocking Off".to_string(),
+    });
     let developer_mode = (site.developer_mode.iter())
         .map(|&on| format!("{DEVELOPER_MODE_NAME} {}", if on { "On" } else { "Off" }));
     let permissions: Vec<String> = ad_blocking
@@ -1749,9 +1757,6 @@ impl SiteControls {
                 .find(|each| &each.id == id)
                 .map(|each| each.title.clone()),
             Stop::AddExtension => Some("Add Extension".into()),
-            Stop::AdBlocking => (open.site.as_ref())
-                .and_then(|site| site.ad_blocking)
-                .map(|on| shield_label(on).into()),
             // A lock or a chip that's a glyph alone names itself in its tooltip.
             Stop::Lock => (open.site.as_ref())
                 .filter(|site| lock_alone(site, open.profiles.as_ref()))
@@ -1764,6 +1769,7 @@ impl SiteControls {
                         .is_some_and(|site| lock_alone(site, open.profiles.as_ref()))
                 })
                 .map(|profiles| profiles.name.clone()),
+            Stop::AdBlocking => (open.site.as_ref()).and_then(shield_label),
             _ => None,
         };
         open.keyed = Some(stop);
@@ -2142,20 +2148,20 @@ impl SiteControls {
         let on = site.ad_blocking?;
         let frame = self.action_frame(self.tiles(site).len(), y);
         let palette = palette::current(cx);
-        let label = shield_label(on);
+        let label = shield_label(site)?;
         let (glyph, ink): (_, gpui::Hsla) = match on {
             true => (SHIELD_ON, palette.accent.into()),
             false => (SHIELD_OFF, palette.on_overlay_glyph(TEXT)),
         };
         let tile = Self::plate(&palette, "site-shield".into(), frame, on)
             .when(self.a11y, |tile| {
-                button_named(tile, label, (false, true, false))
+                button_named(tile, label.clone(), (false, true, false))
             })
             .flex()
             .items_center()
             .justify_center()
             .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
-                panel.tooltip(label.into(), frame, *hovered, cx)
+                panel.tooltip(label.clone(), frame, *hovered, cx)
             }))
             .on_click(cx.listener(move |panel, _, _, cx| panel.toggle_ad_blocking(!on, cx)))
             .child(svg().path(glyph).size(px(19.5)).text_color(ink))

@@ -1977,6 +1977,9 @@ impl CommandBar {
             }
             Some(TaskRow::SetUp) => {
                 log!("browser: command bar sets up agents");
+                // Ended here, or the next ⌘T ends it from inside the Shell's update, whose slot
+                // closing reads the Shell (#2459).
+                self.end_ask(cx);
                 self.close();
                 self.host.set_up_agents(cx);
             }

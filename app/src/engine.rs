@@ -1413,13 +1413,9 @@ impl Browser for Engine {
         }
     }
 
-    fn can_open_in_safari(&self) -> bool {
-        true
-    }
-
-    fn open_in_safari(&self, url: &str, _: &mut App) {
+    fn open_elsewhere(&self, url: &str, _: &mut App) {
         if let Ok(url) = CString::new(url) {
-            unsafe { platform::host_open_in_safari(url.as_ptr()) };
+            unsafe { platform::host_open_elsewhere(url.as_ptr()) };
         }
     }
 
@@ -1596,6 +1592,11 @@ impl Browser for Engine {
     }
 
     #[cfg(target_os = "macos")]
+    fn full_screen_now(&self) -> bool {
+        unsafe { platform::host_window_full_screen(self.ui_view) }
+    }
+
+    #[cfg(target_os = "macos")]
     fn on_active_space(&self) -> bool {
         unsafe { platform::host_window_on_active_space(self.ui_view) }
     }
@@ -1761,8 +1762,10 @@ impl Browser for Engine {
         );
     }
 
+    /// The Mac's and Windows' hosts read the desktop's picture. Linux has no way an app in its
+    /// sandbox can, so there it's never offered (#2682).
     fn desktop_picture_offered(&self) -> bool {
-        cfg!(target_os = "macos")
+        cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
     fn page_picture(&self, tab: u64, request: u64, _: &mut App) {
@@ -2081,6 +2084,8 @@ impl Browser for Engine {
                 return;
             };
             let space = little_home(space, main);
+            // The user's now, which no page closes away.
+            crate::sign_in_close::link_tab_left(tab);
             unsafe {
                 if bc::bc_window_space(main) != space {
                     bc::bc_window_show_space(main, space);

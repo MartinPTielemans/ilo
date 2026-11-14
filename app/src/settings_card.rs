@@ -6,8 +6,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui::{
-    BoxShadow, FontWeight, Rgba, ScrollHandle, SharedString, canvas, div, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, rgba,
+    Bounds, BoxShadow, FocusHandle, FontWeight, Pixels, Rgba, ScrollHandle, SharedString,
+    WeakFocusHandle, canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, rgb,
+    rgba,
 };
 
 use crate::palette::OVERLAY_DARK;
@@ -35,6 +36,123 @@ pub struct Card {
     logged: RefCell<Option<SharedString>>,
     /// Where the card shows a row whole, as `reveal` has it, logged once a change.
     sight_logged: Rc<Cell<Option<(i32, i32)>>>,
+    /// Keeps the control the keys move to in sight.
+    follow: Follow,
+}
+
+/// A pane that scrolls keeps the control that takes the keyboard in sight, as a browser's page
+/// does: GPUI moves the keys from control to control without scrolling to them, so ⇥ to a control
+/// under a short window's edge would leave it, and its ring, out of sight (#2506). Its `before`
+/// is drawn before the pane's controls and its `after` once they're drawn.
+#[derive(Default)]
+pub struct Follow {
+    /// Where the control with the keyboard was drawn by the time the pane's began.
+    before: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The control in the pane last scrolled to, kept to only as it takes the keyboard, so a wheel
+    /// can take it away again.
+    followed: Rc<RefCell<Option<WeakFocusHandle>>>,
+    /// A row scrolled to this frame by other means, as `reveal` does, isn't followed as well.
+    placed: Rc<Cell<bool>>,
+}
+
+impl Follow {
+    /// Put in before the pane.
+    pub fn before(&self) -> gpui::Canvas<()> {
+        let before = self.before.clone();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| before.set(window.painted_focus_bounds()),
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// Put in after the pane, on the bounds of its scroll view: a control in it that took the
+    /// keyboard is scrolled in, by `scroll`, as little as shows it whole between `top` and `bottom`
+    /// points in from the view's edges, where the pane's held title and fade cover it.
+    pub fn after(&self, scroll: ScrollHandle, top: f32, bottom: f32) -> gpui::Canvas<()> {
+        let (before, followed) = (self.before.clone(), self.followed.clone());
+        let placed = self.placed.clone();
+        canvas(
+            |_, _, _| {},
+            move |view, _, window, cx| {
+                let placed = placed.replace(false);
+                let focus = window.painted_focus_bounds();
+                let Some(control) = focus.filter(|_| focus != before.get()) else {
+                    followed.replace(None);
+                    return;
+                };
+                let focused = window.focused(cx);
+                let kept = followed.replace(focused.as_ref().map(FocusHandle::downgrade));
+                let same = match (&kept, &focused) {
+                    (Some(kept), Some(focused)) => kept == focused,
+                    (kept, focused) => kept.is_none() && focused.is_none(),
+                };
+                if same || placed {
+                    return;
+                }
+                let by = into_sight(view, control, top, bottom);
+                if by != 0. {
+                    let most = f32::from(scroll.max_offset().y);
+                    let mut offset = (f32::from(scroll.offset().y) + by).clamp(-most, 0.);
+                    // Within the title's or the fade's height of an end, where neither is drawn,
+                    // the page goes to the end rather than stop a few points short of it.
+                    if by > 0. && offset > -top {
+                        offset = 0.;
+                    } else if by < 0. && offset < bottom - most {
+                        offset = -most;
+                    }
+                    scroll.set_offset(point(px(0.), px(offset)));
+                    // Not refresh, which does nothing while the frame draws.
+                    window.request_animation_frame();
+                }
+            },
+        )
+        .absolute()
+        .inset_0()
+    }
+}
+
+/// How far to move a pane's page, `view` in the window, so `control` shows whole between `top`
+/// and `bottom` points in from its edges: as little as that takes, its top first where it can't.
+/// One that covers all it shows already shows all it can, as the pane itself does, whose controls
+/// leave it the keyboard as a press takes it, and is left where it is (#2522).
+fn into_sight(view: Bounds<Pixels>, control: Bounds<Pixels>, top: f32, bottom: f32) -> f32 {
+    let (from, to) = (
+        f32::from(view.origin.y) + top,
+        f32::from(view.bottom()) - bottom,
+    );
+    let (y, end) = (f32::from(control.origin.y), f32::from(control.bottom()));
+    if y <= from && end >= to {
+        0.
+    } else if y < from {
+        from - y
+    } else if end > to {
+        -(end - to).min(y - from)
+    } else {
+        0.
+    }
+}
+
+/// Where Page Down, Page Up, Home and End move a page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Paging {
+    Down,
+    Up,
+    Top,
+    Bottom,
+}
+
+impl Paging {
+    /// Space and ⇧Space, as a page has them: Page Down and Page Up. Only while the window itself has
+    /// the keyboard: with a control, Space is its press, and with a field, a space typed.
+    pub fn space(keys: &gpui::Keystroke) -> Option<Paging> {
+        let held = keys.modifiers.platform || keys.modifiers.control || keys.modifiers.alt;
+        (keys.key == "space" && !held).then_some(match keys.modifiers.shift {
+            true => Paging::Up,
+            false => Paging::Down,
+        })
+    }
 }
 
 /// The card's colours: its fill, the held title's hairline, its name's and its heading's ink.
@@ -71,11 +189,34 @@ impl Card {
         self.revealing.set(true);
     }
 
+    /// Page Down and Page Up move the page by what the card shows between its held title and its
+    /// fade, so the row the fade covered shows under the title; Home and End go to its top and its
+    /// foot. False where it's already there.
+    pub fn page(&self, to: Paging) -> bool {
+        let (offset, most) = (
+            f32::from(self.scroll.offset().y),
+            f32::from(self.scroll.max_offset().y),
+        );
+        let sight = (self.height.get() - HELD_TITLE - FADE).max(0.);
+        let next = match to {
+            Paging::Down => offset - sight,
+            Paging::Up => offset + sight,
+            Paging::Top => 0.,
+            Paging::Bottom => -most,
+        }
+        .clamp(-most, 0.);
+        if next == offset {
+            return false;
+        }
+        self.scroll.set_offset(point(px(0.), px(next)));
+        true
+    }
+
     /// Put in a row's element: once it's drawn after `reveal_next`, the card scrolls it to just
     /// under the held title, unless it's already in sight above the fade.
     pub fn reveal(&self) -> gpui::Canvas<()> {
         let (scroll, top, height) = (self.scroll.clone(), self.top.clone(), self.height.clone());
-        let revealing = self.revealing.clone();
+        let (revealing, placed) = (self.revealing.clone(), self.follow.placed.clone());
         canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
@@ -90,6 +231,7 @@ impl Card {
                 let offset = f32::from(scroll.offset().y) - (row - card - HELD_TITLE - PAGE_TOP);
                 let most = f32::from(scroll.max_offset().y);
                 scroll.set_offset(point(px(0.), px(offset.clamp(-most, 0.))));
+                placed.set(true);
                 window.refresh();
             },
         )
@@ -256,6 +398,7 @@ impl Card {
             })
             .overflow_hidden()
             .child(at)
+            .child(self.follow.before())
             .child(
                 div()
                     .id("card")
@@ -272,6 +415,7 @@ impl Card {
                     .child(page),
             )
             .child(after)
+            .child(self.follow.after(self.scroll.clone(), HELD_TITLE, FADE))
             .children(held)
             .children(fade)
     }

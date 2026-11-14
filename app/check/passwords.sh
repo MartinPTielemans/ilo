@@ -1,3 +1,4 @@
+# check.sh runs this at 270.
 # A page's submitted login brings our offer to save its password, a card 18 in from the page
 # card's top right corner, which keeps its place through a resize. Showing another tab closes it,
 # and showing the tab again doesn't bring it back, but the key after the host in the URL field
@@ -134,15 +135,18 @@ sed -n "/^browser: drive $back: /,\$p" "$log" | grep -q '^browser: offer shown$'
 grep -q "^browser: key $tab offer\$" "$log" || fail "the offer gave its tab no key"
 # Where the key was drawn last, its centre in the window.
 key_at() { grep '^browser: key drawn at ' "$log" | tail -1 | cut -d' ' -f5-6; }
-[ -n "$(key_at)" ] || fail "the key wasn't drawn"
-../tools/window-screenshot.sh "$pid" "$out/password-key.png" || fail "no window to capture"
 # The pointer on the key hovers the sidebar, whose tools come out in the URL field and move the
 # key: it's clicked where it is with them out, or the press can land on what took its place.
-if [ "$(grep '^browser: sidebar tools ' "$log" | tail -1)" != "browser: sidebar tools shown" ]; then
-  send move $(key_at)
-  expect '^browser: sidebar tools shown$' "the pointer on the key didn't bring the sidebar's tools out"
-fi
-send click $(key_at)
+click_key() {
+  if [ "$(grep '^browser: sidebar tools ' "$log" | tail -1)" != "browser: sidebar tools shown" ]; then
+    send move $(key_at)
+    expect '^browser: sidebar tools shown$' "the pointer on the key didn't bring the sidebar's tools out"
+  fi
+  send click $(key_at)
+}
+[ -n "$(key_at)" ] || fail "the key wasn't drawn"
+../tools/window-screenshot.sh "$pid" "$out/password-key.png" || fail "no window to capture"
+click_key
 expect "^browser: key $tab clicked\$" "a click on the key didn't reach it"
 offered save
 skip_on_sway_xwayland "the offer's keys and the steps after them"
@@ -187,7 +191,7 @@ go_from_bar "${site#http://}login.html"
 expect "^browser: title $tab filled\$" "the login page didn't fill the saved password in"
 # The saved login gives the page a key, and a click on it opens the Site Controls, which list it.
 await "^browser: key $tab saved\$" || fail "the saved login gave the page no key"
-send click $(key_at)
+click_key
 expect "^browser: key $tab clicked\$" "a click on the saved login's key didn't reach it"
 expect '^browser: command site-controls via key$' \
   "the saved login's key didn't open the Site Controls"
@@ -307,9 +311,9 @@ else
       grep 'gpui dropped\|panicked\|already borrowed' | head -3 | tr '\n' ';')"
 fi
 none_since '^browser: remove login' || fail "Cancel removed the login"
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses off$' "a click on Save and fill addresses didn't switch it off"
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses on$' "a second click didn't switch addresses back on"
 # Manage Passwords…, under the box of the login's row, opens Chrome's password manager page in a
 # new tab, where a search for the username finds the login. Its device check guards only Show,
@@ -413,7 +417,7 @@ send choose "$(cased 'All Passwords…')"
 expect '^browser: site controls run passwords$' "All Passwords… didn't run again"
 expect '^browser: settings shown Passwords$' "All Passwords… didn't show Settings' Passwords tab again"
 settings_drew Passwords
-send clickkey $(drawn "switch offer to save passwords")
+click_in_sight "switch offer to save passwords"
 expect '^browser: offer to save passwords off$' "a click on Offer to save passwords didn't switch it off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-passwords-off.png" || fail "no window to capture"
 send key w cmd
@@ -549,6 +553,8 @@ if [ "$(uname)" = Darwin ]; then
   settings_drew Passwords
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings after Edit › AutoFill"
+else
+  echo "skip: Edit › AutoFill: the menu bar is the Mac's alone."
 fi
 # Settings' Passwords tab, which ⌘, shows again, lists the saved address under the logins, and its
 # Remove asks first, as a login's does, and removes it, which Settings hears. The card declined
@@ -625,9 +631,9 @@ done
 # Save and fill addresses and Save and fill payment methods, switched off for the profile, keep a
 # new address and the card just removed from bringing an offer. The pages they post to loading,
 # and the command bar opening and closing, take longer than the core reporting an offer.
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses off$' "a click on Save and fill addresses didn't switch it off"
-send clickkey $(drawn "switch save and fill payment methods")
+click_in_sight "switch save and fill payment methods"
 expect '^browser: save and fill payment methods off$' \
   "a click on Save and fill payment methods didn't switch it off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-autofill-off.png" || fail "no window to capture"

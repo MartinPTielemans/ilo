@@ -20,6 +20,8 @@ const SHOWN: usize = 20_000;
 pub const ALL_SHOWN: usize = 100_000;
 /// What stands for a value that's hidden.
 const HIDDEN: &str = "(hidden)";
+/// What stands for an empty value in what a request sent, as an empty one is an object's name.
+const EMPTY: &str = "\"\"";
 
 /// A request, as checked against the page and ready for the core (bc_agent_request).
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +59,194 @@ impl Request {
     pub fn summary(&self) -> String {
         summary(&self.body)
     }
+
+    /// What its body sends, a line a field, for the activity log (#2326).
+    pub fn sent(&self) -> Vec<Sent> {
+        let kind = (self.headers.iter())
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+            .map_or("", |(_, value)| value.as_str());
+        sent(&self.body, kind)
+    }
+}
+
+/// A line of what a request sent, as the activity log shows it: how deep it sits, a field's name,
+/// an object's or an item's place, and its value, empty under an object's name. A secret's value is
+/// "(hidden)", by the rule that hides them from an agent's answers, so the log never keeps one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sent {
+    pub depth: u8,
+    pub name: String,
+    pub value: String,
+}
+
+impl Sent {
+    pub fn hidden(&self) -> bool {
+        self.value == HIDDEN
+    }
+}
+
+/// The most lines of what a request sent the log keeps, and characters of a value: a body may be a
+/// megabyte, and the log holds a thousand entries.
+const SENT_LINES: usize = 200;
+const SENT_VALUE: usize = 2000;
+
+/// `body` a line a field: a form's fields, a JSON object's, nested ones under their object's name,
+/// or the lines of any other text.
+pub fn sent(body: &str, kind: &str) -> Vec<Sent> {
+    let body = body.trim();
+    let mut lines = Vec::new();
+    if body.is_empty() {
+        return lines;
+    }
+    let line = |depth: u8, name: &str, value: &str| Sent {
+        depth,
+        name: clip(name, 64),
+        value: clip(value, SENT_VALUE),
+    };
+    if kind.to_ascii_lowercase().contains("x-www-form-urlencoded") {
+        for pair in body.split('&').filter(|pair| !pair.is_empty()) {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let (name, value) = (form_decoded(name), form_decoded(value));
+            let secret = !value.is_empty() && (secret_name(&name) || token_like(&value));
+            let value = match (secret, value.is_empty()) {
+                (true, _) => HIDDEN,
+                (false, true) => EMPTY,
+                (false, false) => &value,
+            };
+            lines.push(line(0, &name, value));
+        }
+    } else if let Ok(value @ (Value::Object(_) | Value::Array(_))) =
+        serde_json::from_str::<Value>(body)
+    {
+        json_lines(&mut lines, None, &value, 0, false);
+    } else {
+        let (text, _) = hide_text(body);
+        let shown = text
+            .lines()
+            .map(str::trim_end)
+            .filter(|each| !each.is_empty());
+        lines.extend(shown.map(|each| line(0, "", each)));
+    }
+    if lines.len() > SENT_LINES {
+        lines.truncate(SENT_LINES - 1);
+        lines.push(line(0, "", "…"));
+    }
+    lines
+}
+
+/// `value`'s lines, under `name` at `depth`: a scalar or a list of them on its line, an object's
+/// name over its fields a step deeper, and a list's items by their place, one whose fields are all
+/// scalars on a line of its own.
+fn json_lines(lines: &mut Vec<Sent>, name: Option<&str>, value: &Value, depth: u8, secret: bool) {
+    if lines.len() > SENT_LINES {
+        return;
+    }
+    let secret = secret || name.is_some_and(secret_name);
+    let push = |lines: &mut Vec<Sent>, value: &str| {
+        lines.push(Sent {
+            depth,
+            name: clip(name.unwrap_or(""), 64),
+            value: clip(value, SENT_VALUE),
+        })
+    };
+    let deeper = depth.saturating_add(1).min(8);
+    match value {
+        Value::Object(fields) if fields.is_empty() => push(lines, "{}"),
+        Value::Array(items) if items.is_empty() => push(lines, "[]"),
+        Value::Array(items) if items.iter().all(|item| scalar(item).is_some()) => {
+            let shown: Vec<String> = (items.iter())
+                .map(|item| shown_scalar(item, secret))
+                .collect();
+            push(lines, &shown.join(", "));
+        }
+        Value::Object(fields) => {
+            // At the top, an object's fields are the body's own lines.
+            let depth = match name {
+                Some(_) => {
+                    push(lines, "");
+                    deeper
+                }
+                None => depth,
+            };
+            for (field, item) in fields {
+                json_lines(lines, Some(field), item, depth, secret);
+            }
+        }
+        Value::Array(items) => {
+            let depth = match name {
+                Some(_) => {
+                    push(lines, "");
+                    deeper
+                }
+                None => depth,
+            };
+            for (at, item) in items.iter().enumerate() {
+                let place = (at + 1).to_string();
+                let flat = item.as_object().filter(|fields| {
+                    !fields.is_empty() && fields.values().all(|each| scalar(each).is_some())
+                });
+                match flat {
+                    Some(fields) => {
+                        let shown: Vec<String> = (fields.iter())
+                            .map(|(field, each)| {
+                                format!(
+                                    "{field}: {}",
+                                    shown_scalar(each, secret || secret_name(field))
+                                )
+                            })
+                            .collect();
+                        lines.push(Sent {
+                            depth,
+                            name: place,
+                            value: clip(&shown.join(" · "), SENT_VALUE),
+                        });
+                    }
+                    None => json_lines(lines, Some(&place), item, depth, secret),
+                }
+            }
+        }
+        scalar => push(lines, &shown_scalar(scalar, secret)),
+    }
+}
+
+/// A JSON scalar as its line shows it, a string without its quotes, or None for a list or object.
+fn scalar(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(_) | Value::Object(_) => None,
+        value => Some(value.to_string()),
+    }
+}
+
+/// A scalar as shown, "(hidden)" if it's a secret's or looks like a credential.
+fn shown_scalar(value: &Value, secret: bool) -> String {
+    let text = scalar(value).unwrap_or_default();
+    let blank = value.is_null() || text.is_empty();
+    match (blank, secret || token_like(&text)) {
+        (false, true) => HIDDEN.into(),
+        (true, _) if !value.is_null() => EMPTY.into(),
+        _ => text,
+    }
+}
+
+/// A form's name or value as typed: "+" a space, and "%xx" its byte.
+fn form_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = |at: usize| bytes.get(at).and_then(|byte| (*byte as char).to_digit(16));
+        match (bytes[at], hex(at + 1), hex(at + 2)) {
+            (b'+', _, _) => decoded.push(b' '),
+            (b'%', Some(high), Some(low)) => {
+                decoded.push((high * 16 + low) as u8);
+                at += 2;
+            }
+            (byte, _, _) => decoded.push(byte),
+        }
+        at += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 /// Why a call's requests aren't sent: a rule's refusal, which the activity log has, or arguments
@@ -630,6 +820,79 @@ mod tests {
     use super::*;
 
     const PAGE: &str = "https://team.example.com/board?view=1#top";
+
+    fn lines(sent: &[Sent]) -> Vec<String> {
+        (sent.iter())
+            .map(|each| {
+                let indent = "  ".repeat(each.depth.into());
+                match each.name.is_empty() {
+                    true => format!("{indent}{}", each.value),
+                    false => format!("{indent}{}: {}", each.name, each.value),
+                }
+            })
+            .collect()
+    }
+
+    /// What a request sent is a line a field for the log: a form's decoded, a JSON object's with
+    /// nested ones under their names and a list's items by place, any other text's lines; and a
+    /// secret's value never, by name or by its look.
+    #[test]
+    fn what_was_sent_is_a_line_a_field_without_secrets() {
+        let form = "name=Ada+Lovelace&city=London%2C+UK&password=hunter2&csrf_token=abc&empty=";
+        assert_eq!(
+            lines(&sent(form, "application/x-www-form-urlencoded")),
+            [
+                "name: Ada Lovelace",
+                "city: London, UK",
+                "password: (hidden)",
+                "csrf_token: abc",
+                "empty: \"\""
+            ]
+        );
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJl";
+        let nested = json!({
+            "board": { "name": "Home", "columns": [
+                { "title": "To do", "cards": 2 }, { "title": "Done", "cards": 5 }
+            ]},
+            "tags": ["home", "weekly"],
+            "api_token": "s3cret",
+            "auth": { "user": "ada", "key": 7 },
+            "note": jwt,
+            "notify": true,
+            "steps": [{ "do": ["a"] }],
+        });
+        assert_eq!(
+            lines(&sent(&nested.to_string(), "application/json")),
+            [
+                "board: ",
+                "  name: Home",
+                "  columns: ",
+                "    1: title: To do · cards: 2",
+                "    2: title: Done · cards: 5",
+                "tags: home, weekly",
+                "api_token: (hidden)",
+                "auth: ",
+                "  user: (hidden)",
+                "  key: (hidden)",
+                "note: (hidden)",
+                "notify: true",
+                "steps: ",
+                "  1: ",
+                "    do: a",
+            ]
+        );
+        let text = format!("first line\n\nAuthorization: Bearer {jwt}\n");
+        assert_eq!(
+            lines(&sent(&text, "text/plain")),
+            ["first line", "Authorization: Bearer (hidden)"]
+        );
+        assert!(sent("", "application/json").is_empty());
+        let long =
+            json!({ "items": (0..500).map(|n| json!({ "n": { "deep": n } })).collect::<Vec<_>>() });
+        let kept = sent(&long.to_string(), "application/json");
+        assert_eq!(kept.len(), SENT_LINES);
+        assert_eq!(kept.last().map(|each| each.value.as_str()), Some("…"));
+    }
 
     fn parsed(requests: Value) -> Result<Vec<Request>, Wrong> {
         parse(&json!({ "requests": requests }), PAGE)

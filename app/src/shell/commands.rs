@@ -1368,6 +1368,16 @@ pub fn window_became_key(shell: WeakEntity<Shell>) -> impl FnOnce(&mut App) + 's
     }
 }
 
+/// Whether a window made key since `shell` was has yet to be heard, so `shell` hearing late mustn't
+/// take the shortcuts back from it (#2648).
+pub(super) fn key_moved_on(shell: &WeakEntity<Shell>) -> bool {
+    MADE_KEY.with_borrow(|made_key| {
+        made_key
+            .as_ref()
+            .is_some_and(|made_key| made_key != shell && made_key.upgrade().is_some())
+    })
+}
+
 /// The shell made key has heard, so the ShellHandle names it.
 pub(super) fn heard_key(shell: &WeakEntity<Shell>) {
     MADE_KEY.with_borrow_mut(|made_key| {
@@ -1721,11 +1731,11 @@ impl Shell {
             }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
-                let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
+                let url = BuildInfo::here(cx).issue_url(build_info::NEW_ISSUE);
                 return self.browser.open_page(&url, cx);
             }
             Command::CopyBuildInfo => {
-                return self.copy(&BuildInfo::here().text(), "Copied Build Info", cx);
+                return self.copy(&BuildInfo::here(cx).text(), "Copied Build Info", cx);
             }
             Command::HelpCenter => return self.browser.open_page(build_info::HELP_CENTER, cx),
             Command::WhatsNew => return self.browser.open_page(build_info::WHATS_NEW, cx),
@@ -2025,9 +2035,10 @@ impl Shell {
                 point(page.center().x, page.top())
             }
         };
-        let title = self.title(self.selected);
-        self.browser
-            .show_share_sheet(self.selected, &link, &title, at, cx);
+        let (tab, title) = (self.selected, self.title(self.selected));
+        // After this update, as finding the tab's window reads every Shell (#2459).
+        let browser = self.browser.clone();
+        cx.defer(move |cx| browser.show_share_sheet(tab, &link, &title, at, cx));
     }
 
     /// `tab`'s link to copy, as a Markdown link if `markdown`, and the toast to say so with.
@@ -3254,5 +3265,41 @@ mod tests {
             ["select 11"],
             "and still does once the shell has heard"
         );
+    }
+
+    /// A window opened in front keeps the shortcuts when the window made key before it, as one
+    /// closed, hears only after it opened, as macOS reports no key change for the window opened
+    /// in front: ⌘N right after ⇧⌘W, then ⇧⌘W, closes the new window, not the one behind (#2648).
+    #[gpui::test]
+    fn a_window_opened_in_front_keeps_the_shortcuts_from_one_made_key_before(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(bind_keys);
+        let (behind, behind_host) = shell_with_today(cx, vec![11]);
+        cx.run_until_parked();
+
+        // A window closed and left this one key, and its shell hears once the executor turns.
+        let behind_heard = window_became_key(behind.downgrade());
+        // ⌘N's window opens before that turn, and is key from when it opens, as the app makes it.
+        let (opened, opened_host) = shell_with_today(cx, vec![21]);
+        let opened_heard = window_became_key(opened.downgrade());
+        cx.update(behind_heard);
+        behind_host.take();
+        opened_host.take();
+        let closed = |host: &super::super::recorder::Recorder| {
+            host.take().iter().any(|call| call == "close window")
+        };
+
+        cx.update(|cx| cx.dispatch_action(&Run(Command::CloseWindow)));
+        assert!(closed(&opened_host), "⇧⌘W closed the window opened");
+        assert!(!closed(&behind_host), "and not the one behind");
+
+        cx.update(opened_heard);
+        cx.update(|cx| cx.dispatch_action(&Run(Command::CloseWindow)));
+        assert!(
+            closed(&opened_host),
+            "and still does once the window opened has heard"
+        );
+        assert!(!closed(&behind_host), "the one behind still isn't closed");
     }
 }

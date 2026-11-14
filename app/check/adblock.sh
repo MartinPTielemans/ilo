@@ -1,17 +1,23 @@
+# check.sh runs this at 190.
 # The browser blocks ads and trackers from a new profile's first page, with nothing to install:
-# uBlock Origin, in the framework, loads into every profile, listed last in the Extensions menu. A
-# filter given for the check, through the same managed settings the browser gives it its own,
-# blocks the served page's ad script and hides its ad, and it stays in the menu all along, as it
-# doesn't reload itself as it first starts. The run reports how long that first launch let requests
-# through. It pins as any extension, and its action's menu has no Remove. Its own lists take fbclid
-# out of an address. The Site Controls' Block ads and trackers turns that off for the site,
-# reloading the page, which then shows the ad, and on again, by clicks and then by Tab's ring and
-# space and return. Off for the site, Settings lists it,
-# and its Turn On turns it on there again. Settings' Block ads and trackers turns it off in every
-# profile, which takes it out of the Extensions menu and the Site Controls, and on again. A private
-# window blocks too. The app ships the version ublock.ini pins, trusting no site, YouTube neither,
+# uBlock Origin, in the framework, loads into every profile, and no extension list shows it, as
+# Settings › Ad Blocking is all of its settings (#2107). Filters given for the check as My filters,
+# through the same managed settings the browser gives it its own, block the served page's ad script
+# and hide its ad. The run reports how long that first launch let requests through. Its own lists
+# take fbclid out of an address. The Site Controls' shield, the action row's last tile, says how
+# many requests it blocked on the page, and turns it off for the site, reloading the page, which
+# then shows the ad, and on again, counting afresh, by clicks and then by Tab's ring and space and
+# return. Off
+# for the site, Settings › Ad Blocking lists it, and its Turn On turns it on there again. Its Block
+# ads and trackers turns it off in every profile, which takes it out of the Site Controls, and on
+# again.
+# A filter list switched on there, found by Settings' search, blocks at once: uBlock filters –
+# Annoyances, off as it comes, which --ad-block-lists makes a list on the check's server. A rule
+# added in My filters hides an element, and its Remove shows it again. A private window blocks
+# too. The app ships the version ublock.ini pins, trusting no site, YouTube neither,
 # and launched again on the same profile, it blocks there too, from each launch's first page, which
-# the core holds until uBlock Origin is ready.
+# the core holds until uBlock Origin is ready. The browser's own engine, which blocks in its place
+# with --ad-block-engine=native (#2111), never loads, nor keeps anything in the profile.
 
 # The served ad page: its title says whether its script ran and whether its ad shows. uBlock Origin
 # hides the ad from a stylesheet of its own, which the page can't hear arrive, so it looks again
@@ -34,6 +40,64 @@ requestAnimationFrame(() => setTimeout(report));
 setInterval(report, 100);
 </script>' > "$out/site/ads.html"
 ads="${site}ads.html"
+# A page whose script only the annoyance list blocks, and one whose element only My filters' rule
+# added below hides.
+printf '%s' 'self.listedLoaded = true;' > "$out/site/listed-ad.js"
+printf '%s' '<title>loading</title>
+<script src="listed-ad.js"></script>
+<script>
+requestAnimationFrame(() => setTimeout(() => {
+  document.title = "listed script " + (self.listedLoaded ? "loaded" : "blocked");
+}));
+</script>' > "$out/site/listed.html"
+listed="${site}listed.html"
+printf '%s' '<title>loading</title>
+<div class=check-filtered style="height:60px">filtered</div>
+<script>
+const report = () => {
+  const hidden = getComputedStyle(document.querySelector(".check-filtered")).display == "none";
+  const title = "filtered element " + (hidden ? "hidden" : "shown");
+  if (document.title != title) {
+    document.title = title;
+  }
+};
+requestAnimationFrame(() => setTimeout(report));
+setInterval(report, 100);
+</script>' > "$out/site/filtered.html"
+filtered="${site}filtered.html"
+# The lists' source: uBlock Origin's assets.json with every remote address taken out, so nothing
+# reaches the network, as in adblock-lists, and uBlock filters – Annoyances, off as it comes, the
+# check's list blocking listed-ad.js.
+if [ -d "$app/ublock" ]; then
+  ublock_dir="$app/ublock"
+else
+  ublock_dir="$(echo "$app"/Contents/Frameworks/*Framework.framework)/Resources/ublock"
+fi
+mkdir -p "$out/site/lists"
+printf '%s\n' '! Title: Check annoyances' '/listed-ad.js' > "$out/site/lists/annoyances.txt"
+python3 -I - "$ublock_dir/assets/assets.json" "${site}lists/annoyances.txt" \
+  > "$out/site/lists/assets.json" << 'EOF'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    assets = json.load(f)
+listed = {}
+for key, entry in assets.items():
+    urls = entry.get("contentURL", [])
+    local = [url for url in ([urls] if isinstance(urls, str) else urls)
+             if not url.startswith(("http:", "https:"))]
+    if key == "ublock-annoyances":
+        local = [sys.argv[2]]
+    if local:
+        entry["contentURL"] = local
+        entry.pop("cdnURLs", None)
+        entry.pop("patchURLs", None)
+        listed[key] = entry
+if not listed.get("ublock-annoyances", {}).get("off"):
+    sys.exit("uBlock filters - Annoyances isn't off as uBlock Origin comes")
+json.dump(listed, sys.stdout)
+EOF
+[ -s "$out/site/lists/assets.json" ] || fail "the run couldn't make its lists' source"
+lists="${site}lists/assets.json"
 ublock=oghkpboejbohceocapipmnjifoklonij
 # A profile of the run's own, so uBlock Origin starts as on a new install: it keeps the managed
 # settings it last read, and reads its lists into the profile on its first launch.
@@ -45,12 +109,10 @@ step=0
 filters="$(printf '/check-ad.js\n127.0.0.1##.check-ad')"
 launched=$(python3 -I -c 'import time; print(time.time())')
 BROWSER_DRIVE=1 BROWSER_URL="$ads" BROWSER_PROFILE_DIR="$profile_dir" \
-  "$browser" --ad-block-filters="$filters" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --ad-block-filters="$filters" --ad-block-lists="$lists" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
-await "^browser: extensions menu .*$ublock\$" ||
-  fail "uBlock Origin wasn't in the Extensions menu: $(grep '^browser: extensions' "$log")"
 tab=$(today | cut -d' ' -f1)
 await "^browser: title $tab ad script " || fail "the ad page didn't report"
 send click $page_point
@@ -62,11 +124,12 @@ if [ "$active" != 1 ]; then
 fi
 # Reloads the tab until its page says $1, for at most 20 reloads, each waiting up to 2 s for the
 # page to say it. On a new profile, uBlock Origin lets everything through until it has read its
-# lists, a few seconds in.
+# lists, a few seconds in. The page reports in titles starting $report.
+report="ad script "
 reload_until() {
   for _ in $(seq 20); do
     send key r cmd
-    expect "^browser: title $tab ad script " "the ad page didn't report after ⌘R"
+    expect "^browser: title $tab $report" "the page didn't report after ⌘R"
     for _ in $(seq 20); do
       none_since "^browser: title $tab $1\$" || return 0
       sleep 0.1
@@ -83,25 +146,13 @@ first_block=$(python3 -I -c 'import sys, time; print("%.1f" % (time.time() - flo
 reloads=$(grep -c "^browser: title $tab ad script " "$log" || true)
 echo "adblock: a new profile's first launch blocked within $first_block s, over $reloads loads"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-blocked.png" || fail "no window to capture"
-# It never left the menu: reloading itself as it first started unloaded it under the first pages,
-# and Chromium then dropped what they were asking for (#954).
-left=$(grep '^browser: extensions menu' "$log" | grep -v "$ublock\$" | head -1)
-[ -z "$left" ] || fail "uBlock Origin left the Extensions menu on the first launch: $left"
-# Pinnable as any extension, its action alone at the URL field's end, 3 in from the 228-wide
-# sidebar's field ending at 220, with the count of what it blocked on the page. Its menu has no
-# Remove, since Settings turns it off.
-send menu "Pin to URL Field › uBlock Origin"
-expect "^browser: pin extension $ublock\$" "Pin to URL Field › uBlock Origin didn't reach the UI"
-expect "^browser: extension actions $ublock\(:[0-9]*\)\{0,1\}\$" \
-  "the pinned uBlock Origin didn't show in the URL field"
-../tools/window-screenshot.sh "$pid" "$out/adblock-pinned.png" || fail "no window to capture"
-post rightclick 202 64
-expect "^browser: menu shown $(cased 'Unpin, Options, Manage Extension')\$" \
-  "a right-click on uBlock Origin's action didn't show its menu without Remove"
-send choose Unpin
-expect "^browser: unpin extension $ublock\$" "Unpin didn't unpin uBlock Origin"
-expect '^browser: extension actions $' "unpinned, uBlock Origin's action stayed in the URL field"
-send click $page_point
+# No extension list shows it, so its popup and dashboard never open: the Extensions menu leaves
+# it out, as the URL field's actions do (#2107).
+listed_ublock() {
+  grep -e "^browser: extensions menu .*$ublock" -e "^browser: extension actions .*$ublock" "$log" |
+    head -1
+}
+[ -z "$(listed_ublock)" ] || fail "an extension list showed uBlock Origin: $(listed_ublock)"
 
 # Its own lists take Facebook's click id out of an address before the page loads, and leave the
 # site's own parameters.
@@ -123,7 +174,11 @@ open_site_controls() {
   expect '^browser: site controls settled$' "the Site Controls didn't open"
 }
 open_site_controls
-expect "${controls}Ad blocking On" "the Site Controls didn't list ad blocking as on, first"
+# With how many requests it blocked on the page, the ad script among them, as its badge counts.
+expect "${controls}Ad blocking On ([0-9>][0-9k]* blocked)" \
+  "the Site Controls didn't list ad blocking as on, first, with what it blocked"
+blocked_count=$(grep "^${controls#^}" "$log" | sed -n 's/.*Ad blocking On (\([^)]*\) blocked).*/\1/p' |
+  tail -1)
 click_placed send shield
 expect '^browser: site controls set ad blocking off$' "a click on the shield didn't run"
 expect "^browser: title $tab ad script loaded, element shown\$" \
@@ -133,6 +188,9 @@ expect "${controls}Ad blocking Off" "the Site Controls didn't show ad blocking a
 click_placed send shield
 expect '^browser: site controls set ad blocking on$' "a second click didn't turn it on again"
 expect "^browser: title $tab $blocked\$" "on again, the page didn't block its ad"
+# The open panel hears the badge of the page it reloaded, which counts afresh.
+expect "${controls}Ad blocking On ([0-9>][0-9k]* blocked)" \
+  "on again, the open Site Controls didn't say what the reloaded page blocked"
 # From the keyboard: Tab takes the ring along the tiles to the shield, the row's last, however
 # many tiles the system has, and space and return turn it off and on as clicks do (#1382).
 keyed() { grep '^browser: site controls keyed ' "$log" | tail -1 | cut -d' ' -f5-; }
@@ -165,9 +223,9 @@ expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
 expect '^browser: settings shown General$' "Settings… didn't show General"
 settings_drew General
-send clickkey $(drawn "toolbar Privacy")
-expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
-settings_drew Privacy
+send clickkey $(drawn "toolbar Ad Blocking")
+expect '^browser: settings tab Ad Blocking$' "a click on Ad Blocking didn't show its section"
+settings_drew "Ad Blocking"
 expect '^browser: settings ad blocking off on 127\.0\.0\.1$' \
   "Settings didn't list the site ad blocking is off on, alone"
 expect '^browser: settings turn on 127\.0\.0\.1 at ' "Settings didn't draw the site's Turn On"
@@ -181,14 +239,13 @@ expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $page_point
 reload_until "$blocked" "turned on again in Settings' list, the page didn't block its ad"
 
-# Off everywhere in Settings, whose Privacy, where it opens again, leads with Block ads and
+# Off everywhere in Settings, whose Ad Blocking, where it opens again, leads with Block ads and
 # trackers.
 send menu Settings…
-expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy again"
-settings_drew Privacy
-send clickkey $(drawn "switch ad blocking")
+expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking again"
+settings_drew "Ad Blocking"
+click_in_sight "switch ad blocking"
 expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
-expect '^browser: extensions menu $' "turned off, uBlock Origin stayed in the Extensions menu"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-settings.png" all || fail "no window to capture"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -202,15 +259,72 @@ none_since "${controls}Ad blocking" || fail "turned off in Settings, the Site Co
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 send menu Settings…
-expect '^browser: settings shown Privacy$' "Settings… didn't show Privacy a third time"
-settings_drew Privacy
-send clickkey $(drawn "switch ad blocking")
+expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking a third time"
+settings_drew "Ad Blocking"
+click_in_sight "switch ad blocking"
 expect '^browser: ad blocking on$' "a second click on the switch didn't turn it on"
-expect "^browser: extensions menu .*$ublock\$" "turned on, uBlock Origin didn't come back"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $page_point
 reload_until "$blocked" "turned on again in Settings, the page didn't block its ad"
+
+# A rule added in My filters hides an element at once, and its Remove shows it again: the page's
+# element shows until then. The filters given for the check are My filters' first two.
+go_from_bar "${filtered#http://}"
+expect "^browser: loaded $tab $filtered\$" "the tab didn't load the filtered page"
+expect "^browser: title $tab filtered element shown\$" "the filtered page's element didn't show first"
+send menu Settings…
+expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking for My filters"
+settings_drew "Ad Blocking"
+send clickkey $(drawn "filter field")
+send insert "127.0.0.1##.check-filtered"
+send key return
+expect '^browser: ad block filter added 127\.0\.0\.1##\.check-filtered$' \
+  "return in My filters' field didn't add the rule"
+expect '^browser: settings remove filter 2 at ' "My filters didn't list the rule added, third"
+../tools/window-screenshot.sh "$pid" "$out/adblock-my-filters.png" all || fail "no window to capture"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send click $page_point
+report="filtered element "
+reload_until "filtered element hidden" "My filters' rule didn't hide the page's element"
+send menu Settings…
+expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking to remove the rule"
+settings_drew "Ad Blocking"
+send clickkey $(drawn "remove filter 2")
+expect '^browser: ad block filter removed 127\.0\.0\.1##\.check-filtered$' \
+  "My filters' Remove didn't remove the rule"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send click $page_point
+reload_until "filtered element shown" "My filters' rule removed, the page's element stayed hidden"
+
+# uBlock filters – Annoyances, off as it comes, lets the listed page's script load; switched on in
+# Settings, found by its search, it's fetched from the check's server and blocks it.
+go_from_bar "${listed#http://}"
+expect "^browser: loaded $tab $listed\$" "the tab didn't load the listed page"
+expect "^browser: title $tab listed script loaded\$" \
+  "with the annoyance list off, the listed page's script didn't load"
+send menu Settings…
+expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking for its lists"
+settings_drew "Ad Blocking"
+send clickkey $(drawn "search")
+send type ublock annoyances
+expect '^browser: settings search "ublock annoyances" finds uBlock filters – Annoyances$' \
+  "Settings' search didn't find uBlock filters – Annoyances alone"
+send clickkey $(drawn "switch ad block list ublock-annoyances")
+expect '^browser: ad block list ublock-annoyances on$' "a click on the list's switch didn't turn it on"
+served "/lists/annoyances.txt" "uBlock Origin didn't fetch the list switched on"
+../tools/window-screenshot.sh "$pid" "$out/adblock-list-on.png" all || fail "no window to capture"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send click $page_point
+report="listed script "
+reload_until "listed script blocked" "the list switched on in Settings didn't block its script"
+report="ad script "
+go_from_bar "${ads#http://}"
+expect "^browser: loaded $tab $ads\$" "the tab didn't load the ad page again"
+expect "^browser: title $tab $blocked\$" "back on the ad page, it didn't block its ad"
 
 # A private window blocks too.
 send key n cmd shift
@@ -263,7 +377,7 @@ for n in 2 3 4; do
   log="$out/adblock-launch-$n.log"
   step=0
   BROWSER_DRIVE=1 BROWSER_URL="$ads?$n" BROWSER_PROFILE_DIR="$profile_dir" \
-    "$browser" --ad-block-filters="$filters" < "$out/drive" > "$log" 2>&1 &
+    "$browser" --ad-block-filters="$filters" --ad-block-lists="$lists" < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await "^browser: loaded [0-9]* $ads?$n\$" ||
@@ -279,8 +393,8 @@ for n in 2 3 4; do
     fail "launch $n on its profile: the ad wasn't hidden: $(grep "^browser: title $tab " "$log" | tail -1)"
   loads=$(grep -c "^browser: loaded $tab " "$log")
   [ "$loads" = 1 ] || fail "launch $n on its profile: the page loaded $loads times, not once"
-  await "^browser: extensions menu .*$ublock\$" ||
-    fail "launch $n on its profile: uBlock Origin wasn't in the menu: $(grep '^browser: extensions' "$log")"
+  [ -z "$(listed_ublock)" ] ||
+    fail "launch $n on its profile: an extension list showed uBlock Origin: $(listed_ublock)"
   held=$(sed -n 's/^browser: ad blocking held a page \([0-9]*\) ms, ready$/\1/p' "$log" | head -1)
   frame=$(sed -n 's/^browser: first frame at \([0-9]*\).*/\1/p' "$log" | head -1)
   echo "adblock: launch $n on its profile blocked from its first page, held ${held:-0} ms; UI's first frame at $frame ms"
@@ -289,4 +403,11 @@ for n in 2 3 4; do
   [ "$n" = 4 ] || quit
 done
 quit
-echo "ok: a new profile blocks ads from its first page: uBlock Origin is in the Extensions menu, and a filter given through its managed settings blocks the page's ad script and hides its ad, with uBlock Origin in the menu all along; its own lists take fbclid out of an address. The Site Controls' Block ads and trackers, first in its rows, turns it off for the site and on again, reloading the page, and Settings lists the site while it's off, with a Turn On that lets it block there again; Settings' turns it off everywhere, taking it out of the Extensions menu and the Site Controls, and on again. A private window blocks too, and uBlock Origin ships at ublock.ini's $pinned_version without the timers that woke an idle browser, trusting no site, YouTube neither. It pins at the URL field with no Remove in its menu, and launched again three times, the existing profile blocks from each first page. The first launch blocked within $first_block s. Windows: $out/adblock-blocked.png, $out/adblock-pinned.png, $out/adblock-off-for-site.png, $out/adblock-off-sites.png, $out/adblock-settings.png, $out/adblock-private.png, $out/adblock-existing.png"
+# uBlock Origin blocks unless --ad-block-engine=native, and then the browser's own engine never
+# loads, compiles or downloads a list, nor keeps anything in the profile.
+! grep -h "^browser: ad block engine " "$out/adblock.log" "$out"/adblock-launch-*.log ||
+  fail "without --ad-block-engine=native, the browser's own ad block engine loaded"
+[ ! -e "$profile_dir/Ad Blocking" ] ||
+  fail "without --ad-block-engine=native, the profile has the native engine's folder:" \
+    "$(ls "$profile_dir/Ad Blocking")"
+echo "ok: a new profile blocks ads from its first page, with uBlock Origin in no extension list: My filters given through its managed settings block the page's ad script and hide its ad; its own lists take fbclid out of an address. The Site Controls' shield, the action row's last tile, says it blocked $blocked_count on the page, and turns it off for the site and on again, reloading the page and counting it afresh, and Settings › Ad Blocking lists the site while it's off, with a Turn On that lets it block there again; its switch turns it off everywhere, taking it out of the Site Controls, and on again. A rule added in My filters hides an element, and its Remove shows it again; uBlock filters – Annoyances, switched on from Settings' search, is fetched and blocks its script. A private window blocks too, and uBlock Origin ships at ublock.ini's $pinned_version without the timers that woke an idle browser, trusting no site, YouTube neither. The browser's own engine never loaded. Launched again three times, the existing profile blocks from each first page. The first launch blocked within $first_block s. Windows: $out/adblock-blocked.png, $out/adblock-off-for-site.png, $out/adblock-off-sites.png, $out/adblock-settings.png, $out/adblock-my-filters.png, $out/adblock-list-on.png, $out/adblock-private.png, $out/adblock-existing.png"

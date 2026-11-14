@@ -13,9 +13,15 @@
 # tools/headless.sh's sway session, each holding nothing but the app, and refuses outside them; on
 # Windows it copies the screen where the window is, only on a CI runner, whose desktop holds nothing
 # but the app.
-# Usage: tools/window-frames.sh <pid> <seconds> <stop> <x> <y> <w> <h> <flat-dir>
+# With <every-dir>, on Windows and Linux, it also keeps every picture of the rect there, named the
+# same way, written once it stops so writing them doesn't slow the pictures: a motion's frames, to
+# read and to show (check/peek-motion.sh).
+# Usage: tools/window-frames.sh <pid> <seconds> <stop> <x> <y> <w> <h> <flat-dir> [every-dir]
 set -e
-[ $# -eq 8 ] || { echo "usage: $0 <pid> <seconds> <stop> <x> <y> <w> <h> <flat-dir>" >&2; exit 2; }
+[ $# -eq 8 ] || [ $# -eq 9 ] ||
+  { echo "usage: $0 <pid> <seconds> <stop> <x> <y> <w> <h> <flat-dir> [every-dir]" >&2; exit 2; }
+every=${9:-}
+[ -z "$every" ] || mkdir -p "$every"
 kill -0 "$1" 2> /dev/null || { echo "process $1 isn't running" >&2; exit 1; }
 mkdir -p "$8"
 # A rect flat to within this much luma shows no page: a page's text or edges reach far more.
@@ -26,11 +32,13 @@ MINGW* | MSYS*)
     { echo "Copies the screen only on a CI runner, whose desktop holds nothing but the app." >&2; exit 1; }
   exec env PID="$(cat "/proc/$1/winpid")" SECONDS_LONG="$2" STOP="$(cygpath -w "$3")" X="$4" \
     Y="$5" W="$6" H="$7" FLAT_DIR="$(cygpath -w "$8")" FLAT="$flat" \
+    EVERY_DIR="$([ -z "$every" ] || cygpath -w "$every")" \
     powershell.exe -NoProfile -NonInteractive -Command '
 Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -45,7 +53,7 @@ public static class Frames {
   [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT rect, int size);
 
-  public static void Run(uint pid, double seconds, string stop, int x, int y, int w, int h, string flatDir, int flat) {
+  public static void Run(uint pid, double seconds, string stop, int x, int y, int w, int h, string flatDir, int flat, string everyDir) {
     SetProcessDPIAware();
     // The biggest visible window of the process that no other owns: the browser window.
     Rectangle main = Rectangle.Empty;
@@ -64,6 +72,7 @@ public static class Frames {
     DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
     DateTime end = DateTime.UtcNow.AddSeconds(seconds);
     int saved = 0;
+    var every = new List<KeyValuePair<double, Bitmap>>();
     using (Bitmap bitmap = new Bitmap(w, h, PixelFormat.Format32bppRgb))
     using (Graphics graphics = Graphics.FromImage(bitmap)) {
       Console.WriteLine("capturing " + w + "x" + h);
@@ -98,13 +107,18 @@ public static class Frames {
           saved++;
           bitmap.Save(Path.Combine(flatDir, at.ToString("F3", CultureInfo.InvariantCulture) + ".png"), ImageFormat.Png);
         }
+        if (everyDir != "") every.Add(new KeyValuePair<double, Bitmap>(at, (Bitmap)bitmap.Clone()));
       }
+    }
+    foreach (var picture in every) {
+      picture.Value.Save(Path.Combine(everyDir, picture.Key.ToString("F3", CultureInfo.InvariantCulture) + ".png"), ImageFormat.Png);
+      picture.Value.Dispose();
     }
   }
 }
 "@
 [Frames]::Run([uint32]$env:PID, [double]$env:SECONDS_LONG, $env:STOP, [int]$env:X, [int]$env:Y,
-  [int]$env:W, [int]$env:H, $env:FLAT_DIR, [int]$env:FLAT)
+  [int]$env:W, [int]$env:H, $env:FLAT_DIR, [int]$env:FLAT, [string]$env:EVERY_DIR)
 '
   ;;
 Linux)
@@ -138,12 +152,12 @@ if ours:
   fi
   [ -n "$where" ] || { echo "no window of process $1" >&2; exit 1; }
   # shellcheck disable=SC2086 # four numbers
-  exec python3 -I - "$2" "$3" $where "$4" "$5" "$6" "$7" "$8" "$flat" << 'PY'
+  exec python3 -I - "$2" "$3" $where "$4" "$5" "$6" "$7" "$8" "$flat" "$every" << 'PY'
 import ctypes, ctypes.util, os, struct, subprocess, sys, time, zlib
 
 seconds, stop = float(sys.argv[1]), sys.argv[2]
 left, top, width, height, x, y, w, h = (int(each) for each in sys.argv[3:11])
-flat_dir, flat = sys.argv[11], int(sys.argv[12])
+flat_dir, flat, every_dir = sys.argv[11], int(sys.argv[12]), sys.argv[13]
 
 
 class XImage(ctypes.Structure):
@@ -197,7 +211,7 @@ else:
         return head[3], width * 3, 3, (0, 1, 2)
 
 
-def png(path, rows):
+def png(path, rows, width=width, height=height):
     def chunk(kind, body):
         return struct.pack(">I", len(body)) + kind + body + struct.pack(
             ">I", zlib.crc32(kind + body) & 0xffffffff)
@@ -207,8 +221,19 @@ def png(path, rows):
                    + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
 
 
+def rgb_rows(picture, left, top, columns, lines):
+    data, line, size, (ri, gi, bi) = picture
+    rows = []
+    for row in range(top, top + lines):
+        pixels = data[row * line + left * size:row * line + (left + columns) * size]
+        rgb = bytearray(columns * 3)
+        rgb[0::3], rgb[1::3], rgb[2::3] = pixels[ri::size], pixels[gi::size], pixels[bi::size]
+        rows.append(bytes(rgb))
+    return rows
+
+
 print("capturing %dx%d" % (w, h), flush=True)
-end, saved = time.time() + seconds, 0
+end, saved, every = time.time() + seconds, 0, []
 while time.time() < end and not os.path.exists(stop):
     at = time.time()
     picture = grab()
@@ -228,16 +253,15 @@ while time.time() < end and not os.path.exists(stop):
                                          red // n, green // n, blue // n), flush=True)
     if is_flat and saved < 10:
         saved += 1
-        rows = []
-        for row in range(height):
-            pixels = data[row * line:row * line + width * size]
-            rgb = bytearray(width * 3)
-            rgb[0::3], rgb[1::3], rgb[2::3] = pixels[ri::size], pixels[gi::size], pixels[bi::size]
-            rows.append(bytes(rgb))
-        png(os.path.join(flat_dir, "%.3f.png" % at), rows)
+        png(os.path.join(flat_dir, "%.3f.png" % at), rgb_rows(picture, 0, 0, width, height))
+    if every_dir:
+        every.append((at, picture))
+for at, picture in every:
+    png(os.path.join(every_dir, "%.3f.png" % at), rgb_rows(picture, x, y, w, h), w, h)
 PY
   ;;
 esac
+[ -z "$every" ] || { echo "Keeps every picture only on Windows and Linux." >&2; exit 1; }
 PID="$1" SECONDS_LONG="$2" STOP="$3" X="$4" Y="$5" W="$6" H="$7" FLAT_DIR="$8" FLAT="$flat" \
   exec swift - << 'SWIFT'
 import Foundation

@@ -1,3 +1,4 @@
+# check.sh runs this at 110.
 # Launched again after ⌘Q, the app brings back every regular window that was open, as Arc and
 # Chrome do: each at the frame it had, in the Space it showed, stacked as they were, with the one
 # in front key. A window closed before the quit, and a private window, don't come back. With

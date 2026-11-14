@@ -149,7 +149,7 @@ jobs:
           case $RUNS in
           '')
             runs=
-            for run in $(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p' check.sh); do
+            for run in $(sh check.sh --runs default); do
               case " $VM_RUNS " in *" $run "*) ;; *) runs="$runs $run" ;; esac
             done
             ;;

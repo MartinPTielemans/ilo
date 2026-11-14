@@ -1,9 +1,11 @@
+# check.sh runs this at 60.
 # Back and forward go through the tab's history from keys, with the page or the UI focused, from
 # the header's buttons, which dim with nowhere to go, and from a swipe over the page. Reload loads
 # the page again, and while a page loads, reload is stop, which ⌘., escape and the button do. A
 # tab's row shows its page's favicon, and keeps it until the next page has loaded without one. A
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
-# warning before http, and a local one over http. A right-click on reload lists Reload, Hard Reload
+# warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
+# and a local one over http. A right-click on reload lists Reload, Hard Reload
 # and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache, not
 # another site's, before the page loads again.
 
@@ -164,8 +166,9 @@ else
 fi
 [ "$(tls)" -gt "$before" ] || fail "$plain came to http without trying https first"
 before=$(tls)
-# go_from_bar's steps, with a ⌘L of its own to name: under Wayland, ⌘L on Chrome's warning with the
-# keyboard in the page doesn't open the command bar (#2416, quarantined on that failure alone).
+# go_from_bar's steps, with a ⌘L of its own to name: Chrome's warning is a tab dialog of Chromium's
+# that holds the keyboard where Wayland gives it one, and its keys are asked about as a page's are
+# (#2416).
 page="$plain's page"
 [ "$major" -lt 157 ] || page="Chrome's warning before http"
 send key l cmd
@@ -259,7 +262,82 @@ expect '^browser: command clear-site-data via sidebar$' "Clear Site Data and Rel
 stored 127.0.0.1 "0 0 0" "Clear Site Data and Reload kept 127.0.0.1's cookie, localStorage or IndexedDB"
 go_from_bar "http://$nearby:$port/stored.html?$stored_key"
 stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's data"
+# With Chrome's warning up, ⌘T opens the command bar for a new tab and escape closes it, and ⌘W
+# closes the tab, as from a page (#2416). Where the warning has the keyboard is said, since only
+# Wayland gives it one without a click: elsewhere the UI keeps the keyboard it had since the click
+# on stop, and GPUI's own bindings take the keys. A click on the warning's top edge gives it the
+# keyboard there, as the user's would, so its keys are the dialog's on every session.
+warned() {
+  go_from_bar "$plain"
+  # The core says a tab's trouble as it changes, and a tab still on the warning keeps it.
+  expect "^browser: loaded $tab chrome-error://chromewebdata/\$" "$plain's warning before http didn't load again"
+  [ "$(grep "^browser: page $tab trouble " "$log" | tail -1)" = "browser: page $tab trouble network -20" ] ||
+    expect "^browser: page $tab trouble network -20\$" "$plain had no warning before http again"
+  send state
+  echo "note: with Chrome's warning before http up, the keyboard is in $key, on $focus"
+  [ "$key" != NativeWidgetMacNSWindow ] || return 0
+  send layout
+  warning=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: layout child //p' |
+    head -1)
+  [ -n "$warning" ] || fail "Chrome's warning before http wasn't a dialog over the page"
+  warning_x=${warning%%,*} warning_y=${warning#*,}
+  warning_y=${warning_y%% *} warning_width=${warning#* }
+  send click $((warning_x + ${warning_width%%x*} / 2)) $((warning_y + 8))
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on Chrome's warning before http at $warning didn't give it the keyboard: $key, $focus"
+}
+# The way a shortcut on the warning reaches the UI, one way an OS: on the Mac AppKit offers a ⌘
+# shortcut to the browser window's views too, so GPUI runs it from the UI; on Linux and Windows the
+# key goes to the warning alone, whose keys the core asks about as a page's (dialog_keys.cc).
+route=page
+[ "$(uname)" != Darwin ] || route=ui
+# Command $1 ran once since the last key, $2, and by this OS's way. Read once its effect is logged.
+ran_on_warning() {
+  ran_once "$1" "$2 on Chrome's warning before http"
+  since | grep -q "^browser: command $1 via $route\$" ||
+    fail "$2 on Chrome's warning before http ran $1 $(since | sed -n "s/^browser: command $1 //p"), not via $route"
+}
+if [ "$major" -ge 157 ]; then
+  warned
+  send key t cmd
+  expect '^browser: command new-tab via ' "⌘T on Chrome's warning before http didn't reach the UI"
+  expect '^browser: command bar shown$' "⌘T on Chrome's warning before http didn't open the command bar"
+  ran_on_warning new-tab "one ⌘T"
+  # The Mac's warning is a window of its own, which had the keyboard: the bar takes it from there.
+  # Elsewhere the second tab's address, typed into the bar below, shows the bar has it.
+  if [ "$(uname)" = Darwin ]; then
+    send state
+    [ "$key" = GPUIPanel ] && [ "$focus" = GPUIView ] ||
+      fail "⌘T on Chrome's warning before http opened the command bar without the keyboard, which is in $key, on $focus"
+  else
+    echo "skip: which window has the keyboard as the command bar opens and closes over Chrome's warning before http: the warning is a window of its own on the Mac alone, and here the second tab's address typed into the bar shows the bar has it."
+  fi
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened"
+  # And gives it back to the warning, as the page under it drops every key, ilo's shortcuts with
+  # them, while the warning's up (#2625). The second ⌘T, next, comes from there.
+  if [ "$(uname)" = Darwin ]; then
+    send state
+    [ "$key" = NativeWidgetMacNSWindow ] ||
+      fail "the command bar closing over Chrome's warning before http gave the keyboard to $key, on $focus, not back to the warning"
+  fi
+  # The warning's in a second tab, so one ⌘W on it is seen to close that tab alone: under Wayland
+  # the UI, which the closed tab gives the keyboard, read the press again and ran it twice (#2442).
+  kept=$tab
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar for a second tab"
+  send type "$nearby:$port"
+  send key return
+  expect "^browser: today [0-9][0-9]* $kept\$" "the second tab didn't open over $kept: Today is \"$(today)\""
+  tab=$(today | cut -d' ' -f1)
+  expect "^browser: loaded $tab http://$nearby:$port/\$" "$nearby:$port didn't load in the second tab"
+  warned
+  send key w cmd
+  expect '^browser: command close-tab via ' "⌘W on Chrome's warning before http didn't reach the UI"
+  expect_tabs "$kept" "$kept" "after one ⌘W on Chrome's warning before http"
+  ran_on_warning close-tab "one ⌘W"
+fi
 exec 3>&-
 quit
 kill "$stuck"
-echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
+echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, where ⌘L, ⌘T and ⌘W reach the UI, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"

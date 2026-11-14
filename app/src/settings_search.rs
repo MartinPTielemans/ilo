@@ -36,18 +36,30 @@ actions!(
         /// ⇥: the keyboard goes to the next control, in reading order.
         NextControl,
         /// ⇧⇥: the keyboard goes to the control before.
-        PreviousControl
+        PreviousControl,
+        /// Page Down: the section's page moves on by what the card shows.
+        PageDown,
+        /// Page Up: back by what the card shows.
+        PageUp,
+        /// Home: to the page's top.
+        PageTop,
+        /// End: to its foot.
+        PageBottom
     ]
 );
 
 /// ⌘F and Esc, while Settings has the keyboard. A field or view inside it that takes Esc itself
-/// keeps it, as the import does.
+/// keeps it, as the import does, and a text field keeps Home and End.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         shell::view_binding("cmd-f", Box::new(Search), "Settings", cx),
         gpui::KeyBinding::new("escape", EndSearch, Some("Settings")),
         gpui::KeyBinding::new("tab", NextControl, Some("Settings")),
         gpui::KeyBinding::new("shift-tab", PreviousControl, Some("Settings")),
+        gpui::KeyBinding::new("pagedown", PageDown, Some("Settings")),
+        gpui::KeyBinding::new("pageup", PageUp, Some("Settings")),
+        gpui::KeyBinding::new("home", PageTop, Some("Settings")),
+        gpui::KeyBinding::new("end", PageBottom, Some("Settings")),
     ]);
 }
 
@@ -87,6 +99,7 @@ pub fn also(name: &str) -> &'static [&'static str] {
         "Show what's new after an update" => &["release notes", "changelog"],
         "Check for updates automatically" => &["auto update", "software update"],
         "Dock icon takes the Space's color" => &["dock dot"],
+        "Taskbar button takes the Space's color" => &["taskbar dot", "dock dot"],
         "Battery Saver" => &["energy saver", "low power"],
         _ => &[],
     }

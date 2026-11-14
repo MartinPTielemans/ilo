@@ -1,3 +1,4 @@
+# check.sh runs this at 672.
 # Point (#2352): an agent's point tool asks the user to click on a page what they mean. Its card
 # offers Point, which turns the mode on in the tab in front: a frame round the page, the foot bar
 # with the question, and a mark on what's under the pointer, all drawn by the window over the page.

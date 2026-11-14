@@ -650,6 +650,9 @@ text = 13.0
 header-text = 11.0
 # Between the check, the title and what trails it.
 gap = 6.0
+# Between an item's title and its detail in the secondary ink, as Default's model follows
+# "Default": a word space at 13 pt.
+detail-gap = 4.0
 check = 12.0
 chevron = 12.0
 min-width = 200.0
@@ -1012,6 +1015,18 @@ on-hovered = 0.14
 on-pressed = 0.18
 on-switch-off = 0.13
 on-detail = 0.77
+# Ours (#2326): an agent's request in the activity log opens in place under its title, in the
+# small size: "To" and its whole address, then "Sent", or "Not sent" for a refused one, each label
+# in a column 64 wide, a line each, 4 apart, nested fields 12 further in a level, the opened part
+# 4 into the row's bottom padding. Eight lines show, the eighth "Show all" when there are more,
+# which opens the rest in place, a value cut at the row's edge until then. Every row of the list
+# keeps the chevron's 12 at its end, so the times end on one edge (the orchestrator, 2026-11-10).
+sent-label = 64.0
+sent-gap = 4.0
+sent-indent = 12.0
+sent-tuck = 4.0
+sent-lines = 8
+sent-chevron = 12.0
 # Ours (#2407): Sidebar position is two drawings of the window, under its row's line, 6 down from
 # it with their ring's room around them. Each is 128 by 80 at the window's radius, 20 apart, named
 # 6 under it in the row's small text, the chosen one's name in the row's ink at medium. A drawing

@@ -1111,27 +1111,22 @@ impl Render for ThemePicker {
             .key_context(KEY_CONTEXT)
             .size_full()
             .font_family(crate::face::UI);
-        // The pointer's moves anywhere in the window, while something is dragged, and its release
-        // always: a press and its release can both come before the next frame, which would
-        // otherwise be drawn without a listener for the release.
-        let dragging = self
-            .editing
-            .as_ref()
-            .is_some_and(|editing| editing.drag.is_some() || editing.pressed.is_some());
+        // The pointer's moves anywhere in the window and its release, in every frame: a press and
+        // its first move or its release can both come before the next frame, which would
+        // otherwise be drawn without a listener for them (#2605). A move with nothing dragged
+        // does nothing.
         let entity = cx.weak_entity();
         let listener = canvas(
             |_, _, _| {},
             move |_, _, window, _| {
-                if dragging {
-                    let moved = entity.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Capture {
-                            moved
-                                .update(cx, |picker, cx| picker.drag(event.position, cx))
-                                .ok();
-                        }
-                    });
-                }
+                let moved = entity.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        moved
+                            .update(cx, |picker, cx| picker.drag(event.position, cx))
+                            .ok();
+                    }
+                });
                 let released = entity.clone();
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture && event.button == MouseButton::Left {

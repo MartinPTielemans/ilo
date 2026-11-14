@@ -118,6 +118,8 @@ mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
 mod undo_tests;
+#[cfg(test)]
+mod window_move_tests;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
 mod picture;
 mod recent_downloads;
@@ -170,7 +172,7 @@ pub use commands::{
 };
 pub use display_face::display_text;
 pub use drag::{WindowDragEnd, dropped_urls};
-pub use drm_note::PlayReady;
+pub use drm_note::{Elsewhere, PlayReady};
 pub use extensions::{
     Extension, ExtensionAction, ExtensionCommand, menu_item as extension_menu_item,
     pin_menu_item as extension_pin_menu_item,
@@ -179,8 +181,9 @@ pub use favorites::FavoritesScope;
 use fly_in::Flight;
 pub use history::HistoryPage;
 pub use keys::{
-    Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, page_keystroke, rebindable,
-    recorded, reserved, shortcut_found, user_keys, view_binding, web_keystroke, written_as,
+    Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, page_key_answer,
+    page_keystroke, rebindable, recorded, reserved, shortcut_found, user_keys, view_binding,
+    web_keystroke, written_as,
 };
 pub(crate) use library::bytes;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
@@ -237,7 +240,7 @@ pub fn window_radius() -> f32 {
     #[cfg(target_os = "macos")]
     return tokens::WINDOW_RADIUS_MAC;
     #[cfg(target_os = "windows")]
-    return match windows_11() {
+    return match crate::build_info::windows_11() {
         true => tokens::WINDOW_RADIUS_WINDOWS,
         false => 0.,
     };
@@ -245,37 +248,6 @@ pub fn window_radius() -> f32 {
     return tokens::WINDOW_RADIUS_LINUX;
 }
 
-/// Whether this is Windows 11, build 22000 on, which rounds a window's corners, as the registry
-/// says (the window captures in tools/window-screenshot.sh read it there too).
-#[cfg(target_os = "windows")]
-fn windows_11() -> bool {
-    use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
-    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    let build = *BUILD.get_or_init(|| {
-        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
-        let folder = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-        let name = wide("CurrentBuildNumber");
-        let mut text = [0u16; 16];
-        let mut size = std::mem::size_of_val(&text) as u32;
-        let read = unsafe {
-            RegGetValueW(
-                HKEY_LOCAL_MACHINE,
-                folder.as_ptr(),
-                name.as_ptr(),
-                RRF_RT_REG_SZ,
-                std::ptr::null_mut(),
-                text.as_mut_ptr().cast(),
-                &mut size,
-            )
-        };
-        let text = String::from_utf16_lossy(&text[..(size as usize / 2).min(text.len())]);
-        match read {
-            0 => text.trim_end_matches('\0').parse().unwrap_or(0),
-            _ => 0,
-        }
-    });
-    build >= 22000
-}
 /// The most pages a split view shows, as the core's Space has it.
 const MAX_PANES: usize = 3;
 use crate::tokens::shell::FOCUS_GLOW;
@@ -337,6 +309,15 @@ const NAV_PRESS_SCALE: f32 = (NAV_SIZE - 2.) / NAV_SIZE;
 // A pressed row comes away once the pointer has moved this far (ours), and the tiles make room for
 // a dragged tab critically damped, as Arc's do (docs/ux-spec.md › Motion: Favorites room).
 const DRAG_START: f32 = 4.;
+
+/// Whether the pointer, pressed on the window's background at `press`, has gone far enough to
+/// `at` to move the window.
+fn moves_window(press: Option<Point<Pixels>>, at: Point<Pixels>) -> bool {
+    press.is_some_and(|press| {
+        let moved = at - press;
+        moved.x.abs().max(moved.y.abs()) >= px(DRAG_START)
+    })
+}
 const ROOM_OMEGA: f32 = 25.;
 // A dragged row turning into a tile has faded its title by this far through the turn (ours).
 const TURN_TITLE_FADE: f32 = 0.5;
@@ -1008,9 +989,9 @@ struct Opened {
 }
 
 impl Opened {
-    /// How far they've faded in, or None once they have.
-    fn done(&self) -> Option<f32> {
-        self.curve.at(self.start.elapsed().as_secs_f32())
+    /// How far they've faded in at `t` seconds into the list's motion, or None once they have.
+    fn done(&self, t: f32) -> Option<f32> {
+        self.curve.at(t)
     }
 }
 
@@ -1226,6 +1207,9 @@ struct Settle {
     next_door: bool,
 }
 
+/// Told a kind of decision the demo's wheel made of a swipe, and what it decided.
+pub type WheelNotes = Rc<dyn Fn(&'static str, &str)>;
+
 /// A page's full screen resizing the window, while `Shell::full_screen_step` waits to time it.
 struct FullScreenTiming {
     entering: bool,
@@ -1251,6 +1235,13 @@ impl Settle {
         let offset = (self.from + rise * t) * decay;
         let speed = (self.velocity - omega * rise * t) * decay;
         (offset.abs() > 0.25 || speed.abs() > 10.).then_some(offset)
+    }
+
+    /// Keeps no more of the speed than lands the page without passing its place: from `from`, the
+    /// spring passes it going toward it faster than ω·|from|.
+    fn spend(&mut self) {
+        let most = std::f32::consts::TAU / SPACE_SETTLE * self.from.abs();
+        self.velocity = self.velocity.clamp(-most, most);
     }
 
     fn elapsed(&self) -> f32 {
@@ -1348,6 +1339,10 @@ pub struct Shell {
     held_row: Option<HeldRow>,
     /// The header button the pointer pressed, for its shrinking and growing back.
     held_nav: Option<HeldNav>,
+    /// GPUI's clock, which the list's and the Library's motion are timed by (`since`): the real one
+    /// in the app, and in a test one only the test moves, so a slide holds on a slow runner until
+    /// the test moves it on, as the Space's settle does (#2265, #2630).
+    clock: BackgroundExecutor,
     /// Rows on their way to their place: how far from it each started, and when.
     slides: HashMap<Slot, (f32, Instant, Curve)>,
     /// Where the frame last drawn had each tab's row in the list, which the pointer's presses hit
@@ -1388,6 +1383,9 @@ pub struct Shell {
     /// On the web, the way fingers that just landed have gone, held until it's enough to tell
     /// across from along.
     web_undecided: Option<Point<Pixels>>,
+    /// With the demo's `?trace`, told each thing the wheel's events decide of a swipe, as its kind
+    /// and what it decided.
+    web_notes: Option<WheelNotes>,
     /// Where the page of the Space beside drew its tiles, by tab, and its URL field, as 0.
     #[cfg(test)]
     beside_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -1851,8 +1849,10 @@ pub struct Shell {
     page_dialog_shown: Option<(u64, u64, (Bounds<Pixels>, f32))>,
     /// The tab or Space the user asked for and when, until it's shown.
     switching: Option<(Switch, Instant)>,
-    /// A press on the window's background, until the pointer moves and it moves the window.
-    background_pressed: bool,
+    /// Where the window's background was pressed, until the pointer moves past DRAG_START and it
+    /// moves the window. A move that goes nowhere isn't a drag: Windows sends one to a resting
+    /// pointer as windows show or hide, which turned a double-click into a window move.
+    background_pressed: Option<Point<Pixels>>,
     /// What the chrome draws with, for the Space shown (palette.rs), and each theme's, worked
     /// out once.
     palette: Palette,
@@ -1968,6 +1968,7 @@ impl Shell {
             unhovered: Vec::new(),
             held_row: None,
             held_nav: None,
+            clock: cx.background_executor().clone(),
             slides: HashMap::new(),
             drawn_rows: RefCell::default(),
             drawn_top: RefCell::default(),
@@ -1984,6 +1985,7 @@ impl Shell {
             web_wheel: Default::default(),
             web_wheel_quiet: None,
             web_undecided: None,
+            web_notes: None,
             #[cfg(test)]
             beside_frames: Rc::default(),
             button_frames: Rc::default(),
@@ -2223,7 +2225,7 @@ impl Shell {
             card_picker: None,
             card_move: None,
             switching: None,
-            background_pressed: false,
+            background_pressed: None,
             palette: Palette::default(),
             palettes: RefCell::default(),
             system_tone: Tone::Dark,
@@ -2880,7 +2882,7 @@ impl Shell {
         }
         // The Spaces section springs to its width as cards come and go, as on a section's change.
         if self.library.is_some() && self.library_width() != width {
-            self.library_resize = Some((width, crate::motion::start(cx)));
+            self.library_resize = Some((width, crate::motion::start_at(self.clock.now(), cx)));
         }
         if self.show_favorites() {
             self.log_favorites();
@@ -3367,6 +3369,10 @@ impl Shell {
     /// The window became the one in front: the browser's shortcuts and menus act on this shell,
     /// and the menu bar lists its Space's extensions.
     pub fn became_key(&mut self, cx: &mut Context<Self>) {
+        // A window made key or opened in front since, before this shell heard.
+        if commands::key_moved_on(&cx.weak_entity()) {
+            return;
+        }
         cx.set_global(ShellHandle(cx.weak_entity()));
         commands::heard_key(&cx.weak_entity());
         // Its tab's dialog goes over its card again, as another window's may have shown since, and
@@ -3730,10 +3736,7 @@ impl Shell {
     /// unless a page took it there, and leaving takes that away.
     pub fn set_full_screen(&mut self, entered: bool, cx: &mut Context<Self>) {
         self.full_screen = entered;
-        // A new window waiting for its full screen opens its bar at the next frame.
-        if self.opening.is_some() {
-            cx.notify();
-        }
+        self.opening_heard(entered, cx);
         // There for the page, or back, with no resize to end the hold, as a window already its
         // screen's size goes: held on, the page stayed put for good, under the Library (#1633).
         if entered == self.page_fullscreen && self.page_held.take().is_some() {
@@ -4157,11 +4160,22 @@ impl Shell {
         }
     }
 
+    /// Seconds since `start` on the list's clock.
+    pub(super) fn since(&self, start: Instant) -> f32 {
+        Self::since_on(&self.clock, start)
+    }
+
+    fn since_on(clock: &BackgroundExecutor, start: Instant) -> f32 {
+        clock.now().saturating_duration_since(start).as_secs_f32()
+    }
+
     /// Drops the list's and the pages' motion that's done, and returns whether any is left.
     fn list_moving(&mut self) -> bool {
+        let clock = self.clock.clone();
+        let since = |start: Instant| Self::since_on(&clock, start);
         let sliding = !self.slides.is_empty();
         self.slides
-            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_some());
+            .retain(|_, (_, start, curve)| curve.at(since(*start)).is_some());
         if sliding && self.slides.is_empty() {
             // check.sh waits for this line before it presses a row that moved, or scrolls the
             // list: a row sliding in from above leaves the list short until it settles.
@@ -4169,19 +4183,20 @@ impl Shell {
         }
         let tiling = !self.tile_slides.is_empty();
         self.tile_slides
-            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_some());
+            .retain(|_, (_, start, curve)| curve.at(since(*start)).is_some());
         if tiling && self.tile_slides.is_empty() {
             // check.sh waits for this line before it presses a tile that moved.
             log!("browser: tiles settled");
         }
         self.list_slide
-            .take_if(|(_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_none());
+            .take_if(|(_, start, curve)| curve.at(since(*start)).is_none());
         self.closing
-            .retain(|row| row_spring(row.start.elapsed().as_secs_f32()).is_some());
+            .retain(|row| row_spring(since(row.start)).is_some());
         self.unhovered
             .retain(|(_, start)| start.elapsed().as_secs_f32() < SELECTED_UNHOVER);
         if self.slides.is_empty() {
-            self.opened.take_if(|opened| opened.done().is_none());
+            self.opened
+                .take_if(|opened| opened.done(since(opened.start)).is_none());
         }
         if let Some(settle) = self.settle.take_if(|settle| settle.offset().is_none()) {
             // check.sh reads these lines.
@@ -4488,7 +4503,8 @@ impl Render for Shell {
         if self.window_button_geometry.is_none() && window_buttons {
             self.window_button_geometry = self.browser.window_button_geometry(cx);
         }
-        // The Library slides in from the left with the card's edge, over the sidebar receding.
+        // The Library slides in from the left with the card's edge, over the sidebar receding, or
+        // on the right from behind the card after the sidebar going right (`library_x`).
         let library = self.library.is_some() && !self.page_fullscreen;
         // Full screen has no window buttons, so the panel draws none.
         let buttons = self.library_buttons() && !window.is_fullscreen();
@@ -4514,8 +4530,9 @@ impl Render for Shell {
             && (!self.sidebar_hidden || self.sidebar_motion.is_some());
         let sidebar = sidebar_shown.then(|| {
             let scale = self.sidebar_scale();
+            let shift = self.sidebar_shift();
             let origin = point(
-                px(self.from_side(width + RECEDE_X)),
+                px(self.from_side(width + RECEDE_X) + shift),
                 self.viewport.height / 2.,
             );
             // Whole: the Library fades in over it rather than cutting it (`library_opacity`).
@@ -4527,8 +4544,13 @@ impl Render for Shell {
             // Its buttons recede with it, over the Library, as the window's do in Arc. Full screen
             // has none.
             let buttons = self.sidebar_buttons() && !window.is_fullscreen();
-            let buttons = buttons.then(|| self.window_buttons(Some(self.viewport.width), cx));
-            let receding = div().absolute().size_full().opacity(opacity);
+            let buttons = buttons.then(|| self.window_buttons(self.viewport.width, cx));
+            let receding = div()
+                .absolute()
+                .top_0()
+                .left(px(shift))
+                .size_full()
+                .opacity(opacity);
             scaled(receding.child(sidebar).children(buttons), scale, origin)
         });
         let docked = sidebar_shown
@@ -4538,7 +4560,7 @@ impl Render for Shell {
         let edge = docked.then(|| self.sidebar_edge(cx));
         let own_buttons = self
             .draws_own_window_buttons()
-            .then(|| self.window_buttons(Some(self.viewport.width), cx));
+            .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
         self.breath.arm(cx);
@@ -4564,11 +4586,13 @@ impl Render for Shell {
             // background, which moves the window as a title bar does.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|shell, _, _, _| shell.background_pressed = true),
+                cx.listener(|shell, event: &MouseDownEvent, _, _| {
+                    shell.background_pressed = Some(event.position)
+                }),
             )
             .on_mouse_move(cx.listener(|shell, event: &MouseMoveEvent, window, cx| {
-                if shell.background_pressed && event.dragging() {
-                    shell.background_pressed = false;
+                if moves_window(shell.background_pressed, event.position) && event.dragging() {
+                    shell.background_pressed = None;
                     // check.sh reads this line.
                     log!("browser: window move");
                     window.start_window_move();
@@ -4587,7 +4611,7 @@ impl Render for Shell {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|shell, event: &MouseUpEvent, window, cx| {
-                    if std::mem::take(&mut shell.background_pressed) && event.click_count == 2 {
+                    if shell.background_pressed.take().is_some() && event.click_count == 2 {
                         shell.double_click_background(event.position, window, cx);
                     }
                 }),
@@ -5252,7 +5276,7 @@ impl Shell {
                     .border(px(0.5))
                     .border_color(self.palette.faint(REVEAL_BORDER))
                     .bg(self.gradient(Some(self.palette.underlay.into())))
-                    .child(self.window_buttons(Some(px(self.width())), cx))
+                    .child(self.window_buttons(px(self.width()), cx))
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
@@ -5273,11 +5297,11 @@ impl Shell {
         self.window_button_geometry.unwrap_or_default().frames()
     }
 
-    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel. With the sidebar
-    /// on the right they're mirrored `across` what they're drawn in, so close is at its corner, as
-    /// AppKit's are; the Library's column draws them as they are.
-    fn window_buttons(&self, across: Option<Pixels>, cx: &mut Context<Self>) -> AnyElement {
-        let right = self.right && across.is_some();
+    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel, the sidebar or
+    /// the Library's column. With the sidebar on the right they're mirrored `across` what they're
+    /// drawn in, so close is at its corner, as AppKit's are.
+    fn window_buttons(&self, across: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        let right = self.right;
         if cfg!(target_os = "windows") {
             return self.windows_buttons(right, cx);
         }
@@ -5292,8 +5316,7 @@ impl Shell {
             (WindowButton::Zoom, zoom),
         ];
         let frames = self.window_button_frames();
-        let frames =
-            frames.map(|frame| sidebar::mirrored(right, across.unwrap_or_default(), frame));
+        let frames = frames.map(|frame| sidebar::mirrored(right, across, frame));
         let row = Bounds::from_corners(
             point(frames[0].left().min(frames[2].left()), frames[0].top()),
             point(frames[0].right().max(frames[2].right()), frames[2].bottom()),

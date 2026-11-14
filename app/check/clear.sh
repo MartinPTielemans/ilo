@@ -1,3 +1,4 @@
+# check.sh runs this at 140.
 # View › Clear Cache and Refresh and the command bar's Clear Cookies and Refresh delete the cache
 # and the cookies of the page's site, and load the page again. ⇧⌘C and ⌥⇧⌘C from the page and the UI
 # copy the tab's URL and a Markdown link to it, to a pasteboard of the run's own, without its
@@ -475,6 +476,8 @@ if [ "$(uname)" = Darwin ]; then
   echo "$info" | grep -q '^Apple ' || fail "Copy Build Info has no chip: $info"
   echo "ok: Help lists Help Center, What's New, the shortcuts, Report a Problem… and" \
     "Troubleshooting, $out/help-menu.png. Copy Build Info copied: $(echo "$info" | sed 's/^browser: copied //' | tr '\n' ';')"
+else
+  echo "skip: Help's items and Troubleshooting › Copy Build Info: what it reads, the macOS version and the Apple chip, is the Mac's, and off the Mac it isn't checked yet."
 fi
 # Archive Tabs Below shows the tab right-clicked first, so none below it loads on the way out.
 post rightclick $(row 1)
@@ -764,6 +767,8 @@ none_since '^browser: site controls run certificate' "$lock" || fail "the lock r
 if [ "$(uname)" = Darwin ] || windows; then
   send menu 'Share…'
   expect "^browser: share http://localhost:$port/index.html\$" "File › Share… didn't share the page"
+else
+  echo "skip: File › Share…: Linux has no share sheet."
 fi
 # Hover still works once they've closed: the pointer out to the page hides the URL field's buttons,
 # and back over the sidebar shows them. While they were open the buttons stayed, as the pointer
@@ -901,6 +906,8 @@ expect '^browser: site controls settled$' "the Site Controls didn't open from th
 send key escape
 expect '^browser: site controls closing (escape)$' "escape didn't close the Site Controls"
 expect '^browser: site controls hidden$' "the Site Controls didn't leave after escape"
+none_since '^browser: site controls takes the keyboard back from its window$' ||
+  fail "the Site Controls took the keyboard back from the browser window as they closed"
 # Reset permissions sets the site back to asking, and a click outside closes them. The button
 # shows only under the pointer, as it was last over the page.
 away
@@ -1023,15 +1030,18 @@ EOF
 # click, whose page can say it loaded WebKit before the next line runs.
 early=$(grep '^browser: system engine loaded for ' "$log" | grep -v ' for clearing a site' || true)
 # On Linux the note's button downloads Google's Widevine module from Google, which the widevine run
-# checks, so it isn't pressed here, and on Windows the note has none (drm_note.rs).
-[ "$(uname)" != Darwin ] || send click $((nx + nw / 2)) $((ny + nh - 26))
+# checks, so it isn't pressed here. On Windows it opens the default browser, which the runner's
+# isn't ilo, and a driven run only logs it.
+[ "$(uname)" = Linux ] || send click $((nx + nw / 2)) $((ny + nh - 26))
 # Safari's engine keeps a store for each profile from macOS 14; before it, the note offers Safari.
 if [ "$(uname)" = Linux ]; then
   drm_done="nothing, as on Linux it offers Google's Widevine module, the widevine run's"
   echo "skip: the note's button: on Linux it downloads Google's Widevine module (the widevine run)."
 elif windows; then
-  drm_done="nothing, as on Windows the note offers none"
-  echo "skip: the note's button: on Windows the note says why the PC can't play the video, and offers nothing."
+  drm_done="the default browser"
+  expect "^browser: open in default browser http://127.0.0.1:$port/drm.html\$" \
+    "the note's button didn't open the page in the default browser"
+  none_since "^browser: page $tab needs nothing\$" || fail "the button took the note away"
 elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   drm_done="Safari's engine"
   [ -z "$early" ] || fail "WebKit loaded before its first page: $early"
@@ -1049,8 +1059,10 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   items=$(grep "$copied" "$log" | tail -1 | cut -d' ' -f6)
   [ "$cookies" -ge 2 ] && [ "$items" -ge 1 ] ||
     fail "the switch copied $cookies cookies and $items storage items, not the session page's"
-  served "^GET safari 127.0.0.1:$port/drm.html cookie .*h=$port; n=$port" \
-    "Safari's engine's first request didn't carry the site's cookies from Chromium"
+  # The cookies are logged sorted, and Safari's engine may hold its own from a run before: the
+  # store is named after the profile's path, which a check's wiped profile comes back at (#2396).
+  served "^GET safari 127.0.0.1:$port/drm.html cookie .*h=$port;.* n=$port" \
+    "Safari's engine's first request didn't carry the site's cookies from Chromium" "^GET safari "
   served "^GET safari 127.0.0.1:$port/seen?item=chromium " \
     "Safari's engine's page didn't find the item from Chromium as its script ran"
   # Chromium's page let go for the switch isn't a renderer lost, which a crash card would show.
@@ -1422,8 +1434,11 @@ open_clear_browsing_data() {
     [ "$(focused)" = Cancel ] && break
     sleep 0.1
   done
-  [ "$(focused)" = Cancel ] ||
-    fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused)"
+  if [ "$(focused)" != Cancel ]; then
+    # Which window has the keyboard, and whether ilo is the active app, for the VM's failure (#2396).
+    send front
+    fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused); active $active, $(grep '^browser: front ' "$log" | tail -1)"
+  fi
 }
 # Cancel closes the dialog, deleting nothing, and the browser stays up: from Chromium 157 it tells
 # the BrowserView too, as Delete does.

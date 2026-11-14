@@ -1,3 +1,4 @@
+# check.sh runs this at 400.
 # The command bar's order, on the signals Arc's ranks on (#1396), driven against pages of the run's
 # own. The row for the page shown goes last, after a page from history it outranked. Two GitHub
 # pages with one title, from history, list as one row, as Arc's bar keeps one row per title on the
@@ -27,15 +28,30 @@ done
 MSYS2_ARG_CONV_EXCL=/CN= openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=github.com \
   -addext subjectAltName=DNS:github.com -keyout "$out/ranking-tls.key" \
   -out "$out/ranking-tls.pem" 2> /dev/null || fail "openssl didn't make GitHub's certificate"
-spki=$(openssl x509 -in "$out/ranking-tls.pem" -pubkey -noout | openssl pkey -pubin -outform der |
-  openssl dgst -sha256 -binary | base64)
+# The base64 of the SHA-256 of the certificate's key, which is what the browser takes it by.
+key_of() {
+  openssl x509 -in "$out/ranking-tls.pem" -pubkey -noout | openssl pkey -pubin -outform der |
+    openssl dgst -sha256 -binary | base64
+}
+spki=$(key_of)
+expr "$spki" : '[A-Za-z0-9+/]\{43\}=$' > /dev/null ||
+  fail "openssl gave \"$spki\" as the certificate's key, not a SHA-256 in base64"
 rm -f "$out/ranking-tls.port"
 mkfifo "$out/ranking-tls.port"
 python3 -I -u -c '
 import functools, http.server, socketserver, ssl, sys
 handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
 # TCPServer, as site.sh binds: HTTPServer looks 127.0.0.1 up by name, 35 s on the hosted Mac.
-server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
+class Server(socketserver.ThreadingTCPServer):
+    # A handshake the browser ends, as it does for a certificate it refuses, raises here, and
+    # socketserver drops it unlogged (#2673).
+    def get_request(self):
+        try:
+            return super().get_request()
+        except OSError as error:
+            print("handshake failed: %s" % error, file=sys.stderr)
+            raise
+server = Server(("127.0.0.1", 0), handler)
 tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 tls.load_cert_chain(sys.argv[2], sys.argv[3])
 server.socket = tls.wrap_socket(server.socket, server_side=True)
@@ -78,10 +94,28 @@ listed() {
   grep "^browser: command bar lists \"$1\": " "$log" | tail -1 | sed 's/^browser: command bar lists "[^"]*": //' |
     tr -s ', ' '\n ' | sed 's/^ //'
 }
+# Waits for tab $2 (or a pattern for it) to load $1, failing with $3 if it doesn't. A load the
+# network refused says its error, and for GitHub's, the key the browser was to take the
+# certificate by and what GitHub's server logged, as a refused certificate otherwise leaves no
+# trace (#2673).
+loads() {
+  expect "^browser: \(loaded $2 $1\|page $2 trouble network -[0-9]*\)\$" "$3"
+  error=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n "s/^browser: page $2 trouble network //p" |
+    tail -1)
+  [ -n "$error" ] || return 0
+  case $1 in
+  https://github.com/*)
+    key=$(key_of)
+    [ "$key" = "$spki" ] || key="$key, not $spki as the browser was given"
+    fail "$3: error $error. The certificate's key is $key. GitHub's server logged: $(cat "$out/ranking-tls.log")"
+    ;;
+  esac
+  fail "$3: error $error"
+}
 # Goes to $1 in the tab shown, from the command bar, and waits for its page to draw.
 go_to() {
   go_from_bar "$1"
-  expect "^browser: loaded [0-9]* $1\$" "$1 didn't load"
+  loads "$1" "[0-9]*" "$1 didn't load"
   expect "^browser: title [0-9]* $2\$" "$1 didn't draw"
 }
 # Opens $1 in a new tab from the command bar, sets $tab to it, and waits for its page to draw.
@@ -93,7 +127,7 @@ open_page() {
   send key return
   expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for $1 didn't open at the top of Today"
   tab=$(today | cut -d' ' -f1)
-  expect "^browser: loaded $tab $1\$" "$1 didn't load in its tab"
+  loads "$1" "$tab" "$1 didn't load in its tab"
   expect "^browser: title $tab $2\$" "$1 didn't draw"
 }
 # Opens the bar with ⌘T, types $1, waits for the rows listed for it to have a line matching $2,

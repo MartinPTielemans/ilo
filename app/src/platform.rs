@@ -208,6 +208,8 @@ unsafe extern "C" {
     #[cfg(target_os = "macos")]
     pub fn host_enter_full_screen(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
+    pub fn host_window_full_screen(ui_view: *mut c_void) -> bool;
+    #[cfg(target_os = "macos")]
     pub fn host_window_on_active_space(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_window_buttons(
@@ -294,7 +296,7 @@ unsafe extern "C" {
     pub fn host_key_repeated() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_paste(text: *mut c_char, capacity: usize) -> usize;
-    pub fn host_open_in_safari(url: *const c_char);
+    pub fn host_open_elsewhere(url: *const c_char);
     pub fn host_open_full_disk_access();
     pub fn host_share(
         ui_view: *mut c_void,
@@ -420,6 +422,7 @@ unsafe extern "C" {
     );
     pub fn host_show_link_target(ui_view: *mut c_void, left: f64, top: f64, fade: f64);
     pub fn host_hide_link_target(fade: f64);
+    pub fn host_mouse_down() -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_keep_keychain_key() -> bool;
     #[cfg(not(target_os = "linux"))]

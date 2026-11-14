@@ -1,3 +1,4 @@
+# check.sh runs this at 260.
 # A tab in a call says so on its row, as Chrome's tab strip does: the camera while its page uses the
 # camera, the microphone alone, or the screen while it shares a screen, a window or a tab, and the
 # tab it shares shows the screen too. While it shares a tab, another tab's menu has Share This Tab
@@ -386,7 +387,7 @@ mini_player() {
     expect '^browser: settings tab Features$' "a click on Features didn't show its section"
     settings_drew Features
   fi
-  send clickkey $(drawn "switch mini player")
+  click_in_sight "switch mini player"
   expect "^browser: mini player $1\$" "a click on the Mini Player's switch didn't turn it $1"
   [ "$1" = on ] || ../tools/window-screenshot.sh "$pid" "$out/settings-mini-player.png" ||
     fail "no window to capture"
@@ -859,6 +860,8 @@ second=$(grep -c '^browser: window opened ' "$log")
 if [ "$(uname)" != Linux ]; then
   opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
   expect "^browser: window $opened main true\$" "the window ⌘N opened didn't become the main one"
+else
+  echo "skip: the window ⌘N opened becoming the main one: Linux's host doesn't say which is."
 fi
 send window 1
 expect 'browser: mini player back in its tab$' \

@@ -163,6 +163,7 @@ fn site() -> Site {
         reset: Some("Reset permissions".into()),
         system_engine: None,
         ad_blocking: None,
+        ad_blocked: SharedString::default(),
         developer_mode: None,
         logins: vec![],
         devices: Vec::new(),
