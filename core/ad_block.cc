@@ -745,10 +745,13 @@ void AddAdBlockHold(content::NavigationThrottleRegistry& registry) {
   content::BrowserContext* context = navigation.GetWebContents()->GetBrowserContext();
   Profile* profile = Profile::FromBrowserContext(context);
   // Only where it filters and will get ready: http(s), in a profile it's loaded and on in, and not
-  // on a site the user turned it off on, whose requests it never sees.
+  // on a site the user turned it off on, whose requests it never sees. Off the record, its page
+  // starts only in the profile's private windows, the original's primary off-the-record profile,
+  // never in one made apart, as the sync sign-in window's (#2619).
   if (!url.SchemeIsHTTPOrHTTPS() || !Followers().contains(profile->GetOriginalProfile()) ||
       !extensions::ExtensionRegistry::Get(profile)->enabled_extensions().Contains(kId) ||
-      (profile->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(kId, profile)) ||
+      (profile->IsOffTheRecord() && (!profile->IsPrimaryOTRProfile() ||
+                                     !extensions::util::IsIncognitoEnabled(kId, profile))) ||
       Ready(context) || OffSites(profile->GetOriginalProfile()).MatchesURL(url)) {
     return;
   }
