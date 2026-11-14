@@ -403,9 +403,26 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
       }
     }
   };
+  // A combobox's list that the page made its child (aria-owns), as a picker's often is, is the
+  // page's own, as a list the field only controls already shows: it stays, with its options, and
+  // the field keeps it (#2355). Whatever else is under the field goes.
+  std::map<std::string, base::ListValue> lists;
   for (const auto& [id, node] : by_id) {
-    if (IsField(*node)) {
-      children_of(*node);
+    const base::ListValue* children = IsField(*node) ? node->FindList("childIds") : nullptr;
+    if (!children) {
+      continue;
+    }
+    for (const base::Value& child : *children) {
+      const std::string* each = child.GetIfString();
+      if (!each) {
+        continue;
+      }
+      const auto found = by_id.find(*each);
+      if (IsRole(*node, "combobox") && found != by_id.end() && IsRole(*found->second, "listbox")) {
+        lists[id].Append(*each);
+      } else {
+        steps.push_back(*each);
+      }
     }
   }
   while (!steps.empty()) {
@@ -431,7 +448,11 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
     }
     dict->Remove("value");
     if (IsField(*dict)) {
-      dict->Remove("childIds");
+      if (auto list = lists.find(*id); list != lists.end()) {
+        dict->Set("childIds", std::move(list->second));
+      } else {
+        dict->Remove("childIds");
+      }
     }
     if (base::ListValue* properties = dict->FindList("properties")) {
       properties->EraseIf([](const base::Value& property) {

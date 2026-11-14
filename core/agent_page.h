@@ -387,7 +387,8 @@ bool IsWebFrame(content::RenderFrameHost* frame);
 
 // What a page's accessibility tree, as DevTools' Accessibility.getFullAXTree gives it, may show
 // an agent: each node without its value, and without the nodes under a field, where Chromium puts
-// what was typed or filled into it, and with "password": true on the nodes in |passwords|.
+// what was typed or filled into it, but for a combobox's own list of options, and with
+// "password": true on the nodes in |passwords|.
 base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwords);
 
 }  // namespace browser_core

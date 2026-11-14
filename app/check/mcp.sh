@@ -876,7 +876,12 @@ addEventListener('message', (event) => {
 <ul id=list role=listbox aria-label=Priorities hidden>
 <li role=option>Low<li role=option>High<li role=option>Urgent
 </ul>
+<input id=city role=combobox aria-label=City aria-owns=cities aria-expanded=true value=Ber-by-ada>
+<ul id=cities role=listbox aria-label=Cities>
+<li role=option>Berlin<li role=option>Bern
+</ul>
 <script>
+cities.onclick = event => document.title = "city " + event.target.textContent;
 const field = document.getElementById("status");
 field.onchange = () => document.title = "status " + field.value;
 const show = open => { list.hidden = !open; pick.ariaExpanded = open; };
@@ -898,6 +903,17 @@ painted(() => document.title = "choose");
   priority=$(ref_of combobox Priority)
   [ -n "$status" ] && [ -n "$priority" ] ||
     fail "the choosing page's fields had the refs '$status' and '$priority'"
+  # A picker whose list is its child (aria-owns), as Chromium's tree has it, shows its options with
+  # refs, and still not what's in its field (#2355).
+  case "$outline" in *Ber-by-ada*) fail "the picker's line gave what its field holds" ;; esac
+  bern=$(ref_of option Bern)
+  case "$outline" in
+    *"- combobox \"City\" [e"*"- listbox \"Cities\" [e"*"- option \"Berlin\" [e"*"- option \"Bern\" [$bern]"*) ;;
+    *) fail "the picker's own list wasn't in the outline: $(printf '%s\n' "$outline" | grep -A3 City)" ;;
+  esac
+  picked=$(call click "{\"tab\":$choose_tab,\"ref\":\"$bern\"}")
+  case "$picked" in "Clicked option “Bern”."*) ;; *) fail "clicking the picker's option answered: $picked" ;; esac
+  await_log "^browser: title $choose_tab city Bern\$" "clicking the picker's option didn't reach the page"
   chose=$(call select "{\"tab\":$choose_tab,\"ref\":\"$status\",\"option\":\"closed\"}")
   case "$chose" in
     "The combobox “Status” now holds “Closed”."*) ;;
