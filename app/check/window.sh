@@ -859,13 +859,6 @@ in_browser RenderWidgetHostViewCocoa "after the command bar closed over a page t
 # don't move the window itself: the window server follows the real pointer.
 moves=0
 drag() {
-  # On X11 the window manager moves the window with the real pointer, once it has taken it from the
-  # app. The driver lets go before then, as no hand can, and the move outlives the drag and eats the
-  # next press: the driver waiting for the window manager is #2721's slice 2.
-  if [ "$3" = moves ] && [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-    echo "skip: a drag on $4 moving the window, on X11: #2721 slice 2."
-    return
-  fi
   send drag "$1" "$2" $(($1 + 5)) "$2"
   count=$(grep -c '^browser: window move$' "$log" || true)
   if [ "$3" = moves ]; then
@@ -886,10 +879,10 @@ drag 110 400 moves "the empty sidebar"
 # design/tokens.toml's card-inset is 10.
 if windows; then
   drag 600 5 stays "the frame's top edge, which resizes"
-  drag 600 9 moves "the card's top margin"
-else
-  drag 600 5 moves "the card's top margin"
 fi
+# Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the screen's
+# top, its quick-maximize zone, as it does under a hand.
+drag 600 9 moves "the card's top margin"
 drag $((width - 8)) 300 moves "the card's right margin"
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
 # unless it's set to something else. Sway, the Wayland session's compositor, maximizes no window:
