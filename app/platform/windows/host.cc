@@ -3109,8 +3109,15 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
     // check.sh reads this line.
     fprintf(stderr, "browser: launch picture shown\n");
   }
-  // Maximized on the screen of the frame it was made at, which it un-maximizes to.
-  ShowWindow(window, maximized ? SW_SHOWMAXIMIZED : SW_SHOW);
+  // Maximized on the screen of the frame it was made at, which it un-maximizes to, which Windows
+  // can't do without activating it. Otherwise shown, then brought to the front: showing and
+  // activating it in one ShowWindow took 7 ms more, before Chromium starts (#2384).
+  if (maximized) {
+    ShowWindow(window, SW_SHOWMAXIMIZED);
+  } else {
+    ShowWindow(window, SW_SHOWNA);
+    SetForegroundWindow(window);
+  }
   // On screen now, as Chromium's startup holds the main thread for a while before its loop.
   UpdateWindow(window);
 }
