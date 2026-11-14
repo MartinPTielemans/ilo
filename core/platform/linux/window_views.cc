@@ -932,8 +932,13 @@ class WindowViews : public views::WidgetObserver,
         key->event = main;
         x11::Connection* connection = x11::Connection::Get();
         // With the focus, or GPUI, finding it on this window, hands the key back here as the
-        // page's, and the two pass it on without end, as ⌘Q after full screen did (#919).
-        SetInputFocus(main);
+        // page's, and the two pass it on without end, as ⌘Q after full screen did (#919). Only
+        // while the focus is still in this window: a key handled after a click that opened another
+        // window, which has the focus by then, would take it back, as ⌥⌘-click's ⌥ and ⌘ did from
+        // Little ilo (#2762).
+        if (IsWithin(InputFocus(), window())) {
+          SetInputFocus(main);
+        }
         connection->SendEvent(*key, main, x11::EventMask::NoEvent);
         connection->Flush();
       }
