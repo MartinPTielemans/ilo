@@ -588,6 +588,7 @@ fi
 presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
 send click $page_point
 driven=$active
+held_said=""
 hand_back_pressed "$presses"
 if [ "$driven" = 1 ]; then
   # A click on the card opens its conversation, its steps in its agent's place.
@@ -609,6 +610,31 @@ CHIP
   ../tools/window-screenshot.sh "$pid" "$out/agent-pages.png" || fail "no window to capture"
   watch "$agent_tab"
   ../tools/window-screenshot.sh "$pid" "$out/agent-watched.png" || fail "no window to capture"
+
+  # A page in the agent's tab that asks to show notifications on load is held behind the URL
+  # field's bell, as the user's would be: reading the tab tells the agent the request is there and
+  # that only the user can answer it, nothing answers it, and leaving the page ends it (#2323).
+  # Chromium asks for a page only while its tab is shown, so this is the tab watched.
+  printf '%s' '<!doctype html><title>Asks</title>
+<script>Notification.requestPermission().then(answer => document.title = "asks " + answer)</script>' \
+    > "$out/site/asks.html"
+  call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/asks.html\"}" > /dev/null
+  await_log "^browser: page $agent_tab asks .*notifications, quietly\$" \
+    "the agent's page asking to show notifications on load wasn't held quietly"
+  read=$(call read_page "{\"tab\":$agent_tab}")
+  case "$read" in
+    *"asked to send notifications. Only the user can answer it, from the bell in the URL field."*) ;;
+    *) fail "reading a tab with a request held behind the bell answered: $read" ;;
+  esac
+  grep -q "^browser: title $agent_tab asks " "$log" && fail "the agent's held request was answered"
+  asked=$(grep -c "^browser: page $agent_tab asks nothing\$" "$log" || true)
+  call navigate "{\"tab\":$agent_tab,\"url\":\"example.com\"}" > /dev/null
+  await_more "^browser: page $agent_tab asks nothing\$" "$asked" ||
+    fail "leaving the page didn't end its held request"
+  # Chrome counts no step back to a page the user never touched, as asks.html is.
+  await_log "^browser: page $agent_tab back [1-9][0-9]* forward 0 loading 0 https://example\\.com/\$" \
+    "the agent's tab didn't go back to example.com"
+  held_said=", is told a request to show notifications its page made on load is held for the user"
 fi
 
 # Split views (#1597): the agent puts two tabs of its own side by side, adds a third, lists them
@@ -721,7 +747,7 @@ painted(() => document.title = "fields");
   call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/fields.html\"}" > /dev/null
   await_log "^browser: title $agent_tab fields\$" "the fields page didn't load in the agent's tab"
   # A click while the page still loads can land before its field is drawn, and focus no field.
-  await_log "^browser: page $agent_tab back 1 forward 0 loading 0 http://localhost:$port/fields\\.html\$" \
+  await_log "^browser: page $agent_tab back [1-9][0-9]* forward 0 loading 0 http://localhost:$port/fields\\.html\$" \
     "the fields page didn't finish loading"
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   send click $page_point
@@ -2291,7 +2317,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page$held_said, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
