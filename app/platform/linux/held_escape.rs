@@ -40,6 +40,8 @@ thread_local! {
     static WAYLAND: Cell<bool> = const { Cell::new(false) };
     /// Under Wayland, GPUI's number for the Escape press the UI got, while it may be held.
     static WAYLAND_PRESS: Cell<Option<u64>> = const { Cell::new(None) };
+    /// Under Wayland, the key GPUI repeated as the page's last key came, as `held_key` gives it.
+    static PAGE_HELD: Cell<Option<(u32, u64)>> = const { Cell::new(None) };
     static X: RefCell<Option<X>> = const { RefCell::new(None) };
     /// The windows that tell this connection their key releases while Escape is held.
     static HELD: RefCell<Option<Vec<xproto::Window>>> = const { RefCell::new(None) };
@@ -73,6 +75,17 @@ pub(crate) fn watch(wayland: bool, cx: &mut App) {
 /// GPUI's number for the press of the Escape it repeats, if it's Escape it's repeating.
 fn repeating_escape() -> Option<u64> {
     gpui_linux::held_key().and_then(|(keysym, press)| (keysym == ESCAPE).then_some(press))
+}
+
+/// Under Wayland, whether the key going to the page now is a held key's repeat, as the host can't
+/// say (`host_key_repeated`): GPUI's number for the press it repeats is the one it had as the
+/// page's last key came, so no key has gone down since, and that key is still held. A press goes
+/// to Chromium and GPUI from the one read of the display, so GPUI has it by the time the page's
+/// key reaches the app. Under X11 GPUI never hears the page's keys, and this is false.
+pub(crate) fn page_key_repeated() -> bool {
+    let held = gpui_linux::held_key();
+    let last = PAGE_HELD.replace(held);
+    held.is_some() && last == held
 }
 
 /// Whether `key`, going to a page, is the repeat of an Escape held since the UI got its press.
