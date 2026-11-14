@@ -23,6 +23,7 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/dialog_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/session.h"
@@ -132,6 +133,11 @@ class PopupLog : public views::NativeViewFocusChangeListener,
 // shown inactive (HWNDMessageHandler::SetInitialFocus), and focusing it activates its window: that
 // closed the command bar over it and brought a window restored behind to the front (#872).
 void ShowInactive(views::Widget* holder) {
+  // A tab switch shows the pane it's already in: showing it again sends its window the style and
+  // show messages for nothing, about 0.2 ms of the switch (#2377).
+  if (holder->IsVisible()) {
+    return;
+  }
   HWND hwnd = views::HWNDForWidget(holder);
   const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
   SetWindowLongPtr(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE);
@@ -166,6 +172,10 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   // HWND focused, which it needs to take the input method's text. Not while another of the app's
   // windows is in front, such as the command bar.
   void OnWindowFocused(aura::Window* gained_focus, aura::Window*) override {
+    // A click on a page whose tab shows a dialog focuses the pane here, as the page, ignoring input
+    // under the dialog, won't take it, and every key the pane then has is lost: the dialog takes
+    // the keyboard back, as on the Mac (#2625).
+    dialog_keys::PageViewFocused(gained_focus);
     const bool take =
         gained_focus && GetFocus() != hwnd_ && GetActiveWindow() == GetAncestor(hwnd_, GA_ROOT);
     VLOG(1) << "pane " << hwnd_ << " focuses " << Describe(gained_focus)
@@ -630,8 +640,18 @@ class WindowViews : public views::WidgetObserver,
       CombineRgn(region, region, top, RGN_OR);
       DeleteObject(top);
     }
-    // The window owns the region from here.
-    SetWindowRgn(hwnd, region, TRUE);
+    // Only a region that changed: each tab switch lays the pane out again at the same size, and
+    // setting an equal region still makes Windows send the pane its frame's messages and redraw it,
+    // about 0.4 ms of each switch before its frame (#2377).
+    HRGN current = CreateRectRgn(0, 0, 0, 0);
+    const bool same = GetWindowRgn(hwnd, current) != ERROR && EqualRgn(current, region);
+    DeleteObject(current);
+    if (same) {
+      DeleteObject(region);
+    } else {
+      // The window owns the region from here.
+      SetWindowRgn(hwnd, region, TRUE);
+    }
   }
 
   // Shows |page|, a link preview's, at |frame| over the pages shown, in place of the preview it
@@ -1051,11 +1071,14 @@ void HidePages(views::Widget* widget) {
 // The app's view for a link preview is an overlay of its own over the window, which can't hold a
 // page, as on Linux, so the page shows in the window over its pages, where the overlay leaves a
 // hole, and the card the app draws round that.
+// The app shows the page through its hole the frame after placing it, as no run showed it late
+// here (#2640), so nothing waits for it to be on screen.
 void ShowPageIn(views::Widget* widget,
                 gfx::NativeView page,
                 void*,
                 const gfx::Rect& frame,
-                double corner_radius) {
+                double corner_radius,
+                base::OnceClosure) {
   WindowViews* views = widget ? ViewsOf(widget) : nullptr;
   if (views && page) {
     views->ShowPreview(page, frame, corner_radius);

@@ -11,6 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -951,10 +952,6 @@ bool bc_profile_list_history(bc_id profile,
   return browser_core::ListHistory(LoadedProfile(profile), profile, request, before, text, max);
 }
 
-bool bc_profile_remove_history(bc_id profile, const char* url, int64_t begin, int64_t end) {
-  return browser_core::RemoveHistory(LoadedProfile(profile), url, begin, end);
-}
-
 bool bc_profile_add_addresses(bc_id profile, const bc_address* addresses, size_t count) {
   return (addresses || !count) &&
          browser_core::AddImportedAddresses(LoadedProfile(profile), profile, addresses, count);
@@ -1847,6 +1844,20 @@ bool bc_window_redo_remove_suggestion(bc_id window_id, bc_id removal) {
   return window && window->RedoRemoveSuggestion(removal);
 }
 
+bc_id bc_window_remove_history(bc_id window_id,
+                               bc_id profile,
+                               const char* url,
+                               int64_t begin,
+                               int64_t end) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  const auto time = [](int64_t microseconds) {
+    return base::Time::UnixEpoch() + base::Microseconds(microseconds);
+  };
+  return window && url ? window->RemoveHistory(LoadedProfile(profile), GURL(url), time(begin),
+                                               time(end))
+                       : 0;
+}
+
 static bc_id OpenTyped(bc_id window_id, const char* url, bool when_shown, const char* typed) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   Profile* profile = window ? ProfileOf(*window) : nullptr;
@@ -1913,9 +1924,15 @@ void bc_tab_show_in(bc_id id, void* view, bc_rect frame, double corner_radius) {
     return;
   }
   browser_core::Window* window = browser_core::Window::Holding(id);
+  // The frame the app passed, not the rect laid out from it, so the app can match it.
+  auto shown = [](bc_id id, bc_rect frame) {
+    if (browser_core::Host().tab_shown_in) {
+      browser_core::Host().tab_shown_in(browser_core::Host().context, id, frame);
+    }
+  };
   browser_core::platform::ShowPageIn(window ? window->widget() : nullptr,
                                      contents->GetNativeView(), view, ToRect(frame),
-                                     corner_radius);
+                                     corner_radius, base::BindOnce(shown, id, frame));
   contents->Focus();
 }
 
@@ -2325,12 +2342,73 @@ void bc_profile_set_boost(bc_id profile, const char* site, const char* css) {
   browser_core::Boosts::Set(profile, site ? site : "", css ? css : "");
 }
 
+namespace {
+
+int ScriptState(browser_core::boost_script::State state) {
+  switch (state) {
+    case browser_core::boost_script::State::kOn:
+      return BC_BOOST_SCRIPT_ON;
+    case browser_core::boost_script::State::kNew:
+      return BC_BOOST_SCRIPT_NEW;
+    case browser_core::boost_script::State::kChanged:
+      return BC_BOOST_SCRIPT_CHANGED;
+    case browser_core::boost_script::State::kTooLarge:
+      return BC_BOOST_SCRIPT_TOO_LARGE;
+  }
+  NOTREACHED();
+}
+
+std::string_view Bytes(const char* script, size_t size) {
+  return script ? std::string_view(script, size) : std::string_view();
+}
+
+}  // namespace
+
+int bc_profile_set_boost_script(bc_id profile, const char* site, const char* script, size_t size) {
+  return ScriptState(browser_core::Boosts::SetScript(
+      profile, site ? site : "",
+      script ? std::optional<std::string_view>(Bytes(script, size)) : std::nullopt));
+}
+
+int bc_profile_boost_script_state(bc_id profile,
+                                  const char* site,
+                                  const char* script,
+                                  size_t size) {
+  return ScriptState(
+      browser_core::Boosts::ScriptState(profile, site ? site : "", Bytes(script, size)));
+}
+
+bool bc_profile_turn_on_boost_script(bc_id profile,
+                                     const char* site,
+                                     const char* script,
+                                     size_t size) {
+  return browser_core::Boosts::TurnOnScript(profile, site ? site : "", Bytes(script, size));
+}
+
+void bc_profile_forget_boost_script(bc_id profile, const char* site) {
+  browser_core::Boosts::ForgetScript(profile, site ? site : "");
+}
+
 void bc_tab_boost_zap(bc_id id, bool on) {
   content::WebContents* contents = browser_core::Tab::FromId(id);
   if (browser_core::Boosts* boosts =
           contents ? browser_core::Boosts::FromWebContents(contents) : nullptr) {
     boosts->Zap(on);
   }
+}
+
+void bc_arrange_set_lift(const bc_arrange_lift* lift) {
+  if (!lift) {
+    return;
+  }
+  // Sizes past what a shadow is for draw it at 0, as a value left out does.
+  const auto size = [](double value) { return browser_core::arrangement::Within(value, 0, 64, 0); };
+  browser_core::Arrange::SetLift({.rim = lift->rim,
+                                  .outline = lift->outline,
+                                  .shadow = lift->shadow,
+                                  .outline_blur = size(lift->outline_blur),
+                                  .shadow_y = size(lift->shadow_y),
+                                  .shadow_blur = size(lift->shadow_blur)});
 }
 
 bool bc_tab_arrange(bc_id id, bool on, const bc_arrange_look* look) {

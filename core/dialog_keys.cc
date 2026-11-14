@@ -12,6 +12,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
+#include "build/build_config.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
@@ -21,11 +22,16 @@
 #include "ui/events/event.h"
 #include "ui/events/event_handler.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
+
+#if !BUILDFLAG(IS_MAC)
+#include "ui/aura/window.h"
+#endif
 
 namespace browser_core::dialog_keys {
 namespace {
@@ -123,6 +129,21 @@ class DialogKeys : public ui::EventHandler, public views::WidgetObserver {
             dialog_->GetWeakPtr(), window_->GetWeakPtr()));
   }
 
+#if !BUILDFLAG(IS_MAC)
+  void PageViewFocused(gfx::NativeView view) {
+    content::WebContents* page = ShownPage(window_);
+    if (!page || !view) {
+      return;
+    }
+    // Aura focuses the window holding the page when the page's own view, ignoring input under the
+    // dialog, won't take it, as the pane's on Windows.
+    gfx::NativeView page_view = page->GetNativeView();
+    if (page_view->Contains(view) || view->Contains(page_view)) {
+      PageFocused(page);
+    }
+  }
+#endif
+
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override {
     // Erasing deletes this, so it's the last thing done.
@@ -157,6 +178,14 @@ void PageFocused(content::WebContents* page) {
     watched.second->PageFocused(page);
   }
 }
+
+#if !BUILDFLAG(IS_MAC)
+void PageViewFocused(gfx::NativeView view) {
+  for (auto& watched : Watched()) {
+    watched.second->PageViewFocused(view);
+  }
+}
+#endif
 
 void Watch(views::Widget* window) {
   if (!window) {

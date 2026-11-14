@@ -546,11 +546,13 @@ void HidePages(views::Widget* widget) {
   [view letLeavingGo];
 }
 
+// The page is in the app's view, over what it draws, so nothing waits for it to be on screen.
 void ShowPageIn(views::Widget*,
                 gfx::NativeView page,
                 void* view,
                 const gfx::Rect& frame,
-                double corner_radius) {
+                double corner_radius,
+                base::OnceClosure) {
   NSView* holder = (__bridge NSView*)view;
   NSView* page_view = page.GetNativeNSView();
   if (!holder || !page_view) {

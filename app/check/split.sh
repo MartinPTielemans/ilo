@@ -162,6 +162,26 @@ send key w cmd
 expect "^browser: tab $n closed\$" "⌘W didn't close the link's pane"
 expect "^browser: panes $a\$" "⌘W on the link's pane didn't leave the page alone"
 send click $page_point
+# On Linux, Shift+Alt-click does what ⌥-click does, since Openbox and Xfce take every Alt-click but
+# leave one with Shift (#2755), and ⇧-click on the same link still opens Peek.
+if [ "$(uname)" = Linux ]; then
+  send click $((x + 20)) $((y + 20)) shift alt
+  expect "^browser: splits $a+[0-9][0-9]*\$" \
+    "a click on a link with Shift+Alt didn't open it beside the page: \"$(splits)\""
+  n=$(splits | cut -d+ -f2)
+  expect "^browser: panes $a $n\$" "the window doesn't show the Shift+Alt-clicked link beside the page"
+  expect "^browser: loaded $n ${site}notes.txt\$" "the Shift+Alt-clicked link didn't load in its pane"
+  send key w cmd
+  expect "^browser: tab $n closed\$" "⌘W didn't close the Shift+Alt-clicked link's pane"
+  expect "^browser: panes $a\$" "⌘W on the Shift+Alt-clicked link's pane didn't leave the page alone"
+  send click $page_point
+  send click $((x + 20)) $((y + 20)) shift
+  expect "^browser: link preview [1-9][0-9]* ${site}notes.txt\$" "⇧-click on the link didn't open Peek"
+  expect '^browser: link preview shown$' "Peek's window didn't show"
+  send key escape
+  expect '^browser: link preview hidden$' "Esc didn't close Peek"
+  send click $page_point
+fi
 # A link dragged over the page brings the targets, which the page doesn't see, and let go on the
 # right one it opens in a pane there, as a tab let go there does. The link comes from another app,
 # as the driver hands it to the page's view: a drag the page starts is AppKit's, which follows the
@@ -331,10 +351,10 @@ send key 2 cmd
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" \
   "⌘2 didn't show the split with its pane focused last"
 expect "^browser: panes $a $b\$" "⌘2 didn't show both panes"
-if windows; then
-  # The driver's pointer is real there (#2544), heard before the press as a hand's is, so a frame
-  # draws the row's ✕ under it first and the right favicon sits left of the ✕'s room, as a hand
-  # finds it.
+if windows || { [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; }; then
+  # The driver's pointer is real on Windows (#2544) and X11's XTEST (#2721), heard before the press
+  # as a hand's is, so a frame draws the row's ✕ under it first and the right favicon sits left of
+  # the ✕'s room, as a hand finds it.
   send move 205 $(row 1 | cut -d' ' -f2)
   expect '^browser: hover tab [0-9]* close 1 ' \
     "resting on the split's row at 205 didn't show its ✕ (wanted a \"hover tab … close 1\" line): $(grep '^browser: hover ' "$log" | tail -3 | tr '\n' ';')"

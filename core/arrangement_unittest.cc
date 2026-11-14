@@ -187,5 +187,23 @@ TEST(ArrangementTest, AMotionValueOutsideItsRangeTakesTheDefault) {
   EXPECT_EQ(Within(std::numeric_limits<double>::infinity(), 5, 100, 25), 25);
 }
 
+TEST(ArrangementTest, ALiftIsTheElevationsShadow) {
+  // tokens.toml's popover level: rim, outline blurred 1, and the shadow 8 down blurred 24.
+  EXPECT_EQ(Shadow({.rim = 0xffffff1f,
+                    .outline = 0x000000b3,
+                    .shadow = 0x00000059,
+                    .outline_blur = 1,
+                    .shadow_y = 8,
+                    .shadow_blur = 24}),
+            "inset 0 0 0 1px #ffffff1f, 0 0 1px #000000b3, 0 8px 24px #00000059");
+  EXPECT_EQ(Shadow({.shadow = 0x00000059, .shadow_y = 1.5, .shadow_blur = 3}),
+            "0 1.5px 3px #00000059");
+}
+
+TEST(ArrangementTest, ALiftWithNoAlphaDrawsNothing) {
+  EXPECT_EQ(Shadow({}), "");
+  EXPECT_EQ(Shadow({.rim = 0xffffff00, .outline = 0x00000000, .shadow_y = 8}), "");
+}
+
 }  // namespace
 }  // namespace browser_core::arrangement

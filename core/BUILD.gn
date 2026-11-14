@@ -206,6 +206,27 @@ source_set("arrangement") {
   ]
 }
 
+# What the ad blocker carries over from uBlock Origin's storage, apart so browser_core_unittests
+# tests the read alone.
+source_set("ad_block_carry") {
+  sources = [
+    "ad_block_carry.cc",
+    "ad_block_carry.h",
+  ]
+  public_deps = [ "//base" ]
+  deps = [ "//third_party/leveldatabase" ]
+}
+
+# When the ad blocker looks at its lists, and whether a download takes the place of a list's copy,
+# apart so browser_core_unittests tests the rules alone.
+source_set("ad_block_list_check") {
+  sources = [
+    "ad_block_list_check.cc",
+    "ad_block_list_check.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
 # Whether a pinned tab is at its pinned URL, apart so browser_core_unittests tests the rule alone.
 source_set("pinned_url") {
   sources = [
@@ -233,6 +254,21 @@ source_set("arrange_rule") {
     "arrange_rule.h",
   ]
   deps = [ "//base" ]
+}
+
+# What a window's removals take out of a profile's history and put back, apart so
+# browser_core_unittests tests them on a history service alone (#2337).
+source_set("history_removal") {
+  sources = [
+    "history_removal.cc",
+    "history_removal.h",
+  ]
+  deps = [
+    "//base",
+    "//components/history/core/browser",
+    "//components/search_engines",
+    "//url",
+  ]
 }
 
 # Whether a load the user typed keeps its http:// (#2417), apart so browser_core_unittests tests
@@ -374,6 +410,20 @@ source_set("withheld_fields") {
     "//base",
     "//skia",
     "//ui/gfx/geometry",
+  ]
+}
+
+# Which of a data folder's Safari-engine stores a profile still names, apart so
+# browser_core_unittests tests the rule alone.
+source_set("system_stores") {
+  sources = [
+    "system_stores.cc",
+    "system_stores.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/common:constants",
+    "//components/prefs",
   ]
 }
 
@@ -545,6 +595,8 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":ad_block_carry",
+    ":ad_block_list_check",
     ":ad_block_off_sites",
     ":ad_block_page",
     ":archive_rule",
@@ -552,7 +604,9 @@ source_set("browser_core") {
     ":pinned_url",
     ":arrangement",
     ":ax_text",
+    ":boost_script",
     ":drm_request",
+    ":history_removal",
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
@@ -560,6 +614,7 @@ source_set("browser_core") {
     ":select_choices",
     ":agent_download_hold",
     ":sidebar_backups",
+    ":system_stores",
     ":site_searches",
     ":space_default",
     ":split_view",
@@ -731,6 +786,7 @@ source_set("browser_core") {
     "//ui/events:dom_keycode_converter",
     "//ui/events:events_base",
     "//ui/gfx",
+    "//ui/gfx/animation",
     "//ui/gfx/codec",
     "//ui/gfx/geometry",
     "//ui/menus",
@@ -784,7 +840,6 @@ source_set("browser_core") {
       "//cc/paint",
       "//skia",
       "//ui/aura",
-      "//ui/compositor",
       "//ui/gfx",
     ]
   }
@@ -829,7 +884,6 @@ source_set("browser_core") {
       "//third_party/wayland-protocols:xdg_activation",
       "//ui/aura",
       "//ui/base/ime",
-      "//ui/compositor",
       "//ui/events",
       "//ui/events/keycodes:xkb",
       "//ui/events/ozone/layout",
@@ -849,6 +903,8 @@ source_set("browser_core") {
 # engine's run runs them.
 test("browser_core_unittests") {
   sources = [
+    "ad_block_carry_unittest.cc",
+    "ad_block_list_check_unittest.cc",
     "ad_block_off_sites_unittest.cc",
     "archive_rule_unittest.cc",
     "arrange_rule_unittest.cc",
@@ -857,6 +913,8 @@ test("browser_core_unittests") {
     "ax_text_unittest.cc",
     "agent_download_hold_unittest.cc",
     "boost_script_unittest.cc",
+    # The removals the Library's History and the command bar undo on ⌘Z, on a history service.
+    "history_removal_unittest.cc",
     "idle_check_unittest.cc",
 
     # The engine's patch to leveldb's cache, through leveldb's own API.
@@ -881,12 +939,15 @@ test("browser_core_unittests") {
     "sync_pairing_unittest.cc",
     "sync_spaces_newer_unittest.cc",
     "sync_updates_unittest.cc",
+    "system_stores_unittest.cc",
     "typed_http_unittest.cc",
     "typing_keys_unittest.cc",
     "window_frames_unittest.cc",
     "withheld_fields_unittest.cc",
   ]
   deps = [
+    ":ad_block_carry",
+    ":ad_block_list_check",
     ":ad_block_off_sites",
     ":archive_rule",
     ":arrange_rule",
@@ -895,12 +956,14 @@ test("browser_core_unittests") {
     ":ax_text",
     ":agent_download_hold",
     ":boost_script",
+    ":history_removal",
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
     ":search_default",
     ":select_choices",
     ":sidebar_backups",
+    ":system_stores",
     ":site_searches",
     ":space_default",
     ":split_view",

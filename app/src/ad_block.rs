@@ -19,6 +19,7 @@ use base64::prelude::BASE64_STANDARD;
 use web_time::Instant;
 
 pub mod choice;
+mod responses;
 mod scriptlets;
 
 /// What the engine blocks with, as the core gives it (bc_host's ad_block_use).
@@ -38,6 +39,10 @@ pub struct Setup {
 pub struct Engine {
     rules: Rules,
     popups: Rules,
+    /// uBlock Origin's response-time filters, which adblock-rust doesn't read.
+    responses: responses::Responses,
+    /// The stand-ins' data: URLs by name, for those filters' `$redirect`.
+    stand_ins: std::collections::HashMap<String, String>,
 }
 
 /// What to do with a request (BC_AD_BLOCK_).
@@ -49,6 +54,9 @@ pub enum Verdict {
     Redirect(String),
     /// Sent to this address instead.
     Rewrite(String),
+    /// Allowed now, and asked about again at each of its responses, a redirect's too, with the
+    /// values of these headers: `at_response` says then.
+    AtResponse(Vec<String>),
 }
 
 /// The bit of adblock-rust's permission mask uBlock Origin's own lists carry, which its trusted
@@ -336,9 +344,14 @@ fn popups_apart(text: String) -> (String, String) {
 /// on, and gives it uBlock Origin's stand-ins and scriptlets. A list that can't be read is left out.
 pub fn compile(setup: &Setup) -> Engine {
     let (mut set, mut popups) = (FilterSet::new(false), FilterSet::new(false));
+    let mut response_lines = String::new();
     let mut add = |text: String, options: ParseOptions| {
         let (text, popup_text) = match options.format {
-            FilterFormat::Standard => popups_apart(text),
+            FilterFormat::Standard => {
+                let (text, lines) = responses::apart(text);
+                response_lines.push_str(&lines);
+                popups_apart(text)
+            }
             FilterFormat::Hosts => (text, String::new()),
         };
         set.add_filter_list(hostnames_anchored(text), options.clone());
@@ -362,7 +375,21 @@ pub fn compile(setup: &Setup) -> Engine {
     Engine {
         rules,
         popups: Rules::new_with_filter_set(popups),
+        responses: responses_of(&response_lines),
+        stand_ins: responses::stand_in_urls(&stand_ins(&setup.folder)),
     }
+}
+
+/// The response-time filters of `lines`; those it can't honour are named in its unit tests.
+fn responses_of(lines: &str) -> responses::Responses {
+    let (responses, not_honoured) = responses::Responses::of(lines);
+    if !not_honoured.is_empty() {
+        crate::log!(
+            "browser: ad block: {} response-time filters not honoured",
+            not_honoured.len()
+        );
+    }
+    responses
 }
 
 /// What filters name in uBlock Origin's `folder`: its stand-ins and its scriptlets.
@@ -447,10 +474,71 @@ pub fn check(engine: &Engine, url: &str, source: &str, kind: &str) -> Verdict {
             None => Verdict::Block,
         };
     }
-    match result.rewritten_url {
-        Some(url) => Verdict::Rewrite(url),
-        None => Verdict::Allow,
+    if let Some(url) = result.rewritten_url {
+        return Verdict::Rewrite(url);
     }
+    if engine.responses.is_empty() {
+        return Verdict::Allow;
+    }
+    let excepted = || {
+        (engine.rules)
+            .check_network_request_subset(&request, true, false)
+            .exception
+            .is_some()
+    };
+    match engine
+        .responses
+        .at_request(&asked(&request, url, source, kind), excepted)
+    {
+        None => Verdict::Allow,
+        Some(responses::AtRequest::Ask(names)) => Verdict::AtResponse(names),
+        Some(responses::AtRequest::Block(stand_in)) => {
+            match stand_in.and_then(|name| engine.stand_ins.get(&name)) {
+                Some(data) => Verdict::Redirect(data.clone()),
+                None => Verdict::Block,
+            }
+        }
+    }
+}
+
+/// The request for `url` as the response-time filters read it.
+fn asked<'a>(request: &Request, url: &'a str, source: &str, kind: &'a str) -> responses::Asked<'a> {
+    let host = responses::host_of(url);
+    responses::Asked {
+        address: responses::address_of(url, &host),
+        url,
+        kind,
+        host,
+        source_host: responses::host_of(source),
+        third_party: request.is_third_party,
+    }
+}
+
+/// Whether a response to the request for `url`, which `check` said to ask about, is blocked:
+/// one sent for `method` with `headers`, lines of "name: value" of those `check` named.
+pub fn at_response(
+    engine: &Engine,
+    url: &str,
+    source: &str,
+    kind: &str,
+    method: &str,
+    headers: &str,
+) -> bool {
+    let Ok(request) = Request::new(url, source, kind, method) else {
+        return false;
+    };
+    let excepted = || {
+        (engine.rules)
+            .check_network_request_subset(&request, true, false)
+            .exception
+            .is_some()
+    };
+    (engine.responses).at_response(
+        &asked(&request, url, source, kind),
+        method,
+        headers,
+        excepted,
+    )
 }
 
 /// What the page at `url` hides and runs from the start, as bc_host's ad_block_page writes it: a
@@ -585,8 +673,9 @@ pub fn hide(engine: &Engine, classes: &[String], ids: &[String], exceptions: &[S
 /// What `compile` makes of the same lists: one more each time it reads them differently, so an
 /// engine the last compile made isn't loaded. 2: bare hostnames anchored. 3: pop-ups' filters apart,
 /// the file the two engines, the first's length before it. 4: procedural filters read as such.
-/// 5: `!#if` conditions evaluated as uBlock Origin on Chromium does.
-const COMPILED: u32 = 5;
+/// 5: `!#if` conditions evaluated as uBlock Origin on Chromium does. 6: response-time filters apart,
+/// their lines after the two engines, the second's length first.
+const COMPILED: u32 = 6;
 
 /// The compiled engine's name in the cache folder, for `setup` as its files are now: a change to
 /// a list, the filters, adblock-rust's version or COMPILED names another.
@@ -613,6 +702,7 @@ pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
     let file = cache.map(|cache| cache.join(cache_name(setup)));
     if let Some(mut engine) = file.as_ref().and_then(|file| read(&fs::read(file).ok()?)) {
         engine.rules.use_resources(resources(&setup.folder));
+        engine.stand_ins = responses::stand_in_urls(&stand_ins(&setup.folder));
         crate::log!(
             "browser: ad block engine loaded in {} ms",
             start.elapsed().as_millis()
@@ -636,10 +726,13 @@ pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
         }
         if fs::create_dir_all(cache).is_ok() {
             let (rules, popups) = (engine.rules.serialize(), engine.popups.serialize());
-            let mut bytes = Vec::with_capacity(8 + rules.len() + popups.len());
+            let lines = engine.responses.lines().as_bytes();
+            let mut bytes = Vec::with_capacity(16 + rules.len() + popups.len() + lines.len());
             bytes.extend_from_slice(&(rules.len() as u64).to_le_bytes());
             bytes.extend(rules);
+            bytes.extend_from_slice(&(popups.len() as u64).to_le_bytes());
             bytes.extend(popups);
+            bytes.extend_from_slice(lines);
             _ = fs::write(&file, bytes);
         }
     }
@@ -648,13 +741,21 @@ pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
 
 /// The engines `load` kept in `bytes`, or None for a file it didn't write.
 fn read(bytes: &[u8]) -> Option<Engine> {
-    let (length, rest) = bytes.split_first_chunk::<8>()?;
-    let (rules_bytes, popups_bytes) =
-        rest.split_at_checked(usize::try_from(u64::from_le_bytes(*length)).ok()?)?;
+    fn part(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+        let (length, rest) = bytes.split_first_chunk::<8>()?;
+        rest.split_at_checked(usize::try_from(u64::from_le_bytes(*length)).ok()?)
+    }
+    let (rules_bytes, rest) = part(bytes)?;
+    let (popups_bytes, lines) = part(rest)?;
     let (mut rules, mut popups) = (Rules::default(), Rules::default());
     rules.deserialize(rules_bytes).ok()?;
     popups.deserialize(popups_bytes).ok()?;
-    Some(Engine { rules, popups })
+    Some(Engine {
+        rules,
+        popups,
+        responses: responses_of(std::str::from_utf8(lines).ok()?),
+        stand_ins: Default::default(),
+    })
 }
 
 /// The engine the core asks, swapped whole as the setup changes, as a page's requests keep asking

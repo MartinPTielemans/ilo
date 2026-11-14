@@ -2,13 +2,10 @@
 
 #include <algorithm>
 #include <limits>
-#include <optional>
-#include <set>
 #include <string>
 #include <vector>
 
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,7 +18,6 @@
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/url_row.h"
 #include "components/keyed_service/core/service_access_type.h"
-#include "url/gurl.h"
 
 namespace browser_core {
 
@@ -101,21 +97,6 @@ bool ListHistory(Profile* profile,
   options.policy_for_404_visits = history::VisitQuery404sPolicy::kInclude404s;
   history->QueryHistory(base::UTF8ToUTF16(text ? text : ""), options,
                         base::BindOnce(&Listed, id, request), &Tracker());
-  return true;
-}
-
-bool RemoveHistory(Profile* profile, const char* url, int64_t begin, int64_t end) {
-  history::HistoryService* history = LoadedHistory(profile);
-  GURL page(url ? url : "");
-  if (!history || !page.is_valid() || begin >= end) {
-    return false;
-  }
-  // The page's visits in the span alone, as Chrome's history page removes a day's row; its
-  // observers hear the deletion, and with them history_deleted. No synced history to tell: this
-  // build has no Google account web history.
-  history->ExpireHistoryBetween(std::set<GURL>{page}, std::nullopt, FromMicroseconds(begin),
-                                FromMicroseconds(end), /*user_initiated=*/true,
-                                base::DoNothing(), &Tracker());
   return true;
 }
 

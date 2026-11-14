@@ -67,6 +67,10 @@ bool Withheld(const FieldFacts& field) {
   return !field.fixed && field.markup != field.value;
 }
 
+bool Hatches(const FieldFacts& field, Hatched hatched) {
+  return hatched == Hatched::kEveryValue ? !field.value.empty() : Withheld(field);
+}
+
 bool SecretAutocomplete(std::string_view autocomplete) {
   for (std::string_view token :
        base::SplitStringPiece(autocomplete, base::kWhitespaceASCII, base::TRIM_WHITESPACE,
