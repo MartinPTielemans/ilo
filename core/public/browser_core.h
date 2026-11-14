@@ -2997,7 +2997,7 @@ BC_EXPORT void bc_profile_forget_boost_script(bc_id profile, const char* site);
 // with its own code, the same for every site: one element settled before or after another, two
 // traded, one floating over the page, and none other. Hiding is Zap's rule in the Boost's CSS. The
 // user's alone: no agent, page, sync, link or import starts the mode or changes an arrangement, and
-// an agent's call in a tab while it's arranging is refused, in the activity log.
+// a tab in an agent's Space never arranges.
 
 // How Arrange's marks in the page look, from the app's tokens and the Space's accent: the outline,
 // the drop line, a trade's fill and the label over the element, in |accent| with |label| for the
