@@ -4,8 +4,10 @@
 # engine-mac-<commit> of the repository engine/prebuilt.ini names, named for the commit of ilo's
 # (app/branding/repository) it was built from, as engine-linux.yml publishes Linux's.
 # engine/fetch.sh on a Mac takes the one nearest a checkout's history. Runs on the Mac after
-# engine/build.sh, as tools/mac-nightly.sh does. It reads nothing of the owner's but gh's login,
-# which uploads the release.
+# engine/build.sh, as tools/mac-nightly.sh does. The first engine uploaded for a commit stays,
+# whether this script or Engine on macOS (.github/workflows/engine-mac.yml) built it, since a check
+# may already have run on it: a second build of the commit is never uploaded. It reads nothing of
+# the owner's but gh's login, which uploads the release.
 # Usage: mac-engine-publish.sh
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -32,11 +34,21 @@ version=$(git -C "$root" config -f engine/pins.ini chromium.version)
 built=$(sed -n 's/^[A-Z]*=//p' "$engine/.deps/src/chrome/VERSION" | paste -sd. -)
 [ "$built" = "$version" ] ||
   fail "the tree has Chromium $built and pins.ini names $version. Update it with engine/setup.sh update."
+tag=engine-mac-${commit:0:12}
+# Says which engine the release has, if it has one, as "<label> uploaded <time>". Without the
+# release, gh prints GitHub's answer, which isn't one.
+published() {
+  local there
+  there=$(gh api "repos/$repo/releases/tags/$tag" --jq '.assets[] | select(.name == "Chromium-mac-arm64.tar.xz") |
+    "\(if (.label // "") == "" then .name else .label end) uploaded \(.created_at)"' 2>/dev/null) || there=
+  echo "$there"
+}
+there=$(published)
+[ -z "$there" ] || { echo "mac-engine-publish: $tag already has its engine, $there."; exit 0; }
 # build.sh relinks this checkout's core, applies its series and builds what changed, which takes
 # seconds when the build is already this commit's.
 "$engine/build.sh"
 
-tag=engine-mac-${commit:0:12}
 mkdir -p "$engine/.deps/publish"
 archive=$engine/.deps/publish/Chromium-mac-arm64.tar.xz
 # Without the Mac's metadata, which tar would otherwise add as ._ files.
@@ -48,6 +60,13 @@ shasum -a 256 "$archive" | cut -d' ' -f1 >"$archive.sha256"
 gh release view "$tag" -R "$repo" >/dev/null 2>&1 ||
   gh release create "$tag" -R "$repo" --target main --title "Mac engine ${commit:0:12}" --latest=false \
     --notes "The Mac engine (Chromium $version, Apple silicon) built from $source/commit/$commit, which holds its source."
-gh release upload "$tag" -R "$repo" --clobber "$archive" "$archive.sha256"
+# Engine on macOS may have uploaded one while this built.
+there=$(published)
+if [ -n "$there" ]; then
+  rm "$archive" "$archive.sha256"
+  echo "mac-engine-publish: $tag already has its engine, $there, so this build isn't uploaded."
+  exit 0
+fi
+gh release upload "$tag" -R "$repo" "$archive#Chromium-mac-arm64.tar.xz, from tools/mac-engine-publish.sh" "$archive.sha256"
 rm "$archive" "$archive.sha256"
 echo "mac-engine-publish: released $tag."

@@ -11,6 +11,8 @@ outputs:
     value: ${{ steps.detect.outputs.app_mac }}
   engine_windows:
     value: ${{ steps.detect.outputs.engine_windows }}
+  app_windows:
+    value: ${{ steps.detect.outputs.app_windows }}
 runs:
   using: composite
   steps:
@@ -19,6 +21,7 @@ runs:
       env:
         EVENT_NAME: ${{ github.event_name }}
         BEFORE_SHA: ${{ github.event.before }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -uo pipefail
 
@@ -39,11 +42,31 @@ runs:
           # A new branch: what it adds to main.
           base=$(git merge-base origin/main HEAD) || fail_open "No merge base with main."
         else
-          # A push: what it adds to the branch. Runs don't cancel each other, so each push is checked.
-          git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null \
-            || git fetch --quiet --no-tags --filter=blob:none origin "$BEFORE_SHA" \
-            || fail_open "Could not fetch ${BEFORE_SHA}."
-          base=$BEFORE_SHA
+          # A push: what it adds to the branch, as the push before it was checked. Runs don't cancel
+          # each other, but a person can cancel one, and one can fail before a job ran: then the
+          # jobs that push needed may never have run, and a later push that touches other files
+          # would skip them for good, as #2370's core did until an engine build failed on it. So
+          # unless the push before has a run that passed or is still going, what the branch adds
+          # to main. Main itself, whose merges each passed as a branch, checks each push.
+          before="completed success"
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            before=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+              -f head_sha="$BEFORE_SHA" -f event=push -f per_page=1 \
+              --jq '.workflow_runs[0] | "\(.status) \(.conclusion)"' 2>/dev/null) || before=
+          fi
+          case $before in
+            "completed success" | queued* | in_progress* | waiting* | pending* | requested*)
+              git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null \
+                || git fetch --quiet --no-tags --filter=blob:none origin "$BEFORE_SHA" \
+                || fail_open "Could not fetch ${BEFORE_SHA}."
+              base=$BEFORE_SHA
+              ;;
+            *)
+              echo "The push before, ${BEFORE_SHA:0:12}, has no run that passed (${before:-none}):" \
+                "checking what the branch adds to main."
+              base=$(git merge-base origin/main HEAD) || fail_open "No merge base with main."
+              ;;
+          esac
         fi
 
         # --no-renames lists a rename as its old and new path, so moving a file out of core/ counts

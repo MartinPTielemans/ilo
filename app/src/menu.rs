@@ -10,10 +10,8 @@
 //! (AGENTS.md › Over the page). What the menu decides is in `Tracking` and `lay_out`, which the
 //! tests drive; what it asks of its window goes through `Host`.
 
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, FocusHandle, Hsla, KeyDownEvent, ModifiersChangedEvent,
@@ -292,7 +290,8 @@ fn panel_width(
             Some(keys) => GAP + width_of(&keystroke_label(keys)),
             None => 0.,
         };
-        width_of(&entry.title) + trailing
+        let detail = (entry.detail.as_ref()).map_or(0., |detail| DETAIL_GAP + width_of(detail));
+        width_of(&entry.title) + detail + trailing
     })
     .fold(0., f32::max);
     let submenus = items
@@ -901,6 +900,10 @@ pub(crate) fn described(entries: &[MenuEntry]) -> String {
 /// The menu's items as `described` has them, with each item's ⌥ alternate in its place if `alt`.
 pub(crate) fn described_held(entries: &[MenuEntry], alt: bool) -> String {
     let mark = |entry: &MenuEntry, title: String| {
+        let title = match &entry.detail {
+            Some(detail) => format!("{title} [{detail}]"),
+            None => title,
+        };
         let title = match (entry.page, entry.favicon.is_some()) {
             (false, _) => title,
             (true, true) => format!("{title} (favicon)"),
@@ -1111,6 +1114,7 @@ fn update(
 
 /// Shows the menu `request` asks for, closing one that shows.
 pub fn show(request: Request, cx: &mut App) {
+    crate::lazy_window::ready::<ContextMenu>(cx);
     let mut request = Some(request);
     // The window it opens from saw the press or key that opened it, with what was held then.
     let alt = (cx.active_window())
@@ -1549,7 +1553,10 @@ impl ContextMenu {
             (None, false) => None,
         };
         let a11y = self.a11y;
-        let name = entry.title.clone();
+        let name = match &entry.detail {
+            Some(detail) => format!("{}, {detail}", entry.title).into(),
+            None => entry.title.clone(),
+        };
         let enabled = entry.enabled || entry.header;
         let (checked, keys) = (entry.checked, shortcut.clone());
         let header = entry.header;
@@ -1597,7 +1604,13 @@ impl ContextMenu {
                             .text_size(px(HEADER_TEXT))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                     })
-                    .child(entry.title.clone()),
+                    .child(entry.title.clone())
+                    .when_some(entry.detail.clone(), |title, detail| {
+                        title
+                            .flex()
+                            .gap(px(DETAIL_GAP))
+                            .child(div().flex_none().text_color(secondary).child(detail))
+                    }),
             )
             .children(trailing)
             .when(a11y, |row| {

@@ -2,13 +2,16 @@
 //! agents, as their receipts showed them. Only what a receipt shows is kept: the task's title, its
 //! agent, when it ran, its pages' titles and addresses, the orders and messages the user allowed
 //! it, and its activity log's entries, each what it did, on which site, when, and why it was
-//! refused. Never what a page said, what on it the agent acted on, what was typed, a cookie or the
-//! conversation. Kept on this
+//! refused, and for a request where it went and what it sent, without its secrets (#2326, which
+//! the owner approved). Never what a page said, what else on it the agent acted on, what was
+//! typed, a cookie or the conversation. Kept on this
 //! computer only, in the profile's own folder as `FILE` (the owner, 2026-11-04), never synced, and
 //! never for a private window, which offers no tasks. Each lives 30 days from when it ended, and
 //! goes with the history the user deletes of its time.
 
 use serde_json::{Value, json};
+
+use crate::agents::request::Sent;
 
 /// The file in a profile's folder its past tasks are kept in.
 pub const FILE: &str = "Agent sessions";
@@ -20,7 +23,7 @@ pub const KEEP: u64 = 30 * 24 * 60 * 60;
 pub const STEPS: usize = 200;
 
 /// An entry of a past task's activity log.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Step {
     /// When, in seconds since 1970.
     pub at: u64,
@@ -30,6 +33,11 @@ pub struct Step {
     pub site: String,
     /// Why it was refused, or empty if it wasn't.
     pub refused: String,
+    /// A request's method and path, its whole address, and what it sent, or would have; empty
+    /// for any other step, and for a request kept before they were.
+    pub target: String,
+    pub url: String,
+    pub sent: Vec<Sent>,
 }
 
 /// A past task or session, as its receipt showed it.
@@ -116,10 +124,19 @@ impl Past {
             .collect();
         let steps: Vec<Value> = (self.steps.iter())
             .map(|step| {
-                json!({
+                let mut kept = json!({
                     "at": step.at, "action": step.action, "site": step.site,
                     "refused": step.refused,
-                })
+                });
+                if !step.url.is_empty() {
+                    let sent: Vec<Value> = (step.sent.iter())
+                        .map(|line| json!([line.depth, line.name, line.value]))
+                        .collect();
+                    kept["target"] = json!(step.target);
+                    kept["url"] = json!(step.url);
+                    kept["sent"] = json!(sent);
+                }
+                kept
             })
             .collect();
         json!({
@@ -147,11 +164,28 @@ impl Past {
             .flatten())
         .filter_map(|step| {
             let field = |key: &str| step.get(key).and_then(Value::as_str).map(str::to_string);
+            let sent = (step
+                .get("sent")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten())
+            .filter_map(|line| {
+                let line = line.as_array()?;
+                Some(Sent {
+                    depth: u8::try_from(line.first()?.as_u64()?).ok()?,
+                    name: line.get(1)?.as_str()?.to_string(),
+                    value: line.get(2)?.as_str()?.to_string(),
+                })
+            })
+            .collect();
             Some(Step {
                 at: step.get("at")?.as_u64()?,
                 action: field("action")?,
                 site: field("site").unwrap_or_default(),
                 refused: field("refused").unwrap_or_default(),
+                target: field("target").unwrap_or_default(),
+                url: field("url").unwrap_or_default(),
+                sent,
             })
         })
         .collect();

@@ -71,8 +71,19 @@ const LANDMARKS: &[&str] = &[
     "search",
     "contentinfo",
 ];
+/// Parts of a table or list a person may click, as a console's list of things does, given a ref
+/// too. A row or list item with no name of its own, as Chromium gives neither one, is named by its
+/// text, when that's all it holds.
+const PARTS: &[&str] = &[
+    "row",
+    "cell",
+    "gridcell",
+    "rowheader",
+    "columnheader",
+    "listitem",
+];
 const STATES: &[&str] = &[
-    "checked", "selected", "expanded", "disabled", "required", "level",
+    "checked", "selected", "expanded", "disabled", "readonly", "required", "level",
 ];
 /// A frame's element, under which the core puts its document.
 const FRAMES: &[&str] = &["Iframe", "IframePresentational"];
@@ -213,13 +224,51 @@ pub struct Outline {
     notes: Vec<&'static str>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct Line {
     depth: usize,
     /// The line without its indent, as `- button "Pay" [e4] (disabled)`.
     text: String,
     /// Its element's ref, by number, if it has one.
     element: Option<u32>,
+    /// Its element's name and states, as in its text, for what changed in it.
+    name: String,
+    states: Vec<String>,
+}
+
+impl Line {
+    /// What changed in the element since `was`, its line before: its name, and each state it has
+    /// now and hadn't, or had and hasn't, as "now enabled".
+    fn change(&self, was: &Line) -> String {
+        let mut changes = Vec::new();
+        if self.name != was.name {
+            changes.push(format!("was “{}”", clip(&was.name, 60)));
+        }
+        for state in was
+            .states
+            .iter()
+            .filter(|state| !self.states.contains(state))
+        {
+            changes.push(match state.as_str() {
+                "disabled" => "now enabled".into(),
+                "checked" => "now unchecked".into(),
+                "expanded" => "now collapsed".into(),
+                "read-only" => "now editable".into(),
+                state => format!("no longer {state}"),
+            });
+        }
+        for state in self
+            .states
+            .iter()
+            .filter(|state| !was.states.contains(state))
+        {
+            changes.push(format!("now {state}"));
+        }
+        match changes.is_empty() {
+            true => self.text.clone(),
+            false => format!("{}: {}", self.text, changes.join(", ")),
+        }
+    }
 }
 
 impl Outline {
@@ -247,10 +296,11 @@ impl Outline {
             return self.text();
         };
         let kept: std::collections::HashSet<usize> = same.iter().flatten().copied().collect();
-        let changed: Vec<&str> = (self.lines.iter().zip(&same))
+        // Each changed line, with what changed in it.
+        let changed: Vec<(&Line, String)> = (self.lines.iter().zip(&same))
             .filter_map(|(line, was)| {
                 let was = &last.lines[(*was)?];
-                (line.element.is_some() && line.text != was.text).then_some(line.text.as_str())
+                (line.element.is_some() && line.text != was.text).then(|| (line, line.change(was)))
             })
             .collect();
         let mut parts = Vec::new();
@@ -259,7 +309,8 @@ impl Outline {
             parts.push(format!("New:\n{added}"));
         }
         if !changed.is_empty() {
-            parts.push(format!("Changed:\n{}", changed.join("\n")));
+            let lines: Vec<&str> = changed.iter().map(|(_, said)| said.as_str()).collect();
+            parts.push(format!("Changed:\n{}", lines.join("\n")));
         }
         let gone = runs(&last.lines, |at| !kept.contains(&at));
         if !gone.is_empty() {
@@ -269,12 +320,16 @@ impl Outline {
             return self.with_notes(format!("{}\n\nNothing in the outline changed.", self.head));
         }
         let changes = parts.join("\n\n");
+        // What it says of each change counts for nothing here: how much changed does.
+        let said: usize = (changed.iter())
+            .map(|(line, said)| said.len() - line.text.len())
+            .sum();
         let whole: usize = self
             .lines
             .iter()
             .map(|line| 2 * line.depth + line.text.len() + 1)
             .sum();
-        if 2 * changes.len() > whole {
+        if 2 * (changes.len() - said) > whole {
             return self.text();
         }
         let since = "What changed since the last outline you had of this tab:";
@@ -386,17 +441,38 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    fn add(&mut self, depth: usize, text: String, element: Option<u32>) {
+    fn add(&mut self, line: Line) {
         if self.size > MAX_OUTLINE {
             return;
         }
         // Its indent and line break too.
-        self.size += 2 * depth + text.len() + 1;
-        self.lines.push(Line {
-            depth,
-            text,
-            element,
-        });
+        self.size += 2 * line.depth + line.text.len() + 1;
+        self.lines.push(line);
+    }
+
+    /// The text a row or list item holds, if that's all it holds: no element to act on, which it
+    /// would rather be acted on by.
+    fn text_of(&self, node: &Value, levels: usize) -> Option<String> {
+        if levels > 50 {
+            return None;
+        }
+        if role(node) == "StaticText" {
+            return Some(name(node));
+        }
+        if INTERACTIVE.contains(&role(node)) {
+            return None;
+        }
+        let mut text = Vec::new();
+        let children = node.get("childIds").and_then(Value::as_array);
+        for child in children.into_iter().flatten() {
+            if let Some(child) = child.as_str().and_then(|id| self.by_id.get(id).copied()) {
+                let each = self.text_of(child, levels + 1)?;
+                if !each.is_empty() {
+                    text.push(each);
+                }
+            }
+        }
+        Some(text.join(" "))
     }
 
     fn node(&mut self, node: &Value, depth: usize, parent_name: &str, levels: usize) {
@@ -415,13 +491,27 @@ impl Walk<'_> {
         if human.iter().any(|words| lower.contains(words)) {
             self.captcha = true;
         }
+        // A list's bullet or number, which its indent already says.
+        if role == "ListMarker" {
+            return;
+        }
         if !ignored && role == "StaticText" {
             let repeated = parent_name.contains(&name) || self.field_names.contains(&name);
             if !name.is_empty() && !repeated {
-                self.add(depth, format!("- text: {name}"), None);
+                self.add(Line {
+                    depth,
+                    text: format!("- text: {name}"),
+                    ..Line::default()
+                });
             }
             return;
         }
+        let name = match (role, name.is_empty()) {
+            ("listitem" | "row", true) => (self.text_of(node, 0))
+                .map(|text| clip(&text, 160))
+                .unwrap_or_default(),
+            _ => name,
+        };
         let (mut next, mut next_name) = (depth, parent_name.to_string());
         let shown = INTERACTIVE.contains(&role) || !name.is_empty() || LANDMARKS.contains(&role);
         // Where a frame's element's line went, and the size before it.
@@ -433,7 +523,8 @@ impl Walk<'_> {
                 line.push_str(&format!(" \"{}\"", clip(&name, 160)));
             }
             let backend = node.get("backendDOMNodeId").and_then(Value::as_i64);
-            let refers = INTERACTIVE.contains(&role) || SCROLLS.contains(&role);
+            let refers =
+                INTERACTIVE.contains(&role) || SCROLLS.contains(&role) || PARTS.contains(&role);
             if let (true, Some(backend)) = (refers, backend) {
                 let password = node
                     .get("password")
@@ -453,6 +544,7 @@ impl Walk<'_> {
                     line.push_str(" (password: off limits)");
                 }
             }
+            let mut states = Vec::new();
             for property in node
                 .get("properties")
                 .and_then(Value::as_array)
@@ -466,17 +558,30 @@ impl Walk<'_> {
                     continue;
                 }
                 let value = property.pointer("/value/value");
+                let shown = if state == "readonly" {
+                    "read-only"
+                } else {
+                    state
+                };
                 match (state, value) {
-                    ("level", Some(level)) => line.push_str(&format!(" (level {level})")),
-                    (_, Some(Value::Bool(true))) => line.push_str(&format!(" ({state})")),
-                    (_, Some(Value::String(text))) if text == "true" => {
-                        line.push_str(&format!(" ({state})"))
-                    }
+                    ("level", _) if role == "listitem" => {}
+                    ("level", Some(level)) => states.push(format!("level {level}")),
+                    (_, Some(Value::Bool(true))) => states.push(shown.into()),
+                    (_, Some(Value::String(text))) if text == "true" => states.push(shown.into()),
                     _ => {}
                 }
             }
+            for state in &states {
+                line.push_str(&format!(" ({state})"));
+            }
             let before = (self.lines.len(), self.size);
-            self.add(depth, line, reference);
+            self.add(Line {
+                depth,
+                text: line,
+                element: reference,
+                name: name.clone(),
+                states,
+            });
             if FRAMES.contains(&role) && self.lines.len() > before.0 {
                 frame = Some(before);
             }
@@ -735,13 +840,13 @@ mod tests {
             format!(
                 "{head}{since}New:\n\
                  - listbox \"Size\" [e8]\n  - option \"S\" [e9]\n  - option \"M\" [e10]\n\n\
-                 Changed:\n- combobox \"Size\" [e6] (expanded)"
+                 Changed:\n- combobox \"Size\" [e6] (expanded): now expanded"
             )
         );
         assert_eq!(
             closed.since(&open),
             format!(
-                "{head}{since}Changed:\n- combobox \"Size\" [e6]\n\n\
+                "{head}{since}Changed:\n- combobox \"Size\" [e6]: now collapsed\n\n\
                  Gone:\n- listbox \"Size\" [e8]\n  - option \"S\" [e9]\n  - option \"M\" [e10]"
             )
         );
@@ -765,6 +870,113 @@ mod tests {
         assert!(text.since(&closed).ends_with(
             "New:\n- text: Heavy linen.\n\nGone:\n- text: Light linen, cut loose, for long summer days."
         ));
+    }
+
+    /// What changed in an element says so, as a state it no longer has can't be seen in its line:
+    /// a button the page enabled, a field it made read-only, a link it renamed.
+    #[test]
+    fn a_change_says_what_changed() {
+        let form = |enabled: bool| {
+            let mut nodes = vec![
+                node(
+                    "1",
+                    "RootWebArea",
+                    "Form",
+                    &["2", "3", "4", "5", "6", "7", "8"],
+                ),
+                node("2", "textbox", "Name", &[]),
+                node("3", "button", "Continue", &[]),
+                node(
+                    "4",
+                    "link",
+                    if enabled { "Help" } else { "Help and contact" },
+                    &[],
+                ),
+                node("5", "heading", "Your details, as on your passport", &[]),
+                node("6", "textbox", "Date of birth", &[]),
+                node("7", "textbox", "Country of birth", &[]),
+                node("8", "textbox", "Passport number", &["9"]),
+                node(
+                    "9",
+                    "StaticText",
+                    "As it's printed on the page with your photo, in capitals, with no spaces, \
+                     the letters and digits after the country's code. A passport that runs out \
+                     within six months of travelling can't be used; renew it first.",
+                    &[],
+                ),
+            ];
+            for node in &mut nodes {
+                node["backendDOMNodeId"] =
+                    json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+            }
+            let state = |name: &str| json!([{ "name": name, "value": { "value": true } }]);
+            match enabled {
+                true => nodes[1]["properties"] = state("readonly"),
+                false => nodes[2]["properties"] = state("disabled"),
+            }
+            nodes
+        };
+        let mut refs = Refs::default();
+        let before = outline(&tab(), &form(false), &mut refs, None);
+        assert!(
+            before
+                .text()
+                .contains("- button \"Continue\" [e2] (disabled)")
+        );
+        let after = outline(&tab(), &form(true), &mut refs, None);
+        assert!(after.text().contains("- textbox \"Name\" [e1] (read-only)"));
+        assert!(
+            after.since(&before).ends_with(
+                "Changed:\n\
+                 - textbox \"Name\" [e1] (read-only): now read-only\n\
+                 - button \"Continue\" [e2]: now enabled\n\
+                 - link \"Help\" [e3]: was “Help and contact”"
+            ),
+            "{}",
+            after.since(&before)
+        );
+    }
+
+    /// A table's rows and cells and a list's items have refs, as a person may click them; an item
+    /// holding only text is named by it, and one holding a link leaves the ref to the link.
+    #[test]
+    fn rows_and_items_have_refs() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Console", &["2", "5"]),
+            node("2", "table", "Instances", &["3"]),
+            // Chromium names neither a row nor a list item by what it holds.
+            node("3", "row", "", &["4", "42"]),
+            node("4", "cell", "web-1", &["41"]),
+            node("41", "StaticText", "web-1", &[]),
+            node("42", "cell", "Running", &["43"]),
+            node("43", "StaticText", "Running", &[]),
+            node("5", "list", "", &["6", "7"]),
+            node("6", "listitem", "", &["60", "61"]),
+            node("60", "ListMarker", "•", &[]),
+            node("61", "StaticText", "Instances", &[]),
+            node("7", "listitem", "", &["71"]),
+            node("71", "link", "Volumes", &["72"]),
+            node("72", "StaticText", "Volumes", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        // Its level says nothing a list item's indent doesn't.
+        nodes[6]["properties"] = json!([{ "name": "level", "value": { "value": 1 } }]);
+        let mut refs = Refs::default();
+        assert_eq!(
+            outline(&tab(), &nodes, &mut refs, None).text(),
+            "Tab 20: Console\nURL: https://shop.example/\n\n\
+             - table \"Instances\"\n\
+             \x20 - row \"web-1 Running\" [e1]\n\
+             \x20   - cell \"web-1\" [e2]\n\
+             \x20   - cell \"Running\" [e3]\n\
+             - listitem \"Instances\" [e4]\n\
+             - link \"Volumes\" [e5]"
+        );
+        assert_eq!(refs.get("e1").map(|element| element.node), Some(3));
+        assert_eq!(refs.get("e4").map(|element| element.node), Some(6));
     }
 
     /// A new page, by its address or its document, answers whole, as do changes to more than half

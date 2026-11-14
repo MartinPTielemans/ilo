@@ -384,18 +384,33 @@ fn library_button() -> Bounds<Pixels> {
 #[test]
 fn a_footer_buttons_tooltip_is_beside_it_and_centred_on_it() {
     // Arc's: 3.5 past the plate's right edge, its middle at the plate's.
-    let (left, top) = place(Anchor::beside(library_button(), window()), SIZE);
+    let (left, top) = place(Anchor::beside(library_button(), window(), false), SIZE);
     assert_eq!(left, 8. + 32. + BESIDE);
     assert_eq!(top + HEIGHT / 2., 700. - 41. + 16.);
+}
+
+/// From a sidebar on the right, a footer button's tooltip is beside it toward the page, the same
+/// gap off the plate's left edge, its square corner the top right, at the button.
+#[test]
+fn from_a_sidebar_on_the_right_a_footer_tooltip_is_to_its_left() {
+    let button = frame(1000. - 40., 700. - 41., 32., 32.);
+    let anchor = Anchor::beside(button, window(), true);
+    let (left, top) = place(anchor, SIZE);
+    assert_eq!(left + SIZE.0, 1000. - 40. - BESIDE);
+    assert_eq!(top + HEIGHT / 2., 700. - 41. + 16.);
+    assert_eq!(near(anchor, SIZE.0, HEIGHT), Near::TopRight);
+    // At the window's left edge it keeps EDGE_INSET from it.
+    let far = Anchor::beside(frame(20., 300., 32., 32.), window(), true);
+    assert_eq!(place(far, SIZE).0, EDGE_INSET);
 }
 
 #[test]
 fn a_tooltip_beside_stays_inside_the_window() {
     // A button whose middle is nearer the window's bottom than half the tooltip's height.
-    let low = Anchor::beside(frame(8., 690., 32., 10.), window());
+    let low = Anchor::beside(frame(8., 690., 32., 10.), window(), false);
     assert_eq!(place(low, SIZE).1, 700. - HEIGHT);
     // One at the right edge: the tooltip ends EDGE_INSET from the window's edge.
-    let right = Anchor::beside(frame(950., 300., 32., 32.), window());
+    let right = Anchor::beside(frame(950., 300., 32., 32.), window(), false);
     assert_eq!(place(right, SIZE).0, 1000. - 100. - EDGE_INSET);
 }
 
@@ -488,7 +503,7 @@ fn the_log_names_the_keys_as_a_menu_does() {
 #[test]
 fn the_capsule_is_round_but_at_what_it_names() {
     // Beside a button, under a tile and under a row, the corner at what it names is the top left.
-    let beside = Anchor::beside(library_button(), window());
+    let beside = Anchor::beside(library_button(), window(), false);
     assert_eq!(near(beside, 100., HEIGHT), Near::TopLeft);
     assert_eq!(near(tile_a(), 100., HEIGHT), Near::TopLeft);
     assert_eq!(near(folder_row(), 100., HEIGHT), Near::TopLeft);
@@ -499,8 +514,8 @@ fn the_capsule_is_round_but_at_what_it_names() {
     let corner = Anchor::under(frame(930., 650., 70., 41.), window());
     assert_eq!(near(corner, 100., HEIGHT), Near::BottomRight);
     // A footer button's tooltip never goes above, whatever the window's height, and never mirrors.
-    let low = Anchor::beside(frame(8., 690., 32., 10.), window());
+    let low = Anchor::beside(frame(8., 690., 32., 10.), window(), false);
     assert_eq!(near(low, 100., HEIGHT), Near::TopLeft);
-    let right = Anchor::beside(frame(950., 300., 32., 32.), window());
+    let right = Anchor::beside(frame(950., 300., 32., 32.), window(), false);
     assert_eq!(near(right, 100., HEIGHT), Near::TopLeft);
 }

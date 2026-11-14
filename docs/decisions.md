@@ -60,17 +60,15 @@ A Space is a tab container (pinned tabs, Today, color). Several Spaces can share
 
 ## 6. UX: Arc's feel, ilo's look
 
-No open-ended UX exploration. Arc's structure (sidebar, Spaces, pinned and Today tabs, favorites, archive, Peek, Little Arc, split view, Boosts), its behavior, layout and timings, and Dia's command bar and motion are the spec. Features beyond Arc and Dia come in only when the owner picks them, and `docs/ux-spec.md` lists each one.
+Arc's structure (sidebar, Spaces, pinned and Today tabs, favorites, archive, Peek, Little Arc, split view, Boosts), its behavior, layout and timings, and Dia's command bar and motion are where every surface starts: their measured values hold unless a change is better in every way, and its PR says why for each difference, for the owner's review. Features beyond Arc and Dia come in only when the owner picks them, and `docs/ux-spec.md` lists each one.
 
-The look is ilo's own: colour, window material, corner radii, type, icons, shadows and edges. It's built from ilo's brand and `docs/ux-principles.md`, not from Arc's or Dia's values. A Space's theme stays the user's, chosen freely; ilo owns the look of a Space with no theme, the preset swatches, and everything drawn on top, which has to read on any theme. ilo is Arc's successor, so an Arc user has to find everything where their hands expect it and feel the same speed and calm. It can't read as one more Arc clone. Familiarity comes from where things are and how they move, so those stay measured: the sidebar's layout, row pitch and plates, the state alphas, every timing and spring, and the nav glyphs.
+The look is ilo's own: colour, window material, corner radii, type, icons, shadows and edges. It's built from ilo's brand and `docs/ux-principles.md`, not from Arc's or Dia's values. A Space's theme stays the user's, chosen freely; ilo owns the look of a Space with no theme, the preset swatches, and everything drawn on top, which has to read on any theme. ilo is Arc's successor, so an Arc user has to find everything where their hands expect it and feel the same speed and calm. It can't read as one more Arc clone. Familiarity comes from where things are and how they move: the sidebar's layout, row pitch and plates, the state alphas, every timing and spring, and the nav glyphs.
 
 Dia's surfaces built around its assistant aren't copied, since ilo has no assistant of its own and the user's agents (decision 8) are asked from Arc's bar. So ⌘T opens Arc's command bar over the page, not Dia's New Tab page, whose box is the assistant's chat field and whose empty card holds its answers. Without the assistant, that page was Arc's bar moved into the card with the page hidden behind it.
 
 - Start from Ardia's measured `docs/dia-spec.md` and `docs/dia-feature-parity.md` (Apache-2.0, credited).
 - Measure Arc ourselves before it is shut down on 2026-12-22.
-- Copy behavior, layout and timings. Never ship their assets or names.
-
-AI features of ilo's own are out of scope for v1. The user's agents (decision 8) are the one way AI comes in.
+- Never ship their assets or names.
 
 Revisit the look if Arc users moving over say ilo doesn't feel like Arc continued, and it traces to a look change rather than layout or motion.
 

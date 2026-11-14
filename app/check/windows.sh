@@ -1,3 +1,4 @@
+# check.sh runs this at 210.
 # Stay On Top keeps a window over the others, and Don't Stay On Top lets it go back. ⌘N opens
 # another window on the same Spaces, showing the key window's Space with no page, with ⌘T's
 # command bar, which escape closes to its card and its one line, and a click on the card with ⌘T's
@@ -173,6 +174,8 @@ expect '^browser: front driven, main driven, key driven, ax focused driven, ax m
 send window 1
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: desktop space changed$' "the first window's full-screen Space didn't come forward"
+else
+  echo "skip: the full-screen window's Space coming forward, and the desktop's coming back: elsewhere full screen is no Space of its own."
 fi
 # Sway takes a full-screen window out of it as another on its workspace takes the focus, so there
 # the first left as the second came forward.
@@ -315,7 +318,7 @@ send window 1
 
 # A page in Safari's engine moves to a new window as Chromium's does, and the window it left draws
 # WebKit's picture of it. The drm page asks for Widevine, so its Site Controls offer Safari's
-# engine, whose row is their first, at y 262 (clear.sh), and On shows the page there.
+# engine with a switch, and On shows the page there.
 webkit_moved=
 if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   before=$(today)
@@ -330,8 +333,8 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: site controls http://127.0.0.1:$port: .*; Safari's engine off\$" \
     "the Site Controls didn't offer Safari's engine for the drm page: $(grep '^browser: site controls http' "$log" | tail -1)"
   expect '^browser: site controls settled$' "the Site Controls didn't open at the drm page"
-  post click 207 262
-  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's row didn't offer On"
+  click_placed post "switch Safari's engine"
+  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's switch didn't offer On"
   engine_from=$(date '+%Y-%m-%d %H:%M:%S')
   send choose On
   expect "^browser: site controls set Safari's engine On\$" "On in the menu didn't run"
@@ -716,6 +719,12 @@ if [ "$(uname)" = Darwin ] || windows || x11; then
   driven_seventh=$(grep -c '^browser: window opened ' "$log")
   # Under the pointer, at its point on the screen, as near as the screen lets it.
   send order
+  # In front of the window it left, as well as key, so a click where it shows lands in it (#2607).
+  order=$(grep '^browser: order ' "$log" | tail -1)
+  case "$order" in
+    "browser: order window $driven_seventh "*) ;;
+    *) fail "the window opened for the tab isn't in front of the one it left: ${order#browser: }" ;;
+  esac
   frame=$(grep "^browser: frame window $driven_seventh " "$log" | tail -1 | cut -d' ' -f5-)
   echo "$frame" | awk -v x=$((right + over)) '{ exit !($1 <= x && x <= $1 + $3 && $2 <= 440 && 440 <= $2 + $4) }' ||
     fail "the window opened for the tab isn't under the pointer: $frame"
@@ -739,10 +748,32 @@ else
   echo "skip: a tab's row dragged out of its window: this system has no drag of a tab (#1798)."
 fi
 
+# ⌘N right after ⇧⌘W closed a window, escape and ⇧⌘W close the window ⌘N opened, not the one the
+# close left key: no key change comes for a window opened in front, and the window left key may
+# hear it was made key only after ⌘N's opened (#2648). A race, so in rounds, as a user goes, with
+# no window picked by the driver, which would make it key.
+send key n cmd
+expect '^browser: window opened [0-9]' "⌘N didn't open a window for the closes in a row"
+closing=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
+for round in 1 2 3 4; do
+  send key w cmd shift
+  expect '^browser: window closed [0-9]' "⇧⌘W closed no window in round $round"
+  closed=$(since | sed -n 's/^browser: window closed //p' | head -1)
+  [ "$closed" = "$closing" ] ||
+    fail "⇧⌘W after ⌘N and escape closed window $closed, not ⌘N's $closing, in round $round (#2648)"
+  [ "$round" = 4 ] && break
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N right after ⇧⌘W didn't open a window in round $round"
+  closing=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  new_window_bar
+done
+closes_in_a_row=", ⌘N right after ⇧⌘W, escape and ⇧⌘W close ⌘N's window"
+
 # ⇧⌘W in the last window quits. It's the driver's last command: the app doesn't report it done.
 post key w cmd shift
 exec 3>&-
 await "^browser: window closed $first\$" || fail "⇧⌘W didn't close the last window"
 exited
 forget_engine_sites
-echo "ok: ⌘N opens a window on the same Spaces with no page, whose card shows its one line, and a click on it with the command bar open only closes the bar, which never takes another window's page on a Space switch, is the one other apps take for the window in front with the first in full screen, the Spaces menu acts on it, a click on a row moves its page there live and the window it left draws a picture of the page, a click on which takes the page back, a window switching away from the page gives it back to the one with its picture and keeps the keyboard, ⇧⌘W gives the closed window's tabs back to the other, live, and quits from the last, ⇧↩ in the command bar opens a new window, and Switch to Tab brings forward the window showing the tab${webkit_moved:-}${dragged_out:-}. Each stage of a page's move between windows: $out/handover-summary.txt. Windows: $out/windows-new.png, $out/empty-window.png, $out/windows-moved.png, $out/windows-pictured.png, $out/windows-pictured-back.png, $out/windows-handed-back.png, $out/windows-closed.png, $out/windows-shift-return.png, $out/windows-switch.png${webkit_moved:+, $out/windows-webkit-pictured.png}"
+echo "ok: ⌘N opens a window on the same Spaces with no page, whose card shows its one line, and a click on it with the command bar open only closes the bar, which never takes another window's page on a Space switch, is the one other apps take for the window in front with the first in full screen, the Spaces menu acts on it, a click on a row moves its page there live and the window it left draws a picture of the page, a click on which takes the page back, a window switching away from the page gives it back to the one with its picture and keeps the keyboard, ⇧⌘W gives the closed window's tabs back to the other, live, and quits from the last, ⇧↩ in the command bar opens a new window, and Switch to Tab brings forward the window showing the tab${webkit_moved:-}${dragged_out:-}${closes_in_a_row}. Each stage of a page's move between windows: $out/handover-summary.txt. Windows: $out/windows-new.png, $out/empty-window.png, $out/windows-moved.png, $out/windows-pictured.png, $out/windows-pictured-back.png, $out/windows-handed-back.png, $out/windows-closed.png, $out/windows-shift-return.png, $out/windows-switch.png${webkit_moved:+, $out/windows-webkit-pictured.png}"

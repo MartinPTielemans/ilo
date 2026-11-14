@@ -165,7 +165,6 @@ void Unclaimed() {
     unclaimed(Host().context);
   }
   if (!keys.empty()) {
-    // check.sh reads this line.
     fprintf(stderr, "browser: held %zu keys went to the page\n", keys.size());
   }
   for (const input::NativeWebKeyboardEvent& press : keys) {

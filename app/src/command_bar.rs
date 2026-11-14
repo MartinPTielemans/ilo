@@ -7,13 +7,14 @@
 //! Arc's. A click on the sidebar's URL field opens a narrower panel over the field,
 //! as Arc's does. What it asks of the core and of its window goes through `Host`.
 
-use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc};
+use web_time::Instant;
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Entity, Focusable, FontWeight, Global, HoverListenerMode,
-    Hsla, Image, KeyBinding, Pixels, Rgba, ScrollHandle, SharedString, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
-    div, img, point, prelude::*, px, size, svg,
+    AnyElement, AnyView, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable,
+    FontWeight, Global, HoverListenerMode, Hsla, Image, KeyBinding, Pixels, Rgba, ScrollHandle,
+    SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, actions, div, img, point, prelude::*, px, size, svg,
 };
 use gpui::{Role, Size, accesskit::Live, canvas};
 
@@ -386,6 +387,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::ZoomOut => "icons/zoom-out.svg",
         Command::FlipSplit => "icons/arrow-left-right.svg",
         Command::ToggleSidebar => "icons/panel-left.svg",
+        Command::MoveSidebar => "icons/panel-right.svg",
         Command::CapturePortion | Command::CaptureFullPage => "icons/camera.svg",
         Command::CapturePortrait | Command::CapturePortraitNow => "icons/image.svg",
         Command::SavePage => "icons/save.svg",
@@ -657,9 +659,29 @@ pub struct CommandBar {
     open: Cell<bool>,
 }
 
-struct CommandBarWindow(WindowHandle<CommandBar>);
+/// The bar, and the window it draws in: its own, or on the web the browser's one window.
+#[derive(Clone)]
+struct CommandBarWindow {
+    window: AnyWindowHandle,
+    bar: Entity<CommandBar>,
+}
 
 impl Global for CommandBarWindow {}
+
+impl CommandBarWindow {
+    /// Runs `update` on the bar, with the window it draws in, as a `WindowHandle`'s does.
+    fn update<R>(
+        &self,
+        cx: &mut App,
+        update: impl FnOnce(&mut CommandBar, &mut Window, &mut Context<CommandBar>) -> R,
+    ) -> Result<R, ()> {
+        let bar = self.bar.clone();
+        let update = |_: AnyView, window: &mut Window, cx: &mut App| {
+            bar.update(cx, |bar, cx| update(bar, window, cx))
+        };
+        self.window.update(cx, update).map_err(|_| ())
+    }
+}
 
 /// Opens the command bar's window, hidden, for `host` to show over the browser window. Opening it
 /// ahead of time keeps window setup off the path from the shortcut to the bar on screen.
@@ -675,6 +697,66 @@ pub fn open_at(
     show: bool,
     cx: &mut App,
 ) -> Option<WindowHandle<CommandBar>> {
+    bind_keys(cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        // The preview's has none, so it hasn't the window buttons the host's takes off.
+        titlebar: (!show).then_some(TitlebarOptions {
+            title: None,
+            appears_transparent: true,
+            traffic_light_position: None,
+        }),
+        kind: WindowKind::Floating,
+        show,
+        focus: show,
+        is_movable: false,
+        is_resizable: false,
+        is_minimizable: false,
+        // The panel's rounded shape is drawn, so the window around it is clear.
+        window_background: WindowBackgroundAppearance::Transparent,
+        ..Default::default()
+    };
+    let window = cx.open_window(options, |window, cx| {
+        let bar = new_bar(host, true, window, cx);
+        window.focus(&bar.read(cx).input.focus_handle(cx), cx);
+        bar
+    });
+    match window {
+        Ok(window) => {
+            let bar = window.entity(cx).ok()?;
+            cx.set_global(CommandBarWindow {
+                window: window.into(),
+                bar,
+            });
+            Some(window)
+        }
+        Err(error) => {
+            log!("couldn't open the command bar: {error}");
+            None
+        }
+    }
+}
+
+/// Makes the command bar in `window`, the browser's, for a host that draws it there over the shell:
+/// the web's, which has one window. `Host::show` puts it on screen.
+pub fn open_in(host: Rc<dyn Host>, window: &mut Window, cx: &mut App) -> Entity<CommandBar> {
+    bind_keys(cx);
+    let bar = new_bar(host, false, window, cx);
+    let window = window.window_handle();
+    cx.set_global(CommandBarWindow {
+        window,
+        bar: bar.clone(),
+    });
+    bar
+}
+
+/// The bar's field, which a host that draws the bar in the browser's window focuses to show it.
+pub fn input_focus(cx: &App) -> Option<FocusHandle> {
+    let bar = cx.try_global::<CommandBarWindow>()?;
+    Some(bar.bar.read(cx).input.focus_handle(cx))
+}
+
+fn bind_keys(cx: &mut App) {
     // Off the Mac ⌃ and ⌥ are both Alt, and Alt+↩ is ⌥↩'s, near Chrome's Alt+Enter, which opens a
     // tab, so ⌃↩ has no key there. Arc's ⌥⌘⌫ would be Ctrl+Alt+Backspace, which X11 can take to end
     // the session, so there ⇧⌦ alone removes a suggestion, as in Chrome.
@@ -706,38 +788,29 @@ pub fn open_at(
         KeyBinding::new("pagedown", Last, Some("CommandBar")),
         KeyBinding::new("shift-delete", Remove, Some("CommandBar")),
     ]);
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        // The preview's has none, so it hasn't the window buttons the host's takes off.
-        titlebar: (!show).then_some(TitlebarOptions {
-            title: None,
-            appears_transparent: true,
-            traffic_light_position: None,
-        }),
-        kind: WindowKind::Floating,
-        show,
-        focus: show,
-        is_movable: false,
-        is_resizable: false,
-        is_minimizable: false,
-        // The panel's rounded shape is drawn, so the window around it is clear.
-        window_background: WindowBackgroundAppearance::Transparent,
-        ..Default::default()
-    };
-    let window = cx.open_window(options, |window, cx| {
-        let input = cx.new(|cx| {
-            TextInput::new(PLACEHOLDER_TEXT, cx)
-                .placeholder_color(palette::current(cx).on_overlay(PLACEHOLDER))
-                .caret_color(palette::current(cx).accent)
-                .selection_color(palette::current(cx).selection())
-                .paste_and_go()
-        });
-        window.focus(&input.focus_handle(cx), cx);
-        cx.new(|cx| {
-            cx.observe_in(&input, window, |bar: &mut CommandBar, _, window, cx| {
-                bar.edited(window, cx)
-            })
-            .detach();
+}
+
+/// The bar, in its own window if `own_window`, else in the browser's.
+fn new_bar(
+    host: Rc<dyn Host>,
+    own_window: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<CommandBar> {
+    let input = cx.new(|cx| {
+        TextInput::new(PLACEHOLDER_TEXT, cx)
+            .placeholder_color(palette::current(cx).on_overlay(PLACEHOLDER))
+            .caret_color(palette::current(cx).accent)
+            .selection_color(palette::current(cx).selection())
+            .paste_and_go()
+    });
+    cx.new(|cx| {
+        cx.observe_in(&input, window, |bar: &mut CommandBar, _, window, cx| {
+            bar.edited(window, cx)
+        })
+        .detach();
+        // In a window of its own, nothing else there takes the field's focus.
+        if own_window {
             cx.observe_window_activation(window, |bar: &mut CommandBar, window, cx| {
                 bar.activation_changed(window, cx)
             })
@@ -746,50 +819,40 @@ pub fn open_at(
                 bar.keep_focus(window, cx)
             })
             .detach();
-            CommandBar {
-                host,
-                input,
-                target: Target::NewTab,
-                asked: String::new(),
-                asked_at: Instant::now(),
-                complete: false,
-                completion: String::new(),
-                before: (0, 0),
-                rows: Vec::new(),
-                suggested: String::new(),
-                selected: 0,
-                hovered: None,
-                remove_drawn: None,
-                a11y: false,
-                over_field: false,
-                page: String::new(),
-                site: None,
-                commands: None,
-                settings_index: None,
-                opened_at: None,
-                task_agents: None,
-                ask: None,
-                favicons: HashMap::new(),
-                tabs: Vec::new(),
-                spaces: Vec::new(),
-                shown: Vec::new(),
-                scroll: ScrollHandle::new(),
-                tipped: None,
-                remove_frame: Rc::default(),
-                open: Cell::new(false),
-            }
-        })
-    });
-    match window {
-        Ok(window) => {
-            cx.set_global(CommandBarWindow(window));
-            Some(window)
         }
-        Err(error) => {
-            log!("couldn't open the command bar: {error}");
-            None
+        CommandBar {
+            host,
+            input,
+            target: Target::NewTab,
+            asked: String::new(),
+            asked_at: Instant::now(),
+            complete: false,
+            completion: String::new(),
+            before: (0, 0),
+            rows: Vec::new(),
+            suggested: String::new(),
+            selected: 0,
+            hovered: None,
+            remove_drawn: None,
+            a11y: false,
+            over_field: false,
+            page: String::new(),
+            site: None,
+            commands: None,
+            settings_index: None,
+            opened_at: None,
+            task_agents: None,
+            ask: None,
+            favicons: HashMap::new(),
+            tabs: Vec::new(),
+            spaces: Vec::new(),
+            shown: Vec::new(),
+            scroll: ScrollHandle::new(),
+            tipped: None,
+            remove_frame: Rc::default(),
+            open: Cell::new(false),
         }
-    }
+    })
 }
 
 /// Shows the command bar with the keyboard: empty for a new tab, listing `tabs`, or on `editing`'s
@@ -867,7 +930,7 @@ pub fn show_spaces(spaces: Vec<shell::BarSpace>, bar: Bounds<Pixels>, cx: &mut A
     // check.sh reads this line.
     let ids: Vec<String> = spaces.iter().map(|space| space.space.to_string()).collect();
     log!("browser: command bar lists spaces {}", ids.join(" "));
-    let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
         return;
     };
     // Before the reset, which lists them as the bar opens.
@@ -941,7 +1004,7 @@ fn reset(
     over_field: bool,
     cx: &mut App,
 ) -> Option<Rc<dyn Host>> {
-    let window = cx.try_global::<CommandBarWindow>()?.0;
+    let window = cx.try_global::<CommandBarWindow>()?.clone();
     window
         .update(cx, |bar, window, cx| {
             bar.target = target;
@@ -991,9 +1054,11 @@ fn reset(
 /// edited isn't shown now, so ↩ opens a new tab. A new pane's bar goes, as its split view stays
 /// behind. Returns whether its pick opens a new tab.
 pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: &mut App) -> bool {
-    let Some(bar_window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(bar_window) = cx.try_global::<CommandBarWindow>().cloned() else {
         return false;
     };
+    // The handle the commands' list goes through, once out of the shell's update.
+    let later = bar_window.clone();
     bar_window
         .update(cx, |bar, window, cx| {
             if !bar.open.get() {
@@ -1041,7 +1106,7 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
             if bar.commands.is_some() {
                 // Which commands do something now is the shell's to say, once out of its update.
                 cx.defer(move |cx| {
-                    bar_window
+                    later
                         .update(cx, |bar, window, cx| bar.list_commands(text, window, cx))
                         .ok();
                 });
@@ -1069,7 +1134,7 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
 
 /// The user left the bar with a click outside it, or Esc.
 pub fn dismissed(cx: &mut App) {
-    if let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) {
+    if let Some(window) = cx.try_global::<CommandBarWindow>().cloned() {
         window
             .update(cx, |bar, _, cx| {
                 bar.open.set(false);
@@ -1082,7 +1147,7 @@ pub fn dismissed(cx: &mut App) {
 /// What the browser knows of the agents ⇥ asks has changed, as after it learned which are ready:
 /// an ask that shows lists them again.
 pub fn task_agents_changed(cx: &mut App) {
-    let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
         return;
     };
     window
@@ -1107,13 +1172,12 @@ pub fn task_agents_changed(cx: &mut App) {
 /// click outside the bar has closed it by now, but the shell hears so only after the click's press.
 pub fn is_open(cx: &App) -> bool {
     cx.try_global::<CommandBarWindow>()
-        .and_then(|bar| bar.0.read(cx).ok())
-        .is_some_and(|bar| bar.open.get())
+        .is_some_and(|bar| bar.bar.read(cx).open.get())
 }
 
 /// The favicon `Host::page_favicon` asked for, for a row going to `url`.
 pub fn page_favicon(url: &str, favicon: Option<Arc<Image>>, cx: &mut App) {
-    let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
         return;
     };
     window
@@ -1150,7 +1214,7 @@ pub fn field_height(rows: usize) -> f32 {
 
 /// The core's suggestions for `text`.
 pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
-    let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
         return;
     };
     window
@@ -1922,6 +1986,9 @@ impl CommandBar {
             }
             Some(TaskRow::SetUp) => {
                 log!("browser: command bar sets up agents");
+                // Ended here, or the next ⌘T ends it from inside the Shell's update, whose slot
+                // closing reads the Shell (#2459).
+                self.end_ask(cx);
                 self.close();
                 self.host.set_up_agents(cx);
             }

@@ -1,10 +1,8 @@
 //! The browser's commands: their names, their keys and where the command bar offers
 //! them, and what each does, run from a key, a menu, the command bar or the page.
 
-use std::{
-    sync::{Arc, LazyLock},
-    time::Instant,
-};
+use std::sync::{Arc, LazyLock};
+use web_time::Instant;
 
 use gpui::{
     Action, App, Bounds, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
@@ -167,6 +165,9 @@ pub enum Command {
     /// Keeps the window over other apps' windows, or lets it go back among them (Arc's Window ›
     /// Stay On Top).
     StayOnTop,
+    /// Moves the sidebar to the window's other side, Settings' Sidebar position, in every window.
+    /// The command bar's alone, with no key (#2375).
+    MoveSidebar,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -248,6 +249,8 @@ pub enum Command {
     /// Focuses the split view's page right of the focused one, or left of it.
     NextPane,
     PreviousPane,
+    /// Focuses the split view's page at this place from the left, as Arc's ⌃⇧1–⌃⇧4 do.
+    FocusPane(usize),
     /// Opens Chrome's history page in a new tab.
     ViewHistory,
     /// Opens Chromium's search engines page in a new tab, where the profile's site searches are
@@ -395,6 +398,15 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("ctrl-shift-}", Command::NextPane, false),
     ("ctrl-shift-[", Command::PreviousPane, false),
     ("ctrl-shift-{", Command::PreviousPane, false),
+    // A split view has at most four pages. GPUI may name the digit or what ⇧ makes of it.
+    ("ctrl-shift-1", Command::FocusPane(0), false),
+    ("ctrl-shift-!", Command::FocusPane(0), false),
+    ("ctrl-shift-2", Command::FocusPane(1), false),
+    ("ctrl-shift-@", Command::FocusPane(1), false),
+    ("ctrl-shift-3", Command::FocusPane(2), false),
+    ("ctrl-shift-#", Command::FocusPane(2), false),
+    ("ctrl-shift-4", Command::FocusPane(3), false),
+    ("ctrl-shift-$", Command::FocusPane(3), false),
     ("escape", Command::Stop, false),
     ("ctrl-1", Command::SelectSpace(0), false),
     ("ctrl-2", Command::SelectSpace(1), false),
@@ -414,6 +426,10 @@ const HIDE_SIDEBAR: &str = "Hide Sidebar";
 /// Window › Stay On Top, and the command bar's row that ends it while it's on.
 pub const STAY_ON_TOP: &str = "Stay On Top";
 const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
+
+/// The command bar's rows for Sidebar position, of which it lists the one that would move it.
+const SIDEBAR_TO_RIGHT: &str = "Move Sidebar to the Right";
+const SIDEBAR_TO_LEFT: &str = "Move Sidebar to the Left";
 
 /// The page's Developer Mode's rows in the command bar, of which it lists the one that would change
 /// it (Arc's, in sentence case).
@@ -665,6 +681,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         DONT_STAY_ON_TOP,
         Command::StayOnTop,
         &["float", "always on top", "pin window"],
+    ),
+    (
+        SIDEBAR_TO_RIGHT,
+        Command::MoveSidebar,
+        &["side", "position", "left", "right"],
+    ),
+    (
+        SIDEBAR_TO_LEFT,
+        Command::MoveSidebar,
+        &["side", "position", "left", "right"],
     ),
     (
         trace::RECORD,
@@ -1107,15 +1133,17 @@ pub fn copy_from_bar(text: &str, cx: &mut App) {
 /// ⇧⌘C in the link preview copies its page's address, not the tab's under it, as Arc's Peek
 /// does, with the toast ⇧⌘C shows.
 pub fn copy_url_of_preview(url: &str, cx: &mut App) {
-    let url = clean_link(url);
     let Some(shell) = key_shell(cx) else {
         return;
     };
-    if !url.is_empty() {
-        shell
-            .update(cx, |shell, cx| shell.copy(&url, "Copied Current URL", cx))
-            .ok();
-    }
+    shell
+        .update(cx, |shell, cx| {
+            let url = shell.copied_link(url);
+            if !url.is_empty() {
+                shell.copy(&url, "Copied Current URL", cx);
+            }
+        })
+        .ok();
 }
 
 /// Runs `command`, whose row in the command bar was chosen, once the bar has gone.
@@ -1149,6 +1177,7 @@ impl Command {
     pub fn key_name(self) -> String {
         match self {
             Command::SelectSpace(index) => format!("select-space-{}", index + 1),
+            Command::FocusPane(index) => format!("focus-pane-{}", index + 1),
             _ => self.name().to_string(),
         }
     }
@@ -1230,6 +1259,7 @@ impl Command {
             Command::TaskManager => "task-manager",
             Command::RecordTrace => "record-trace",
             Command::StayOnTop => "stay-on-top",
+            Command::MoveSidebar => "move-sidebar",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1271,6 +1301,7 @@ impl Command {
             Command::MovePaneRight => "move-pane-right",
             Command::NextPane => "next-pane",
             Command::PreviousPane => "previous-pane",
+            Command::FocusPane(_) => "focus-pane",
             Command::ViewHistory => "view-history",
             Command::SiteSearchSettings => "site-search-settings",
             Command::ClearBrowsingData => "clear-browsing-data",
@@ -1335,6 +1366,16 @@ pub fn window_became_key(shell: WeakEntity<Shell>) -> impl FnOnce(&mut App) + 's
             heard_key(&shell);
         }
     }
+}
+
+/// Whether a window made key since `shell` was has yet to be heard, so `shell` hearing late mustn't
+/// take the shortcuts back from it (#2648).
+pub(super) fn key_moved_on(shell: &WeakEntity<Shell>) -> bool {
+    MADE_KEY.with_borrow(|made_key| {
+        made_key
+            .as_ref()
+            .is_some_and(|made_key| made_key != shell && made_key.upgrade().is_some())
+    })
 }
 
 /// The shell made key has heard, so the ShellHandle names it.
@@ -1661,6 +1702,11 @@ impl Shell {
                 return self.update_menus(cx);
             }
             Command::StayOnTop => return self.toggle_on_top(cx),
+            Command::MoveSidebar => {
+                return self
+                    .browser
+                    .keep_sidebar_right(!super::sidebar_right(cx), cx);
+            }
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -1685,11 +1731,11 @@ impl Shell {
             }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
-                let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
+                let url = BuildInfo::here(cx).issue_url(build_info::NEW_ISSUE);
                 return self.browser.open_page(&url, cx);
             }
             Command::CopyBuildInfo => {
-                return self.copy(&BuildInfo::here().text(), "Copied Build Info", cx);
+                return self.copy(&BuildInfo::here(cx).text(), "Copied Build Info", cx);
             }
             Command::HelpCenter => return self.browser.open_page(build_info::HELP_CENTER, cx),
             Command::WhatsNew => return self.browser.open_page(build_info::WHATS_NEW, cx),
@@ -1751,6 +1797,7 @@ impl Shell {
             }
             Command::NextPane => return self.focus_pane(true, cx),
             Command::PreviousPane => return self.focus_pane(false, cx),
+            Command::FocusPane(index) => return self.focus_pane_at(index, cx),
             Command::ToggleSidebar => return self.toggle_sidebar(cx),
             Command::Appearance(appearance) => return self.set_app_appearance(appearance, cx),
             Command::ViewLibrary => return self.set_library(!self.library_open, cx),
@@ -1977,25 +2024,26 @@ impl Shell {
     /// File › Share… and the command bar's Share…: the system's share sheet for the page shown,
     /// as Site Controls' Share tile opens it, hanging from the URL field, else from the page's top.
     fn share_page(&mut self, cx: &mut Context<Self>) {
-        let link = clean_link(&self.url(self.selected));
+        let link = self.copied_link(&self.url(self.selected));
         if link.is_empty() || !self.browser.has_share_sheet() {
             return;
         }
         let at = match self.url_field_bounds() {
-            Some(field) => point(field.center().x, field.bottom()) + self.sidebar_origin.get(),
+            Some(field) => point(field.center().x, field.bottom()),
             None => {
                 let page = self.page_frame(self.viewport).0;
                 point(page.center().x, page.top())
             }
         };
-        let title = self.title(self.selected);
-        self.browser
-            .show_share_sheet(self.selected, &link, &title, at, cx);
+        let (tab, title) = (self.selected, self.title(self.selected));
+        // After this update, as finding the tab's window reads every Shell (#2459).
+        let browser = self.browser.clone();
+        cx.defer(move |cx| browser.show_share_sheet(tab, &link, &title, at, cx));
     }
 
     /// `tab`'s link to copy, as a Markdown link if `markdown`, and the toast to say so with.
     pub(super) fn link_to_copy(&self, tab: u64, markdown: bool) -> Option<(String, &'static str)> {
-        let url = clean_link(&self.url(tab));
+        let url = self.copied_link(&self.url(tab));
         if url.is_empty() {
             return None;
         }
@@ -2167,6 +2215,21 @@ impl Shell {
         cx.notify();
     }
 
+    /// Settings › Privacy's Copy links without tracking: off, every copy path, and the share sheet,
+    /// gives the address as it is (#2351).
+    pub fn set_clean_links(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.clean_links = on;
+        cx.notify();
+    }
+
+    /// `url` as the copy paths give it: without its trackers, unless the user turned that off.
+    pub(super) fn copied_link(&self, url: &str) -> String {
+        match self.clean_links {
+            true => clean_link(url),
+            false => url.to_string(),
+        }
+    }
+
     /// Whether `command` would do something now, for the command bar to offer it.
     pub(super) fn offers(&self, command: Command) -> bool {
         if self.one_space() && !private_runs(command) {
@@ -2226,9 +2289,7 @@ impl Shell {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)
             }
-            Command::Share => {
-                self.browser.has_share_sheet() && !clean_link(&self.url(self.selected)).is_empty()
-            }
+            Command::Share => self.browser.has_share_sheet() && !self.url(self.selected).is_empty(),
             // A favorite's menu has no Rename, and the field is in the tab's row in the sidebar.
             Command::RenameTab => {
                 let favorite = self.favorites.contains(&self.selected);
@@ -2290,6 +2351,7 @@ impl Shell {
             | Command::Appearance(_)
             | Command::RecordTrace
             | Command::StayOnTop
+            | Command::MoveSidebar
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -2363,6 +2425,13 @@ impl Shell {
                     })
             .then_some(name),
             Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
+            Command::MoveSidebar => {
+                let to = match super::sidebar_right(cx) {
+                    true => SIDEBAR_TO_LEFT,
+                    false => SIDEBAR_TO_RIGHT,
+                };
+                (name == to).then_some(name)
+            }
             _ => Some(name),
         }
     }
@@ -3196,5 +3265,41 @@ mod tests {
             ["select 11"],
             "and still does once the shell has heard"
         );
+    }
+
+    /// A window opened in front keeps the shortcuts when the window made key before it, as one
+    /// closed, hears only after it opened, as macOS reports no key change for the window opened
+    /// in front: ⌘N right after ⇧⌘W, then ⇧⌘W, closes the new window, not the one behind (#2648).
+    #[gpui::test]
+    fn a_window_opened_in_front_keeps_the_shortcuts_from_one_made_key_before(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(bind_keys);
+        let (behind, behind_host) = shell_with_today(cx, vec![11]);
+        cx.run_until_parked();
+
+        // A window closed and left this one key, and its shell hears once the executor turns.
+        let behind_heard = window_became_key(behind.downgrade());
+        // ⌘N's window opens before that turn, and is key from when it opens, as the app makes it.
+        let (opened, opened_host) = shell_with_today(cx, vec![21]);
+        let opened_heard = window_became_key(opened.downgrade());
+        cx.update(behind_heard);
+        behind_host.take();
+        opened_host.take();
+        let closed = |host: &super::super::recorder::Recorder| {
+            host.take().iter().any(|call| call == "close window")
+        };
+
+        cx.update(|cx| cx.dispatch_action(&Run(Command::CloseWindow)));
+        assert!(closed(&opened_host), "⇧⌘W closed the window opened");
+        assert!(!closed(&behind_host), "and not the one behind");
+
+        cx.update(opened_heard);
+        cx.update(|cx| cx.dispatch_action(&Run(Command::CloseWindow)));
+        assert!(
+            closed(&opened_host),
+            "and still does once the window opened has heard"
+        );
+        assert!(!closed(&behind_host), "the one behind still isn't closed");
     }
 }

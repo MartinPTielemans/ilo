@@ -2,10 +2,8 @@
 //! hidden, its reveal over the page (docs/ux-spec.md › Sidebar reveal); its gradient in the
 //! Space's colour; and the marker for the selected tab's row scrolled out of the list.
 
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, ClickEvent, Context, CursorStyle, DispatchPhase, Hsla, MouseButton,
@@ -43,7 +41,87 @@ pub fn edge_reveals(cx: &gpui::App) -> bool {
     cx.try_global::<SidebarEdge>().is_none_or(|edge| edge.0)
 }
 
+/// Settings › Tabs & Sidebar's Sidebar position, Right rather than the default Left (#2375): the
+/// sidebar, the window's buttons and the reveal go to the window's right, and what opens toward the
+/// page opens to their left. This device's, not synced: a laptop and a desk with a second screen
+/// can want different sides. Every window follows at once. The user's preference: agents have no
+/// call to change it.
+#[derive(Clone, Copy)]
+pub struct SidebarRight(pub bool);
+
+impl gpui::Global for SidebarRight {}
+
+/// Whether Sidebar position is Right.
+pub fn sidebar_right(cx: &gpui::App) -> bool {
+    cx.try_global::<SidebarRight>().is_some_and(|right| right.0)
+}
+
+/// `x` across a window `width` wide, measured from the sidebar's side: itself on the left, from the
+/// right edge on the right. Its own inverse.
+pub(super) fn from_side(right: bool, width: f32, x: f32) -> f32 {
+    match right {
+        true => width - x,
+        false => x,
+    }
+}
+
+/// `frame` in a window `width` wide, mirrored when the sidebar is on the right.
+pub(super) fn mirrored(right: bool, width: Pixels, frame: Bounds<Pixels>) -> Bounds<Pixels> {
+    match right {
+        true => Bounds::new(
+            point(width - frame.origin.x - frame.size.width, frame.origin.y),
+            frame.size,
+        ),
+        false => frame,
+    }
+}
+
 impl Shell {
+    /// Whether this window's sidebar is on the right (`SidebarRight`). A Little ilo window has
+    /// none.
+    pub(super) fn right(&self) -> bool {
+        self.right
+    }
+
+    /// `x` across the window from the sidebar's side (`from_side`).
+    pub(super) fn from_side(&self, x: f32) -> f32 {
+        from_side(self.right, f32::from(self.viewport.width), x)
+    }
+
+    /// Where the docked sidebar's column starts across the window: 0, or its width in from the
+    /// right edge.
+    pub(super) fn column_x(&self) -> f32 {
+        match self.right {
+            true => f32::from(self.viewport.width) - self.width(),
+            false => 0.,
+        }
+    }
+
+    /// The docked sidebar's edge toward the page, across the window, where what it opens beside
+    /// it points from.
+    pub(super) fn page_edge_x(&self) -> f32 {
+        self.column_x() + if self.right { 0. } else { self.width() }
+    }
+
+    /// Follows Sidebar position: the window lays itself out on the other side, and its host moves
+    /// the window's buttons and the reveal's edge.
+    pub fn set_sidebar_right(&mut self, right: bool, cx: &mut Context<Self>) {
+        let right = right && self.little.is_none();
+        if right == self.right {
+            return;
+        }
+        self.right = right;
+        self.conceal_now(cx);
+        self.browser.set_sidebar_right(right, cx);
+        // check.sh waits for this line.
+        log!(
+            "browser: sidebar on the {}",
+            if right { "right" } else { "left" }
+        );
+        self.update_menus(cx);
+        cx.notify();
+    }
+
     /// The docked sidebar's width as drawn: with the pointer while its edge is dragged, then on its
     /// way to where it rests.
     pub(super) fn width(&self) -> f32 {
@@ -61,9 +139,14 @@ impl Shell {
     /// The docked sidebar's right edge, which drags its width and puts it back on a double-click.
     pub(super) fn sidebar_edge(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let width = self.width();
+        // Toward the page widens it, so the arrows turn with the side.
+        let (wider, narrower) = match self.right {
+            true => (CursorStyle::ResizeLeft, CursorStyle::ResizeRight),
+            false => (CursorStyle::ResizeRight, CursorStyle::ResizeLeft),
+        };
         let cursor = match width {
-            width if width <= SIDEBAR_MIN => CursorStyle::ResizeRight,
-            width if width >= SIDEBAR_MAX => CursorStyle::ResizeLeft,
+            width if width <= SIDEBAR_MIN => wider,
+            width if width >= SIDEBAR_MAX => narrower,
             _ => CursorStyle::ResizeLeftRight,
         };
         let resizing = self.resize.is_some();
@@ -73,7 +156,10 @@ impl Shell {
             .absolute()
             .top_0()
             .bottom_0()
-            .left(px(width - SIDEBAR_EDGE))
+            .left(px(match self.right {
+                true => self.column_x(),
+                false => width - SIDEBAR_EDGE,
+            }))
             .w(px(SIDEBAR_EDGE))
             .cursor(cursor)
             .block_mouse_except_scroll()
@@ -117,16 +203,18 @@ impl Shell {
             return;
         }
         self.width_motion = None;
-        self.resize = Some((f32::from(event.position.x) - width, width));
+        self.resize = Some((self.from_side(f32::from(event.position.x)) - width, width));
         cx.notify();
     }
 
-    /// The pointer dragging the edge is at `x`. Past half the narrowest width, as AppKit's split
-    /// view collapses a pane, the sidebar hides in one frame and keeps the width it had (Arc).
+    /// The pointer dragging the edge is at `x` across the window. Past half the narrowest width, as
+    /// AppKit's split view collapses a pane, the sidebar hides in one frame and keeps the width it
+    /// had (Arc).
     pub(super) fn drag_edge(&mut self, x: f32, cx: &mut Context<Self>) {
         let Some((grab, _)) = self.resize else {
             return;
         };
+        let x = self.from_side(x);
         if x - grab >= SIDEBAR_MIN / 2. {
             self.resize = Some((grab, x - grab));
             return cx.notify();
@@ -557,12 +645,13 @@ impl Shell {
     /// sidebar hidden (Arc 1.171).
     pub(super) fn pointer_over(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         let (x, y) = (f32::from(at.x), f32::from(at.y));
-        self.reveal_strip = (0. ..CARD_INSET)
-            .contains(&x)
-            .then(|| match self.reveal_strip {
-                Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
-                None => (y, false),
-            });
+        self.reveal_strip =
+            (0. ..CARD_INSET)
+                .contains(&self.from_side(x))
+                .then(|| match self.reveal_strip {
+                    Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
+                    None => (y, false),
+                });
         self.pointer_at(x, cx);
     }
 
@@ -576,14 +665,29 @@ impl Shell {
         }
     }
 
-    /// The pointer is at `x` in the browser window: kept at its left edge, unless Settings › Tabs &
-    /// Sidebar has the edge off, it brings the hidden sidebar out over the page, and more than the
-    /// hold zone past the panel's edge, and off a row's hover card, it sends it away, and the card with it.
+    /// `x` across the reveal's window, `width` wide, as across the browser window, whose edge on the
+    /// sidebar's side the reveal's window is at.
+    pub fn from_reveal(&self, x: f32, width: f32) -> f32 {
+        match self.right {
+            true => f32::from(self.viewport.width) - width + x,
+            false => x,
+        }
+    }
+
+    /// The pointer is at `x` in the browser window: kept at its edge on the sidebar's side, unless
+    /// Settings › Tabs & Sidebar has the edge off, it brings the hidden sidebar out over the page,
+    /// and more than the hold zone past the panel's edge, and off a row's hover card, it sends it
+    /// away, and the card with it. The hosts say the pointer has gone with an `x` past any window.
     pub fn pointer_at(&mut self, x: f32, cx: &mut Context<Self>) {
         self.reveal_x = x;
         if !self.can_reveal() {
             return;
         }
+        // From the sidebar's side, gone staying gone.
+        let x = match x < f32::MAX {
+            true => self.from_side(x),
+            false => x,
+        };
         let held = REVEAL_INSET + self.width() + REVEAL_HOLD;
         if self.revealed_by_option {
             if x > held {
@@ -591,8 +695,8 @@ impl Shell {
             }
             self.revealed_by_option = false;
         }
-        // The edge is the card's margin. Left of the window, the pointer has gone to another
-        // window or display.
+        // The edge is the card's margin. Past it, out of the window, the pointer has gone to
+        // another window or display.
         if !(0. ..CARD_INSET).contains(&x) {
             self.reveal_wait = None;
             self.reveal_strip = None;
