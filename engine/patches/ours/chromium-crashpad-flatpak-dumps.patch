@@ -1,0 +1,301 @@
+In the Flatpak a crash leaves a minidump (#2454). Without Flatpak's devel permission, its seccomp
+refuses the ptrace syscall, which Crashpad's handler attaches with, so it wrote none. The kernel
+still lets the handler read a process that named it its ptracer through /proc: its memory, and each
+thread's stack pointer and program counter. When ptrace is refused, the handler stops the process
+with SIGSTOP, as ptrace would hold it, reads it there, and lets it go on. The crashing thread's whole
+context comes from the client, as it always has; the other threads have their stacks and where they
+were, but no other registers. Renderers, which zypak starts in a pid namespace of their own, can't
+name the handler, whose pid means nothing there, so in the Flatpak they allow any ptracer instead,
+before their sandbox engages. Outside the Flatpak nothing changes.
+
+--- a/third_party/crashpad/crashpad/client/crashpad_client_linux.cc
++++ b/third_party/crashpad/crashpad/client/crashpad_client_linux.cc
+@@ -19,7 +19,9 @@
+ #include <limits.h>
+ #include <linux/futex.h>
+ #include <pthread.h>
++#include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include <sys/mman.h>
+ #include <sys/prctl.h>
+ #include <sys/socket.h>
+@@ -35,6 +37,7 @@
+ 
+ #include "base/check_op.h"
+ #include "base/logging.h"
++#include "base/posix/eintr_wrapper.h"
+ #include "base/strings/stringprintf.h"
+ #include "build/build_config.h"
+ #include "client/client_argv_handling.h"
+@@ -350,6 +353,29 @@ class LaunchAtCrashHandler : public SignalHandler {
+   bool set_envp_ = false;
+ };
+ 
++// browser_core: in the Flatpak, zypak starts sandboxed processes in a pid namespace of
++// their own, where the handler's pid names no process, or another one, and Chromium may pass no pid
++// at all, so naming the handler this process's ptracer can't work. Such a process allows any
++// ptracer instead, while its sandbox isn't on yet, so the handler can read it through /proc. That
++// opens it to the app's own processes; the user's processes on the host could read it already, as
++// the user owns the Flatpak's user namespace.
++bool AllowAnyPtracer(pid_t pid) {
++  if (pid < 0 || access("/.flatpak-info", F_OK) != 0) {
++    return false;
++  }
++  if (pid == 0) {
++    return true;
++  }
++  char path[32];
++  snprintf(path, sizeof(path), "/proc/%d/comm", pid);
++  ScopedFileHandle comm_file(HANDLE_EINTR(open(path, O_RDONLY | O_CLOEXEC)));
++  char comm[16] = {};
++  // A process's name is its file's first 15 bytes: chrome_crashpad_handler's.
++  return !comm_file.is_valid() ||
++         ReadFile(comm_file.get(), comm, sizeof(comm) - 1) <= 0 ||
++         strncmp(comm, "chrome_crashpad", 15) != 0;
++}
++
+ class RequestCrashDumpHandler : public SignalHandler {
+  public:
+   RequestCrashDumpHandler(const RequestCrashDumpHandler&) = delete;
+@@ -379,9 +405,10 @@ class RequestCrashDumpHandler : public SignalHandler {
+       }
+       pid = creds.pid;
+     }
+-    if (pid > 0) {
++    ptracer_any_ = AllowAnyPtracer(pid);
++    if (pid > 0 || ptracer_any_) {
+       pthread_atfork(nullptr, nullptr, SetPtracerAtFork);
+-      if (prctl(PR_SET_PTRACER, pid, 0, 0, 0) != 0) {
++      if (prctl(PR_SET_PTRACER, Ptracer(pid), 0, 0, 0) != 0) {
+         PLOG(WARNING) << "prctl";
+       }
+     }
+@@ -407,8 +434,8 @@ class RequestCrashDumpHandler : public SignalHandler {
+     // Attempt to set the ptracer again, in case a crash occurs after a fork,
+     // before SetPtracerAtFork() has been called. Ignore errors because the
+     // system call may be disallowed if the sandbox is engaged.
+-    if (handler_pid_ > 0) {
+-      sys_prctl(PR_SET_PTRACER, handler_pid_, 0, 0, 0);
++    if (handler_pid_ > 0 || ptracer_any_) {
++      sys_prctl(PR_SET_PTRACER, Ptracer(handler_pid_), 0, 0, 0);
+     }
+ 
+     ExceptionHandlerProtocol::ClientInformation info = {};
+@@ -435,14 +462,20 @@ class RequestCrashDumpHandler : public SignalHandler {
+ 
+   static void SetPtracerAtFork() {
+     auto handler = RequestCrashDumpHandler::Get();
+-    if (handler->handler_pid_ > 0 &&
+-        prctl(PR_SET_PTRACER, handler->handler_pid_, 0, 0, 0) != 0) {
++    if ((handler->handler_pid_ > 0 || handler->ptracer_any_) &&
++        prctl(PR_SET_PTRACER, handler->Ptracer(handler->handler_pid_), 0, 0,
++              0) != 0) {
+       PLOG(WARNING) << "prctl";
+     }
+   }
+ 
++  unsigned long Ptracer(pid_t pid) const {
++    return ptracer_any_ ? PR_SET_PTRACER_ANY : static_cast<unsigned long>(pid);
++  }
++
+   ScopedFileHandle sock_to_handler_;
+   pid_t handler_pid_ = -1;
++  bool ptracer_any_ = false;
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+   // An optional UNIX timestamp passed to us from Chrome.
+--- a/third_party/crashpad/crashpad/util/linux/direct_ptrace_connection.cc
++++ b/third_party/crashpad/crashpad/util/linux/direct_ptrace_connection.cc
+@@ -14,8 +14,20 @@
+ 
+ #include "util/linux/direct_ptrace_connection.h"
+ 
++#include <fcntl.h>
++#include <signal.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++#include <unistd.h>
++
++#include <string>
+ #include <utility>
+ 
++#include "base/logging.h"
++#include "base/posix/eintr_wrapper.h"
++#include "build/build_config.h"
+ #include "util/file/file_io.h"
+ #include "util/linux/proc_task_reader.h"
+ 
+@@ -29,13 +41,67 @@ DirectPtraceConnection::DirectPtraceConnection()
+       ptracer_(/* can_log= */ true),
+       initialized_() {}
+ 
+-DirectPtraceConnection::~DirectPtraceConnection() {}
++DirectPtraceConnection::~DirectPtraceConnection() {
++  if (stopped_) {
++    kill(pid_, SIGCONT);
++  }
++}
++
++namespace {
++
++// browser_core: whether every thread of pid is stopped, from each one's state in
++// /proc/<pid>/task/<tid>/stat, the letter after the parenthesised name.
++bool AllThreadsStopped(pid_t pid) {
++  std::vector<pid_t> threads;
++  if (!ReadThreadIDs(pid, &threads)) {
++    return false;
++  }
++  for (pid_t tid : threads) {
++    char path[64];
++    snprintf(path, sizeof(path), "/proc/%d/task/%d/stat", pid, tid);
++    std::string stat;
++    if (!LoggingReadEntireFile(base::FilePath(path), &stat)) {
++      return false;
++    }
++    size_t end = stat.rfind(')');
++    if (end == std::string::npos || end + 2 >= stat.size() ||
++        (stat[end + 2] != 'T' && stat[end + 2] != 't')) {
++      return false;
++    }
++  }
++  return true;
++}
++
++}  // namespace
+ 
+ bool DirectPtraceConnection::Initialize(pid_t pid) {
+   INITIALIZATION_STATE_SET_INITIALIZING(initialized_);
+ 
+   if (!Attach(pid) || !ptracer_.Initialize(pid)) {
+-    return false;
++    // browser_core: the Flatpak's seccomp refuses the ptrace syscall but not reading the
++    // process through /proc, which the kernel allows as it would ptrace, so a process that named
++    // this handler its ptracer can still be dumped. The process is stopped while it's read, as
++    // ptrace would hold it, and each thread's stack pointer and program counter come from
++    // /proc/<pid>/task/<tid>/syscall; the crashing thread's whole context comes from the client.
++    char path[32];
++    snprintf(path, sizeof(path), "/proc/%d/mem", pid);
++    ScopedFileHandle mem(HANDLE_EINTR(open(path, O_RDONLY | O_CLOEXEC)));
++    if (!mem.is_valid()) {
++      return false;
++    }
++    attachments_.clear();
++    pid_ = pid;
++    without_ptrace_ = true;
++    if (kill(pid, SIGSTOP) == 0) {
++      stopped_ = true;
++      for (int i = 0; i < 1000 && !AllThreadsStopped(pid); ++i) {
++        const timespec millisecond = {0, 1000 * 1000};
++        nanosleep(&millisecond, nullptr);
++      }
++    }
++    LOG(WARNING) << "reading " << pid << " without ptrace";
++    INITIALIZATION_STATE_SET_VALID(initialized_);
++    return true;
+   }
+   pid_ = pid;
+ 
+@@ -49,6 +115,9 @@ pid_t DirectPtraceConnection::GetProcessID() {
+ }
+ 
+ bool DirectPtraceConnection::Attach(pid_t tid) {
++  if (without_ptrace_) {
++    return true;
++  }
+   std::unique_ptr<ScopedPtraceAttach> attach(new ScopedPtraceAttach);
+   if (!attach->ResetAttach(tid)) {
+     return false;
+@@ -59,12 +128,61 @@ bool DirectPtraceConnection::Attach(pid_t tid) {
+ 
+ bool DirectPtraceConnection::Is64Bit() {
+   INITIALIZATION_STATE_DCHECK_VALID(initialized_);
++  if (without_ptrace_) {
++#if defined(ARCH_CPU_64_BITS)
++    return true;
++#else
++    return false;
++#endif
++  }
+   return ptracer_.Is64Bit();
+ }
+ 
+ bool DirectPtraceConnection::GetThreadInfo(pid_t tid, ThreadInfo* info) {
+   INITIALIZATION_STATE_DCHECK_VALID(initialized_);
+-  return ptracer_.GetThreadInfo(tid, info);
++  if (!without_ptrace_) {
++    return ptracer_.GetThreadInfo(tid, info);
++  }
++#if defined(ARCH_CPU_X86_64) || defined(ARCH_CPU_ARM64)
++  // browser_core: "<nr> <six arguments> <sp> <pc>", or "-1 <sp> <pc>" for a thread
++  // stopped outside a system call; "running" for one that isn't stopped, which gives nothing.
++  char path[64];
++  snprintf(path, sizeof(path), "/proc/%d/task/%d/syscall", pid_, tid);
++  std::string line;
++  if (!LoggingReadEntireFile(base::FilePath(path), &line)) {
++    return false;
++  }
++  std::vector<std::string> fields;
++  size_t start = 0;
++  while (start < line.size()) {
++    size_t end = line.find_first_of(" \n", start);
++    if (end == std::string::npos) {
++      end = line.size();
++    }
++    if (end > start) {
++      fields.push_back(line.substr(start, end - start));
++    }
++    start = end + 1;
++  }
++  if (fields.size() != 3 && fields.size() != 9) {
++    return false;
++  }
++  memset(&info->thread_context, 0, sizeof(info->thread_context));
++  memset(&info->float_context, 0, sizeof(info->float_context));
++  info->thread_specific_data_address = 0;
++  const uint64_t sp = strtoull(fields[fields.size() - 2].c_str(), nullptr, 16);
++  const uint64_t pc = strtoull(fields[fields.size() - 1].c_str(), nullptr, 16);
++#if defined(ARCH_CPU_X86_64)
++  info->thread_context.t64.rsp = sp;
++  info->thread_context.t64.rip = pc;
++#else
++  info->thread_context.t64.sp = sp;
++  info->thread_context.t64.pc = pc;
++#endif
++  return true;
++#else
++  return false;
++#endif
+ }
+ 
+ bool DirectPtraceConnection::ReadFileContents(const base::FilePath& path,
+@@ -89,6 +207,14 @@ bool DirectPtraceConnection::Threads(std::vector<pid_t>* threads) {
+ ssize_t DirectPtraceConnection::ReadUpTo(VMAddress address,
+                                          size_t size,
+                                          void* buffer) {
++  if (without_ptrace_) {
++    char path[32];
++    snprintf(path, sizeof(path), "/proc/%d/mem", pid_);
++    ScopedFileHandle mem(HANDLE_EINTR(open(path, O_RDONLY | O_CLOEXEC)));
++    return mem.is_valid()
++               ? HANDLE_EINTR(pread64(mem.get(), buffer, size, address))
++               : -1;
++  }
+   return ptracer_.ReadUpTo(pid_, address, size, static_cast<char*>(buffer));
+ }
+ 
+--- a/third_party/crashpad/crashpad/util/linux/direct_ptrace_connection.h
++++ b/third_party/crashpad/crashpad/util/linux/direct_ptrace_connection.h
+@@ -67,6 +67,10 @@ class DirectPtraceConnection : public PtraceConnection {
+   std::unique_ptr<ProcessMemoryLinux> memory_;
+   pid_t pid_;
+   Ptracer ptracer_;
++  // browser_core: true when the process is read through /proc instead, as in the Flatpak,
++  // whose seccomp refuses the ptrace syscall, and stopped_ while this holds it stopped.
++  bool without_ptrace_ = false;
++  bool stopped_ = false;
+   InitializationStateDcheck initialized_;
+ };
+ 

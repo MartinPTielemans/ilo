@@ -31,7 +31,7 @@ index a91818acd0..2d1de9aa21 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..5cbec0765f 100644
+index a5390e77f8..c022a65fc4 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
 @@ -1,4 +1,26 @@
@@ -59,11 +59,11 @@ index a5390e77f8..5cbec0765f 100644
 +};
 +#[cfg(feature = "wayland")]
 +pub use linux::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
-+    open_next_window_in_surface, resize_embedded,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_clipboard_text,
++    held_key, marked_range_in, open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..ca5b025ee3 100644
+index e4da54b52b..99881d4693 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -119,8 +119,8 @@ index e4da54b52b..ca5b025ee3 100644
  pub(crate) use wayland::*;
 +#[cfg(feature = "wayland")]
 +pub use wayland::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
-+    open_next_window_in_surface, resize_embedded,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_clipboard_text,
++    held_key, marked_range_in, open_next_window_in_surface, resize_embedded,
 +};
 +#[cfg(feature = "x11")]
 +pub use x11::{
@@ -2042,7 +2042,7 @@ index 0c5370db6c..d641576663 100644
      let shift = keymap_state.mod_name_is_active(xkb::MOD_NAME_SHIFT, xkb::STATE_MODS_EFFECTIVE);
      let alt = keymap_state.mod_name_is_active(xkb::MOD_NAME_ALT, xkb::STATE_MODS_EFFECTIVE);
 diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
-index cbc962bcff..46c3b3e249 100644
+index cbc962bcff..53aed61dfc 100644
 --- a/crates/gpui_linux/src/linux/wayland.rs
 +++ b/crates/gpui_linux/src/linux/wayland.rs
 @@ -9,7 +9,13 @@ mod window;
@@ -2051,8 +2051,8 @@ index cbc962bcff..46c3b3e249 100644
  
 +pub(crate) use client::dispatch_embedded_queue;
 +pub use client::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
-+    resize_embedded,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_clipboard_text,
++    held_key, marked_range_in, resize_embedded,
 +};
  pub(crate) use client::*;
 +pub use window::open_next_window_in_surface;
@@ -2060,7 +2060,7 @@ index cbc962bcff..46c3b3e249 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..78e709800d 100644
+index 2d40cf7fa9..824f53bd1b 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -3382,7 +3382,7 @@ index 2d40cf7fa9..78e709800d 100644
              }
              _ => {}
          }
-@@ -3479,3 +4090,715 @@ mod tests {
+@@ -3479,3 +4090,725 @@ mod tests {
          );
      }
  }
@@ -3597,6 +3597,16 @@ index 2d40cf7fa9..78e709800d 100644
 +    {
 +        backend.flush().ok();
 +    }
++}
++
++/// The text this app holds the clipboard with, from GPUI's own state: what it last put there, while
++/// the compositor hasn't cancelled the source it offered it with. None once anything else was
++/// copied, or with no embedded client. Nothing is read through anyone, so it answers whoever holds
++/// the keyboard: Chromium, on the same connection, reads GPUI's own copy as empty while the app
++/// hasn't the keyboard.
++pub fn held_clipboard_text() -> Option<String> {
++    let client = EMBEDDED_CLIENT.with_borrow(|client| client.as_ref()?.upgrade())?;
++    client.borrow().clipboard.held_text()
 +}
 +
 +/// Sizes the window GPUI opened in the embedder's `parent` surface, in logical pixels, as the
@@ -4099,7 +4109,7 @@ index 2d40cf7fa9..78e709800d 100644
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/wayland/clipboard.rs b/crates/gpui_linux/src/linux/wayland/clipboard.rs
-index 86dc7da97b..a38ef82ead 100644
+index 86dc7da97b..6ab67f51e4 100644
 --- a/crates/gpui_linux/src/linux/wayland/clipboard.rs
 +++ b/crates/gpui_linux/src/linux/wayland/clipboard.rs
 @@ -7,7 +7,10 @@ use std::{
@@ -4148,7 +4158,7 @@ index 86dc7da97b..a38ef82ead 100644
  
              cached_read: None,
              current_offer: None,
-@@ -156,6 +163,28 @@ impl Clipboard {
+@@ -156,6 +163,35 @@ impl Clipboard {
          self.contents = Some(item);
      }
  
@@ -4174,10 +4184,17 @@ index 86dc7da97b..a38ef82ead 100644
 +        self.contents.as_ref()
 +    }
 +
++    /// The text this app holds the clipboard with: what it last put there, while its source still
++    /// holds the selection. The compositor cancels the source once anything else is copied.
++    pub fn held_text(&self) -> Option<String> {
++        self.source.as_ref()?;
++        self.contents.as_ref()?.text()
++    }
++
      pub fn set_primary(&mut self, item: ClipboardItem) {
          self.primary_contents = Some(item);
      }
-@@ -174,12 +203,25 @@ impl Clipboard {
+@@ -174,12 +210,25 @@ impl Clipboard {
          self.self_mime.clone()
      }
  
