@@ -1307,7 +1307,6 @@ expect "^browser: chosen $c $b $a\$" "⌘-clicks didn't choose the rows once mor
 send key w cmd
 expect "^browser: today $rest\$" "⌘W with rows chosen didn't close them all: $(today)"
 send key z cmd
-reopened=$step
 expect "^browser: today [0-9][0-9]* [0-9][0-9]* [0-9][0-9]* $rest\$" \
   "⌘Z after ⌘W didn't bring the three chosen tabs back: $(today)"
 
@@ -1636,14 +1635,8 @@ fi
 # Tabs, listed while one is muted, unmutes them; Enter Full Screen puts the window full screen and
 # reads Exit Full Screen there, which takes it out; and there Exit, View › Exit's, with ⎋'s key,
 # takes it out too.
-# The ⌘Z above gave the tab shown a fresh page, and a key typed into a page whose renderer is still
-# starting is lost (#1519), which the Wayland pass hits. There ⌘L waits for the page to load. #1974
-# fixes the race in the core and removes this.
-if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-  echo "skip: ⌘L in the page ⌘Z brought back before it has loaded: the key is lost while its renderer starts (#1519)."
-  reopened_tab=$(sed -n "/^browser: drive $reopened: /,\$p" "$log" | grep '^browser: tab [0-9]* has its page$' | tail -1 | cut -d' ' -f3)
-  expect "^browser: loaded ${reopened_tab:-[0-9]*} " "the tab ⌘Z brought back didn't load" "$reopened"
-fi
+# The ⌘Z above gave the tab shown a fresh page, and ⌘L reaches the browser while its renderer is
+# still starting (#1519).
 send click $page_point
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar for Mute All Tabs"
