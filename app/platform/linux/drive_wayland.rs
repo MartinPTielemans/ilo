@@ -152,12 +152,9 @@ pub(crate) fn on() -> bool {
     SESSION.with_borrow(Option::is_some)
 }
 
-fn open() -> Result<Session, String> {
-    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
-    let headless = std::env::var("BROWSER_HEADLESS").unwrap_or_default();
-    if display.is_empty() || display != headless {
-        return Err("WAYLAND_DISPLAY isn't tools/headless.sh's session".into());
-    }
+/// The outputs of the sway at SWAYSOCK, if they're all headless, as tools/headless.sh's are and a
+/// desktop's never are: the driver's input there reaches nothing but the session's own windows.
+pub(crate) fn headless_sway() -> Result<Vec<Value>, String> {
     let outputs = sway(GET_OUTPUTS, "").ok_or("no sway at SWAYSOCK")?;
     let outputs = outputs.as_array().ok_or("sway listed no outputs")?;
     let headless = |output: &Value| {
@@ -168,7 +165,17 @@ fn open() -> Result<Session, String> {
     if outputs.is_empty() || !outputs.iter().all(headless) {
         return Err("sway's outputs aren't all headless".into());
     }
-    let extent = extent(outputs);
+    Ok(outputs.clone())
+}
+
+fn open() -> Result<Session, String> {
+    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+    let headless = std::env::var("BROWSER_HEADLESS").unwrap_or_default();
+    if display.is_empty() || display != headless {
+        return Err("WAYLAND_DISPLAY isn't tools/headless.sh's session".into());
+    }
+    let outputs = headless_sway()?;
+    let extent = extent(&outputs);
     let connection = Connection::connect_to_env().map_err(|e| e.to_string())?;
     let (globals, mut queue) =
         registry_queue_init::<State>(&connection).map_err(|e| e.to_string())?;
