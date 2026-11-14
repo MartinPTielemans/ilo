@@ -6,7 +6,6 @@
 use std::{
     collections::HashSet,
     sync::atomic::{AtomicU64, Ordering},
-    time::Instant,
 };
 
 use chrono::{Local, NaiveDate, TimeZone};
@@ -14,6 +13,7 @@ use gpui::{
     AnyElement, ClickEvent, Context, Modifiers, MouseButton, MouseDownEvent, Pixels, Point,
     SharedString, div, prelude::*, px, svg,
 };
+use web_time::Instant;
 
 use super::{
     ARCHIVED_FAVICON_X, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_PLATE, ARCHIVED_RADIUS,
