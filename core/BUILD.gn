@@ -206,6 +206,16 @@ source_set("arrangement") {
   ]
 }
 
+# When the ad blocker looks at its lists, and whether a download takes the place of a list's copy,
+# apart so browser_core_unittests tests the rules alone.
+source_set("ad_block_list_check") {
+  sources = [
+    "ad_block_list_check.cc",
+    "ad_block_list_check.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
 # Whether a pinned tab is at its pinned URL, apart so browser_core_unittests tests the rule alone.
 source_set("pinned_url") {
   sources = [
@@ -560,6 +570,7 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":ad_block_list_check",
     ":ad_block_off_sites",
     ":ad_block_page",
     ":archive_rule",
@@ -865,6 +876,7 @@ source_set("browser_core") {
 # engine's run runs them.
 test("browser_core_unittests") {
   sources = [
+    "ad_block_list_check_unittest.cc",
     "ad_block_off_sites_unittest.cc",
     "archive_rule_unittest.cc",
     "arrange_rule_unittest.cc",
@@ -905,6 +917,7 @@ test("browser_core_unittests") {
     "withheld_fields_unittest.cc",
   ]
   deps = [
+    ":ad_block_list_check",
     ":ad_block_off_sites",
     ":archive_rule",
     ":arrange_rule",
