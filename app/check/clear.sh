@@ -565,6 +565,7 @@ for y in 167 223 279 335 391 447 503 559 615 671 727; do
 done
 [ -n "$visited_y" ] || fail "History listed no visited page in the rows the window shows; they were: $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: history pointed ' | cut -d' ' -f4- | tr '\n' ' ')"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-visited.png" || fail "no window to capture"
+send click 300 $visited_y
 expect '^browser: history page in preview$' "a click on a visited page's row didn't open it in Peek"
 none_since '^browser: history open$' || fail "a click on a visited page's row opened it at once"
 expect '^browser: link preview [1-9][0-9]* https\{0,1\}://' "Peek of the visited page didn't open at a page"
