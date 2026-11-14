@@ -1942,6 +1942,8 @@ static void WatchLittleOrderingOut(NSWindow* window) {
   }
 }
 
+static void PlaceTitlebarSide(Browser* browser);
+
 void host_show_window(void* ui_view) {
   host_show_window_behind(ui_view, nullptr);
 }
@@ -1955,6 +1957,10 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
   browser->window = window;
+  // As the sidebar's side was told before there was a window (host_set_sidebar_right).
+  if (browser->sidebar_right) {
+    PlaceTitlebarSide(browser);
+  }
   if (browser->little) {
     ToShownDesktop(browser, window);
     // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
@@ -4886,18 +4892,14 @@ static bool AnswerTitlebarDirection(NSWindow* window) {
   return true;
 }
 
-void host_set_sidebar_right(void* ui_view, bool right) {
-  Browser* browser = BrowserWithView(ui_view);
-  if (!browser || browser->sidebar_right == right) {
-    return;
-  }
-  browser->sidebar_right = right;
+// Lays |browser|'s title bar out for the side its sidebar is on.
+static void PlaceTitlebarSide(Browser* browser) {
   NSWindow* window = browser->window;
   if (!AnswerTitlebarDirection(window)) {
     fprintf(stderr, "browser: the title bar's direction can't be answered\n");
     return;
   }
-  objc_setAssociatedObject(window, &kSidebarRight, right ? @YES : nil,
+  objc_setAssociatedObject(window, &kSidebarRight, browser->sidebar_right ? @YES : nil,
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
   // AppKit places the buttons as the window's frame view changes size, and not when its layout is
   // only marked or the style mask set again (check/titlebar-right.sh on a hosted Mac, run
@@ -4906,6 +4908,19 @@ void host_set_sidebar_right(void* ui_view, bool right) {
   const NSSize size = frame.frame.size;
   [frame setFrameSize:NSMakeSize(size.width + 1, size.height)];
   [frame setFrameSize:size];
+}
+
+void host_set_sidebar_right(void* ui_view, bool right) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || browser->sidebar_right == right) {
+    return;
+  }
+  browser->sidebar_right = right;
+  // A window the UI is made in hears its side before it's shown, and so before it's the browser's
+  // window: host_show_window lays its title bar out then.
+  if (browser->window) {
+    PlaceTitlebarSide(browser);
+  }
   if (browser->reveal_monitor) {
     PlaceReveal(browser);
   }
