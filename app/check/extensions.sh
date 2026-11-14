@@ -212,10 +212,19 @@ expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show"
 expect "^browser: extension actions $popup:1 $clicked:7\$" \
   "the badge Check Popup's popup gave it didn't show at once"
 ../tools/window-screenshot.sh "$pid" "$out/extension-popup.png" || fail "no window to capture"
-# Closes the popup: escape, where it has the keyboard.
+# Closes the popup: escape, where it has the keyboard. Under Wayland the popup never gets it
+# (#2836), so a click on its action again closes it, as in Chrome, or on the page, $1.
 close_popup() {
-  send key escape
-  how="escape, $(painted_by_escape), the keyboard in $key, focus on $focus,"
+  if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${1:-}" ]; then
+    send click $1
+    how="a click on the page"
+  elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    send click $first_place
+    how="a click on its action"
+  else
+    send key escape
+    how="escape, $(painted_by_escape), the keyboard in $key, focus on $focus,"
+  fi
   expect '^browser: extension popup none$' "$how didn't close the extension's popup"
 }
 # Whether Check Popup's page had said it painted by the escape just sent, by its action's title
@@ -236,16 +245,22 @@ painted_by_escape() {
       exit
     }' "$log"
 }
-send state
-[ "$key" != BrowserCoreNSWindow ] || fail "the extension's popup didn't take the keyboard"
-close_popup
-send state
-[ "$key" = BrowserCoreNSWindow ] ||
-  fail "the browser window didn't get the keyboard back from the popup: it's in $key"
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: the extension's popup taking the keyboard and escape closing it: under Wayland the popup never gets the keyboard (#2836)."
+  close_popup
+else
+  send state
+  [ "$key" != BrowserCoreNSWindow ] || fail "the extension's popup didn't take the keyboard"
+  close_popup
+  send state
+  [ "$key" = BrowserCoreNSWindow ] ||
+    fail "the browser window didn't get the keyboard back from the popup: it's in $key"
+fi
 # The Extensions menu runs a pinned one too, its popup hanging from its action.
 send menu "Check Popup"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the menu"
-close_popup
+# Under Wayland a click on its action would run it again, so the page's click closes it.
+close_popup "$page_point"
 # The command bar finds it by its name and runs it, as Arc's does (#1396). Captured before the
 # expect, so a build without the row shows what's there instead.
 send key l cmd
@@ -261,7 +276,7 @@ expect '^browser: command run-extension via command bar$' "Check Popup didn't ru
 expect "^browser: run extension $popup ran\$" "the bar's Check Popup didn't run its action"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the bar"
 ../tools/window-screenshot.sh "$pid" "$out/bar-extension-popup.png" || fail "no window to capture"
-close_popup
+close_popup "$page_point"
 # In a Little ilo window the pinned actions end its bar's title, as they end the URL field, and a
 # click on one runs it there, its popup hanging from its button (#693).
 send key n cmd alt
@@ -284,7 +299,11 @@ send click $((end_x - 45)) "$end_y"
 expect "^browser: run extension $popup ran\$" "a click on Check Popup's action in Little ilo didn't run it"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from Little ilo"
 ../tools/window-screenshot.sh "$pid" "$out/little-extension-popup.png" all || fail "no window to capture"
-send key escape
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  send click $((end_x - 45)) "$end_y"
+else
+  send key escape
+fi
 expect '^browser: extension popup none$' "Check Popup's popup in Little ilo didn't close"
 send key w cmd
 expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window"
@@ -311,7 +330,8 @@ expect "^browser: run extension $third ran\$" "Check Third didn't run from the o
 expect "^browser: extension popup $third\$" "Check Third's popup didn't show"
 ../tools/window-screenshot.sh "$pid" "$out/extension-overflow-popup.png" ||
   fail "no window to capture"
-close_popup
+# Its action is behind the overflow button, so under Wayland a click on the page closes it.
+close_popup "$page_point"
 # Check Clicked unpinned, Check Third has a place of its own, where a right-click unpins it.
 send menu "Pin to URL Field › Check Clicked"
 expect "^browser: unpin extension $clicked\$" "Pin to URL Field › Check Clicked didn't unpin it"
@@ -375,7 +395,7 @@ send key $popup_key
 expect "^browser: extension command $popup _execute_action ran via ui\$" \
   "$popup_said with the UI focused didn't run Check Popup's action"
 expect "^browser: extension popup $popup\$" "$popup_said with the UI focused didn't show the popup"
-close_popup
+close_popup "$page_point"
 send click $page_point
 in_browser RenderWidgetHostViewCocoa "after a click on the command page"
 send key $popup_key
@@ -383,7 +403,7 @@ expect "^browser: extension command $popup _execute_action ran via page\$" \
   "$popup_said with the page focused didn't run Check Popup's action"
 expect "^browser: extension popup $popup\$" "$popup_said with the page focused didn't show the popup"
 ../tools/window-screenshot.sh "$pid" "$out/extension-key-popup.png" || fail "no window to capture"
-close_popup
+close_popup "$page_point"
 send menu "Manage Extensions…"
 expect '^browser: command manage-extensions via ui$' "Manage Extensions… didn't reach the UI"
 expect '^browser: loaded [0-9]* chrome://extensions/$' \
