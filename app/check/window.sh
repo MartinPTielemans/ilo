@@ -125,17 +125,6 @@ motion=
 if [ "$(uname)" = Darwin ] || windows; then
   motion=full
 fi
-# The sidebar's rests below measure what the browser takes while nothing draws. On a new profile
-# uBlock Origin writes its selfie about 80 s in, which took 0.8 s of the browser's pool on the Mac,
-# in whichever rest the run had reached (#2502). A user's launches after the first are on it, so on
-# a profile with none a launch first stays until it's written, and quits, which also ends what the
-# write leaves for its store to compact.
-if ublock_selfie; then
-  echo "window: the profile has uBlock Origin's selfie"
-else
-  selfie_launch "$url" "$out/window-selfie.log"
-  echo "window: uBlock Origin wrote its selfie $selfie_at s into a launch before the run's"
-fi
 BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"

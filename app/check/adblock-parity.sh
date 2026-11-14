@@ -66,7 +66,11 @@ step=0
 ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
 scratch=$(mktemp -d)
 engine_switch=
-case $engine in ublock | off) ;; *) engine_switch=--ad-block-engine=$engine ;; esac
+# The browser's own is the build's default (#2111), so uBlock Origin's runs, off's too, name it.
+case $engine in
+off) engine_switch=--ad-block-engine=ublock ;;
+*) engine_switch=--ad-block-engine=$engine ;;
+esac
 # Both engines block with the same copy of each list, or a list's authors' edits between the two
 # runs read as one engine's miss: foxnews let rockspreading.com through on the Mac, which only that
 # day's EasyPrivacy named (#2111). The baseline's run downloads each list it starts with once, into

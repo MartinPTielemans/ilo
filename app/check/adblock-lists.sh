@@ -1,4 +1,5 @@
 # check.sh runs this at 200.
+# The run gives --ad-block-engine=ublock, as the browser's own is the default (#2111).
 # uBlock Origin's filter lists come from the source the core gives it (kFilterListsSource in
 # core/ad_block.cc), here the check's own, through --ad-block-lists: uBlock Origin's assets.json
 # with every remote address taken out, so nothing reaches the network, and one list more, on the
@@ -60,7 +61,8 @@ log="$out/adblock-lists.log"
 step=0
 launched=$(date +%s)
 BROWSER_DRIVE=1 BROWSER_URL="$listed" BROWSER_PROFILE_DIR="$profile_dir" \
-  "$browser" --ad-block-lists="${site}lists/assets.json" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --ad-block-engine=ublock --ad-block-lists="${site}lists/assets.json" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load

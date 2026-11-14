@@ -5,7 +5,8 @@
 # stand-in of its own that loads, so the page's ads find nothing missing (its lists' filter for it
 # says redirect=googlesyndication_adsbygoogle.js). Off the Mac it reports the most memory uBlock
 # Origin's process took as it compiled its lists and wrote its selfie (#2069). It needs the network
-# and those servers, so it runs only when named: ./check.sh adblock-live.
+# and those servers, so it runs only when named: ./check.sh adblock-live. The browser's own is the
+# default (#2111), so the run gives --ad-block-engine=ublock.
 
 # The served page's title says whether Google's ad script loaded, was blocked, or was blocked by
 # uBlock Origin's stand-in, whose adsbygoogle.push does nothing, where Google's queues an ad.
@@ -71,7 +72,7 @@ ublock_peaks() {
   fi
 }
 BROWSER_DRIVE=1 BROWSER_URL="${site}live.html" BROWSER_PROFILE_DIR="$profile_dir" \
-  "$browser" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --ad-block-engine=ublock < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 # The time to blocking counts from uBlock Origin's process starting, as it's loaded into the

@@ -1,6 +1,8 @@
 # check.sh runs this at 190.
 # The browser blocks ads and trackers from a new profile's first page, with nothing to install:
-# uBlock Origin, in the framework, loads into every profile, and no extension list shows it, as
+# uBlock Origin, in the framework, loads into every profile it's given for, here by
+# --ad-block-engine=ublock where the build's default is the browser's own (#2111), and no extension
+# list shows it, as
 # Settings › Ad Blocking is all of its settings (#2107). Filters given for the check as My filters,
 # through the same managed settings the browser gives it its own, block the served page's ad script
 # and hide its ad. The run reports how long that first launch let requests through. Its own lists
@@ -111,7 +113,8 @@ step=0
 filters="$(printf '/check-ad.js\n127.0.0.1##.check-ad')"
 launched=$(python3 -I -c 'import time; print(time.time())')
 BROWSER_DRIVE=1 BROWSER_URL="$ads" BROWSER_PROFILE_DIR="$profile_dir" \
-  "$browser" --ad-block-filters="$filters" --ad-block-lists="$lists" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --ad-block-engine=ublock --ad-block-filters="$filters" --ad-block-lists="$lists" \
+  < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -379,7 +382,8 @@ for n in 2 3 4; do
   log="$out/adblock-launch-$n.log"
   step=0
   BROWSER_DRIVE=1 BROWSER_URL="$ads?$n" BROWSER_PROFILE_DIR="$profile_dir" \
-    "$browser" --ad-block-filters="$filters" --ad-block-lists="$lists" < "$out/drive" > "$log" 2>&1 &
+    "$browser" --ad-block-engine=ublock --ad-block-filters="$filters" --ad-block-lists="$lists" \
+    < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await "^browser: loaded [0-9]* $ads?$n\$" ||
@@ -405,16 +409,15 @@ for n in 2 3 4; do
   [ "$n" = 4 ] || quit
 done
 quit
-# uBlock Origin blocks unless --ad-block-engine=native, and then the browser's own engine never
-# loads, compiles or downloads a list, nor keeps anything in the profile.
+# With --ad-block-engine=ublock, uBlock Origin blocks, and the browser's own engine never loads,
+# compiles or downloads a list, nor keeps anything in the profile.
 ! grep -h "^browser: ad block engine " "$out/adblock.log" "$out"/adblock-launch-*.log ||
-  fail "without --ad-block-engine=native, the browser's own ad block engine loaded"
+  fail "with --ad-block-engine=ublock, the browser's own ad block engine loaded"
 [ ! -e "$profile_dir/Ad Blocking" ] ||
-  fail "without --ad-block-engine=native, the profile has the native engine's folder:" \
+  fail "with --ad-block-engine=ublock, the profile has the native engine's folder:" \
     "$(ls "$profile_dir/Ad Blocking")"
-# The way back (#2111): in a build whose default is the browser's own engine, which
-# --ad-block-default=native makes this one for the check, Settings › Ad Blocking's Block with
-# uBlock Origin goes back to the extension at the next launch, and the browser's own leaves its
+# The way back (#2111): the build's default being the browser's own engine, which a launch with no
+# switch runs, Settings › Ad Blocking's Block with uBlock Origin goes back to the extension at the next launch, and the browser's own leaves its
 # data as it was. The relaunch is the restart's, with the switches it was given, as widevine.sh's:
 # a click on Restart would start an app outside the check, so the run reads that it's drawn.
 store="$profile_dir/Default/Local Extension Settings/$ublock"
@@ -446,7 +449,7 @@ for engine in native ublock; do
   log="$out/adblock-way-back-$engine.log"
   step=0
   BROWSER_DRIVE=1 BROWSER_URL="$ads?$engine" BROWSER_PROFILE_DIR="$profile_dir" \
-    "$browser" --ad-block-default=native --ad-block-filters="$filters" --ad-block-lists="$lists" \
+    "$browser" --ad-block-filters="$filters" --ad-block-lists="$lists" \
     < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
