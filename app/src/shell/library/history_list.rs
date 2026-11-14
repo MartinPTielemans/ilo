@@ -6,7 +6,6 @@
 use std::{
     collections::HashSet,
     sync::atomic::{AtomicU64, Ordering},
-    time::Instant,
 };
 
 use chrono::{Local, NaiveDate, TimeZone};
@@ -14,6 +13,7 @@ use gpui::{
     AnyElement, ClickEvent, Context, Modifiers, MouseButton, MouseDownEvent, Pixels, Point,
     SharedString, div, prelude::*, px, svg,
 };
+use web_time::Instant;
 
 use super::{
     ARCHIVED_FAVICON_X, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_PLATE, ARCHIVED_RADIUS,
@@ -156,12 +156,21 @@ pub(super) fn history_when(at: f64, starts: [f64; 4], twelve: bool) -> String {
     time.format(&format).to_string()
 }
 
+/// Where a History row's text ends, from the row's end: 4 before its trash while the trash shows,
+/// as a tab row's title before its ✕, and otherwise 12, over the trash's place.
+pub(super) fn history_text_end(trash: bool) -> f32 {
+    match trash {
+        true => 4. + CLOSE_SIZE + CLOSE_RIGHT,
+        false => 12.,
+    }
+}
+
 /// A History row's title over what it is and when, which truncate before the row's trash while it
-/// shows, and otherwise end 12 from the row's end.
+/// shows, and otherwise have the row's whole width.
 pub(super) fn history_text(
     title: SharedString,
     about: SharedString,
-    at_rest: bool,
+    trash: bool,
     palette: &crate::palette::Palette,
 ) -> gpui::Div {
     div()
@@ -172,7 +181,7 @@ pub(super) fn history_text(
         .flex_col()
         .justify_center()
         .pl(px(ARCHIVED_TEXT_X))
-        .when(at_rest, |text| text.pr(px(12.)))
+        .pr(px(history_text_end(trash)))
         .child(text_line(
             title,
             text::BODY,
@@ -234,9 +243,9 @@ impl Shell {
         div()
             .id(id)
             .when(self.a11y, |button| button.button_named(name))
-            .flex_none()
-            .ml(px(4.))
-            .mr(px(CLOSE_RIGHT))
+            .absolute()
+            .right(px(CLOSE_RIGHT))
+            .top(px((ARCHIVED_PLATE - CLOSE_SIZE) / 2.))
             .size(px(CLOSE_SIZE))
             .rounded(px(NAV_RADIUS))
             .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
@@ -517,7 +526,7 @@ impl Shell {
                     .child(history_text(
                         title,
                         about.into(),
-                        trash.is_none(),
+                        trash.is_some(),
                         &self.palette,
                     ))
                     .children(trash),

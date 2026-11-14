@@ -8,6 +8,7 @@ use std::rc::Rc;
 use chrono::{Local, NaiveDate, TimeZone};
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 
+use super::history_list::history_text_end;
 use super::{
     ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_RIGHT, Archived, COLUMN_WIDTH,
     FILTER_WIDTH, FILTER_X, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, LIBRARY_WIDTH,
@@ -640,6 +641,24 @@ fn a_closed_tabs_trash_shows_under_the_pointer(cx: &mut TestAppContext) {
     );
     assert_eq!(host.take_edits(), ["archive remove 5 as 9001"]);
     assert!(library_open(&shell, cx));
+}
+
+/// A long title has the row's whole width at rest, running over the trash's place, and truncates 4
+/// before the trash only while the trash shows, as a tab row's title does before its ✕ (the
+/// orchestrator's call 2 on #2337, 11-14).
+#[test]
+fn a_title_has_the_trashs_room_until_the_trash_shows() {
+    let trash_start = CLOSE_RIGHT + CLOSE_SIZE;
+    let at_rest = history_text_end(false);
+    assert!(
+        at_rest < trash_start,
+        "at rest a title ends {at_rest} from the row's end, short of the trash's place, which starts {trash_start} from it"
+    );
+    assert_eq!(
+        history_text_end(true),
+        trash_start + 4.,
+        "while the trash shows, a title ends 4 before it"
+    );
 }
 
 /// A visited page's trash removes its visits that day, and its row goes at once.

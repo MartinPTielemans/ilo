@@ -2577,7 +2577,7 @@ impl Shell {
                             .items_center()
                             .child(icon),
                     )
-                    .child(history_text(title, about, trash.is_none(), &self.palette))
+                    .child(history_text(title, about, trash.is_some(), &self.palette))
                     .children(trash),
             )
             .into_any_element()
