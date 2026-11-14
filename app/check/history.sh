@@ -6,14 +6,16 @@
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
 # warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
 # and a local one over http. One typed with http:// loads over http as written, with no https try
-# and no warning, as in Chrome's address bar. A right-click on reload lists Reload, Hard Reload
+# and no warning, as in Chrome's address bar. Only what the user typed counts: an agent's open_tab
+# and navigate, and a link, to an http:// address, are tried over https first. A right-click on reload lists Reload, Hard Reload
 # and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache, not
 # another site's, before the page loads again.
 
 # Back, forward, reload and stop. stuck.test leads to a server that takes connections and never
 # answers, so its page keeps loading until it's stopped, and $plain to the check's own, which has no
 # https. The profile remembers a host that fell back to http, so each run names a new one, and
-# $written is another such host, typed with http://.
+# $written is another such host, typed with http://, and $agent_opened, $agent_moved and $linked
+# three more, which an agent and a link go to.
 # $nearby is a local name for the check's server that no run typed before: Chrome's bar fills in a
 # page typed once under the host and port typed, such as tabs' back.html under 127.0.0.1:$port, as
 # one check.sh's runs share its server (#1148).
@@ -21,6 +23,9 @@ serve
 plain="plain-$(date +%s).example.com"
 nearby="history-$(date +%s).localhost"
 written="written-$(date +%s).example.com"
+agent_opened="agent-opened-$(date +%s).example.com"
+agent_moved="agent-moved-$(date +%s).example.com"
+linked="linked-$(date +%s).example.com"
 python3 -I -c '
 import socket, time
 server = socket.socket()
@@ -44,7 +49,8 @@ rm -f "$saved" "$launch_frame"
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
   --host-resolver-rules="MAP stuck.test 127.0.0.1:$(cat "$out/port"), \
 MAP $plain 127.0.0.1:$port, MAP $nearby 127.0.0.1:$port, \
-MAP $written 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
+MAP $written 127.0.0.1:$port, MAP $agent_opened 127.0.0.1:$port, \
+MAP $agent_moved 127.0.0.1:$port, MAP $linked 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -192,6 +198,44 @@ expect "^browser: loaded $tab http://$written/\$" \
   "http://$written didn't load as written$([ "$major" -lt 157 ] || echo ", without Chrome's warning"): \
 $(grep "^browser: loaded $tab" "$log" | tail -1)"
 [ "$(tls)" = "$before" ] || fail "http://$written was tried over https"
+
+# Only an address the user typed counts (#2417): an agent's open_tab and navigate, and a link, to
+# an http:// address go as a bare host does, over https first, then to 156's http or 157's warning.
+# Each goes to a host of its own, never $written: Chromium lets a host's later loads through once
+# the user typed it with http://, or once 156 fell back to http for it.
+# Waits for the tab $1 to come to http://$2/ after an https try, as $plain did, for $3.
+upgraded() {
+  expect "^browser: page $1 back [0-9]* forward 0 loading 0 http://$2/\$" \
+    "$3 didn't come to http://$2/: $(grep "^browser: page $1 " "$log" | tail -1)"
+  if [ "$major" -ge 157 ]; then
+    expect "^browser: page $1 trouble network -20\$" \
+      "$3 to http://$2/ had no warning before http: $(grep "^browser: loaded $1 " "$log" | tail -1)"
+  else
+    expect "^browser: loaded $1 http://$2/\$" \
+      "$3 to http://$2/ didn't load over http: $(grep "^browser: loaded $1 " "$log" | tail -1)"
+  fi
+  [ "$(tls)" -gt "$before" ] || fail "$3 came to http://$2/ without trying https first"
+}
+send agentspace claude-code Claude Code
+expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
+before=$(tls)
+send agentopen claude-code "http://$agent_opened/"
+expect '^browser: agent claude-code opened [1-9][0-9]*$' "the agent didn't open http://$agent_opened/"
+agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
+upgraded "$agent_tab" "$agent_opened" "the agent's open_tab"
+before=$(tls)
+send agentnavigate claude-code "$agent_tab" "http://$agent_moved/"
+expect "^browser: agent claude-code navigated $agent_tab: 1\$" \
+  "the core didn't take the agent's navigate to http://$agent_moved/"
+upgraded "$agent_tab" "$agent_moved" "the agent's navigate"
+# The link clicks itself once its page has loaded: a page's own click on a link loads as a link.
+printf '%s' "<title>link</title><a id=go href=\"http://$linked/\">$linked</a>
+<script>onload = () => setTimeout(() => go.click());</script>" > "$out/site/link.html"
+before=$(tls)
+go_from_bar "$nearby:$port/link.html"
+expect "^browser: loaded $tab http://$nearby:$port/link.html\$" \
+  "the page with the link didn't load: $(grep "^browser: loaded $tab " "$log" | tail -1)"
+upgraded "$tab" "$linked" "a link"
 
 # A right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload (#1959), shown
 # light and dark. stored.html says whether its site has the cookie, the localStorage value and the

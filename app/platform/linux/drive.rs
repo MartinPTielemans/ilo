@@ -15,7 +15,7 @@
 //! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, warp (Linux's), scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
-//! agentopen, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
+//! agentopen, agentnavigate, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
 //! The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
 //! and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt
 //! with Alt. flags presses and lets go of those keys, the last key's among them, and the keys after
@@ -2760,6 +2760,15 @@ fn run_command(line: &str) -> Option<()> {
             let tab = unsafe { bc::bc_agent_open_tab(agent_c.as_ptr(), url_c.as_ptr()) };
             (tab != 0).then_some(())?;
             log!("browser: agent {agent} opened {tab}");
+            Some(())
+        }
+        "agentnavigate" => {
+            let agent = words.next()?;
+            let tab: bc::bc_id = words.next()?.parse().ok()?;
+            let url = words.next()?;
+            let (agent_c, url_c) = (CString::new(agent).ok()?, CString::new(url).ok()?);
+            let went = unsafe { bc::bc_agent_navigate(agent_c.as_ptr(), tab, url_c.as_ptr()) };
+            log!("browser: agent {agent} navigated {tab}: {}", went as u8);
             Some(())
         }
         "agentrelease" => {

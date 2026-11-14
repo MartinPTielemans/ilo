@@ -197,6 +197,9 @@
 //   agentopen <agent> <url>               the agent opens <url> in a tab of its Space, as its
 //                                         MCP tool does, logging "browser: agent <agent> opened
 //                                         <tab>"
+//   agentnavigate <agent> <tab> <url>     the agent loads <url> in its tab, as its MCP tool's
+//                                         navigate does, logging "browser: agent <agent>
+//                                         navigated <tab>: <0|1>", whether the core took it
 //   agentmayact <agent> <tab> [action]    logs whether the agent may do the action, "navigate" if none,
 //                                         to the tab, as "browser: agent <agent> may act on
 //                                         <tab>: <0|1>", and if not "browser: agent <agent>
@@ -1867,6 +1870,18 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
+    done();
+    return true;
+  }
+  if (action == "agentnavigate") {
+    std::string agent, url;
+    bc_id tab;
+    if (!(words >> agent >> tab >> url)) {
+      return false;
+    }
+    const bool went = bc_agent_navigate(agent.c_str(), tab, url.c_str());
+    fprintf(stderr, "browser: agent %s navigated %llu: %d\n", agent.c_str(),
+            (unsigned long long)tab, went ? 1 : 0);
     done();
     return true;
   }

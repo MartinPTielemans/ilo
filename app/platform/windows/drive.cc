@@ -11,7 +11,7 @@
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, resizekey, place, minimize, window, order, layout, state, title, pasteboard, front, menu,
-// menubar, choose, dismiss, agentspace, agentopen, agentmayact, agentrelease, agentdisconnect,
+// menubar, choose, dismiss, agentspace, agentopen, agentnavigate, agentmayact, agentrelease, agentdisconnect,
 // takeback and age, pip, as Linux's finds Chromium's Picture in Picture window but with hit
 // tests in place of drags, and Windows' own maximize, which the Mac's has no command for,
 // dpi <percent>, which tells the browser window it moved to a display of that scale as Windows does
@@ -2005,6 +2005,17 @@ bool Run(const std::string& line) {
       return false;
     }
     fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
+    return true;
+  }
+  if (action == "agentnavigate") {
+    std::string agent, url;
+    bc_id tab;
+    if (!(words >> agent >> tab >> url)) {
+      return false;
+    }
+    const bool went = bc_agent_navigate(agent.c_str(), tab, url.c_str());
+    fprintf(stderr, "browser: agent %s navigated %llu: %d\n", agent.c_str(),
+            (unsigned long long)tab, went ? 1 : 0);
     return true;
   }
   if (action == "agentmayact") {

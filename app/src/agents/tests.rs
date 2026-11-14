@@ -6027,3 +6027,35 @@ mod sessions {
 }
 
 mod holds;
+
+/// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
+/// address as the agent wrote it through `open_tab` and `navigate`, bc_agent_open_tab's and
+/// bc_agent_navigate's, which take no typed text, so the core never sets
+/// url_typed_with_http_scheme for it and HTTPS-First still tries it over https first.
+#[gpui::test]
+fn an_agents_http_address_is_never_a_typed_one(cx: &mut TestAppContext) {
+    let (agents, browser, _configs) = connected(cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "http://plain.example.com/" }),
+        cx,
+    );
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    let (tab, _, _, opened) = *browser.tabs.borrow().last().unwrap();
+    assert_eq!((tab, opened), (30, "http://plain.example.com/"));
+
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "url": "http://other.example.com/" }),
+        cx,
+    );
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    assert_eq!(
+        *browser.navigated.borrow(),
+        [(30, "http://other.example.com/".to_string())]
+    );
+}
