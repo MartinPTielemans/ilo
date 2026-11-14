@@ -2,30 +2,30 @@
 //! page: once the window's first frame is on screen, and with the window it came from full screen,
 //! once it's full screen too (docs/ux-spec.md › Window › New window).
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{Context, Window};
 
 use crate::shell::{Command, Shell};
 
+mod life;
+
+use life::{Actions, Event, Life};
+
 /// A window ⌘N or ⇧⌘N opened, until its command bar opens.
+#[derive(Clone, Copy)]
 pub(crate) struct Opening {
     /// When the key was pressed, for the first frame's time.
     asked: Instant,
-    /// Whether it goes full screen first, as the window it came from was.
-    full_screen: bool,
-    /// Whether it has asked to go full screen.
-    entering: bool,
-    /// Whether its first frame on screen has been drawn, which it can have been as it came on
-    /// screen.
-    drawn: bool,
+    life: Life,
 }
 
 impl Shell {
     /// Whether the window is full screen of its own, not for a page: a window ⌘N opens from it
-    /// goes full screen too.
+    /// goes full screen too. As the window has it, which the shell hears a frame or more later: a
+    /// ⌘N between opened a window that went full screen without waiting for its desktop (#2553).
     pub fn in_window_full_screen(&self) -> bool {
-        self.full_screen && !self.page_fullscreen
+        (self.full_screen || self.browser.full_screen_now()) && !self.page_fullscreen
     }
 
     /// The window was opened by ⌘N or ⇧⌘N at `asked`: it opens the command bar once it's on
@@ -34,61 +34,79 @@ impl Shell {
     pub fn open_bar_when_shown(&mut self, asked: Instant, full_screen: bool, drawn: bool) {
         self.opening = Some(Opening {
             asked,
-            full_screen,
-            entering: false,
-            drawn,
+            life: life::start(full_screen, drawn),
         });
     }
 
     /// Before the frame's drawn: once the window is on screen, the command bar, or first full
-    /// screen. GPUI draws a window only once it's visible, some frames after it's put on screen,
-    /// so a bar opened before would open over nothing.
+    /// screen and the window's desktop (`life.rs`).
     pub(super) fn step_opening(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(opening) = self.opening.as_mut() else {
+        let Some(Opening { asked, mut life }) = self.opening else {
             return;
         };
         if !window.is_visible() {
             return;
         }
-        if !std::mem::replace(&mut opening.drawn, true) {
-            // check.sh reads this line, the new window's time from the key to its first frame.
-            let ms = opening.asked.elapsed().as_secs_f64() * 1000.;
-            log!("browser: new window first frame at {ms:.1} ms");
-        }
-        // The bar waits for the window's full screen, as macOS moves the window to a desktop of
-        // its own on the way, and the bar would be left on the one it came from. AppKit can have
-        // taken it there itself, as it does a window opened from a full-screen one.
-        let entering = opening.entering;
-        if opening.full_screen && !self.full_screen {
-            opening.entering = true;
-            if entering {
+        loop {
+            let frame = Event::Frame {
+                full_screen: self.full_screen,
+                on_space: self.browser.on_active_space(),
+            };
+            let (next, mut actions) = life::step(life, frame);
+            life = next;
+            if actions.has(Actions::ASK) {
+                let already = self.browser.enter_full_screen(cx);
+                log!(
+                    "browser: new window asked for full screen, already {}",
+                    already as u8
+                );
+                let (next, answer) = life::step(life, Event::Asked { already });
+                life = next;
+                actions = actions | answer;
+            }
+            // Kept before what follows, as taking the full screen steps it again.
+            self.opening = (life != Life::Open).then_some(Opening { asked, life });
+            if actions.has(Actions::FIRST_FRAME) {
+                // check.sh reads this line, the new window's time from the key to its first frame.
+                let ms = asked.elapsed().as_secs_f64() * 1000.;
+                log!("browser: new window first frame at {ms:.1} ms");
+            }
+            if actions.has(Actions::TAKE) {
+                // AppKit tells of the full screen it gave the window as it opened before the window
+                // can hear it, so the shell takes it from here: its layout and the note follow.
+                self.set_full_screen(true, cx);
+                life = self.opening.map_or(Life::Open, |opening| opening.life);
+            }
+            if actions.has(Actions::WENT) {
+                // check.sh reads this line.
+                log!("browser: new window went full screen");
+            }
+            if actions.has(Actions::OPEN_BAR) {
+                // After this frame, as running it updates the shell.
+                cx.defer_in(window, |shell, _, cx| {
+                    shell.run(Command::NewTab, "new window", cx)
+                });
+            }
+            if actions.has(Actions::NEXT_FRAME) {
+                window.request_animation_frame();
+            }
+            if !actions.has(Actions::AGAIN) {
                 return;
             }
-            let already = self.browser.enter_full_screen(cx);
-            log!(
-                "browser: new window asked for full screen, already {}",
-                already as u8
-            );
-            if !already {
-                return;
-            }
-            // AppKit tells of the full screen it gave the window as it opened before the window
-            // can hear it, so the shell takes it from here: its layout and the note follow.
-            self.set_full_screen(true, cx);
         }
-        // Over the window's desktop: macOS moves there after the window's full screen begins.
-        if !self.browser.on_active_space() {
-            window.request_animation_frame();
+    }
+
+    /// The host said the window went full screen or left it: a new window waiting for that steps
+    /// at its next frame.
+    pub(super) fn opening_heard(&mut self, full_screen: bool, cx: &mut Context<Self>) {
+        let Some(opening) = self.opening.as_mut() else {
             return;
+        };
+        let (life, actions) = life::step(opening.life, Event::Heard { full_screen });
+        opening.life = life;
+        if actions.has(Actions::NEXT_FRAME) {
+            cx.notify();
         }
-        if self.opening.take().is_some_and(|opening| opening.entering) {
-            // check.sh reads this line.
-            log!("browser: new window went full screen");
-        }
-        // After this frame, as running it updates the shell.
-        cx.defer_in(window, |shell, _, cx| {
-            shell.run(Command::NewTab, "new window", cx)
-        });
     }
 }
 
@@ -171,6 +189,23 @@ mod tests {
         assert_eq!(bars(&host), 1, "the drawn window's bar didn't open once");
     }
 
+    /// A window that has gone full screen is, for ⌘N, before the shell has heard so, and isn't while
+    /// a page has it full screen (#2553).
+    #[gpui::test]
+    fn a_window_is_full_screen_for_cmd_n_before_the_shell_hears(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        host.full_screen.set(true);
+        assert!(
+            shell.read_with(cx, |shell, _| shell.in_window_full_screen()),
+            "the window full screen wasn't, until the shell heard"
+        );
+        shell.update(cx, |shell, _| shell.page_fullscreen = true);
+        assert!(
+            shell.read_with(cx, |shell, _| !shell.in_window_full_screen()),
+            "the window full screen for a page was full screen of its own"
+        );
+    }
+
     /// From a full-screen window, it goes full screen first, and the bar waits for that.
     #[gpui::test]
     fn a_new_window_from_full_screen_goes_full_screen_before_its_bar(cx: &mut TestAppContext) {
@@ -234,6 +269,35 @@ mod tests {
                 .count(),
             1,
             "it didn't ask once whether the window was full screen"
+        );
+    }
+
+    /// A window the shell heard was full screen before its first frame, as from the window's
+    /// bounds when AppKit took it there as it opened, opens its bar at once, never asking, which
+    /// would take it out (#2482).
+    #[gpui::test]
+    fn a_new_window_heard_full_screen_before_its_frame_opens_its_bar_at_once(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx, host) = window(cx);
+        shell.update(cx, |shell, cx| {
+            shell.open_bar_when_shown(Instant::now(), true, false);
+            shell.set_full_screen(true, cx);
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert_eq!(
+            bars(&host),
+            1,
+            "the bar waited for a full screen the shell had"
+        );
+        assert!(
+            !host.take().iter().any(|call| call == "enter full screen"),
+            "it asked for a full screen it had"
+        );
+        assert!(
+            shell.read_with(cx, |shell, _| shell.full_screen && shell.opening.is_none()),
+            "the shell lost the full screen or kept waiting"
         );
     }
 

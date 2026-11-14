@@ -1,7 +1,9 @@
+# check.sh runs this at 650.
 # A site's Boost (#695): the CSS in its file in the profile's Boosts folder shows on its pages as
 # they load, and each save of the file at once; Edit Boost in the command bar opens its card, whose
 # Zap hides what the user clicks, now and in the file, until escape in the page ends it; its
 # Customize… opens the editor, whose changes show at once in each window on the site and ⌘Z takes
+# back, and whose Advanced grows the card for its sliders, which the arrow keys move and Reset puts
 # back; and with the file gone the page is its own again, as with a Boost turned off.
 
 serve
@@ -164,6 +166,31 @@ both_are "$ground" "the second window's page didn't take the editor's ground"
 send key z cmd
 expect '^browser: boost editor undo$' "⌘Z didn't take the editor's change back"
 both_are "rgb(0, 128, 0)" "⌘Z left the editor's ground on a page"
+# Advanced, at Invert lightness's line's end, grows the card 104 points for three sliders. A click
+# at three quarters of Contrast's track, from 76 to 293, sets 125 %, and → a step more, which the
+# page takes as a filter on its root.
+send clickkey 306 244
+expect '^browser: boost editor advanced true$' "Advanced didn't open"
+expect '^browser: boost editor height 600$' "the card didn't grow for Advanced's sliders"
+send clickkey 251.75 280
+expect "^browser: boost editor set $host contrast 125; advanced; dragged\$" \
+  "a click on Contrast's track didn't set it where it was"
+send key right
+expect "^browser: boost editor set $host contrast 130; advanced; dragged\$" \
+  "→ didn't move the focused slider a step"
+# A click at a quarter of Brightness's track sets 75 %, so the capture shows a fill each way.
+send clickkey 143.25 312
+expect "^browser: boost editor set $host contrast 130; brightness 75; advanced; dragged\$" \
+  "a click on Brightness's track didn't set it where it was"
+grep -q '^html { filter: contrast(130%) brightness(75%) !important; }$' "$file" ||
+  fail "Contrast and Brightness didn't filter the page in the Boost's file: $(cat "$file")"
+../tools/window-screenshot.sh "$pid" "$out/boost-advanced.png" || fail "no window to capture"
+# Reset, left of Advanced, puts the three back; Advanced again closes them, and the card shrinks.
+send clickkey 222 244
+expect "^browser: boost editor set $host advanced; dragged\$" "Reset didn't put the sliders back"
+send clickkey 306 244
+expect '^browser: boost editor advanced false$' "Advanced didn't close"
+expect '^browser: boost editor height 496$' "the card didn't shrink as Advanced closed"
 send key escape
 expect '^browser: boost editor dismissed$' "escape didn't close the Boost editor"
 
@@ -187,7 +214,9 @@ echo "ok: a site's Boost showed on its page as it loaded and at once as its file
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
   "the tab's menu and the +'s offered Edit Boost…, which opened the card; Customize… opened the" \
   "editor, whose field coloured the page in both windows, ⌘Z took it back and escape closed it;" \
+  "Advanced grew the card, Contrast's and Brightness's filtered the page and Reset put them back;" \
   "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
   "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
-  "$out/boost-tab-menu.png, $out/boost-plus-menu.png, $out/boost-editor.png, $out/boost-edited.png"
+  "$out/boost-tab-menu.png, $out/boost-plus-menu.png, $out/boost-editor.png," \
+  "$out/boost-edited.png, $out/boost-advanced.png"

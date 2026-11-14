@@ -11,7 +11,8 @@
 //! The handles and the dial stay the mouse's: a swatch places a colour, as a click on the field
 //! does.
 
-use std::{cell::OnceCell, f32::consts::TAU, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::OnceCell, f32::consts::TAU, rc::Rc, sync::Arc};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
@@ -170,6 +171,8 @@ struct Editing {
     changed: Changed,
     /// The arrow's tip, down the window, if it has one.
     arrow_y: Option<f32>,
+    /// Whether it opened to the left, its arrow on its right.
+    left: bool,
     /// False once it's closing: what it shows stays, for the host's shrink out.
     open: bool,
     drag: Option<Drag>,
@@ -272,8 +275,8 @@ pub fn open_at(
 /// Where the picker opens in the browser window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum At {
-    /// Beside a row, its arrow pointing at the middle of the row's right end: the Create a Space
-    /// form's Choose a Theme row, or a Library card's brush.
+    /// Beside a row, its arrow pointing at the middle of the row's end toward the page: the Create
+    /// a Space form's Choose a Theme row, or a Library card's brush.
     Row(Point<f32>),
     /// With no arrow, against the sidebar's edge this far across, at the window's top, as Arc
     /// 1.171's opens from the Space's menu, over the page rather than the sidebar it colours.
@@ -282,42 +285,62 @@ pub enum At {
 
 /// The card's corners from the window's top left, each with the radius it's rounded by, clockwise
 /// from where it grows in from: the arrow's tip `arrow_y` down the window, or with no arrow the
-/// card's top left.
-pub fn corners(arrow_y: Option<f32>) -> Vec<(f32, f32, f32)> {
-    corners_of(arrow_y, HEIGHT)
+/// card's top corner on the sidebar's side. `left` opens it to the left of what opened it, from a
+/// sidebar on the right, its arrow on its right edge.
+pub fn corners(arrow_y: Option<f32>, left: bool) -> Vec<(f32, f32, f32)> {
+    corners_of(arrow_y, left, HEIGHT)
 }
 
 /// `corners` for a card of the picker's form `height` tall, as the Boost editor's is.
-pub fn corners_of(arrow_y: Option<f32>, height: f32) -> Vec<(f32, f32, f32)> {
+pub fn corners_of(arrow_y: Option<f32>, left: bool, height: f32) -> Vec<(f32, f32, f32)> {
     let card = [
         (ARROW, 0., RADIUS),
         (WIDTH, 0., RADIUS),
         (WIDTH, height, RADIUS),
         (ARROW, height, RADIUS),
     ];
-    let Some(arrow_y) = arrow_y else {
-        return card.to_vec();
+    let mut corners = match arrow_y {
+        None => card.to_vec(),
+        Some(arrow_y) => {
+            let mut corners = vec![
+                (0., arrow_y, ARROW_TIP_RADIUS),
+                (ARROW, arrow_y - ARROW, ARROW_FOOT_RADIUS),
+            ];
+            corners.extend(card);
+            corners.push((ARROW, arrow_y + ARROW, ARROW_FOOT_RADIUS));
+            corners
+        }
     };
-    let mut corners = vec![
-        (0., arrow_y, ARROW_TIP_RADIUS),
-        (ARROW, arrow_y - ARROW, ARROW_FOOT_RADIUS),
-    ];
-    corners.extend(card);
-    corners.push((ARROW, arrow_y + ARROW, ARROW_FOOT_RADIUS));
+    if left {
+        // Mirrored, the same corners run anticlockwise, so the rest go round the other way from
+        // the first.
+        for corner in &mut corners {
+            corner.0 = WIDTH - corner.0;
+        }
+        corners[1..].reverse();
+    }
     corners
+}
+
+/// Where the card starts across its window: past the arrow's room on the window's left, or at it
+/// with the arrow on its right.
+pub fn card_x(left: bool) -> f32 {
+    if left { 0. } else { ARROW }
 }
 
 /// Where the window goes in a browser window `height` tall: its top left, and the arrow's tip
 /// down it if it has one. Beside a row, the card centres on the arrow, as Arc's does, unless that
-/// takes it past the browser window's top or bottom.
-pub fn placed(at: At, height: f32) -> (f32, f32, Option<f32>) {
-    placed_of(at, height, HEIGHT)
+/// takes it past the browser window's top or bottom. `left` opens it to the left of `at`, toward
+/// the page from a sidebar on the right.
+pub fn placed(at: At, left: bool, height: f32) -> (f32, f32, Option<f32>) {
+    placed_of(at, left, height, HEIGHT)
 }
 
 /// `placed` for a card of the picker's form `card` tall.
-pub fn placed_of(at: At, height: f32, card: f32) -> (f32, f32, Option<f32>) {
+pub fn placed_of(at: At, left: bool, height: f32, card: f32) -> (f32, f32, Option<f32>) {
     let anchor = match at {
         // The window is as wide as the card and its arrow, so it starts that far left of the card.
+        At::Edge(x) if left => return (x - EDGE_INSET - CARD_WIDTH, EDGE_INSET, None),
         At::Edge(x) => return (x + EDGE_INSET - ARROW, EDGE_INSET, None),
         At::Row(anchor) => anchor,
     };
@@ -327,7 +350,12 @@ pub fn placed_of(at: At, height: f32, card: f32) -> (f32, f32, Option<f32>) {
     // The tip keeps clear of the card's rounded corners.
     let reach = RADIUS + ARROW + ARROW_FOOT_RADIUS;
     let arrow_y = (anchor.y - top).clamp(reach, card - reach);
-    (anchor.x + GAP - TIP_SHORT, top, Some(arrow_y))
+    let x = if left {
+        anchor.x - GAP + TIP_SHORT - WIDTH
+    } else {
+        anchor.x + GAP - TIP_SHORT
+    };
+    (x, top, Some(arrow_y))
 }
 
 /// Shows the picker for `space`, which has `theme` or none yet, `at` its place in browser window
@@ -338,10 +366,12 @@ pub fn show(
     space: u64,
     theme: Option<Theme>,
     at: At,
+    left: bool,
     height: f32,
     changed: Changed,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<ThemePicker>(cx);
     let Some(window) = cx.try_global::<ThemePickerWindow>().map(|picker| picker.0) else {
         return;
     };
@@ -349,13 +379,14 @@ pub fn show(
         .update(cx, |picker, window, cx| {
             // check.sh reads this line.
             log!("browser: theme picker for {space}");
-            let (left, top, arrow_y) = placed(at, height);
+            let (x, top, arrow_y) = placed(at, left, height);
             picker.editing = Some(Editing {
                 space,
                 theme,
                 appearance: theme.map_or(Appearance::default(), |theme| theme.appearance),
                 changed,
                 arrow_y,
+                left,
                 open: true,
                 drag: None,
                 press: None,
@@ -368,7 +399,7 @@ pub fn show(
                 palette: Palette::of(theme.as_ref(), Tone::Dark),
             });
             window.focus(&picker.focus, cx);
-            picker.host.show(over, left, top, &corners(arrow_y));
+            picker.host.show(over, x, top, &corners(arrow_y, left));
             cx.notify();
         })
         .ok();
@@ -592,6 +623,11 @@ fn grain_at(x: f32, y: f32, before: f32) -> f32 {
 }
 
 impl ThemePicker {
+    /// Where the card starts across the picker's window, as it opened.
+    fn card_x(&self) -> f32 {
+        card_x(self.editing.as_ref().is_some_and(|editing| editing.left))
+    }
+
     fn close(&mut self, cx: &mut Context<Self>) {
         if let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) {
             editing.open = false;
@@ -658,7 +694,7 @@ impl ThemePicker {
 
     fn press(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         let (x, y) = (
-            f32::from(event.position.x) - ARROW,
+            f32::from(event.position.x) - self.card_x(),
             f32::from(event.position.y),
         );
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
@@ -838,7 +874,7 @@ impl ThemePicker {
     }
 
     fn drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let (x, y) = (f32::from(position.x) - ARROW, f32::from(position.y));
+        let (x, y) = (f32::from(position.x) - self.card_x(), f32::from(position.y));
         let Some(editing) = self.editing.as_mut() else {
             return;
         };
@@ -1075,27 +1111,22 @@ impl Render for ThemePicker {
             .key_context(KEY_CONTEXT)
             .size_full()
             .font_family(crate::face::UI);
-        // The pointer's moves anywhere in the window, while something is dragged, and its release
-        // always: a press and its release can both come before the next frame, which would
-        // otherwise be drawn without a listener for the release.
-        let dragging = self
-            .editing
-            .as_ref()
-            .is_some_and(|editing| editing.drag.is_some() || editing.pressed.is_some());
+        // The pointer's moves anywhere in the window and its release, in every frame: a press and
+        // its first move or its release can both come before the next frame, which would
+        // otherwise be drawn without a listener for them (#2605). A move with nothing dragged
+        // does nothing.
         let entity = cx.weak_entity();
         let listener = canvas(
             |_, _, _| {},
             move |_, _, window, _| {
-                if dragging {
-                    let moved = entity.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Capture {
-                            moved
-                                .update(cx, |picker, cx| picker.drag(event.position, cx))
-                                .ok();
-                        }
-                    });
-                }
+                let moved = entity.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        moved
+                            .update(cx, |picker, cx| picker.drag(event.position, cx))
+                            .ok();
+                    }
+                });
                 let released = entity.clone();
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
@@ -1153,7 +1184,8 @@ impl Render for ThemePicker {
         let theme = editing.theme;
         let palette = editing.palette;
         let keyed = editing.keyed;
-        let card_x = |x: f32| px(ARROW + x);
+        let card_left = card_x(editing.left);
+        let card_x = |x: f32| px(card_left + x);
         // The keyboard's ring, as Focus Sidebar's: inside a button's plate, or `RING_GAP` round a
         // swatch or the wave's knob, `width` by `height` about `x`, `y` in the card.
         let ring = |x: f32, y: f32, width: f32, height: f32, radius: f32| {
@@ -1206,12 +1238,12 @@ impl Render for ThemePicker {
                 round_ring(knob_x(intensity), SLIDER_Y, KNOB_WIDTH, KNOB_HEIGHT)
             }
         });
-        let arrow_y = editing.arrow_y;
+        let (arrow_y, left) = (editing.arrow_y, editing.left);
         let card_fill = palette::current(cx).card_drawn();
         let card = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                icon_picker::paint_card(bounds.origin, &corners(arrow_y), card_fill, window)
+                icon_picker::paint_card(bounds.origin, &corners(arrow_y, left), card_fill, window)
             },
         )
         .absolute()
@@ -1417,7 +1449,7 @@ impl Render for ThemePicker {
         let controls = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                let at = |x: f32, y: f32| bounds.origin + point(px(ARROW + x), px(y));
+                let at = |x: f32, y: f32| bounds.origin + point(px(card_left + x), px(y));
                 let track = Bounds::new(
                     at(TRACK_LEFT, SLIDER_Y - TRACK_HEIGHT / 2.),
                     size(px(TRACK_RIGHT - TRACK_LEFT), px(TRACK_HEIGHT)),

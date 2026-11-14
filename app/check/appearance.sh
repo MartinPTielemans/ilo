@@ -1,5 +1,6 @@
-# View › Appearance gives a page its choice as prefers-color-scheme as it changes, and Automatic
-# gives back the system's: on the Mac through the app's appearance, which the host sets, and off it
+# check.sh runs this at 410.
+# View › Appearance, and Settings' Appearance, give a page its choice as prefers-color-scheme as it
+# changes, and Automatic gives back the system's: on the Mac through the app's appearance, which the host sets, and off it
 # through the core (bc_set_appearance). Each choice changes the scheme the one before gave, so the
 # page says so.
 # A Space's theme never reaches a page (#684): what theme.html sees of the browser's colours stays
@@ -37,6 +38,43 @@ for choice in $other $system $other automatic; do
   expect "^browser: title [0-9]* scheme $scheme\$" \
     "View › Appearance › $item didn't make the page's prefers-color-scheme $scheme"
 done
+# Settings › General's Appearance is three drawings (#2429) that pick as View › Appearance does,
+# and follow it: a click on the other look's gives the page its scheme, View › Appearance's other
+# item moves the ring and gives back the system's, and a click on Automatic's leaves the page's
+# scheme as it is. The row is captured in each look.
+send menu Settings…
+expect '^browser: settings shown General$' "Settings… didn't show General"
+settings_drew
+was=$system
+for choice in $other $system automatic; do
+  case $choice in
+  dark) item=Dark scheme=dark ;;
+  light) item=Light scheme=light ;;
+  *) item=Automatic scheme=$system ;;
+  esac
+  if [ "$choice" = "$system" ]; then
+    send menu "Appearance › $item"
+  else
+    at=$(drawn "appearance option $item") || fail "Settings didn't draw Appearance's $item"
+    send clickkey $at
+  fi
+  expect "^browser: appearance $choice\$" "Appearance's $item didn't change the appearance"
+  # The page hears only a change of scheme.
+  if [ "$scheme" != "$was" ]; then
+    expect "^browser: title [0-9]* scheme $scheme\$" \
+      "Appearance's $item didn't make the page's prefers-color-scheme $scheme"
+  fi
+  was=$scheme
+  expect "^browser: settings appearance $item\$" "Settings' Appearance didn't take $item"
+  # Light and Dark are each drawn chosen for the first time here, Automatic was at launch.
+  if [ "$choice" != automatic ]; then
+    expect "^browser: settings appearance $item at " "Settings' Appearance didn't show $item"
+    ../tools/window-screenshot.sh "$pid" "$out/settings-appearance-$choice.png" ||
+      fail "no window to capture"
+  fi
+done
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 # On Windows the UI draws Windows' own window buttons (#1244), captured in each appearance at rest,
 # with the pointer on maximize, which the frame answers for (Snap layouts) and passes on to the UI,
 # and with it on close.
@@ -122,5 +160,6 @@ for color in $(sed -n 's/^browser: colored space [0-9]* \([0-9a-f]\{6\}\)$/\1/p'
 done
 exec 3>&-
 quit
-echo "ok: View › Appearance gives the page its choice as prefers-color-scheme as it changes, and Automatic the system's ($system)$buttons;" \
+echo "ok: View › Appearance gives the page its choice as prefers-color-scheme as it changes, and Automatic the system's ($system)," \
+  "and Settings' Appearance picks and follows it, captured in $out/settings-appearance-*.png$buttons;" \
   "a red theme and a $look blue one left all the page sees as it was: $seen"

@@ -1,0 +1,41 @@
+Tells the core's agent where a field's value came from, for an agent's screenshot (//browser_core/
+agent_page.cc): DevTools' accessibility tree gives a field that is or has been a password field in
+its document the property wasPassword, and one Chrome's autofill filled, or previews, the property
+autofilled. The screenshot an agent takes paints over such a field, as it does any field whose
+value isn't the agent's own typing or the page's own, so what the outline withholds of a field the
+picture withholds too (#2355). Names of their own, outside the protocol's list, which DevTools'
+own front end never sees.
+
+--- a/third_party/blink/renderer/modules/accessibility/inspector_type_builder_helper.cc
++++ b/third_party/blink/renderer/modules/accessibility/inspector_type_builder_helper.cc
+@@ -6,6 +6,8 @@
+ 
+ #include "third_party/blink/renderer/core/dom/dom_node_ids.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
++#include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+ #include "third_party/blink/renderer/core/inspector/identifiers_factory.h"
+ #include "third_party/blink/renderer/core/inspector/protocol/accessibility.h"
+ #include "third_party/blink/renderer/modules/accessibility/ax_enums.h"
+@@ -880,6 +882,21 @@
+   FillWidgetStates(ax_object, node_data, *(properties.get()));
+   FillRelationships(ax_object, *(properties.get()));
+   FillSparseAttributes(ax_object, node_data, *(properties.get()));
++  // ilo: where a field's value came from, for an agent's screenshot (//browser_core/
++  // agent_page.cc), which paints over a field that is or was a password field in this document,
++  // and one Chrome's autofill filled or previews (#2355). Names of their own, outside the
++  // protocol's list, which DevTools' own front end never sees.
++  if (const auto* input = DynamicTo<HTMLInputElement>(ax_object.GetNode());
++      input && input->HasBeenPasswordField()) {
++    properties->emplace_back(
++        CreateProperty("wasPassword", CreateBooleanValue(true)));
++  }
++  if (const auto* control =
++          DynamicTo<HTMLFormControlElement>(ax_object.GetNode());
++      control && (control->IsAutofilled() || control->IsPreviewed())) {
++    properties->emplace_back(
++        CreateProperty("autofilled", CreateBooleanValue(true)));
++  }
+ 
+   ax::mojom::blink::NameFrom name_from;
+   AXObject::NameSources name_sources;

@@ -418,24 +418,98 @@ fn claudes_sign_in_status() {
     assert!(!crate::agents::ready::claude_signed_in("Not logged in"));
 }
 
+/// Each model as id and name, as the lists keep them.
+fn pairs(models: &[(&str, &str)]) -> Vec<(String, String)> {
+    (models.iter())
+        .map(|(id, name)| (id.to_string(), name.to_string()))
+        .collect()
+}
+
+#[test]
+fn claudes_models_are_its_own_and_its_default_names_one() {
+    use crate::agents::ready::{Models, claude_listed};
+    // Claude Code 2.1.322's answer to initialize, cut to its models.
+    let answer: Value =
+        serde_json::from_str(include_str!("answers/claude-2.1.322-initialize.json")).unwrap();
+    assert_eq!(
+        claude_listed(&answer),
+        Some(Models {
+            listed: pairs(&[
+                ("opus", "Opus"),
+                ("fable", "Fable"),
+                ("sonnet", "Sonnet"),
+                ("haiku", "Haiku"),
+            ]),
+            default: Some("Opus".into()),
+        })
+    );
+    // A Claude too old to list them answers without, or with an error.
+    let error = json!({ "type": "control_response", "response": {
+        "subtype": "error", "request_id": "models", "error": "Unknown subtype: initialize" } });
+    assert_eq!(claude_listed(&error), None);
+    // An empty list is a list: Default alone.
+    let empty = json!({ "type": "control_response", "response": {
+        "subtype": "success", "request_id": "models", "response": { "models": [] } } });
+    assert_eq!(claude_listed(&empty), Some(Models::default()));
+}
+
 #[test]
 fn codexs_models_are_kept_without_the_hidden_ones() {
-    use crate::agents::ready::{Found, Ready, codex_listed};
-    let listed = codex_listed(&json!({ "id": 2, "result": { "data": [
+    use crate::agents::ready::{Found, Models, Ready, codex_listed};
+    // Codex 0.167.1's answer to model/list, cut to what ilo reads.
+    let answer: Value =
+        serde_json::from_str(include_str!("answers/codex-0.167.1-model-list.json")).unwrap();
+    let listed = codex_listed(&answer);
+    assert_eq!(listed.default.as_deref(), Some("GPT-6.1-Sol"));
+    assert_eq!(
+        listed.listed[..3],
+        pairs(&[
+            ("gpt-6.1-sol", "GPT-6.1-Sol"),
+            ("gpt-6-astra", "GPT-6-Astra"),
+            ("gpt-6-sol", "GPT-6-Sol"),
+        ])
+    );
+    assert_eq!(listed.listed.len(), 9);
+    let hidden = codex_listed(&json!({ "id": 2, "result": { "data": [
         { "id": "gpt-5-codex", "displayName": "GPT-5 Codex", "hidden": false },
-        { "id": "old", "displayName": "Old", "hidden": true },
+        { "id": "old", "displayName": "Old", "hidden": true, "isDefault": true },
         { "id": "bare" },
     ], "nextCursor": null } }));
-    let models: Vec<(String, String)> = [("gpt-5-codex", "GPT-5 Codex"), ("bare", "bare")]
-        .map(|(id, name)| (id.into(), name.into()))
-        .into();
-    assert_eq!(listed, models);
+    assert_eq!(
+        hidden,
+        Models {
+            listed: pairs(&[("gpt-5-codex", "GPT-5 Codex"), ("bare", "bare")]),
+            default: Some("Old".into()),
+        },
+        "a hidden default is still named"
+    );
     let found = Found {
         ready: Ready::SignedIn,
-        models,
+        models: Some(hidden),
         ..Default::default()
     };
     assert_eq!(Found::from_saved(&found.saved()), found, "kept across runs");
+    let unasked = Found {
+        ready: Ready::SignedIn,
+        ..Default::default()
+    };
+    assert_eq!(Found::from_saved(&unasked.saved()), unasked);
+}
+
+#[test]
+fn a_list_saved_before_the_cli_named_its_default_is_read() {
+    use crate::agents::ready::{Found, Models};
+    // As a browser before #2455 kept Codex's, and Claude's empty one, which said nothing.
+    let codex = json!({ "ready": "signed-in", "models": [["gpt-5.5", "GPT-5.5"]] });
+    assert_eq!(
+        Found::from_saved(&codex).models,
+        Some(Models {
+            listed: pairs(&[("gpt-5.5", "GPT-5.5")]),
+            default: None,
+        })
+    );
+    let claude = json!({ "ready": "signed-in", "models": [] });
+    assert_eq!(Found::from_saved(&claude).models, None);
 }
 
 #[cfg(unix)]

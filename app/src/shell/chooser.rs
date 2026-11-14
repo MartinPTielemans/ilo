@@ -10,7 +10,8 @@
 //! tab's request while another tab is shown, as it keeps a question, and cancels one an agent's
 //! tab makes, as a device is the user's alone to give.
 
-use std::{cell::Cell, rc::Rc, time::Instant};
+use std::{cell::Cell, rc::Rc};
+use web_time::Instant;
 
 use gpui::{Bounds, Context, FontWeight, Pixels, SharedString, div, prelude::*, px, svg};
 

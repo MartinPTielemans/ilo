@@ -41,6 +41,10 @@ class Boosts : public content::WebContentsObserver,
   // Turns Zap on or off on the tab's page: while it's on, a left press on the page goes to Zap
   // instead of the page, and tab_boost_zapped says what was under it.
   void Zap(bool on);
+  bool zapping() const { return zapping_; }
+  // Ends Zap, and says so with tab_boost_zap_ended if |tell|: Arrange ends it, as both take the
+  // page's presses.
+  void EndZap(bool tell);
 
  private:
   friend class content::WebContentsUserData<Boosts>;
@@ -53,7 +57,6 @@ class Boosts : public content::WebContentsObserver,
   void Unhook();
   bool OnMouse(content::RenderWidgetHost* widget, const blink::WebMouseEvent& event);
   void Zapped(base::Value selector);
-  void EndZap(bool tell);
 
   // content::WebContentsObserver:
   void DidFinishNavigation(content::NavigationHandle* navigation) override;

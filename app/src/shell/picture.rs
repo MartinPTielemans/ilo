@@ -9,8 +9,8 @@ use std::{
         Arc, Weak,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
 };
+use web_time::Instant;
 
 use gpui::{
     AnyElement, AsyncApp, Bounds, Context, Corners, MouseButton, Pixels, RenderImage, WeakEntity,

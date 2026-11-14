@@ -72,6 +72,10 @@ pub(super) struct Recorder {
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
+    /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
+    /// answer.
+    pub(super) safe_start: Cell<bool>,
+    pub(super) ad_blocking: Cell<bool>,
     /// The build updates itself, as `updates` answers, and how often Check for Updates ran.
     pub(super) updates: Cell<bool>,
     pub(super) checked_for_updates: Cell<usize>,
@@ -151,6 +155,8 @@ pub(super) struct Recorder {
     pub(super) site_controls: RefCell<Vec<(u64, crate::site_controls::Place)>>,
     /// The ids of the extensions the Site Controls were given to list, each time.
     pub(super) site_controls_extensions: RefCell<Vec<Vec<SharedString>>>,
+    /// The profiles the Site Controls were last given for their chip.
+    pub(super) site_controls_profiles: RefCell<Option<crate::site_controls::Profiles>>,
     /// Each time the shell opened the command bar: the URL field's box it opened over, if any.
     pub(super) command_bars: RefCell<Vec<Option<Bounds<Pixels>>>>,
     /// And the tab whose URL it edits, if any.
@@ -247,9 +253,28 @@ pub(super) struct Recorder {
     pub(super) sync_server: Cell<bool>,
     /// The videos opened that haven't given their first frame yet.
     videos_starting: RefCell<Vec<u64>>,
+    /// The Shell that set_agents and show_share_sheet read, as the core's do: turning agents off
+    /// ends their ask, which reads every Shell, and the share sheet finds its tab's window.
+    reads: RefCell<Option<WeakEntity<super::Shell>>>,
 }
 
 impl Recorder {
+    /// From now on, the calls that read Shells in the app read `shell` (#2459).
+    pub(super) fn reads_shell(&self, shell: WeakEntity<super::Shell>) {
+        *self.reads.borrow_mut() = Some(shell);
+    }
+
+    fn read_shell(&self, cx: &App) {
+        if let Some(shell) = self
+            .reads
+            .borrow()
+            .as_ref()
+            .and_then(|shell| shell.upgrade())
+        {
+            shell.read(cx);
+        }
+    }
+
     /// A host for another window of the same core.
     pub(super) fn beside(other: &Recorder) -> Self {
         Recorder {
@@ -853,12 +878,8 @@ impl Browser for Recorder {
         self.record(format!("answer agent {question} {answer:?}"))
     }
 
-    fn can_open_in_safari(&self) -> bool {
-        true
-    }
-
-    fn open_in_safari(&self, url: &str, _: &mut App) {
-        self.record(format!("open in safari {url}"))
+    fn open_elsewhere(&self, url: &str, _: &mut App) {
+        self.record(format!("open elsewhere {url}"))
     }
 
     fn can_use_system_engine(&self) -> bool {
@@ -887,6 +908,14 @@ impl Browser for Recorder {
 
     fn restart(&self, _: &mut App) {
         self.record("restart".into())
+    }
+
+    fn safe_start(&self) -> bool {
+        self.safe_start.get()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        self.ad_blocking.get()
     }
 
     fn show_page_dialog(&self, shown: Option<ShownPageDialog>, _: &mut App) {
@@ -1335,6 +1364,10 @@ impl Browser for Recorder {
 
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
 
+    fn set_sidebar_right(&self, right: bool, _: &mut App) {
+        self.record(format!("sidebar right {right}"))
+    }
+
     fn little_drawn(&self, _: &mut App) {
         self.record("little drawn".into());
     }
@@ -1357,7 +1390,9 @@ impl Browser for Recorder {
         }
     }
 
-    fn start_window_move(&self, _: &mut App) {}
+    fn start_window_move(&self, _: &mut App) {
+        self.record("window move".into())
+    }
 
     fn window_maximized(&self) -> bool {
         false
@@ -1409,7 +1444,8 @@ impl Browser for Recorder {
         self.share_sheet.get()
     }
 
-    fn show_share_sheet(&self, tab: u64, url: &str, title: &str, _: Point<Pixels>, _: &mut App) {
+    fn show_share_sheet(&self, tab: u64, url: &str, title: &str, _: Point<Pixels>, cx: &mut App) {
+        self.read_shell(cx);
         self.record(format!("share sheet {tab} {url} {title}"))
     }
 
@@ -1603,9 +1639,11 @@ impl Browser for Recorder {
         place: crate::site_controls::Place,
         _: Size<Pixels>,
         extensions: Vec<crate::site_controls::Extension>,
+        profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,
     ) {
         self.site_controls.borrow_mut().push((tab, place));
+        *self.site_controls_profiles.borrow_mut() = profiles;
         self.site_controls_extensions(tab, extensions, cx);
     }
 
@@ -1767,7 +1805,8 @@ impl Browser for Recorder {
         self.agents.get()
     }
 
-    fn set_agents(&self, on: bool, _: &mut App) {
+    fn set_agents(&self, on: bool, cx: &mut App) {
+        self.read_shell(cx);
         self.agents.set(Some(on));
         self.record(format!("agents {on}"))
     }

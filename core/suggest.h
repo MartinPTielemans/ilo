@@ -17,6 +17,7 @@
 #include "browser_core/public/browser_core.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
+#include "components/search_engines/template_url_id.h"
 #include "url/gurl.h"
 
 class ChromeAutocompleteSchemeClassifier;
@@ -72,7 +73,7 @@ class Suggestions : public AutocompleteController::Observer, public ProfileObser
 
     GURL url;
     std::vector<GURL> pages;
-    std::vector<std::pair<int64_t, std::u16string>> searches;
+    std::vector<std::pair<TemplateURLID, std::u16string>> searches;
     scoped_refptr<Removed> removed;
     State state = State::kTaking;
   };

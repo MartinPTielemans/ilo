@@ -1,14 +1,17 @@
 //! The UI alone, with made-up tabs, for working on how it looks: it needs no engine and rebuilds in
 //! seconds. `cargo run --release --bin preview`. The browser's own rules for tabs live in the core,
-//! so the ones here are only stand-ins.
+//! so the ones here are only stand-ins. Built for the web, it's the site's live demo instead (`web`),
+//! which draws the Spaces the site gives it and leaves the made-up ones and the env switches unused.
+#![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use browser::account::{self, Account};
 use browser::agents::task::{
@@ -18,6 +21,7 @@ use browser::boost_editor;
 use browser::boost_style::{self, Case, Face, Style};
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
+use browser::foot_bar;
 use browser::icon_picker::{self, Recents};
 use browser::import::sources::{Os, Roots};
 use browser::link_preview;
@@ -35,7 +39,7 @@ use browser::theme::{Appearance, Theme};
 use browser::theme_picker;
 use gpui::{
     App, AppContext, Bounds, Focusable, Pixels, Point, SharedString, Size, TitlebarOptions,
-    WeakEntity, WindowBounds, WindowOptions, point, px, size,
+    TouchPhase, WeakEntity, WindowBounds, WindowOptions, point, px, size,
 };
 
 thread_local! {
@@ -47,11 +51,16 @@ thread_local! {
     static DIALOG_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
+#[cfg(not(target_family = "wasm"))]
 unsafe extern "C" {
     // platform/mac/host.mm: where a window goes, centered on the main display or, with
     // BROWSER_DISPLAY=builtin, on the Mac's own.
     fn host_centered(width: f64, height: f64, x: *mut f64, y: *mut f64);
 }
+
+/// The web opens no window of its own, so the env switches' windows that call this never open.
+#[cfg(target_family = "wasm")]
+unsafe fn host_centered(_: f64, _: f64, _: *mut f64, _: *mut f64) {}
 
 // Two Spaces, so the switcher shows, the second in Dia's pink. The tabs are in the first, the top
 // two pinned, the second in a folder.
@@ -370,6 +379,22 @@ struct Fake {
     downloads: RefCell<Vec<Download>>,
     /// The onboarding's two switches, both offered and off to begin with.
     opt_ins: Cell<(bool, bool)>,
+    /// The tab each Space opens on where the site names one.
+    opens_on: RefCell<HashMap<u64, u64>>,
+    /// The tab each Space showed as it was left, which it shows again, and its page beside shows
+    /// while it pages, as the core keeps them.
+    shows: Rc<RefCell<HashMap<u64, u64>>>,
+}
+
+/// The tab the shown Space opens on, where the site names none: its first Today tab, the page in
+/// use rather than a pinned app, else its first pinned one.
+fn opening_tab(shell: &Shell) -> u64 {
+    shell
+        .today()
+        .first()
+        .or(shell.pinned().first())
+        .copied()
+        .unwrap_or(0)
 }
 
 impl Fake {
@@ -946,6 +971,7 @@ impl Browser for Fake {
                                     action: action.into(),
                                     site: format!("example{n}.com"),
                                     refused: refused.into(),
+                                    ..Default::default()
                                 };
                             [
                                 step(at, "open_tab", ""),
@@ -959,6 +985,7 @@ impl Browser for Fake {
                             site: String::new(),
                             refused: "Agents never read passwords, cookies or autofill data."
                                 .into(),
+                            ..Default::default()
                         }])
                         .collect(),
                     answers: "claude-code".into(),
@@ -1100,8 +1127,25 @@ impl Browser for Fake {
         self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
     }
 
+    // Safari's engine is the Mac's alone, so elsewhere the note offers what each system's does.
     fn can_use_system_engine(&self) -> bool {
-        true
+        cfg!(target_os = "macos")
+    }
+
+    // PREVIEW_DRM=default draws the note as where ilo is the system's default browser.
+    fn elsewhere(&self) -> Option<browser::shell::Elsewhere> {
+        let default = || std::env::var("PREVIEW_DRM").is_ok_and(|drm| drm == "default");
+        browser::shell::Elsewhere::on(self.os(), default)
+    }
+
+    // PREVIEW_SAFE_START=1 shows a safe start's card at the sidebar's foot, with Settings' ad
+    // blocking on, or =unblocked with it off.
+    fn safe_start(&self) -> bool {
+        std::env::var_os("PREVIEW_SAFE_START").is_some()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        std::env::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
     }
 
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
@@ -1236,11 +1280,16 @@ impl Browser for Fake {
     fn command_bar(
         &self,
         editing: Option<(u64, SharedString)>,
-        _: Vec<SharedString>,
-        _: Vec<BarTab>,
-        _: Option<Bounds<Pixels>>,
+        shown: Vec<SharedString>,
+        tabs: Vec<BarTab>,
+        field: Option<Bounds<Pixels>>,
         cx: &mut App,
     ) {
+        // On the web the bar draws in the one window, over the shell (web::Root), which is mid-update
+        // here, so the bar shows once that's over.
+        if cfg!(target_family = "wasm") {
+            return cx.defer(move |cx| command_bar::show(editing, shown, tabs, field, cx));
+        }
         // No command bar here: a new tab opens at once.
         if editing.is_some() {
             return;
@@ -1282,6 +1331,7 @@ impl Browser for Fake {
         place: site_controls::Place,
         window: Size<Pixels>,
         extensions: Vec<site_controls::Extension>,
+        profiles: Option<site_controls::Profiles>,
         cx: &mut App,
     ) {
         if std::env::var_os("PREVIEW_SITE_CONTROLS").is_none() {
@@ -1291,7 +1341,7 @@ impl Browser for Fake {
         let room = size(px(site_controls::WIDTH), window.height - at.y);
         let bounds = Bounds::new(PREVIEW_ORIGIN.get() + at, room);
         if site_controls::open_at(Rc::new(PreviewSiteControls), bounds, true, cx).is_some() {
-            site_controls::show(tab, place, window, extensions, cx);
+            site_controls::show(tab, place, window, extensions, profiles, cx);
             site_controls::changed(tab, preview_site(), cx);
         }
     }
@@ -1378,23 +1428,24 @@ impl Browser for Fake {
 
     fn import(&self, _: &mut App) {}
 
-    // Each made-up Space shows its top tab.
     fn show_space(&self, space: u64, cx: &mut App) {
+        let named = self.opens_on.borrow().get(&space).copied();
+        let shows = self.shows.clone();
         self.later(cx, move |shell, cx| {
+            shows.borrow_mut().insert(shell.space(), shell.selected());
             shell.set_space(space, cx);
-            let top = shell
-                .today()
-                .first()
-                .or(shell.pinned().first())
-                .copied()
-                .unwrap_or(0);
-            shell.set_selected(top, cx);
+            let held = |tab: &u64| shell.today().contains(tab) || shell.pinned().contains(tab);
+            let last = shows.borrow().get(&space).copied().filter(held);
+            let tab = last.or(named).unwrap_or_else(|| opening_tab(shell));
+            shows.borrow_mut().insert(space, tab);
+            shell.set_selected(tab, cx);
         });
     }
 
-    // The made-up Spaces' pages slide in without a selected row.
-    fn space_tab(&self, _: u64) -> u64 {
-        0
+    fn space_tab(&self, space: u64) -> u64 {
+        let last = self.shows.borrow().get(&space).copied();
+        last.or_else(|| self.opens_on.borrow().get(&space).copied())
+            .unwrap_or(0)
     }
 
     fn create_space(&self, name: &str, profile: u64, after: u64, cx: &mut App) -> u64 {
@@ -1540,7 +1591,11 @@ impl Browser for Fake {
     fn focus_page(&self, _: &mut App) {}
 
     // There's no page, and the window's buttons stay where GPUI put them.
-    fn lay_out_page(&self, _: Bounds<Pixels>, _: f32, _: &mut App) {}
+    // The site lays its frame out under the canvas there.
+    fn lay_out_page(&self, _frame: Bounds<Pixels>, _radius: f32, _: &mut App) {
+        #[cfg(target_family = "wasm")]
+        web::lay_out(_frame, _radius);
+    }
 
     fn set_focus_color(&self, _: u32, _: &mut App) {}
 
@@ -1560,9 +1615,9 @@ impl Browser for Fake {
 
     fn set_pane_corner(&self, _: f32, _: f32, _: f32, _: &mut App) {}
 
-    // No command bar here, as for a new tab, and no split views but the made-up one.
-    fn command_bar_open(&self, _: &App) -> bool {
-        false
+    // No command bar here but the web's, as for a new tab, and no split views but the made-up one.
+    fn command_bar_open(&self, cx: &App) -> bool {
+        cfg!(target_family = "wasm") && command_bar::is_open(cx)
     }
 
     fn command_bar_follows(&self, _: Vec<BarTab>, _: Vec<BarTab>, _: &mut App) -> bool {
@@ -1657,10 +1712,17 @@ impl Browser for Fake {
         false
     }
 
-    // The reveal's window is the app's, over the page, which the preview has neither of.
-    fn show_reveal(&self, _: f32, _: &mut App) {}
+    // The reveal's window is the app's, over the page, which the preview has neither of. On the web
+    // the panel draws in the one canvas, over the site's frame, which the site hears.
+    fn show_reveal(&self, _: f32, _: &mut App) {
+        #[cfg(target_family = "wasm")]
+        web::cover(web::Over::Reveal, true);
+    }
 
-    fn hide_reveal(&self, _: &mut App) {}
+    fn hide_reveal(&self, _: &mut App) {
+        #[cfg(target_family = "wasm")]
+        web::cover(web::Over::Reveal, false);
+    }
 
     fn option_reveals_sidebar(&self) -> bool {
         true
@@ -1985,6 +2047,15 @@ fn preview_theme() -> Option<Theme> {
     }
 }
 
+/// PREVIEW_PROFILES=Personal,Work names the profiles, the Spaces' the first, as a second one
+/// shows the profile in the name row and Site Controls (#2339).
+fn preview_profiles() -> Vec<(u64, SharedString)> {
+    let names = std::env::var("PREVIEW_PROFILES").unwrap_or_else(|_| "Default".into());
+    (0..)
+        .zip(names.split(',').map(|name| name.to_owned().into()))
+        .collect()
+}
+
 /// PREVIEW_APPEARANCE=light or =dark draws the window as if the system's appearance were that,
 /// as a headless session has none to switch.
 fn preview_tone() -> Option<Tone> {
@@ -2207,6 +2278,8 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ];
             ("clear", rows)
         }
+        // The bar adds Open Library… itself, whose glyph the sidebar foot's button shares.
+        "library" => ("library", vec![search("library")]),
         "sites" => (
             "wik",
             vec![
@@ -2257,7 +2330,8 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ],
         ),
     };
-    let rows_shown = rows.len();
+    // The command the bar adds for what's typed takes a row too.
+    let rows_shown = rows.len() + usize::from(mode == "library");
     let bounds = Bounds::new(
         at,
         size(px(command_bar::WIDTH), px(command_bar::height(rows_shown))),
@@ -2301,6 +2375,12 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
     }
 }
 
+/// wasm-bindgen runs `main` as the page loads the module, and the page starts the demo with
+/// `web::start`.
+#[cfg(target_family = "wasm")]
+fn main() {}
+
+#[cfg(not(target_family = "wasm"))]
 fn main() {
     gpui_platform::application()
         .with_assets(shell::Assets)
@@ -2308,12 +2388,51 @@ fn main() {
             browser::face::register(cx);
             shell::bind_keys(cx);
             browser::text_input::bind_keys(cx);
+            // PREVIEW_SIDEBAR_RIGHT=1 puts the sidebar on the window's right, as Settings' Sidebar
+            // position does.
+            if std::env::var_os("PREVIEW_SIDEBAR_RIGHT").is_some() {
+                cx.set_global(shell::SidebarRight(true));
+            }
             // PREVIEW_UPDATE=ready or =available shows the update banner on a made-up 0.1.5, opened
             // as under the pointer with =ready-open or =available-open, and PREVIEW_UPDATE_CHECKS=off
             // as with the updater's automatic checks off.
             let update = std::env::var("PREVIEW_UPDATE").ok();
             if let Some(update) = &update {
                 preview_update(update, cx);
+            }
+            // PREVIEW_SIDEBAR_POSITION=left or right shows Settings › Tabs & Sidebar's sidebar group
+            // alone, Sidebar position's drawings with that side chosen (#2407).
+            if let Ok(side) = std::env::var("PREVIEW_SIDEBAR_POSITION") {
+                preview_pictures(
+                    Pictures::Sidebar {
+                        right: side == "right",
+                    },
+                    cx,
+                );
+                return;
+            }
+            // PREVIEW_APPEARANCE_PICKER=automatic, light or dark shows Settings › General's Look
+            // group alone, Appearance's drawings with that one chosen and Settings drawn in it,
+            // Automatic's as PREVIEW_APPEARANCE has the system (#2429).
+            if let Ok(chosen) = std::env::var("PREVIEW_APPEARANCE_PICKER") {
+                let chosen = match chosen.as_str() {
+                    "light" => browser::theme::Appearance::Light,
+                    "dark" => browser::theme::Appearance::Dark,
+                    _ => browser::theme::Appearance::Automatic,
+                };
+                preview_pictures(Pictures::Appearance(chosen), cx);
+                return;
+            }
+            // PREVIEW_SHARE_FAVORITES=every, profile or space shows Settings › Tabs & Sidebar's
+            // Share favorites group alone, its drawings with that scope chosen (#2430).
+            if let Ok(chosen) = std::env::var("PREVIEW_SHARE_FAVORITES") {
+                let chosen = match chosen.as_str() {
+                    "every" => browser::shell::FavoritesScope::Every,
+                    "space" => browser::shell::FavoritesScope::Space,
+                    _ => browser::shell::FavoritesScope::Profile,
+                };
+                preview_pictures(Pictures::Favorites(chosen), cx);
+                return;
             }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
@@ -2436,6 +2555,8 @@ fn main() {
                         archive: RefCell::new(archive),
                         downloads: RefCell::new(downloads),
                         opt_ins: Cell::new((false, false)),
+                        opens_on: RefCell::default(),
+                        shows: Rc::default(),
                     });
                     browser.report_archive(cx);
                     browser.report_downloads(cx);
@@ -2456,7 +2577,7 @@ fn main() {
                         _ => Shell::new(browser, cx),
                     };
                     shell.force_tone(preview_tone());
-                    shell.set_profiles(vec![(0, "Default".into())], cx);
+                    shell.set_profiles(preview_profiles(), cx);
                     shell.set_spaces(spaces, cx);
                     shell.set_space(first_space, cx);
                     // The shell forgets what it knows of a tab in no list, so the lists come first.
@@ -2493,8 +2614,8 @@ fn main() {
                         };
                         shell.set_page(tab, page, cx);
                     }
-                    // PREVIEW_DRM=1 has the first tab's page ask for video ilo plays only in Apple's
-                    // engine, so its note shows.
+                    // PREVIEW_DRM=1 has the first tab's page ask for video ilo can't play, so its
+                    // note shows, offering what this system's does (#2468).
                     if std::env::var_os("PREVIEW_DRM").is_some() {
                         shell.set_media_unsupported(1, "com.widevine.alpha", cx);
                     }
@@ -2740,8 +2861,8 @@ fn main() {
                     cx.quit();
                 }
             }
-            // PREVIEW_BAR=tabs, sites or commands shows the command bar over the window, with made-up
-            // suggestions.
+            // PREVIEW_BAR=tabs, sites, commands or library shows the command bar over the window, with
+            // made-up suggestions.
             if let Ok(mode) = std::env::var("PREVIEW_BAR") {
                 let left = x + (width - command_bar::WIDTH as f64) / 2.;
                 let top = y as f32 + command_bar::centered_top(height as f32);
@@ -2795,30 +2916,37 @@ fn main() {
                     let changed: theme_picker::Changed = Rc::new(|_, _, _| {});
                     let anchor = point(0., theme_picker::HEIGHT / 2. + 8.);
                     let at = theme_picker::At::Row(anchor);
-                    theme_picker::show(0, 1, preview_theme(), at, f32::MAX, changed, cx);
+                    theme_picker::show(0, 1, preview_theme(), at, false, f32::MAX, changed, cx);
                 }
             }
             // PREVIEW_BOOST_EDITOR=new shows the Boost editor for a site's new Boost, its hint up
-            // and its dots unplaced, and =edited for one with its edits made.
+            // and its dots unplaced, =edited for one with its edits made, and =advanced for that
+            // one with Advanced open and its sliders moved.
             if let Some(kind) = std::env::var_os("PREVIEW_BOOST_EDITOR") {
+                let edited = Style {
+                    ground: Some(boost_style::Dot { x: -0.3, y: 0.86 }),
+                    links: Some(boost_style::Dot { x: 0.5, y: -0.2 }),
+                    face: Some(Face::Serif),
+                    size: 110,
+                    case: Some(Case::Lower),
+                    dragged: true,
+                    name: Some("Quiet news".into()),
+                    ..Style::default()
+                };
+                let style = match kind.to_str() {
+                    Some("edited") => edited,
+                    Some("advanced") => Style {
+                        adjust: [110, 100, 80],
+                        advanced: true,
+                        ..edited
+                    },
+                    _ => Style::default(),
+                };
                 let bounds = Bounds::new(
                     point(px(x as f32 + 230.), px(y as f32 + 34.)),
-                    size(px(boost_editor::WIDTH), px(boost_editor::HEIGHT)),
+                    size(px(boost_editor::WIDTH), px(boost_editor::height_of(&style))),
                 );
                 if boost_editor::open_at(Rc::new(PreviewPicker), bounds, true, cx).is_some() {
-                    let style = match kind.to_str() {
-                        Some("edited") => Style {
-                            ground: Some(boost_style::Dot { x: -0.3, y: 0.86 }),
-                            links: Some(boost_style::Dot { x: 0.5, y: -0.2 }),
-                            face: Some(Face::Serif),
-                            size: 110,
-                            case: Some(Case::Lower),
-                            dragged: true,
-                            name: Some("Quiet news".into()),
-                            ..Style::default()
-                        },
-                        _ => Style::default(),
-                    };
                     let requested: boost_editor::Requested = Rc::new(|_, _| {});
                     let at = theme_picker::At::Row(point(0., 30.));
                     let palette = browser::palette::Palette::of(
@@ -2833,12 +2961,21 @@ fn main() {
                         style,
                         true,
                         at,
+                        false,
                         f32::MAX,
                         palette,
                         requested,
                         cx,
                     );
                 }
+            }
+            // PREVIEW_FOOT_BAR=arrange shows the foot bar over the page's bottom centre with one
+            // line, as Arrange's, =point with two, as pointing's, and =long with a question past
+            // its two lines.
+            if let Ok(kind) = std::env::var("PREVIEW_FOOT_BAR")
+                && let Some(shell) = shell_window
+            {
+                preview_foot_bar(&kind, shell, bounds, cx);
             }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
             // drawn the URL field they hang from.
@@ -2853,6 +2990,51 @@ fn main() {
                             shell.run(Command::SiteControls, "preview", cx)
                         })
                         .ok();
+                })
+                .detach();
+            }
+            // PREVIEW_SWIPE=1 brings the Library out with fingers going right on the first Space, and
+            // takes it back with them going left, through the gesture's own code, then does the
+            // same with clicks, for a recording of its motion (#2375).
+            if let Some(shell) =
+                shell_window.filter(|_| std::env::var_os("PREVIEW_SWIPE").is_some())
+            {
+                cx.spawn(async move |cx| {
+                    let executor = cx.background_executor().clone();
+                    let wait = |ms| executor.timer(Duration::from_millis(ms));
+                    wait(1000).await;
+                    // Fingers 1.2 Library widths each way in half a second, a frame at a time.
+                    for way in [1., -1.] {
+                        log!(
+                            "browser: preview swipe {}",
+                            if way > 0. { "in" } else { "out" }
+                        );
+                        let step = |phase, x| {
+                            move |shell: &mut Shell,
+                                  window: &mut gpui::Window,
+                                  cx: &mut gpui::Context<Shell>| {
+                                shell.preview_fingers(x, phase, window, cx)
+                            }
+                        };
+                        shell.update(cx, step(TouchPhase::Started, 0.)).ok();
+                        for _ in 0..30 {
+                            wait(16).await;
+                            let x = way * 1.2 * 417. / 30. / 0.5;
+                            shell.update(cx, step(TouchPhase::Moved, x)).ok();
+                        }
+                        shell.update(cx, step(TouchPhase::Ended, 0.)).ok();
+                        wait(2000).await;
+                    }
+                    for stage in ["in", "out"] {
+                        log!("browser: preview click {stage}");
+                        shell
+                            .update(cx, |shell, _, cx| {
+                                shell.run(Command::ViewLibrary, "preview", cx)
+                            })
+                            .ok();
+                        wait(2000).await;
+                    }
+                    log!("browser: preview swipe done");
                 })
                 .detach();
             }
@@ -2889,6 +3071,12 @@ fn main() {
                 if let Some(shell) = shell_window {
                     preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Left, cx);
                 }
+            }
+            // PREVIEW_MODEL_MENU=<claude|codex>[,<model>] shows Settings › Agents' Model menu for that
+            // CLI as it opens, from the CLI's recorded list, on Default or the model chosen, light
+            // with PREVIEW_APPEARANCE=light (#2455).
+            if let Ok(cli) = std::env::var("PREVIEW_MODEL_MENU") {
+                preview_model_menu(bounds, &cli, cx);
             }
             // PREVIEW_PAGE_MENU=<link|image|text|field>,<x>,<y>[,<key>…] shows a page's menu there, made
             // up as Chrome builds it for a link, an image, selected text or a misspelt word in a text
@@ -3012,6 +3200,45 @@ fn preview_page_menu(
     .detach();
 }
 
+/// A CLI's Model menu as Settings › Agents opens it with Default chosen, its models as the CLI's
+/// recorded answer lists them, in the light or dark Settings.
+fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
+    use browser::agents::ready::{claude_listed, codex_listed};
+    let (cli, chosen) = cli.split_once(',').unwrap_or((cli, ""));
+    let answer = |text: &str| serde_json::from_str(text).unwrap_or_default();
+    let models = match cli {
+        "codex" => Some(codex_listed(&answer(include_str!(
+            "agents/runner/answers/codex-0.167.1-model-list.json"
+        )))),
+        _ => claude_listed(&answer(include_str!(
+            "agents/runner/answers/claude-2.1.322-initialize.json"
+        ))),
+    }
+    .unwrap_or_default();
+    let (_, items) =
+        browser::agents::task::model_menu(chosen, models.default.as_deref(), models.listed);
+    let light = preview_tone() == Some(Tone::Light);
+    if menu::open_at(Rc::new(PreviewMenu), bounds, cx).is_none() {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        cx.update(|cx| {
+            let request = menu::Request {
+                items,
+                at: point(px(40.), px(40.)),
+                area: Bounds::new(point(px(0.), px(0.)), bounds.size),
+                look: menu::Look::plain(light),
+                chosen: menu::picked(|_, _| {}),
+            };
+            menu::show(request, cx);
+        });
+    })
+    .detach();
+}
+
 /// ilo's menu over the preview's window, whose host can't move it: its window covers the preview's.
 struct PreviewMenu;
 
@@ -3022,6 +3249,60 @@ impl menu::Host for PreviewMenu {
 }
 
 /// The icon picker over the preview's window, whose host can't move it: it opened where it's to be.
+thread_local! {
+    /// Where the foot bar asked to go.
+    static FOOT_BAR_PLACE: std::cell::Cell<Option<foot_bar::Place>> =
+        const { std::cell::Cell::new(None) };
+}
+
+struct PreviewFootBar;
+
+impl foot_bar::Host for PreviewFootBar {
+    fn show(&self, _: u64, place: foot_bar::Place) {
+        FOOT_BAR_PLACE.set(Some(place));
+    }
+
+    fn hide(&self) {}
+}
+
+/// Shows the foot bar with made-up words over the page of the preview's `window` at `bounds`.
+/// The host sizes the bar's window to what it shows, so a hidden one lays it out first, as the
+/// host would place it.
+fn preview_foot_bar(
+    kind: &str,
+    window: gpui::WindowHandle<Shell>,
+    bounds: Bounds<Pixels>,
+    cx: &mut App,
+) {
+    let Ok((page, palette)) = window.read_with(cx, |shell, _| {
+        (shell.page_frame(bounds.size).0, shell.palette())
+    }) else {
+        return;
+    };
+    let Some(bar) = foot_bar::sample(kind) else {
+        return;
+    };
+    let look = move |_, _: &App| palette;
+    let hidden = Bounds::new(bounds.origin, size(px(1.), px(1.)));
+    let Some(measuring) = foot_bar::open_at(Rc::new(PreviewFootBar), look, hidden, false, cx)
+    else {
+        return;
+    };
+    foot_bar::show(0, page, bounds.size, bar.clone(), cx);
+    let _ = measuring.update(cx, |_, window, _| window.remove_window());
+    let Some(place) = FOOT_BAR_PLACE.get() else {
+        return;
+    };
+    let across = f32::from(bounds.size.width) - place.left - place.right;
+    let left = place.left + (across - f32::from(place.size.width)) / 2.;
+    let top = f32::from(bounds.size.height - place.size.height) - place.bottom;
+    let at = Bounds::new(bounds.origin + point(px(left), px(top)), place.size);
+    if foot_bar::open_at(Rc::new(PreviewFootBar), look, at, true, cx).is_some() {
+        foot_bar::show(0, page, bounds.size, bar, cx);
+        log!("preview: foot bar shown");
+    }
+}
+
 struct PreviewPicker;
 
 impl icon_picker::Host for PreviewPicker {
@@ -3042,6 +3323,9 @@ impl theme_picker::Host for PreviewPicker {
 
 impl boost_editor::Host for PreviewPicker {
     fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+
+    // The preview's window is opened at the height it shows at.
+    fn resize(&self, _: f32, _: &[(f32, f32, f32)]) {}
 
     fn hide(&self) {}
 }
@@ -3148,11 +3432,21 @@ fn preview_site() -> Site {
             state: state.to_string().into(),
             choices: choices.to_vec(),
         };
+    // PREVIEW_CONNECTION=not-secure shows a page over plain http, and =internal the browser's own.
+    let (site, connection, summary) = match std::env::var("PREVIEW_CONNECTION").as_deref() {
+        Ok("not-secure") => ("en.wikipedia.org", Connection::NotSecure, "Not secure"),
+        Ok("internal") => ("ilo", Connection::Internal, "ilo"),
+        _ => (
+            "en.wikipedia.org",
+            Connection::Secure,
+            "Connection is secure",
+        ),
+    };
     Site {
-        site: "en.wikipedia.org".into(),
-        connection: Connection::Secure,
-        connection_summary: "Connection is secure".into(),
-        certificate: true,
+        site: site.into(),
+        connection,
+        connection_summary: summary.into(),
+        certificate: connection == Connection::Secure,
         permissions: vec![
             permission(
                 5,
@@ -3185,6 +3479,7 @@ fn preview_site() -> Site {
         logins: Vec::new(),
         devices: Vec::new(),
         ad_blocking: Some(true),
+        ad_blocked: "12".into(),
         developer_mode: Some(false),
         // PREVIEW_BOOST=on or off gives the site a Boost, which shows its row.
         boostable: true,
@@ -3304,6 +3599,309 @@ fn preview_account(state: &str, cx: &mut App) {
     }
 }
 
+/// A Settings group whose row is chosen from drawings, on its card as Settings draws it.
+#[derive(Clone, Copy)]
+enum Pictures {
+    /// Tabs & Sidebar's sidebar group: Sidebar position, `right` chosen, and the two switches
+    /// under it.
+    Sidebar { right: bool },
+    /// General's Look group: Appearance, the one chosen, and Page zoom under it.
+    Appearance(browser::theme::Appearance),
+    /// Tabs & Sidebar's Share favorites, the scope chosen, in its group of one.
+    Favorites(browser::shell::FavoritesScope),
+}
+
+/// `shown`'s group in a window of Settings' size. PREVIEW_BUTTONS=mac, windows or linux draws that
+/// OS's window buttons in the drawings.
+fn preview_pictures(shown: Pictures, cx: &mut App) {
+    use browser::settings_pictures::Buttons;
+    use browser::tokens::settings::{HEIGHT, WIDTH};
+    let buttons = match std::env::var("PREVIEW_BUTTONS").as_deref() {
+        Ok("mac") => Buttons::Mac,
+        Ok("windows") => Buttons::Windows,
+        Ok("linux") => Buttons::Linux,
+        _ => Buttons::HERE,
+    };
+    let (mut x, mut y) = (0., 0.);
+    unsafe { host_centered(WIDTH as f64, HEIGHT as f64, &mut x, &mut y) };
+    let bounds = Bounds::new(
+        point(px(x as f32), px(y as f32)),
+        size(px(WIDTH), px(HEIGHT)),
+    );
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        ..Default::default()
+    };
+    let opened = cx.open_window(options, |_, cx| {
+        cx.new(|cx| {
+            let look = browser::settings_rows::Look::settings(true);
+            let search = cx.new(|cx| {
+                browser::text_input::TextInput::new("Search", cx)
+                    .placeholder_color(look.detail)
+                    .caret_color(look.ink)
+            });
+            PicturesPage {
+                shown,
+                buttons,
+                card: Card::default(),
+                search,
+                logged: Rc::default(),
+            }
+        })
+    });
+    if let Err(error) = opened {
+        log!("preview: couldn't open the pictures' window: {error}");
+    }
+}
+
+struct PicturesPage {
+    shown: Pictures,
+    buttons: browser::settings_pictures::Buttons,
+    card: Card,
+    search: gpui::Entity<browser::text_input::TextInput>,
+    logged: Rc<std::cell::RefCell<Vec<String>>>,
+}
+
+impl gpui::Render for PicturesPage {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use browser::palette::{INK, PAPER};
+        use browser::settings_card::Colors;
+        use browser::settings_column::{self, Section};
+        use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
+        use browser::settings_rows::{
+            Look, end, frame, group, popup, stop_switch, text as row_text,
+        };
+        use browser::theme::Appearance;
+        use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
+        use browser::tokens::settings::{
+            HEADING_BOTTOM, NAME, POPUP_WIDTH, SIDE_ROOM, SIDE_TOP, TEXT_X,
+        };
+        use browser::tokens::text;
+        use gpui::{FontWeight, ParentElement, Styled, div, rgb};
+        // Settings takes Light's or Dark's look when it's chosen, and the system's for Automatic.
+        let dark = match self.shown {
+            Pictures::Appearance(Appearance::Light) => false,
+            Pictures::Appearance(Appearance::Dark) => true,
+            _ => preview_tone() != Some(Tone::Light),
+        };
+        let look = Look::settings(dark);
+        let base = if dark { rgb(PAPER) } else { rgb(INK) };
+        let a11y = window.is_a11y_active();
+        let field = browser::settings_search::field(
+            &self.search,
+            base,
+            gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+            |_, _| {},
+            cx,
+        );
+        let section = match self.shown {
+            Pictures::Sidebar { .. } | Pictures::Favorites(_) => Section::TabsAndSidebar,
+            Pictures::Appearance(_) => Section::General,
+        };
+        let column = settings_column::column(
+            &Default::default(),
+            section,
+            dark,
+            Rc::default(),
+            gpui::IntoElement::into_any_element(field),
+            None,
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _| {}),
+            a11y,
+        );
+        let page = cx.entity().downgrade();
+        let (heading, rows) = match self.shown {
+            Pictures::Sidebar { right } => {
+                let pair = picker(
+                    &look,
+                    base,
+                    dark,
+                    right,
+                    self.buttons,
+                    a11y,
+                    self.logged.clone(),
+                    move |side, _, cx| {
+                        log!(
+                            "preview: sidebar position {}",
+                            browser::settings_pictures::title(side)
+                        );
+                        page.update(cx, |page, cx| {
+                            page.shown = Pictures::Sidebar { right: side };
+                            cx.notify();
+                        })
+                        .ok();
+                    },
+                );
+                let position = frame()
+                    .flex_col()
+                    .items_stretch()
+                    .child(row_text(
+                        &look,
+                        "Sidebar position",
+                        Some(
+                            "The side of the window the sidebar and the window's buttons are on."
+                                .into(),
+                        ),
+                    ))
+                    .child(div().flex().mt(px(SIDE_TOP)).ml(px(-SIDE_ROOM)).child(pair));
+                let switch = |name: &'static str, on: bool| {
+                    end([gpui::IntoElement::into_any_element(stop_switch(
+                        &look,
+                        name,
+                        name,
+                        on,
+                        1.,
+                        look.accent,
+                        a11y,
+                    ))])
+                };
+                let side = if right { "right" } else { "left" };
+                let edge = frame()
+                    .child(row_text(
+                        &look,
+                        "Show the hidden sidebar at the window's edge",
+                        Some(
+                            format!(
+                                "Move the pointer along the {side} edge. ⌘S shows it either way."
+                            )
+                            .into(),
+                        ),
+                    ))
+                    .child(switch("edge", true));
+                let option = frame()
+                    .child(row_text(
+                        &look,
+                        "Show the hidden sidebar when ⌥ is pressed alone",
+                        Some("Press and let go of ⌥ with no other key.".into()),
+                    ))
+                    .child(switch("option", false));
+                (Some("The sidebar"), vec![position, edge, option])
+            }
+            Pictures::Appearance(chosen) => {
+                let three = appearance_picker(
+                    &look,
+                    base,
+                    chosen,
+                    self.buttons,
+                    a11y,
+                    self.logged.clone(),
+                    move |appearance, _, cx| {
+                        log!("preview: appearance {appearance:?}");
+                        page.update(cx, |page, cx| {
+                            page.shown = Pictures::Appearance(appearance);
+                            cx.notify();
+                        })
+                        .ok();
+                    },
+                );
+                let line = match self.buttons {
+                    browser::settings_pictures::Buttons::Mac => {
+                        "Light, dark, or as macOS is. View › Appearance has it too."
+                    }
+                    _ => "Light, dark, or as the system is.",
+                };
+                let appearance = frame()
+                    .flex_col()
+                    .items_stretch()
+                    .child(row_text(&look, "Appearance", Some(line.into())))
+                    .child(
+                        div()
+                            .flex()
+                            .mt(px(SIDE_TOP))
+                            .ml(px(-SIDE_ROOM))
+                            .child(three),
+                    );
+                let zoom = frame()
+                    .child(row_text(
+                        &look,
+                        "Page zoom",
+                        Some(
+                            "Every page's size, until you zoom a site, which keeps its own.".into(),
+                        ),
+                    ))
+                    .child(end([gpui::IntoElement::into_any_element(popup(
+                        &look,
+                        "100%",
+                        POPUP_WIDTH,
+                        false,
+                    ))]));
+                (Some("Look"), vec![appearance, zoom])
+            }
+            Pictures::Favorites(chosen) => {
+                let three = favorites_picker(
+                    &look,
+                    base,
+                    dark,
+                    chosen,
+                    a11y,
+                    self.logged.clone(),
+                    move |scope, _, cx| {
+                        log!("preview: share favorites {}", scope.title());
+                        page.update(cx, |page, cx| {
+                            page.shown = Pictures::Favorites(scope);
+                            cx.notify();
+                        })
+                        .ok();
+                    },
+                );
+                let shared = frame()
+                    .flex_col()
+                    .items_stretch()
+                    .child(row_text(
+                        &look,
+                        "Share favorites",
+                        Some("Which Spaces show the same favorites.".into()),
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .mt(px(SIDE_TOP))
+                            .ml(px(-SIDE_ROOM))
+                            .child(three),
+                    );
+                (None, vec![shared])
+            }
+        };
+        let heading = heading.map(|heading| {
+            div()
+                .px(px(TEXT_X))
+                .mb(px(HEADING_BOTTOM))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(look.heading)
+                .child(heading)
+        });
+        let colors = Colors {
+            line: look.line,
+            name: base.opacity(NAME),
+            heading: look.heading,
+        };
+        let card = self.card.draw(
+            section.name(),
+            div()
+                .flex()
+                .flex_col()
+                .children(heading)
+                .child(group(&look, rows)),
+            dark,
+            colors,
+        );
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .bg(rgb(if dark { STAND_IN } else { LIGHT_STAND_IN }))
+            .font_family(browser::face::UI)
+            .text_size(px(text::BODY))
+            .text_color(look.ink)
+            .child(column)
+            .child(card)
+    }
+}
+
 /// The account's view on Settings' card, beside Settings' column with Sync lit, with the dialog
 /// it asks in over all of it, as Settings has on Linux.
 struct AccountPage {
@@ -3341,6 +3939,7 @@ impl gpui::Render for AccountPage {
             cx,
         );
         let column = settings_column::column(
+            &Default::default(),
             Section::Sync,
             dark,
             Rc::default(),
@@ -3463,4 +4062,859 @@ fn preview_update(update: &str, cx: &mut App) {
         _ => Stage::Ready(version),
     };
     updates::changed(stage, cx);
+}
+
+/// The site's live demo: the browser's UI in the canvas the site gives it, with the site's Spaces,
+/// over the site's frame, which the site lays out where the page goes and shows the selected tab
+/// in. Its JS:
+///
+/// ```js
+/// import init, { start } from "./ilo_demo.js";
+/// await init();
+/// start(canvas, spaces, host);
+/// ```
+///
+/// `spaces` is `{ favorites: [tab], spaces: [space] }`, a Space `{ name, color, pinned: [tab],
+/// today: [tab], selected }` and a tab `{ title, url, icon }`: `color` is 0xRRGGBB or none, `icon`
+/// a PNG's URL or none for the globe, and `selected` the URL of the tab the Space opens on, or none
+/// for its first Today tab, else its first pinned one. `host` hears `layOut(x, y, width, height,
+/// radius)` for the page's frame, `show(url)` for the tab shown ("" for none), `space(index)` for
+/// the Space shown, `cover(covered)` while something draws over the frame, and `ready()` once the
+/// first frame is up. `host.scheme`, "dark" or "light", keeps the demo in that appearance; without
+/// it the demo follows the visitor's, as the app follows the system's. The demo takes the keyboard
+/// only once it's clicked or its command bar opens, and gives it back when the bar closes;
+/// `openBar()` opens the bar.
+#[cfg(target_family = "wasm")]
+mod web {
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+        sync::Arc,
+    };
+
+    use browser::command_bar::{self, CommandBar, Suggestion};
+    use browser::log;
+    use browser::palette::Tone;
+    use browser::shell::{self, Command, Folders, Page, Shell, SpaceEntry};
+    use gpui::{
+        AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, Entity, Focusable, Image,
+        ImageFormat, KeyBinding, MouseButton, NoAction, OperatingSystem, Pixels, Render,
+        SharedString, Subscription, WeakEntity, Window, WindowBackgroundAppearance, WindowOptions,
+        actions, div, prelude::*, px,
+    };
+    use wasm_bindgen::{JsCast, JsValue, prelude::wasm_bindgen};
+
+    use super::{Fake, set_today};
+
+    actions!(web, [OpenCommandBar]);
+
+    thread_local! {
+        /// The site's `host`.
+        static HOST: RefCell<JsValue> = const { RefCell::new(JsValue::UNDEFINED) };
+        /// The running demo's app and shell, for the calls the site makes into it.
+        static DEMO: RefCell<Option<(AsyncApp, WeakEntity<Shell>)>> = const { RefCell::new(None) };
+    }
+
+    /// Calls `host.<name>(…args)`, if the site has it.
+    fn call(name: &str, args: &[JsValue]) {
+        HOST.with_borrow(|host| {
+            let function = js_sys::Reflect::get(host, &name.into()).ok();
+            let Some(function) = function
+                .as_ref()
+                .and_then(|f| f.dyn_ref::<js_sys::Function>())
+            else {
+                return;
+            };
+            let args: js_sys::Array = args.iter().collect();
+            if let Err(error) = function.apply(host, &args) {
+                log!("host.{name} threw {error:?}");
+            }
+        });
+    }
+
+    /// What draws over the site's frame.
+    #[derive(Clone, Copy)]
+    pub enum Over {
+        Bar,
+        Reveal,
+    }
+
+    thread_local! {
+        static OVER: Cell<[bool; 2]> = const { Cell::new([false; 2]) };
+    }
+
+    /// `over` draws over the site's frame, or has gone: the site hears `cover` as the first comes
+    /// and the last goes.
+    pub fn cover(over: Over, covered: bool) {
+        let mut all = OVER.get();
+        let was = all.contains(&true);
+        all[over as usize] = covered;
+        OVER.set(all);
+        if all.contains(&true) != was {
+            call("cover", &[JsValue::from_bool(!was)]);
+        }
+    }
+
+    pub fn lay_out(frame: Bounds<Pixels>, radius: f32) {
+        let (origin, size) = (frame.origin, frame.size);
+        // The shell lays out once before the canvas gives the window its size, which leaves the
+        // frame inside out; the site gets an empty frame there instead.
+        let size = size.max(&gpui::Size::default());
+        let numbers = [origin.x, origin.y, size.width, size.height].map(f32::from);
+        let args = numbers
+            .into_iter()
+            .chain([radius])
+            .map(|n| JsValue::from(n as f64));
+        call("layOut", &args.collect::<Vec<_>>());
+    }
+
+    /// One tab the site gave.
+    struct Tab {
+        title: String,
+        url: String,
+        icon: Option<String>,
+    }
+
+    struct SiteSpace {
+        name: String,
+        color: Option<u32>,
+        pinned: Vec<Tab>,
+        today: Vec<Tab>,
+        /// The URL of the tab the Space opens on, if the site names one.
+        selected: Option<String>,
+    }
+
+    fn get(object: &JsValue, key: &str) -> JsValue {
+        js_sys::Reflect::get(object, &key.into()).unwrap_or(JsValue::UNDEFINED)
+    }
+
+    fn list(object: &JsValue, key: &str) -> Vec<JsValue> {
+        let list = get(object, key);
+        match js_sys::Array::is_array(&list) {
+            true => js_sys::Array::from(&list).iter().collect(),
+            false => Vec::new(),
+        }
+    }
+
+    fn tabs(object: &JsValue, key: &str) -> Vec<Tab> {
+        let tab = |tab: JsValue| Tab {
+            title: get(&tab, "title").as_string().unwrap_or_default(),
+            url: get(&tab, "url").as_string().unwrap_or_default(),
+            icon: get(&tab, "icon")
+                .as_string()
+                .filter(|icon| !icon.is_empty()),
+        };
+        list(object, key).into_iter().map(tab).collect()
+    }
+
+    /// Starts the demo in `canvas`, with the Spaces in `spaces`, telling `host` what it does.
+    #[wasm_bindgen]
+    pub fn start(canvas: web_sys::HtmlCanvasElement, spaces: JsValue, host: JsValue) {
+        let tone = match get(&host, "scheme").as_string().as_deref() {
+            Some("dark") => Some(Tone::Dark),
+            Some("light") => Some(Tone::Light),
+            _ => None,
+        };
+        HOST.with_borrow_mut(|site| *site = host);
+        let favorites = tabs(&spaces, "favorites");
+        let spaces: Vec<SiteSpace> = list(&spaces, "spaces")
+            .into_iter()
+            .map(|space| SiteSpace {
+                name: get(&space, "name").as_string().unwrap_or_default(),
+                color: get(&space, "color").as_f64().map(|color| color as u32),
+                pinned: tabs(&space, "pinned"),
+                today: tabs(&space, "today"),
+                selected: get(&space, "selected").as_string(),
+            })
+            .collect();
+        let notes = trace(&canvas);
+        gpui_web::draw_in(canvas);
+        gpui_platform::web_init();
+        gpui_platform::single_threaded_web()
+            .with_assets(shell::Assets)
+            .run(move |cx| {
+                browser::face::register(cx);
+                bind_keys(cx);
+                shell::bind_keys(cx);
+                browser::text_input::bind_keys(cx);
+                // The frame under the page's rect shows through.
+                let options = WindowOptions {
+                    window_background: WindowBackgroundAppearance::Transparent,
+                    ..Default::default()
+                };
+                let opened = cx.open_window(options, |window, cx| {
+                    let mut icons = Vec::new();
+                    let mut space_ids = Vec::new();
+                    let mut pages = Vec::new();
+                    let shell = cx.new(|cx| {
+                        let mut shell =
+                            shell_of(&favorites, &spaces, &mut icons, &mut space_ids, cx);
+                        shell.force_tone(tone);
+                        if let Some(notes) = &notes {
+                            shell.note_wheel(notes.clone());
+                        }
+                        pages = favorites
+                            .iter()
+                            .chain(
+                                spaces
+                                    .iter()
+                                    .flat_map(|space| space.pinned.iter().chain(&space.today)),
+                            )
+                            .map(|tab| (SharedString::from(tab.title.clone()), tab.url.clone()))
+                            .collect();
+                        shell
+                    });
+                    window.focus(&shell.focus_handle(cx), cx);
+                    DEMO.with_borrow_mut(|demo| *demo = Some((cx.to_async(), shell.downgrade())));
+                    fetch_icons(&shell, icons, cx);
+                    Root::new(shell, space_ids, pages, window, cx)
+                });
+                if let Err(error) = opened {
+                    log!("couldn't open the demo: {error:#}");
+                }
+            });
+    }
+
+    /// With `?trace` on the page, records the wheel events over the demo, when the trackpad gave each
+    /// and when the page heard it, the page's frames while they come, and what the demo decided of
+    /// each swipe from them, and puts a button on the page that saves them as JSON: a real swipe,
+    /// to check what `shell::swipe`'s model assumes of a trackpad and a browser against, and to
+    /// replay through the model (`replay_wheel_trace`). Gives the shell what to tell its decisions.
+    fn trace(canvas: &web_sys::HtmlCanvasElement) -> Option<shell::WheelNotes> {
+        // Version 2 added `frames`, `decisions` and each event's `demo`; version 1 had no version.
+        const RECORD: &str = r#"
+            if (!new URLSearchParams(location.search).has("trace")) return;
+            const events = [], frames = [], decisions = [];
+            let heard = -Infinity, framing = false;
+            const button = document.createElement("button");
+            const label = () => { button.textContent = `Save wheel trace (${events.length} events)`; };
+            // Frames only for a second after the wheel's last event, so an idle page stays idle.
+            const frame = (now) => {
+                frames.push(now);
+                framing = performance.now() - heard < 1000;
+                if (framing) requestAnimationFrame(frame);
+            };
+            canvas.addEventListener("wheel", (event) => {
+                const { timeStamp: stamp, deltaX: x, deltaY: y, deltaMode: mode } = event;
+                heard = performance.now();
+                events.push({ stamp, heard, x, y, mode });
+                if (!framing) {
+                    framing = true;
+                    requestAnimationFrame(frame);
+                }
+                label();
+            }, { capture: true, passive: true });
+            Object.assign(button.style, { position: "fixed", right: "12px", bottom: "12px",
+                zIndex: "2147483647", font: "13px system-ui, sans-serif", padding: "6px 10px" });
+            button.onclick = () => {
+                const trace = { version: 2, userAgent: navigator.userAgent, devicePixelRatio,
+                    events, frames, decisions };
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(new Blob([JSON.stringify(trace)], { type: "application/json" }));
+                link.download = "ilo-wheel-trace.json";
+                link.click();
+                events.length = frames.length = decisions.length = 0;
+                label();
+            };
+            label();
+            document.body.append(button);
+            // The demo hears each event after this listener, so its decisions are the last event's,
+            // or with no event, its quiet timer's. "wheel" marks an event it took as a swipe's.
+            return (kind, what) => {
+                const event = events.length - 1;
+                if (kind !== "wheel") decisions.push({ event, heard: performance.now(), kind, what });
+                else if (event >= 0) events[event].demo = true;
+            };
+        "#;
+        let record = js_sys::Function::new_with_args("canvas", RECORD);
+        let note = match record.call1(&JsValue::NULL, canvas) {
+            Ok(note) => note.dyn_into::<js_sys::Function>().ok()?,
+            Err(error) => {
+                log!("couldn't record wheel events: {error:?}");
+                return None;
+            }
+        };
+        Some(Rc::new(move |kind: &'static str, what: &str| {
+            let (kind, what) = (JsValue::from_str(kind), JsValue::from_str(what));
+            note.call2(&JsValue::NULL, &kind, &what).ok();
+        }))
+    }
+
+    /// Opens the command bar and gives it the keyboard, as ⌘K (⌃K) in the demo does: the site calls
+    /// it for ⌘K anywhere on its page, since the page's keys are the site's until the demo's clicked.
+    #[wasm_bindgen(js_name = openBar)]
+    pub fn open_bar() {
+        let Some((app, shell)) = DEMO.with_borrow(Clone::clone) else {
+            return;
+        };
+        app.update(|cx| shell.update(cx, |shell, cx| shell.run(Command::NewTab, "site", cx)))
+            .ok();
+    }
+
+    /// The shell with the site's tabs, in one profile, the first Space shown on the tab it opens on.
+    /// Fills `icons` with each tab's icon to fetch, and `space_ids` with the Spaces' ids in order.
+    fn shell_of(
+        favorites: &[Tab],
+        spaces: &[SiteSpace],
+        icons: &mut Vec<(u64, String)>,
+        space_ids: &mut Vec<u64>,
+        cx: &mut Context<Shell>,
+    ) -> Shell {
+        let mut next = 1;
+        let mut ids = |count: usize| {
+            let ids: Vec<u64> = (next..).take(count).collect();
+            next += count as u64;
+            ids
+        };
+        let favorite_ids = ids(favorites.len());
+        let space_tabs: Vec<(u64, Vec<u64>, Vec<u64>)> = spaces
+            .iter()
+            .map(|space| (ids(1)[0], ids(space.pinned.len()), ids(space.today.len())))
+            .collect();
+        let entries: Vec<SpaceEntry> = spaces
+            .iter()
+            .zip(&space_tabs)
+            .map(|(space, (id, ..))| {
+                (
+                    *id,
+                    space.name.clone().into(),
+                    space.color,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
+            })
+            .collect();
+        let browser = Rc::new(Fake {
+            shell: cx.weak_entity(),
+            next_id: Rc::new(Cell::new(next)),
+            spaces: RefCell::new(entries.clone()),
+            archive: RefCell::new(Vec::new()),
+            downloads: RefCell::new(Vec::new()),
+            opt_ins: Cell::new((false, false)),
+            opens_on: RefCell::default(),
+            shows: Rc::default(),
+        });
+        let mut shell = Shell::new(browser.clone(), cx);
+        shell.set_profiles(vec![(0, "Default".into())], cx);
+        shell.set_spaces(entries, cx);
+        let Some(&(first, ..)) = space_tabs.first() else {
+            return shell;
+        };
+        shell.set_space(first, cx);
+        // The shell forgets what it knows of a tab in no list, so the lists come first.
+        shell.set_favorites(favorite_ids.iter().map(|&tab| (tab, 0)).collect(), cx);
+        for ((id, pinned, today), space) in space_tabs.iter().zip(spaces) {
+            let none = (Vec::new(), Folders::default());
+            shell.set_tabs(*id, pinned.clone(), today.clone(), none.0, none.1, cx);
+            space_ids.push(*id);
+            let tabs = pinned
+                .iter()
+                .chain(today)
+                .zip(space.pinned.iter().chain(&space.today));
+            for (&tab, site) in tabs {
+                set_tab(&mut shell, tab, site, icons, cx);
+                if space.selected.as_ref() == Some(&site.url) {
+                    browser.opens_on.borrow_mut().insert(*id, tab);
+                }
+            }
+        }
+        for (&tab, site) in favorite_ids.iter().zip(favorites) {
+            set_tab(&mut shell, tab, site, icons, cx);
+        }
+        shell.set_space(first, cx);
+        let named = browser.opens_on.borrow().get(&first).copied();
+        let tab = named.unwrap_or_else(|| super::opening_tab(&shell));
+        shell.set_selected(tab, cx);
+        shell
+    }
+
+    fn set_tab(
+        shell: &mut Shell,
+        tab: u64,
+        site: &Tab,
+        icons: &mut Vec<(u64, String)>,
+        cx: &mut Context<Shell>,
+    ) {
+        shell.set_title(tab, site.title.clone().into(), cx);
+        shell.set_page(
+            tab,
+            Page {
+                url: site.url.clone().into(),
+                ..Default::default()
+            },
+            cx,
+        );
+        if let Some(icon) = &site.icon {
+            icons.push((tab, icon.clone()));
+        }
+    }
+
+    /// Fetches the tabs' icons from the site, each its tab's favicon once it comes.
+    fn fetch_icons(shell: &Entity<Shell>, icons: Vec<(u64, String)>, cx: &mut App) {
+        let shell = shell.downgrade();
+        for (tab, url) in icons {
+            let shell = shell.clone();
+            cx.spawn(async move |cx| {
+                let Some(png) = fetch(&url).await else {
+                    log!("couldn't fetch the icon {url}");
+                    return;
+                };
+                let favicon = Arc::new(Image::from_bytes(ImageFormat::Png, png));
+                shell
+                    .update(cx, |shell, cx| shell.set_favicon(tab, Some(favicon), cx))
+                    .ok();
+            })
+            .detach();
+        }
+    }
+
+    async fn fetch(url: &str) -> Option<Vec<u8>> {
+        use wasm_bindgen_futures::JsFuture;
+        let response = JsFuture::from(web_sys::window()?.fetch_with_str(url))
+            .await
+            .ok()?;
+        let response: web_sys::Response = response.dyn_into().ok()?;
+        if !response.ok() {
+            return None;
+        }
+        let bytes = JsFuture::from(response.array_buffer().ok()?).await.ok()?;
+        Some(js_sys::Uint8Array::new(&bytes).to_vec())
+    }
+
+    /// The hosting browser keeps ⌘T, ⌘W, ⌘N and ⌘Q (⌃ off the Mac), so they do nothing here, and
+    /// ⌘K (⌃K) opens the command bar, as the web's command palettes do.
+    fn bind_keys(cx: &mut App) {
+        let (open, reserved) = match cx.platform_info().os {
+            OperatingSystem::Mac => ("cmd-k", ["cmd-t", "cmd-w", "cmd-n", "cmd-q"]),
+            _ => ("ctrl-k", ["ctrl-t", "ctrl-w", "ctrl-n", "ctrl-q"]),
+        };
+        let mut bindings = vec![KeyBinding::new(
+            open,
+            OpenCommandBar,
+            Some(shell::KEY_CONTEXT),
+        )];
+        for key in reserved {
+            for context in [shell::KEY_CONTEXT, "CommandBar"] {
+                bindings.push(KeyBinding::new(key, NoAction, Some(context)));
+            }
+        }
+        cx.bind_keys(bindings);
+    }
+
+    /// Where the bar shows, as `command_bar::Host::show` asks.
+    #[derive(Clone, Copy)]
+    struct Place {
+        centered: bool,
+        left: f32,
+        top: f32,
+        width: f32,
+        radius: f32,
+    }
+
+    /// The web's one window: the shell, and over it the command bar, which is a window of its own
+    /// in the app.
+    pub struct Root {
+        shell: Entity<Shell>,
+        bar: Entity<CommandBar>,
+        place: Option<Place>,
+        height: f32,
+        /// The Spaces' ids, in the site's order.
+        spaces: Vec<u64>,
+        /// What the site last heard: the URL shown and the Space's index.
+        shown: Option<(SharedString, Option<usize>)>,
+        drawn: bool,
+        _shell: Subscription,
+    }
+
+    impl Root {
+        fn new(
+            shell: Entity<Shell>,
+            spaces: Vec<u64>,
+            pages: Vec<(SharedString, String)>,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> Entity<Root> {
+            let handle = window.window_handle();
+            cx.new(|cx| {
+                let host = Rc::new(Bar {
+                    root: cx.weak_entity(),
+                    window: handle,
+                    app: cx.to_async(),
+                    shell: shell.downgrade(),
+                    pages,
+                    next_tab: Cell::new(1_000_000),
+                });
+                let bar = command_bar::open_in(host, window, cx);
+                let watch = cx.observe(&shell, |root: &mut Root, shell, cx| {
+                    root.tell_site(&shell, cx)
+                });
+                let mut root = Root {
+                    shell: shell.clone(),
+                    bar,
+                    place: None,
+                    height: command_bar::height(0),
+                    spaces,
+                    shown: None,
+                    drawn: false,
+                    _shell: watch,
+                };
+                root.tell_site(&shell, cx);
+                root
+            })
+        }
+
+        /// Tells the site the page and the Space shown, when either changes.
+        fn tell_site(&mut self, shell: &Entity<Shell>, cx: &App) {
+            let shell = shell.read(cx);
+            let selected = shell.selected();
+            let url = match selected {
+                0 => SharedString::default(),
+                tab => shell.page(tab).url,
+            };
+            let space = self.spaces.iter().position(|&id| id == shell.space());
+            let shown = Some((url.clone(), space));
+            if shown == self.shown {
+                return;
+            }
+            let (last_url, last_space) = self.shown.take().unzip();
+            if last_url.as_ref() != Some(&url) {
+                call("show", &[JsValue::from_str(&url)]);
+            }
+            if let (Some(index), true) = (space, last_space != Some(space)) {
+                call("space", &[JsValue::from(index as f64)]);
+            }
+            self.shown = shown;
+        }
+
+        fn show(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
+            cover(Over::Bar, true);
+            self.place = Some(place);
+            if let Some(input) = command_bar::input_focus(cx) {
+                window.focus(&input, cx);
+            }
+            cx.notify();
+        }
+
+        /// The bar's gone, `dismissed` if the user left it without choosing.
+        fn close(&mut self, dismissed: bool, window: &mut Window, cx: &mut Context<Self>) {
+            self.place = None;
+            cover(Over::Bar, false);
+            if dismissed {
+                // The bar draws in this window, which is mid-update.
+                cx.defer(command_bar::dismissed);
+                self.shell
+                    .update(cx, |shell, cx| shell.command_bar_dismissed(cx));
+            }
+            window.focus(&self.shell.focus_handle(cx), cx);
+            // The site's keys were its own until the bar took them, so they go back with it; a
+            // click that closed it in the demo takes them again.
+            gpui_web::release_keyboard();
+            cx.notify();
+        }
+    }
+
+    impl Render for Root {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            if !std::mem::replace(&mut self.drawn, true) {
+                window.on_next_frame(|_, _| call("ready", &[]));
+            }
+            let root = div()
+                .size_full()
+                .relative()
+                .on_action(cx.listener(|root, _: &OpenCommandBar, _, cx| {
+                    root.shell
+                        .update(cx, |shell, cx| shell.run(Command::NewTab, "web", cx));
+                }))
+                .child(self.shell.clone());
+            let Some(place) = self.place else {
+                return root;
+            };
+            let viewport = window.viewport_size();
+            let (left, top) = match place.centered {
+                true => (
+                    (viewport.width - px(place.width)) / 2.,
+                    viewport.height / 2. - px(place.top),
+                ),
+                false => (px(place.left), px(place.top)),
+            };
+            // A click anywhere but the bar leaves it, as one outside its window does in the app.
+            let outside = div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .occlude()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|root, _, window, cx| root.close(true, window, cx)),
+                );
+            let bar = div()
+                .absolute()
+                .left(left)
+                .top(top)
+                .w(px(place.width))
+                .h(px(self.height))
+                .rounded(px(place.radius))
+                .shadow_lg()
+                .occlude()
+                .child(self.bar.clone());
+            root.child(outside).child(bar)
+        }
+    }
+
+    /// The command bar's requests: the site's pages, and a search for anything typed.
+    struct Bar {
+        root: WeakEntity<Root>,
+        window: AnyWindowHandle,
+        app: AsyncApp,
+        shell: WeakEntity<Shell>,
+        /// The site's tabs, by title and URL, which the bar suggests.
+        pages: Vec<(SharedString, String)>,
+        next_tab: Cell<u64>,
+    }
+
+    impl Bar {
+        /// Runs `change` once the bar's update is over, as a host's reply comes after.
+        fn later(&self, change: impl FnOnce(&mut App) + 'static) {
+            let app = self.app.clone();
+            self.app
+                .foreground_executor()
+                .spawn(async move { app.update(change) })
+                .detach();
+        }
+
+        fn later_root(
+            &self,
+            change: impl FnOnce(&mut Root, &mut Window, &mut Context<Root>) + 'static,
+        ) {
+            let (root, window) = (self.root.clone(), self.window);
+            self.later(move |cx| {
+                window
+                    .update(cx, |_, window, cx| {
+                        root.update(cx, |root, cx| change(root, window, cx))
+                    })
+                    .ok();
+            });
+        }
+
+        fn later_shell(&self, change: impl FnOnce(&mut Shell, &mut Context<Shell>) + 'static) {
+            let shell = self.shell.clone();
+            self.later(move |cx| _ = shell.update(cx, change));
+        }
+    }
+
+    /// A page's title until it has its own: its host.
+    fn title(url: &str) -> SharedString {
+        let host = url.split_once("://").map_or(url, |(_, rest)| rest);
+        host.split('/').next().unwrap_or(host).to_string().into()
+    }
+
+    impl command_bar::Host for Bar {
+        fn suggest(&self, _: Option<&str>, text: &str, _: bool) {
+            let text = text.to_string();
+            let search = self.search_url(None, &text).filter(|_| !text.is_empty());
+            let typed = text.to_lowercase();
+            let matching = self.pages.iter().filter(|(title, url)| {
+                !typed.is_empty() && (title.to_lowercase().contains(&typed) || url.contains(&typed))
+            });
+            let mut rows: Vec<Suggestion> = search
+                .map(|url| Suggestion {
+                    url,
+                    text: text.clone().into(),
+                    ..Default::default()
+                })
+                .into_iter()
+                .collect();
+            rows.extend(matching.map(|(text, url)| Suggestion {
+                url: url.clone(),
+                text: text.clone(),
+                detail: title(url),
+                ..Default::default()
+            }));
+            self.later(move |cx| command_bar::suggested(text, rows, cx));
+        }
+        fn remove_suggestion(&self, _: &str, _: &mut App) {}
+        fn step_removal(&self, _: bool, _: &mut App) -> bool {
+            false
+        }
+        fn typed_url(&self, text: &str) -> Option<String> {
+            match text.contains('.') && !text.contains(' ') {
+                true if text.contains("://") => Some(text.to_string()),
+                true => Some(format!("https://{text}")),
+                false => self.search_url(None, text),
+            }
+        }
+        fn search_url(&self, _: Option<&str>, text: &str) -> Option<String> {
+            let query = String::from(js_sys::encode_uri_component(text));
+            Some(format!("https://duckduckgo.com/?q={query}"))
+        }
+        fn page_favicon(&self, _: &str) {}
+        // A new tab at the top of Today, shown.
+        fn open_tab(&self, url: &str, behind: bool) {
+            let (tab, url) = (self.next_tab.get(), url.to_string());
+            self.next_tab.set(tab + 1);
+            self.later_shell(move |shell, cx| {
+                shell.set_title(tab, title(&url), cx);
+                shell.set_page(
+                    tab,
+                    Page {
+                        url: url.into(),
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                let mut today = shell.today().to_vec();
+                today.insert(0, tab);
+                set_today(shell, today, cx);
+                if !behind {
+                    shell.set_selected(tab, cx);
+                }
+            });
+        }
+        // The demo has the one window.
+        fn open_window(&self, url: &str, _: &mut App) {
+            self.open_tab(url, false);
+        }
+        fn navigate(&self, tab: u64, url: &str) {
+            let url = url.to_string();
+            self.later_shell(move |shell, cx| {
+                shell.set_title(tab, title(&url), cx);
+                shell.set_page(
+                    tab,
+                    Page {
+                        url: url.into(),
+                        ..shell.page(tab)
+                    },
+                    cx,
+                );
+            });
+        }
+        fn reload(&self, _: u64) {}
+        fn select(&self, tab: u64) {
+            self.later_shell(move |shell, cx| shell.set_selected(tab, cx));
+        }
+        fn tab_window(&self, _: u64) -> Option<u64> {
+            None
+        }
+        fn activate(&self, _: u64, _: u64, _: &mut App) {}
+        fn split(&self, _: u64, _: u64, _: &mut App) {}
+        fn open_split(&self, url: &str, _: u64, _: &mut App) {
+            self.open_tab(url, false);
+        }
+        fn copy(&self, _: &str, _: &mut App) {}
+        fn show(
+            &self,
+            centered: bool,
+            left: f32,
+            top: f32,
+            width: f32,
+            radius: f32,
+            _: browser::elevation::Level,
+        ) {
+            let place = Place {
+                centered,
+                left,
+                top,
+                width,
+                radius,
+            };
+            self.later_root(move |root, window, cx| root.show(place, window, cx));
+        }
+        fn set_height(&self, height: f32) {
+            self.later_root(move |root, _, cx| {
+                root.height = height;
+                cx.notify();
+            });
+        }
+        fn hide(&self) {
+            self.later_root(|root, window, cx| root.close(false, window, cx));
+        }
+        fn dismiss(&self) {
+            self.later_root(|root, window, cx| root.close(true, window, cx));
+        }
+        // The bar draws in the one canvas, which has the page's keys once clicked (web::Root).
+        fn take_keyboard(&self) {}
+        fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand> {
+            shell::bar_commands(text, cx)
+        }
+        // The demo runs no agents: ⇥ asks nothing.
+        fn task_agents(&self, _: &App) -> Option<command_bar::TaskAgents> {
+            None
+        }
+        fn over_private(&self) -> bool {
+            false
+        }
+        fn asking(&self, _: bool, _: &mut App) {}
+        fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
+            None
+        }
+        fn run_task(&self, _: &str, _: &str, _: Option<(SharedString, SharedString)>, _: &mut App) {
+        }
+        fn set_up_agents(&self, _: &mut App) {}
+        fn tooltip(
+            &self,
+            _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>,
+            _: &mut App,
+        ) {
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use browser::shell::{Browser, Folders, Shell};
+    use gpui::TestAppContext;
+
+    use super::Fake;
+
+    /// A Space left keeps the tab it showed: its page beside, sliding out once the next Space is
+    /// shown, draws that tab's URL field, not an empty one's, and the Space shows it again on its
+    /// return, as the core's do.
+    #[gpui::test]
+    fn a_space_left_keeps_the_tab_it_showed(cx: &mut TestAppContext) {
+        let fake: Rc<RefCell<Option<Rc<Fake>>>> = Rc::default();
+        let made = fake.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            let browser = Rc::new(Fake {
+                shell: cx.weak_entity(),
+                next_id: Default::default(),
+                spaces: Default::default(),
+                archive: Default::default(),
+                downloads: Default::default(),
+                opt_ins: Default::default(),
+                opens_on: Default::default(),
+                shows: Default::default(),
+            });
+            *made.borrow_mut() = Some(browser.clone());
+            let mut shell = Shell::new(browser, cx);
+            let space = |id: u64| (id, "".into(), None, 0, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space(1), space(2)], cx);
+            for (space, today) in [(1, vec![11, 12]), (2, vec![21, 22])] {
+                shell.set_tabs(space, Vec::new(), today, Vec::new(), Folders::default(), cx);
+            }
+            shell.set_space(1, cx);
+            shell.set_selected(12, cx);
+            shell
+        });
+        let fake = fake.borrow().clone().unwrap();
+        cx.update(|_, cx| fake.show_space(2, cx));
+        cx.run_until_parked();
+        assert_eq!(fake.space_tab(1), 12, "the Space left forgot its tab");
+        assert_eq!(shell.read_with(cx, |shell, _| shell.selected()), 21);
+
+        cx.update(|_, cx| fake.select(22, cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| fake.show_space(1, cx));
+        cx.run_until_parked();
+        assert_eq!(fake.space_tab(2), 22, "the Space left forgot its tab");
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.selected()),
+            12,
+            "back on another tab"
+        );
+    }
 }

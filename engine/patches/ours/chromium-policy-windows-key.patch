@@ -4,33 +4,30 @@ machine shares (docs/policies.md, #684). The loader's key is generated from
 generate_policy_source.py's CHROMIUM_POLICY_KEY in a Chromium-branded build, so it changes there,
 and the policy templates' writer names the same key, so the ADMX files an administrator imports
 agree. It's a constant at build time, as chromium-windows-product-folder.patch names ilo's folders.
-Other systems build the same files and use neither key.
+Other systems build the same files and use neither key. The writer sets the key after its table,
+whose indentation Chromium 157 changed, so one patch fits 156 and 157.
 
 --- a/components/policy/tools/generate_policy_source.py
 +++ b/components/policy/tools/generate_policy_source.py
-@@ -28,7 +28,9 @@
- 
- CHROME_POLICY_KEY = 'SOFTWARE\\\\Policies\\\\Google\\\\Chrome'
+@@ -29,3 +29,5 @@
  CHROME_FOR_TESTING_POLICY_KEY = CHROME_POLICY_KEY + ' for Testing'
 -CHROMIUM_POLICY_KEY = 'SOFTWARE\\\\Policies\\\\Chromium'
 +# browser_core: ilo's own key, so an administrator's policies for every other Chromium on the
 +# machine aren't ilo's (docs/policies.md).
 +CHROMIUM_POLICY_KEY = 'SOFTWARE\\\\Policies\\\\ilo'
  PLATFORM_STRINGS = {
-     'chrome_frame': ['win'],
-     'chrome_os': ['chrome_os'],
 --- a/components/policy/tools/template_writers/writer_configuration.py
 +++ b/components/policy/tools/template_writers/writer_configuration.py
-@@ -34,9 +34,10 @@
-         'webview_name': 'Chromium WebView',
-         'win_config': {
-             'win': {
--                'reg_mandatory_key_name': 'Software\\Policies\\Chromium',
-+                # browser_core: the key the loader reads (generate_policy_source.py).
-+                'reg_mandatory_key_name': 'Software\\Policies\\ilo',
-                 'reg_recommended_key_name':
--                'Software\\Policies\\Chromium\\Recommended',
-+                'Software\\Policies\\ilo\\Recommended',
-                 'mandatory_category_path': ['chromium'],
-                 'recommended_category_path': ['chromium_recommended'],
-                 'category_path_strings': {
+@@ -118,6 +118,12 @@
+     }
+   else:
+     raise Exception('Unknown build')
++  if '_chromium' in defines:
++    # browser_core: the key the loader reads (generate_policy_source.py), set here rather than in
++    # the table above, whose layout differs between Chromium versions.
++    config['win_config']['win']['reg_mandatory_key_name'] = 'Software\\Policies\\ilo'
++    config['win_config']['win']['reg_recommended_key_name'] = (
++        'Software\\Policies\\ilo\\Recommended')
+   if 'version' in defines:
+     config['version'] = defines['version']
+   if 'major_version' in defines:
