@@ -393,6 +393,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
 }
 
 unsafe extern "C" fn started(_: *mut c_void) {
+    gpui::launch_mark("app started callback");
     // Chromium's message loop dispatches GPUI's messages, as its run loop does on the Mac.
     #[cfg(target_os = "windows")]
     gpui_windows::embed();
@@ -479,6 +480,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         }
         !display.is_null()
     };
+    gpui::launch_mark("app platform making");
     let application = gpui_platform::application().with_assets(shell::Assets);
     // On X11, as Chromium is, even with a Wayland display in the environment.
     #[cfg(target_os = "linux")]
@@ -492,7 +494,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         )),
     };
     let app = application.run_embedded(move |cx| {
+        gpui::launch_mark("app run_embedded");
         browser::face::register(cx);
+        gpui::launch_mark("app faces registered");
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
         settings::read_look(cx);
@@ -545,6 +549,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         log!("browser: started at {:.1} ms", unsafe {
             platform::host_since_launch()
         });
+        gpui::launch_mark("app dock dot");
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
         // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
@@ -555,10 +560,13 @@ unsafe extern "C" fn started(_: *mut c_void) {
         ) {
             unsafe { platform::host_set_little_task(title.as_ptr(), switch.as_ptr()) };
         }
+        gpui::launch_mark("app hosts starting");
         needs_you_host::start(cx);
         daily_count_host::start(cx);
         safe_start_host::start(cx);
+        gpui::launch_mark("app open_window");
         open_window(None, None, cx);
+        gpui::launch_mark("app open_window returned");
         // Launched by New Incognito Window while ilo wasn't running, the private window opens
         // over the first.
         if launch_asks_private_window() {
@@ -569,7 +577,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         if little_launch::asks_for_little(std::env::args()) {
             cx.defer(|cx| new_little_window("command line", cx));
         }
+        gpui::launch_mark("app launched closure ends");
     });
+    gpui::launch_mark("app run_embedded returned");
     // On Chromium's Wayland display, GPUI's windows and their surfaces are on a display Chromium
     // has closed by the time the thread-locals go at exit, and dropping them there crashes (#474).
     #[cfg(target_os = "linux")]
@@ -587,6 +597,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         }
         unsafe { platform::host_watch_fd(fd, ready) };
     }
+    gpui::launch_mark("app started returns");
 }
 
 /// AppKit has finished launching the app, and so has handed over the links that launched it.

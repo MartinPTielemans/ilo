@@ -3286,11 +3286,20 @@ void WriteJumpList();
 constexpr double kJumpListAfter = 2;
 }  // namespace
 
+// Proof only (#2384): a launch mark from the host, as the app's (gpui::launch_mark).
+void ProofMark(const char* what) {
+  fprintf(stderr, "browser: mark host %s at %.1f ms on host\n", what, host_since_launch());
+}
+
 void host_show_window(void* ui_view) {
+  ProofMark("show starts");
   HWND root = Root(ui_view);
   TakeTitleBar(ui_view);
+  ProofMark("title bar taken");
   ShowWindow(root, SW_SHOW);
+  ProofMark("ShowWindow returned");
   SetForegroundWindow(root);
+  ProofMark("SetForegroundWindow returned");
   if (g_jump_list_wanted && !std::exchange(g_jump_list_set, true)) {
     After(kJumpListAfter, WriteJumpList);
   }
