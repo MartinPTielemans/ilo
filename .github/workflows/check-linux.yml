@@ -28,7 +28,7 @@ on:
           Where check.sh runs the app: on X11 under Xvfb or sway's Xwayland, or under Xvfb and KWin,
           which blurs, then on Wayland with no runs named, or on Wayland alone
         type: choice
-        options: [xvfb, sway, kwin, wayland]
+        options: [xvfb, sway, kwin, wayland, i3]
         default: xvfb
       rebuild:
         description: Build the app, even if a check of this commit kept one
@@ -320,6 +320,11 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: kwin-x11 x11-utils dbus-bin
+      # Probe (#2790): i3, a tiling manager, and the probe's window tree under openbox.
+      - if: ${{ steps.engine.outputs.found == 'true' && (matrix.session == 'i3' || matrix.session == 'xvfb') }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: i3-wm x11-utils
 
       # The updates run builds ilo's Flatpak (tools/flatpak.sh) and updates it through Flatpak's
       # portal and permission store, which only it needs. The leg's runs alone decide, so main's
@@ -456,6 +461,7 @@ jobs:
           case $SESSION in
           xvfb) export BROWSER_XVFB=1 ;;
           kwin) export BROWSER_XVFB=kwin ;;
+          i3) export BROWSER_XVFB=i3 ;;
           wayland) export BROWSER_WAYLAND=1; where=wayland/ ;;
           esac
           dir=$out/$where
