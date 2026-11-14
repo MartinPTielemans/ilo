@@ -252,6 +252,54 @@ pub(super) fn after(ms: u32, task: Box<dyn FnOnce()>) {
     unsafe { g_timeout_add(ms, run, Box::into_raw(Box::new(task)) as *mut c_void) };
 }
 
+/// Probe for #2789, not for merging: for 1.5 s from a click, each change of the X input focus,
+/// as the window it's in, and of whether the core says the UI has the keyboard, in the order the
+/// main loop sees them, polled every millisecond.
+fn probe_2789(start: Instant, last: Option<(String, bool)>) {
+    let Some(browser) = driven() else { return };
+    let Some(x) = server() else { return };
+    let (connection, _) = &*x;
+    let Some(focus) = connection
+        .get_input_focus()
+        .ok()
+        .and_then(|c| c.reply().ok())
+    else {
+        return;
+    };
+    let focus = focus.focus;
+    let place = if focus == browser.window {
+        "browser window".to_string()
+    } else if focus == browser.gpui {
+        "gpui window".to_string()
+    } else if focus == browser.ui {
+        "ui window".to_string()
+    } else if within(connection, focus, browser.gpui) {
+        format!("{focus:#x} in gpui")
+    } else if within(connection, focus, browser.window) {
+        format!("{focus:#x} in browser window")
+    } else if overlay_views()
+        .iter()
+        .any(|&v| within(connection, focus, v as usize as u32))
+    {
+        format!("{focus:#x} overlay")
+    } else {
+        format!("{focus:#x} other")
+    };
+    let ui = unsafe { bc::bc_window_keyboard_is_ui(browser.id) };
+    let now = (place, ui);
+    if last.as_ref() != Some(&now) {
+        log!(
+            "browser: probe 2789 +{} us: input focus {}, core keyboard {}",
+            start.elapsed().as_micros(),
+            now.0,
+            if now.1 { "ui" } else { "page" }
+        );
+    }
+    if start.elapsed() < Duration::from_millis(1500) {
+        after(1, Box::new(move || probe_2789(start, Some(now))));
+    }
+}
+
 /// Reports command `n` done once Chromium and GPUI have handled its events: once the X server has
 /// handed them over, and the main loop has read them. Twice, as the server may write the windows'
 /// clients' events after its answer to the driver's. GPUI's are handled as it syncs, since xcb
@@ -2607,6 +2655,7 @@ fn run_command(line: &str) -> Option<()> {
         "click" | "rightclick" | "middleclick" | "doubleclick" => {
             let (x, y) = point(&mut words)?;
             let at = target_at(x, y)?;
+            probe_2789(Instant::now(), None);
             let which = match action {
                 "rightclick" => 3,
                 "middleclick" => 2,

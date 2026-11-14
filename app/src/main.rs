@@ -462,7 +462,15 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 // as after ⌘W, where the UI holds the keys for the page shown next (#1209).
                 fn pressed(ui_view: *mut c_void) {
                     if let Some(window) = window_in(ui_view) {
+                        // Probe for #2789, not for merging.
+                        let before = unsafe { bc::bc_window_keyboard_is_ui(window) };
                         unsafe { bc::bc_window_ui_takes_keyboard(window) };
+                        let after = unsafe { bc::bc_window_keyboard_is_ui(window) };
+                        log!(
+                            "browser: probe 2789 ui pressed, core keyboard ui before {} after {}",
+                            before as u8,
+                            after as u8
+                        );
                     }
                 }
                 gpui_linux::embed_x11(unsafe { bc::bc_display_scale() } as f32, pressed);
