@@ -570,6 +570,7 @@ none_since '^browser: history open$' || fail "a click on a visited page's row op
 expect '^browser: link preview [1-9][0-9]* https\{0,1\}://' "Peek of the visited page didn't open at a page"
 peek=$(grep '^browser: link preview [1-9][0-9]* http' "$log" | tail -1 | cut -d' ' -f4)
 expect '^browser: link preview settled$' "Peek of the visited page didn't settle"
+expect "^browser: loaded $peek http" "Peek's page didn't load before Esc (probe: does main list a loaded Peek's visit?)"
 ../tools/window-screenshot.sh "$pid" "$out/history-peek-visited.png" || fail "no window to capture"
 send key escape
 expect '^browser: link preview closing (' "Esc didn't close Peek of the visited page"
