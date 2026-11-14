@@ -32,6 +32,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
+#include "browser_core/ad_block_list_check.h"
 #include "browser_core/extensions.h"
 #include "browser_core/hooks.h"
 #include "browser_core/native_ad_block.h"
@@ -92,9 +93,8 @@ constexpr char kFilterListsSource[] = "";
 
 // How often, in hours, it updates its lists while the browser stays open: weekly, so an idle
 // browser wakes for them once a week, as a launch updates the lists past their expiry 37 s in.
-// The browser's own ad blocker keeps the same times.
+// The browser's own ad blocker has no timer: it looks with a page instead (ad_block_list_check.h).
 constexpr char kUpdatePeriodHours[] = "168";
-constexpr base::TimeDelta kUpdatePeriod = base::Hours(168);
 constexpr base::TimeDelta kFirstUpdate = base::Seconds(37);
 // uBlock Origin's "emergency" update, for when a list is twice as old as it stays current.
 constexpr base::TimeDelta kFirstUpdateOfStaleLists = base::Seconds(2);
@@ -383,16 +383,24 @@ std::vector<NativeAdBlockList> ListsToKeepCurrent() {
   for (const AdBlockList& list : AdBlockLists()) {
     const auto listed = std::ranges::find(Lists(), list.key, &Listed::key);
     if (list.on && listed != Lists().end() && !listed->addresses.empty()) {
-      lists.push_back({listed->key, listed->addresses, listed->update_after});
+      lists.push_back({listed->key, listed->addresses, listed->update_after, listed->file});
     }
   }
   return lists;
+}
+
+// When the browser's own ad blocker last looked at its lists, or null until launch's look.
+base::TimeTicks& LastLook() {
+  static base::TimeTicks last;
+  return last;
 }
 
 // Downloads the lists turned on that are past their expiry, or that the browser has no copy of,
 // for the browser's own ad blocker, and gives it those it downloaded. One update at a time.
 void UpdateLists() {
   static bool updating = false;
+  // A look with ad blocking off counts, so the hour after it a page looks again.
+  LastLook() = base::TimeTicks::Now();
   if (!NativeAdBlock() || !UserSettings().ad_blocking || updating) {
     return;
   }
@@ -412,10 +420,9 @@ void UpdateLists() {
 }
 
 // Updates the lists 37 s after launch, or 2 s if one is long out of date, as on a first launch
-// with the lists the browser came with, and weekly after, as uBlock Origin does its own.
+// with the lists the browser came with, as uBlock Origin does its own. After that a page looks
+// (AddAdBlockHold), so an idle browser never wakes for them.
 void KeepListsCurrent() {
-  static base::NoDestructor<base::RepeatingTimer> weekly;
-  weekly->Start(FROM_HERE, kUpdatePeriod, base::BindRepeating(&UpdateLists));
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&AnyNativeAdBlockListLongOutOfDate, ListsToKeepCurrent()),
@@ -732,6 +739,9 @@ void AddAdBlockHold(content::NavigationThrottleRegistry& registry) {
     // A tab's page asks at each address it's redirected to, as a site turned off may be one.
     if (!parent) {
       AddNativeAdBlockPage(registry);
+      if (ad_block_list_check::PageLooks(LastLook(), base::TimeTicks::Now())) {
+        UpdateLists();
+      }
       return;
     }
     const GURL page = parent->GetOutermostMainFrame()->GetLastCommittedURL();
