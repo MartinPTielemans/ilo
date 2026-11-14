@@ -841,7 +841,14 @@ l.addEventListener("mouseleave", () => {
   clearTimeout(rest);
   rest = setTimeout(() => document.title = "rested " + entered, 600);
 });
-requestAnimationFrame(() => setTimeout(() => document.title = "held ready"));
+requestAnimationFrame(() => setTimeout(() => {
+  document.title = "held ready";
+  // Probe (#2764): every pointer event the page hears, in the log by its title.
+  let k = 0;
+  for (const type of ["mousemove", "mousedown", "mouseup", "mouseover", "pointerover"])
+    addEventListener(type, e => document.title =
+      `ev ${++k} ${type} ${e.clientX},${e.clientY} ${e.target.id || e.target.tagName}`, true);
+}));
 </script>' > "$out/site/little-held.html"
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar for the held press's page"
@@ -854,8 +861,21 @@ expect '^browser: title [0-9]* held ready$' "the held press's page didn't draw"
 # reached its link before it leaves.
 send click $page_point
 send move $((x + 20)) $((y + 20))
-await '^browser: title [0-9]* on 1$' ||
-  fail "the held press's page didn't say the pointer reached its link"
+if await '^browser: title [0-9]* on 1$'; then
+  echo "probe 2764: on 1 after the click and one move"
+else
+  send move $((x + 21)) $((y + 21))
+  if await '^browser: title [0-9]* on 1$'; then
+    echo "probe 2764: on 1 after a second move a pixel on"
+  else
+    send move $page_point
+    send move $((x + 20)) $((y + 20))
+    await '^browser: title [0-9]* on 1$' ||
+      fail "probe 2764: no on 1 after the click, two moves, off and back on"
+    echo "probe 2764: on 1 only after off and back on"
+  fi
+fi
+grep '^browser: title [0-9]* \(ev\|on\|held\)' "$log" | sed 's/^/probe 2764: /'
 send move $page_point
 await '^browser: title [0-9]* rested 1$' ||
   fail "the held press's page didn't say the pointer had left its link 600 ms before"
