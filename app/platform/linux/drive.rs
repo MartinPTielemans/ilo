@@ -900,6 +900,9 @@ fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
         xtest_modifiers(state & MODIFIERS)?;
     }
     hover(at)?;
+    if press {
+        uncover(at);
+    }
     let kind = match press {
         true => xproto::BUTTON_PRESS_EVENT,
         false => xproto::BUTTON_RELEASE_EVENT,
@@ -909,6 +912,56 @@ fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
         true => Some(()),
         false => xtest_modifiers(0),
     }
+}
+
+/// Before a press at `at`, with the pointer there: waits until no window of the screen's that's
+/// input-only, which a hand can't see and so never means to click, is over the point. KWin keeps
+/// one over each screen corner that has an action, and takes it away as the pointer comes into it
+/// (its X11 WindowBasedEdge's approach window), so a hand's press reaches the window under it; the
+/// driver's, sent with the move, reached KWin's first (#2765). For 2 s at most, then it goes.
+fn uncover(at: Target) {
+    let Some(x) = server() else { return };
+    let (connection, root) = &*x;
+    let covering = || {
+        let child = connection.query_pointer(*root).ok()?.reply().ok()?.child;
+        if child == x11rb::NONE || within(connection, at.window, child) {
+            return None;
+        }
+        let attributes = connection.get_window_attributes(child).ok()?.reply().ok()?;
+        (attributes.class == xproto::WindowClass::INPUT_ONLY).then_some(child)
+    };
+    let until = Instant::now() + Duration::from_secs(2);
+    let started = Instant::now();
+    let pause = || std::thread::sleep(Duration::from_millis(2));
+    match await_uncovered(until, covering, pause) {
+        Ok(0) => {}
+        Ok(_) => log!(
+            "browser: drive waited {} ms for an input-only window over the point to go",
+            started.elapsed().as_millis()
+        ),
+        Err(window) => log!(
+            "browser: drive pressed under {window:#x}, an input-only window still over the point after 2 s"
+        ),
+    }
+}
+
+/// Asks `covering` which window covers the point until it's none, with `pause` between, as the
+/// window's client takes it away once it hears the pointer come; until `until`, when it answers the
+/// window still there. How many times it was covered, otherwise.
+fn await_uncovered(
+    until: Instant,
+    mut covering: impl FnMut() -> Option<xproto::Window>,
+    mut pause: impl FnMut(),
+) -> Result<usize, xproto::Window> {
+    let mut times = 0;
+    while let Some(window) = covering() {
+        if Instant::now() >= until {
+            return Err(window);
+        }
+        times += 1;
+        pause();
+    }
+    Ok(times)
 }
 
 /// Moves the pointer to `at` through XTEST, which holds the buttons itself. While one is held, the
@@ -2582,6 +2635,7 @@ fn run_command(line: &str) -> Option<()> {
             let (x, y) = point(&mut words)?;
             let at = target_at(x, y)?;
             hover(at)?;
+            uncover(at);
             xtest_event(xproto::BUTTON_PRESS_EVENT, 1, at.root_x, at.root_y)?;
             xtest_event(xproto::BUTTON_RELEASE_EVENT, 1, at.root_x, at.root_y)
         }
@@ -3437,7 +3491,30 @@ fn relative_to(to: Target, window: xproto::Window) -> Option<Target> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WmGrab, wm_grab_after, xproto, xtest_delay, xtest_verdict};
+    use super::{WmGrab, await_uncovered, wm_grab_after, xproto, xtest_delay, xtest_verdict};
+    use std::time::{Duration, Instant};
+
+    // KWin's input-only window over the screen's corner took the press the driver sent with the
+    // move there, before KWin heard the pointer come and took the window away (#2765).
+    #[test]
+    fn a_press_waits_for_an_input_only_window_over_the_point_to_go() {
+        let later = Instant::now() + Duration::from_secs(60);
+        let mut pauses = 0;
+        let mut answers = [Some(0x20001b), Some(0x20001b), None].into_iter();
+        let waited = await_uncovered(later, || answers.next().flatten(), || pauses += 1);
+        assert_eq!(waited, Ok(2));
+        assert_eq!(pauses, 2);
+        // Nothing over the point: the press goes at once.
+        let mut pauses = 0;
+        assert_eq!(await_uncovered(later, || None, || pauses += 1), Ok(0));
+        assert_eq!(pauses, 0);
+        // One that stays past the deadline is named, and the press goes anyway.
+        let past = Instant::now();
+        assert_eq!(
+            await_uncovered(past, || Some(0x20001b), || {}),
+            Err(0x20001b)
+        );
+    }
 
     // The driver let go of a drag before the window manager took the pointer for the window move
     // the drag started, and the move outlived it and took the next press (#2721).
