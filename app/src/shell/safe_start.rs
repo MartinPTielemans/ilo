@@ -3,8 +3,9 @@
 //! (crate::safe_start), and this card, over the footer and under the update banner, says so in
 //! every window until the launch ends: what happened, what's off, that pages aren't ad-blocked
 //! meanwhile if Settings blocks ads, Turn Back On, which restarts into a normal launch with the
-//! windows and tabs, and Manage Extensions…, for the extension that may be the cause. Those two are
-//! an agent task card's chips, so the foot's cards read as one family. It has no ×: the hold lasts
+//! windows and tabs, and Extensions…, for the extension that may be the cause. Those two are an
+//! agent task card's chips, one under the other at every width, so the foot's cards read as one
+//! family and the card doesn't reflow as the sidebar's width changes. It has no ×: the hold lasts
 //! the launch whatever the user does, so the card does too. Agents get none of it.
 
 use gpui::{
@@ -23,14 +24,15 @@ use crate::tokens::shell::{
     UPDATE_BANNER_GAP,
 };
 use crate::tokens::text;
-use crate::tooltip::text_width;
 
 /// Its words, as check.sh and an assistive app name them.
 pub(super) const TITLE: &str = concat!(env!("APP_NAME"), " closed unexpectedly");
 const OFF: &str = "Extensions and Boosts are off for now.";
 const OFF_UNBLOCKED: &str = "Extensions and Boosts are off for now, so ads aren’t blocked.";
 pub(super) const TURN_BACK_ON: &str = "Turn Back On";
-pub(super) const MANAGE: &str = "Manage Extensions…";
+/// The body line says what is off, so the chip needn't say "Manage", and so fits whole at the
+/// narrowest sidebar.
+pub(super) const EXTENSIONS: &str = "Extensions…";
 
 /// The gap between the title and the detail, as the update banner's open state has it.
 const DETAIL_TOP: f32 = 2.;
@@ -43,9 +45,6 @@ pub(super) struct Shape {
     ad_blocking: bool,
     title_lines: usize,
     detail_lines: usize,
-    /// Whether Manage Extensions… goes on a row of its own, under Turn Back On, as a task card's
-    /// chips wrap.
-    chips_wrap: bool,
 }
 
 impl Shape {
@@ -56,11 +55,8 @@ impl Shape {
             + self.detail_lines as f32 * SAFE_START_DETAIL_LINE
             + CHIPS_TOP
             + CHIP_HEIGHT
-            + if self.chips_wrap {
-                CHIP_GAP + CHIP_HEIGHT
-            } else {
-                0.
-            }
+            + CHIP_GAP
+            + CHIP_HEIGHT
             + SAFE_START_PAD
     }
 }
@@ -75,7 +71,7 @@ fn chips_x() -> f32 {
     words_x() - CHIP_X
 }
 
-/// How wide the chips' row may be in a card `plate` wide.
+/// How wide a chip may be in a card `plate` wide.
 fn chips_room(plate: f32) -> f32 {
     plate - CHIP_END - chips_x()
 }
@@ -147,11 +143,6 @@ impl Shell {
             .unwrap_or_else(|| WindowTextSystem::new(cx.text_system().clone()));
         let plate = width - 2. * PLATE_INSET;
         let wrap = plate - words_x() - TITLE_END_INSET;
-        let chip = |label: &str| {
-            let label: SharedString = label.to_string().into();
-            text_width(&label, text::SMALL, FontWeight::MEDIUM, &system).ceil() + 2. * CHIP_X
-        };
-        let chips_wrap = chip(TURN_BACK_ON) + CHIP_GAP + chip(MANAGE) > chips_room(plate);
         let shape = Shape {
             width,
             ad_blocking,
@@ -163,7 +154,6 @@ impl Shell {
                 wrap,
                 &system,
             ),
-            chips_wrap,
         };
         self.text_system = Some(system);
         if self.safe_start.is_none() {
@@ -240,8 +230,8 @@ impl Shell {
             ))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|shell, _, _, cx| shell.turn_back_on(cx)));
-        let manage = card_chip(&self.palette, "safe-start-manage", MANAGE.into())
-            .when(self.a11y, |link| link.button_named(MANAGE))
+        let manage = card_chip(&self.palette, "safe-start-manage", EXTENSIONS.into())
+            .when(self.a11y, |link| link.button_named(EXTENSIONS))
             .relative()
             .max_w(px(room))
             // check.sh clicks it where it's drawn.
@@ -257,7 +247,8 @@ impl Shell {
             .ml(px(chips_x()))
             .mr(px(CHIP_END))
             .flex()
-            .when(shape.chips_wrap, |chips| chips.flex_col().items_start())
+            .flex_col()
+            .items_start()
             .gap(px(CHIP_GAP))
             .child(button)
             .child(manage);
