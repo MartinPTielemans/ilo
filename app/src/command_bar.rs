@@ -265,6 +265,17 @@ const SET_UP: &str = "Set up Claude or Codex";
 /// size, as the chip's text is the rows' body size.
 const CHIP_MAX: f32 = 180.;
 const CHIP_FAVICON: f32 = 12.;
+/// The tile after a row's end, as Switch to Tab's: its margin from the row's end, and its glyph's
+/// box.
+const END_TILE_RIGHT: f32 = 3.;
+const END_GLYPH: f32 = 14.;
+
+/// How far from the row's end its end ends with no tile after it, as a visited page's day: at the
+/// tile's glyph's right edge, so it lines up with a closed tab's ↺ over or under it, the tile's
+/// plate hanging past (the orchestrator, 11-14).
+fn bare_end() -> f32 {
+    END_TILE_RIGHT + (ICON_BOX - END_GLYPH) / 2.
+}
 
 /// A task ⇥ is making of what's typed: the page that goes with it, as its address and title, which
 /// ⌫ at the field's start takes off.
@@ -3232,7 +3243,7 @@ impl CommandBar {
                     div()
                         .size(px(ICON_BOX))
                         .flex_none()
-                        .mr(px(3.))
+                        .mr(px(END_TILE_RIGHT))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -3242,14 +3253,20 @@ impl CommandBar {
                         } else {
                             palette.plate(ARROW_TILE)
                         })
-                        .child(svg().path(glyph).size(px(14.)).text_color(if selected {
-                            accent
-                        } else {
-                            palette.on_overlay(ARROW)
-                        }))
+                        .child(
+                            svg()
+                                .path(glyph)
+                                .size(px(END_GLYPH))
+                                .text_color(if selected {
+                                    accent
+                                } else {
+                                    palette.on_overlay(ARROW)
+                                }),
+                        )
                 });
                 let tint = if selected { label } else { dim };
-                let label = div().flex_none().mr(px(7.)).text_color(tint);
+                let end = if tile.is_some() { 7. } else { bare_end() };
+                let label = div().flex_none().mr(px(end)).text_color(tint);
                 line.child(div().flex_1())
                     .child(label.child(said))
                     .children(tile)
