@@ -195,6 +195,17 @@ source_set("arrangement") {
   ]
 }
 
+# What the ad blocker carries over from uBlock Origin's storage, apart so browser_core_unittests
+# tests the read alone.
+source_set("ad_block_carry") {
+  sources = [
+    "ad_block_carry.cc",
+    "ad_block_carry.h",
+  ]
+  public_deps = [ "//base" ]
+  deps = [ "//third_party/leveldatabase" ]
+}
+
 # When auto-archive takes a Today tab, Never too, apart so browser_core_unittests tests the rule
 # alone.
 source_set("archive_rule") {
@@ -473,6 +484,7 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":ad_block_carry",
     ":ad_block_page",
     ":archive_rule",
     ":arrangement",
@@ -767,6 +779,7 @@ source_set("browser_core") {
 # engine's run runs them.
 test("browser_core_unittests") {
   sources = [
+    "ad_block_carry_unittest.cc",
     "archive_rule_unittest.cc",
     "arrangement_unittest.cc",
     "agent_download_hold_unittest.cc",
@@ -799,6 +812,7 @@ test("browser_core_unittests") {
     "withheld_fields_unittest.cc",
   ]
   deps = [
+    ":ad_block_carry",
     ":archive_rule",
     ":arrangement",
     ":agent_download_hold",
