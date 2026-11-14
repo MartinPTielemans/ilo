@@ -1733,6 +1733,35 @@ fn a_question_left_unanswered_is_refused_after_5_minutes(cx: &mut TestAppContext
     assert!(grants.is_empty());
 }
 
+/// A check's `--agent-waits` shortens both waits so a run sees each end; a prod build, or a value
+/// that isn't two whole seconds, keeps the spec's.
+#[test]
+fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
+    let given = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let spec = Waits {
+        ask: ASK_WAIT,
+        handoff: HANDOFF_WAIT,
+    };
+    assert_eq!(Waits::new(&given(&[]), false), spec);
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=2,3"]), false),
+        Waits {
+            ask: Duration::from_secs(2),
+            handoff: Duration::from_secs(3),
+        }
+    );
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=2,3"]), true),
+        spec,
+        "a prod build reads no check's waits"
+    );
+    assert_eq!(Waits::new(&given(&["--agent-waits=2"]), false), spec);
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=x,3"]), false).ask,
+        ASK_WAIT
+    );
+}
+
 /// A handoff not handed back in 15 minutes answers the agent's call, so it isn't left waiting.
 /// The tab stays the user's, and Hand Back still gives it back.
 #[gpui::test]
