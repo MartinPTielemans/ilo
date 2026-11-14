@@ -2594,6 +2594,14 @@ void host_watch_reduce_motion(void (*changed)(void)) {
               }];
 }
 
+bool host_twelve_hour_clock(void) {
+  // "j" is the locale's preferred hour, which follows the user's 24-hour switch; "a" is AM/PM.
+  NSString* format = [NSDateFormatter dateFormatFromTemplate:@"j"
+                                                     options:0
+                                                      locale:NSLocale.autoupdatingCurrentLocale];
+  return [format containsString:@"a"];
+}
+
 bool host_is_default_browser(void) {
   NSString* mine = NSBundle.mainBundle.bundleIdentifier;
   for (NSString* link in @[ @"http://", @"https://" ]) {

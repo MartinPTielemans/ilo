@@ -89,7 +89,7 @@ fn a_click_on_an_archived_tab_opens_it_in_a_preview(cx: &mut TestAppContext) {
     );
     assert!(library_open(&shell, cx));
     // Kept, it's the window's tab, and the Library closes as for a tab restored from its row.
-    shell.update(cx, |shell, cx| shell.restored_from_preview(cx));
+    shell.update(cx, |shell, cx| shell.kept_from_preview(cx));
     cx.run_until_parked();
     assert!(!library_open(&shell, cx));
 }

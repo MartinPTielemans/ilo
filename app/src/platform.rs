@@ -129,6 +129,8 @@ unsafe extern "C" {
     pub fn host_reduce_motion() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_watch_reduce_motion(changed: extern "C" fn());
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_twelve_hour_clock() -> bool;
     pub fn host_is_default_browser() -> bool;
     pub fn host_make_default_browser(answered: extern "C" fn());
     pub fn host_since_launch() -> f64;

@@ -382,6 +382,8 @@ source_set("browser_core") {
     "history_deletions.h",
     "history_import.cc",
     "history_import.h",
+    "history_list.cc",
+    "history_list.h",
     "idle_unload.cc",
     "idle_unload.h",
     "host.h",

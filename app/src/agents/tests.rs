@@ -1593,6 +1593,55 @@ fn an_agent_never_reaches_chromes_password_manager(cx: &mut TestAppContext) {
     assert!(browser.pages.borrow().is_empty());
 }
 
+/// Library › History lists the profile's pages, so an agent can't reach the history page Chrome
+/// keeps them in either, by a tab of its own or its tab's way, each try in the activity log with
+/// why, and it has no tool that lists or removes them (#2337).
+#[gpui::test]
+fn an_agent_never_reaches_the_history(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let tabs = browser.tabs.borrow().len();
+    let refused = ToolResult::error("Agents may open only http and https pages.");
+    for url in [
+        "chrome://history",
+        "chrome://history/?q=bank",
+        "CHROME://HISTORY",
+    ] {
+        let answer = call(
+            &agents,
+            "claude-code",
+            "open_tab",
+            json!({ "url": url }),
+            cx,
+        );
+        assert_eq!(answer.recv().unwrap(), refused, "{url}");
+        let going = json!({ "tab": 20, "url": url });
+        let answer = call(&agents, "claude-code", "navigate", going, cx);
+        assert_eq!(answer.recv().unwrap(), refused, "{url}");
+        let (action, _, why) = log(&agents, "claude-code", cx)[0].clone();
+        assert_eq!(
+            (action.as_str(), why.as_str()),
+            ("navigate", "Agents may open only http and https pages."),
+            "{url}'s refusal isn't in the activity log"
+        );
+    }
+    assert_eq!(
+        browser.tabs.borrow().len(),
+        tabs,
+        "an agent opened the history"
+    );
+    assert!(
+        browser.navigated.borrow().is_empty(),
+        "an agent went to the history"
+    );
+    for tool in ["history", "list_history", "remove_history"] {
+        let answer = call(&agents, "claude-code", tool, json!({}), cx);
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error(format!("There's no tool {tool}."))
+        );
+    }
+}
+
 /// A tab the page opens as the agent clicks, which the core puts in the agent's Space, behind, is
 /// named in the click's answer, so the agent can work in it (#1470). One another tab's page opens
 /// isn't.

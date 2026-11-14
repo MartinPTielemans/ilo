@@ -69,9 +69,11 @@ impl link_preview::Host for LinkPreviewHost {
         }
     }
 
-    fn kept_archived(&self, window: u64, archived: u64, cx: &mut App) {
-        // check.sh waits for this line.
-        log!("browser: restore archived {archived} from preview");
+    fn kept(&self, window: u64, archived: Option<u64>, cx: &mut App) {
+        if let Some(archived) = archived {
+            // check.sh waits for this line.
+            log!("browser: restore archived {archived} from preview");
+        }
         let shell = WINDOWS.with_borrow(|windows| {
             windows
                 .iter()
@@ -80,7 +82,7 @@ impl link_preview::Host for LinkPreviewHost {
         });
         if let Some(shell) = shell {
             shell
-                .update(cx, |shell, cx| shell.restored_from_preview(cx))
+                .update(cx, |shell, cx| shell.kept_from_preview(cx))
                 .ok();
         }
     }

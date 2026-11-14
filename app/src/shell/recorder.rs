@@ -81,6 +81,11 @@ pub(super) struct Recorder {
     pub(super) checked_for_updates: Cell<usize>,
     /// The import finds no browser on the machine.
     pub(super) no_browsers: Cell<bool>,
+    /// The profile's history hasn't loaded, so `list_history` and `remove_history` answer false.
+    pub(super) history_unloaded: Cell<bool>,
+    /// The starts of today, yesterday, this week and last week, as `day_starts` answers: all 0,
+    /// so everything is today, unless a test says.
+    pub(super) day_starts: Cell<[f64; 4]>,
     /// A field of the page has the keyboard, as `show_autofill` answers.
     pub(super) field_focused: Cell<bool>,
     /// The browser the import reads and adds to, when a test gives one.
@@ -742,6 +747,26 @@ impl Browser for Recorder {
         id
     }
 
+    fn list_history(
+        &self,
+        profile: u64,
+        request: u64,
+        before: i64,
+        text: &str,
+        max: usize,
+        _: &mut App,
+    ) -> bool {
+        self.record(format!(
+            "list history {profile} {request} {before} {text:?} {max}"
+        ));
+        !self.history_unloaded.get()
+    }
+
+    fn remove_history(&self, profile: u64, url: &str, begin: i64, end: i64, _: &mut App) -> bool {
+        self.record(format!("remove history {profile} {url} {begin} {end}"));
+        !self.history_unloaded.get()
+    }
+
     fn act_on_download(&self, _: u64, _: DownloadAction, _: &mut App) {}
 
     fn clear_downloads(&self, private: Option<u64>, _: &mut App) {
@@ -798,7 +823,7 @@ impl Browser for Recorder {
     fn page_favicon(&self, _: &str, _: &mut App) {}
 
     fn day_starts(&self) -> [f64; 4] {
-        Default::default()
+        self.day_starts.get()
     }
 
     fn last_seen(&self, tab: u64) -> f64 {

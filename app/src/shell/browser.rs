@@ -207,6 +207,33 @@ pub trait Browser {
     fn remove_archived(&self, archived: u64, cx: &mut App) -> u64;
     /// Empties the archive, and returns the removal's id, or 0 if it was empty.
     fn clear_archive(&self, cx: &mut App) -> u64;
+    /// Asks for up to `max` of `profile`'s visited pages from before `before`, in microseconds
+    /// since 1970, or from now for 0: newest first, each once a day, and those whose title or URL
+    /// has `text`'s words. The answer comes to `Shell::history_listed` with `request`. False when
+    /// none will: a private profile, or one whose history hasn't loaded yet.
+    fn list_history(
+        &self,
+        _profile: u64,
+        _request: u64,
+        _before: i64,
+        _text: &str,
+        _max: usize,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
+    /// Deletes `profile`'s visits to `url` from `begin` to `end`, in microseconds since 1970, and
+    /// says whether it could, as `list_history` can.
+    fn remove_history(
+        &self,
+        _profile: u64,
+        _url: &str,
+        _begin: i64,
+        _end: i64,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
     /// Does `action` to the download.
     fn act_on_download(&self, download: u64, action: DownloadAction, cx: &mut App);
     /// Takes the downloads that aren't running or paused off the list, keeping their files: those

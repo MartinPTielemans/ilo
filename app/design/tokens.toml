@@ -1710,6 +1710,9 @@ search-placeholder = 0.56
 filter-x = 336.0
 filter-width = 73.0
 filter-gap = 8.0
+# History's Filter button is at least Arc's width, and grows from its end to fit what it filters
+# to with this much either side of its label.
+filter-pad = 12.0
 # The archive's list, beside the column.
 archive-top = 56.0
 archive-width = 304.0

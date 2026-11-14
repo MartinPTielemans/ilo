@@ -46,6 +46,7 @@
 #include "browser_core/find.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/history_import.h"
+#include "browser_core/history_list.h"
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
@@ -893,6 +894,18 @@ void bc_profile_set_notes_service(bc_id profile_id, const char* service) {
 bool bc_profile_add_history(bc_id profile, const bc_history_page* pages, size_t count) {
   return (pages || !count) &&
          browser_core::AddImportedHistory(LoadedProfile(profile), profile, pages, count);
+}
+
+bool bc_profile_list_history(bc_id profile,
+                             uint64_t request,
+                             int64_t before,
+                             const char* text,
+                             size_t max) {
+  return browser_core::ListHistory(LoadedProfile(profile), profile, request, before, text, max);
+}
+
+bool bc_profile_remove_history(bc_id profile, const char* url, int64_t begin, int64_t end) {
+  return browser_core::RemoveHistory(LoadedProfile(profile), url, begin, end);
 }
 
 bool bc_profile_add_addresses(bc_id profile, const bc_address* addresses, size_t count) {

@@ -31,8 +31,8 @@ use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
-    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, Volume,
-    WindowButton,
+    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, Visited,
+    Volume, WindowButton,
 };
 use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
@@ -188,6 +188,49 @@ const ARCHIVE: [(&str, &str, f64); 6] = [
     ("", "https://example.org/", 12.),
 ];
 const DAY: f64 = 86_400_000.;
+
+// The profile's visited pages, History lists beside the closed tabs: how many days ago each was
+// last visited, newest first. Wikipedia is a closed tab too, so it shows once, as the closed tab,
+// and Page 0 the first made-up agent task's page, so it shows as its tab's.
+const VISITED: [(&str, &str, f64); 13] = [
+    (
+        "Rust Programming Language",
+        "https://www.rust-lang.org/",
+        0.02,
+    ),
+    ("Page 0", "https://example.com/0", 0.023),
+    ("Wikipedia", "https://www.wikipedia.org/", 0.06),
+    ("Hacker News", "https://news.ycombinator.com/", 0.08),
+    ("MDN Web Docs", "https://developer.mozilla.org/en-US/", 0.15),
+    ("OpenStreetMap", "https://www.openstreetmap.org/", 0.3),
+    (
+        "HTTP - Wikipedia",
+        "https://en.wikipedia.org/wiki/HTTP",
+        0.9,
+    ),
+    (
+        "The Rust Programming Language",
+        "https://doc.rust-lang.org/book/",
+        1.05,
+    ),
+    (
+        "Internet for people, not profit — Mozilla",
+        "https://www.mozilla.org/",
+        1.3,
+    ),
+    (
+        "Internet Archive: Digital Library",
+        "https://archive.org/",
+        2.2,
+    ),
+    (
+        "World Wide Web - Wikipedia",
+        "https://en.wikipedia.org/wiki/World_Wide_Web",
+        2.4,
+    ),
+    ("BBC Weather", "https://www.bbc.com/weather", 3.),
+    ("Welcome to Python.org", "https://www.python.org/", 7.),
+];
 
 // The downloads: one running, one paused, one held, and finished ones, newest first, with their
 // bytes so far and in all, and how many days ago they started.
@@ -790,6 +833,46 @@ impl Browser for Fake {
         self.archive.borrow_mut().clear();
         self.report_archive(cx);
         0
+    }
+
+    // The made-up pages before `before`, those with each of the text's words.
+    fn list_history(
+        &self,
+        profile: u64,
+        request: u64,
+        before: i64,
+        text: &str,
+        max: usize,
+        cx: &mut App,
+    ) -> bool {
+        let before = match before {
+            0 => f64::INFINITY,
+            before => before as f64 / 1000.,
+        };
+        let words: Vec<String> = text.split_whitespace().map(str::to_lowercase).collect();
+        let mut pages: Vec<Visited> = (VISITED.iter())
+            .map(|&(title, url, days)| Visited {
+                url: url.into(),
+                title: title.into(),
+                visited: now() - days * DAY,
+            })
+            .filter(|page| page.visited < before)
+            .filter(|page| {
+                let (title, url) = (page.title.to_lowercase(), page.url.to_lowercase());
+                (words.iter()).all(|word| title.contains(word) || url.contains(word))
+            })
+            .collect();
+        let more = pages.len() > max;
+        pages.truncate(max);
+        self.later(cx, move |shell, cx| {
+            shell.history_listed(profile, request, pages, more, cx)
+        });
+        true
+    }
+
+    // The row goes, and nothing else keeps the made-up pages.
+    fn remove_history(&self, _: u64, _: &str, _: i64, _: i64, _: &mut App) -> bool {
+        true
     }
 
     // Opening and showing a file do nothing here.
@@ -2743,8 +2826,9 @@ fn main() {
             });
             let shell_window = window.as_ref().ok().copied();
             match window {
-                // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces or
-                // =agents opens it there; =rename opens its Spaces with the first card's name in its field.
+                // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces,
+                // =history or =agents opens it there; =rename opens its Spaces with the first card's
+                // name in its field.
                 Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
                     window
                         .update(cx, |shell, window, cx| {
@@ -2752,6 +2836,7 @@ fn main() {
                                 Ok("downloads") => shell.run(Command::ViewDownloads, "preview", cx),
                                 Ok("spaces") => shell.show_spaces(cx),
                                 Ok("agents") => shell.show_agents(cx),
+                                Ok("history") => shell.show_visited(cx),
                                 Ok("rename") => {
                                     shell.show_spaces(cx);
                                     shell.preview_rename_card(window, cx);

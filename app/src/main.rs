@@ -51,6 +51,9 @@ mod active_window;
 mod agents_core;
 mod bar_picks_host;
 mod browser_windows;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/clock.rs"]
+mod clock;
 mod daily_count_host;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]
@@ -791,7 +794,18 @@ extern "C" fn became_active() {
         // GTK's settings file, Linux's last word, says nothing as it changes.
         #[cfg(target_os = "linux")]
         follow_reduce_motion(cx);
+        follow_clock(cx);
     });
+}
+
+/// Reads the system's 12- or 24-hour clock, which History's times follow, as the app comes back
+/// from another app, where the user may have changed it, and once after launch (window_opening).
+fn follow_clock(cx: &mut App) {
+    #[cfg(not(target_os = "linux"))]
+    browser::clock::set_twelve_hour(unsafe { platform::host_twelve_hour_clock() });
+    #[cfg(target_os = "linux")]
+    clock::read(cx);
+    let _ = cx;
 }
 
 /// Reads the system's Reduce Motion as the first window opens, before its first frame, and again
@@ -1055,6 +1069,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         ui_committed: Some(ui_committed),
         history_added: Some(history_added),
         history_deleted: Some(history_deleted),
+        history_listed: Some(history_listed),
         sync_changed: Some(sync_changed),
         sync_pairing_asked: Some(sync_pairing_asked),
         sync_devices_changed: Some(sync_devices_changed),

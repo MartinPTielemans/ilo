@@ -61,7 +61,54 @@ pub(crate) unsafe extern "C" fn history_deleted(
             urls,
         },
     };
-    update_app_later(move |cx| browser::shell::history_deleted(profile, deleted, cx));
+    update_app_later(move |cx| {
+        browser::shell::history_deleted(profile, deleted, cx);
+        // Library › History lists what's left.
+        update_shells_in(cx, |shell, cx| shell.history_forgotten(profile, cx));
+    });
+}
+
+/// The profile's visited pages a window's History asked for with `request`, newest first, and
+/// whether older ones are left. Each window keeps its own answers. The pages aren't logged:
+/// they're the user's.
+pub(crate) unsafe extern "C" fn history_listed(
+    _: *mut c_void,
+    profile: bc::bc_id,
+    request: u64,
+    pages: *const bc::bc_history_page,
+    count: usize,
+    more: bool,
+) {
+    let pages = match count {
+        0 => &[][..],
+        count => unsafe { std::slice::from_raw_parts(pages, count) },
+    };
+    let text = |text: *const c_char| -> SharedString {
+        match text.is_null() {
+            true => SharedString::default(),
+            false => unsafe { CStr::from_ptr(text) }
+                .to_string_lossy()
+                .into_owned()
+                .into(),
+        }
+    };
+    let pages: Vec<browser::shell::Visited> = (pages.iter())
+        .map(|page| browser::shell::Visited {
+            url: text(page.url),
+            title: text(page.title),
+            // The Library's times are milliseconds.
+            visited: page.last_visit as f64 / 1000.,
+        })
+        .collect();
+    log!(
+        "browser: history listed {} for request {request} of profile {profile}, more {more}",
+        pages.len()
+    );
+    update_app_later(move |cx| {
+        update_shells_in(cx, |shell, cx| {
+            shell.history_listed(profile, request, pages.clone(), more, cx)
+        })
+    });
 }
 
 pub(crate) unsafe extern "C" fn addresses_added(_: *mut c_void, profile: bc::bc_id, added: usize) {
