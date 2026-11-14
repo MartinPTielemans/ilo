@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "base/base_switches.h"
@@ -704,11 +705,15 @@ content::ContentClient* MainDelegate::CreateContentClient() {
   return content_client.get();
 }
 
-std::optional<int> MainDelegate::PreBrowserMain() {
-  std::optional<int> exit_code = ChromeMainDelegate::PreBrowserMain();
-  // Chrome's PreBrowserMain made NSApp, which the app can't make before it: Chrome's class reads
-  // the command line as it's made.
-  if (!exit_code && g_host.launching) {
+std::optional<int> MainDelegate::PostEarlyInitialization(InvokedIn invoked_in) {
+  std::optional<int> exit_code = ChromeMainDelegate::PostEarlyInitialization(invoked_in);
+  // In the browser process, once Chromium has the profile's lock: a launch that hands its links to
+  // the browser running already has an exit code here and goes, so it puts nothing on screen and
+  // starts nothing the app would have to stop, even when two launch at once (#2494). Chrome's
+  // PreBrowserMain made NSApp before this, which the app can't make before it: Chrome's class
+  // reads the command line as it's made.
+  if (!exit_code && std::holds_alternative<InvokedInBrowserProcess>(invoked_in) &&
+      g_host.launching) {
     g_host.launching(g_host.context);
   }
   return exit_code;
