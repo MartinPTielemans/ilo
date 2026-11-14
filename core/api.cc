@@ -31,6 +31,7 @@
 #include "browser_core/autofill_offer.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/capture.h"
+#include "browser_core/card_video.h"
 #include "browser_core/cast_dialog.h"
 #include "browser_core/bluetooth_pair.h"
 #include "browser_core/device_chooser.h"
@@ -2525,6 +2526,10 @@ void bc_tab_media(bc_id id, int action) {
   if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
     tab->Media(action);
   }
+}
+
+void bc_tab_show_video(bc_id tab, bc_id window, bc_rect frame, double corner_radius) {
+  browser_core::ShowCardVideo(tab, window, ToRect(frame), corner_radius);
 }
 
 void bc_tab_close_below(bc_id id) {

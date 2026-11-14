@@ -299,6 +299,11 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_media(tab, action as i32) };
     }
 
+    fn show_video(&self, tab: u64, frame: Option<Bounds<Pixels>>, radius: f32, _: &mut App) {
+        let frame = rect(frame.unwrap_or_default());
+        unsafe { bc::bc_tab_show_video(tab, self.window, frame, radius.into()) };
+    }
+
     fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
         unsafe { bc::bc_tab_set_volume(tab, volume as f64) };
     }

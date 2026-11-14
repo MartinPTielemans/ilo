@@ -9,13 +9,14 @@
 # would. A tab playing music out of sight has a player at the sidebar's foot, whose buttons pause
 # it, skip back and float it in Picture in Picture, whose volume drawer's slider sets the tab's
 # volume, whose click shows the tab, and whose × puts it away. A private window's music has a
-# player in that window alone. View › Cast… and the page menu's Cast… open the tab's Cast card, and
-# × closes it; on the Mac the run answers macOS's question for the local network that looking for
-# devices brings, and any it asks as the call starts. A video's page menu floats it in Picture in
-# Picture, the Mini Player, 10 in from the top right of the screen, which a scroll or a drag moves,
-# ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
-# shows where it was left, after a relaunch too, and coming back to its tab's window from another
-# window, or from another app with a menu open, puts it back in the tab.
+# player in that window alone. A video's player shows it live while the stack is open, playing or
+# paused. View › Cast… and the page menu's Cast… open the tab's Cast card, and × closes it; on the
+# Mac the run answers macOS's question for the local network that looking for devices brings, and
+# any it asks as the call starts. A video's page menu floats it in Picture in Picture, the Mini
+# Player, 10 in from the top right of the screen, which a scroll or a drag moves, ⌘ or Ctrl with a
+# scroll sizes, and a double-click puts back in its tab, shown. The next shows where it was left,
+# after a relaunch too, and coming back to its tab's window from another window, or from another
+# app with a menu open, puts it back in the tab.
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
 # Shared without its picker; the question for the camera is answered with Allow, as the user would,
 # since the fake question Chromium can put in its place never tells the browser what's captured.
@@ -688,6 +689,70 @@ send window 2
 send key w cmd shift
 expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
 send window 1
+
+# Open, the newest card whose page has a video shows it live over its title row (#2100): the page's
+# own video, as Picture in Picture shows it, which the page sees go into Picture in Picture and
+# leave it as the stack rests. Paused, it shows the frame it stopped on. A test pattern with a
+# silent sound track, six seconds, long enough for Chrome to give it controls: ffmpeg -f lavfi -i
+# testsrc2=size=160x90:rate=10:duration=6 -f lavfi -i anullsrc=r=48000:cl=mono -t 6 -c:v libvpx
+# -b:v 40k -c:a libopus -b:a 6k -shortest card.webm
+cp check/card.webm "$out/site/card.webm"
+printf '%s' '<title>loading</title><body style="margin:0;background:#333">
+<video id=v loop src=card.webm style="width:100vw;height:100vh"></video>
+<script>
+v.onplaying = () => document.title = "playing";
+v.onpause = () => document.title = "paused";
+v.onenterpictureinpicture = () => document.title = "floating";
+v.onleavepictureinpicture = () => document.title = "landed";
+// A handler returning false would keep every other key from the browser, ⌘5 among them.
+onkeydown = e => { if (e.key == "m") v.play(); };
+</script>' > "$out/site/card.html"
+send key t cmd
+expect '^browser: command bar shown$' "the command bar didn't open for the card's video"
+send type "${site}card.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}card.html\$" "the card's video page didn't load"
+vc=$(grep "^browser: loaded [0-9]* ${site}card.html\$" "$log" | tail -1 | cut -d' ' -f3)
+send click $page_point
+send key m
+expect "^browser: title $vc playing\$" "m didn't play the card's video"
+shown "$b"
+expect "^browser: media players $vc\$" "the video playing out of sight had no player"
+# card_at <failure>: reads where the video's card was drawn last into mx, my, mw and mh.
+card_at() {
+  expect "^browser: media player $vc at " "$1"
+  read -r mx my mw mh <<EOF
+$(grep "^browser: media player $vc at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+}
+# card_video <failure> <capture>: waits for the core to show the video in the stack just opened,
+# and captures it.
+card_video() {
+  expect "^browser: card video $vc at " "the open card didn't ask for its video"
+  expect "browser: card video $vc in its card at " "$1"
+  card_at "the open card wasn't drawn"
+  ../tools/window-screenshot.sh "$pid" "$out/$2" || fail "no window to capture"
+}
+card_at "the video's player wasn't drawn"
+send move $((mx + mw / 2)) $((my + mh - 16))
+expect '^browser: media stack open$' "the stack didn't open over the video's card"
+card_video "the core didn't show the video in its open card" media-card-video.png
+expect "^browser: title $vc floating\$" "the page didn't see its video go into its card"
+send move $page_point
+expect '^browser: media stack rest$' "the stack didn't rest once the pointer left it"
+expect "browser: card video $vc left its card" "the video stayed as the stack rested"
+expect "^browser: title $vc landed\$" "the page didn't see its video leave its card"
+card_at "the video's player wasn't drawn at rest"
+send click $((mx + mw / 2)) $((my + mh / 2))
+expect "^browser: title $vc paused\$" "the player's pause didn't pause the video"
+expect '^browser: media stack open$' "the stack didn't open under the pointer on the paused card"
+card_video "the core didn't show the paused video in its card" media-card-video-paused.png
+# Its title row is under the video, and × is its last button, as without one.
+send click $((mx + mw - 5 - 12)) $((my + mh - 47))
+expect '^browser: command media-dismiss via player$' "the video card's × didn't take the click"
+expect '^browser: media players $' "× didn't put the video's player away"
+expect "browser: card video $vc left its card" "the video stayed as its card went"
+send move $page_point
 
 # The Cast card, from View › Cast… and from the page menu, with whatever devices the network has,
 # none clicked. Chrome looking for them is the first time on the Mac that the app reaches the local

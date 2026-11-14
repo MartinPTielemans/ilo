@@ -27,6 +27,7 @@
 #include "browser_core/arrange.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
+#include "browser_core/card_video.h"
 #include "browser_core/cast_dialog.h"
 #include "browser_core/bluetooth_pair.h"
 #include "browser_core/device_chooser.h"
@@ -82,6 +83,8 @@
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/overlay_window.h"
+#include "content/public/browser/video_picture_in_picture_window_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
@@ -404,6 +407,20 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
         network_context_params->persist_session_cookies) {
       network_context_params->restore_old_session_cookies = true;
     }
+  }
+
+  // Every video's Picture in Picture window is the core's, which shows it at its media card while
+  // one asks, and in Chrome's own otherwise (card_video.h).
+  std::unique_ptr<content::VideoOverlayWindow> CreateWindowForVideoPictureInPicture(
+      content::VideoPictureInPictureWindowController* controller) override {
+    return NewVideoWindow(
+        controller, base::BindOnce(
+                        [](ContentBrowserClient* client,
+                           content::VideoPictureInPictureWindowController* controller) {
+                          return client->ChromeContentBrowserClient::
+                              CreateWindowForVideoPictureInPicture(controller);
+                        },
+                        base::Unretained(this), base::Unretained(controller)));
   }
 
   // Chrome's, and the browser's own ad blocker where it blocks (ad_block.h).

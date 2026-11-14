@@ -1491,6 +1491,14 @@ std::optional<gfx::Rect> FocusRingFrame(views::Widget* widget) {
   return std::nullopt;
 }
 
+void PassPointerThrough(views::Widget* widget) {
+  // A Wayland bubble takes no input without accept_events; X11's window needs an empty input
+  // shape.
+  if (!OnWayland()) {
+    PlatformWindowOf(widget)->SetInputRegion(std::vector<gfx::Rect>{gfx::Rect()});
+  }
+}
+
 bool PageDialogsInOwnWindow() {
   // Chrome's default, which hasn't been looked at here.
   return false;
