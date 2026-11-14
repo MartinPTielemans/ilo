@@ -14,6 +14,8 @@ struct Recorder {
     under: Cell<bool>,
     /// Whether its hole opens the frame after it's laid out at rest, as on X11 and Windows.
     opens_at_once: Cell<bool>,
+    /// Whether the card shrinks back from the key as it closes, as on Windows.
+    closes_at_once: Cell<bool>,
 }
 
 impl Recorder {
@@ -50,6 +52,9 @@ impl Host for Recorder {
     }
     fn open_waits(&self) -> bool {
         !self.opens_at_once.get()
+    }
+    fn close_waits(&self) -> bool {
+        !self.closes_at_once.get()
     }
     fn release(&self) {
         self.push("release".into());
@@ -384,6 +389,38 @@ fn where_the_open_never_showed_through_it_doesnt_wait(cx: &mut TestAppContext) {
     advance(&mut shown, CLOSE / 2.);
     assert_eq!(pose_of(&mut shown).scale, 1.);
     there(&mut shown, LEFT);
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
+/// Where Peek's page never showed round the shrinking card (Windows), neither the open nor the
+/// close waits for the core: the plate fills the hole the frame after the key, the hole closes and
+/// the page leaves the frame after that, and the card shrinks back from the key (#2640).
+#[gpui::test]
+fn where_nothing_showed_through_neither_waits(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    host.opens_at_once.set(true);
+    host.closes_at_once.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE, HOLE]);
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    let calls = shown.drawn();
+    assert_eq!(
+        calls[..5],
+        [HOLE, HOLE, NO_HOLE, OUT_OF_SIGHT, "release"],
+        "{calls:?}"
+    );
+    assert!(!waiting(&mut shown));
+    advance(&mut shown, CLOSE / 2.);
+    assert!(pose_of(&mut shown).scale < 1.);
     let calls = shown.calls();
     assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
 }

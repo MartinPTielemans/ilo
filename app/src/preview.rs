@@ -3265,6 +3265,10 @@ impl link_preview::Host for PreviewPeek {
         false
     }
 
+    fn close_waits(&self) -> bool {
+        false
+    }
+
     fn release(&self) {}
 
     fn hide(&self) {}
