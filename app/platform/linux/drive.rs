@@ -438,16 +438,25 @@ fn sync() {
             Event::SelectionRequest(request) => serve_drag(&request),
             Event::SelectionNotify(notify) => pasted(&notify),
             Event::ClientMessage(message) if message.format == 32 => drag_answered(&message),
-            Event::EnterNotify(crossing) | Event::LeaveNotify(crossing) => {
-                WM_GRAB.set(wm_grab_after(WM_GRAB.get(), crossing.mode))
-            }
+            Event::EnterNotify(crossing) => WM_GRAB.set(wm_grab_after(
+                WM_GRAB.get(),
+                false,
+                crossing.mode,
+                crossing.detail,
+            )),
+            Event::LeaveNotify(crossing) => WM_GRAB.set(wm_grab_after(
+                WM_GRAB.get(),
+                true,
+                crossing.mode,
+                crossing.detail,
+            )),
             _ => {}
         }
     }
 }
 
 /// The window manager's grab of the pointer for a window move, as the browser window the pointer
-/// is in hears it: the pointer crosses out of it as the grab takes it, and back as the grab ends.
+/// is in hears it: the pointer leaves it as the window manager takes it, and comes back as it ends.
 #[derive(Clone, Copy, PartialEq)]
 enum WmGrab {
     None,
@@ -455,12 +464,25 @@ enum WmGrab {
     GivenBack,
 }
 
-/// The grab after a crossing in `mode`: one a grab caused takes the pointer, and one its end
-/// caused gives it back. A crossing the pointer's own move made changes nothing.
-fn wm_grab_after(now: WmGrab, mode: xproto::NotifyMode) -> WmGrab {
-    match mode {
-        xproto::NotifyMode::GRAB => WmGrab::Taken,
-        xproto::NotifyMode::UNGRAB if now == WmGrab::Taken => WmGrab::GivenBack,
+/// The grab after the browser window hears the pointer `leave` it, or enter, in `mode`, as
+/// `detail` says. Openbox grabs the pointer, which leaves the window in Grab mode, and comes back
+/// in Ungrab mode. KWin first maps a window of its own over the screen and grabs the pointer
+/// there, so it leaves as a plain move would, and comes back as KWin takes that window away. A
+/// crossing into or out of the window's own children changes nothing, nor does an earlier grab's
+/// end.
+fn wm_grab_after(
+    now: WmGrab,
+    leave: bool,
+    mode: xproto::NotifyMode,
+    detail: xproto::NotifyDetail,
+) -> WmGrab {
+    if detail == xproto::NotifyDetail::INFERIOR {
+        return now;
+    }
+    match now {
+        WmGrab::None if leave && mode != xproto::NotifyMode::UNGRAB => WmGrab::Taken,
+        WmGrab::None if mode == xproto::NotifyMode::GRAB => WmGrab::Taken,
+        WmGrab::Taken if !leave || mode == xproto::NotifyMode::UNGRAB => WmGrab::GivenBack,
         _ => now,
     }
 }
@@ -3419,18 +3441,24 @@ mod tests {
     // the drag started, and the move outlived it and took the next press (#2721).
     #[test]
     fn a_window_move_waits_for_the_window_managers_grab_and_its_end() {
-        let (plain, grab, ungrab) = (
-            xproto::NotifyMode::NORMAL,
-            xproto::NotifyMode::GRAB,
-            xproto::NotifyMode::UNGRAB,
-        );
-        // The pointer's own crossings are no grab.
-        assert!(wm_grab_after(WmGrab::None, plain) == WmGrab::None);
-        assert!(wm_grab_after(WmGrab::None, grab) == WmGrab::Taken);
-        assert!(wm_grab_after(WmGrab::Taken, plain) == WmGrab::Taken);
-        assert!(wm_grab_after(WmGrab::Taken, ungrab) == WmGrab::GivenBack);
-        // An earlier grab's end, before the move's grab, gives nothing back.
-        assert!(wm_grab_after(WmGrab::None, ungrab) == WmGrab::None);
+        use xproto::{NotifyDetail as Detail, NotifyMode as Mode};
+        let (leave, enter) = (true, false);
+        let after = |now, leave, mode, detail| wm_grab_after(now, leave, mode, detail);
+        // Openbox: the grab takes the pointer out of the window, and its end brings it back.
+        let taken = after(WmGrab::None, leave, Mode::GRAB, Detail::VIRTUAL);
+        assert!(taken == WmGrab::Taken);
+        assert!(after(taken, enter, Mode::UNGRAB, Detail::VIRTUAL) == WmGrab::GivenBack);
+        // KWin: the window it maps over the screen takes the pointer, and goes at the move's end.
+        let taken = after(WmGrab::None, leave, Mode::NORMAL, Detail::NONLINEAR);
+        assert!(taken == WmGrab::Taken);
+        assert!(after(taken, leave, Mode::GRAB, Detail::NONLINEAR) == WmGrab::Taken);
+        assert!(after(taken, enter, Mode::NORMAL, Detail::NONLINEAR) == WmGrab::GivenBack);
+        // The pointer going into or out of the window's own children is no grab.
+        assert!(after(WmGrab::None, leave, Mode::NORMAL, Detail::INFERIOR) == WmGrab::None);
+        assert!(after(WmGrab::Taken, enter, Mode::NORMAL, Detail::INFERIOR) == WmGrab::Taken);
+        // An earlier grab's end, before the move's, gives nothing back and takes nothing.
+        assert!(after(WmGrab::None, enter, Mode::UNGRAB, Detail::VIRTUAL) == WmGrab::None);
+        assert!(after(WmGrab::None, leave, Mode::UNGRAB, Detail::VIRTUAL) == WmGrab::None);
     }
 
     fn outputs(names: &[&str]) -> Vec<String> {
