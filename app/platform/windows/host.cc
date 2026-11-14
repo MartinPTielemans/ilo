@@ -2631,6 +2631,44 @@ void WritePng(const std::wstring& path, const std::vector<uint8_t>& pixels, UINT
   }
 }
 
+// With BROWSER_LAUNCH_CAPTURE, writes the launch window as it has been on screen, its frame too, to
+// that PNG, for check.sh, as the Mac's host does: it's up only until the UI has drawn under it.
+void CaptureLaunchWindow(HWND window) {
+  const char* path = getenv("BROWSER_LAUNCH_CAPTURE");
+  RECT frame{};
+  if (!path || !*path || !GetWindowRect(window, &frame)) {
+    return;
+  }
+  const int width = frame.right - frame.left;
+  const int height = frame.bottom - frame.top;
+  if (width < 1 || height < 1) {
+    return;
+  }
+  BITMAPINFO info{};
+  info.bmiHeader = {sizeof(BITMAPINFOHEADER), width, -height, 1, 32, BI_RGB};
+  void* bits = nullptr;
+  HDC screen = GetDC(nullptr);
+  if (HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &bits, nullptr, 0)) {
+    HDC dc = CreateCompatibleDC(screen);
+    HGDIOBJ was = SelectObject(dc, bitmap);
+    const bool printed = PrintWindow(window, dc, PW_RENDERFULLCONTENT);
+    GdiFlush();
+    SelectObject(dc, was);
+    DeleteDC(dc);
+    if (printed) {
+      const auto* start = static_cast<const uint8_t*>(bits);
+      const std::vector<uint8_t> pixels(start, start + static_cast<size_t>(width) * height * 4);
+      const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+      WritePng(Wide(path), pixels, static_cast<UINT>(width), static_cast<UINT>(height));
+      if (SUCCEEDED(com)) {
+        CoUninitialize();
+      }
+    }
+    DeleteObject(bitmap);
+  }
+  ReleaseDC(nullptr, screen);
+}
+
 }  // namespace
 
 // For updates.cc, whose download runs on a thread of its own.
@@ -3079,6 +3117,7 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
 
 void host_close_launch_window(void) {
   if (g_launch.hwnd) {
+    CaptureLaunchWindow(g_launch.hwnd);
     DestroyWindow(g_launch.hwnd);
   }
   if (g_launch.owner) {
