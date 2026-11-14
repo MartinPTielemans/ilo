@@ -155,10 +155,27 @@ still_home "after the previews asked for"
 send key d cmd
 expect '^browser: command toggle-pin via page$' "⌘D with the page focused didn't reach the UI"
 expect "^browser: pinned $a\$" "⌘D didn't pin the test page's tab: the pinned tabs are \"$(pinned)\""
+# Probe (#2790): what the window manager makes of Peek, with probe2790 among the trace categories.
+p2790on=
+case "${CHECK_TRACE_CATEGORIES:-}" in *probe2790*)
+  [ "$(uname)" != Linux ] || [ -n "${WAYLAND_DISPLAY:-}" ] || p2790on=1 ;;
+esac
+if [ -n "$p2790on" ]; then
+  . check/probe2790.sh
+  p2790 snap > "$out/probe2790-p0.json"
+fi
 open_preview "from the pinned tab"
 first_frame=$(grep -m1 '^browser: link preview first frame in ' "$log" | sed 's/.* in //')
 [ -n "$first_frame" ] || fail "the preview didn't log its first frame"
 ../tools/window-screenshot.sh "$pid" "$out/preview-open.png" || fail "no window to capture"
+if [ -n "$p2790on" ]; then
+  note peek "first-frame {\"ms\": \"$first_frame\"}"
+  pb=$(browser_window "$pid")
+  p2790 snap > "$out/probe2790-p1.json"
+  peek=$(new_windows "$out/probe2790-p0.json" "$out/probe2790-p1.json" "$pb" | head -1)
+  note peek "{\"id\": \"$peek\", \"browser\": \"$pb\"}"
+  [ -z "$peek" ] || battery "$pb" "$peek" peek
+fi
 # On Windows the card holds Peek's page where the core shows it: the frame the UI draws it in, at its
 # window's scale, and the page's in the browser window, in pixels, each edge within 3 of the other's,
 # as the core rounds the page's frame in DIPs. The page is under the preview's window there, which
