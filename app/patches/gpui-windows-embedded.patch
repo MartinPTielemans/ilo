@@ -1,3 +1,15 @@
+diff --git a/crates/gpui_windows/Cargo.toml b/crates/gpui_windows/Cargo.toml
+index 37e4a2f7f2..c9c60e1e67 100644
+--- a/crates/gpui_windows/Cargo.toml
++++ b/crates/gpui_windows/Cargo.toml
+@@ -61,6 +61,7 @@ windows = { workspace = true, features = [
+     "Win32_System_StationsAndDesktops",
+     "Win32_System_SystemInformation",
+     "Win32_System_SystemServices",
++    "Win32_UI_Accessibility",
+     "Win32_UI_Controls",
+     "Win32_UI_HiDpi",
+     "Win32_UI_Input_Ime",
 diff --git a/crates/gpui_windows/src/dialog.rs b/crates/gpui_windows/src/dialog.rs
 index 16866cfc35..659fa75c23 100644
 --- a/crates/gpui_windows/src/dialog.rs
@@ -987,7 +999,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..3990bc5937 100644
+index 095e009e23..7088748947 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -20,7 +20,10 @@ use windows::{
@@ -1366,7 +1378,7 @@ index 095e009e23..3990bc5937 100644
      Ok(())
  }
  
-@@ -1980,3 +2155,45 @@ mod tests {
+@@ -1980,3 +2155,52 @@ mod tests {
          );
      }
  }
@@ -1386,10 +1398,10 @@ index 095e009e23..3990bc5937 100644
 +    std::sync::Mutex::new(None);
 +
 +/// Starts making the text system, the DirectX devices and the first window's pipelines on a
-+/// thread of their own, for the platform and that window to take: an embedder that has other work
-+/// before it starts GPUI, such as a browser engine starting, saves the main thread their ~12 ms.
-+/// None needs the main thread; the drop helper, an apartment-threaded COM object, is still made
-+/// there.
++/// thread of their own, for the platform and that window to take, and loads UI Automation, which
++/// each window's accessibility adapter starts: an embedder that has other work before it starts
++/// GPUI, such as a browser engine starting, saves the main thread their ~15 ms. None needs the
++/// main thread; the drop helper, an apartment-threaded COM object, is still made there.
 +pub fn make_early() {
 +    let made = std::thread::Builder::new()
 +        .name("GpuiEarly".into())
@@ -1399,6 +1411,13 @@ index 095e009e23..3990bc5937 100644
 +            if let Ok(devices) = &devices {
 +                crate::directx_renderer::make_pipelines_early(&devices.device);
 +            }
++            // As accesskit's adapter does (init_uia), which then finds it loaded: ~3.5 ms.
++            unsafe {
++                windows::Win32::UI::Accessibility::UiaLookupId(
++                    windows::Win32::UI::Accessibility::AutomationIdentifierType_Property,
++                    &windows::Win32::UI::Accessibility::ControlType_Property_GUID,
++                )
++            };
 +            (text_system, devices)
 +        });
 +    if let (Ok(thread), Ok(mut early)) = (made, EARLY.lock()) {
