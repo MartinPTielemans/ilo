@@ -471,19 +471,14 @@ expect "^browser: space $first in " "a wheel's tick across the sidebar didn't sh
 expect_tabs "$a" "$a" "after a wheel's tick showed the first Space"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 # A mouse's side buttons over the sidebar show the next Space and the previous, as Arc's (#688).
-# Windows' driver can't press them yet (drive.cc).
-if windows; then
-  echo "skip: side buttons over the sidebar: the Windows driver can't press them yet."
-else
-  send sideclick $swipe_point forward
-  expect '^browser: command select-space via mouse$' "the forward side button over the sidebar didn't page"
-  expect "^browser: space $second in " "the forward side button over the sidebar didn't show the second Space"
-  send sideclick $swipe_point back
-  expect '^browser: command select-space via mouse$' "the back side button over the sidebar didn't page"
-  expect "^browser: space $first in " "the back side button over the sidebar didn't show the first Space"
-  expect_tabs "$a" "$a" "after the back side button showed the first Space"
-  expect "^browser: settled space $first\$" "the first Space's page didn't settle after the side buttons"
-fi
+send sideclick $swipe_point forward
+expect '^browser: command select-space via mouse$' "the forward side button over the sidebar didn't page"
+expect "^browser: space $second in " "the forward side button over the sidebar didn't show the second Space"
+send sideclick $swipe_point back
+expect '^browser: command select-space via mouse$' "the back side button over the sidebar didn't page"
+expect "^browser: space $first in " "the back side button over the sidebar didn't show the first Space"
+expect_tabs "$a" "$a" "after the back side button showed the first Space"
+expect "^browser: settled space $first\$" "the first Space's page didn't settle after the side buttons"
 # Past the first Space is the Library. Held partway it shows beside the page, and let go short of
 # halfway it goes back. A flick brings it out and one the other way puts it back, and so do a
 # wheel's ticks.
