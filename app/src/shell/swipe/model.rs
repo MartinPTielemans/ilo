@@ -554,8 +554,9 @@ impl Run {
 }
 
 /// How much further than the app's a hard flick may take the page past its Space, in Spaces: a
-/// browser's lift comes some events late, and that much is a few pixels.
-const PAST_SLACK: f32 = 0.02;
+/// browser's lift comes some events late, and at 60 Hz the frame that straddles it can read as the
+/// fingers' fastest and stretch the band a pixel.
+const PAST_SLACK: f32 = 0.005;
 
 /// A hard flick lands on the next Space, as the app's does, goes no further past it than the app's
 /// give or take PAST_SLACK, and once the demo finds the fingers lifted, the page settles there

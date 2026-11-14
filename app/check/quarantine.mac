@@ -2,4 +2,3 @@
 # open (check/quarantine.sh says how). A line lasts 14 days:
 # <run> #<issue> <YYYY-MM-DD> [<its FAIL line's start, as the summary shows it>]
 switch-frames #2248 2026-11-10 the page area showed no page through a switch
-filled #2633 2026-11-13 filling its screen, the window is

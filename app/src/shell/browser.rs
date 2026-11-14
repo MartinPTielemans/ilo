@@ -119,6 +119,9 @@ pub trait Browser {
     fn share_instead(&self, tab: u64, cx: &mut App);
     /// Plays, pauses or skips `tab`'s media.
     fn media(&self, tab: u64, action: MediaAction, cx: &mut App);
+    /// Shows `tab`'s video live at `frame` in the window, with corners of `corner_radius`, for
+    /// its media card, or stops showing it with none.
+    fn show_video(&self, tab: u64, frame: Option<Bounds<Pixels>>, corner_radius: f32, cx: &mut App);
     /// Sets `tab`'s volume, 0 to 1, which scales its page's media (bc_tab_set_volume).
     fn set_volume(&self, tab: u64, volume: f32, cx: &mut App);
     /// Opens `tab`'s Cast dialog, which the core reports with `Shell::set_cast`.
@@ -1043,8 +1046,9 @@ pub struct Page {
     pub share_instead: bool,
     /// The page has media the browser can play, pause and skip, as Chrome's media controls do:
     /// whether it's playing, its title and artist, each empty without one, whether it has a
-    /// previous and a next track, and whether it can float in Picture in Picture while nothing of
-    /// the page floats.
+    /// previous and a next track, whether it can float in Picture in Picture while nothing of the
+    /// page floats or its card shows its video, and whether it has a video its card can show,
+    /// which a call hasn't.
     pub media: bool,
     pub media_playing: bool,
     pub media_title: SharedString,
@@ -1052,6 +1056,7 @@ pub struct Page {
     pub media_previous: bool,
     pub media_next: bool,
     pub media_picture_in_picture: bool,
+    pub media_video: bool,
     /// The tab shows its page in Developer Mode, for its site or as localhost.
     pub developer_mode: bool,
 }

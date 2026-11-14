@@ -32,6 +32,7 @@
 #include "browser_core/autofill_offer.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/capture.h"
+#include "browser_core/card_video.h"
 #include "browser_core/cast_dialog.h"
 #include "browser_core/bluetooth_pair.h"
 #include "browser_core/device_chooser.h"
@@ -47,9 +48,11 @@
 #include "browser_core/find.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/history_import.h"
+#include "browser_core/history_list.h"
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
+#include "browser_core/link_target.h"
 #include "browser_core/main_delegate.h"
 #include "browser_core/notes.h"
 #include "browser_core/page_dialog.h"
@@ -696,10 +699,9 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
     }
   }
   Profile* profile = space ? browser_core::ProfileFor(space->profile()) : nullptr;
-  content::WebContents* contents =
-      window && profile
-          ? window->OpenTab(profile, target, /*when_shown=*/false, /*typed_http=*/false)
-          : nullptr;
+  // The agent's from before its page starts, so its first request is an agent's (#2660).
+  content::WebContents* contents = window && profile ? window->OpenHeld(*space, profile, target)
+                                                     : nullptr;
   if (!contents) {
     return 0;
   }
@@ -941,6 +943,18 @@ bool bc_profile_add_history(bc_id profile, const bc_history_page* pages, size_t 
          browser_core::AddImportedHistory(LoadedProfile(profile), profile, pages, count);
 }
 
+bool bc_profile_list_history(bc_id profile,
+                             uint64_t request,
+                             int64_t before,
+                             const char* text,
+                             size_t max) {
+  return browser_core::ListHistory(LoadedProfile(profile), profile, request, before, text, max);
+}
+
+bool bc_profile_remove_history(bc_id profile, const char* url, int64_t begin, int64_t end) {
+  return browser_core::RemoveHistory(LoadedProfile(profile), url, begin, end);
+}
+
 bool bc_profile_add_addresses(bc_id profile, const bc_address* addresses, size_t count) {
   return (addresses || !count) &&
          browser_core::AddImportedAddresses(LoadedProfile(profile), profile, addresses, count);
@@ -1160,6 +1174,12 @@ void bc_folder_move_to_space(bc_id folder, bc_id space) {
 void bc_folder_delete(bc_id folder) {
   if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
     space->DeleteFolder(folder);
+  }
+}
+
+void bc_tab_forget_page(bc_id id) {
+  if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
+    tab->ForgetPage();
   }
 }
 
@@ -1797,6 +1817,10 @@ void bc_page_favicon(const char* url) {
   if (url) {
     browser_core::FindFavicon(url);
   }
+}
+
+size_t bc_url_site(const char* url, char* site, size_t capacity) {
+  return CopyString(browser_core::SiteOf(GURL(url ? url : "")), site, capacity);
 }
 
 void bc_window_suggest(bc_id window_id, const char* keyword, const char* text, bool complete) {
@@ -2645,6 +2669,10 @@ void bc_tab_media(bc_id id, int action) {
   if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
     tab->Media(action);
   }
+}
+
+void bc_tab_show_video(bc_id tab, bc_id window, bc_rect frame, double corner_radius) {
+  browser_core::ShowCardVideo(tab, window, ToRect(frame), corner_radius);
 }
 
 void bc_tab_close_below(bc_id id) {

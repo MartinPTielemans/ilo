@@ -32,9 +32,41 @@ if [ "$active" != 1 ]; then
   echo "skip: filled. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-send screen
-screen=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: screen at ' |
-  cut -d' ' -f6- | tr ' ' x)
+# The first screen's frame and its visible area, x, y up from the bottom, width and height, as a new
+# process's AppKit gives them.
+screen_areas() {
+  osascript -l JavaScript -e 'ObjC.import("AppKit");
+const s = $.NSScreen.screens.objectAtIndex(0);
+[s.frame, s.visibleFrame].map((r) => [r.origin.x, r.origin.y, r.size.width, r.size.height].join(" "))
+  .join(" ")' 2>&1 | tr '\n' ' '
+}
+# The Dock started hidden still takes its space, even from a new process, until an app is active
+# (#2633). The zoom fills what the app's AppKit leaves of the screen, so this waits, up to 20 s,
+# for that to be the whole screen, within the 4 pt a hidden Dock may keep.
+# Whether $visible is the whole of $at, the screen.
+whole() {
+  echo "$at $visible" | awk 'NF == 8 { ok = $5 - $1 <= 4 && $6 - $2 <= 4 &&
+    $1 + $3 - $5 - $7 <= 4 && $2 + $4 - $6 - $8 <= 4 } END { exit !ok }'
+}
+shown=
+for _ in $(seq 40); do
+  send screen
+  at=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: screen at ' | cut -d' ' -f4-)
+  visible=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: screen visible ' |
+    cut -d' ' -f4-)
+  if [ "$visible" != "$shown" ]; then
+    echo "note: the app's visible area $visible of $at (x, y down from the top, w, h)"
+    echo "note: a new process's screen and visible area $(screen_areas)(x, y up from the bottom)"
+    shown=$visible
+  fi
+  whole && break
+  sleep 0.5
+done
+whole || {
+  echo "note: then a new process's screen and visible area $(screen_areas)"
+  fail "the app's visible area stayed $visible of $at for 20 s: the Dock or the menu bar shows"
+}
+screen=$(echo "$at" | cut -d' ' -f3- | tr ' ' x)
 # Zoomed by a double-click on its header, unless System Settings sets that to something else, and
 # else placed over the screen.
 if [ "$(defaults read -g AppleActionOnDoubleClick 2>/dev/null || echo Maximize)" = Maximize ]; then

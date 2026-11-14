@@ -107,8 +107,9 @@ typedef struct bc_tab_state {
   bool share_instead;
   // The page's media, as Chrome's media controls show it: whether it has a session the browser
   // can play, pause and skip (bc_tab_media), whether that's playing, its title and artist, each
-  // empty without one, whether it has a previous and a next track, and whether it can float in
-  // Picture in Picture while nothing of the page floats.
+  // empty without one, whether it has a previous and a next track, whether it can float in
+  // Picture in Picture while nothing of the page floats or its card shows its video, and whether
+  // it has a video its card can show (bc_tab_show_video), which a page in a call hasn't.
   bool media;
   bool media_playing;
   const char* media_title;
@@ -116,6 +117,7 @@ typedef struct bc_tab_state {
   bool media_previous;
   bool media_next;
   bool media_picture_in_picture;
+  bool media_video;
   // The tab shows its page in Developer Mode (bc_tab_set_developer_mode): the user turned it on for
   // the page's site, or it's localhost, as Chrome counts it, and they didn't turn it off there.
   bool developer_mode;
@@ -3459,6 +3461,18 @@ BC_EXPORT void bc_tab_share_instead(bc_id tab);
 // Then tab_state_changed. The user's: agents act in the page instead.
 BC_EXPORT void bc_tab_media(bc_id tab, int action);
 
+// Shows the video of |tab|'s media live in |window|, for its media card while no window shows the
+// tab and its state has media_video: at |frame| in points from the top-left of the window's
+// content, over what the app draws there, with corners of |corner_radius|, fitted in black. It's
+// the page's own video, as Picture in Picture shows it, so a paused one shows the frame it stopped
+// on, and it's black until the page sends its first frame. Call it again as the frame changes, and
+// with an empty frame once the card's gone. One video shows at a time, across windows: the last
+// asked for. While another Picture in Picture window is open, a page's own, a call's or the Mini
+// Player, it keeps its video, and the app's drawing shows at |frame|. bc_tab_media's Picture in
+// Picture floats the card's video into Chrome's window. The page sees its video go into Picture in
+// Picture and leave it. The user's: agents get no media cards.
+BC_EXPORT void bc_tab_show_video(bc_id tab, bc_id window, bc_rect frame, double corner_radius);
+
 // Closes the Today tabs below the tab, each as bc_tab_close does, bottom up. A window showing one
 // shows the tab first. Then tab_closed for each, and space_changed.
 BC_EXPORT void bc_tab_close_below(bc_id tab);
@@ -3528,6 +3542,14 @@ BC_EXPORT void bc_tab_close(bc_id tab, bool split);
 // Space too. A close the page asks for then closes the tab as the user's would, and tab_closed
 // follows. The user's alone: an agent's tab never has it.
 BC_EXPORT void bc_tab_set_page_may_close(bc_id tab, bool may);
+
+// Keeps nothing of the page the tab shows, as the UI asks for a sign-in's callback page in a
+// Little ilo window another app's link opened, whose address carries a single-use code: its URL
+// leaves the profile's history, with every visit to it, and so the command bar's suggestions. If
+// the tab closes while it still shows that page, it isn't archived or among the tabs
+// bc_window_reopen_closed_tab reopens. One that has gone on to another page closes as any does.
+// The user's alone: an agent's tab never shows such a page.
+BC_EXPORT void bc_tab_forget_page(bc_id tab);
 
 // Windows. Every window shows the same Spaces, and a tab's page is live in one window at a time:
 // the one that showed it last. The reads are for the UI and agents alike.

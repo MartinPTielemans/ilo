@@ -28,6 +28,7 @@
 #include "browser_core/arrange.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
+#include "browser_core/card_video.h"
 #include "browser_core/cast_dialog.h"
 #include "browser_core/bluetooth_pair.h"
 #include "browser_core/device_chooser.h"
@@ -83,11 +84,14 @@
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/overlay_window.h"
+#include "content/public/browser/video_picture_in_picture_window_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "url/gurl.h"
 
@@ -409,6 +413,20 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     }
   }
 
+  // Every video's Picture in Picture window is the core's, which shows it at its media card while
+  // one asks, and in Chrome's own otherwise (card_video.h).
+  std::unique_ptr<content::VideoOverlayWindow> CreateWindowForVideoPictureInPicture(
+      content::VideoPictureInPictureWindowController* controller) override {
+    return NewVideoWindow(
+        controller, base::BindOnce(
+                        [](ContentBrowserClient* client,
+                           content::VideoPictureInPictureWindowController* controller) {
+                          return client->ChromeContentBrowserClient::
+                              CreateWindowForVideoPictureInPicture(controller);
+                        },
+                        base::Unretained(this), base::Unretained(controller)));
+  }
+
   // Chrome's, and the browser's own ad blocker where it blocks (ad_block.h).
   void WillCreateURLLoaderFactory(
       content::BrowserContext* browser_context,
@@ -473,6 +491,7 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     // with no error page in place of the page, and the agent hears why (#1443).
     content::WebContents* contents = web_contents_getter.Run();
     if (contents && !OpenAppDialog::MayOpen(contents)) {
+      LOG(ERROR) << "browser: agent tab " << Tab::IdOf(contents) << " refused " << url.scheme();
       AgentPage::AppRefused(contents, url);
       return true;
     }
@@ -653,8 +672,15 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     // Chrome's own discards, under memory pressure, then keep theirs too.
     std::string features = command_line->GetSwitchValueASCII(switches::kEnableFeatures);
     features += features.empty() ? "" : ",";
-    command_line->AppendSwitchASCII(switches::kEnableFeatures,
-                                    features + features::kWebContentsDiscard.name);
+    // And a page asks to share the screen only from a click or a key, as the spec and the other two
+    // engines have it, so none puts the picker up unasked; the promise it gets otherwise is refused,
+    // with no UI of ours (decision 12, #2456). As a feature, not a Blink one: the browser reads it to
+    // tell the page whether a call needs the click (capture_policy_utils.cc), and Blink's own follows
+    // it. Blink's alone refused nothing, as the browser said no click was needed.
+    command_line->AppendSwitchASCII(
+        switches::kEnableFeatures,
+        features + features::kWebContentsDiscard.name + "," +
+            blink::features::kGetDisplayMediaRequiresUserActivation.name);
     // A profile's sessionStorage stays on disk across a launch, as Chrome keeps it when it restores
     // the last session, for the tabs the Spaces bring back to find theirs again; the core deletes
     // what no tab came back for once they're back (RestoreSession). Chrome otherwise clears it all
@@ -674,12 +700,9 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     std::string blink = command_line->GetSwitchValueASCII(switches::kEnableBlinkFeatures);
     blink += blink.empty() ? "" : ",";
     // And ⌥-click on a link opens it in a split view, as Arc's does, not Chrome's download
-    // (chromium-core-alt-click-split.patch). And a page asks to share the screen only from a click
-    // or a key, as the spec and the other two engines have it, so none puts the picker up unasked;
-    // the promise it gets otherwise is refused, with no UI of ours (decision 12, #2456).
-    command_line->AppendSwitchASCII(
-        switches::kEnableBlinkFeatures,
-        blink + "PasswordReveal,AltClickSplitView,GetDisplayMediaRequiresUserActivation");
+    // (chromium-core-alt-click-split.patch).
+    command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures,
+                                    blink + "PasswordReveal,AltClickSplitView");
 #if BUILDFLAG(IS_MAC)
     platform::NameKeychainItem();
 #endif
@@ -722,19 +745,32 @@ content::ContentClient* MainDelegate::CreateContentClient() {
   return content_client.get();
 }
 
+#if BUILDFLAG(IS_MAC)
+// The Mac hears launching before Chromium takes the profile's lock, about 20 ms sooner, as it has
+// no early thread to lose and only a hand-run binary makes a second process, whose launch window
+// shows until the running ilo answers (#2494).
+std::optional<int> MainDelegate::PreBrowserMain() {
+  std::optional<int> exit_code = ChromeMainDelegate::PreBrowserMain();
+  // Chrome's PreBrowserMain made NSApp, which the app can't make before it: Chrome's class reads
+  // the command line as it's made.
+  if (!exit_code && g_host.launching) {
+    g_host.launching(g_host.context);
+  }
+  return exit_code;
+}
+#else
 std::optional<int> MainDelegate::PostEarlyInitialization(InvokedIn invoked_in) {
   std::optional<int> exit_code = ChromeMainDelegate::PostEarlyInitialization(invoked_in);
   // In the browser process, once Chromium has the profile's lock: a launch that hands its links to
   // the browser running already has an exit code here and goes, so it puts nothing on screen and
-  // starts nothing the app would have to stop, even when two launch at once (#2494). Chrome's
-  // PreBrowserMain made NSApp before this, which the app can't make before it: Chrome's class
-  // reads the command line as it's made.
+  // starts nothing the app would have to stop, even when two launch at once (#2494).
   if (!exit_code && std::holds_alternative<InvokedInBrowserProcess>(invoked_in) &&
       g_host.launching) {
     g_host.launching(g_host.context);
   }
   return exit_code;
 }
+#endif
 
 content::ContentBrowserClient* MainDelegate::CreateContentBrowserClient() {
   // As ChromeMainDelegate's, with our client in place of Chrome's.

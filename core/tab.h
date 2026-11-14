@@ -58,6 +58,10 @@ class Tab : public content::WebContentsObserver,
   static bc_id IdOf(content::WebContents* contents);
   // |contents|'s tab, or null if nothing asked for its id.
   static Tab* FromWebContents(content::WebContents* contents);
+  // |contents| has Chrome's tab helpers now, as its tab strip took it: its tab, if it has one yet,
+  // observes what they make. A tab made before them, as a pop-up an agent's page opens is
+  // (DidOpenRequestedURL), observes nothing of theirs until then.
+  static void HelpersArrived(content::WebContents* contents);
   // |id|'s tab, with its page or without, or null.
   static Tab* Get(bc_id id);
   // |id|'s page, or null, as for a tab without one.
@@ -129,6 +133,9 @@ class Tab : public content::WebContentsObserver,
   // followed, such as a sign-in hop, or after the page replaced its own address. So a pinned tab
   // that goes back to a pinned URL that always redirects is home, not away from it (#2338).
   bool At(const GURL& url) const;
+  // Keeps nothing of the page it's at (bc_tab_forget_page): its URL leaves the profile's history,
+  // and it isn't archived or reopenable if it closes while still there.
+  void ForgetPage();
   // Its history, with its name, icon and mute, as the session keeps it.
   SavedTab Save() const;
   // The id of its page's sessionStorage in its profile, loaded or not, which the session file keeps
@@ -276,6 +283,9 @@ class Tab : public content::WebContentsObserver,
 
   // Makes |contents| the tab's page.
   void Attach(content::WebContents* contents);
+  // Observes what Chrome's tab helpers made for its page, the favicon driver, sound, infobars,
+  // autofill and translate, those it doesn't yet.
+  void ObserveHelpers();
   // Tells the app the tab closed, as its page did or as Close closes it.
   void ReportClosed();
   // Finds the favicon the profile has for |url|, for a tab whose page hasn't loaded, as Chrome's
@@ -284,6 +294,14 @@ class Tab : public content::WebContentsObserver,
 
   // content::WebContentsObserver:
   void DidStartNavigation(content::NavigationHandle* navigation) override;
+  void DidOpenRequestedURL(content::WebContents* new_contents,
+                           content::RenderFrameHost* source_render_frame_host,
+                           const GURL& url,
+                           const content::Referrer& referrer,
+                           WindowOpenDisposition disposition,
+                           ui::PageTransition transition,
+                           bool started_from_context_menu,
+                           bool renderer_initiated) override;
   void DidFinishNavigation(content::NavigationHandle* navigation) override;
   void DidStartLoading() override;
   void DidStopLoading() override;

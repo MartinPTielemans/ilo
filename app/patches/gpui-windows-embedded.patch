@@ -112,10 +112,20 @@ index 622c1cb604..697ce244f7 100644
          let bind_flag;
          let bytes_per_pixel;
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
-index 98a13f304c..6cfbd572ae 100644
+index 98a13f304c..c8fd25a160 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
-@@ -73,16 +73,36 @@ struct DirectXResources {
+@@ -54,6 +54,9 @@ pub(crate) struct DirectXRenderer {
+     /// In that case we want to discard the first frame that we draw as we got reset in the middle of a frame
+     /// meaning we lost all the allocated gpu textures and scene resources.
+     skip_draws: bool,
++    /// Signalled once the GPU has finished the last frame presented, which reaches the screen
++    /// only then: until it has, the window waits to draw its next.
++    presented: Option<ID3D11Query>,
+ }
+ 
+ /// Direct3D objects
+@@ -73,16 +76,36 @@ struct DirectXResources {
      render_target: Option<ID3D11Texture2D>,
      render_target_view: Option<ID3D11RenderTargetView>,
  
@@ -157,7 +167,72 @@ index 98a13f304c..6cfbd572ae 100644
  struct DirectXRenderPipelines {
      shadow_pipeline: PipelineState<Shadow>,
      quad_pipeline: PipelineState<Quad>,
-@@ -409,7 +429,6 @@ impl DirectXRenderer {
+@@ -194,6 +217,7 @@ impl DirectXRenderer {
+             width: 1,
+             height: 1,
+             skip_draws: false,
++            presented: None,
+         })
+     }
+ 
+@@ -324,6 +348,7 @@ impl DirectXRenderer {
+         self.pipelines = pipelines;
+         self.direct_composition = direct_composition;
+         self.skip_draws = true;
++        self.presented = None;
+         Ok(())
+     }
+ 
+@@ -338,7 +363,47 @@ impl DirectXRenderer {
+             return Ok(());
+         }
+         self.render(scene, background_appearance)?;
+-        self.present()
++        self.present()?;
++        self.mark_presented();
++        Ok(())
++    }
++
++    /// Asks the GPU to say when it has finished the frame just presented.
++    fn mark_presented(&mut self) {
++        let Some(devices) = &self.devices else {
++            return;
++        };
++        if self.presented.is_none() {
++            let desc = D3D11_QUERY_DESC {
++                Query: D3D11_QUERY_EVENT,
++                MiscFlags: 0,
++            };
++            unsafe { devices.device.CreateQuery(&desc, Some(&mut self.presented)) }.log_err();
++        }
++        if let Some(query) = &self.presented {
++            unsafe { devices.device_context.End(query) };
++        }
++    }
++
++    /// Whether the GPU is still drawing the last frame presented. A window that draws its next
++    /// before then has its frames queue, and what the app changes outside them, such as another
++    /// window's place or this one's region, reach the screen ahead of the frame drawn with them.
++    pub(crate) fn gpu_behind(&self) -> bool {
++        let (Some(devices), Some(query)) = (&self.devices, &self.presented) else {
++            return false;
++        };
++        let mut done = windows::core::BOOL(0);
++        let asked = unsafe {
++            devices.device_context.GetData(
++                query,
++                Some(&mut done as *mut _ as *mut _),
++                std::mem::size_of_val(&done) as u32,
++                0,
++            )
++        };
++        // GetData succeeds without writing while the GPU is behind, and fails once the device is
++        // lost, when there's nothing to wait for.
++        asked.is_ok() && !done.as_bool()
+     }
+ 
+     /// Clear the render target for `background_appearance` and encode every
+@@ -409,7 +474,6 @@ impl DirectXRenderer {
      /// goes through MetalRenderer; this is the Windows analogue). Draws into
      /// the existing render target, copies it into a `D3D11_USAGE_STAGING`
      /// texture, maps it, and converts BGRA to RGBA.
@@ -165,7 +240,7 @@ index 98a13f304c..6cfbd572ae 100644
      pub(crate) fn render_to_image(
          &mut self,
          scene: &Scene,
-@@ -618,16 +637,21 @@ impl DirectXRenderer {
+@@ -618,16 +682,21 @@ impl DirectXRenderer {
          }
  
          let devices = self.devices.as_ref().context("devices missing")?;
@@ -189,7 +264,7 @@ index 98a13f304c..6cfbd572ae 100644
                  None,
              );
          }
-@@ -660,9 +684,9 @@ impl DirectXRenderer {
+@@ -660,9 +729,9 @@ impl DirectXRenderer {
          // Resolve MSAA to non-MSAA intermediate texture
          unsafe {
              devices.device_context.ResolveSubresource(
@@ -201,7 +276,7 @@ index 98a13f304c..6cfbd572ae 100644
                  0,
                  RENDER_TARGET_FORMAT,
              );
-@@ -704,6 +728,10 @@ impl DirectXRenderer {
+@@ -704,6 +773,10 @@ impl DirectXRenderer {
  
          let devices = self.devices.as_ref().context("devices missing")?;
          let resources = self.resources.as_ref().context("resources missing")?;
@@ -212,7 +287,7 @@ index 98a13f304c..6cfbd572ae 100644
          self.pipelines.path_sprite_pipeline.update_buffer(
              &devices.device,
              &devices.device_context,
-@@ -713,7 +741,7 @@ impl DirectXRenderer {
+@@ -713,7 +786,7 @@ impl DirectXRenderer {
          // Draw the sprites with the path texture
          self.pipelines.path_sprite_pipeline.draw_with_texture(
              &devices.device_context,
@@ -221,7 +296,7 @@ index 98a13f304c..6cfbd572ae 100644
              slice::from_ref(&self.globals.sampler),
              sprites.len() as u32,
          )
-@@ -889,25 +917,15 @@ impl DirectXResources {
+@@ -889,25 +962,15 @@ impl DirectXResources {
              )?
          };
  
@@ -250,7 +325,7 @@ index 98a13f304c..6cfbd572ae 100644
              viewport,
          })
      }
-@@ -919,21 +937,12 @@ impl DirectXResources {
+@@ -919,21 +982,12 @@ impl DirectXResources {
          width: u32,
          height: u32,
      ) -> Result<()> {
@@ -276,7 +351,7 @@ index 98a13f304c..6cfbd572ae 100644
          self.viewport = viewport;
          Ok(())
      }
-@@ -1359,20 +1368,12 @@ fn create_resources(
+@@ -1359,20 +1413,12 @@ fn create_resources(
      width: u32,
      height: u32,
  ) -> Result<(
@@ -297,7 +372,7 @@ index 98a13f304c..6cfbd572ae 100644
      let viewport = D3D11_VIEWPORT {
          TopLeftX: 0.0,
          TopLeftY: 0.0,
-@@ -1381,15 +1382,7 @@ fn create_resources(
+@@ -1381,15 +1427,7 @@ fn create_resources(
          MinDepth: 0.0,
          MaxDepth: 1.0,
      };
@@ -315,7 +390,7 @@ index 98a13f304c..6cfbd572ae 100644
  
  #[inline]
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..37c28be9ee 100644
+index 08f91bd626..679d76e0e9 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -103,13 +103,14 @@ impl WindowsWindowInner {
@@ -583,7 +658,7 @@ index 08f91bd626..37c28be9ee 100644
          None
      }
  
-@@ -1347,16 +1511,20 @@ impl WindowsWindowInner {
+@@ -1347,16 +1511,28 @@ impl WindowsWindowInner {
              }
              // Validate the region so a nested message pump doesn't keep
              // re-dispatching WM_PAINT for the still-invalid region in a busy
@@ -597,6 +672,14 @@ index 08f91bd626..37c28be9ee 100644
              unsafe { ValidateRect(Some(handle), None).ok().log_err() };
              return Some(0);
          };
++        if !force_render && self.state.renderer.borrow().gpu_behind() {
++            // Its last frame isn't on screen yet: the app draws its next once it is, so what it
++            // changes alongside that frame doesn't reach the screen ahead of the last. The vsync
++            // thread asks again at the next vsync.
++            self.state.frame_want.wake();
++            unsafe { ValidateRect(Some(handle), None).ok().log_err() };
++            return Some(0);
++        }
          let mut request_frame = self.state.callbacks.request_frame.take()?;
  
          self.state.direct_manipulation.update();
@@ -606,7 +689,7 @@ index 08f91bd626..37c28be9ee 100644
  
          let events = self.state.direct_manipulation.drain_events();
          if !events.is_empty() {
-@@ -1823,3 +1991,70 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +1999,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }

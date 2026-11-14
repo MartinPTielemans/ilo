@@ -440,6 +440,61 @@ quit() {
   quit_app
   exited "$@"
 }
+# uBlock Origin's selfie of its filters (#2381, #2502), which goes with uBlock Origin (#2111). A
+# launch takes its filters in from it, or with none compiles them, and 53 s after its lists last
+# changed writes it, about a minute into a new profile's first launch, in the browser's pool, main
+# and IO threads and the extension's process: 0.85 s of CPU in 4 s on the Mac. A user's launches
+# after are on it, so a run's that measure them are too.
+# ublock_stores <command>: <command> on each of its two stores, failing as it fails on one.
+ublock_stores() {
+  local ublock=oghkpboejbohceocapipmnjifoklonij
+  "$@" "$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb.leveldb" &&
+    "$@" "$profile_dir/Default/Local Extension Settings/$ublock"
+}
+ublock_store_selfie() {
+  local keys key
+  keys=$(python3 -I check/leveldb_keys.py "$1") || return 1
+  for key in staticMain staticExtFilteringEngine staticNetFilteringEngine; do
+    printf '%s\n' "$keys" | LC_ALL=C grep -aq "selfie/$key\$" || return 1
+  done
+}
+# ublock_selfie: whether uBlock Origin wrote its selfie's three parts, which it takes in only
+# together, to its IndexedDB and to its extension storage, by the keys their files hold. A key it
+# takes out stays in them until they compact, so this says only that one was written.
+ublock_selfie() {
+  ublock_stores ublock_store_selfie
+}
+# What <store> holds of the selfie, and its files, for a run that ends with none.
+ublock_store_note() {
+  echo "$1"
+  ls -lR "$1" "${1%.leveldb}.blob" 2> /dev/null || true
+  python3 -I check/leveldb_keys.py "$1" | LC_ALL=C grep -ao 'selfie/.*' | sort | uniq -c
+}
+# selfie_launch <url> <log>: a launch on page <url>, logged to <log>, that stays until uBlock Origin
+# has written its selfie, checking each second, and quits, so its work has ended before the next
+# launch. $selfie_at is the seconds it took.
+selfie_launch() {
+  local run_log=$log stayed
+  log=$2
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  stayed=$(date +%s)
+  BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+  pid=$!
+  selfie_at=
+  for _ in $(seq 180); do
+    ublock_selfie && selfie_at=$(($(date +%s) - stayed)) && break
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 1
+  done
+  quit
+  if [ -z "$selfie_at" ]; then
+    # Whether it wrote none or some, for a run that ends here.
+    ublock_stores ublock_store_note > "$out/selfie-stores.txt" 2>&1 || true
+    fail "uBlock Origin wrote no selfie in a launch that stayed 180 s; its stores: $out/selfie-stores.txt"
+  fi
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  log=$run_log
+}
 # Whether the run is on X11 through sway's Xwayland, where a child window such as the password
 # offer or the find bar can't keep the X focus, which wlroots' window manager sends back to the
 # browser window (#1646). Wayland and Xvfb keep it.
@@ -743,15 +798,19 @@ recorded() {
   fail "the window's recording didn't finish: $said"
 }
 # GitHub's hosted Mac starts a recording and never gets its first frame, ReplayKit's -5822 (#1108),
-# so there the run goes on without it, saying so. Anywhere else a recording that started and then
-# failed fails the run.
+# and a check VM's guest stops a stream partway through, ScreenCaptureKit's -3821 (#2396). The
+# motion can't be taken again once it's driven, so the run goes on without the video, saying so.
+# Any other recording that started and then failed fails the run.
 unrecorded() {
   said=$(tail -1 "${recording%.mp4}-record.log")
+  stopped=$(grep '^the stream ended by itself.*Code=-3821 ' "${recording%.mp4}-record.log" | tail -1)
   case "${GITHUB_ACTIONS:-}: $said" in
-  true:*Code=-5822*) ;;
-  *) return 1 ;;
+  true:*Code=-5822*)
+    echo "skip: recording $(basename "$recording" .mp4), as the hosted Mac's recording got no first frame: $said" ;;
+  *)
+    [ -n "$stopped" ] || return 1
+    echo "skip: recording $(basename "$recording" .mp4), as the system stopped it: $stopped" ;;
   esac
-  echo "skip: recording $(basename "$recording" .mp4), as the hosted Mac's recording got no first frame: $said"
   recording=""
 }
 # The driver's clicks come with no move, and one in the sidebar tells it the pointer is there, so
@@ -1071,7 +1130,10 @@ served() {
     grep -q "$1" "$out/site.log" && return 0
     sleep 0.1
   done
-  fail "$2"
+  # With $3, the failure quotes the first requests the site logged that match it.
+  sent=
+  [ -z "${3:-}" ] || sent=": $(grep -- "$3" "$out/site.log" | head -2 | tr '\n' ' ')"
+  fail "$2$sent"
 }
 # The colour at ($2, $3), as fractions of the width and height, in the capture $1: "r g b".
 pixel() {

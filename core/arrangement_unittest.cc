@@ -59,7 +59,8 @@ TEST(ArrangementTest, AnythingTheSchemaDoesntNameRefusesTheFile) {
       // A settle against both neighbours, or neither.
       With(R"("before": {"name": "the article")", R"("after": {"name": "x", "role": "x",
            "target": {"path": "p"}}, "before": {"name": "the article")"),
-      With(R"("before": {"name": "the article", "role": "article", "target": {"path": "main > article"}})",
+      With(R"("before": {"name": "the article", "role": "article",
+              "target": {"path": "main > article", "fp": {"tag": "article", "landmark": "main"}}})",
            R"("width": 3)"),
       // A trade's other element in a settle's field.
       With(R"("with":)", R"("before":)"),

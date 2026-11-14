@@ -42,7 +42,7 @@
 # Reconnected, its next call is a card of its own, whose Stop answers the call under way and closes
 # the client's connection. Turning Settings › Agents off takes the socket away and drops a client
 # connected. Relaunched, a call with a tab's id from before is refused as one from before ilo
-# restarted.
+# restarted. Its tools offer it nothing of Boosts, which are the user's alone.
 # It scrolls in a panel and in another site's frame by their refs, until each answers that
 # nothing scrolled. A table's rows and a menu's items have refs it clicks by, and an answer says what
 # changed in an element, as a button now enabled.
@@ -300,8 +300,10 @@ grep -q '"protocolVersion":"2025-06-18"' "$out/mcp-initialize.json" ||
   fail "initialize didn't answer in the client's version"
 await_log '^browser: agent mcp-client hello from check$' "the app didn't hear the client's hello"
 mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-mcp '{"jsonrpc":"2.0","id":100,"method":"tools/list"}' | grep -q '"name":"read_page"' ||
-  fail "tools/list didn't list read_page"
+mcp '{"jsonrpc":"2.0","id":100,"method":"tools/list"}' > "$out/mcp-tools.json"
+grep -q '"name":"read_page"' "$out/mcp-tools.json" || fail "tools/list didn't list read_page"
+# A Boost is the user's alone (decision 8), so no tool reads, writes or turns one on.
+grep -qi 'boost' "$out/mcp-tools.json" && fail "tools/list named a Boost among the agent's tools: $(grep -o '"name":"[^"]*"' "$out/mcp-tools.json" | tr '\n' ' ')"
 
 listed=$(call list_tabs '{}')
 await_log '^browser: made space [1-9][0-9]* for agent mcp-client$' "list_tabs didn't make the agent's Space"
@@ -348,6 +350,46 @@ case "$read" in
 esac
 closed=$(call close_tab "{\"tab\":$documents}")
 case "$closed" in "Closed tab $documents."*) ;; *) fail "closing the documents tab answered: $closed" ;; esac
+
+# A tab an agent's tab opens follows the agent's rules from when it's made, as the agent's own tab
+# does, whether a link, a page's window.open or a redirect in it leads there (#2660).
+if engine_has ../core/space.cc ../core/window.cc ../core/tab.cc ../core/main_delegate.cc; then
+  # The tab open_tab made refused the link to an app above where the core decides, as it's the
+  # agent's from its first request: open_tab makes it so before its page starts.
+  grep -q "browser: agent tab $documents refused ms-word\$" "$log" ||
+    fail "the agent's own tab didn't refuse the link to an app; its last agent tab line:
+$(grep 'browser: agent tab ' "$log" | tail -1)"
+  # window.open by name: a handler's bare open() is the document's, which with one argument
+  # replaces the page and opens nothing.
+  printf '%s' '<!doctype html><title>Opens</title>
+<a href="maps:?q=check" target="_blank">Link</a>
+<a href="bounce?to=maps%3A%3Fq%3Dcheck" target="_blank">Redirect</a>
+<button onclick="window.open(&quot;maps:?q=check&quot;)">Pop up</button>' > "$out/site/opens.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/opens.html\"}")
+  opens=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  # The core's line carries Chromium's prefix.
+  kept='browser: agent tab [0-9]* refused maps$'
+  for target in 'link "Link"' 'link "Redirect"' 'button "Pop up"'; do
+    ref=$(printf '%s\n' "$opened" | sed -n "s/.*- $target \[\(e[0-9]*\)\].*/\1/p" | head -1)
+    before=$(grep -c "$kept" "$log" || true)
+    call click "{\"tab\":$opens,\"ref\":\"$ref\"}" > /dev/null
+    await_more "$kept" "$before" || fail "the tab the agent's $target opened didn't follow the agent's rules"
+    kept_tab=$(grep "$kept" "$log" | tail -1 | sed 's/.*browser: agent tab \([0-9]*\) .*/\1/')
+    [ "$kept_tab" != "$opens" ] || fail "the agent's $target was kept in its own tab, not one it opened"
+    grep -q "^browser: page $kept_tab dialog [^n]" "$log" &&
+      fail "the tab the agent's $target opened asked the user: $(grep "^browser: page $kept_tab dialog" "$log" | tail -1)"
+    if call list_tabs '{}' | grep -q "^. $kept_tab  "; then
+      closed=$(call close_tab "{\"tab\":$kept_tab}")
+      case "$closed" in "Closed tab $kept_tab."*) ;; *) fail "closing tab $kept_tab answered: $closed" ;; esac
+    fi
+  done
+  closed=$(call close_tab "{\"tab\":$opens}")
+  case "$closed" in "Closed tab $opens."*) ;; *) fail "closing tab $opens answered: $closed" ;; esac
+  opened_said=", each following its rules from when it's made"
+else
+  opened_said=""
+  echo "skip: mcp, a tab an agent's tab opens. This engine is from before such a tab was the agent's from when it's made (#2660)."
+fi
 
 # Ten cases of a web toolkit, each the same form on a page of its own, which an agent moves to
 # Closed in tabs the user isn't looking at, each step on all ten in one turn: cases.py, through a
@@ -1911,6 +1953,28 @@ CARD
   done
   [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] ||
     fail "the refused download left a file: $(ls -A "$out/downloads" | tr '\n' ' ')"
+  # As does one a tab the agent's tab opened starts (#2660): the user's Never for the site just
+  # above refuses it without asking again.
+  if [ -n "$opened_said" ]; then
+    printf '%s' "<!doctype html><title>Files</title><a href=\"//files.localhost:$port/report.docx\" target=\"_blank\">Report</a>" \
+      > "$out/site/files.html"
+    opened=$(call open_tab "{\"url\":\"localhost:$port/files.html\"}")
+    files=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+    ref=$(printf '%s\n' "$opened" | sed -n 's/.*- link "Report" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+    never='^browser: agent logged mcp-client download files\.localhost refused: You said never on this site\.$'
+    before=$(grep -c "$never" "$log" || true)
+    call click "{\"tab\":$files,\"ref\":\"$ref\"}" > /dev/null
+    await_more "$never" "$before" ||
+      fail "a download a tab the agent's tab opened started wasn't refused by the user's Never for its site; the last download lines:
+$(grep 'browser: agent .*download' "$log" | tail -3)"
+    for _ in $(seq 50); do
+      [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] && break
+      sleep 0.1
+    done
+    [ "$(ls -A "$out/downloads" | grep -c '^report')" = 1 ] ||
+      fail "the opened tab's refused download left a file: $(ls -A "$out/downloads" | tr '\n' ' ')"
+    # Left open: the agent is at work in it, which the session's end below ends.
+  fi
 
   # A bank's site asks first, in a card in the window, and Allow Once opens it.
   bank="{\"url\":\"bank.localhost:$port/fields.html\"}"
@@ -1987,7 +2051,7 @@ if [ "$driven" = 1 ]; then
     "the client's card didn't say when it ended: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   grep '^browser: task card session-[0-9]* Done ' "$log" | grep -q '[0-9] pages\{0,1\}' &&
     fail "the client's receipt counted its pages, which Open counts: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
-  # The agent is at work in the tab it last acted in, the bank's it opened.
+  # The agent is at work in the tab it last acted in, which is still open.
   at=$(grep '^browser: agent mcp-client at work in ' "$log" | tail -1 | awk '{print $NF}')
   await_log "^browser: agent mcp-client done in $at\$" "the tab still shows a gone agent at work"
   await_log "^browser: agent question $pending gone\$" "a gone agent's question stayed open"
@@ -2227,9 +2291,9 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind$opened_said, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, each opening in Settings › Agents to where it went and what it sent or didn't, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, is offered no Boost tool, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind$opened_said. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi
 if [ -n "${toast_skip:-}" ]; then
   echo "skip: the needs' toast showing, as Windows shows toasts only for an installed copy, which the run's isn't: it counted on the taskbar button and asked for the toast."

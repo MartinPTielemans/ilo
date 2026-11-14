@@ -39,7 +39,7 @@ use browser::theme::{Appearance, Theme};
 use browser::theme_picker;
 use gpui::{
     App, AppContext, Bounds, Focusable, Pixels, Point, SharedString, Size, TitlebarOptions,
-    WeakEntity, WindowBounds, WindowOptions, point, px, size,
+    TouchPhase, WeakEntity, WindowBounds, WindowOptions, point, px, size,
 };
 
 thread_local! {
@@ -966,6 +966,9 @@ impl Browser for Fake {
 
     // The made-up pages share nothing.
     fn share_instead(&self, _: u64, _: &mut App) {}
+
+    // The made-up pages have no video.
+    fn show_video(&self, _: u64, _: Option<Bounds<Pixels>>, _: f32, _: &mut App) {}
 
     fn set_volume(&self, tab: u64, volume: f32, cx: &mut App) {
         self.later(cx, move |shell, cx| {
@@ -2908,6 +2911,51 @@ fn main() {
                 })
                 .detach();
             }
+            // PREVIEW_SWIPE=1 brings the Library out with fingers going right on the first Space, and
+            // takes it back with them going left, through the gesture's own code, then does the
+            // same with clicks, for a recording of its motion (#2375).
+            if let Some(shell) =
+                shell_window.filter(|_| std::env::var_os("PREVIEW_SWIPE").is_some())
+            {
+                cx.spawn(async move |cx| {
+                    let executor = cx.background_executor().clone();
+                    let wait = |ms| executor.timer(Duration::from_millis(ms));
+                    wait(1000).await;
+                    // Fingers 1.2 Library widths each way in half a second, a frame at a time.
+                    for way in [1., -1.] {
+                        log!(
+                            "browser: preview swipe {}",
+                            if way > 0. { "in" } else { "out" }
+                        );
+                        let step = |phase, x| {
+                            move |shell: &mut Shell,
+                                  window: &mut gpui::Window,
+                                  cx: &mut gpui::Context<Shell>| {
+                                shell.preview_fingers(x, phase, window, cx)
+                            }
+                        };
+                        shell.update(cx, step(TouchPhase::Started, 0.)).ok();
+                        for _ in 0..30 {
+                            wait(16).await;
+                            let x = way * 1.2 * 417. / 30. / 0.5;
+                            shell.update(cx, step(TouchPhase::Moved, x)).ok();
+                        }
+                        shell.update(cx, step(TouchPhase::Ended, 0.)).ok();
+                        wait(2000).await;
+                    }
+                    for stage in ["in", "out"] {
+                        log!("browser: preview click {stage}");
+                        shell
+                            .update(cx, |shell, _, cx| {
+                                shell.run(Command::ViewLibrary, "preview", cx)
+                            })
+                            .ok();
+                        wait(2000).await;
+                    }
+                    log!("browser: preview swipe done");
+                })
+                .detach();
+            }
             // PREVIEW_PEEK=1 opens a link of the page shown in Peek, once the shell has laid the page
             // out, with the shell's page showing through the card, as it does on Linux and Windows.
             if let Some(shell) = shell_window.filter(|_| std::env::var_os("PREVIEW_PEEK").is_some())
@@ -4622,7 +4670,7 @@ mod web {
         }
         fn page_favicon(&self, _: &str) {}
         // A new tab at the top of Today, shown.
-        fn open_tab(&self, url: &str, behind: bool) {
+        fn open_tab(&self, url: &str, _: &str, behind: bool) {
             let (tab, url) = (self.next_tab.get(), url.to_string());
             self.next_tab.set(tab + 1);
             self.later_shell(move |shell, cx| {
@@ -4644,10 +4692,10 @@ mod web {
             });
         }
         // The demo has the one window.
-        fn open_window(&self, url: &str, _: &mut App) {
-            self.open_tab(url, false);
+        fn open_window(&self, url: &str, typed: &str, _: &mut App) {
+            self.open_tab(url, typed, false);
         }
-        fn navigate(&self, tab: u64, url: &str) {
+        fn navigate(&self, tab: u64, url: &str, _: &str) {
             let url = url.to_string();
             self.later_shell(move |shell, cx| {
                 shell.set_title(tab, title(&url), cx);
@@ -4670,8 +4718,8 @@ mod web {
         }
         fn activate(&self, _: u64, _: u64, _: &mut App) {}
         fn split(&self, _: u64, _: u64, _: &mut App) {}
-        fn open_split(&self, url: &str, _: u64, _: &mut App) {
-            self.open_tab(url, false);
+        fn open_split(&self, url: &str, typed: &str, _: u64, _: &mut App) {
+            self.open_tab(url, typed, false);
         }
         fn copy(&self, _: &str, _: &mut App) {}
         fn show(

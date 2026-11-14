@@ -1125,6 +1125,44 @@ bool FocusSettledOnActivation() {
   return false;
 }
 
+namespace {
+
+// Answers |widget|'s hit test with HTTRANSPARENT, so the pointer goes to the window of the same
+// thread under it, the browser window, as views' accept_events doesn't for a popup. Goes with the
+// widget.
+class PassThrough : public ui::HWNDMessageFilter, public views::WidgetObserver {
+ public:
+  explicit PassThrough(views::Widget* widget) {
+    ui::HWNDSubclass::AddFilterToTarget(views::HWNDForWidget(widget), this);
+    observation_.Observe(widget);
+  }
+
+  // ui::HWNDMessageFilter:
+  bool FilterMessage(HWND, UINT message, WPARAM, LPARAM, LRESULT* result) override {
+    if (message != WM_NCHITTEST) {
+      return false;
+    }
+    *result = HTTRANSPARENT;
+    return true;
+  }
+
+  // views::WidgetObserver:
+  void OnWidgetDestroying(views::Widget*) override {
+    ui::HWNDSubclass::RemoveFilterFromAllTargets(this);
+    observation_.Reset();
+    delete this;
+  }
+
+ private:
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+};
+
+}  // namespace
+
+void PassPointerThrough(views::Widget* widget) {
+  new PassThrough(widget);
+}
+
 bool PageDialogsInOwnWindow() {
   // Aura would draw it in the window's HWND, under the UI's and the pages' child HWNDs.
   return true;

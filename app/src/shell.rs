@@ -976,9 +976,9 @@ struct Opened {
 }
 
 impl Opened {
-    /// How far they've faded in, or None once they have.
-    fn done(&self) -> Option<f32> {
-        self.curve.at(self.start.elapsed().as_secs_f32())
+    /// How far they've faded in at `t` seconds into the list's motion, or None once they have.
+    fn done(&self, t: f32) -> Option<f32> {
+        self.curve.at(t)
     }
 }
 
@@ -1326,6 +1326,10 @@ pub struct Shell {
     held_row: Option<HeldRow>,
     /// The header button the pointer pressed, for its shrinking and growing back.
     held_nav: Option<HeldNav>,
+    /// GPUI's clock, which the list's motion is timed by (`since`): the real one in the app, and
+    /// in a test one only the test moves, so a slide holds on a slow runner until the test moves
+    /// it on, as the Space's settle does (#2265, #2630).
+    clock: BackgroundExecutor,
     /// Rows on their way to their place: how far from it each started, and when.
     slides: HashMap<Slot, (f32, Instant, Curve)>,
     /// Where the frame last drawn had each tab's row in the list, which the pointer's presses hit
@@ -1947,6 +1951,7 @@ impl Shell {
             unhovered: Vec::new(),
             held_row: None,
             held_nav: None,
+            clock: cx.background_executor().clone(),
             slides: HashMap::new(),
             drawn_rows: RefCell::default(),
             drawn_top: RefCell::default(),
@@ -3342,6 +3347,10 @@ impl Shell {
     /// The window became the one in front: the browser's shortcuts and menus act on this shell,
     /// and the menu bar lists its Space's extensions.
     pub fn became_key(&mut self, cx: &mut Context<Self>) {
+        // A window made key or opened in front since, before this shell heard.
+        if commands::key_moved_on(&cx.weak_entity()) {
+            return;
+        }
         cx.set_global(ShellHandle(cx.weak_entity()));
         commands::heard_key(&cx.weak_entity());
         // Its tab's dialog goes over its card again, as another window's may have shown since, and
@@ -4129,11 +4138,22 @@ impl Shell {
         }
     }
 
+    /// Seconds since `start` on the list's clock.
+    pub(super) fn since(&self, start: Instant) -> f32 {
+        Self::since_on(&self.clock, start)
+    }
+
+    fn since_on(clock: &BackgroundExecutor, start: Instant) -> f32 {
+        clock.now().saturating_duration_since(start).as_secs_f32()
+    }
+
     /// Drops the list's and the pages' motion that's done, and returns whether any is left.
     fn list_moving(&mut self) -> bool {
+        let clock = self.clock.clone();
+        let since = |start: Instant| Self::since_on(&clock, start);
         let sliding = !self.slides.is_empty();
         self.slides
-            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_some());
+            .retain(|_, (_, start, curve)| curve.at(since(*start)).is_some());
         if sliding && self.slides.is_empty() {
             // check.sh waits for this line before it presses a row that moved, or scrolls the
             // list: a row sliding in from above leaves the list short until it settles.
@@ -4141,19 +4161,20 @@ impl Shell {
         }
         let tiling = !self.tile_slides.is_empty();
         self.tile_slides
-            .retain(|_, (_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_some());
+            .retain(|_, (_, start, curve)| curve.at(since(*start)).is_some());
         if tiling && self.tile_slides.is_empty() {
             // check.sh waits for this line before it presses a tile that moved.
             log!("browser: tiles settled");
         }
         self.list_slide
-            .take_if(|(_, start, curve)| curve.at(start.elapsed().as_secs_f32()).is_none());
+            .take_if(|(_, start, curve)| curve.at(since(*start)).is_none());
         self.closing
-            .retain(|row| row_spring(row.start.elapsed().as_secs_f32()).is_some());
+            .retain(|row| row_spring(since(row.start)).is_some());
         self.unhovered
             .retain(|(_, start)| start.elapsed().as_secs_f32() < SELECTED_UNHOVER);
         if self.slides.is_empty() {
-            self.opened.take_if(|opened| opened.done().is_none());
+            self.opened
+                .take_if(|opened| opened.done(since(opened.start)).is_none());
         }
         if let Some(settle) = self.settle.take_if(|settle| settle.offset().is_none()) {
             // check.sh reads these lines.
@@ -4460,7 +4481,8 @@ impl Render for Shell {
         if self.window_button_geometry.is_none() && window_buttons {
             self.window_button_geometry = self.browser.window_button_geometry(cx);
         }
-        // The Library slides in from the left with the card's edge, over the sidebar receding.
+        // The Library slides in from the left with the card's edge, over the sidebar receding, or
+        // on the right from behind the card after the sidebar going right (`library_x`).
         let library = self.library.is_some() && !self.page_fullscreen;
         // Full screen has no window buttons, so the panel draws none.
         let buttons = self.library_buttons() && !window.is_fullscreen();
@@ -4486,8 +4508,9 @@ impl Render for Shell {
             && (!self.sidebar_hidden || self.sidebar_motion.is_some());
         let sidebar = sidebar_shown.then(|| {
             let scale = self.sidebar_scale();
+            let shift = self.sidebar_shift();
             let origin = point(
-                px(self.from_side(width + RECEDE_X)),
+                px(self.from_side(width + RECEDE_X) + shift),
                 self.viewport.height / 2.,
             );
             // Whole: the Library fades in over it rather than cutting it (`library_opacity`).
@@ -4499,8 +4522,13 @@ impl Render for Shell {
             // Its buttons recede with it, over the Library, as the window's do in Arc. Full screen
             // has none.
             let buttons = self.sidebar_buttons() && !window.is_fullscreen();
-            let buttons = buttons.then(|| self.window_buttons(Some(self.viewport.width), cx));
-            let receding = div().absolute().size_full().opacity(opacity);
+            let buttons = buttons.then(|| self.window_buttons(self.viewport.width, cx));
+            let receding = div()
+                .absolute()
+                .top_0()
+                .left(px(shift))
+                .size_full()
+                .opacity(opacity);
             scaled(receding.child(sidebar).children(buttons), scale, origin)
         });
         let docked = sidebar_shown
@@ -4510,7 +4538,7 @@ impl Render for Shell {
         let edge = docked.then(|| self.sidebar_edge(cx));
         let own_buttons = self
             .draws_own_window_buttons()
-            .then(|| self.window_buttons(Some(self.viewport.width), cx));
+            .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
         self.breath.arm(cx);
@@ -5224,7 +5252,7 @@ impl Shell {
                     .border(px(0.5))
                     .border_color(self.palette.faint(REVEAL_BORDER))
                     .bg(self.gradient(Some(self.palette.underlay.into())))
-                    .child(self.window_buttons(Some(px(self.width())), cx))
+                    .child(self.window_buttons(px(self.width()), cx))
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
@@ -5245,11 +5273,11 @@ impl Shell {
         self.window_button_geometry.unwrap_or_default().frames()
     }
 
-    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel. With the sidebar
-    /// on the right they're mirrored `across` what they're drawn in, so close is at its corner, as
-    /// AppKit's are; the Library's column draws them as they are.
-    fn window_buttons(&self, across: Option<Pixels>, cx: &mut Context<Self>) -> AnyElement {
-        let right = self.right && across.is_some();
+    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel, the sidebar or
+    /// the Library's column. With the sidebar on the right they're mirrored `across` what they're
+    /// drawn in, so close is at its corner, as AppKit's are.
+    fn window_buttons(&self, across: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        let right = self.right;
         if cfg!(target_os = "windows") {
             return self.windows_buttons(right, cx);
         }
@@ -5264,8 +5292,7 @@ impl Shell {
             (WindowButton::Zoom, zoom),
         ];
         let frames = self.window_button_frames();
-        let frames =
-            frames.map(|frame| sidebar::mirrored(right, across.unwrap_or_default(), frame));
+        let frames = frames.map(|frame| sidebar::mirrored(right, across, frame));
         let row = Bounds::from_corners(
             point(frames[0].left().min(frames[2].left()), frames[0].top()),
             point(frames[0].right().max(frames[2].right()), frames[2].bottom()),

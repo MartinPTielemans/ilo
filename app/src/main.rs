@@ -177,6 +177,7 @@ use updates_host::*;
 mod quitting;
 mod scripting_host;
 use quitting::*;
+mod ad_block_host;
 mod battery_saver_host;
 use battery_saver_host::*;
 mod other_tabs_host;
@@ -475,6 +476,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 gpui_linux::embed_wayland(display, keyboard);
                 gpui_linux::watch_embedder_swipes(system::swiped);
                 browser::clipboard::read_through(system::read_through_core);
+                browser::clipboard::held_through(gpui_linux::held_clipboard_text);
             }
         }
         !display.is_null()
@@ -865,8 +867,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     let mut args: Vec<String> = vec![
         format!("--user-data-dir={profile}"),
         // Chrome would copy the app bundle to check its signature against, which an
-        // ad-hoc-signed build doesn't need.
-        "--disable-features=MacAppCodeSignClone".into(),
+        // ad-hoc-signed build doesn't need. And off the Mac, every switch would copy and encode
+        // the tab it leaves for the hover cards of Chrome's tab strip, which ilo never shows: its
+        // own hover card takes its own picture (core/capture.cc, #2377).
+        "--disable-features=MacAppCodeSignClone,TabHoverCardImages".into(),
         // An idle browser shouldn't wake: Chrome's stack sampling feeds metrics nobody receives,
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
@@ -947,6 +951,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         .into_iter()
         .filter_map(|arg| CString::new(arg).ok())
         .collect();
+    ad_block_host::keep_cache_in(&args);
     if std::env::var_os("BROWSER_DRIVE").is_some() {
         #[cfg(target_os = "linux")]
         drive::start();
@@ -1062,6 +1067,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_frozen: Some(tab_frozen),
         other_tabs_changed: Some(other_tabs_changed),
         app_new_window: Some(app_new_window),
+        ad_block_use: Some(ad_block_host::ad_block_use),
+        ad_block_request: Some(ad_block_host::ad_block_request),
+        ad_block_page: Some(ad_block_host::ad_block_page),
+        ad_block_hide: Some(ad_block_host::ad_block_hide),
         ..Default::default()
     };
     (args, host)

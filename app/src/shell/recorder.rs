@@ -554,6 +554,19 @@ impl Browser for Recorder {
         self.record(format!("media {tab} {action:?}"));
     }
 
+    fn show_video(&self, tab: u64, frame: Option<Bounds<Pixels>>, radius: f32, _: &mut App) {
+        match frame {
+            Some(at) => self.record(format!(
+                "show video {tab} at {} {} {} {} round {radius}",
+                f32::from(at.origin.x),
+                f32::from(at.origin.y),
+                f32::from(at.size.width),
+                f32::from(at.size.height)
+            )),
+            None => self.record(format!("show video {tab} none")),
+        }
+    }
+
     fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
         self.record(format!("volume {tab} {volume:.2}"));
     }
