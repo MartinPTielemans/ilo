@@ -99,10 +99,6 @@ KeyboardWatch& Watching() {
 // app-wide, in local state, so every profile's and a private window's share it.
 constexpr char kLeftPref[] = "browser_core.mini_player_left";
 
-void RegisterPrefs(PrefRegistrySimple* registry) {
-  registry->RegisterDictionaryPref(kLeftPref);
-}
-
 std::optional<gfx::Rect> LastLeft() {
   const base::DictValue& left = g_browser_process->local_state()->GetDict(kLeftPref);
   const std::optional<int> x = left.FindInt("x");
@@ -356,7 +352,10 @@ void SetUpMiniPlayer() {
   g_browser_core_mini_player_place = &Placed;
   g_browser_core_mini_player_left = &Left;
   g_browser_core_mini_player_laid_out = &LaidOut;
-  g_browser_core_register_local_state = &RegisterPrefs;
+}
+
+void RegisterMiniPlayerPrefs(PrefRegistrySimple* registry) {
+  registry->RegisterDictionaryPref(kLeftPref);
 }
 
 bool MiniPlayerHasKeyboard() {

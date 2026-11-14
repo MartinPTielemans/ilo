@@ -7,12 +7,17 @@
 #ifndef BROWSER_CORE_MINI_PLAYER_H_
 #define BROWSER_CORE_MINI_PLAYER_H_
 
+class PrefRegistrySimple;
+
 namespace browser_core {
 
 class Window;
 
 // Sets the hooks that place, move and size it, before Chrome starts.
 void SetUpMiniPlayer();
+
+// Registers where the last one was left, in Local State, app-wide.
+void RegisterMiniPlayerPrefs(PrefRegistrySimple* registry);
 
 // Whether the Mini Player has the keyboard, as after a click on it.
 bool MiniPlayerHasKeyboard();

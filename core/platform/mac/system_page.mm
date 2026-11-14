@@ -841,10 +841,12 @@ void SystemPage::DeleteStore(const std::string& id) {
     [WebKitClass(@"WKWebsiteDataStore")
         removeDataStoreForIdentifier:uuid
                    completionHandler:^(NSError* error) {
+                     // check.sh reads these lines. Never the store's id.
                      if (error) {
-                       VLOG(1) << "browser: system store " << base::SysNSStringToUTF8(key)
-                               << " not deleted: "
-                               << base::SysNSStringToUTF8(error.localizedDescription);
+                       fprintf(stderr, "browser: system store not deleted: %s\n",
+                               base::SysNSStringToUTF8(error.localizedDescription).c_str());
+                     } else {
+                       fprintf(stderr, "browser: system store deleted\n");
                      }
                    }];
   }

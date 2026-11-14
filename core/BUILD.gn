@@ -311,6 +311,20 @@ source_set("withheld_fields") {
   ]
 }
 
+# Which of a data folder's Safari-engine stores a profile still names, apart so
+# browser_core_unittests tests the rule alone.
+source_set("system_stores") {
+  sources = [
+    "system_stores.cc",
+    "system_stores.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/common:constants",
+    "//components/prefs",
+  ]
+}
+
 source_set("browser_core") {
   configs += [ ":app_calls" ]
   sources = [
@@ -483,6 +497,7 @@ source_set("browser_core") {
     ":search_default",
     ":agent_download_hold",
     ":sidebar_backups",
+    ":system_stores",
     ":site_searches",
     ":space_default",
     ":split_view",
@@ -794,6 +809,7 @@ test("browser_core_unittests") {
     "sync_pairing_unittest.cc",
     "sync_spaces_newer_unittest.cc",
     "sync_updates_unittest.cc",
+    "system_stores_unittest.cc",
     "typing_keys_unittest.cc",
     "window_frames_unittest.cc",
     "withheld_fields_unittest.cc",
@@ -808,6 +824,7 @@ test("browser_core_unittests") {
     ":other_tabs",
     ":search_default",
     ":sidebar_backups",
+    ":system_stores",
     ":site_searches",
     ":space_default",
     ":split_view",
@@ -824,6 +841,8 @@ test("browser_core_unittests") {
     "//components/history/core/test",
     "//components/omnibox/browser",
     "//components/omnibox/browser:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
     "//components/search_engines",
     "//components/sessions",
     "//components/download/public/common:test_support",
