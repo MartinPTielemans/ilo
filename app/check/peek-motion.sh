@@ -22,7 +22,7 @@ if false; then
 fi
 # Under KWin a frame shows Peek's page where it rests, outside its card, when its page presents
 # after the hole moves (#2640); the fix waits on its engine (#2715).
-if [ "${BROWSER_XVFB:-}" = kwin ]; then
+if false; then
   echo "skip: peek-motion, under KWin: a frame shows Peek's resting frame outside its card (#2640)."
   exit 0
 fi
