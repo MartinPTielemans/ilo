@@ -31,6 +31,7 @@
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/native_widget_factory.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -42,6 +43,7 @@
 #include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host_platform.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_solid_color.h"
 #include "ui/events/event.h"
@@ -444,7 +446,10 @@ class WindowViews : public views::WidgetObserver,
 
   // Shows |page|, a link preview's, at |frame| over the pages shown, in place of the preview it
   // shows. The app's overlay over the window has a hole where it shows, and its card round that.
-  void ShowPreview(aura::Window* page, const gfx::Rect& frame, double corner_radius) {
+  void ShowPreview(aura::Window* page,
+                   const gfx::Rect& frame,
+                   double corner_radius,
+                   base::OnceClosure shown) {
     aura::Window* holder = HolderFor(preview_);
     if (preview_.page != page) {
       Empty(preview_);
@@ -466,6 +471,25 @@ class WindowViews : public views::WidgetObserver,
     LayOut(preview_, size);
     DrawPreview();
     ShowThrough();
+    WhenPreviewShown(holder->layer()->GetCompositor(), std::move(shown));
+  }
+
+  // Runs |shown| once the first frame |compositor| draws from now is on screen, unless the preview
+  // is placed again first. It asks the compositor only for its next frame's time, which a frame the
+  // new place makes anyway sets off; it draws no frame of its own.
+  void WhenPreviewShown(ui::Compositor* compositor, base::OnceClosure shown) {
+    const uint64_t placed = ++preview_placed_;
+    if (!compositor) {
+      return;
+    }
+    compositor->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
+        [](base::WeakPtr<WindowViews> views, uint64_t placed, base::OnceClosure shown,
+           const viz::FrameTimingDetails&) {
+          if (views && views->preview_placed_ == placed) {
+            std::move(shown).Run();
+          }
+        },
+        weak_factory_.GetWeakPtr(), placed, std::move(shown)));
   }
 
   // Draws the link preview's page at |scale| of its frame about |about|, in the window's content,
@@ -779,6 +803,12 @@ class WindowViews : public views::WidgetObserver,
     if (auto* client = aura::client::GetFocusClient(content())) {
       client->ResetFocusWithinActiveWindow(content());
     }
+    // That does nothing in a window that isn't active, as while an overlay has the input focus, and
+    // views focuses the view it stored as the window lost activation, the page's, once it's active
+    // again (DesktopNativeWidgetAura::OnWindowActivated), taking the keyboard from the UI (#2789).
+    if (views::FocusManager* focus = widget_->GetFocusManager()) {
+      focus->SetStoredFocusView(nullptr);
+    }
     ui_text_input_.SetKeyboard(true);
     if (ui_ == x11::Window::None) {
       return;
@@ -982,8 +1012,13 @@ class WindowViews : public views::WidgetObserver,
         key->event = main;
         x11::Connection* connection = x11::Connection::Get();
         // With the focus, or GPUI, finding it on this window, hands the key back here as the
-        // page's, and the two pass it on without end, as ⌘Q after full screen did (#919).
-        SetInputFocus(main);
+        // page's, and the two pass it on without end, as ⌘Q after full screen did (#919). Only
+        // while the focus is still in this window: a key handled after a click that opened another
+        // window, which has the focus by then, would take it back, as ⌥⌘-click's ⌥ and ⌘ did from
+        // Little ilo (#2762).
+        if (IsWithin(InputFocus(), window())) {
+          SetInputFocus(main);
+        }
         connection->SendEvent(*key, main, x11::EventMask::NoEvent);
         connection->Flush();
       }
@@ -1262,6 +1297,8 @@ class WindowViews : public views::WidgetObserver,
   // under it.
   Slot preview_;
   SkColor4f preview_color_ = SkColors::kWhite;
+  // How many times the preview's page has been placed, for WhenPreviewShown to tell the last.
+  uint64_t preview_placed_ = 0;
   // How its page is drawn for the card's motion (DrawPreview).
   Drawn preview_drawn_;
   // After the slots, so it leaves its holder before that goes.
@@ -1542,10 +1579,11 @@ void ShowPageIn(views::Widget* widget,
                 gfx::NativeView page,
                 void*,
                 const gfx::Rect& frame,
-                double corner_radius) {
+                double corner_radius,
+                base::OnceClosure shown) {
   WindowViews* views = widget ? ViewsOf(widget) : nullptr;
   if (views && page) {
-    views->ShowPreview(page, frame, corner_radius);
+    views->ShowPreview(page, frame, corner_radius, std::move(shown));
   }
 }
 

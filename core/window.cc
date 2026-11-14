@@ -909,6 +909,16 @@ void Window::AdjustNavigate(NavigateParams& params) {
     return;
   }
   Tab* source = params.source_contents ? Tab::FromWebContents(params.source_contents) : nullptr;
+#if BUILDFLAG(IS_LINUX)
+  // ⇧⌥-click on a link opens it in a split view on Linux, as ⌥-click does, since Openbox and Xfce
+  // take every Alt-click for themselves but leave one with Shift (#2755). Blink
+  // asks for a new window, as for ⇧-click, so the press it came from tells them apart.
+  if (source && params.disposition == WindowOpenDisposition::NEW_WINDOW &&
+      !params.started_from_context_menu && params.user_gesture && !params.contents_to_insert &&
+      !params.post_data && source->last_press_held_alt()) {
+    params.disposition = WindowOpenDisposition::NEW_SPLIT_VIEW;
+  }
+#endif
   // A page in an agent's Space the user isn't looking at opens its tabs and windows there, behind,
   // loading at once, as the agent's own: it works in its own tabs and never changes what the user
   // sees (#1470). Chrome gives a tab opened from a link the tab it shows as its opener, so the
@@ -1682,6 +1692,18 @@ bool Window::RedoRemoveSuggestion(bc_id removal) {
   return suggestions_ && suggestions_->RemoveAgain(removal);
 }
 
+bc_id Window::RemoveHistory(Profile* profile, const GURL& url, base::Time begin, base::Time end) {
+  // Closing, it may have let its profile go.
+  if (closing_ || !profile) {
+    return 0;
+  }
+  // The removals live with the window's suggestions, so one ⌘Z path undoes both.
+  if (!suggestions_ || suggestions_->profile() != profile) {
+    suggestions_ = std::make_unique<Suggestions>(id_, profile);
+  }
+  return suggestions_->RemoveVisits(url, begin, end);
+}
+
 content::WebContents* Window::OpenTab(Profile* profile,
                                       const GURL& url,
                                       bool when_shown,
@@ -1755,6 +1777,12 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener,
   content::WebContents* preview = params.navigated_or_inserted_contents;
   if (!preview) {
     return nullptr;
+  }
+  // The app shows it in its card until it draws, so it shows the window's page colour until then,
+  // as the panes do, not Chromium's white (#2742).
+  if (Tab* tab = Tab::FromWebContents(preview); tab && page_color_) {
+    tab->SetPageColor(
+        SkColorSetRGB(*page_color_ >> 16, *page_color_ >> 8 & 0xff, *page_color_ & 0xff));
   }
   // Inserting a background tab sized it to the active tab's page.
   preview->Resize(gfx::Rect(size));
