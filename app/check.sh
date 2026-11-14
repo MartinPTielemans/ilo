@@ -69,6 +69,10 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
         # names its property on the root window (#2134).
         config=$(mktemp -d)
         printf "[Plugins]\nblurEnabled=true\n" > "$config/kwinrc"
+        # Spike (#2790): KWin's window open and close animations off, to tell them from the app's.
+        case "${CHECK_TRACE_CATEGORIES:-}" in *noanim*)
+          printf "scaleEnabled=false\nfadeEnabled=false\nglideEnabled=false\n" >> "$config/kwinrc" ;;
+        esac
         XDG_CONFIG_HOME=$config KWIN_COMPOSE=O2 dbus-run-session -- kwin_x11 > "$ready.log" 2>&1 &
         tries=0
         until xprop -root _KDE_NET_WM_BLUR_BEHIND_REGION 2> /dev/null |
