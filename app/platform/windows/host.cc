@@ -2469,6 +2469,8 @@ struct LaunchWindow {
   // (host_show_launch_window).
   LONG foot = 0;
   LONG grows = 0;
+  // Whether it shows at the window's right, where the sidebar was.
+  bool right = false;
   HBRUSH background = nullptr;
 };
 LaunchWindow g_launch;
@@ -2493,9 +2495,10 @@ bool SystemIsLight() {
 }
 
 // The picture at |path| as a top-down bitmap, if it's |height| pixels high: one taken on a screen
-// of another scale is left out. Fills |edge| with the colour of its right edge halfway down, the
-// sidebar's colour with nothing on it.
-HBITMAP LoadLaunchPicture(const std::wstring& path, LONG height, SIZE* size, COLORREF* edge) {
+// of another scale is left out. Fills |edge| with the colour of its edge toward the page halfway
+// down, its right or with |right| its left, the sidebar's colour with nothing on it.
+HBITMAP LoadLaunchPicture(const std::wstring& path, LONG height, bool right, SIZE* size,
+                          COLORREF* edge) {
   const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   HBITMAP bitmap = nullptr;
   {
@@ -2525,7 +2528,7 @@ HBITMAP LoadLaunchPicture(const std::wstring& path, LONG height, SIZE* size, COL
       bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, reinterpret_cast<void**>(&bits),
                                 nullptr, 0);
       if (bitmap && SUCCEEDED(converter->CopyPixels(nullptr, width * 4, width * 4 * high, bits))) {
-        const uint8_t* pixel = bits + ((high / 2) * width + width - 1) * 4;
+        const uint8_t* pixel = bits + ((high / 2) * width + (right ? 0 : width - 1)) * 4;
         *edge = RGB(pixel[2], pixel[1], pixel[0]);
         *size = {static_cast<LONG>(width), static_cast<LONG>(high)};
       } else if (bitmap) {
@@ -2572,10 +2575,11 @@ LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         const LONG width = g_launch.picture_size.cx;
         const LONG foot = g_launch.foot;
         const LONG grows = g_launch.grows;
+        const LONG left = g_launch.right ? client.right - width : 0;
         // Rows |from| to |to| of the picture, |at| rows down the window.
         const auto place = [&](LONG from, LONG to, LONG at) {
           if (to > from) {
-            BitBlt(dc, 0, at, width, to - from, source, 0, from, SRCCOPY);
+            BitBlt(dc, left, at, width, to - from, source, 0, from, SRCCOPY);
           }
         };
         // The top at the window's top and the foot at its bottom: a shorter window loses the
@@ -3057,7 +3061,7 @@ void host_centered(double width, double height, double* x, double* y) {
 
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
                              double height, bool maximized, double picture_width,
-                             double picture_height, double foot_top) {
+                             double picture_height, double foot_top, bool right) {
   static const wchar_t* launch_class = [] {
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = LaunchProc;
@@ -3099,8 +3103,9 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
     const LONG grows = std::lround(height * scale) - std::lround(picture_height * scale);
     g_launch.picture =
         LoadLaunchPicture(LaunchPicturePath(profile_dir, picture_width, picture_height),
-                          client.bottom - grows, &g_launch.picture_size, &color);
+                          client.bottom - grows, right, &g_launch.picture_size, &color);
     g_launch.grows = grows;
+    g_launch.right = right;
     g_launch.foot = std::clamp(std::lround(foot_top * scale), 0L, g_launch.picture_size.cy);
   }
   g_launch.background = CreateSolidBrush(color);

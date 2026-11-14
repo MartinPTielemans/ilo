@@ -1455,7 +1455,7 @@ void CaptureLaunchWindow() {
 // Never maximized, which is Windows' alone: a zoomed window's frame is the one it has.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
                              double height, bool, double picture_width, double picture_height,
-                             double foot_top) {
+                             double foot_top, bool right) {
   // The core's y runs down from the main display's top, AppKit's up from its bottom.
   const NSRect frame =
       NSMakeRect(x, NSHeight(NSScreen.screens.firstObject.frame) - y - height, width, height);
@@ -1486,14 +1486,17 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   // A picture taken on a screen of another scale is left out.
   if ([pixels isKindOfClass:NSBitmapImageRep.class] && pixels.CGImage &&
       pixels.pixelsHigh == lround(picture_height * scale)) {
-    // The sidebar's right edge, halfway down, is the material with nothing on it.
-    NSColor* edge = [pixels colorAtX:pixels.pixelsWide - 1 y:pixels.pixelsHigh / 2];
+    // The sidebar's edge toward the page, halfway down, is the material with nothing on it.
+    NSColor* edge = [pixels colorAtX:right ? 0 : pixels.pixelsWide - 1 y:pixels.pixelsHigh / 2];
     window.backgroundColor = [edge colorWithAlphaComponent:1];
     const long rows = pixels.pixelsHigh;
     const long columns = pixels.pixelsWide;
     const long foot = std::clamp(lround(foot_top * scale), 0L, rows);
     const long grows = lround(height * scale) - rows;
-    NSView* shown = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, columns / scale, height)];
+    NSView* shown = [[NSView alloc]
+        initWithFrame:NSMakeRect(right ? width - columns / scale : 0, 0, columns / scale, height)];
+    // At its edge of the window, should the browser window's view be another width.
+    shown.autoresizingMask = right ? NSViewMinXMargin : NSViewMaxXMargin;
     // Puts the picture's rows |from| to |to| |at| rows down from the window's top.
     auto place = [&](long from, long to, long at) {
       if (to <= from) {
@@ -1613,7 +1616,7 @@ void host_watch_finished_launching(void (*finished)(void)) {
               }];
 }
 
-bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width) {
+bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width, bool right) {
   NSWindow* window = ((__bridge NSView*)ui_view).window;
   const NSSize size = window.frame.size;
   NSString* path = LaunchPicturePath(profile_dir, size.width, size.height);
@@ -1641,8 +1644,10 @@ bool host_save_launch_picture(void* ui_view, const char* profile_dir, double wid
     return false;
   }
   const CGFloat scale = (CGFloat)CGImageGetWidth(whole) / size.width;
+  const CGFloat columns = round(width * scale);
   CGImageRef sidebar = CGImageCreateWithImageInRect(
-      whole, CGRectMake(0, 0, round(width * scale), CGImageGetHeight(whole)));
+      whole, CGRectMake(right ? CGImageGetWidth(whole) - columns : 0, 0, columns,
+                        CGImageGetHeight(whole)));
   CGImageRelease(whole);
   if (!sidebar) {
     return false;

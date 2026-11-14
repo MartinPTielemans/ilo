@@ -266,12 +266,12 @@ void host_centered(double width, double height, double* x, double* y) {
 // core opens it instead.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width, double height,
                              bool maximized, double picture_width, double picture_height,
-                             double foot_top) {}
+                             double foot_top, bool right) {}
 
 void host_close_launch_window(void) {}
 
 // No launch window shows it (host_show_launch_window), so none is kept.
-bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width) {
+bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width, bool right) {
   return false;
 }
 
