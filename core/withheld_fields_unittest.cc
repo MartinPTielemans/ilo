@@ -66,6 +66,23 @@ TEST(WithheldFieldsTest, WhatTheAgentSees) {
   EXPECT_FALSE(Withheld(Holding(u"")));
 }
 
+// Point's picture hatches every value, as its text and the note's panel send none: the page's
+// default, a read-only field's and the agent's own typing too, which a screenshot shows.
+TEST(WithheldFieldsTest, PointsPictureHatchesEveryValue) {
+  FieldFacts page_default = Holding(u"Netherlands");
+  page_default.markup = u"Netherlands";
+  FieldFacts fixed = Holding(u"Order 1234");
+  fixed.fixed = true;
+  FieldFacts typed = Holding(u"Ada");
+  typed.typed = u"Ada";
+  for (const FieldFacts& field : {page_default, fixed, typed}) {
+    EXPECT_FALSE(Hatches(field, Hatched::kWithheld));
+    EXPECT_TRUE(Hatches(field, Hatched::kEveryValue));
+  }
+  EXPECT_TRUE(Hatches(Holding(u"ada@example.com"), Hatched::kWithheld));
+  EXPECT_FALSE(Hatches(Holding(u""), Hatched::kEveryValue));
+}
+
 // A field in a frame, as one in a cross-origin frame is, lands where the frame shows it, and never
 // past the frame's box.
 TEST(WithheldFieldsTest, AFieldInAFrameIsCutToTheFrame) {

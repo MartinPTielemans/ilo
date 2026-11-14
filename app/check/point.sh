@@ -29,8 +29,11 @@ chmod 600 "$agents_file"
 # The section is a box in the page's middle, so the page's middle is the section's own, clear of
 # its fields, and its mark shows whole round it. Its fields sit where FIELDS below says, each
 # holding what its value is drawn in red: an email and a password as autofill fills them, a select
-# and a textarea as the user leaves them. The red line under them is no field's, so the picture
-# shows it. Its title says it's ready once the fields are filled; the observer starts after that
+# and a textarea as the user leaves them, and a value from the markup, a read-only one and a
+# disabled one, which an agent's screenshot shows (core/withheld_fields.cc) and Point's picture
+# hatches all the same. The red line under them is no field's, so the picture shows it. A value
+# the agent typed is the unit test's (PointsPictureHatchesEveryValue): Point starts in the
+# window's selected tab, which is always the user's, where an agent may not type. Its title says it's ready once the fields are filled; the observer starts after that
 # title, so the only title it sets is "changed", once, on anything added, removed or changed.
 printf '%s' '<!doctype html><meta charset=utf-8><title>-</title>
 <style>body { margin: 0 }
@@ -42,12 +45,16 @@ input, select, textarea { width: 220px; height: 30px; padding: 2px 6px; color: r
   font: 16px monospace; background: white }
 #email { left: 20px; top: 64px } #password { left: 260px; top: 64px }
 #country { left: 20px; top: 108px } #words { left: 260px; top: 108px; height: 54px; resize: none }
+#named, #member, #since { top: 176px; width: 146px } #named { left: 20px } #member { left: 187px }
+#since { left: 354px }
 p { left: 20px; top: 220px } #shown { left: 20px; top: 260px; color: red; font: 24px monospace }
 </style>
 <section aria-label="Sign in"><h1>Sign in</h1>
 <input id=email type=email autocomplete=email> <input id=password type=password>
 <select id=country><option>-</option><option>Netherlands</option></select>
 <textarea id=words></textarea>
+<input id=named value="Ada Lovelace"> <input id=member readonly value="AL-1815">
+<input id=since disabled value="December 1815">
 <p>Forgot your password?</p><div id=shown>██████████</div></section>
 <script>
 email.value = "ada@example.com";
@@ -139,6 +146,9 @@ FIELDS="email 20 64 220 30 hatched
 password 260 64 220 30 hatched
 select 20 108 220 30 hatched
 textarea 260 108 220 54 hatched
+markup 20 176 146 30 hatched
+read-only 187 176 146 30 hatched
+disabled 354 176 146 30 hatched
 line 20 260 240 28 shown"
 # Checks the sent picture $1 against FIELDS, writing each one's red to $3. The picture is the
 # section's box, which the answer $2 gives, and 8 around it (core/point.cc's kAround), so a field is
@@ -246,8 +256,8 @@ print(("error: " if result.get("isError") else "") + result["content"][0]["text"
     "A form field's value never goes"; do
     case "$answer" in *"$part"*) ;; *) fail "the answer didn't have \"$part\": $answer" ;; esac
   done
-  for part in 'ada@example.com' 'lovelace-check' 'Netherlands' 'Meet at noon' 's3cr3t' 'session=' \
-    '#top'; do
+  for part in 'ada@example.com' 'lovelace-check' 'Netherlands' 'Meet at noon' 'Ada Lovelace' \
+    'AL-1815' 'December 1815' 's3cr3t' 'session=' '#top'; do
     case "$answer" in *"$part"*) fail "the answer gave away \"$part\": $answer" ;; esac
   done
   [ -s "$out/point-picture$2.png" ] || fail "the answer had no picture of the section: $answer"
