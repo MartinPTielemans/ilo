@@ -42,7 +42,8 @@
 # when it leaves. From 14, a listed streaming service, a host of the run's server the dev build
 # lists, opens in Safari's engine from its first load, in a private window too, the Site Controls
 # show it on, and Off keeps it in Chromium after a reload, in a new tab, after another site and
-# back and after a relaunch, where On brings it back.
+# back and after a relaunch, where On brings it back. A profile made where one's folder was removed
+# by hand has a Safari's engine store of its own, and the old one is deleted at the next launch.
 
 # Clear, from the served page and two more, with the served page pinned for it to leave.
 serve
@@ -1573,6 +1574,132 @@ for kind in ("sites", "listed_off"):
     if "127.0.0.1" in engine.get(kind, []):
         sys.exit(f"the profile has the listed host in its {kind}")
 ' "$listed_prefs" || fail "On didn't leave the listed host as listed"
+  # A profile folder removed by hand takes its Safari's engine store's name with it (#2657): a
+  # profile made at its path has a store of its own, and the next launch deletes the old one. In a
+  # data folder of the run's own, as the user's Default is the one the steps above share.
+  store_dir="$PWD/$out/clear-store"
+  rm -rf "$store_dir"
+  mkdir -p "$store_dir/Default"
+  # Launches the app in it at the session page with the query $1, as the run $2.
+  store_launch() {
+    log="$out/clear-store-$2.log"
+    step=0
+    BROWSER_DRIVE=1 BROWSER_PROFILE_DIR="$store_dir" BROWSER_STREAMING_TEST_HOST=127.0.0.1 \
+      BROWSER_URL="http://127.0.0.1:$port/session$1" "$browser" < "$out/drive" > "$log" 2>&1 &
+    pid=$!
+    exec 3> "$out/drive"
+    await_load
+  }
+  store_launch '?webkit' before
+  await '^browser: title [0-9]* session safari sees w back$' ||
+    fail "the session page didn't keep its cookie and item in Safari's engine: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
+  exec 3>&-
+  quit
+  rm -rf "$store_dir/Default"
+  store_launch '' after
+  await '^browser: title [0-9]* session safari sees none$' ||
+    fail "a profile made where one was removed by hand saw its Safari's engine session: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
+  await '^browser: system store deleted$' ||
+    fail "the launch after a profile's folder was removed by hand didn't delete its store: $(grep '^browser: system store' "$log" | tail -1)"
+  exec 3>&-
+  quit
+  rm -rf "$store_dir"
+  # A store a version before #2664 gave a profile that's gone is deleted once, by its path (#2701).
+  # Default names the stores the old ids, as an old version would have, so the app makes them
+  # itself. With no symlinks in the path, as the old ids are of the path the app holds.
+  store_dir="$(cd "$out" && pwd -P)/clear-old-store"
+  rm -rf "$store_dir"
+  mkdir -p "$store_dir/Default"
+  # The old id of the profile path $1 in the data folder: StoreIdFor's before #2664.
+  old_id() {
+    python3 -I -c '
+import hashlib, sys, uuid
+digest = bytearray(hashlib.sha1(b"ilo system store " + sys.argv[1].encode()).digest())
+digest[6] = (digest[6] & 0x0f) | 0x50
+digest[8] = (digest[8] & 0x3f) | 0x80
+print(uuid.UUID(bytes=bytes(digest[:16])))
+' "$store_dir/$1"
+  }
+  # Has Default name the store $1, or none for "", and takes the stores the launch before listed
+  # off Local State's list, as a folder from before #2664 has none. With $2 "unswept", also as the
+  # folder of an old version's: unmarked, with Profile 1 counted.
+  old_store_prefs() {
+    python3 -I -c '
+import json, os, sys
+folder, store, unswept = sys.argv[1], sys.argv[2], sys.argv[3] == "unswept"
+def edit(path, change):
+    prefs = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
+    change(prefs)
+    json.dump(prefs, open(path, "w", encoding="utf-8"))
+def named(prefs):
+    engine = prefs.setdefault("browser_core", {}).setdefault("system_engine", {})
+    if store:
+        engine["store"] = store
+    else:
+        engine.pop("store", None)
+def listed(state):
+    engine = state.setdefault("browser_core", {}).setdefault("system_engine", {})
+    engine.pop("given_stores", None)
+    if unswept:
+        engine.pop("old_stores_swept", None)
+        state.setdefault("profile", {})["profiles_created"] = 2
+edit(os.path.join(folder, "Default", "Preferences"), named)
+if os.path.exists(os.path.join(folder, "Local State")):
+    edit(os.path.join(folder, "Local State"), listed)
+' "$store_dir" "$1" "${2:-}"
+  }
+  # Whether Local State marks the folder swept.
+  old_stores_marked() {
+    python3 -I -c '
+import json, sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+sys.exit(0 if state.get("browser_core", {}).get("system_engine", {}).get("old_stores_swept") else 1)
+' "$store_dir/Local State"
+  }
+  gone_store=$(old_id "Profile 1")
+  kept_store=$(old_id Default)
+  # A folder's first launch makes no old store, so it's marked without a sweep: here Default's
+  # page fills the store of Profile 1's path, which has no folder.
+  old_store_prefs "$gone_store"
+  store_launch '?webkit' old-first
+  await '^browser: title [0-9]* session safari sees w back$' ||
+    fail "the session page didn't keep its cookie and item in the store of Profile 1's path: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
+  exec 3>&-
+  quit
+  ! grep -q '^browser: old system stores swept$' "$log" ||
+    fail "a data folder's first launch swept old stores, which a folder set aside and put back would lose"
+  old_stores_marked || fail "a data folder's first launch didn't mark it as having no old stores"
+  old_store_prefs "$kept_store"
+  store_launch '?webkit' old-kept
+  await '^browser: title [0-9]* session safari sees w back$' ||
+    fail "the session page didn't keep its cookie and item in the store of Default's path: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
+  exec 3>&-
+  quit
+  # As an old version leaves the folder: no store named, none listed, unmarked, Profile 1 counted.
+  old_store_prefs '' unswept
+  store_launch '' old-swept
+  await '^browser: old system stores swept$' ||
+    fail "the launch after an old version's didn't sweep its stores: $(grep 'system store' "$log" | tail -3)"
+  deleted=$(grep -c '^browser: system store deleted$' "$log" || true)
+  [ "$deleted" = 1 ] ||
+    fail "the sweep deleted $deleted stores, not the one of Profile 1's path alone: $(grep '^browser: system store' "$log" | tail -3)"
+  exec 3>&-
+  quit
+  old_stores_marked || fail "the sweep didn't mark the folder swept"
+  # The store of Default's path stayed, its folder being there, and Profile 1's went.
+  old_store_prefs "$kept_store"
+  store_launch '' old-kept-after
+  await '^browser: title [0-9]* session safari sees w back$' ||
+    fail "the sweep deleted the store of Default's path, whose folder is there: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
+  exec 3>&-
+  quit
+  old_store_prefs "$gone_store"
+  store_launch '' old-gone-after
+  await '^browser: title [0-9]* session safari sees none$' ||
+    fail "the store of Profile 1's path, which has no folder, kept its session after the sweep: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
+  exec 3>&-
+  quit
+  rm -rf "$store_dir"
 fi
 forget_engine_sites
-echo "ok: the pointer on a link shows its address in a plate that goes when the pointer leaves it, and a long one's whole after 1.5 s, Clear Cache and Refresh from the View menu fetches the page's script again, keeping its cookie, and Clear Cookies and Refresh from the command bar deletes its cookie, keeping the cached script. Clear browsing data's Cancel keeps the history and Delete, with Browsing history ticked, empties the history the command bar suggests from, and the browser stays up after each. ⇧⌘C and ⌥⇧⌘C from the page and the UI copy the tab's URL and a Markdown link to it, without its tracking parameters, and ⇧⌘C's toast says Copied Current URL, with the capture toast's Share where there's a share sheet, which shares the page from either. ⌥⌘V from the UI and the page and the command bar's Paste URL as New Tab open the link copied in a new tab at the top of Today, and a Markdown link copied nothing. The sidebar shows Clear and the URL field's button only while the pointer is over it, and the button copies the URL. ⇧⌘K from the page and the UI, and Clear on the divider, close the Today tabs but the one shown, with no toast, and ⌘Z from the page and the UI brings them back in place, unloaded, but not from the page's text field, where it undoes typing. With only the tab shown left, Clear has an arrow before it and closes that tab too, and ⌘Z brings it back, shown. ⇧⌘T from the page and the UI reopens the tab closed last, where it was, with its history, muted if it was and with its icon, and ⌘Z brings back only the tabs ⇧⌘T didn't. A right-click on a row shows its tab's menu, Arc's for a Today tab: Duplicate copies the tab with its history and icon under it, Archive Tabs Below closes the Today tabs under it without showing them, and Unpin Tab unpins. ⌘W archives a Today tab, and ⇧⌘L, Window › Open Library… and the footer's button open the Library, which pushes the page right at its width; a click on an archived tab reopens it at the top of Today with its history and closes the Library, a right-click on one shows its menu, whose Copy URL copies its URL and Delete from Archive takes it out; and Clear Archive, from a right-click on the Archived Tabs section and the Archive menu, asks, then empties it, ⌘Z bringing its tabs back, and the section's is dimmed once it's empty. A page's question about a permission shows under the URL field while its tab is shown, and brings a hidden sidebar out until it's answered: × dismisses it, Block refuses the site now and later, and Allow grants. The URL field's Site Controls button and the command bar's Site Controls list the site's permissions as Chrome does; Block there sticks and refuses the site, Reset permissions has it ask again, Share shares the page, as File › Share… does where there's a share sheet, the lock does nothing without a certificate, the … menu lists Arc's items and opens the site's settings, and the button, escape and a click outside close them. A page that asks for Widevine brings a note under the URL field, while one that asks for ClearKey brings none. Its button used $drm_done: Safari's engine shows the page in the tab with the site's cookies, HttpOnly too, and localStorage from Chromium there before its first request and script, keeps the site for it until the Site Controls turn it off, which brings the cookies and the item its page stored back to Chromium, gives another site back to Chromium, keeps a link whose redirects pass through another site and come back, and gives back one whose redirects end there, opens a new tab from ⌘T at the site there, gives a private window's tab there a session of its own, which the regular window doesn't see and which ends with the window, and with its page focused ⌘T, ⌘L and ⌘W reach the UI, the click that closes the command bar reaches the page, as it does Chromium's, and in its text field ⌘A and ⌘C stay with the page and a Japanese composition commits; Safari opens the page there, leaving the note until the tab is at another site. The note's × closes it for the site, which leaves it closed after a reload, in another tab and after another site and back, while another site's note still shows; from macOS 14 the Site Controls offer Safari's engine for the site instead, and On shows the page there, as they do for a site turned off. From macOS 14 a listed streaming service opens in Safari's engine on its first load, without Chromium's first, in a private window too; the Site Controls show it on, and Off shows it in Chromium after a reload, in a new tab, after another site and back and after a relaunch, where On brings it back without keeping it as the user's. ⇧⌘Z redoes Clear, and Archive Tabs Below offers Undo, which brings back its tabs in place and shows the one that was shown, and ⇧⌘Z closes them again. Windows: $out/link-target.png, $out/link-target-whole.png, $out/clear-site.png, $out/url-toast.png, $out/pasted-url.png, $out/sidebar-hovered.png, $out/row-hovered.png, $out/sidebar-away.png, $out/clear.png, $out/clear-arrow.png, $out/clear-arrow-undone.png, $out/reopen.png, $out/tab-menu.png, $out/library.png, $out/archived-menu.png, $out/archive-section-menu.png, $out/library-empty.png, $out/question.png, $out/question-reveal.png, $out/site-controls.png, $out/site-controls-blocked.png, $out/drm-note.png, and from macOS 14 $out/drm-engine.png, $out/engine-ime.png, $out/site-controls-engine.png, $out/site-controls-offered.png, $out/listed.png, $out/site-controls-listed-on.png and $out/site-controls-listed-off.png"
+echo "ok: the pointer on a link shows its address in a plate that goes when the pointer leaves it, and a long one's whole after 1.5 s, Clear Cache and Refresh from the View menu fetches the page's script again, keeping its cookie, and Clear Cookies and Refresh from the command bar deletes its cookie, keeping the cached script. Clear browsing data's Cancel keeps the history and Delete, with Browsing history ticked, empties the history the command bar suggests from, and the browser stays up after each. ⇧⌘C and ⌥⇧⌘C from the page and the UI copy the tab's URL and a Markdown link to it, without its tracking parameters, and ⇧⌘C's toast says Copied Current URL, with the capture toast's Share where there's a share sheet, which shares the page from either. ⌥⌘V from the UI and the page and the command bar's Paste URL as New Tab open the link copied in a new tab at the top of Today, and a Markdown link copied nothing. The sidebar shows Clear and the URL field's button only while the pointer is over it, and the button copies the URL. ⇧⌘K from the page and the UI, and Clear on the divider, close the Today tabs but the one shown, with no toast, and ⌘Z from the page and the UI brings them back in place, unloaded, but not from the page's text field, where it undoes typing. With only the tab shown left, Clear has an arrow before it and closes that tab too, and ⌘Z brings it back, shown. ⇧⌘T from the page and the UI reopens the tab closed last, where it was, with its history, muted if it was and with its icon, and ⌘Z brings back only the tabs ⇧⌘T didn't. A right-click on a row shows its tab's menu, Arc's for a Today tab: Duplicate copies the tab with its history and icon under it, Archive Tabs Below closes the Today tabs under it without showing them, and Unpin Tab unpins. ⌘W archives a Today tab, and ⇧⌘L, Window › Open Library… and the footer's button open the Library, which pushes the page right at its width; a click on an archived tab reopens it at the top of Today with its history and closes the Library, a right-click on one shows its menu, whose Copy URL copies its URL and Delete from Archive takes it out; and Clear Archive, from a right-click on the Archived Tabs section and the Archive menu, asks, then empties it, ⌘Z bringing its tabs back, and the section's is dimmed once it's empty. A page's question about a permission shows under the URL field while its tab is shown, and brings a hidden sidebar out until it's answered: × dismisses it, Block refuses the site now and later, and Allow grants. The URL field's Site Controls button and the command bar's Site Controls list the site's permissions as Chrome does; Block there sticks and refuses the site, Reset permissions has it ask again, Share shares the page, as File › Share… does where there's a share sheet, the lock does nothing without a certificate, the … menu lists Arc's items and opens the site's settings, and the button, escape and a click outside close them. A page that asks for Widevine brings a note under the URL field, while one that asks for ClearKey brings none. Its button used $drm_done: Safari's engine shows the page in the tab with the site's cookies, HttpOnly too, and localStorage from Chromium there before its first request and script, keeps the site for it until the Site Controls turn it off, which brings the cookies and the item its page stored back to Chromium, gives another site back to Chromium, keeps a link whose redirects pass through another site and come back, and gives back one whose redirects end there, opens a new tab from ⌘T at the site there, gives a private window's tab there a session of its own, which the regular window doesn't see and which ends with the window, and with its page focused ⌘T, ⌘L and ⌘W reach the UI, the click that closes the command bar reaches the page, as it does Chromium's, and in its text field ⌘A and ⌘C stay with the page and a Japanese composition commits; Safari opens the page there, leaving the note until the tab is at another site. The note's × closes it for the site, which leaves it closed after a reload, in another tab and after another site and back, while another site's note still shows; from macOS 14 the Site Controls offer Safari's engine for the site instead, and On shows the page there, as they do for a site turned off. From macOS 14 a listed streaming service opens in Safari's engine on its first load, without Chromium's first, in a private window too; the Site Controls show it on, and Off shows it in Chromium after a reload, in a new tab, after another site and back and after a relaunch, where On brings it back without keeping it as the user's, and a profile made where one's folder was removed by hand starts with an empty session there, the old store deleted, as is once a store an old version gave a profile that's gone, keeping one whose profile's folder is there, but never on a data folder's first launch. ⇧⌘Z redoes Clear, and Archive Tabs Below offers Undo, which brings back its tabs in place and shows the one that was shown, and ⇧⌘Z closes them again. Windows: $out/link-target.png, $out/link-target-whole.png, $out/clear-site.png, $out/url-toast.png, $out/pasted-url.png, $out/sidebar-hovered.png, $out/row-hovered.png, $out/sidebar-away.png, $out/clear.png, $out/clear-arrow.png, $out/clear-arrow-undone.png, $out/reopen.png, $out/tab-menu.png, $out/library.png, $out/archived-menu.png, $out/archive-section-menu.png, $out/library-empty.png, $out/question.png, $out/question-reveal.png, $out/site-controls.png, $out/site-controls-blocked.png, $out/drm-note.png, and from macOS 14 $out/drm-engine.png, $out/engine-ime.png, $out/site-controls-engine.png, $out/site-controls-offered.png, $out/listed.png, $out/site-controls-listed-on.png and $out/site-controls-listed-off.png"

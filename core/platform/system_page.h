@@ -100,9 +100,12 @@ class SystemPage {
   static void GetCookies(const SystemStore& store,
                          const std::string& site,
                          base::OnceCallback<void(std::vector<net::CanonicalCookie>)> done);
-  // Deletes |id|'s persistent store from the disk, as its profile goes. Loads the system's engine:
-  // call it only for a store a page made.
-  static void DeleteStore(const std::string& id);
+  // Deletes |id|'s persistent store from the disk, as its profile goes, then runs |done| with
+  // whether it went. Loads the system's engine: call it only for a store a page made.
+  static void DeleteStore(const std::string& id, base::OnceCallback<void(bool deleted)> done);
+  // Runs |done| with the ids of the app's persistent stores on disk, or none if it can't list
+  // them. Loads the system's engine.
+  static void ListStores(base::OnceCallback<void(std::vector<std::string>)> done);
   // Lets a private session's store go. Never loads the system's engine.
   static void ReleaseStore(const std::string& id);
   // Deletes |domain|'s |what| from |store|, then runs |done|. Loads the system's engine, as

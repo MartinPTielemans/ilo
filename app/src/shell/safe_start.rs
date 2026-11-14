@@ -3,16 +3,21 @@
 //! (crate::safe_start), and this card, over the footer and under the update banner, says so in
 //! every window until the launch ends: what happened, what's off, that pages aren't ad-blocked
 //! meanwhile if Settings blocks ads, Turn Back On, which restarts into a normal launch with the
-//! windows and tabs, and Manage Extensions…, for the extension that may be the cause. It has no ×:
-//! the hold lasts the launch whatever the user does, so the card does too. Agents get none of it.
+//! windows and tabs, and Extensions…, for the extension that may be the cause. Those two are an
+//! agent task card's chips, one under the other at every width, so the foot's cards read as one
+//! family and the card doesn't reflow as the sidebar's width changes. It has no ×: the hold lasts
+//! the launch whatever the user does, so the card does too. Agents get none of it.
 
 use gpui::{
     Context, Font, FontWeight, MouseButton, SharedString, TextRun, WindowTextSystem, div,
     prelude::*, px, svg,
 };
 
-use super::{FOOTER_HEIGHT, PRESSED, Shell, access::Accessible, permission::card_listener};
-use crate::tokens::settings::{CONTROL_HEIGHT, CONTROL_RADIUS};
+use super::{
+    FOOTER_HEIGHT, PRESSED, Shell, TITLE_END_INSET, access::Accessible, permission::card_listener,
+    task_cards::card_chip,
+};
+use crate::tokens::shell::task::{CHIP_END, CHIP_GAP, CHIP_HEIGHT, CHIP_X, CHIPS_TOP};
 use crate::tokens::shell::{
     FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, PLATE_INSET, PLATE_RADIUS, SAFE_START_DETAIL_LINE,
     SAFE_START_PAD, SAFE_START_TITLE_LINE, SECONDARY, TITLE_GAP, UNSELECTED_TITLE,
@@ -21,19 +26,16 @@ use crate::tokens::shell::{
 use crate::tokens::text;
 
 /// Its words, as check.sh and an assistive app name them.
-pub(super) const TITLE: &str = concat!(env!("APP_NAME"), " closed unexpectedly twice");
+pub(super) const TITLE: &str = concat!(env!("APP_NAME"), " closed unexpectedly");
 const OFF: &str = "Extensions and Boosts are off for now.";
 const OFF_UNBLOCKED: &str = "Extensions and Boosts are off for now, so ads aren’t blocked.";
 pub(super) const TURN_BACK_ON: &str = "Turn Back On";
-pub(super) const MANAGE: &str = "Manage Extensions…";
+/// The body line says what is off, so the chip needn't say "Manage", and so fits whole at the
+/// narrowest sidebar.
+pub(super) const EXTENSIONS: &str = "Extensions…";
 
-/// The gaps between the title, the detail, the button and the link, as the update banner's open
-/// state has them.
+/// The gap between the title and the detail, as the update banner's open state has it.
 const DETAIL_TOP: f32 = 2.;
-const BUTTON_TOP: f32 = 8.;
-const BUTTON_INSET: f32 = 10.;
-const LINK_TOP: f32 = 6.;
-const LINK: f32 = 16.;
 
 /// The card's words, wrapped in the sidebar's width: its height follows their lines, as the foot's
 /// list ends over it.
@@ -51,10 +53,10 @@ impl Shape {
             + self.title_lines as f32 * SAFE_START_TITLE_LINE
             + DETAIL_TOP
             + self.detail_lines as f32 * SAFE_START_DETAIL_LINE
-            + BUTTON_TOP
-            + CONTROL_HEIGHT
-            + LINK_TOP
-            + LINK
+            + CHIPS_TOP
+            + CHIP_HEIGHT
+            + CHIP_GAP
+            + CHIP_HEIGHT
             + SAFE_START_PAD
     }
 }
@@ -62,6 +64,16 @@ impl Shape {
 /// Where the words start in the card: the rows' title column.
 fn words_x() -> f32 {
     FAVICON_X - PLATE_INSET + FAVICON_SIZE + TITLE_GAP
+}
+
+/// Where the chips start in the card, their words on the title column, as a task card's do.
+fn chips_x() -> f32 {
+    words_x() - CHIP_X
+}
+
+/// How wide a chip may be in a card `plate` wide.
+fn chips_room(plate: f32) -> f32 {
+    plate - CHIP_END - chips_x()
 }
 
 fn detail(ad_blocking: bool) -> &'static str {
@@ -129,7 +141,8 @@ impl Shell {
         }
         let system = (self.text_system.take())
             .unwrap_or_else(|| WindowTextSystem::new(cx.text_system().clone()));
-        let wrap = width - 2. * PLATE_INSET - words_x() - BUTTON_INSET;
+        let plate = width - 2. * PLATE_INSET;
+        let wrap = plate - words_x() - TITLE_END_INSET;
         let shape = Shape {
             width,
             ad_blocking,
@@ -175,7 +188,7 @@ impl Shell {
         let head = div()
             .relative()
             .pl(px(words))
-            .pr(px(BUTTON_INSET))
+            .pr(px(TITLE_END_INSET))
             .child(
                 // In the rows' icon column, on the title's first line.
                 div()
@@ -204,53 +217,41 @@ impl Shell {
                     .text_color(self.palette.text(SECONDARY))
                     .child(detail(shape.ad_blocking)),
             );
-        let button = div()
-            .id("safe-start-button")
+        let room = chips_room(self.width() - 2. * PLATE_INSET);
+        let button = card_chip(&self.palette, "safe-start-button", TURN_BACK_ON.into())
             .when(self.a11y, |button| button.button_named(TURN_BACK_ON))
             .relative()
-            .mt(px(BUTTON_TOP))
-            .mx(px(BUTTON_INSET))
-            .h(px(CONTROL_HEIGHT))
-            .rounded(px(CONTROL_RADIUS))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(px(text::BODY))
-            .font_weight(FontWeight::MEDIUM)
-            .bg(self.palette.accent)
-            .text_color(self.palette.accent_label)
-            .hover(|style| style.bg(self.palette.accent_hovered()))
+            .max_w(px(room))
             // check.sh clicks it where it's drawn.
             .child(card_listener(
                 "safe start button",
                 &self.safe_start_button_drawn,
                 0,
             ))
-            .child(TURN_BACK_ON)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|shell, _, _, cx| shell.turn_back_on(cx)));
-        let link = div()
-            .id("safe-start-manage")
-            .when(self.a11y, |link| link.button_named(MANAGE))
+        let manage = card_chip(&self.palette, "safe-start-manage", EXTENSIONS.into())
+            .when(self.a11y, |link| link.button_named(EXTENSIONS))
             .relative()
-            .mt(px(LINK_TOP))
-            .mx(px(BUTTON_INSET))
-            .h(px(LINK))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(px(text::SMALL))
-            .text_color(self.palette.text(SECONDARY))
-            .hover(|style| style.text_color(self.palette.text(1.)))
+            .max_w(px(room))
             // check.sh clicks it where it's drawn.
             .child(card_listener(
                 "safe start manage",
                 &self.safe_start_manage_drawn,
                 0,
             ))
-            .child(MANAGE)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|shell, _, _, cx| shell.manage_from_safe_start(cx)));
+        let chips = div()
+            .mt(px(CHIPS_TOP))
+            .ml(px(chips_x()))
+            .mr(px(CHIP_END))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(CHIP_GAP))
+            .child(button)
+            .child(manage);
         Some(
             div()
                 .id("safe-start")
@@ -275,8 +276,7 @@ impl Shell {
                 // check.sh reads where it's drawn.
                 .child(card_listener("safe start card", &self.safe_start_drawn, 0))
                 .child(head)
-                .child(button)
-                .child(link)
+                .child(chips)
                 .block_mouse_except_scroll()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
         )

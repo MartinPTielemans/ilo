@@ -37,6 +37,11 @@ struct FieldFacts {
 // password manager put there, and a secret field always. An empty one has nothing to withhold.
 bool Withheld(const FieldFacts& field);
 
+// Which fields a picture hatches: those whose contents an agent doesn't see (Withheld), as its
+// screenshot is, or every field holding a value, as Point's is, whose text has none (#2352).
+enum class Hatched { kWithheld, kEveryValue };
+bool Hatches(const FieldFacts& field, Hatched hatched);
+
 // Whether an autocomplete attribute's tokens name a card's or a one-time code's field.
 bool SecretAutocomplete(std::string_view autocomplete);
 

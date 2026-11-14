@@ -546,11 +546,13 @@ void HidePages(views::Widget* widget) {
   [view letLeavingGo];
 }
 
+// The page is in the app's view, over what it draws, so nothing waits for it to be on screen.
 void ShowPageIn(views::Widget*,
                 gfx::NativeView page,
                 void* view,
                 const gfx::Rect& frame,
-                double corner_radius) {
+                double corner_radius,
+                base::OnceClosure) {
   NSView* holder = (__bridge NSView*)view;
   NSView* page_view = page.GetNativeNSView();
   if (!holder || !page_view) {
@@ -569,11 +571,18 @@ void ShowPageIn(views::Widget*,
   UpdateOcclusion(holder.window);
 }
 
+// The page is in the app's view, which scales and fades it with the card.
+void DrawPageIn(views::Widget*, gfx::NativeView, float, const gfx::PointF&, float) {}
+
 bool FocusSettledOnActivation() {
   // AppKit can be part way through moving the keyboard, as when a committing page hides the view
   // that had it and Chromium makes the window key: a page view focused inside that move believes
   // it has the keyboard after AppKit has given it elsewhere.
   return false;
+}
+
+void PassPointerThrough(views::Widget*) {
+  // Views' accept_events makes the window ignore mouse events.
 }
 
 bool PageDialogsInOwnWindow() {

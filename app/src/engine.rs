@@ -47,7 +47,8 @@ fn open_preview_in(
         let Ok(text) = CString::new(url.as_ref()) else {
             return;
         };
-        let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr()) };
+        let at = rect(link_preview::resting(page.0));
+        let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr(), at) };
         if preview == 0 {
             log!("browser: link preview over {over} not opened");
             return;
@@ -297,6 +298,11 @@ impl Browser for Engine {
             MediaAction::PictureInPicture => bc::BC_MEDIA_PICTURE_IN_PICTURE,
         };
         unsafe { bc::bc_tab_media(tab, action as i32) };
+    }
+
+    fn show_video(&self, tab: u64, frame: Option<Bounds<Pixels>>, radius: f32, _: &mut App) {
+        let frame = rect(frame.unwrap_or_default());
+        unsafe { bc::bc_tab_show_video(tab, self.window, frame, radius.into()) };
     }
 
     fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
@@ -975,7 +981,7 @@ impl Browser for Engine {
             // Outside the shell's update, which the split's layout updates.
             Some(with) => {
                 let window = self.window;
-                cx.defer(move |cx| open_split(window, url, with, cx));
+                cx.defer(move |cx| open_split(window, url, "", with, cx));
             }
             None => open_tab(self.window, url),
         }
@@ -1316,6 +1322,9 @@ impl Browser for Engine {
         unsafe {
             bc::bc_window_start_move(self.window)
         };
+        // The check's driver lets go of a drag only once the window manager has the pointer.
+        #[cfg(target_os = "linux")]
+        crate::drive::window_move_asked();
     }
 
     fn window_maximized(&self) -> bool {
@@ -1372,18 +1381,19 @@ impl Browser for Engine {
         }
     }
 
-    fn pasted(&self, cx: &App) -> Option<String> {
+    fn pasted(&self, cx: &mut App, done: browser::clipboard::Done) {
         #[cfg(target_os = "linux")]
-        return system::pasted(cx);
+        browser::clipboard::read_text(cx, done);
         #[cfg(not(target_os = "linux"))]
         {
-            _ = cx;
             // Asked for its length first, then for the text.
             let length = unsafe { platform::host_paste(std::ptr::null_mut(), 0) };
-            let mut text = vec![0u8; length.checked_add(1)?];
+            let mut text = vec![0u8; length.saturating_add(1)];
             unsafe { platform::host_paste(text.as_mut_ptr().cast(), text.len()) };
             text.truncate(length);
-            Some(String::from_utf8_lossy(&text).into_owned()).filter(|text| !text.is_empty())
+            let text =
+                Some(String::from_utf8_lossy(&text).into_owned()).filter(|text| !text.is_empty());
+            cx.defer(move |cx| done(text, cx));
         }
     }
 

@@ -475,6 +475,8 @@ unsafe extern "C" fn started(_: *mut c_void) {
             false => {
                 gpui_linux::embed_wayland(display, keyboard);
                 gpui_linux::watch_embedder_swipes(system::swiped);
+                browser::clipboard::read_through(system::read_through_core);
+                browser::clipboard::held_through(gpui_linux::held_clipboard_text);
             }
         }
         !display.is_null()
@@ -684,6 +686,10 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     #[cfg(target_os = "linux")]
     if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
         gpui_wgpu::WgpuContext::make_instance_early();
+    }
+    #[cfg(target_os = "windows")]
+    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+        gpui_windows::make_early();
     }
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
@@ -1079,6 +1085,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         app_new_window: Some(app_new_window),
         ad_block_use: Some(ad_block_host::ad_block_use),
         ad_block_request: Some(ad_block_host::ad_block_request),
+        ad_block_response: Some(ad_block_host::ad_block_response),
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
         ..Default::default()

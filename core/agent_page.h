@@ -70,13 +70,15 @@ class AgentPage : public content::WebContentsObserver,
   static uint64_t TakeJob(content::WebContents* contents);
 
   // A picture of |contents|' page, or of its |area| in the view's coordinates, as an agent is shown
-  // it: what the outline withholds, the picture withholds. Each field whose contents an agent
-  // doesn't see (Withheld) and each frame whose fields can't be read, as an extension's own, is
-  // hatched over in its own background, with no label. |done| hears, posted, the picture or why
-  // there's none. A page no agent acts on lets DevTools go once it's pictured.
+  // it: what the outline withholds, the picture withholds. Each field |hatched| names and each
+  // frame whose fields can't be read, as an extension's own, is hatched over in its own background,
+  // with no label. |done| hears, posted, the picture or why there's none. A page no agent acts on
+  // lets DevTools go once it's pictured.
   using Pictured = base::OnceCallback<void(base::expected<SkBitmap, std::string>)>;
+  using Hatched = browser_core::Hatched;
   static void Picture(content::WebContents& contents,
                       std::optional<gfx::Rect> area,
+                      Hatched hatched,
                       Pictured done);
 
  private:
@@ -89,8 +91,12 @@ class AgentPage : public content::WebContentsObserver,
     std::string text;
     // When waiting for its element, or for the page to settle, gives up.
     base::TimeTicks deadline;
-    // Whether the page was still busy when it stopped waiting for it to settle.
+    // Whether the page was still busy when it stopped waiting for it to settle: loading, or what it
+    // shows still changing.
     bool busy = false;
+    // Whether requests the page made were still open then, or had only just ended, though it was
+    // neither loading nor changing, as a page that polls or sends beacons keeps them (#2355).
+    bool requests = false;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
@@ -125,6 +131,7 @@ class AgentPage : public content::WebContentsObserver,
     // they're in and their DevTools id.
     std::vector<std::pair<int, std::string>> unread;
     std::vector<std::pair<int64_t, FieldFacts>> fields;
+    Hatched hatched = Hatched::kWithheld;
     Boxes boxes;
     base::OnceCallback<void(std::optional<Boxes>)> then;
   };
@@ -202,9 +209,12 @@ class AgentPage : public content::WebContentsObserver,
   // Picture's, once DevTools is attached to each level of the page's frames (Attach), so none is
   // hatched only for being heard of late: the page's surface, copied once the boxes before it are
   // read, if they could be (Copy), then painted over from each box before to its box after (Paint).
-  void Draw(std::optional<gfx::Rect> area, Pictured done);
+  void Draw(std::optional<gfx::Rect> area, Hatched hatched, Pictured done);
   void Attach(size_t slot, base::OnceClosure then);
-  void Copy(std::optional<gfx::Rect> area, Pictured done, std::optional<Boxes> before);
+  void Copy(std::optional<gfx::Rect> area,
+            Hatched hatched,
+            Pictured done,
+            std::optional<Boxes> before);
   void Paint(gfx::Rect source,
              Pictured done,
              Boxes before,
@@ -216,7 +226,7 @@ class AgentPage : public content::WebContentsObserver,
   // none if a frame's fields couldn't be read: each frame's filled fields (ReadFields), each frame
   // whose fields can't be read (Cover), then each field's attributes and markup (NextField), and a
   // withheld one's box (Withhold).
-  void WithheldBoxes(base::OnceCallback<void(std::optional<Boxes>)> then);
+  void WithheldBoxes(Hatched hatched, base::OnceCallback<void(std::optional<Boxes>)> then);
   void ReadFields(std::unique_ptr<Withholding> withholding, size_t next);
   void Cover(std::unique_ptr<Withholding> withholding, size_t next);
   void NextField(std::unique_ptr<Withholding> withholding, size_t next);
@@ -248,6 +258,25 @@ class AgentPage : public content::WebContentsObserver,
   // Reads the tree of each frame from |next| on, then puts each under its frame's element.
   void ReadTree(size_t next);
   void StitchTree(size_t next);
+  // A radio or checkbox a page hid behind its label, as choice tiles do: its role and whether it's
+  // checked.
+  struct Choice {
+    std::string role;
+    bool checked;
+  };
+  using ChoiceThen = base::OnceCallback<void(std::optional<Choice>)>;
+  // Asks each label in |labels| for the radio or checkbox the page hid behind it, one at a time,
+  // shows each that has one as that control, then checks the passwords.
+  void CheckLabels(base::ListValue nodes,
+                   std::vector<int64_t> fields,
+                   std::vector<int64_t> labels,
+                   std::map<int64_t, Choice> choices);
+  // The radio or checkbox the label is for, from the page's elements as they are now: the one its
+  // "for" names, or else the one inside it.
+  void ChoiceOf(int64_t label, ChoiceThen then);
+  // The first control of the |kind|s from |kind| on that |scope|'s elements have, with |id| if
+  // the label names one.
+  void FindChoice(int slot, int scope, std::optional<std::string> id, size_t kind, ChoiceThen then);
   // Marks the text fields in |fields| that are for passwords, one at a time, then answers.
   void CheckPasswords(base::ListValue nodes,
                       std::vector<int64_t> fields,
@@ -262,6 +291,11 @@ class AgentPage : public content::WebContentsObserver,
   void Center(Then then);
   // The same in the viewport of the frame whose session has the element.
   void Locate(Then then);
+  // DOM.scrollIntoViewIfNeeded's parameters for the |element|, with room around it of a quarter
+  // of the viewport where it fits, so a sticky header doesn't cover it or its label.
+  void ScrollParams(int slot, int element, base::OnceCallback<void(base::DictValue)> then);
+  // The element's box in the viewport of the frame whose session has it.
+  void Measure(int slot, int element, Then then);
   // Moves |box|, in the session at |slot|, into the main frame's viewport, through the elements
   // its frame is in.
   void Offset(int slot, gfx::RectF box, Then then);
@@ -387,8 +421,14 @@ bool IsWebFrame(content::RenderFrameHost* frame);
 
 // What a page's accessibility tree, as DevTools' Accessibility.getFullAXTree gives it, may show
 // an agent: each node without its value, and without the nodes under a field, where Chromium puts
-// what was typed or filled into it, and with "password": true on the nodes in |passwords|.
+// what was typed or filled into it, but for a combobox's own list of options, and with
+// "password": true on the nodes in |passwords|. A native select has "choices", its options' names
+// (select_choices.h).
 base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwords);
+
+// The labels in a page's tree that no node in it is named after, at most |most|: those whose
+// control isn't in the tree, as a radio or checkbox hidden with display: none isn't.
+std::vector<int64_t> UnnamedLabels(const base::ListValue& nodes, size_t most);
 
 }  // namespace browser_core
 

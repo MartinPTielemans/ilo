@@ -21,6 +21,8 @@ struct NativeAdBlockList {
   std::vector<GURL> addresses;
   // How long a downloaded copy stays current: assets.json's updateAfter.
   base::TimeDelta update_after;
+  // The copy the ad blocker reads now, downloaded or the one the browser came with, if any.
+  base::FilePath last_good;
 };
 
 // Where the downloaded copy of the list |key| is kept, in the browser's folder, as the lists are
@@ -33,8 +35,9 @@ bool AnyNativeAdBlockListLongOutOfDate(const std::vector<NativeAdBlockList>& lis
 
 // Downloads, one after another, those of |lists| whose copy is older than its update_after, or
 // that has none, trying each address until one answers with a list, and then calls |done| on the
-// UI thread with the keys of the lists it downloaded. A list none of its addresses gives keeps the
-// copy it has. On the UI thread.
+// UI thread with the keys of the lists it downloaded. A download that doesn't take the place of
+// the last good copy (ad_block_list_check.h) is refused, and the next address tried. A list none
+// of its addresses gives keeps the copy it has. On the UI thread.
 void UpdateNativeAdBlockLists(std::vector<NativeAdBlockList> lists,
                               base::OnceCallback<void(std::vector<std::string>)> done);
 

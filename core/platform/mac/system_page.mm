@@ -19,6 +19,7 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -829,24 +830,48 @@ std::unique_ptr<SystemPage> SystemPage::Create(const SystemStore& store,
 }
 
 // static
-void SystemPage::DeleteStore(const std::string& id) {
+void SystemPage::DeleteStore(const std::string& id, base::OnceCallback<void(bool)> done) {
   NSString* key = base::SysUTF8ToNSString(id);
   NSUUID* uuid = [[NSUUID alloc] initWithUUIDString:key];
   if (!uuid || !Available() || !LoadWebKit("deleting a profile's store")) {
+    std::move(done).Run(false);
     return;
   }
   // Ours lets go first: WebKit won't delete a store in use.
   [Stores() removeObjectForKey:key];
   if (@available(macOS 14, *)) {
+    __block base::OnceCallback<void(bool)> then = std::move(done);
     [WebKitClass(@"WKWebsiteDataStore")
         removeDataStoreForIdentifier:uuid
                    completionHandler:^(NSError* error) {
+                     // check.sh reads these lines. Never the store's id.
                      if (error) {
-                       VLOG(1) << "browser: system store " << base::SysNSStringToUTF8(key)
-                               << " not deleted: "
-                               << base::SysNSStringToUTF8(error.localizedDescription);
+                       fprintf(stderr, "browser: system store not deleted: %s\n",
+                               base::SysNSStringToUTF8(error.localizedDescription).c_str());
+                     } else {
+                       fprintf(stderr, "browser: system store deleted\n");
                      }
+                     std::move(then).Run(!error);
                    }];
+  }
+}
+
+// static
+void SystemPage::ListStores(base::OnceCallback<void(std::vector<std::string>)> done) {
+  if (!Available() || !LoadWebKit("listing the profiles' stores")) {
+    std::move(done).Run({});
+    return;
+  }
+  if (@available(macOS 14, *)) {
+    __block base::OnceCallback<void(std::vector<std::string>)> then = std::move(done);
+    [WebKitClass(@"WKWebsiteDataStore") fetchAllDataStoreIdentifiers:^(NSArray<NSUUID*>* ids) {
+      std::vector<std::string> listed;
+      for (NSUUID* each in ids) {
+        // Lower case, as the core makes its ids.
+        listed.push_back(base::ToLowerASCII(base::SysNSStringToUTF8(each.UUIDString)));
+      }
+      std::move(then).Run(std::move(listed));
+    }];
   }
 }
 
