@@ -144,6 +144,9 @@ jobs:
         scripting: AppleScript is the Mac's alone
         filled: it hides the Dock and the menu bar, so it runs only in a Mac check VM
         later-launch: a lock left on the keyboard is the X server's
+        widevine: only Linux gets Google's Widevine module (decision 1)
+        tab-drag: it checks Wayland's drag; the windows run checks the drag on Windows
+        updates: Windows' updater is only in a release build, which check.sh doesn't make
         sidebar-right: it checks AppKit's window buttons, the Mac's alone
     steps:
       # setup.sh and the patches it applies need the repository's line endings.
