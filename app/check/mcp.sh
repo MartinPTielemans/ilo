@@ -392,8 +392,9 @@ cases=$(sed -n 's/^cases: \(10 cases in .*\)/\1/p' "$out/cases.log")
 # button is enabled 4 s after the page shows, as a form's once its data is in: after open_tab's
 # answer, which waits for the page to settle and took 2.5 s on Windows' runner (#2079), and well
 # within the 5 s the click waits for it. Its click fetches /slow, which takes a second, then says
-# what came: the click's answer has it, with no wait step. Stall's fetch never comes, so its click
-# answers after 5 s, saying the page was still busy.
+# what came: the click's answer has it, with no wait step. Stall's fetch never comes, as a poll's
+# doesn't, while the page holds still: its click answers after 5 s saying so, not that the page may
+# change yet (#2355).
 printf '%s' '<script src="painted.js"></script>
 <h1>Settle</h1>
 <p><button id=load disabled>Load</button> <button id=stall>Stall</button> <span id=state></span></p>
@@ -426,9 +427,10 @@ case "$settled" in
 esac
 stalled=$(call click "{\"tab\":$settle_tab,\"ref\":\"$stall\"}")
 case "$stalled" in
-  "Clicked button “Stall”. The page was still busy after 5 s"*) ;;
+  "Clicked button “Stall”. The page held still, with requests it made still open after 5 s."*) ;;
   *) fail "the click on Stall, whose fetch never comes, answered: $stalled" ;;
 esac
+case "$stalled" in *"may change yet"*) fail "the click on Stall said the page may change yet" ;; esac
 settle="the settle page's click waited $(($(date +%s) - started)) s in all"
 closed=$(call close_tab "{\"tab\":$settle_tab}")
 case "$closed" in "Closed tab $settle_tab."*) ;; *) fail "closing the settle page answered: $closed" ;; esac

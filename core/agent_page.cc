@@ -781,7 +781,13 @@ void AgentPage::Quiet() {
   base::TimeTicks next = job_->deadline;
   if (now >= next) {
     settling_ = false;
-    job_->busy = true;
+    // A document still loading is busy. Requests alone are said apart, as what the page shows
+    // may well have held still, which Still finds out, and then it's busy too.
+    if (GetWebContents().IsLoading()) {
+      job_->busy = true;
+    } else {
+      job_->requests = true;
+    }
     Still(base::ListValue());
     return;
   }
@@ -2250,6 +2256,8 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
     base::DictValue answer = base::DictValue().Set("nodes", AgentTree(std::move(nodes), passwords));
     if (job_ && job_->busy) {
       answer.Set("busy", true);
+    } else if (job_ && job_->requests) {
+      answer.Set("requests", true);
     }
     if (choosing_ == Choosing::kChosen && shows_) {
       answer.Set("chosen", chosen_name_);
