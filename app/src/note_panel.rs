@@ -530,7 +530,6 @@ impl Render for NotePanel {
                             each.w(px(w)).h(px(h))
                         });
                     div()
-                        .mt(px(ROW_GAP))
                         .flex()
                         .text_size(px(SMALL))
                         .child(
@@ -575,6 +574,10 @@ impl Render for NotePanel {
                                     .id("note-rows")
                                     .flex()
                                     .flex_col()
+                                    // Padding and gaps, not each row's margin: the scroll's end
+                                    // leaves margins out, and cut the last row by its gap.
+                                    .pt(px(ROW_GAP))
+                                    .gap(px(ROW_GAP))
                                     .min_h_0()
                                     .overflow_y_scroll()
                                     .track_scroll(&self.rows)
