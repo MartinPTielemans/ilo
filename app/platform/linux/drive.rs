@@ -355,6 +355,13 @@ thread_local! {
     /// The window a press went to, which gets the drag's events until the release, as the X
     /// server's grab of the pointer does.
     static PRESSED: Cell<Option<Target>> = const { Cell::new(None) };
+    /// That the app asked the window manager to move a browser window, as a drag on the window's
+    /// background does as the app handles its move (`window_move_asked`).
+    static MOVE_ASKED: Cell<bool> = const { Cell::new(false) };
+    /// The window manager's grab of the pointer for that move, as the browser window hears it.
+    static WM_GRAB: Cell<WmGrab> = const { Cell::new(WmGrab::None) };
+    /// What runs once the main loop has read the events the driver sent (`handled`).
+    static HANDLED: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
     /// The Mini Player's press through XTest, till its release (hold_mini_player).
     static PIP_HELD: Cell<Option<HeldPip>> = const { Cell::new(None) };
     /// The window the pointer is in, which hears it leave.
@@ -431,9 +438,104 @@ fn sync() {
             Event::SelectionRequest(request) => serve_drag(&request),
             Event::SelectionNotify(notify) => pasted(&notify),
             Event::ClientMessage(message) if message.format == 32 => drag_answered(&message),
+            Event::EnterNotify(crossing) | Event::LeaveNotify(crossing) => {
+                WM_GRAB.set(wm_grab_after(WM_GRAB.get(), crossing.mode))
+            }
             _ => {}
         }
     }
+}
+
+/// The window manager's grab of the pointer for a window move, as the browser window the pointer
+/// is in hears it: the pointer crosses out of it as the grab takes it, and back as the grab ends.
+#[derive(Clone, Copy, PartialEq)]
+enum WmGrab {
+    None,
+    Taken,
+    GivenBack,
+}
+
+/// The grab after a crossing in `mode`: one a grab caused takes the pointer, and one its end
+/// caused gives it back. A crossing the pointer's own move made changes nothing.
+fn wm_grab_after(now: WmGrab, mode: xproto::NotifyMode) -> WmGrab {
+    match mode {
+        xproto::NotifyMode::GRAB => WmGrab::Taken,
+        xproto::NotifyMode::UNGRAB if now == WmGrab::Taken => WmGrab::GivenBack,
+        _ => now,
+    }
+}
+
+/// The app has asked the window manager to move a browser window, which takes the pointer for it.
+pub(crate) fn window_move_asked() {
+    MOVE_ASKED.set(true);
+}
+
+/// Has the driver hear the pointer cross into and out of browser window `window`, as the window
+/// manager's grab makes it (`WmGrab`). Each client selects events for itself, so Chromium's are
+/// as they were.
+fn watch_crossings(window: xproto::Window) -> Option<()> {
+    let x = server()?;
+    let (connection, _) = &*x;
+    let events = EventMask::ENTER_WINDOW | EventMask::LEAVE_WINDOW;
+    let aux = ChangeWindowAttributesAux::new().event_mask(events);
+    connection.change_window_attributes(window, &aux).ok()?;
+    connection.flush().ok()
+}
+
+/// Runs `then` once the main loop has read the events the driver sent and the windows have drawn
+/// what they changed, as `settle` waits before it reports a command done.
+fn handled(then: Box<dyn FnOnce()>) {
+    sync();
+    gpui_linux::sync_display();
+    HANDLED.set(Some(then));
+    idle(Box::new(|| {
+        sync();
+        gpui_linux::sync_display();
+        if let Some(then) = HANDLED.take() {
+            drawn(then);
+        }
+    }));
+}
+
+/// Lets go of a drag's press at `to` once the app has handled its move, as no hand can sooner.
+/// When the app asked the window manager to move the window, the release also waits for the
+/// window manager to take the pointer, as a hand's comes during the move: before then, the move
+/// would outlive the drag and take the next press. The drag is then done once the window manager
+/// has given the pointer back.
+fn release_after_move(to: Target, done: Box<dyn FnOnce()>) {
+    handled(Box::new(move || {
+        let asked = MOVE_ASKED.take();
+        let until = Instant::now() + Duration::from_secs(5);
+        let release = move || {
+            if button(to, 1, false, button_mask(1)).is_none() {
+                log!("browser: drive couldn't let go of the drag");
+            }
+            let until = Instant::now() + Duration::from_secs(5);
+            await_wm_grab(asked, WmGrab::GivenBack, until, done);
+        };
+        await_wm_grab(asked, WmGrab::Taken, until, Box::new(release));
+    }));
+}
+
+/// Runs `then` once the window manager's grab for the window move the app `asked` for is `want`,
+/// at once if it asked for none. After `until` it says what it waited for, and runs it anyway.
+fn await_wm_grab(asked: bool, want: WmGrab, until: Instant, then: Box<dyn FnOnce()>) {
+    sync();
+    if !asked || WM_GRAB.get() == want {
+        return then();
+    }
+    if Instant::now() >= until {
+        let what = match want {
+            WmGrab::GivenBack => "give the pointer back after the drag let go",
+            _ => "take the pointer for the window move the app asked for",
+        };
+        log!("browser: drive waited 5 s for the window manager to {what}");
+        return then();
+    }
+    after(
+        10,
+        Box::new(move || await_wm_grab(asked, want, until, then)),
+    );
 }
 
 /// A browser window, as the X server has it.
@@ -2509,10 +2611,14 @@ fn run_command(line: &str) -> Option<()> {
                 ..target_in(driven()?.window, x2, y2)?
             };
             let to = relative_to(to, at.window)?;
+            watch_crossings(driven()?.window)?;
+            MOVE_ASKED.set(false);
+            WM_GRAB.set(WmGrab::None);
             first_press(at, 1, false);
             button(at, 1, true, none)?;
             motion(to, button_mask(1))?;
-            button(to, 1, false, button_mask(1))
+            go_on(Box::new(move |done| release_after_move(to, done)));
+            Some(())
         }
         "press" | "dragto" | "release" | "rightpress" | "rightdragto" | "rightrelease" => {
             let (x, y) = point(&mut words)?;
@@ -3302,7 +3408,25 @@ fn relative_to(to: Target, window: xproto::Window) -> Option<Target> {
 
 #[cfg(test)]
 mod tests {
-    use super::{xproto, xtest_delay, xtest_verdict};
+    use super::{WmGrab, wm_grab_after, xproto, xtest_delay, xtest_verdict};
+
+    // The driver let go of a drag before the window manager took the pointer for the window move
+    // the drag started, and the move outlived it and took the next press (#2721).
+    #[test]
+    fn a_window_move_waits_for_the_window_managers_grab_and_its_end() {
+        let (plain, grab, ungrab) = (
+            xproto::NotifyMode::NORMAL,
+            xproto::NotifyMode::GRAB,
+            xproto::NotifyMode::UNGRAB,
+        );
+        // The pointer's own crossings are no grab.
+        assert!(wm_grab_after(WmGrab::None, plain) == WmGrab::None);
+        assert!(wm_grab_after(WmGrab::None, grab) == WmGrab::Taken);
+        assert!(wm_grab_after(WmGrab::Taken, plain) == WmGrab::Taken);
+        assert!(wm_grab_after(WmGrab::Taken, ungrab) == WmGrab::GivenBack);
+        // An earlier grab's end, before the move's grab, gives nothing back.
+        assert!(wm_grab_after(WmGrab::None, ungrab) == WmGrab::None);
+    }
 
     fn outputs(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| name.to_string()).collect()

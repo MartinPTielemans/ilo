@@ -838,13 +838,6 @@ in_browser RenderWidgetHostViewCocoa "after the command bar closed over a page t
 # don't move the window itself: the window server follows the real pointer.
 moves=0
 drag() {
-  # On X11 the window manager moves the window with the real pointer, once it has taken it from the
-  # app. The driver lets go before then, as no hand can, and the move outlives the drag and eats the
-  # next press: the driver waiting for the window manager is #2721's slice 2.
-  if [ "$3" = moves ] && [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-    echo "skip: a drag on $4 moving the window, on X11: #2721 slice 2."
-    return
-  fi
   send drag "$1" "$2" $(($1 + 5)) "$2"
   count=$(grep -c '^browser: window move$' "$log" || true)
   if [ "$3" = moves ]; then
