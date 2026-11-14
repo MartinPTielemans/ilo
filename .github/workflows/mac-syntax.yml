@@ -1,7 +1,7 @@
 # The Mac host's code, which a branch pushed from Linux can't compile, checked for errors in
 # minutes on GitHub's hosted Mac rather than hours later on the owner's: clang -fsyntax-only on
 # app/platform/mac with the flags build.rs gives it, against the runner's macOS SDK. The core's Mac
-# files compile only against a Chromium tree, so this doesn't check them.
+# files compile only against Chromium's headers, so core-mac-syntax.yml checks them.
 name: Mac syntax
 
 on:

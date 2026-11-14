@@ -270,7 +270,7 @@ pub fn copy_for(text: &str, kept: Duration, cx: &mut App) {
     cx.spawn(async move |cx| {
         cx.background_executor().timer(kept).await;
         cx.update(|cx| {
-            if cx.read_from_clipboard().and_then(|item| item.text()) == Some(text) {
+            if crate::clipboard::holds_own(cx, &text) {
                 cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
             }
         });

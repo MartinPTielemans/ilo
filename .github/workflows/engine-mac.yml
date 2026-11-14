@@ -238,6 +238,25 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+      # What a compile of the core reads besides the core and the SDK, about 200 MB, for Core Mac
+      # syntax to check any branch's Mac files against until the next build (#2668). A failure here
+      # costs only the check, never the engine.
+      - id: core
+        if: steps.stage.outputs.finished == 'true'
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/core"
+          python3 engine/core_syntax.py pack engine/.deps/src "$RUNNER_TEMP/core/core-syntax.tar.zst"
+          echo "name=engine-mac-core-$(git config -f engine/pins.ini chromium.version)" >> "$GITHUB_OUTPUT"
+      - if: steps.core.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.core.outputs.name }}
+          path: ${{ runner.temp }}/core/core-syntax.tar.zst
+          retention-days: 90
+          compression-level: 0
+
       # The tree, with its times, which ninja reads: for the next stage for a day, or as the kept
       # tree for 90 days once it's finished. The downloads only the cold setup reads stay out.
       - if: steps.stage.outcome == 'success'

@@ -124,6 +124,8 @@ if [ "$(uname)" = Darwin ]; then
   done
   [ "$keyed" = "$sign_in_key" ] && [ "$focus" = RenderWidgetHostViewCocoa ] ||
     fail "with Chrome's passkey dialog gone, the keyboard is in $keyed on $focus, not the page's"
+else
+  echo "skip: the keyboard back in the sign-in window's page once Chrome's passkey dialog is gone: it's read from AppKit's key window, and off the Mac it isn't checked yet."
 fi
 # Touched, the key adds the passkey. The page blurred Add a Passkey as it went disabled, so the
 # next tab is from it, to Not Now, and shift-tab comes back to it.
@@ -156,6 +158,8 @@ if [ "$(uname)" = Darwin ]; then
     sleep 0.1
   done
   expect "$words" "Copy didn't put the 24 recovery words on the run's pasteboard"
+else
+  echo "skip: Copy putting the 24 recovery words on the pasteboard, and their leaving it 90 s after: off the Mac it isn't tried yet."
 fi
 send clickkey $(drawn_after "sync done" "$on")
 await 'browser: sync service active$' ||
@@ -378,6 +382,14 @@ exec 3>&- 5>&-
 quit
 # The runs after start signed out.
 rm -f "$profile_dir/Account"
+# The sign-in window has an off-the-record profile of its own, where uBlock Origin's page never
+# starts, so a page held for it there waits out the whole hold, 10 s a page (#2619). Once signing
+# in starts the window's pages are the run's only http(s) ones, as its own tab's is a data: page.
+held=$(sed -n '/^browser: account SigningIn /,$p' "$log" | grep -A1 '^browser: ad blocking held a page' |
+  grep -v '^--$' || true)
+[ -z "$held" ] ||
+  fail "the sign-in window's pages were held for an ad blocker that never gets ready in its" \
+    "profile: $(printf '%s\n' "$held" | tr '\n' ' ')"
 [ -s "$netlog" ] || fail "Chromium wrote no net log"
 urls=$(grep -o '"url":"[a-z]*://[^"]*"' "$netlog" | cut -d'"' -f4 | sort -u)
 # Google's servers, but the security components' updates, which a run as long as the Mac's, with

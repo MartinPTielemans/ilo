@@ -28,9 +28,9 @@ log="$out/adblock-live.log"
 memory="$out/adblock-live/ublock-memory.txt"
 rm -f "$memory"
 step=0
-# uBlock Origin's process, once there is one, within 10 s.
+# uBlock Origin's process, once there is one, within $1 tenths of a second.
 ublock_process() {
-  for _ in $(seq 100); do
+  for _ in $(seq "$1"); do
     pgrep -f "$procs.*--extension-process" | head -1 | grep . && return 0
     sleep 0.1
   done
@@ -74,12 +74,12 @@ BROWSER_DRIVE=1 BROWSER_URL="${site}live.html" BROWSER_PROFILE_DIR="$profile_dir
   "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
-# The time to blocking counts from here, as uBlock Origin is loaded into the profile.
-await "^browser: extensions 1 .*$ublock\$" || fail "uBlock Origin wasn't loaded"
+# The time to blocking counts from uBlock Origin's process starting, as it's loaded into the
+# profile: no extension list names it since #2113, the app's log line among them (#2650).
+ublock_id=$(ublock_process 600) || fail "uBlock Origin had no process 60 s after the launch"
 loaded=$(date +%s)
 if ! [ "$(uname)" = Darwin ]; then
   loaded_ms=$(date +%s%3N)
-  ublock_id=$(ublock_process) || fail "uBlock Origin had no process 10 s after it loaded"
   sample_ublock "$ublock_id" &
   # Not $sampler, which quit clears (lib.sh's exited).
   ublock_sampler=$!

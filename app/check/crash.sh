@@ -183,7 +183,9 @@ launch "$collector_url/refuse/"
 await '^browser: crash report not sent$' || fail "the refused report wasn't tried"
 [ "$(pending)" = 1 ] || fail "the refused report didn't wait"
 send click $page_point
-if [ "$(uname)" = Darwin ] && [ "$active" = 1 ]; then
+# The Mac's driven clicks need the app active; the other drivers' reach Settings where it drew, as
+# preview's switch has them.
+if [ "$(uname)" != Darwin ] || [ "$active" = 1 ]; then
   send key , cmd
   expect '^browser: settings shown General$' "⌘, didn't show Settings"
   settings_drew General
@@ -198,11 +200,7 @@ if [ "$(uname)" = Darwin ] && [ "$active" = 1 ]; then
   turned_off=" Turned off in Settings › Privacy, it deleted that one."
   windows="$out/crash-opt-ins.png, $out/crash-offer.png, $out/privacy.png"
 else
-  if [ "$(uname)" = Darwin ]; then
-    echo "skip: crash's Settings switch. Browser wasn't the active app."
-  else
-    echo "skip: crash's Settings switch, whose clicks are where the Mac's Settings has it."
-  fi
+  echo "skip: crash's Settings switch. Browser wasn't the active app."
   turned_off=
   windows="$out/crash-opt-ins.png, $out/crash-offer.png"
 fi

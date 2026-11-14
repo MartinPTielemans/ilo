@@ -209,26 +209,17 @@ fi
 [ "$menu" = "$page_items" ] ||
   fail "the page's menu is $menu"
 ../tools/window-screenshot.sh "$pid" "$out/page-menu.png" || fail "no window to capture"
-if [ "$(uname)" = Linux ]; then
-  # Print preview there never gets the keyboard, so escape can't close it, and the driver can't
-  # see it (#708).
-  echo "skip: Print and ⌘P showing print preview, which escape closes: on Linux it never gets the keyboard and the driver can't see it (#708)."
-  send dismiss
-  expect '^browser: menu closed$' "dismiss didn't close the page's menu"
-  rm "${out:?}/before-print.png"
-else
-  send choose Print…
-  print_preview "the page menu's Print…" print.png
-  # ⌘P, as File › Print, with the page's text field focused, as what's typed there shows. Its last
-  # word stays spelt right, where the field's menu below is opened: a misspelt word's has no Select
-  # All, Language Settings or Writing Direction (Chrome), and Windows checks the spelling.
-  send click 300 250
-  send type s
-  expect "^browser: title $opener .*notes\$" "typing in the page's text field didn't reach it"
-  ../tools/window-screenshot.sh "$pid" "$out/before-print.png" || fail "no window to capture"
-  page_shortcut p print
-  print_preview ⌘P print-key.png xy
-fi
+send choose Print…
+print_preview "the page menu's Print…" print.png
+# ⌘P, as File › Print, with the page's text field focused, as what's typed there shows. Its last
+# word stays spelt right, where the field's menu below is opened: a misspelt word's has no Select
+# All, Language Settings or Writing Direction (Chrome), and Windows checks the spelling.
+send click 300 250
+send type s
+expect "^browser: title $opener .*notes\$" "typing in the page's text field didn't reach it"
+../tools/window-screenshot.sh "$pid" "$out/before-print.png" || fail "no window to capture"
+page_shortcut p print
+print_preview ⌘P print-key.png xy
 # A text field's menu has what Chrome gives it, its Language Settings for spelling and its Writing
 # Direction submenu, and Select All selects the field's text, which typing then replaces. The check
 # chooses nothing that uses the pasteboard.
