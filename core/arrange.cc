@@ -605,10 +605,10 @@ constexpr char16_t kScript[] =
         .line::after{left:100%}
         .line.v::before{left:50%;top:0}.line.v::after{left:50%;top:100%}
         .label{font:500 11px/16px system-ui,sans-serif;color:${hex(look.label)};background:${hex(look.accent)};
-          padding:0 6px;border-radius:${radius}px;white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
+          padding:0 5px;border-radius:${radius}px;white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}
       </style><div class="old"></div><div class="fill"></div><div class="outline"></div><div class="line"></div><div class="label"></div>`;
       const part = (n) => root.querySelector('.' + n);
-      return { host, outline: part('outline'), fill: part('fill'), old: part('old'), line: part('line'), label: part('label') };
+      return { host, w, outline: part('outline'), fill: part('fill'), old: part('old'), line: part('line'), label: part('label') };
     }
     function raise() {
       const h = mode.marks.host;
@@ -625,25 +625,30 @@ constexpr char16_t kScript[] =
       const k = roleOf(el);
       return (mode.look.kinds && mode.look.kinds[k]) || mode.look.other || k;
     };
+    // |r| grown by |by| on every side.
+    const grown = (r, by) => r && { left: r.left - by, top: r.top - by, width: r.width + 2 * by, height: r.height + 2 * by };
     function draw() {
       const m = mode.marks;
-      const el = carry ? null : mode.selected || mode.pointed;
-      box(m.outline, el && rect(el));
+      // The element marked: the one pointed at or selected, or while the page shows a drop, the one
+      // carried, where it would land. Its mark is the app's for Point (#2352), so the two read as
+      // one: a line outside its box, and its label 4 px over the box at the line's left, or inside
+      // the box's top where the viewport's top cuts it.
+      const el = carry ? (mode.previewing ? carry.el : null) : mode.selected || mode.pointed;
+      box(m.outline, el && grown(rect(el), m.w));
       if (el) {
         const r = rect(el), name = nameOf(el);
         m.label.textContent = word(el) + (name ? ' · ' + name : '');
-        Object.assign(m.label.style, { display: 'block', left: px(r.left), top: px(Math.max(0, r.top - 20)) });
+        Object.assign(m.label.style, { display: 'block', left: px(r.left - m.w), top: px(r.top - 20 < 0 ? r.top + 4 : r.top - 20) });
       } else m.label.style.display = 'none';
       const d = carry && !mode.previewing ? carry.drop : null;
       box(m.old, carry && !mode.previewing ? carry.from : null);
-      box(m.fill, d && d.change === CHANGE.TRADES && rect(d.ref));
+      box(m.fill, d && d.change === CHANGE.TRADES && grown(rect(d.ref), m.w));
       if (d && d.change === CHANGE.SETTLES) {
         const r = rect(d.ref), row = d.axis === 'row';
         m.line.className = row ? 'line v' : 'line';
         const at = d.before ? (row ? r.left : r.top) : row ? r.right : r.bottom;
         box(m.line, row ? { left: at - 1.5, top: r.top, width: 3, height: r.height } : { left: r.left, top: at - 1.5, width: r.width, height: 3 });
       } else box(m.line, null);
-      if (mode.previewing && carry) box(m.outline, rect(carry.el));
     }
     // What the press would take at |x|, |y|: the page's element there, never the document, the
     // body or the marks, and a frame from another site whole.
