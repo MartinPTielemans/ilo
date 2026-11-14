@@ -641,6 +641,8 @@ fn dialog_bounds(ui_view: *mut c_void, insets: [f64; 4]) -> Option<(Bounds<Pixel
 #[unsafe(no_mangle)]
 pub extern "C" fn host_add_dialog(dialog_view: *mut c_void) {
     DIALOG.with_borrow_mut(|dialog| dialog.view = dialog_view);
+    // A question waits for its answer while the user is in another app.
+    gpui_linux::set_overlay_managed(dialog_view);
 }
 
 /// Shows the dialog over all of the browser window of `ui_view`, or over the tab's card at `x`,

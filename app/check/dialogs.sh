@@ -87,6 +87,35 @@ ask p Prompt prompt
 send type grace
 answer return accept "prompt grace"
 
+# On X11, another app's window raised over ilo's while the page's alert shows: the window manager
+# stacks the alert under that window with ilo's, where KWin drew an override-redirect one over every
+# window it manages (#2790). Back in ilo's window, the alert has the keys again for ↩.
+raised_over=
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+  ask a Alert alert-raised-over
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other_app=$!
+  exec 7> "$out/other-in"
+  for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+  cover=$(head -1 "$out/other-window.log")
+  xdotool windowactivate --sync "$cover" 2> /dev/null ||
+    fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+  # The manager restacks as it activates, so its list is read until it settles, a second at most.
+  under=
+  for _ in $(seq 10); do
+    stacking=$(python3 -I check/x11-stacking.py "$cover" "$pid" 2>&1) && under=1 && break
+    sleep 0.1
+  done
+  [ -n "$under" ] || fail "the alert isn't under another app's window raised over ilo's: $stacking"
+  exec 7>&-
+  wait "$other_app" 2> /dev/null || true
+  send window 1
+  answer return accept alerted
+  raised_over=1
+fi
+
 # Another tab takes the alert down, and its own brings it back.
 open_from_bar example.com
 other=$tab
@@ -458,6 +487,8 @@ echo "  and hides 20 times, between the command bar and a tab's menu, with no pa
   "link target and the hover card show under it, and the link target over ilo's window once it's" \
   "gone. Windows: $out/link-target-covered-ilo.png, $out/link-target-covered-away.png," \
   "$out/link-target-uncovered.png"
+[ -z "$raised_over" ] || echo "  On X11 an alert stays under another app's window raised over" \
+  "ilo's, in the window manager's stacking, and has the keys again back in ilo's window."
 [ -z "$background_dialog" ] || echo "  An alert that came with another app in front of ilo's" \
   "window ($background_dialog) went under that app's window and over ilo's, and took the keyboard" \
   "as ilo's window came to the front, with no caption of Windows' behind the window buttons there" \

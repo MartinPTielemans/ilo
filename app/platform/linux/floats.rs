@@ -386,6 +386,8 @@ pub(crate) fn forget_window(ui_view: *mut c_void) {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_add_foot_bar(foot_bar_view: *mut c_void) {
     add(Kind::FootBar, foot_bar_view);
+    // It stays with its mode while the user is in another app.
+    gpui_linux::set_overlay_managed(foot_bar_view);
     // All of it takes the pointer, for its buttons, and the keyboard stays with the browser window.
     gpui_linux::set_overlay_pointer(foot_bar_view, None);
 }
@@ -465,6 +467,8 @@ pub extern "C" fn host_hide_drop_targets() {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_add_toast(toast_view: *mut c_void) {
     add(Kind::Toast, toast_view);
+    // It stays its time while the user is in another app.
+    gpui_linux::set_overlay_managed(toast_view);
 }
 
 /// Where its window can't blend with the page under it (X11 with no compositor), the toast over
