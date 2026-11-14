@@ -622,6 +622,15 @@ pub trait Browser {
     fn download_widevine(&self, _cx: &mut App) {}
     /// Quits and starts again, bringing back the windows and their Spaces.
     fn restart(&self, _cx: &mut App) {}
+    /// Whether this launch is a safe start, with extensions and Boosts held after two crashes at
+    /// launch (crate::safe_start). Agents can't start or end one.
+    fn safe_start(&self) -> bool {
+        false
+    }
+    /// Whether Settings has ad blocking on.
+    fn ad_blocking(&self) -> bool {
+        false
+    }
     /// What PlayReady, which Windows plays protected video with, needs that the PC may lack.
     fn playready_needs(&self) -> super::PlayReady {
         super::PlayReady::None
@@ -695,6 +704,11 @@ pub trait Browser {
     /// does, unless it is already, which it returns: AppKit takes a window opened from a
     /// full-screen one there itself.
     fn enter_full_screen(&self, cx: &mut App) -> bool;
+    /// Whether the window is full screen or on its way, as the window has it at once: the shell
+    /// hears it a frame or more later, AppKit's once the transition is over (#2553).
+    fn full_screen_now(&self) -> bool {
+        self.window_full_screen()
+    }
     /// Whether the window is on the macOS desktop shown: one AppKit takes full screen isn't until
     /// macOS has moved there, and an overlay opened before is left on the desktop it came from.
     fn on_active_space(&self) -> bool {
@@ -812,8 +826,8 @@ pub trait Browser {
         background: crate::capture::portrait::Background,
         cx: &mut App,
     );
-    /// Whether Portrait Mode can put a page on the desktop's picture, which only the Mac's host
-    /// reads.
+    /// Whether Portrait Mode can put a page on the desktop's picture, which the Mac's and Windows'
+    /// hosts read.
     fn desktop_picture_offered(&self) -> bool {
         false
     }

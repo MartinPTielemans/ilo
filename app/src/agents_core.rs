@@ -96,6 +96,11 @@ impl Browser for Core {
         }
     }
 
+    fn space_of(&self, tab: u64, cx: &App) -> u64 {
+        let mut spaces = ids(bc::bc_spaces).into_iter();
+        (spaces.find(|&space| self.space_tab_ids(space, cx).contains(&tab))).unwrap_or(0)
+    }
+
     fn may_act(&self, agent: &str, tab: u64, action: &str, _: &mut App) -> Result<(), String> {
         let (Ok(agent), Ok(action)) = (CString::new(agent), CString::new(action)) else {
             return Err("The agent's name can't be used.".into());

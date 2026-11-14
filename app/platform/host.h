@@ -499,9 +499,9 @@ void host_hide_capture(void);
 // in a driven run.
 void host_copy_png(const uint8_t* png, size_t size);
 
-// Calls |png| with the main display's desktop picture as a PNG, at most the display's size in
-// pixels, before it returns, for Portrait Mode (#673), and says whether it did: false where the
-// system gives none, as off the Mac for now.
+// Calls |png| with the desktop picture of the display the browser is on as a PNG, at most the
+// display's size in pixels, before it returns, for Portrait Mode (#673), and says whether it did:
+// false where the system gives none, as on Linux, whose sandbox can't read it (#2682).
 bool host_desktop_picture(void* context,
                           void (*png)(void* context, const uint8_t* data, size_t size));
 
@@ -616,6 +616,10 @@ void host_show_link_target(void* ui_view, double left, double top, double fade);
 // Fades the link target's window out over |fade| seconds, then hides it.
 void host_hide_link_target(double fade);
 
+// Whether a mouse button is down now, over any window, the page's included, which the UI doesn't
+// hear the presses of. The link target's window waits for the release to show, move or hide.
+bool host_mouse_down(void);
+
 // Gives |view| the keyboard in its window, from the page if the page has it.
 void host_focus(void* view);
 
@@ -647,6 +651,10 @@ void host_press_window_button(void* ui_view, int button);
 // it's full screen already or on its way, as AppKit takes a window opened from a full-screen one
 // there itself. Returns whether it was.
 bool host_enter_full_screen(void* ui_view);
+
+// The Mac's: whether the browser window of |ui_view| is full screen or on its way, from the start
+// of its transition, before the window hears it's over.
+bool host_window_full_screen(void* ui_view);
 
 // Whether the browser window of |ui_view| is on the macOS desktop shown, as a window AppKit takes
 // full screen isn't until macOS has moved to its desktop. Off the Mac, always.
@@ -701,7 +709,8 @@ void host_show_settings(void);
 void host_hide_settings(void);
 
 // Closes the window with the keyboard if it's one of Chrome's with a close button, such as its
-// Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did.
+// Task Manager or DevTools undocked, as ⌘W does in Chrome, and says whether it did. A tab's dialog
+// isn't one: ⌘W on it closes its tab.
 bool host_close_other_window(void);
 
 // A detent on the trackpad, as a swipe's nearest Space changes.

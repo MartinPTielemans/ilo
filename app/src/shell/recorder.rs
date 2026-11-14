@@ -72,6 +72,10 @@ pub(super) struct Recorder {
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
+    /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
+    /// answer.
+    pub(super) safe_start: Cell<bool>,
+    pub(super) ad_blocking: Cell<bool>,
     /// The build updates itself, as `updates` answers, and how often Check for Updates ran.
     pub(super) updates: Cell<bool>,
     pub(super) checked_for_updates: Cell<usize>,
@@ -244,9 +248,28 @@ pub(super) struct Recorder {
     pub(super) sync_server: Cell<bool>,
     /// The videos opened that haven't given their first frame yet.
     videos_starting: RefCell<Vec<u64>>,
+    /// The Shell that set_agents and show_share_sheet read, as the core's do: turning agents off
+    /// ends their ask, which reads every Shell, and the share sheet finds its tab's window.
+    reads: RefCell<Option<WeakEntity<super::Shell>>>,
 }
 
 impl Recorder {
+    /// From now on, the calls that read Shells in the app read `shell` (#2459).
+    pub(super) fn reads_shell(&self, shell: WeakEntity<super::Shell>) {
+        *self.reads.borrow_mut() = Some(shell);
+    }
+
+    fn read_shell(&self, cx: &App) {
+        if let Some(shell) = self
+            .reads
+            .borrow()
+            .as_ref()
+            .and_then(|shell| shell.upgrade())
+        {
+            shell.read(cx);
+        }
+    }
+
     /// A host for another window of the same core.
     pub(super) fn beside(other: &Recorder) -> Self {
         Recorder {
@@ -862,6 +885,14 @@ impl Browser for Recorder {
         self.record("restart".into())
     }
 
+    fn safe_start(&self) -> bool {
+        self.safe_start.get()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        self.ad_blocking.get()
+    }
+
     fn show_page_dialog(&self, shown: Option<ShownPageDialog>, _: &mut App) {
         match shown {
             Some((tab, dialog, _)) => self.record(format!("page dialog {tab} {}", dialog.id)),
@@ -1334,7 +1365,9 @@ impl Browser for Recorder {
         }
     }
 
-    fn start_window_move(&self, _: &mut App) {}
+    fn start_window_move(&self, _: &mut App) {
+        self.record("window move".into())
+    }
 
     fn window_maximized(&self) -> bool {
         false
@@ -1386,7 +1419,8 @@ impl Browser for Recorder {
         self.share_sheet.get()
     }
 
-    fn show_share_sheet(&self, tab: u64, url: &str, title: &str, _: Point<Pixels>, _: &mut App) {
+    fn show_share_sheet(&self, tab: u64, url: &str, title: &str, _: Point<Pixels>, cx: &mut App) {
+        self.read_shell(cx);
         self.record(format!("share sheet {tab} {url} {title}"))
     }
 
@@ -1746,7 +1780,8 @@ impl Browser for Recorder {
         self.agents.get()
     }
 
-    fn set_agents(&self, on: bool, _: &mut App) {
+    fn set_agents(&self, on: bool, cx: &mut App) {
+        self.read_shell(cx);
         self.agents.set(Some(on));
         self.record(format!("agents {on}"))
     }

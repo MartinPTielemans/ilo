@@ -1,29 +1,11 @@
 #!/bin/sh
 # Runs the app and checks what it does.
-# Each run's file in check/ says what it checks. ./check.sh tabs spaces does only those runs, in
-# that order, and ./check.sh all of them:
-#   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
-#   split favorites cards extensions adblock adblock-lists windows private blank little capture media
-#   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp rules
-#   ranking appearance about sync sync-account sync-devices switch-frames devices pair filled
-#   scripting notifications calls battery battery-os policies hosts idle handback webrtc count
-#   translate pictures boosts sidebar-right foot-bar
-# The store run installs from Google's Web Store, as sync-extensions does on one device for the
-# account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
-# adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
-# the same with the browser's own, adblock-cost them with ad blocking on and off, and widevine,
-# Linux's alone, downloads Google's Widevine module, so they need the network and run only when
-# named: ./check.sh store.
-# Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
-# which build a check copy of their own (build.sh updates), on the Mac and Windows. So does
-# keychain, which uses the real Keychain, on the prod build and only in a check VM. Shots takes
-# the Store's pictures from pages on the internet, so it runs only when named too. Tab-drag drags a
-# tab's row between windows with the data device's own drag, which only Wayland's sessions can, so it
-# runs only when named, and skips elsewhere, where the windows run checks it.
-# Sync-versions syncs one account with the release ILO_OLD names, installed as ilo's Flatpak, on
-# Linux under Xvfb, so it runs only when named too.
-# Perf measures the browser against #456's targets, and Chrome beside it, which takes it 16 minutes,
-# so it runs only when named too.
+# Each run's file in check/ says what it checks, and its first line where it comes among the runs:
+# "# check.sh runs this at 120." for one of the runs ./check.sh does, or "# check.sh runs this at
+# 700, only when named." for one it does only when named, such as one that needs the network. They
+# go in their numbers' order, the named ones after the others, so a new run is a file of its own and
+# touches nothing shared (#2562). ./check.sh tabs spaces does only those runs, in that order.
+# ./check.sh --runs prints the runs, and --runs default or --runs named those of one kind.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys, scripting and sidebar-right are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -34,8 +16,8 @@
 # It opens on the Mac's own screen, where there is one, so it doesn't cover what's playing on
 # another; BROWSER_DISPLAY=main opens it on the main display.
 # Leaves window captures and logs in build/check/. Build first with ./build.sh.
-# BROWSER_PROFILE_DIR gives the app and the runs another profile directory, such as a new one for
-# each run, since one an earlier run left can lack what a run expects, such as its search engines.
+# Each run starts on an empty profile, build/check-profile, never the dev build's, which the app is
+# given by BROWSER_PROFILE_DIR; a failed run's stays there for reading until the next check.
 # On Windows it runs under Git Bash, with python3 on the PATH, on the app the engine's chrome.exe
 # runs from build/Browser. The runs need what the Windows driver (platform/windows/drive.cc) does
 # so far: load, tabs, dialogs, crash, about and onboarding.
@@ -55,7 +37,23 @@ export BROWSER_ONBOARDING=skip
 # The runs place their clicks under the Space's name row, which a lone unnamed Space hides unless
 # Show Space Header keeps it, so theirs is kept; spaces' checks it hiding (#1400).
 export BROWSER_SPACE_HEADER=shown
+# The browser's lines are whole, but a child process that crashes, as the crash steps make one,
+# prints its stack beside them a piece at a time, so a line could start mid-way through one. So no
+# process prints its stack (#2496).
+export BROWSER_STACK_TRACES=off
 cd "$(dirname "$0")"
+# The runs of kind $1, default or named, or of both, from the first line of each run's file, the
+# default ones first, each kind in its numbers' order and a tie in its names'.
+runs_of() {
+  grep '^# check\.sh runs this at [0-9]*\(, only when named\)\{0,1\}\.$' check/*.sh |
+    sed -e 's|^check/\([^:]*\)\.sh:# check\.sh runs this at \([0-9]*\), only when named\.$|named \2 \1|' \
+      -e 's|^check/\([^:]*\)\.sh:# check\.sh runs this at \([0-9]*\)\.$|default \2 \1|' |
+    grep "^${1:-[a-z]*} " | sort -k1,1 -k2,2n -k3,3 | cut -d' ' -f3 | tr '\n' ' '
+}
+if [ "${1:-}" = --runs ]; then
+  echo $(runs_of "${2:-}")
+  exit 0
+fi
 if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   # Under Xvfb, as CI runs it (check-linux.yml): a 1280 by 800 screen, as the sway session's
   # output, captured whole. openbox manages its windows, as sway does Xwayland's: with none, the
@@ -103,13 +101,8 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   # browser window (#851), so Xvfb on CI is the reference for focus.
   exec ../tools/headless.sh --x11 --run ./check.sh "$@"
 fi
-runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
-runs="$runs split favorites cards extensions adblock adblock-lists windows private blank little capture media"
-runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp rules ranking"
-runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
-runs="$runs everyday"
-runs="$runs handback webrtc count translate pictures boosts sidebar-right foot-bar"
-named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
+runs=$(runs_of default)
+named=$(runs_of named)
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
@@ -142,14 +135,12 @@ app_path() {
 native_path() {
   if windows; then cygpath -w "$1"; else printf '%s\n' "$1"; fi
 }
-# The app, what runs it, the pattern that finds its processes, Chromium's helpers too, and its dev
-# profile.
+# The app, what runs it, and the pattern that finds its processes, Chromium's helpers too.
 if windows; then
   . check/git-bash.sh
   app="$PWD/build/Browser"
   browser=windows_browser
   procs="$(cygpath -m "$app/chrome.exe")"
-  profile_dir="$(cygpath -u "$LOCALAPPDATA")/browser-app"
 elif [ -n "${BROWSER_FLATPAK:-}" ]; then
   # The Flatpak flatpak.yml installed, app.ilo.browser: the prod build in its sandbox, given the
   # run's BROWSER_ settings, this folder and the profile's. Only sync-account runs in it so far.
@@ -167,21 +158,14 @@ elif [ -n "${BROWSER_FLATPAK:-}" ]; then
   }
   browser=flatpak_browser
   procs="$app/chrome"
-  profile_dir="$HOME/.cache/browser-app"
 elif [ "$(uname)" = Linux ]; then
   app="$PWD/build/Browser"
   browser="$app/chrome"
   procs="$app/chrome"
-  profile_dir="$HOME/.cache/browser-app"
 else
   app="$PWD/build/Browser.app"
   browser="$app/Contents/MacOS/Browser"
   procs="$app/Contents"
-  profile_dir="$HOME/Library/Caches/browser-app"
-fi
-if [ -n "${BROWSER_PROFILE_DIR:-}" ]; then
-  profile_dir="$BROWSER_PROFILE_DIR"
-  ! windows || profile_dir="$(cygpath -u "$profile_dir")"
 fi
 # Another Browser holds the profile directory, so this one couldn't start.
 if pgrep -f "$procs" > /dev/null; then
@@ -189,89 +173,25 @@ if pgrep -f "$procs" > /dev/null; then
   exit 1
 fi
 rm -rf "$out"
-mkdir -p "$out"
-# The Spaces the app saves for its next launch. Each run starts without them, but the relaunches.
-saved="$profile_dir/Spaces.json"
-# The frame the launch window opens at, which the app keeps next to them. A run that starts without
-# the Spaces starts without it too, so its launch window isn't at the last run's frame.
-launch_frame="$(dirname "$saved")/launch-frame"
-# The mcp run turns agents on with a token of its own, which a failed one left. The keys run gives
-# Go to Space 1 ⌃⌘1 and leaves the favorites out of ⌘1–⌘8, which a failed one left for the runs after.
-# The translate run always translates Spanish, which a failed one left. The sidebar-right run moves
-# the sidebar to the right, which a failed one left for the runs after, which expect it on the left.
-rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts" \
-  "$(dirname "$saved")/Always Translated" "$(dirname "$saved")/sidebar-right"
-# DevTools open where the profile last had them, so an undocked try would leave them in a window.
-# The find run docks them, so they start on the right. The restore run's download goes in the
-# check's own folder, never the user's Downloads. A failed extensions run may have left one of its
-# extensions pinned. The profile keeps the clear run's answers to its sites' questions, and how
-# often it dismissed them, for sites whose ports a later run may get, and a failed clear run may
-# have left localhost out of Developer Mode. A failed media run may have left the Mini Player off,
-# which the core keeps as Block for every site's Automatic picture-in-picture and doesn't undo at
-# launch, so no later run's call floated (#1165). A failed favorites run may have left the first
-# profile's archive at 24 hours, which the profile keeps as its own and no later run's menu then
-# showed at 12 (#1982); dropped, the profile takes Settings' default again.
-# Each file is Chrome's or the core's, in UTF-8, which Windows' Python doesn't read by default, as a
-# Space's emoji in Spaces.json needs (#1673).
-prefs="$profile_dir/Default/Preferences"
-mkdir -p "$(dirname "$prefs")" "$out/downloads"
-python3 -I -c '
-import json, os, sys
-prefs = {}
-if os.path.exists(sys.argv[1]):
-    with open(sys.argv[1], encoding="utf-8") as f:
-        prefs = json.load(f)
-prefs.setdefault("devtools", {}).setdefault("preferences", {})["currentDockState"] = "\"right\""
-prefs.setdefault("download", {})["default_directory"] = sys.argv[2]
-prefs.setdefault("extensions", {})["pinned_extensions"] = []
-exceptions = prefs.get("profile", {}).get("content_settings", {}).get("exceptions", {})
-for kind in ("window_placement", "permission_autoblocking_data", "auto_picture_in_picture"):
-    exceptions.pop(kind, None)
-defaults = prefs.get("profile", {}).get("default_content_setting_values", {})
-defaults.pop("auto_picture_in_picture", None)
-for key in ("developer_mode", "archive_after"):
-    prefs.get("browser_core", {}).pop(key, None)
-with open(sys.argv[1], "w", encoding="utf-8") as f:
-    json.dump(prefs, f)
-' "$prefs" "$(native_path "$PWD/$out/downloads")"
-python3 -I -c '
-import json, os, sys
-if not os.path.exists(sys.argv[1]):
-    sys.exit()
-with open(sys.argv[1], encoding="utf-8") as f:
-    saved = json.load(f)
-if saved.get("settings", {}).get("auto_picture_in_picture") is False:
-    saved["settings"]["auto_picture_in_picture"] = True
-    with open(sys.argv[1], "w", encoding="utf-8") as f:
-        json.dump(saved, f)
-' "$saved"
-# Each run starts in the one profile, Default: Chrome deletes the others, which a run before made,
-# as import's Work, or a failed run left, at its next launch.
-only_default() {
-  python3 -I -c '
-import json, os, sys
-if not os.path.exists(sys.argv[1]):
-    sys.exit()
-with open(sys.argv[1], encoding="utf-8") as f:
-    local = json.load(f)
-profile = local.setdefault("profile", {})
-left = [name for name in profile.get("info_cache", {}) if name != "Default"]
-for name in left:
-    del profile["info_cache"][name]
-profile["last_used"] = "Default"
-profile["last_active_profiles"] = profile["profiles_order"] = ["Default"]
-deleted = local.setdefault("profiles", {}).setdefault("profile_basenames_deleted", [])
-deleted.extend(name for name in left if name not in deleted)
-with open(sys.argv[1], "w", encoding="utf-8") as f:
-    json.dump(local, f)
-' "$(dirname "$saved")/Local State"
-}
+mkdir -p "$out/downloads"
+# Each run starts on a profile no earlier run wrote to, as each hosted job's first run does on a
+# machine of its own: what one run left filled the rows a later one expects, as keys' history of
+# docs.new's sign-in pages did tabs' (#2486). It's the check's own folder, never the dev build's
+# profile the app uses by itself, and it's emptied before each run. A failed run's stays for
+# reading, until the next check; after the last run passes it goes. A run with a profile of its
+# own, such as adblock's, sets profile_dir to it, and the next run's is the check's again (#731).
+check_profile_dir="$PWD/build/check-profile"
+# The Spaces the app saves for its next launch, which a run's relaunches come back to, and the frame
+# its launch window opens at, which the app keeps next to them.
+saved="$check_profile_dir/Spaces.json"
+launch_frame="$check_profile_dir/launch-frame"
 . check/lib.sh
 trap cleanup EXIT
 # The window follows the Mac's appearance and the runs read its dark look, so a check VM runs dark,
 # and cleanup puts back the appearance it had. The owner's Mac keeps its own.
 if [ "$(uname)" = Darwin ] && [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   dark_mode=$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode') || {
+    failed=1
     echo "FAIL: System Events didn't say the Mac's appearance: allow the check to control it" >&2
     exit 1
   }
@@ -279,26 +199,34 @@ if [ "$(uname)" = Darwin ] && [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
 fi
 # The runs send the app's driver its commands through it.
 mkfifo "$out/drive"
-# A run with a profile of its own, such as adblock's, sets profile_dir to it, and the runs after
-# start with the check's again, or what they reset would be that profile's (#731).
-check_profile_dir=$profile_dir
 for run in ${*:-$runs}; do
+  # The last run's app may still be writing its profile as it ends, and Windows doesn't delete a
+  # file a process holds.
+  for _ in $(seq 200); do
+    pgrep -f "$procs" > /dev/null || break
+    sleep 0.1
+  done
+  ! pgrep -f "$procs" > /dev/null || fail "the app from the run before $run is still running"
+  # And without the pipes a run before made for its servers and devices, such as sync-devices'
+  # drive-a, which mkfifo won't make again. The drivers' own pipe stays.
+  find "$out" -maxdepth 1 -type p ! -name drive -exec rm -f {} +
   profile_dir=$check_profile_dir
-  only_default
-  # Rules a run made, as import's from Arc, would send a later run's links to another Space and
-  # put their rows under its clicks, so each run starts without them, as it does without Spaces.
-  rm -f "$profile_dir/Link rules"
-  # And without the command bar's picks, which put a command picked first among equal matches
-  # (#1395), so a run finds the bar's own order and not what an earlier run picked, as Wayland's
-  # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953). Each profile keeps
-  # its own in its folder; the one file beside them is where they were before, which the app moves
-  # into each at launch. A check VM keeps the profile between checks, so missing them there put
-  # its earlier checks' picks first in pinned's "clear" (#2267).
-  rm -f "$profile_dir"/*/"Command bar picks" "$profile_dir/Command bar picks"
-  # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
-  # in a later run if one failed, and clear the note it closed and the listed host it turned off.
-  forget_engine_sites
-  forget_appearance
+  rm -rf "$profile_dir"
+  mkdir -p "$profile_dir/Default"
+  BROWSER_PROFILE_DIR=$(native_path "$profile_dir")
+  export BROWSER_PROFILE_DIR
+  saved="$profile_dir/Spaces.json"
+  launch_frame="$profile_dir/launch-frame"
+  prefs="$profile_dir/Default/Preferences"
+  # DevTools open docked on the right, as the find run expects, and downloads go in the check's own
+  # folder, never the user's Downloads. In UTF-8, which Windows' Python doesn't write by default.
+  python3 -I -c '
+import json, sys
+prefs = {"devtools": {"preferences": {"currentDockState": "\"right\""}},
+         "download": {"default_directory": sys.argv[2]}}
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump(prefs, f)
+' "$prefs" "$(native_path "$PWD/$out/downloads")"
   # Every run is sourced into this one shell, so a helper a run defines under a lib.sh name would
   # replace lib.sh's for the runs after it.
   . "check/$run.sh"
@@ -309,3 +237,4 @@ for run in ${*:-$runs}; do
       sort | uniq -c | tr -s ' ' | tr '\n' ',')"
   fi
 done
+rm -rf "$check_profile_dir"

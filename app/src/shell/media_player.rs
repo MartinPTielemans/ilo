@@ -24,8 +24,8 @@ use gpui::{
 };
 
 use super::{
-    CLOSE_HOVERED, FOOTER_HEIGHT, MediaAction, NAV_RADIUS, PLATE_INSET, SECONDARY, Shell, Space,
-    TILE, TILE_RADIUS, TITLE,
+    CLOSE_HOVERED, MediaAction, NAV_RADIUS, PLATE_INSET, SECONDARY, Shell, Space, TILE,
+    TILE_RADIUS, TITLE,
     access::Accessible,
     new_space::ease_out,
     permission::{card_listener, part_listener},
@@ -423,7 +423,7 @@ impl Shell {
                     .into_any_element()
             })
             .collect();
-        let bottom = FOOTER_HEIGHT + self.update_banner_room();
+        let bottom = self.over_safe_start() + self.update_banner_room();
         Some(
             div()
                 .id("media-stack")

@@ -1,3 +1,4 @@
+# check.sh runs this at 150.
 # Add Split View, from the menu, ⌃+ from the page, ⌥-click on "+ New Tab" and the tab menu, narrows
 # the page at once for a pane on its right, with the command bar over it, which takes typing and
 # escape takes back. ⌥-click on a link, and the link menu's Open Link in Split View, open it in a
@@ -330,7 +331,17 @@ send key 2 cmd
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" \
   "⌘2 didn't show the split with its pane focused last"
 expect "^browser: panes $a $b\$" "⌘2 didn't show both panes"
-send click 205 $(row 1 | cut -d' ' -f2)
+if windows; then
+  # The driver's pointer is real there (#2544), heard before the press as a hand's is, so a frame
+  # draws the row's ✕ under it first and the right favicon sits left of the ✕'s room, as a hand
+  # finds it.
+  send move 205 $(row 1 | cut -d' ' -f2)
+  expect '^browser: hover tab [0-9]* close 1 ' \
+    "resting on the split's row at 205 didn't show its ✕ (wanted a \"hover tab … close 1\" line): $(grep '^browser: hover ' "$log" | tail -3 | tr '\n' ';')"
+  send click 170 $(row 1 | cut -d' ' -f2)
+else
+  send click 205 $(row 1 | cut -d' ' -f2)
+fi
 expect "^browser: selected $b\( in .*\)\{0,1\}\$" \
   "a click on the split's right segment didn't focus it"
 read_keyboard
@@ -599,9 +610,6 @@ seen_at() {
     "$(awk "BEGIN { print $2 / ${content#*x} }")"
 }
 low=$((y + h * 9 / 10))
-fill=$(seen_at $((x + 12)) $((y - 5)))
-edge=$(seen_at $((x + 12)) $low)
-page=$(seen_at $((x + w * 3 / 4)) $low)
 # Whether the colours "r g b" and "r2 g2 b2" are within 8 of each other in each channel.
 alike() {
   set -- $1 $2
@@ -609,12 +617,28 @@ alike() {
     [ "$d" -ge -8 ] && [ "$d" -le 8 ] || return 1
   done
 }
+# Whether the capture shows the page smaller: the window's colour at the card's edge, as above it.
+drawn_smaller() {
+  fill=$(seen_at $((x + 12)) $((y - 5)))
+  edge=$(seen_at $((x + 12)) $low)
+  page=$(seen_at $((x + w * 3 / 4)) $low)
+  alike "$edge" "$fill" && ! alike "$page" "$fill"
+}
 # Not on Windows yet, where each page is a window of its own and keeps its size. Nor under Xvfb,
 # which has no compositor: the capture is the targets' window alone, black where it's clear.
 if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; then
   echo "skip: the pages drawn smaller, in pixels: under Xvfb the capture is the targets' window alone"
-elif ! windows && [ "$still" != on ]; then
-  { alike "$edge" "$fill" && ! alike "$page" "$fill"; } ||
+elif windows; then
+  echo "skip: the pages drawn smaller, in pixels: on Windows each page is a window of its own and keeps its size."
+elif [ "$still" != on ]; then
+  # The app logs the scale as it tells the core, and the page draws at it a frame or more later,
+  # so a capture taken at once can still show it at its size, as on Wayland in #2493's runs.
+  for _ in $(seq 20); do
+    drawn_smaller && break
+    sleep 0.1
+    ../tools/window-screenshot.sh "$pid" "$out/split-targets.png" || fail "no window to capture"
+  done
+  drawn_smaller ||
     fail "the page didn't draw smaller under the tab: $edge at its edge, $fill above it, $page in it"
 fi
 send dragto 100 300

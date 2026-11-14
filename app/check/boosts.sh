@@ -1,3 +1,4 @@
+# check.sh runs this at 650.
 # A site's Boost (#695): the CSS in its file in the profile's Boosts folder shows on its pages as
 # they load, and each save of the file at once; Edit Boost in the command bar opens its card, whose
 # Zap hides what the user clicks, now and in the file, until escape in the page ends it; its

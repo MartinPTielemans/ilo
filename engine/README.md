@@ -9,11 +9,13 @@ Work that doesn't change the core needs no build: `./fetch.sh` downloads the pre
 | Path | What |
 |---|---|
 | `pins.ini` | Chromium version and the ungoogled-chromium, ungoogled-chromium-macos, ungoogled-chromium-portablelinux and ungoogled-chromium-windows tags. Bumped together, every Chromium release |
-| `series` | Ordered list of patches applied after ungoogled-chromium's own series |
+| `series` | Ordered list of patches applied after ungoogled-chromium's own series. A line ending in `<N` or `>=N` is for trees before Chromium N, or from it: the two versions of a patch whose context differs across a major, while the platforms' pins straddle it |
 | `patches/upstream/` | Fixes backported from Chromium after the pinned version, header naming the commit; dropped once the pin has it |
 | `patches/helium/` | Patches taken from Helium, header naming the upstream path and commit |
 | `patches/ardia/` | Patches taken from Ardia, same convention |
 | `patches/ours/` | Our own patches |
+| `patches/mac/` | Our patches for the Mac's tree alone, in `series`' `mac/` section, which every other platform's tree leaves out |
+| `patches/ungoogled-chromium-*/` | A lagging platform's patches and GN flags, rebased by ilo onto ungoogled-chromium's tag, laid out as in its repository (Rules, below) |
 | `args.gn` | Our GN args, after ungoogled-chromium's `flags.gn` and ungoogled-chromium-macos's `flags.macos.gn` |
 | `args.dev.gn` | The dev build's args, after `args.gn` |
 | `tree.sh` | What `setup.sh` and `linux/prepare.sh` both do to a prepared tree: remove Chromium's agent instructions, link the core and apply `series` |
@@ -30,7 +32,7 @@ Work that doesn't change the core needs no build: `./fetch.sh` downloads the pre
 `setup.sh` does this, using ungoogled-chromium-macos's tooling at the pinned tag, which is how its releases are built:
 
 1. Download Chromium's source tarball at the pinned version, checked against its published hashes.
-2. Apply ungoogled-chromium's pruning, its patches and ungoogled-chromium-macos's, and domain substitution.
+2. Apply ungoogled-chromium's pruning, its patches and ungoogled-chromium-macos's (with ilo's rebased copies while it lags), and domain substitution.
 3. Download the toolchain ungoogled-chromium-macos names (LLVM, Rust, Node), in place of Google's.
 4. Download Chrome's optimization profile for Apple silicon, which the source tarball lacks, and build `gn` and `bindgen`, each only if it's missing.
 5. Link the repository's `core/` into the tree as `//browser_core`, so the next build has every edit to it. Apply `series` in order, with no fuzz. A patch already in the tree is skipped, and one that neither applies nor is in the tree stops the run as drift.
@@ -40,7 +42,7 @@ Steps 1–3 change the tree and run once; a run that stopped in one of them mean
 
 `setup.sh` names what it needs and isn't installed: Homebrew's `ninja`, `go`, `esbuild`, `typescript`, `coreutils` and `uv`, and Apple's Metal toolchain. It builds with Python 3.13, as ungoogled-chromium-macos does, through `uv`.
 
-It also needs the macOS SDK of Chromium's official builds (`mac_sdk_official_version` in `build/config/mac/mac_sdk.gni`: 26.5 for Chromium 156), from Xcode or the Command Line Tools, even when a newer Xcode is installed. The pinned LLVM's linker can't read newer SDKs.
+It also needs the macOS SDK of Chromium's official builds with universal Xcode (`mac_sdk_official_universal_version` in `build/config/mac/mac_sdk.gni`: 26.5 for Chromium 156 and 157), from Xcode or the Command Line Tools, even when a newer Xcode is installed. Chromium 157's Apple silicon builds take the macOS 27 SDK, whose stubs the pinned LLVM's linker can't read.
 
 ## The Mac's prebuilt engine
 
@@ -56,6 +58,8 @@ The owner's MacBook builds the Mac engine; no GitHub runner is installed on it, 
 
 `linux/test.sh <work>` builds and runs the core's unit tests, `browser_core_unittests`, as the Linux engine's run does. On Linux base's test support loads Chromium's test fonts, which the source tarball leaves out, so it fetches the object DEPS pins for them from Google's `chromium-fonts` bucket, checks its hash, and keeps it in the tree; a Chromium bump updates the pin in `test.sh`. They're only read by the tests, and `package.sh` never packs them.
 
+Core tests (`.github/workflows/core-tests.yml`) run them for a head without an engine build, in minutes, on the Linux engine's runner and the tree it keeps: `gh workflow run core-tests.yml --ref <branch>`, with `-f filter=<gtest filter>` for some of them, or a push to a `core-tests/` branch. Flags after `test.sh`'s work directory go to the tests. `prepare.sh --kept` brings the tree to the head's core and series, and refuses a head whose tag or GN args differ from the tree's, which would prepare or rebuild it whole; that head's tests wait for its engine. A head that adds or changes a core test, a security head first, is green there on its exact commit before its engine is dispatched (#2392).
+
 `check-linux.sh` prepares the same tree and compiles only the core's own objects; the `browser_core` target would compile most of Chrome, and nothing links. CI (`.github/workflows/core-linux.yml`) runs it on pushes that change the core or the engine, in about half an hour and 40 GB of disk.
 
 The engine itself is built by `.github/workflows/engine-linux.yml`, on a self-hosted runner on the owner's machine that keeps the tree in `$ILO_ENGINE_ROOT/linux` between runs. It runs by hand; each night on main, at 00:30 UTC, when `tools/engine-changed.sh` finds the core or the engine changed since the newest Linux engine in main's history, so a merge never holds the runner and a night with nothing new never takes it; and on `engine-build/` branches, to try an engine change before it merges. Never on other branches or pull requests. Each run publishes a release `engine-linux-<commit>` in ilo-engine, with the secret `ENGINE_RELEASE_TOKEN`, a fine-grained token with Contents read and write on that repository alone. A release's tag is on ilo-engine's own history, which hasn't ilo's commits, so `fetch.sh` reads the commit from the release's name. And `fetch.sh` on Linux downloads the one built from the nearest commit in the checkout's history, unless `core/public/browser_core.h` has changed since. The first build takes 6 to 10 hours and the tree needs about 100 GB, twice the source while a new version comes in.
@@ -64,7 +68,7 @@ The engine itself is built by `.github/workflows/engine-linux.yml`, on a self-ho
 
 Chromium's security point releases (same major, such as 156.0.8078.47 → .60) update the engine without asking the owner. A new major waits for the owner's go.
 
-- **Detect.** `.github/workflows/engine-point-release.yml` runs `point-release.sh` daily on GitHub's runners. For each platform section in `pins.ini`, it finds the newest tag on the pinned major. The bump follows the Mac, which never waits on another platform: `[chromium]` moves to the Mac's newest point release, and each section on the same version that has a tag for it moves too. A section whose tag lags stays on the Chromium its tag names, which `check_ungoogled` in `tree.sh` checks alone, and follows in its own PR once its tag is out. It extracts only the files the patches touch from Chromium's source tarball and dry-runs ungoogled-chromium's patches, the platform's, domain substitution and `series`. It then opens one PR bumping `pins.ini`, with "applies cleanly" or the conflicting patches, and the patch lag: the days since Chrome's stable release of that version. A new major gets an issue asking the owner, once.
+- **Detect.** `.github/workflows/engine-point-release.yml` runs `point-release.sh` daily on GitHub's runners. For each platform section in `pins.ini`, it finds the newest tag on the pinned major. The bump follows the Mac, which never waits on another platform: `[chromium]` moves to the Mac's newest point release, and each section on the same version that has a tag for it moves too. A section whose tag lags stays on the Chromium its tag names, which `check_ungoogled` in `tree.sh` checks alone, and follows in its own PR once its tag is out. A section ilo rebased (Rules, below) follows ungoogled-chromium's tags instead, and when its own tag for the version is out, the PR moves it there and says to remove the rebased copies. It extracts only the files the patches touch from Chromium's source tarball and dry-runs ungoogled-chromium's patches, the platform's, domain substitution and `series`. It then opens one PR bumping `pins.ini`, with "applies cleanly" or the conflicting patches, and the patch lag: the days since Chrome's stable release of that version. A new major gets an issue asking the owner, once.
 - **Update in place.** `setup.sh update` (and `setup.sh update dev`) prepares the new version in `.deps/next`, series and all, then copies it over `.deps/src` with `rsync --checksum --delete`, leaving `out/` alone. Unchanged files keep their dates, so ninja rebuilds only what changed. The scratch tree needs about 25 GB while it runs. Afterwards, `setup.sh` for the other build regenerates its build files.
 - **Merge.** The integrator builds Dev and Release incrementally, runs the full check, merges, and tags `good/…`. The PR comes from `GITHUB_TOKEN`, so no workflow runs on it. A conflict goes to a lane, as for a major.
 
@@ -74,7 +78,7 @@ The Windows engine is cross-compiled on Linux, as Chromium's `docs/win_cross.md`
 
 `windows/cross/prepare.sh <work>` takes ungoogled-chromium-windows's patches and Windows-only sources at the tag `pins.ini` names, on Chromium's source tarball, with ungoogled-chromium-portablelinux's Linux toolchain (the same ungoogled-chromium commit, which the script checks). Of ungoogled-chromium-windows's patches it leaves out the ones that fit its build to a Windows host or its own LLVM, and adds portablelinux's for the Linux host's Python and Node tools. A new tag comes in through `<work>/next` as on Linux. Three exceptions to ungoogled-chromium's pruning stay in the tree: the outputs of Microsoft's `midl` and `mc` that Chromium checks in under `win_build_output/` and `chrome/app/etw_events/`, and windows-rs's import libraries. Those tools don't run on Linux, so a cross build copies the checked-in outputs, as Google's own does. `windows/cross/build.sh` builds `chrome`, and `windows/cross/package.sh` packs what Chromium's `FILES.cfg` lists, with `chrome.dll.lib`, which the app links, into `Chromium-windows-x64.zip`.
 
-Microsoft's compiler, headers and libraries come from a zip of a Visual Studio and Windows SDK install, which Microsoft's licence lets no one redistribute. Never upload it, as a release, an artifact or anywhere else. It sits in `$ILO_ENGINE_ROOT/windows-toolchain`, the only `.zip` there, and unpacks into `vs_files` beside it, which must be a case-insensitive `ciopfs` mount, since the SDK's headers include each other in any case. The runner can't mount one itself, so a service of the owner's keeps it mounted. Its Visual Studio and SDK are the ones `build/vs_toolchain.py` names (Visual Studio 2026 and SDK 10.0.28000.0 for Chromium 156), and `prepare.sh` stops when a new Chromium version names others. To make the zip, on a Windows machine with that Visual Studio (its C++ workload with ATL and MFC) and that SDK, with its debugging tools:
+Microsoft's compiler, headers and libraries come from a zip of a Visual Studio and Windows SDK install, which Microsoft's licence lets no one redistribute. Never upload it, as a release, an artifact or anywhere else. It sits in `$ILO_ENGINE_ROOT/windows-toolchain`, the only `.zip` there, and unpacks into `vs_files` beside it, which must be a case-insensitive `ciopfs` mount, since the SDK's headers include each other in any case. The runner can't mount one itself, so a service of the owner's keeps it mounted. Its Visual Studio and SDK are the ones `build/vs_toolchain.py` names (Visual Studio 2026 and SDK 10.0.28000.0 for Chromium 156 and 157), and `prepare.sh` stops when a new Chromium version names others. To make the zip, on a Windows machine with that Visual Studio (its C++ workload with ATL and MFC) and that SDK, with its debugging tools:
 
 ```
 git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
@@ -119,7 +123,7 @@ ungoogled-chromium cuts the browser's calls to Google. Ardia's patches in `patch
 ## Crash reports
 
 Crashpad writes a minidump of every crash, on every platform, as Chrome's does
-(`patches/ours/chromium-crashpad-start.patch` and, on the Mac, `chromium-crashpad-mac-handler.patch`
+(`patches/ours/chromium-crashpad-start.patch` and, on the Mac, `patches/mac/chromium-crashpad-mac-handler.patch`
 undo ungoogled-chromium's two switches that stopped it). On the Mac the browser doesn't wait for the
 handler to start, which held up launch by about 670 ms (`chromium-crashpad-mac-async-start.patch`),
 so a crash of the browser in its first moments isn't caught. Its handler never uploads one:
@@ -166,5 +170,6 @@ so a build whose profile is elsewhere, as a dev build's is, does none of that.
 - Domain substitution rewrites Google's hosts in the source before the series is applied, so a patch that needs a real host writes it in full, and nothing rewrites it.
 - One concern per patch, named `chromium-<area>-<what>.patch`.
 - Each release, diff Helium's and Ardia's series against ours for anything worth taking.
+- A platform whose repository hasn't tagged a Chromium major within a few days of Stable builds on ungoogled-chromium's tag with its last platform patches, and goes back to the platform's tag when one appears. Its tag in `pins.ini` stays its last; ilo's rebased copies of the patches and other files that need it are in `patches/<repository>/`, laid out as in the repository, each header saying what changed from the platform's and why, and a copy with no hunks is a patch left out (`rebase_platform` in `tree.sh`). The directory goes in the PR that takes the platform's tag.
 - A new Chromium major, or a change to the GN args, means a full build. A point release taken with `setup.sh update` rebuilds only what it changes.
 - An Xcode update doesn't: `chromium-xcode-build-define.patch` drops the `CR_XCODE_BUILD` define, which upstream compiles every object with only so that one does.

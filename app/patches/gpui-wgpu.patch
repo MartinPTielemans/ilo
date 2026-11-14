@@ -13,11 +13,54 @@ index 3ce9dcecc4..ce6de4149b 100644
  
  [target.'cfg(not(any(target_os = "linux", target_os = "freebsd")))'.dependencies]
  wgpu = { workspace = true, default-features = true }
+diff --git a/crates/gpui_wgpu/src/wgpu_atlas.rs b/crates/gpui_wgpu/src/wgpu_atlas.rs
+index b2a7bfeb49..f64a20ab03 100644
+--- a/crates/gpui_wgpu/src/wgpu_atlas.rs
++++ b/crates/gpui_wgpu/src/wgpu_atlas.rs
+@@ -185,17 +185,13 @@ impl WgpuAtlasTextures {
+         min_size: Size<DevicePixels>,
+         kind: AtlasTextureKind,
+     ) -> &mut WgpuAtlasTexture {
+-        const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
+-            width: DevicePixels(1024),
+-            height: DevicePixels(1024),
+-        };
+         let max_texture_size = self.max_texture_size as i32;
+         let max_atlas_size = Size {
+             width: DevicePixels(max_texture_size),
+             height: DevicePixels(max_texture_size),
+         };
+ 
+-        let size = min_size.min(&max_atlas_size).max(&DEFAULT_ATLAS_SIZE);
++        let size = self.storage[kind].next_size(min_size, max_atlas_size);
+         let format = match kind {
+             AtlasTextureKind::Monochrome => wgpu::TextureFormat::R8Unorm,
+             AtlasTextureKind::Subpixel | AtlasTextureKind::Polychrome => self.color_texture_format,
+@@ -463,13 +459,15 @@ mod tests {
+         let (device, queue) = test_device_and_queue()?;
+         let atlas = WgpuAtlas::new(device, queue, wgpu::TextureFormat::Bgra8Unorm);
+ 
++        // A list's first texture is 256 square (AtlasTextureList::next_size): two of the big
++        // tiles don't fit in it together, so the second fits only where the first was.
+         let small = Size {
+-            width: DevicePixels(64),
+-            height: DevicePixels(64),
++            width: DevicePixels(32),
++            height: DevicePixels(32),
+         };
+         let big = Size {
+-            width: DevicePixels(700),
+-            height: DevicePixels(700),
++            width: DevicePixels(160),
++            height: DevicePixels(160),
+         };
+ 
+         let make_key = |image_id: usize| {
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
-index 16d451f008..9551a45d9e 100644
+index 16d451f008..770ceb1ad3 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs
 +++ b/crates/gpui_wgpu/src/wgpu_context.rs
-@@ -7,6 +7,33 @@ use std::sync::Arc;
+@@ -7,6 +7,34 @@ use std::sync::Arc;
  use std::sync::atomic::{AtomicBool, Ordering};
  use wgpu::TextureFormat;
  
@@ -46,12 +89,13 @@ index 16d451f008..9551a45d9e 100644
 +    queue: wgpu::Queue,
 +    dual_source_blending: bool,
 +    color_texture_format: TextureFormat,
++    pipelines: Arc<crate::wgpu_renderer::PipelineCache>,
 +}
 +
  #[derive(Clone)]
  pub struct WgpuContext {
      pub instance: wgpu::Instance,
-@@ -17,6 +44,8 @@ pub struct WgpuContext {
+@@ -17,6 +45,8 @@ pub struct WgpuContext {
      dual_source_blending: bool,
      color_texture_format: wgpu::TextureFormat,
      errors: Arc<DeviceErrorState>,
@@ -60,7 +104,7 @@ index 16d451f008..9551a45d9e 100644
  }
  
  /// Errors reported by wgpu's device-wide callbacks.
-@@ -120,7 +149,7 @@ impl raw_window_handle::HasDisplayHandle for WebDisplaySource {
+@@ -120,7 +150,7 @@ impl raw_window_handle::HasDisplayHandle for WebDisplaySource {
      }
  }
  
@@ -69,7 +113,7 @@ index 16d451f008..9551a45d9e 100644
  pub struct CompositorGpuHint {
      pub vendor_id: u32,
      pub device_id: u32,
-@@ -152,6 +181,29 @@ impl WgpuContext {
+@@ -152,6 +182,31 @@ impl WgpuContext {
          compositor_gpu: Option<CompositorGpuHint>,
          reject_software: bool,
      ) -> anyhow::Result<Self> {
@@ -80,14 +124,16 @@ index 16d451f008..9551a45d9e 100644
 +        {
 +            match gpui::block_on(Self::test_surface(&early.adapter, &early.device, surface)) {
 +                Ok(()) => {
-+                    return Ok(Self::from_native_adapter_and_device(
++                    let mut context = Self::from_native_adapter_and_device(
 +                        instance,
 +                        early.adapter,
 +                        early.device,
 +                        early.queue,
 +                        early.dual_source_blending,
 +                        early.color_texture_format,
-+                    ));
++                    );
++                    context.pipelines = early.pipelines;
++                    return Ok(context);
 +                }
 +                Err(e) => log::info!(
 +                    "Early device on {} failed: {e}, trying every adapter...",
@@ -99,7 +145,7 @@ index 16d451f008..9551a45d9e 100644
          let device_id_filter = Self::device_id_filter();
  
          // Select an adapter by actually testing surface configuration with the real device.
-@@ -313,6 +365,7 @@ impl WgpuContext {
+@@ -313,6 +368,7 @@ impl WgpuContext {
              dual_source_blending,
              color_texture_format,
              errors,
@@ -107,7 +153,7 @@ index 16d451f008..9551a45d9e 100644
          }
      }
  
-@@ -412,6 +465,7 @@ impl WgpuContext {
+@@ -412,6 +468,7 @@ impl WgpuContext {
              dual_source_blending,
              color_texture_format,
              errors,
@@ -115,7 +161,7 @@ index 16d451f008..9551a45d9e 100644
          };
          Ok(PreparedWebGraphics { context, surface })
      }
-@@ -470,8 +524,89 @@ impl WgpuContext {
+@@ -470,8 +527,94 @@ impl WgpuContext {
          ))
      }
  
@@ -124,7 +170,7 @@ index 16d451f008..9551a45d9e 100644
 +    /// opened, on the CI runner's llvmpipe (#2384). It needs no window, and Vulkan, the one backend
 +    /// this crate builds on Linux (Cargo.toml), reads no display handle as it makes one. The thread
 +    /// then makes the device on the adapter the first context tries first, which needs no window
-+    /// either, with the compositor's GPU the platform noted.
++    /// either, with the compositor's GPU the platform noted, and the device's shaders.
 +    #[cfg(not(target_family = "wasm"))]
 +    pub fn make_instance_early() {
 +        let mut early = EARLY.lock();
@@ -158,6 +204,10 @@ index 16d451f008..9551a45d9e 100644
 +        let adapter = adapters.into_iter().next()?;
 +        let (device, queue, dual_source_blending, color_texture_format) =
 +            Self::create_device(&adapter).await.log_err()?;
++        let pipelines = Arc::new(crate::wgpu_renderer::PipelineCache::made_early(
++            &device,
++            dual_source_blending,
++        ));
 +        Some(EarlyDevice {
 +            instance: instance.clone(),
 +            compositor_gpu,
@@ -166,6 +216,7 @@ index 16d451f008..9551a45d9e 100644
 +            queue,
 +            dual_source_blending,
 +            color_texture_format,
++            pipelines,
 +        })
 +    }
 +
@@ -205,7 +256,7 @@ index 16d451f008..9551a45d9e 100644
          wgpu::Instance::new(wgpu::InstanceDescriptor {
              backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
              flags: wgpu::InstanceFlags::default(),
-@@ -645,6 +780,34 @@ impl WgpuContext {
+@@ -645,6 +788,34 @@ impl WgpuContext {
          adapter: &wgpu::Adapter,
          surface: &wgpu::Surface<'_>,
      ) -> anyhow::Result<(wgpu::Device, wgpu::Queue, bool, TextureFormat)> {
@@ -240,7 +291,7 @@ index 16d451f008..9551a45d9e 100644
          let caps = surface.get_capabilities(adapter);
          if caps.formats.is_empty() {
              anyhow::bail!("no compatible surface formats");
-@@ -652,9 +815,15 @@ impl WgpuContext {
+@@ -652,9 +823,15 @@ impl WgpuContext {
          if caps.alpha_modes.is_empty() {
              anyhow::bail!("no compatible alpha modes");
          }
@@ -258,7 +309,7 @@ index 16d451f008..9551a45d9e 100644
          let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
  
          let test_config = wgpu::SurfaceConfiguration {
-@@ -669,19 +838,13 @@ impl WgpuContext {
+@@ -669,19 +846,13 @@ impl WgpuContext {
              view_formats: vec![],
          };
  
@@ -281,7 +332,7 @@ index 16d451f008..9551a45d9e 100644
  
      fn select_color_texture_format(adapter: &wgpu::Adapter) -> anyhow::Result<wgpu::TextureFormat> {
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index a148a4ccfb..bb264118f7 100644
+index a148a4ccfb..b87f131ac3 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -14,7 +14,7 @@ use std::cell::RefCell;
@@ -509,7 +560,7 @@ index a148a4ccfb..bb264118f7 100644
      surfaces: wgpu::BindGroupLayout,
  }
  
-@@ -178,12 +359,72 @@ enum InstanceData {
+@@ -178,12 +359,116 @@ enum InstanceData {
      },
  }
  
@@ -528,10 +579,54 @@ index a148a4ccfb..bb264118f7 100644
 +#[derive(Default)]
 +pub(crate) struct PipelineCache {
 +    layouts: parking_lot::Mutex<Option<Arc<WgpuBindGroupLayouts>>>,
++    shaders: parking_lot::Mutex<Option<Shaders>>,
 +    pipelines: parking_lot::Mutex<Vec<(PipelineKey, Arc<WgpuPipelines>)>>,
 +}
 +
++/// The shader modules a device's pipelines are made from, whatever surface they draw to.
++#[derive(Clone)]
++struct Shaders {
++    dual_source_blending: bool,
++    uses_webgl_instance_data: bool,
++    module: wgpu::ShaderModule,
++    subpixel: Option<wgpu::ShaderModule>,
++}
++
 +impl PipelineCache {
++    /// A native device's layouts and shaders, made by the thread that made the device. Translating
++    /// the shaders took 6.5 to 7.6 ms of the first window's path on llvmpipe (#2384), and needs no
++    /// surface, only the device.
++    #[cfg(not(target_family = "wasm"))]
++    pub(crate) fn made_early(device: &wgpu::Device, dual_source_blending: bool) -> Self {
++        let cache = Self::default();
++        // As WgpuContext::uses_webgl_instance_data says off the web.
++        cache.layouts(device, false);
++        cache.shaders(device, dual_source_blending, false);
++        cache
++    }
++
++    fn shaders(
++        &self,
++        device: &wgpu::Device,
++        dual_source_blending: bool,
++        uses_webgl_instance_data: bool,
++    ) -> Shaders {
++        let mut shaders = self.shaders.lock();
++        if let Some(made) = shaders.as_ref().filter(|made| {
++            made.dual_source_blending == dual_source_blending
++                && made.uses_webgl_instance_data == uses_webgl_instance_data
++        }) {
++            return made.clone();
++        }
++        let made = WgpuRendererCore::create_shaders(
++            device,
++            dual_source_blending,
++            uses_webgl_instance_data,
++        );
++        *shaders = Some(made.clone());
++        made
++    }
++
 +    fn layouts(
 +        &self,
 +        device: &wgpu::Device,
@@ -559,14 +654,14 @@ index a148a4ccfb..bb264118f7 100644
 +        if let Some((_, shared)) = pipelines.iter().find(|(built, _)| *built == key) {
 +            return shared.clone();
 +        }
++        let shaders = self.shaders(device, key.dual_source_blending, uses_webgl_instance_data);
 +        let built = Arc::new(WgpuRendererCore::create_pipelines(
 +            device,
 +            layouts,
++            &shaders,
 +            key.surface_format,
 +            key.alpha_mode,
 +            key.path_sample_count,
-+            key.dual_source_blending,
-+            uses_webgl_instance_data,
 +        ));
 +        pipelines.push((key, built.clone()));
 +        built
@@ -584,7 +679,7 @@ index a148a4ccfb..bb264118f7 100644
      atlas_sampler: wgpu::Sampler,
      atlas_texture_bind_groups: FxHashMap<AtlasTextureId, CachedTextureBindGroup>,
      globals_buffer: wgpu::Buffer,
-@@ -302,9 +543,13 @@ impl WgpuRenderer {
+@@ -302,9 +587,13 @@ impl WgpuRenderer {
              .window_handle()
              .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
  
@@ -600,7 +695,7 @@ index a148a4ccfb..bb264118f7 100644
              raw_window_handle: window_handle.as_raw(),
          };
  
-@@ -418,10 +663,16 @@ impl WgpuRenderer {
+@@ -418,10 +707,16 @@ impl WgpuRenderer {
                      })
              };
  
@@ -621,16 +716,49 @@ index a148a4ccfb..bb264118f7 100644
  
          let opaque_alpha_mode = pick_alpha_mode(&[
              wgpu::CompositeAlphaMode::Opaque,
-@@ -663,7 +914,7 @@ impl WgpuRendererCore {
+@@ -661,15 +956,12 @@ impl WgpuRendererCore {
+         )
+     }
  
-     fn create_pipelines(
+-    fn create_pipelines(
++    fn create_shaders(
          device: &wgpu::Device,
 -        layouts: &WgpuBindGroupLayouts,
+-        surface_format: wgpu::TextureFormat,
+-        alpha_mode: wgpu::CompositeAlphaMode,
+-        path_sample_count: u32,
+         dual_source_blending: bool,
+         uses_webgl_instance_data: bool,
+-    ) -> WgpuPipelines {
++    ) -> Shaders {
++        let asked = dual_source_blending;
+         // Diagnostic guard: verify the device actually has
+         // DUAL_SOURCE_BLENDING. We have a crash report (ZED-5G1) where a
+         // feature mismatch caused a wgpu-hal abort, but we haven't
+@@ -711,7 +1003,22 @@ impl WgpuRendererCore {
+         } else {
+             None
+         };
++        Shaders {
++            dual_source_blending: asked,
++            uses_webgl_instance_data,
++            module: shader_module,
++            subpixel: subpixel_shader_module,
++        }
++    }
+ 
++    fn create_pipelines(
++        device: &wgpu::Device,
 +        layouts: &Arc<WgpuBindGroupLayouts>,
-         surface_format: wgpu::TextureFormat,
-         alpha_mode: wgpu::CompositeAlphaMode,
-         path_sample_count: u32,
-@@ -719,221 +970,26 @@ impl WgpuRendererCore {
++        shaders: &Shaders,
++        surface_format: wgpu::TextureFormat,
++        alpha_mode: wgpu::CompositeAlphaMode,
++        path_sample_count: u32,
++    ) -> WgpuPipelines {
+         let blend_mode = match alpha_mode {
+             wgpu::CompositeAlphaMode::PreMultiplied => {
+                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING
+@@ -719,221 +1026,26 @@ impl WgpuRendererCore {
              _ => wgpu::BlendState::ALPHA_BLENDING,
          };
  
@@ -856,8 +984,8 @@ index a148a4ccfb..bb264118f7 100644
 -            subpixel_sprites,
 -            poly_sprites,
 -            surfaces,
-+            shader_module,
-+            subpixel_shader_module,
++            shader_module: shaders.module.clone(),
++            subpixel_shader_module: shaders.subpixel.clone(),
 +            quads: OnceLock::new(),
 +            shadows: OnceLock::new(),
 +            path_rasterization: OnceLock::new(),
@@ -869,7 +997,7 @@ index a148a4ccfb..bb264118f7 100644
          }
      }
  
-@@ -991,6 +1047,25 @@ impl WgpuRendererCore {
+@@ -991,6 +1103,25 @@ impl WgpuRendererCore {
  }
  
  impl WgpuRenderer {
@@ -895,7 +1023,7 @@ index a148a4ccfb..bb264118f7 100644
      /// Records the new drawable size and reconfigures the surface when one is present.
      /// The size is kept even without GPU resources so that recovery restores it.
      pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
-@@ -1063,19 +1138,42 @@ impl WgpuRenderer {
+@@ -1063,19 +1194,46 @@ impl WgpuRenderer {
          self.surface_config.alpha_mode = new_alpha_mode;
          let format = self.surface_config.format;
  
@@ -934,20 +1062,24 @@ index a148a4ccfb..bb264118f7 100644
 +            })
 +        });
 +        resources.pipelines = shared.unwrap_or_else(|| {
++            let shaders = WgpuRendererCore::create_shaders(
++                &resources.device,
++                key.dual_source_blending,
++                uses_webgl_instance_data,
++            );
 +            Arc::new(WgpuRendererCore::create_pipelines(
 +                &resources.device,
 +                &resources.bind_group_layouts,
++                &shaders,
 +                format,
 +                new_alpha_mode,
 +                key.path_sample_count,
-+                key.dual_source_blending,
-+                uses_webgl_instance_data,
 +            ))
 +        });
  
          if let RendererState::Ready { surface, core } = &self.state {
              surface.configure(&core.resources.device, &self.surface_config);
-@@ -1206,6 +1304,39 @@ impl WgpuRenderer {
+@@ -1206,6 +1364,39 @@ impl WgpuRenderer {
      }
  }
  
@@ -987,7 +1119,7 @@ index a148a4ccfb..bb264118f7 100644
  impl WgpuRendererCore {
      fn new(
          context: &WgpuContext,
-@@ -1219,14 +1350,17 @@ impl WgpuRendererCore {
+@@ -1219,14 +1410,17 @@ impl WgpuRendererCore {
          let uses_webgl_instance_data = context.uses_webgl_instance_data();
          let dual_source_blending =
              context.supports_dual_source_blending() && !uses_webgl_instance_data;
@@ -1011,7 +1143,7 @@ index a148a4ccfb..bb264118f7 100644
              uses_webgl_instance_data,
          );
          let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-@@ -1519,13 +1653,13 @@ impl WgpuRendererCore {
+@@ -1519,13 +1713,13 @@ impl WgpuRendererCore {
                  match batch {
                      PrimitiveBatch::Quads(range) => self.draw_instances(
                          &instance_bindings.quads,
@@ -1027,7 +1159,7 @@ index a148a4ccfb..bb264118f7 100644
                          instance_range(range),
                          &mut pass,
                      ),
-@@ -1567,7 +1701,7 @@ impl WgpuRendererCore {
+@@ -1567,7 +1761,7 @@ impl WgpuRendererCore {
                      }
                      PrimitiveBatch::Underlines(range) => self.draw_instances(
                          &instance_bindings.underlines,
@@ -1036,7 +1168,7 @@ index a148a4ccfb..bb264118f7 100644
                          instance_range(range),
                          &mut pass,
                      ),
-@@ -1575,7 +1709,7 @@ impl WgpuRendererCore {
+@@ -1575,7 +1769,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.monochrome_sprites,
                              texture_id,
@@ -1045,7 +1177,7 @@ index a148a4ccfb..bb264118f7 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1585,11 +1719,7 @@ impl WgpuRendererCore {
+@@ -1585,11 +1779,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.subpixel_sprites,
                              texture_id,
@@ -1058,7 +1190,7 @@ index a148a4ccfb..bb264118f7 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1598,7 +1728,7 @@ impl WgpuRendererCore {
+@@ -1598,7 +1788,7 @@ impl WgpuRendererCore {
                          self.draw_sprites(
                              &instance_bindings.polychrome_sprites,
                              texture_id,
@@ -1067,7 +1199,7 @@ index a148a4ccfb..bb264118f7 100644
                              instance_range(range),
                              &mut pass,
                          )?;
-@@ -1816,7 +1946,7 @@ impl WgpuRendererCore {
+@@ -1816,7 +2006,7 @@ impl WgpuRendererCore {
              &path_intermediate_view,
          );
          let resources = self.resources();
@@ -1076,7 +1208,7 @@ index a148a4ccfb..bb264118f7 100644
          pass.set_bind_group(0, &resources.globals_bind_group, &[]);
          pass.set_bind_group(1, &instances.bind_group, &[]);
          pass.set_bind_group(2, &texture, &[]);
-@@ -1881,7 +2011,7 @@ impl WgpuRendererCore {
+@@ -1881,7 +2071,7 @@ impl WgpuRendererCore {
                  ..Default::default()
              });
  
@@ -1085,7 +1217,7 @@ index a148a4ccfb..bb264118f7 100644
              pass.set_bind_group(0, &resources.path_globals_bind_group, &[]);
              pass.set_bind_group(1, &vertex_binding.bind_group, &[]);
              // The path rasterization shader loads records by vertex index
-@@ -2129,17 +2259,13 @@ impl WgpuRenderer {
+@@ -2129,17 +2319,13 @@ impl WgpuRenderer {
      /// different instance will cause a "Device does not exist" panic because
      /// the wgpu device is bound to its originating instance.
      #[cfg(not(target_family = "wasm"))]
@@ -1105,7 +1237,7 @@ index a148a4ccfb..bb264118f7 100644
  
          let width = (config.size.width.0 as u32).max(1);
          let height = (config.size.height.0 as u32).max(1);
-@@ -2214,10 +2340,6 @@ impl WgpuRenderer {
+@@ -2214,10 +2400,6 @@ impl WgpuRenderer {
              .as_ref()
              .is_none_or(|ctx| ctx.device_lost());
  
@@ -1116,7 +1248,7 @@ index a148a4ccfb..bb264118f7 100644
          let surface = if needs_new_context {
              log::warn!("GPU device lost, recreating context...");
  
-@@ -2232,7 +2354,7 @@ impl WgpuRenderer {
+@@ -2232,7 +2414,7 @@ impl WgpuRenderer {
              std::thread::sleep(std::time::Duration::from_millis(350));
  
              let instance = WgpuContext::instance(Some(Box::new(window.clone())));
@@ -1125,7 +1257,7 @@ index a148a4ccfb..bb264118f7 100644
              let new_context =
                  WgpuContext::new_rejecting_software(instance, &surface, self.compositor_gpu)?;
              *gpu_context.borrow_mut() = Some(new_context);
-@@ -2240,7 +2362,7 @@ impl WgpuRenderer {
+@@ -2240,7 +2422,7 @@ impl WgpuRenderer {
          } else {
              let ctx_ref = gpu_context.borrow();
              let instance = &ctx_ref.as_ref().unwrap().instance;
@@ -1134,7 +1266,7 @@ index a148a4ccfb..bb264118f7 100644
          };
  
          let config = WgpuSurfaceConfig {
-@@ -2411,109 +2533,117 @@ impl WgpuHeadlessRenderer {
+@@ -2411,109 +2593,117 @@ impl WgpuHeadlessRenderer {
              .render_target
              .as_ref()
              .ok_or_else(|| anyhow::anyhow!("Headless render target was not created"))?;
@@ -1348,7 +1480,7 @@ index a148a4ccfb..bb264118f7 100644
  }
  
  #[cfg(all(
-@@ -2546,14 +2676,20 @@ fn instance_range(range: Range<usize>) -> Range<u32> {
+@@ -2546,14 +2736,20 @@ fn instance_range(range: Range<usize>) -> Range<u32> {
  #[cfg(not(target_family = "wasm"))]
  fn create_surface(
      instance: &wgpu::Instance,

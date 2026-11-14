@@ -1,3 +1,4 @@
+# check.sh runs this at 30.
 # A tab opened from the command bar goes at the top of the Space's Today tabs and shows. The command
 # bar lists the Space's other tabs before anything is typed, those shown last first, and suggests
 # pages from history as it's typed in, growing to fit them, with the tabs already at them, never the
@@ -375,6 +376,18 @@ send rightdragto $(($1 + 60)) $(($2 + 16))
 expect "^browser: menu highlights $(cased 'Copy Link') at " "dragging onto Copy Link didn't highlight it"
 send rightrelease $(($1 + 60)) $(($2 + 16))
 expect "^browser: menu chose $(cased 'Copy Link')\$" "letting go on Copy Link didn't pick it"
+# The first click after an item chosen with the pointer lands in the page, and the window stays
+# where it was: on Windows the press that opened the menu, whose release the menu took, left the
+# browser window holding the mouse captured, so the click went to the UI over the page (#2516).
+send order
+[ "$focus" != RenderWidgetHostViewCocoa ] ||
+  fail "the page had the keyboard before the click into it, which then can't say where the click went"
+chosen_frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+send click $page_point
+in_browser RenderWidgetHostViewCocoa "a click into the page right after a menu item chosen with the pointer"
+send order
+[ "$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)" = "$chosen_frame" ] ||
+  fail "a click into the page right after a menu item chosen with the pointer moved the window from $chosen_frame"
 # A click outside closes the menu, and goes no further.
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the top Today row didn't show its menu"
@@ -1313,13 +1326,29 @@ if windows; then
     expect '^browser: new tab plate 0$' "$1 left New Tab's plate selected"
     overlays_none "$1"
   }
-  # The toast from ⌘Z and the hover card under the pointer go by themselves.
-  away
-  for _ in $(seq 100); do
-    toast=$(grep '^browser: toast \(shown\|hidden\)' "$log" | tail -1)
-    card=$(grep '^browser: hover card \(shown\|hidden\)' "$log" | tail -1)
-    case "$toast $card" in *shown*) sleep 0.1 ;; *) break ;; esac
-  done
+  # Where each window over the page is, "x,y" in points, in the driver's order, once there's one.
+  overlays_at() {
+    for _ in $(seq 20); do
+      send overlays
+      at=$(grep '^browser: overlays shown ' "$log" | tail -1 | grep -o ' at [0-9-]*,[0-9-]*' |
+        cut -c5- | tr '\n' ' ')
+      [ -n "$at" ] && return 0
+      sleep 0.1
+    done
+    fail "$1"
+  }
+  # The toast from ⌘Z and the hover card under the pointer go by themselves, once the pointer is
+  # over the page. The driver's pointer is real (#2544), so it rests where a menu was opened, on its
+  # row, which shows the row's hover card once the menu closes, as it does to a hand.
+  settle() {
+    away
+    for _ in $(seq 100); do
+      toast=$(grep '^browser: toast \(shown\|hidden\)' "$log" | tail -1)
+      card=$(grep '^browser: hover card \(shown\|hidden\)' "$log" | tail -1)
+      case "$toast $card" in *shown*) sleep 0.1 ;; *) break ;; esac
+    done
+  }
+  settle
   overlays_none "the steps before"
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
@@ -1344,6 +1373,7 @@ if windows; then
   send key escape
   expect '^browser: menu closed$' "escape didn't close the menu"
   expect '^browser: menu window hidden$' "escape left the menu's window up"
+  settle
   overlays_none "the menu, once closed,"
   send reshow
   expect '^browser: reshown [1-9][0-9]*$' "the driver found none of the UI's windows hidden to show again"
@@ -1364,23 +1394,36 @@ if windows; then
     expect '^browser: menu closed$' "minimizing the window left its menu open"
     expect '^browser: menu window hidden$' "minimizing the window left its menu's window up"
     send minimize
+    settle
     overlays_none "the window coming back from minimized after its menu closed"
   else
     echo "skip: a menu in a minimized window, as the app wasn't active once its window came back."
   fi
+  # Windows' own Win+D and back with the bar open: the bar closes with the window, and once the
+  # window is back the keyboard is the window's, not the hidden bar's, where what the user typed
+  # went unseen and Ctrl+T closed the bar again (#2545). Real keys, which need the desktop to be
+  # the check's own.
+  if [ -n "${CI:-}" ] && [ "$active" = 1 ]; then
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    send realkey d win
+    bar_gone "Win+D"
+    send realkey d win
+    expect '^browser: command bar hidden, its browser window takes the keyboard$' \
+      "the window back from Win+D left its hidden command bar with the keyboard"
+    send realkey t ctrl
+    expect '^browser: command bar shown$' "Ctrl+T after Win+D and back didn't open the command bar"
+    overlays_at "the command bar after Win+D isn't on screen"
+    send realkey g
+    expect '^browser: command bar drew "g"$' "what's typed after Win+D didn't go into the command bar"
+    ../tools/window-screenshot.sh "$pid" "$out/command-bar-after-win-d.png" || fail "no window to capture"
+    send key escape
+    bar_gone "Esc in the command bar after Win+D"
+  else
+    echo "skip: Win+D with the command bar open, as real keys need CI's desktop and the app active."
+  fi
   # Moved with the bar open, the window takes the bar along, over the same place, where it stayed
   # behind on the screen, and the window's menu closes, as the Mac's do (#1364).
-  # Where each window over the page is, "x,y" in points, in the driver's order, once there's one.
-  overlays_at() {
-    for _ in $(seq 20); do
-      send overlays
-      at=$(grep '^browser: overlays shown ' "$log" | tail -1 | grep -o ' at [0-9-]*,[0-9-]*' |
-        cut -c5- | tr '\n' ' ')
-      [ -n "$at" ] && return 0
-      sleep 0.1
-    done
-    fail "$1"
-  }
   send order
   frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
   read -r frame_x frame_y frame_width frame_height <<FRAME
@@ -1410,6 +1453,7 @@ FRAME
   expect '^browser: menu closed$' "moving the window left its menu open"
   expect '^browser: menu window hidden$' "moving the window left its menu's window up"
   send place "$frame_x" "$frame_y" "$frame_width" "$frame_height"
+  settle
   overlays_none "the menu, closed as its window moved,"
   # The bar opened while a page loads in another site's renderer, so its view replaces the one
   # that had the keyboard as it commits: the bar stays open with the keyboard, as it closes only
@@ -1465,6 +1509,119 @@ FRAME
   expect '^browser: command bar shown$' "Ctrl+T didn't open the command bar after Alt+F4 closed a window"
   send key escape
   bar_gone "Esc in the command bar after Alt+F4 closed the window it was over"
+  # The display adapter restarting, as a driver update or a reset does, takes GPUI's device away.
+  # With the bar open and the app idle, the bar's window stayed on screen with nothing drawn in it,
+  # the page reading through its frame and shadow, and the sidebar black, until the next input asked
+  # for a frame (#2536). The device's removal now wakes GPUI to draw its windows again on a new one.
+  # The bar's view isn't rendered again for it, so its "drew" line doesn't say. pnputil needs an
+  # administrator, as CI's runner is.
+  send key t cmd
+  expect '^browser: command bar shown$' "Ctrl+T didn't open the command bar"
+  restarted=$(powershell.exe -NoProfile -Command \
+    'Get-PnpDevice -Class Display -Status OK | ForEach-Object { pnputil /restart-device $_.InstanceId }' \
+    2>&1 || true)
+  case "$restarted" in
+    *"restarted successfully"*)
+      # A driver command that draws nothing, for what's logged after the restart.
+      send overlays
+      expect '^browser: gpui redrew its windows on a new device$' \
+        "the windows drew nothing after the display adapter restarted under the bar, with no input"
+      overlays_at "the command bar's window left the screen as the display adapter restarted"
+      ../tools/window-screenshot.sh "$pid" "$out/bar-adapter-restarted.png" all ||
+        fail "no window to capture"
+      adapter=", and the open bar draws again after the display adapter restarts under it"
+      ;;
+    *) echo "skip: the display adapter restarting under the bar, as pnputil couldn't: $restarted" ;;
+  esac
+  send key escape
+  bar_gone "Esc in the command bar after the display adapter restarted"
+fi
+
+# Showing the desktop with the command bar open (#2711). On X11 the bar is a window of its own that
+# no window manager takes, so it has to leave the screen as its window does: openbox hides every
+# window, and the bar goes with the browser window and comes back with it, with the keys. KWin
+# raises the desktop shell's window over the others and gives it the keys, and the bar closes as
+# it does for any window that takes them; without a shell KWin shows nothing, so the driver maps
+# one. EWMH's _NET_SHOWING_DESKTOP asks either, as openbox's Super+D, KWin's Ctrl+F12 and a
+# pager's button do. sway has no desktop to show and hides a window on another workspace: under
+# Wayland the bar is part of the window's surface and goes with it, and closes as the app goes
+# inactive, as on leaving it for another app's window. sway's Xwayland, where the app is only when
+# X11 is forced in a Wayland session, draws the bar on every workspace and tells no X client its
+# window left the screen (#2720), so the step doesn't run there.
+if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; }; then
+  # The share, in thousandths, of the capture's most common colour: the empty screen's, with the
+  # pointer the only other thing on it.
+  plain() {
+    ../tools/window-screenshot.sh "$pid" "$1" all || fail "no screen to capture"
+    convert "$1" -format %c histogram:info:- |
+      awk -v all="$(identify -format '%[fx:w*h]' "$1")" \
+        '{ n = $1 + 0; if (n > top) top = n } END { printf "%d\n", top * 1000 / all }'
+  }
+  if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    opened=$step
+    swaymsg workspace 9 > /dev/null || fail "sway didn't go to another workspace"
+    for _ in $(seq 50); do
+      [ "$(plain "$out/workspace-away.png")" -ge 995 ] && break
+      sleep 0.1
+    done
+    [ "$(plain "$out/workspace-away.png")" -ge 995 ] ||
+      fail "another workspace still showed the bar or its window: $out/workspace-away.png"
+    expect '^browser: command bar hidden$' "the bar stayed open with its window off screen" "$opened"
+    expect '^browser: app active 0$' "the app stayed active with its window off screen" "$opened"
+    active=$(grep -c '^browser: app active 1$' "$log")
+    swaymsg workspace 1 > /dev/null || fail "sway didn't go back to the window's workspace"
+    for _ in $(seq 100); do
+      [ "$(grep -c '^browser: app active 1$' "$log")" -gt "$active" ] && break
+      sleep 0.1
+    done
+    [ "$(grep -c '^browser: app active 1$' "$log")" -gt "$active" ] ||
+      fail "the app didn't log \"browser: app active 1\" in 10 s back on its window's workspace"
+    ../tools/window-screenshot.sh "$pid" "$out/workspace-back.png" all || fail "no screen to capture"
+    desktop="on another workspace the window and its bar are off screen, and the bar closes as the app does on leaving it"
+  else
+    # What the X server shows, as "window <0|1>, overlays <on screen> of <shown>, keyboard <whose>".
+    onscreen() {
+      for _ in $(seq 50); do
+        send onscreen
+        seen=$(grep '^browser: onscreen ' "$log" | tail -1)
+        printf '%s\n' "$seen" | grep -q "^browser: onscreen $1\$" && return 0
+        sleep 0.1
+      done
+      fail "$2: $seen"
+    }
+    send desktop shell
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    onscreen 'window 1, overlays \([1-9][0-9]*\) of \1, keyboard overlay' \
+      "the bar didn't show over its window with the keys"
+    send desktop on
+    shown=$step
+    onscreen 'window [01], overlays 0 of [0-9][0-9]*, keyboard none' \
+      "showing the desktop left the bar on screen, or the keys with the app"
+    [ "$(plain "$out/desktop-shown.png")" -ge 995 ] ||
+      fail "the desktop showed more than itself: $out/desktop-shown.png"
+    send desktop off
+    onscreen 'window 1, overlays \(\([1-9][0-9]*\) of \2, keyboard overlay\|0 of 0, keyboard window\)' \
+      "the window didn't come back with the keys once the windows showed again"
+    if [ "${seen##*keyboard }" = overlay ]; then
+      send type g
+      expect '^browser: command bar drew "g"$' \
+        "a key typed once the windows showed again didn't reach the bar"
+      ../tools/window-screenshot.sh "$pid" "$out/desktop-back.png" all || fail "no screen to capture"
+      send key escape
+      expect '^browser: command bar hidden$' "Esc didn't close the bar once its window was back"
+      desktop="showing the desktop takes the window and its bar off screen, and back with the keys"
+    else
+      expect '^browser: command bar hidden$' "the bar was off screen but not closed" "$shown"
+      ../tools/window-screenshot.sh "$pid" "$out/desktop-back.png" all || fail "no screen to capture"
+      desktop="showing the desktop closes the bar as the desktop takes the keys, and the window comes back with them"
+    fi
+    send desktop shell off
+  fi
+elif [ "$(uname)" = Linux ]; then
+  echo "skip: another workspace with the command bar open, on sway's Xwayland: sway draws the bar on every workspace and tells no X client its window left the screen; the app is there only when X11 is forced (#2720)."
 fi
 
 # Arc's bar commands that call what the menus do: Mute All Tabs mutes every tab, and Unmute All
@@ -1581,7 +1738,7 @@ else
   exec 3>&-
   quit
 fi
-echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, a pick of View Media… lists it above View Archive…, its equal for \"view\", back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
+echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, a pick of View Media… lists it above View Archive…, its equal for \"view\", back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized${adapter:-}.${desktop:+ On Linux $desktop.}"
 [ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
   "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \

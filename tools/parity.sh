@@ -3,18 +3,21 @@
 # so text that fits on the Mac but not in another system's faces or windows shows without anyone
 # taking screenshots: on Linux on Wayland and on X11, each in a headless sway session of its own
 # (tools/headless.sh), and on Windows, a CI runner's, its desktop (tools/window-capture.ps1).
-# The screens: the sidebar with tabs, on the left and on the right, where the window's buttons
-# are at the window's right corner (#2375), the command bar, a tab's context menu, Site Controls, the
-# icon picker, the delete-Space dialog, the sidebar of a Space whose theme has three colours,
-# whose dot in the switcher draws all three (#1354), Peek over the page, its card a hole the
-# shell's page shows through, and more Spaces than fit (#1401): 16 in the switcher of a sidebar
-# 300 wide, and 8 in the Library's Spaces in a window 1100 wide, and Settings › Sync at Settings'
-# 720 by 480 least size, scrolled, the section's name held at the card's top, and the URL field's
-# translate mark lit under the pointer, light and dark (#2112), and the foot bar with two lines over
-# the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380), and
-# Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default
-# naming its model, light and dark (#2455). The preview's Linux host places no window, so sway
-# puts Site Controls and the icon picker in the middle rather than where the Mac's host would.
+# The screens: the sidebar with tabs, on the left and on the right, where the window's buttons are
+# at the window's right corner (#2375), and with it on the right the Library and its Spaces, on the
+# sidebar's side, the window's buttons on its column (#2375), the command bar, a tab's context menu,
+# Site Controls, the icon picker, the delete-Space dialog, the sidebar of a Space whose theme has
+# three colours, whose dot in the switcher draws all three (#1354), Peek over the page, its card a
+# hole the shell's page shows through, and more Spaces than fit (#1401): 16 in the switcher of a
+# sidebar 300 wide, and 8 in the Library's Spaces in a window 1100 wide, and Settings › Sync at
+# Settings' 720 by 480 least size, scrolled, the section's name held at the card's top, and the URL
+# field's translate mark lit under the pointer, light and dark (#2112), the foot bar with two lines
+# over the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380),
+# Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default naming
+# its model, light and dark (#2455), and the safe-start card at the sidebar's foot, light and dark,
+# and in the narrowest sidebar with ad blocking off (#2345). The preview's Linux host places no
+# window, so sway puts Site Controls and the icon picker in the middle rather than where the Mac's
+# host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -32,6 +35,8 @@ if command -v magick >/dev/null; then convert=(magick) montage=(magick montage);
 screens=(
   "sidebar|drawn at|"
   "sidebar-right|drawn at|PREVIEW_SIDEBAR_RIGHT=1"
+  "library-right|library shown|PREVIEW_SIDEBAR_RIGHT=1 PREVIEW_LIBRARY=1"
+  "library-spaces-right|library shown|PREVIEW_SIDEBAR_RIGHT=1 PREVIEW_LIBRARY=spaces"
   "command-bar|command bar drew|PREVIEW_BAR=tabs"
   "context-menu|menu shown|PREVIEW_MENU=100,247"
   "site-controls|site controls settled|PREVIEW_SITE_CONTROLS=1"
@@ -49,6 +54,9 @@ screens=(
   "model-menu-claude-light|menu shown|PREVIEW_MODEL_MENU=claude,sonnet PREVIEW_APPEARANCE=light"
   "model-menu-codex-dark|menu shown|PREVIEW_MODEL_MENU=codex PREVIEW_APPEARANCE=dark"
   "model-menu-codex-light|menu shown|PREVIEW_MODEL_MENU=codex PREVIEW_APPEARANCE=light"
+  "safe-start-light|safe start card 0 at|PREVIEW_SAFE_START=1 PREVIEW_APPEARANCE=light"
+  "safe-start-dark|safe start card 0 at|PREVIEW_SAFE_START=1 PREVIEW_APPEARANCE=dark"
+  "safe-start-narrow|safe start card 0 at|PREVIEW_SAFE_START=unblocked PREVIEW_SIDEBAR=164"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
