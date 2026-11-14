@@ -403,7 +403,10 @@ fn server() -> Option<Rc<(RustConnection, xproto::Window)>> {
 
 /// The screen's corner, where the display's own pointer waits (`server`).
 fn corner(screen: &xproto::Screen) -> (i16, i16) {
-    (screen.width_in_pixels as i16 - 1, screen.height_in_pixels as i16 - 1)
+    (
+        screen.width_in_pixels as i16 - 1,
+        screen.height_in_pixels as i16 - 1,
+    )
 }
 
 /// Puts the display's own pointer at the press `at` in a page, as a hand's would be. Chromium grabs
