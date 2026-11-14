@@ -148,7 +148,9 @@ impl Agents {
             1 => "1 element".to_owned(),
             count => format!("{count} elements"),
         };
-        self.note_on(&ask.agent, "pointed", &site, &count, "");
+        // Its row opens to the page and the lines sent, as a request's does.
+        let entry = (address.as_str(), point::sent(&notes));
+        self.note_entry(&ask.agent, "pointed", &site, &count, "", entry);
         // check.sh reads this line.
         log!("browser: point {id} sent {}", notes.len());
         self.point_over(ask, cx);

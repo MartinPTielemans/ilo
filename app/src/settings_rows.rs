@@ -690,14 +690,32 @@ fn chevron(up: bool, color: gpui::Hsla) -> gpui::Svg {
         .text_color(color)
 }
 
-/// What an agent's request shows opened under its title (#2326): "To" and its whole address,
-/// then "Sent", or "Not sent" if it was refused, a line a field, cut at the edge until `all`, when
-/// a long value wraps whole. Past eight lines the eighth is "Show all", which calls `show_all`.
-/// Its caller places it under the row's title, at the title's start.
+/// A line in the detail's grey under an opened row's lines, saying what it leaves out and why.
+pub fn sent_aside(text: &'static str, detail: gpui::Hsla) -> gpui::Div {
+    div()
+        .text_size(px(SMALL))
+        .line_height(px(DETAIL_LINE))
+        .text_color(detail)
+        .child(text)
+}
+
+/// The label of an opened log row's address: "Page" for what Point sent, "To" for a request.
+pub fn address_label(action: &str) -> &'static str {
+    match action {
+        "pointed" => "Page",
+        _ => "To",
+    }
+}
+
+/// What an agent's request shows opened under its title (#2326): `to`, "To" for a request and
+/// "Page" for what Point sent (#2352), and its whole address, then "Sent", or "Not sent" if it was
+/// refused, a line a field, cut at the edge until `all`, when a long value wraps whole. Past eight
+/// lines the eighth is "Show all", which calls `show_all`. Its caller places it under the row's
+/// title, at the title's start.
 #[allow(clippy::too_many_arguments)]
 pub fn sent_part(
     id: impl Into<gpui::ElementId>,
-    url: &str,
+    (to, url): (&'static str, &str),
     sent: &[Sent],
     refused: bool,
     all: bool,
@@ -726,7 +744,7 @@ pub fn sent_part(
         true => line,
         false => line.truncate(),
     };
-    let to = cut(small(url.to_string().into()).min_w_0().text_color(ink));
+    let address = cut(small(url.to_string().into()).min_w_0().text_color(ink));
     let (shown, more) = sent_shown(sent.len(), all);
     let mut lines: Vec<gpui::AnyElement> = (sent.iter().take(shown))
         .map(|line| {
@@ -781,7 +799,7 @@ pub fn sent_part(
         .flex()
         .flex_col()
         .gap(px(SENT_GAP))
-        .child(labelled("To", vec![to.into_any_element()]))
+        .child(labelled(to, vec![address.into_any_element()]))
         .when(!lines.is_empty(), |part| part.child(labelled(label, lines)))
 }
 

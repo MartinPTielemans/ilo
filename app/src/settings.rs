@@ -3947,9 +3947,12 @@ impl Settings {
             .when(self.a11y, |head| {
                 named_button(head, what.clone()).aria_expanded(opened)
             })
-            // Its method, which check.sh tells reads from changes by, and no path: its "/" would
-            // end the run's pattern.
-            .child(self.drawn(format!("request {id} {}", method(&entry.target))))
+            // A request's method, which check.sh tells reads from changes by, and no path: its "/"
+            // would end the run's pattern. Point's sent answer is "pointed".
+            .child(self.drawn(match entry.action.as_ref() {
+                "request" => format!("request {id} {}", method(&entry.target)),
+                action => format!("{action} {id}"),
+            }))
             .on_click({
                 let (agents, agent) = (agents.clone(), entry.agent.clone());
                 cx.listener(move |settings, _, _, cx| {
@@ -3968,7 +3971,10 @@ impl Settings {
         let part = opened.then(|| {
             sent_part(
                 ("request-all", id),
-                &entry.url,
+                (
+                    browser::settings_rows::address_label(&entry.action),
+                    &entry.url,
+                ),
                 &entry.sent,
                 refused,
                 all,

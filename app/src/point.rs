@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use gpui::{Bounds, Pixels, point, px, size};
 
+use crate::agents::request::Sent;
+
 /// The answer to every `point` call the user didn't send, whatever happened: Not Now, esc, a
 /// timeout, or a page Point couldn't point into. One answer, so the agent can't tell which, as it
 /// learns nothing of a tab that isn't its own.
@@ -257,6 +259,40 @@ pub fn answer(notes: &[Note]) -> (String, Vec<Arc<[u8]>>) {
         .filter_map(|note| note.element.png.clone())
         .collect();
     (text, pictures)
+}
+
+/// The log's lines for a sent answer, which its row in Settings › Agents opens to: the page's
+/// title, then each element by its number, with the user's note and the panel's rows, its kind
+/// alone, its value as "Not sent" and its picture as its size. Library › Agents' file keeps fewer
+/// (agent_history::kept_lines).
+pub fn sent(notes: &[Note]) -> Vec<Sent> {
+    let line = |depth, name: &str, value: String| Sent {
+        depth,
+        name: name.to_owned(),
+        value,
+    };
+    let title = notes.first().map(|note| note.element.title.clone());
+    let mut lines: Vec<Sent> = title
+        .map(|title| line(0, "title", title))
+        .into_iter()
+        .collect();
+    for (index, note) in notes.iter().enumerate() {
+        let element = &note.element;
+        lines.push(line(0, &(index + 1).to_string(), String::new()));
+        lines.push(line(1, "kind", label(&element.kind, "")));
+        lines.push(line(1, "note", note.words.trim().to_owned()));
+        for row in element.rows() {
+            let (name, value) = match row.name {
+                "Page" | "Title" | "Element" => continue,
+                "Finds it" => ("found by", row.value),
+                "Value" => ("value", "Not sent".to_owned()),
+                name => (name, row.value),
+            };
+            lines.push(line(1, &name.to_lowercase(), value));
+        }
+    }
+    lines.retain(|line| !line.value.is_empty() || line.depth == 0);
+    lines
 }
 
 /// The log's title for a sent answer, "You pointed at 3 elements".
