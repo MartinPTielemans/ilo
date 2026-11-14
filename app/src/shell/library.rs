@@ -1379,6 +1379,29 @@ impl Shell {
             .open_archived_preview(self.selected, id, url, at, page, cx);
     }
 
+    /// A visited page's row opens it in Peek, as a closed tab's does, so one click means one thing
+    /// down the whole list; Open as Tab keeps it as a new tab. ⌘-click, or a click where no
+    /// preview can show, opens the new tab at once (#2337 mock).
+    fn open_visited(
+        &mut self,
+        url: SharedString,
+        at: Point<Pixels>,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let web = url.starts_with("https://") || url.starts_with("http://");
+        let page = self.preview_page().filter(|_| {
+            web && self.selected != 0 && !modifiers.secondary(cx) && self.browser.link_previews()
+        });
+        let Some(page) = page else {
+            log!("browser: history open {url}");
+            self.browser.open_at(&[url.to_string()], false, 0, 0, cx);
+            return self.set_library(false, cx);
+        };
+        log!("browser: history {url} in preview");
+        self.browser.open_preview(self.selected, url, at, page, cx);
+    }
+
     /// The archived tab a preview showed is the window's tab now, kept from the preview, and the
     /// Library closes as it does for one restored from its row.
     pub fn restored_from_preview(&mut self, cx: &mut Context<Self>) {
@@ -2566,6 +2589,7 @@ impl Shell {
             &self.palette,
             self.page_favicons.get(&url).cloned().flatten(),
         );
+        let history = self.visited.is_some();
         let host = SharedString::from(host(&url).to_string());
         // History's says what the row is and when, and names the Space while it lists more
         // than one (#2337).
@@ -2593,6 +2617,7 @@ impl Shell {
             .child(
                 div()
                     .id(("archived", id))
+                    .group(SharedString::from(format!("archived-{id}")))
                     .size_full()
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
@@ -2626,6 +2651,9 @@ impl Shell {
                             .justify_center()
                             .pl(px(ARCHIVED_TEXT_X))
                             .pr(px(12.))
+                            // History keeps the trash's room at the row's end, so the
+                            // title never runs under it.
+                            .when(history, |text| text.pr(px(36.)))
                             .child(text_line(
                                 title,
                                 text::BODY,
@@ -2638,7 +2666,15 @@ impl Shell {
                                 15.,
                                 self.palette.text(SECONDARY),
                             )),
-                    ),
+                    )
+                    .when(self.visited.is_some(), |row| {
+                        row.child(self.history_trash(
+                            ("archived-trash", id),
+                            format!("archived-{id}").into(),
+                            move |shell, cx| shell.delete_archived(id, cx),
+                            cx,
+                        ))
+                    }),
             )
             .into_any_element()
     }
@@ -2720,6 +2756,48 @@ impl Shell {
     /// A visited page's line in History, as a closed tab's: its favicon, its title over when it
     /// was visited and its host. A click opens it in a new tab and closes the Library, and a
     /// right-click shows its menu (#2337).
+    /// The trash at a History row's end, shown while the pointer is on the row: trash removes
+    /// (ux-principles, "A change shows that it happened"), as the command bar's removable rows'.
+    fn history_trash(
+        &self,
+        id: (&'static str, u64),
+        group: SharedString,
+        remove: impl Fn(&mut Shell, &mut Context<Shell>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id(id)
+            .absolute()
+            .right(px(6.))
+            .top_0()
+            .bottom_0()
+            .flex()
+            .items_center()
+            .invisible()
+            .group_hover(group, |style| style.visible())
+            .child(
+                div()
+                    .size(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .child(
+                        svg()
+                            .path("icons/trash.svg")
+                            .size(px(14.))
+                            .text_color(self.palette.text(SECONDARY)),
+                    ),
+            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                cx.stop_propagation();
+                remove(shell, cx)
+            }))
+            .into_any_element()
+    }
+
     fn visited_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let (Some(page), Some(library)) = (
             self.visited.as_ref().and_then(|visited| visited.get(index)),
@@ -2742,7 +2820,7 @@ impl Shell {
             &self.palette,
             self.page_favicons.get(&url).cloned().flatten(),
         );
-        let (open, menu) = (url.clone(), url);
+        let (open, menu, gone) = (url.clone(), url.clone(), url);
         div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
@@ -2751,16 +2829,15 @@ impl Shell {
             .child(
                 div()
                     .id(("visited", index))
+                    .group(SharedString::from(format!("visited-{index}")))
                     .size_full()
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
                     .block_mouse_except_scroll()
                     .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
                     .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
-                    .on_click(cx.listener(move |shell, _, _, cx| {
-                        log!("browser: history open {open}");
-                        shell.browser.open_at(&[open.to_string()], false, 0, 0, cx);
-                        shell.set_library(false, cx);
+                    .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                        shell.open_visited(open.clone(), event.position(), event.modifiers(), cx)
                     }))
                     .on_mouse_down(
                         MouseButton::Right,
@@ -2786,6 +2863,8 @@ impl Shell {
                             .justify_center()
                             .pl(px(ARCHIVED_TEXT_X))
                             .pr(px(12.))
+                            // The title never runs under the trash at the row's end.
+                            .pr(px(36.))
                             .child(text_line(
                                 title,
                                 text::BODY,
@@ -2798,7 +2877,18 @@ impl Shell {
                                 15.,
                                 self.palette.text(SECONDARY),
                             )),
-                    ),
+                    )
+                    .child(self.history_trash(
+                        ("visited-trash", index as u64),
+                        format!("visited-{index}").into(),
+                        move |shell, cx| {
+                            if let Some(visited) = &mut shell.visited {
+                                visited.retain(|page| page.url != gone);
+                            }
+                            shell.filter(true, cx);
+                        },
+                        cx,
+                    )),
             )
             .into_any_element()
     }
@@ -2825,7 +2915,10 @@ impl Shell {
                             shell.browser.open_at(&[url.to_string()], false, 0, 0, cx);
                             shell.set_library(false, cx);
                         }
-                        Some(1) => shell.copy(&clean_link(&url), "Copied URL", cx),
+                        Some(1) => {
+                            let link = shell.copied_link(&url);
+                            shell.copy(&link, "Copied URL", cx)
+                        }
                         Some(3) => {
                             if let Some(visited) = &mut shell.visited {
                                 visited.retain(|page| page.url != url);
