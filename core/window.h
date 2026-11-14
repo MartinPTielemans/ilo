@@ -334,6 +334,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Opens a tab for |profile| loading |url|, not shown, or with |when_shown| an http(s) |url| only
   // once it's first shown. Null while the window is closing or Chromium is quitting.
   content::WebContents* OpenTab(Profile* profile, const GURL& url, bool when_shown);
+  // Opens |url| for |profile| in a tab behind, loading at once, that |space| holds before its page
+  // starts (Space::Expect), for the caller to place there.
+  content::WebContents* OpenHeld(Space& space, Profile* profile, const GURL& url);
   // Opens |url| in a tab |pinned| opened, as a link opened in front, so it's at the top of the
   // Today tabs, shown if the window shows its Space, and closing it shows |pinned| again. Null as
   // OpenTab.

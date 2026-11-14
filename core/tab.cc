@@ -1063,6 +1063,27 @@ bool Tab::muted() const {
   return web_contents() ? web_contents()->IsAudioMuted() : unloaded_ && unloaded_->muted;
 }
 
+void Tab::DidOpenRequestedURL(content::WebContents* new_contents,
+                              content::RenderFrameHost* source_render_frame_host,
+                              const GURL& url,
+                              const content::Referrer& referrer,
+                              WindowOpenDisposition disposition,
+                              ui::PageTransition transition,
+                              bool started_from_context_menu,
+                              bool renderer_initiated) {
+  // A pop-up an agent's page makes goes in the agent's Space, and is the agent's from now, as
+  // content makes it: content starts its page as the window is shown, before the window that
+  // places it hears of it (#2660). A tab Chrome's Navigate made, the window held as it made it.
+  Space* space = Space::Holding(id_);
+  if (!space || !space->agent()) {
+    return;
+  }
+  const bc_id opened = Tab::IdOf(new_contents);
+  if (!Space::Holding(opened)) {
+    space->Expect(opened);
+  }
+}
+
 void Tab::DidStartNavigation(content::NavigationHandle* navigation) {
   if (navigation->IsInPrimaryMainFrame()) {
     PasswordOffer::WatchKey(web_contents());

@@ -458,6 +458,7 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     // with no error page in place of the page, and the agent hears why (#1443).
     content::WebContents* contents = web_contents_getter.Run();
     if (contents && !OpenAppDialog::MayOpen(contents)) {
+      LOG(ERROR) << "browser: agent tab " << Tab::IdOf(contents) << " refused " << url.scheme();
       AgentPage::AppRefused(contents, url);
       return true;
     }

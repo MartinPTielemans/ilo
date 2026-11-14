@@ -652,8 +652,9 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
     }
   }
   Profile* profile = space ? browser_core::ProfileFor(space->profile()) : nullptr;
-  content::WebContents* contents =
-      window && profile ? window->OpenTab(profile, target, /*when_shown=*/false) : nullptr;
+  // The agent's from before its page starts, so its first request is an agent's (#2660).
+  content::WebContents* contents = window && profile ? window->OpenHeld(*space, profile, target)
+                                                     : nullptr;
   if (!contents) {
     return 0;
   }
