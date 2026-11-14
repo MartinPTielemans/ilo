@@ -505,6 +505,13 @@ jobs:
             --key-id "$MAC_NOTARY_KEY_ID" --issuer "$MAC_NOTARY_ISSUER_ID"
           rm "$RUNNER_TEMP/notary.p8"
 
+      # The committed profile must list MAC_CERTIFICATE_P12's certificate, be for the app's App ID
+      # and last 30 days more, or the app would ship and macOS wouldn't start it. It asks Apple
+      # nothing, so the API can't stop a release.
+      - name: Provisioning profile
+        if: ${{ steps.secrets.outputs.signed == 'true' }}
+        run: ../tools/check-profile.sh "$SIGN_IDENTITY"
+
       # It uploads the crash reports' symbols too (tools/symbols.sh). A nightly is marked as one.
       - name: Build
         env:

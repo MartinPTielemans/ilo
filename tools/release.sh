@@ -4,7 +4,10 @@
 # app/build/release/<name>.dmg. tools/install.sh signs the owner's own copy instead.
 # The notarytool profile is NOTARY_PROFILE, else "notary" (xcrun notarytool store-credentials
 # notary). Without it the app is signed and packed but not notarized, and the run fails.
-# SIGN_IDENTITY=- signs ad hoc, to try the signing without the key; it stops before the DMG.
+# The app carries the Developer ID provisioning profile PROVISIONING_PROFILE names, else
+# app/entitlements/developer-id.provisionprofile, and app/entitlements/release.plist's keys.
+# SIGN_IDENTITY=- signs ad hoc, to try the signing without the key; it stops before the DMG, and
+# like the dev builds it has neither the profile nor release.plist's keys.
 # Usage: SIGN_IDENTITY="Developer ID Application: … (TEAMID)" tools/release.sh
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../app" && pwd)"
@@ -25,6 +28,16 @@ if [ "$identity" != - ] && ! plutil -extract SUPublicEDKey raw "$built/Contents/
   echo "$built has no updater. Build it with the key in app/branding/update-key (tools/appcast.sh)." >&2
   exit 1
 fi
+
+# macOS won't start an app whose profile doesn't match it, so such a profile is refused here
+# rather than shipped (check-profile.sh).
+entitlements=$root/entitlements/app.plist
+if [ "$identity" != - ]; then
+  entitlements=$root/entitlements/release.plist
+  provision=${PROVISIONING_PROFILE:-$root/entitlements/developer-id.provisionprofile}
+  PROVISIONING_PROFILE=$provision "$(dirname "$0")/check-profile.sh" "$identity"
+fi
+
 rm -rf "$out"
 mkdir -p "$out"
 ditto --norsrc --noextattr "$built" "$app"
@@ -65,9 +78,19 @@ fi
 # The team's requirement, as tools/install.sh signs the owner's copy, so either reads the other's
 # Keychain items.
 requirement=$("$(dirname "$0")/requirement.sh" "$(cat "$root/branding/id")" "$identity")
-sign --entitlements "$root/entitlements/app.plist" ${requirement:+"-r=$requirement"} "$app"
+[ "$identity" = - ] || cp "$provision" "$app/Contents/embedded.provisionprofile"
+sign --entitlements "$entitlements" ${requirement:+"-r=$requirement"} "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 [ "$identity" = - ] && exit 0
+# What the app carries, read back from it.
+codesign -d --entitlements - --xml "$app" 2> /dev/null | plutil -convert xml1 -o "$out/signed.plist" -
+plutil -convert xml1 -o "$out/claimed.plist" "$entitlements"
+if ! cmp -s "$out/signed.plist" "$out/claimed.plist" || ! cmp -s "$provision" "$app/Contents/embedded.provisionprofile"; then
+  echo "$app doesn't carry $entitlements and $provision as signed." >&2
+  exit 1
+fi
+rm "$out/signed.plist" "$out/claimed.plist"
+plutil -p "$entitlements"
 
 notarize() {
   local result id

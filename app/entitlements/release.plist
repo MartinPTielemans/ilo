@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Developer ID release's: app.plist's keys, and the ones developer-id.provisionprofile
+     beside it grants. macOS stops an app at launch that claims a key its embedded profile
+     doesn't grant, so tools/check-profile.sh checks each one against the profile, and
+     the ad hoc, dev and tools/install.sh signatures keep app.plist. The keychain group is the one
+     Chromium's Touch ID passkeys ask for (<team>.<bundle id>.webauthn); the passkey key,
+     com.apple.developer.web-browser.public-key-credential, comes once Apple grants it and the
+     profile carries it (#2354). -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.personal-information.location</key>
+	<true/>
+	<key>com.apple.application-identifier</key>
+	<string>938WK3V9K9.app.ilo.browser</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>938WK3V9K9</string>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>938WK3V9K9.app.ilo.browser.webauthn</string>
+	</array>
+</dict>
+</plist>
