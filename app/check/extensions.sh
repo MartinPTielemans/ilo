@@ -138,9 +138,15 @@ page='data:text/html,<title>loading</title>
 profile_dir="$extensions/profile"
 rm -rf "$profile_dir"
 mkdir -p "$profile_dir"
+# On Linux, removing an extension runs xdg-icon-resource for its icons, here in the run's own data
+# folder, never the runner's home. Without a hicolor folder its error lands in the log, and once
+# came in the middle of the driver's line a step waits for (#2792), as in store (#2726).
+data_dir="$PWD/$out/extensions-data"
+mkdir -p "$data_dir/icons/hicolor"
 log="$out/extensions.log"
 step=0
-BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
+BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$profile_dir" XDG_DATA_HOME="$data_dir" \
+  "$browser" \
   --load-extension="$(app_path "$clicked_dir"),$(app_path "$extensions/popup"),$(app_path "$extensions/third"),$(app_path "$extensions/panel")" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -627,7 +633,7 @@ echo '<title>answered</title>' > "$home/extension/answered.html"
 echo '<title>unanswered</title>' > "$home/extension/unanswered.html"
 log="$out/native-host.log"
 step=0
-BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$home/profile" \
+BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$home/profile" XDG_DATA_HOME="$data_dir" \
   "$browser" --load-extension="$home/extension" \
   --other-browsers-dir="$home/browsers" \
   < "$out/drive" > "$log" 2>&1 &
@@ -746,7 +752,7 @@ printf '{"download": {"default_directory": "%s", "prompt_for_download": false}}'
   "$(native_path "$PWD/$out/downloads" | sed 's/\\/\\\\/g')" > "$crx/profile/Default/Preferences"
 log="$out/install.log"
 step=0
-BROWSER_DRIVE=1 BROWSER_URL="$site" BROWSER_PROFILE_DIR="$crx/profile" \
+BROWSER_DRIVE=1 BROWSER_URL="$site" BROWSER_PROFILE_DIR="$crx/profile" XDG_DATA_HOME="$data_dir" \
   "$browser" --extension-mime-request-handling=always-prompt-for-install \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -885,7 +891,7 @@ echo '<title>crash page</title>' > "$crashing/extension/page.html"
 crash_launch() {
   log="$out/$1.log"
   step=0
-  BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$crashing/profile" \
+  BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$crashing/profile" XDG_DATA_HOME="$data_dir" \
     "$browser" --load-extension="$(app_path "$crashing/extension")" \
     < "$out/drive" > "$log" 2>&1 &
   pid=$!
