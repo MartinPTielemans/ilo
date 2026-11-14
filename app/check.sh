@@ -69,7 +69,10 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
         # names its property on the root window (#2134).
         config=$(mktemp -d)
         printf "[Plugins]\nblurEnabled=true\n" > "$config/kwinrc"
-        XDG_CONFIG_HOME=$config KWIN_COMPOSE=O2 dbus-run-session -- kwin_x11 > "$ready.log" 2>&1 &
+        # Probe (#2790): where its bus and log are, for a script of its own.
+        echo "$ready.log" > /tmp/kwin-2790.where
+        XDG_CONFIG_HOME=$config KWIN_COMPOSE=O2 QT_LOGGING_RULES="kwin_scripting=true;js=true;qml=true" dbus-run-session -- \
+          sh -c "echo \$DBUS_SESSION_BUS_ADDRESS > /tmp/kwin-2790.bus; exec kwin_x11" > "$ready.log" 2>&1 &
         tries=0
         until xprop -root _KDE_NET_WM_BLUR_BEHIND_REGION 2> /dev/null |
           grep -q "^_KDE_NET_WM_BLUR_BEHIND_REGION("; do
@@ -77,6 +80,21 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
           if ! kill -0 $! 2> /dev/null || [ "$tries" -gt 600 ]; then
             echo "kwin: no blur; the effects it says on the root window:" >&2
             xprop -root | grep "^_KDE" >&2
+            cat "$ready.log" >&2
+            exit 1
+          fi
+          sleep 0.1
+        done
+      elif [ "$BROWSER_XVFB" = i3 ]; then
+        # Probe (#2790): i3, a tiling manager, with no bar and no wizard.
+        config=$(mktemp)
+        printf "font pango:monospace 8\nfocus_follows_mouse no\n" > "$config"
+        i3 -c "$config" > "$ready.log" 2>&1 &
+        tries=0
+        until i3-msg -t get_version > /dev/null 2>&1; do
+          tries=$((tries + 1))
+          if ! kill -0 $! 2> /dev/null || [ "$tries" -gt 300 ]; then
+            echo "i3 did not start" >&2
             cat "$ready.log" >&2
             exit 1
           fi
