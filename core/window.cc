@@ -1135,6 +1135,19 @@ void Window::SetSpaceProfile(bc_id space, const std::string& profile) {
 }
 
 // static
+void Window::TabsArrived(const std::vector<bc_id>& tabs) {
+  for (auto& [id, window] : Windows()) {
+    const bc_id waiting = window->waiting_;
+    const Space* shown = Space::FromId(window->space_);
+    if (!waiting || !std::ranges::contains(tabs, waiting) || !shown ||
+        !(shown->Has(waiting) || Favorites::ShownIn(waiting, *shown))) {
+      continue;
+    }
+    window->Select(waiting);
+  }
+}
+
+// static
 void Window::HiddenFavoritesGone() {
   for (auto& [id, window] : Windows()) {
     // A favorite a Space no longer shows isn't the tab it comes back to.
@@ -1821,6 +1834,7 @@ void Window::SetSidebarWidth(double width) {
 void Window::ShowNothing() {
   HoldPictured();
   selected_ = 0;
+  waiting_ = 0;
   for (bc_id pane : std::exchange(panes_, {})) {
     Seen(pane);
   }
@@ -1893,12 +1907,23 @@ void Window::SetPageScale(double scale) {
 
 void Window::Select(bc_id tab) {
   const Tab* selecting = Tab::Get(tab);
+  waiting_ = 0;
   // A window with a Space of its own shows its tabs alone, and a regular one never shows them:
   // Chrome never moves a page between incognito and regular windows.
   const Space* holding = Space::Holding(tab);
   if (!selecting ||
       (own_space_ ? !holding || holding->id() != space_
                   : (holding && holding->own()) || OffTheRecord(selecting))) {
+    return;
+  }
+  // One whose profile is still loading, or one of its split's, can't have its page yet: the window
+  // shows nothing until it's here (TabsArrived), as it would while a page starts.
+  if (std::ranges::any_of(PanesWith(tab), [](bc_id pane) {
+        const Tab* in = Tab::Get(pane);
+        return in && in->waiting_for_profile();
+      })) {
+    ShowNothing();
+    waiting_ = tab;
     return;
   }
   // A tab without its page, and each of its split's, gets it back here, as it's shown.
@@ -2163,7 +2188,7 @@ bc_id Window::UndoDeleteSpace(bc_id id) {
     above = true;
   }
   space.saved.today = std::move(today);
-  RestoreSpace(*this, profile, space.saved, space.id, space.at);
+  RestoreSpace(*this, DirOf(profile), space.saved, space.id, space.at);
   // Not one of the Space's own, which closed with it and came back as other tabs.
   if (Favorites::Has(space.shown) && !Favorites::SpaceOf(space.shown)) {
     SetSelectedIn(space.id, space.shown);

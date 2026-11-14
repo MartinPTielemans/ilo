@@ -29,6 +29,7 @@
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/keyboard.h"
 #include "browser_core/platform/window_views.h"
+#include "browser_core/profiles.h"
 #include "browser_core/script_dialog.h"
 #include "browser_core/session.h"
 #include "browser_core/developer_mode.h"
@@ -306,28 +307,50 @@ std::vector<Tab*> Tab::All() {
 
 // static
 bc_id Tab::Restore(Profile* profile, const SavedTab& saved) {
-  if (!profile || saved.history.empty()) {
+  return profile ? Make(profile, std::string(), saved) : 0;
+}
+
+// static
+bc_id Tab::Restore(const std::string& dir, const SavedTab& saved) {
+  if (Profile* profile = ProfileFor(dir)) {
+    return Make(profile, std::string(), saved);
+  }
+  return ProfileExpected(dir) ? Make(nullptr, dir, saved) : 0;
+}
+
+// static
+std::vector<bc_id> Tab::ProfileArrived(const std::string& dir, Profile* profile) {
+  std::vector<bc_id> arrived;
+  for (auto& [id, tab] : Tabs()) {
+    if (dir.empty() || tab->waiting_for_ != dir) {
+      continue;
+    }
+    tab->waiting_for_.clear();
+    if (profile) {
+      tab->profile_ = profile->GetWeakPtr();
+    }
+    tab->TakeStorage(std::exchange(tab->waiting_storage_, std::string()));
+    tab->StateChanged();
+    tab->FindFavicon(tab->Url());
+    arrived.push_back(id);
+  }
+  return arrived;
+}
+
+// static
+bc_id Tab::Make(Profile* profile, const std::string& waiting_for, const SavedTab& saved) {
+  if (saved.history.empty()) {
     return 0;
   }
   const bc_id id = NewId();
   Tab* tab = (Tabs()[id] = base::WrapUnique(new Tab(id, profile))).get();
+  tab->waiting_for_ = waiting_for;
   // Only what the page would keep: the rest of |saved| is its place, which the caller sees to.
   SavedTab& unloaded = tab->unloaded_.emplace();
   unloaded.history = saved.history;
   unloaded.current = std::clamp(saved.current, 0, static_cast<int>(saved.history.size()) - 1);
   unloaded.muted = saved.muted;
-  // Its page's sessionStorage from the last launch, unless a tab has it already, as one a sidebar
-  // backup brings back may.
-  const std::string& storage = saved.session_storage;
-  if (!storage.empty() && std::ranges::none_of(All(), [&](const Tab* other) {
-        return other != tab && other->SessionStorageId() == storage;
-      })) {
-    tab->storage_ =
-        profile->GetDefaultStoragePartition()->GetDOMStorageContext()->RecreateSessionStorage(
-            storage);
-    // Kept on disk should it go unshown to the next launch too, as an unloaded tab's is (Unload).
-    tab->storage_->SetShouldPersist(true);
-  }
+  tab->TakeStorage(saved.session_storage);
   tab->name_ = saved.name;
   tab->icon_ = saved.icon;
   if (!saved.last_seen.is_null()) {
@@ -339,11 +362,36 @@ bc_id Tab::Restore(Profile* profile, const SavedTab& saved) {
   // Posted, as the state is, so the app hears of it once its call has returned.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&Tab::ReportTitle, tab->weak_factory_.GetWeakPtr()));
+  // Without a profile, once it's here (ProfileArrived).
   tab->FindFavicon(tab->Url());
   return id;
 }
 
-Tab::Tab(bc_id id, Profile* profile) : id_(id), profile_(profile->GetWeakPtr()) {}
+void Tab::TakeStorage(const std::string& storage) {
+  // Its page's sessionStorage from the last launch, unless a tab has it already, as one a sidebar
+  // backup brings back may.
+  if (storage.empty() || std::ranges::any_of(All(), [&](const Tab* other) {
+        return other != this && other->SessionStorageId() == storage;
+      })) {
+    return;
+  }
+  if (!profile()) {
+    waiting_storage_ = storage;
+    return;
+  }
+  storage_ =
+      profile()->GetDefaultStoragePartition()->GetDOMStorageContext()->RecreateSessionStorage(
+          storage);
+  // Kept on disk should it go unshown to the next launch too, as an unloaded tab's is (Unload).
+  storage_->SetShouldPersist(true);
+}
+
+Tab::Tab(bc_id id, Profile* profile)
+    : id_(id), profile_(profile ? profile->GetWeakPtr() : nullptr) {}
+
+std::string Tab::profile_dir() const {
+  return waiting_for_.empty() ? DirOf(profile()) : waiting_for_;
+}
 
 Tab::~Tab() = default;
 
@@ -508,7 +556,7 @@ std::string Tab::SessionStorageId() const {
   if (content::WebContents* contents = web_contents()) {
     return contents->GetController().GetDefaultSessionStorageNamespace()->id();
   }
-  return storage_ ? storage_->id() : std::string();
+  return storage_ ? storage_->id() : waiting_storage_;
 }
 
 SavedTab Tab::Save() const {

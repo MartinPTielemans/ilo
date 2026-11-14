@@ -1119,8 +1119,8 @@ void bc_folder_delete(bc_id folder) {
 
 bc_id bc_tab_profile(bc_id id) {
   const browser_core::Tab* tab = browser_core::Tab::Get(id);
-  Profile* profile = tab ? tab->profile() : nullptr;
-  return profile ? browser_core::ProfileId(browser_core::DirOf(profile)) : 0;
+  const std::string dir = tab ? tab->profile_dir() : std::string();
+  return dir.empty() ? 0 : browser_core::ProfileId(dir);
 }
 
 double bc_tab_last_seen(bc_id id) {
