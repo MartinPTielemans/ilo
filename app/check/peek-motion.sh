@@ -26,7 +26,8 @@ serve
 # one magenta, so a frame says whose page shows at a point. The titles say "ready" once drawn, and
 # Peek's its size as its first script read it, at its first frame and now, and how many times it
 # was resized before that frame and after: the motion never resizes it (#2519).
-target="http://localhost:$port/peek-motion-target.html"
+# Proof only (#2754): Peek's page answers 2 s late, after the card has settled.
+target="http://localhost:$port/late/peek-motion-target.html"
 printf '%s' "<title>loading</title>
 <body style=\"margin:0;height:100vh;background:rgb(0,176,0)\">
 <a href=\"$target\" style=\"position:fixed;left:0;top:0;width:100%;height:40%;font:24px system-ui;color:rgb(0,90,0)\">
@@ -118,8 +119,9 @@ round() {
   p=$(grep "^browser: link preview [1-9][0-9]* $target\$" "$log" | tail -1 | cut -d' ' -f4)
   expect '^browser: link preview shown$' "Peek's window didn't show"
   expect '^browser: link preview settled$' "Peek didn't settle"
-  stop_film
   expect "^browser: title $p peek ready " "Peek's page didn't draw"
+  # Proof only (#2754): filmed until the late page draws.
+  stop_film
   rest=$(grep '^browser: link preview page at ' "$log" | tail -1 | sed 's/^browser: link preview page at //')
   [ -n "$rest" ] || fail "Peek didn't say where its page rests"
   # Its sizes against its resting size. The motion never resizes it, so it ends at its resting
@@ -146,12 +148,17 @@ round() {
 # so it opens and closes Peek again until a frame has caught each motion mid-way, eight times at
 # most, and fails at once on a frame that shows Peek's resting frame outside its card.
 resized=
-for n in 1 2 3 4 5 6 7 8; do
+# Proof only (#2754): three rounds in light appearance, then three in dark, each one's verdict kept.
+for n in 1 2 3 4 5 6; do
+  if [ $n = 4 ]; then
+    send menu "Appearance › Dark"
+    expect '^browser: appearance dark$' "View › Appearance › Dark didn't change the appearance"
+  fi
   round $n
   # shellcheck disable=SC2086 # numbers: x y w h from x y
   python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
     > "$out/peek-motion.txt" 2>&1 && status=0 || status=$?
-  [ $status = 2 ] && ! grep -q "isn't drawn blended" "$out/peek-motion.txt" || break
+  cp "$out/peek-motion.txt" "$out/peek-motion-$n.txt"
 done
 [ "$(today)" = "$a" ] || fail "Peek opened a tab: Today is \"$(today)\""
 exec 3>&-
