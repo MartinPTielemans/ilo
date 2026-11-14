@@ -525,8 +525,9 @@ expect '^browser: capture left (escape)$' "escape didn't leave the dragged recta
 capture_mode page
 send click 100 400
 expect '^browser: capture left (dismissed)$' "a click on the sidebar didn't leave capture mode"
-# The click gives the keyboard to the UI, as on the Mac: GPUI hears the press itself and takes it,
-# on X11 too now that the driver's press is real input (#2721).
+# The click gives the keyboard to the UI, as on the Mac: GPUI hears the press itself and tells the
+# core, on X11 too now that the driver's press is real input (#2721), whatever the window manager
+# does with the input focus as it activates the window (#2789).
 capture_mode ui
 send resize 1200 760
 expect '^browser: capture left (dismissed)$' "a resize didn't leave capture mode"

@@ -521,6 +521,20 @@ if [ -n "$arc" ]; then
   expect '^browser: today [0-9][0-9]*$' \
     "Personal's Today tab didn't come in from Arc: $(grep '^browser: today' "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/import-personal.png" || fail "no window to capture"
+  # Personal's dust, at Arc's 0.3 grain, is a quarter as strong while its window isn't the key
+  # one: a second window in front, smaller, leaves the first's texture in sight, both in one
+  # picture beside import-personal.png's.
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+  opened=$(sed -n 's/^browser: window opened \([0-9]*\)$/\1/p' "$log" | tail -1)
+  new_window_bar
+  send window "$(grep -c '^browser: window opened ' "$log")"
+  send resize 640 400
+  ../tools/window-screenshot.sh "$pid" "$out/import-personal-inactive.png" all ||
+    fail "no window to capture"
+  send key w cmd shift
+  expect "^browser: window closed $opened\$" "⇧⌘W didn't close the second window"
+  send window 1
 fi
 # The rows the parity checklist ticks on this run (docs/ux-parity/import.md). A made-up Brave comes
 # in after the others, which Settings finds as it shows again: its bookmarks in a bar, a folder of

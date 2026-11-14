@@ -2428,7 +2428,7 @@ impl Agents {
             site,
             act,
             _timer: cx.spawn(async move |agents, cx| {
-                cx.background_executor().timer(ASK_WAIT).await;
+                cx.background_executor().timer(Waits::launch().ask).await;
                 _ = agents.update(cx, |agents, cx| agents.unanswered(id, cx));
             }),
         });
@@ -2451,7 +2451,9 @@ impl Agents {
     /// user's. The tab stays theirs, and Hand Back still gives it back.
     fn handoff_timer(&self, tab: u64, question: u64, cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |agents, cx| {
-            cx.background_executor().timer(HANDOFF_WAIT).await;
+            cx.background_executor()
+                .timer(Waits::launch().handoff)
+                .await;
             _ = agents.update(cx, |agents, cx| {
                 // A timer of an earlier handoff of the tab has gone with its entry, and this
                 // checks it's this one's.
@@ -3544,6 +3546,50 @@ const NO_ANSWER: &str = "No answer in 5 minutes.";
 const ASK_WAIT: Duration = Duration::from_secs(5 * 60);
 /// The spec's: how long a handoff's call waits for the user to hand the tab back.
 const HANDOFF_WAIT: Duration = Duration::from_secs(15 * 60);
+/// A check's waits in place of ASK_WAIT and HANDOFF_WAIT, in seconds, as
+/// `--agent-waits=<ask>,<handoff>`, so a run sees each end without waiting minutes. Not read in a
+/// prod build.
+const WAITS_SWITCH: &str = "--agent-waits";
+
+/// How long an ask and a handoff wait: the spec's, or a check's from the launch's arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Waits {
+    ask: Duration,
+    handoff: Duration,
+}
+
+impl Waits {
+    fn new(given: &[String], prod: bool) -> Waits {
+        let spec = Waits {
+            ask: ASK_WAIT,
+            handoff: HANDOFF_WAIT,
+        };
+        let prefix = format!("{WAITS_SWITCH}=");
+        let Some(value) = (!prod)
+            .then(|| (given.iter().rev()).find_map(|arg| arg.strip_prefix(prefix.as_str())))
+            .flatten()
+        else {
+            return spec;
+        };
+        let seconds = |word: &str| word.parse::<u64>().ok().map(Duration::from_secs);
+        match value.split_once(',') {
+            Some((ask, handoff)) => Waits {
+                ask: seconds(ask).unwrap_or(spec.ask),
+                handoff: seconds(handoff).unwrap_or(spec.handoff),
+            },
+            None => spec,
+        }
+    }
+
+    /// This launch's, read once.
+    fn launch() -> Waits {
+        static WAITS: std::sync::OnceLock<Waits> = std::sync::OnceLock::new();
+        *WAITS.get_or_init(|| {
+            let given: Vec<String> = std::env::args().collect();
+            Waits::new(&given, cfg!(feature = "prod"))
+        })
+    }
+}
 /// Why discarding a page the agent didn't open asks the user first.
 const UNSAVED: &str = "Its page may have unsaved changes, which closing it loses.";
 const SAID_NEVER: &str = "You said never on this site.";
