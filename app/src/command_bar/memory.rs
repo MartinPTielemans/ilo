@@ -146,7 +146,7 @@ impl CommandBar {
 /// Puts the ask at the foot of the bar that's open, as the first query that finds no page by its
 /// title would.
 pub fn ask(cx: &mut App) {
-    let Some(window) = cx.try_global::<super::CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<super::CommandBarWindow>().cloned() else {
         return;
     };
     window
@@ -159,7 +159,7 @@ pub fn ask(cx: &mut App) {
 
 /// Leaves the caret after what's typed in the bar that's open, nothing selected, as typing does.
 pub fn typed(cx: &mut App) {
-    let Some(window) = cx.try_global::<super::CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<super::CommandBarWindow>().cloned() else {
         return;
     };
     window
@@ -175,7 +175,7 @@ pub fn typed(cx: &mut App) {
 
 /// Selects the row at `index` of the bar that's open, as ↓ would.
 pub fn select(index: usize, cx: &mut App) {
-    let Some(window) = cx.try_global::<super::CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<super::CommandBarWindow>().cloned() else {
         return;
     };
     window

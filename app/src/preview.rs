@@ -4277,6 +4277,7 @@ impl gpui::Render for MemoryPage {
             cx,
         );
         let column = settings_column::column(
+            &Default::default(),
             Section::Features,
             dark,
             Rc::default(),
