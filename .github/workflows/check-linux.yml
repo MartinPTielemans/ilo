@@ -64,7 +64,7 @@ env:
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
     favorites cards extensions adblock adblock-lists adblock-cosmetic adblock-page private little capture
     passwords preview access dialogs crash import quit onboarding passkeys appearance about
-    sync sync-account sync-devices
+    sync sync-account sync-devices sync-extensions
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
     blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
     window windows
