@@ -47,7 +47,44 @@ tab=$(today | cut -d' ' -f1)
 await "^browser: title $tab Page blocked\$" ||
   fail "the listed page didn't show the warning: $(grep "^browser: title $tab " "$log" | tail -1)"
 grep -q '/blocked\.html' "$out/site.log" && fail "the listed page reached the server"
-../tools/window-screenshot.sh "$pid" "$out/adblock-page.png" || fail "no window to capture"
+# A page gets no press or key before its first frame: Blink drops them, as it shows nothing to
+# press yet, and the title comes before that frame. So the run captures the window until the
+# warning shows, as dark marks on its card's middle that the blank page before it hasn't (#2840).
+# warning_shown <capture>: whether it does.
+warning_shown() {
+  if windows; then
+    to_bmp "$1" "$out/warning.bmp" || fail "PowerShell couldn't read $1"
+  elif [ "$(uname)" = Linux ]; then
+    magick "$1" BMP3:"$out/warning.bmp" || fail "ImageMagick couldn't read $1"
+  else
+    sips -s format bmp "$1" --out "$out/warning.bmp" > /dev/null || fail "sips couldn't read $1"
+  fi
+  python3 -I - "$out/warning.bmp" << 'PY'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+offset, = struct.unpack_from("<I", data, 10)
+width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
+stride = (bits * width + 31) // 32 * 4
+def at(x, y):
+    row = y if height < 0 else abs(height) - 1 - y
+    i = offset + row * stride + x * bits // 8
+    return data[i:i + 3]
+# The card's own colour, high in its right half, against its middle, where the heading, the
+# address and Open anyway are.
+card = at(int(width * 0.9), int(abs(height) * 0.2))
+marks = (sum(abs(a - b) for a, b in zip(at(x, y), card)) > 150
+         for y in range(int(abs(height) * 0.4), int(abs(height) * 0.6), 2)
+         for x in range(int(width * 0.45), int(width * 0.75), 2))
+sys.exit(0 if any(marks) else 1)
+PY
+}
+shown=
+for _ in $(seq 100); do
+  ../tools/window-screenshot.sh "$pid" "$out/adblock-page.png" || fail "no window to capture"
+  warning_shown "$out/adblock-page.png" && shown=1 && break
+  sleep 0.1
+done
+[ -n "$shown" ] || fail "the warning's page never drew its warning: $out/adblock-page.png"
 
 # Open anyway, the only button with no page to go back to: Tab from the page reaches it.
 send click $page_point

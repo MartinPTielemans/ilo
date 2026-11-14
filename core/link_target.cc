@@ -63,4 +63,19 @@ LinkTarget FormatLinkTarget(const GURL& url) {
   return target;
 }
 
+std::string SiteOf(const GURL& url) {
+  if (!url.SchemeIsHTTPOrHTTPS() || !url.has_host()) {
+    return std::string();
+  }
+  std::string site = net::registry_controlled_domains::GetDomainAndRegistry(
+      url, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+  if (site.empty()) {
+    site = url.host();
+  }
+  if (site.size() > 1 && site.back() == '.') {
+    site.pop_back();
+  }
+  return site;
+}
+
 }  // namespace browser_core

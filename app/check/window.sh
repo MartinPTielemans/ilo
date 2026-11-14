@@ -1596,10 +1596,11 @@ fi
 # With two windows, only the key window's hidden sidebar comes out at its edge, as Arc 1.171's: a
 # window behind leaves its edge to the pointer on its way to the one in front (#1402). The driver
 # sends the window behind its moves without bringing it forward, as dialogs' hover card behind
-# shows they reach it; once in front, the same moves bring its sidebar out. Linux's driver can't
-# drive a window behind another.
-if [ "$(uname)" = Linux ]; then
-  echo "skip: the edge of a window behind another, which Linux's driver can't drive without bringing it forward."
+# shows they reach it; once in front, the same moves bring its sidebar out. On X11 the pointer is
+# the display's own, so the second window goes to the screen's right half, clear of the first's
+# edge. Under Wayland and on sway's Xwayland the compositor places the windows.
+if [ "$(uname)" = Linux ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || sway_xwayland; }; then
+  echo "skip: the edge of a window behind another, under Wayland or on sway's Xwayland: the compositor places the windows."
 else
   send click 110 400
   send key s cmd
@@ -1613,6 +1614,10 @@ else
   expect_late '^browser: command bar shown$' "⌘N's window didn't open the command bar"
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close ⌘N's command bar"
+  if [ "$(uname)" = Linux ]; then
+    send window "$driven_second"
+    send place 640 60 600 680
+  fi
   send window 1 behind
   behind=$step
   send move 400 300
@@ -1625,10 +1630,11 @@ else
   sed -n "/^browser: drive $behind: /,/^browser: drive $step: /p" "$log" |
     grep -q '^browser: reveal \(waits\|shown\)$' &&
     fail "the pointer at the edge of the window behind brought its sidebar out"
-  # Windows' pointer is real: it rests at the edge as the window comes in front, which hears it
-  # there as a hand's, so the sidebar can come out with the step that brings the window forward.
+  # Windows' pointer is real, as X11's is: it rests at the edge as the window comes in front, which
+  # hears it there as a hand's, so the sidebar can come out with the step that brings the window
+  # forward.
   in_front=$((step + 1))
-  windows && in_front=$step
+  { windows || [ "$(uname)" = Linux ]; } && in_front=$step
   reveal_at_edge "the pointer at the edge of the first window, in front, didn't bring its sidebar out" \
     "$in_front"
   check_reveal "with the first window's sidebar out in front of the second" shown

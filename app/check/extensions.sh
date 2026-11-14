@@ -212,14 +212,13 @@ expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show"
 expect "^browser: extension actions $popup:1 $clicked:7\$" \
   "the badge Check Popup's popup gave it didn't show at once"
 ../tools/window-screenshot.sh "$pid" "$out/extension-popup.png" || fail "no window to capture"
-# Closes the popup: escape, where it has the keyboard. On Linux the core gives the keyboard to a
-# page alone, not to a popup (#708), so a click on its action again closes it, as in Chrome, or
-# on the page, $1, where it has none.
+# Closes the popup: escape, where it has the keyboard. Under Wayland the popup never gets it
+# (#2836), so a click on its action again closes it, as in Chrome, or on the page, $1.
 close_popup() {
-  if [ "$(uname)" = Linux ] && [ -n "${1:-}" ]; then
+  if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${1:-}" ]; then
     send click $1
     how="a click on the page"
-  elif [ "$(uname)" = Linux ]; then
+  elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
     send click $first_place
     how="a click on its action"
   else
@@ -246,8 +245,8 @@ painted_by_escape() {
       exit
     }' "$log"
 }
-if [ "$(uname)" = Linux ]; then
-  echo "skip: the extension's popup taking the keyboard and escape closing it: on Linux the core gives the keyboard to a page alone (#708)."
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: the extension's popup taking the keyboard and escape closing it: under Wayland the popup never gets the keyboard (#2836)."
   close_popup
 else
   send state
@@ -260,7 +259,7 @@ fi
 # The Extensions menu runs a pinned one too, its popup hanging from its action.
 send menu "Check Popup"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the menu"
-# On Linux a click on its action would run it again, so the page's click closes it, for the bar.
+# Under Wayland a click on its action would run it again, so the page's click closes it.
 close_popup "$page_point"
 # The command bar finds it by its name and runs it, as Arc's does (#1396). Captured before the
 # expect, so a build without the row shows what's there instead.
@@ -300,7 +299,7 @@ send click $((end_x - 45)) "$end_y"
 expect "^browser: run extension $popup ran\$" "a click on Check Popup's action in Little ilo didn't run it"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from Little ilo"
 ../tools/window-screenshot.sh "$pid" "$out/little-extension-popup.png" all || fail "no window to capture"
-if [ "$(uname)" = Linux ]; then
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
   send click $((end_x - 45)) "$end_y"
 else
   send key escape
@@ -331,7 +330,7 @@ expect "^browser: run extension $third ran\$" "Check Third didn't run from the o
 expect "^browser: extension popup $third\$" "Check Third's popup didn't show"
 ../tools/window-screenshot.sh "$pid" "$out/extension-overflow-popup.png" ||
   fail "no window to capture"
-# Its action is behind the overflow button, so on Linux a click on the page closes it.
+# Its action is behind the overflow button, so under Wayland a click on the page closes it.
 close_popup "$page_point"
 # Check Clicked unpinned, Check Third has a place of its own, where a right-click unpins it.
 send menu "Pin to URL Field › Check Clicked"

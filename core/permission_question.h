@@ -23,6 +23,9 @@ class PermissionQuestion : public permissions::PermissionPrompt {
       permissions::PermissionPrompt::Delegate* delegate);
   // See bc_tab_answer_permission.
   static void Answer(bc_id tab, int answer);
+  // Whether the tab's question asks only to show notifications, with no click or key of the
+  // user's behind it (bc_tab_permission_quiet).
+  static bool Quiet(bc_id tab);
 
   PermissionQuestion(const PermissionQuestion&) = delete;
   PermissionQuestion& operator=(const PermissionQuestion&) = delete;
