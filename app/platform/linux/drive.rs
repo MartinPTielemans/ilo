@@ -883,8 +883,20 @@ fn xtest_event(kind: u8, detail: u8, x: i16, y: i16) -> Option<()> {
     xtest()?;
     let server = server()?;
     let (connection, root) = &*server;
-    (connection.xtest_fake_input(kind, detail, x11rb::CURRENT_TIME, *root, x, y, 0)).ok()?;
+    let delay = xtest_delay(kind);
+    (connection.xtest_fake_input(kind, detail, delay, *root, x, y, 0)).ok()?;
     connection.get_input_focus().ok()?.reply().ok().map(drop)
+}
+
+/// The milliseconds the server waits before an XTEST event of `kind`, XTEST's time being a delay.
+/// A press waits one, as a hand's two presses never share a millisecond: Chromium takes a press
+/// stamped as its last for that one handled again, and counts no double click
+/// (MouseEvent::GetRepeatCount).
+fn xtest_delay(kind: u8) -> u32 {
+    match kind {
+        xproto::BUTTON_PRESS_EVENT => 1,
+        _ => x11rb::CURRENT_TIME,
+    }
 }
 
 /// The left Control, Shift and Alt keys, by their masks.
@@ -3290,10 +3302,26 @@ fn relative_to(to: Target, window: xproto::Window) -> Option<Target> {
 
 #[cfg(test)]
 mod tests {
-    use super::xtest_verdict;
+    use super::{xproto, xtest_delay, xtest_verdict};
 
     fn outputs(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| name.to_string()).collect()
+    }
+
+    // A double click's two presses went out within a millisecond, so Chromium took the second
+    // for the first handled again and the Mini Player saw no double click (#2721).
+    #[test]
+    fn xtest_presses_never_share_a_millisecond() {
+        assert!(xtest_delay(xproto::BUTTON_PRESS_EVENT) >= 1);
+        // Nothing else waits: a release, a move or a key goes as soon as it's sent.
+        for kind in [
+            xproto::BUTTON_RELEASE_EVENT,
+            xproto::MOTION_NOTIFY_EVENT,
+            xproto::KEY_PRESS_EVENT,
+            xproto::KEY_RELEASE_EVENT,
+        ] {
+            assert_eq!(xtest_delay(kind), 0);
+        }
     }
 
     #[test]

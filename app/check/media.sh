@@ -410,7 +410,9 @@ kept_keys
 # one from its bottom right corner, in the 10 its edges keep for sizing, sizes it. The window
 # manager does both, with the display's pointer. The driver through X11 alone, as pip_driven says;
 # Windows answers with its hit test below, and a Mac in CI drags it with check/pointer.mm.
-if pip_driven; then
+if [ "${BROWSER_XVFB:-}" = kwin ]; then
+  echo "skip: moving and sizing the floating call, under KWin: the driver finds no window for it (#2757)."
+elif pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at 1 "the floating call had no window"
