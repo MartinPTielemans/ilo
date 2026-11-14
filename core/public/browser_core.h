@@ -1904,12 +1904,6 @@ BC_EXPORT bool bc_profile_add_history(bc_id profile, const bc_history_page* page
 BC_EXPORT bool bc_profile_list_history(bc_id profile, uint64_t request, int64_t before,
                                        const char* text, size_t max);
 
-// Deletes |profile|'s visits to |url| from |begin| to |end|, microseconds since 1970, as the
-// Library's History removes one row, a page on one day. Chrome's observers hear it as any deletion,
-// and history_deleted follows. Returns whether it will, as bc_profile_list_history.
-BC_EXPORT bool bc_profile_remove_history(bc_id profile, const char* url, int64_t begin,
-                                         int64_t end);
-
 // A field of another browser's saved address, for bc_profile_add_addresses, as a Chromium-based
 // browser's Web Data keeps it: Chromium's FieldType and VerificationStatus numbers, and the value,
 // UTF-8.
@@ -2600,12 +2594,23 @@ BC_EXPORT void bc_window_suggest(bc_id window, const char* keyword, const char* 
 // out, as while the last removal of |url| is still being taken out.
 BC_EXPORT bc_id bc_window_remove_suggestion(bc_id window, const char* url);
 
+// Deletes |profile|'s visits to |url| from |begin| to |end|, microseconds since 1970, as the
+// Library's History removes one row, a page on one day. They're deleted at once, so no list, search
+// or suggestion shows them after, and nothing keeps them but the removal, in memory, for
+// bc_window_undo_remove_suggestion to put back, as the window's other removals. Chrome's observers
+// hear it as any deletion, and history_deleted follows. Returns the removal's id, or 0 if it can't
+// remove: a private profile, whose history nothing keeps, one whose history hasn't loaded, a URL
+// that isn't valid or a span that's empty.
+BC_EXPORT bc_id bc_window_remove_history(bc_id window, bc_id profile, const char* url,
+                                         int64_t begin, int64_t end);
+
 // Puts back what the window's removal |removal| took out of the profile's history, as it was: a
-// page with each of its visits, and so its visit and typed counts, or a search with its term and
-// the pages it searched. Then window_suggestions with it, for the text last asked, if any. One
-// still being taken out, as while history loads, comes back once it's out. Whether it could: false
-// while it's back, once ten other removals have come after it in the window, and once the window's
-// suggestions have been for another profile since.
+// page with each of its visits, or those in bc_window_remove_history's span, and so its visit and
+// typed counts, or a search with its term and the pages it searched. Then window_suggestions with
+// it, for the text last asked, if any; a list or search of the profile's history asked after this
+// returns has it. One still being taken out, as while history loads, comes back once it's out.
+// Whether it could: false while it's back, once ten other removals have come after it in the
+// window, and once the window's removals have been for another profile since.
 BC_EXPORT bool bc_window_undo_remove_suggestion(bc_id window, bc_id removal);
 
 // Takes out again what bc_window_undo_remove_suggestion put back for |removal|, as the removal
