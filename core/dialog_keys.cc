@@ -29,6 +29,10 @@
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
 
+#if !BUILDFLAG(IS_MAC)
+#include "ui/aura/window.h"
+#endif
+
 namespace browser_core::dialog_keys {
 namespace {
 
