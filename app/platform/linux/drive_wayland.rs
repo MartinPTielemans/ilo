@@ -58,6 +58,7 @@ const BTN_EXTRA: u32 = 0x114;
 const SUBPOINTS: f64 = 100.;
 /// sway's IPC messages.
 const RUN_COMMAND: u32 = 0;
+const GET_WORKSPACES: u32 = 1;
 const GET_OUTPUTS: u32 = 3;
 const GET_TREE: u32 = 4;
 const GET_INPUTS: u32 = 100;
@@ -252,6 +253,13 @@ fn outputs_once(done: impl Fn(&[String]) -> bool) -> Option<Vec<String>> {
 fn display_add(width: f64, height: f64) -> Option<()> {
     let before = outputs_once(|_| true)?;
     let (right, _) = SESSION.with_borrow(|session| session.as_ref().map(|s| s.extent))?;
+    // sway lays an output with no position of its own out after those with one, which put the
+    // session's to the new one's right; each keeps its place as a display does.
+    for output in sway(GET_OUTPUTS, "")?.as_array()? {
+        let (name, rect) = (output["name"].as_str()?, &output["rect"]);
+        let (x, y) = (number(&rect["x"]), number(&rect["y"]));
+        sway_command(&format!("output {name} position {x} {y}"))?;
+    }
     sway_command("create_output")?;
     let names = outputs_once(|names| names.iter().any(|name| !before.contains(name)))?;
     let name = names.into_iter().find(|name| !before.contains(name))?;
@@ -264,11 +272,28 @@ fn display_add(width: f64, height: f64) -> Option<()> {
     Some(())
 }
 
-/// The display `display_add` plugged in, unplugged, which sway moves its windows off.
+/// The display `display_add` plugged in, unplugged, which sway moves its windows off. sway moves
+/// its workspace to another output and leaves it hidden there behind that output's own, though it
+/// has the focus, so this switches to it, as a user does.
 fn display_remove() -> Option<()> {
     let name = ADDED.take()?;
     sway_command(&format!("output {name} unplug"))?;
     outputs_once(|names| !names.contains(&name))?;
+    let workspaces = sway(GET_WORKSPACES, "")?;
+    let workspaces = workspaces.as_array()?;
+    let is = |ws: &Value, key: &str| ws[key].as_bool() == Some(true);
+    if let Some(hidden) = workspaces
+        .iter()
+        .find(|ws| is(ws, "focused") && !is(ws, "visible"))
+    {
+        // Focus only moves, and shows a workspace, from elsewhere.
+        let shown = workspaces
+            .iter()
+            .find(|ws| is(ws, "visible") && ws["output"] == hidden["output"])?;
+        let (shown, hidden) = (shown["name"].as_str()?, hidden["name"].as_str()?);
+        sway_command(&format!("workspace \"{shown}\""))?;
+        sway_command(&format!("workspace \"{hidden}\""))?;
+    }
     log!("browser: display removed");
     Some(())
 }

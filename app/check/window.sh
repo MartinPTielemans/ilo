@@ -653,6 +653,9 @@ together() {
     expect_from '^browser: page left full screen$' "the page stayed full screen as its window left it, its display gone $1"
     expect_from '^browser: title [0-9]* fullscreen 0$' "the page's document stayed full screen as its window left it, its display gone $1"
   fi
+  # sway puts a window that leaves full screen back where it was, here on the display that went and
+  # off the one left, and under Wayland ilo can't place its windows: a user moves it back.
+  [ -z "${WAYLAND_DISPLAY:-}" ] || send place $frame
   windowed_again "$1" "$2"
 }
 # After the page's display went away $1, the window is windowed with its sidebar and card back, and
@@ -694,7 +697,6 @@ if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
   send display remove
   from=$step
   together "in full screen" display-gone
-  send place $frame
   echo "skip: the second display going as the window leaves or enters full screen: sway does either in one step."
 elif [ "$(uname)" = Linux ]; then
   echo "skip: second display: the X11 driver can't add one yet."
