@@ -592,6 +592,9 @@ with open(sys.argv[1], "w") as file:
 ' "$saved" || fail "the window kept in $saved has no frame to make shorter"
   # Whole: `open` starts the app in /.
   capture="$PWD/$out/links-launch-shorter.png"
+elif windows; then
+  # In Windows' terms, which the app opens it by.
+  capture=$(cygpath -w "$PWD/$out/links-launch.png")
 fi
 
 # Launched as the system launches the default browser, by `open` on the Mac and by the command
@@ -615,8 +618,9 @@ launch() {
     registered exec "$2" < /dev/null > "$log" 2>&1 &
     pid=$!
   else
-    "$browser" ${2:+"$2"} > "$log" 2>&1 &
+    BROWSER_LAUNCH_CAPTURE=$capture "$browser" ${2:+"$2"} > "$log" 2>&1 &
     pid=$!
+    capture=
   fi
   [ -n "$pid" ] || fail "open didn't launch the app"
   await '^browser: first frame at ' || fail "the window didn't draw"
@@ -659,6 +663,7 @@ pictured "the launch without a link didn't show the sidebar's picture"
   fail "the launch opened at $(grep -m1 '^browser: launch window frame ' "$log" | cut -d' ' -f5-), not 3 points shorter at $shorter"
 plain="launch window $(at 'launch window') ms, started $(at 'started') ms, first frame $(at 'first frame') ms, UI shown $(at 'UI shown') ms"
 quit_launched
+! windows || [ -s "$out/links-launch.png" ] || fail "the launch window wasn't captured as it closed"
 
 # The link that launches the browser opens over the Spaces it brings back, before the UI comes out
 # from under the launch picture, so the restored tab never shows selected first. The UI's first
@@ -795,7 +800,7 @@ else
 fi
 [ -z "$msix" ] || echo "ok: a link sent to the Store's MSIX, which Windows activates for it, opens" \
   "once, in Little ilo, and loads there, the package's chrome.exe handing it over and ending."
-echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png${mac:+, the launch window 3 points shorter than its picture: $out/links-launch-shorter.png}"
+echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png${mac:+, the launch window 3 points shorter than its picture: $out/links-launch-shorter.png}$(! windows || echo ", the launch window: $out/links-launch.png")"
 [ -z "$toasted" ] || echo "ok: a click on a site's notification, which notification_helper.exe hands" \
   "chrome.exe as a launch with the toast's id, reaches the page, in the browser running."
 [ -z "$mac" ] || echo "ok: an update's notes open as a tab in the window at its first launch, with links from other apps going to Little ilo, and only then."
