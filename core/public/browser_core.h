@@ -3385,6 +3385,14 @@ BC_EXPORT void bc_tab_close(bc_id tab, bool split);
 // follows. The user's alone: an agent's tab never has it.
 BC_EXPORT void bc_tab_set_page_may_close(bc_id tab, bool may);
 
+// Keeps nothing of the page the tab shows, as the UI asks for a sign-in's callback page in a
+// Little ilo window another app's link opened, whose address carries a single-use code: its URL
+// leaves the profile's history, with every visit to it, and so the command bar's suggestions. If
+// the tab closes while it still shows that page, it isn't archived or among the tabs
+// bc_window_reopen_closed_tab reopens. One that has gone on to another page closes as any does.
+// The user's alone: an agent's tab never shows such a page.
+BC_EXPORT void bc_tab_forget_page(bc_id tab);
+
 // Windows. Every window shows the same Spaces, and a tab's page is live in one window at a time:
 // the one that showed it last. The reads are for the UI and agents alike.
 

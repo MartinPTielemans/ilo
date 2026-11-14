@@ -1039,19 +1039,19 @@ fn off_nothing_offers_or_opens_a_little_window(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn its_bar_says_a_sign_in_page_is_closing_and_how_to_bring_it_back(cx: &mut TestAppContext) {
+fn its_bar_says_a_sign_in_page_is_closing(cx: &mut TestAppContext) {
     let url = "http://127.0.0.1:8976/callback?code=x";
     let (shell, host) = little(cx, url);
     let title = |shell: &Entity<Shell>, cx: &mut TestAppContext| {
-        shell.read_with(cx, |shell, cx| {
-            shell.little_bar_title(10, "127.0.0.1", url, cx).to_string()
+        shell.read_with(cx, |shell, _| {
+            shell.little_bar_title(10, "127.0.0.1", url).to_string()
         })
     };
     let before = title(&shell, cx);
     shell.update(cx, |shell, cx| shell.set_little_closing(true, cx));
     let closing = title(&shell, cx);
-    assert!(closing.starts_with("Signed in, closing · "), "{closing}");
-    assert!(closing.ends_with(" reopens"), "{closing}");
+    // No key to reopen it: the closed page is kept nowhere (#2527).
+    assert_eq!(closing, "Signed in, closing");
     // Turned off, or the page moved on, before it closed: the bar is the page's again, and nothing
     // was asked of the core.
     shell.update(cx, |shell, cx| shell.set_little_closing(false, cx));
