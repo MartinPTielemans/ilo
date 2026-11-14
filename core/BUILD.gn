@@ -324,6 +324,16 @@ source_set("split_view") {
   ]
 }
 
+# A page's pop-up's report to the app, held for the native ad blocker's pop-up filters, apart so
+# browser_core_unittests tests the hold alone.
+source_set("popup_hold") {
+  sources = [
+    "popup_hold.cc",
+    "popup_hold.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # An agent's download, held until the user answers, apart so browser_core_unittests tests the hold
 # alone.
 source_set("agent_download_hold") {
@@ -556,6 +566,7 @@ source_set("browser_core") {
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
+    ":popup_hold",
     ":search_default",
     ":select_choices",
     ":agent_download_hold",
@@ -867,6 +878,7 @@ test("browser_core_unittests") {
     # read.
     "omnibox_last_visit_unittest.cc",
     "other_tabs_unittest.cc",
+    "popup_hold_unittest.cc",
     "search_default_unittest.cc",
     "select_choices_unittest.cc",
     "sidebar_backups_unittest.cc",
@@ -898,6 +910,7 @@ test("browser_core_unittests") {
     ":idle_check",
     ":mini_player_place",
     ":other_tabs",
+    ":popup_hold",
     ":search_default",
     ":select_choices",
     ":sidebar_backups",

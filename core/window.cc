@@ -917,6 +917,16 @@ void Window::AdjustNavigate(NavigateParams& params) {
   const bc_id source_id = source ? Tab::IdOf(params.source_contents) : 0;
   const Space* source_space = source ? Space::Holding(source_id) : nullptr;
   const bool for_agent = source_space && source_space->agent() && !Showing(source_id);
+  // A tab content made for the page, a link's with a target or window.open()'s, waits for the
+  // ad blocker's pop-up filters before the app hears of it, so one they close is never listed
+  // (#2806). Blink sends a link clicked with ⌘, ⇧ or the middle button as the user's, through
+  // OpenURL, and Chrome makes that tab itself, as for the link menu and the command bar.
+  if (source && params.contents_to_insert) {
+    HoldPopup(params.contents_to_insert.get(), params.source_contents, params.url,
+              params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
+                  params.disposition == WindowOpenDisposition::NEW_POPUP,
+              source_space && source_space->agent());
+  }
   window->agent_opener_ = 0;
   if (for_agent && (params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
                     params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
@@ -3369,6 +3379,18 @@ void Window::ReportTabOpened(bc_id tab,
                                                tab, opener, foreground, split_with, popup,
                                                popup_placed))) {
     return;
+  }
+  // How long after the press in its page a tab a page opened is listed, which the pop-up hold adds
+  // to. Within 3 s, as one later came from something else.
+  content::WebContents* opened_by = opener ? Tab::FromId(opener) : nullptr;
+  const Tab* pressed = opened_by ? Tab::FromWebContents(opened_by) : nullptr;
+  if (pressed && !pressed->last_press_at().is_null()) {
+    const base::TimeDelta since = base::TimeTicks::Now() - pressed->last_press_at();
+    if (since < base::Seconds(3)) {
+      fprintf(stderr, "browser: tab %llu listed +%.2f ms after the press in tab %llu\n",
+              static_cast<unsigned long long>(tab), since.InMillisecondsF(),
+              static_cast<unsigned long long>(opener));
+    }
   }
   if (Space* space = SpaceForOpened(opener)) {
     space->Add(tab, opener, foreground);
