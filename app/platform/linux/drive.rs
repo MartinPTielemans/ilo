@@ -48,7 +48,8 @@
 //! wheel, and pip press, dragto and release work in it, at points from its top-left corner as the
 //! command finds it, or as it was at the press. pip press, dragto and release alone move the
 //! display's pointer, through XTest, onto the window only, and the release puts it back once the
-//! window manager has let go, logging where the drag left the window.
+//! window manager has let go, logging where the drag left the window. Under Wayland pip is
+//! drive_wayland.rs's, from sway's tree, with its virtual pointer and in sway's layout.
 //!
 //! It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, "browser: drive
 //! <n>: can't do that" for one it can't, and "browser: drive <n> done, key <window>, focus <view>,

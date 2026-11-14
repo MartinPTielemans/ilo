@@ -273,12 +273,14 @@ EOF
   done
   fail "$2"
 }
-# pip_driven: whether the driver finds a Picture in Picture window, which it does through X11
-# alone: drive.mm has no pip, and under Wayland no client sees another's windows. Under KWin it
-# finds none (#2757).
+# pip_driven: whether the driver finds a Picture in Picture window, which it does through X11 or
+# sway's tree: drive.mm has no pip. Under KWin it finds none (#2757).
 pip_driven() {
-  [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${BROWSER_XVFB:-}" != kwin ]
+  [ "$(uname)" = Linux ] && [ "${BROWSER_XVFB:-}" != kwin ]
 }
+# Under Wayland the compositor places a window, not the app, so the core's place for the Mini
+# Player is where it asked, not where it shows.
+wayland() { [ -n "${WAYLAND_DISPLAY:-}" ]; }
 # kept_keys [what]: waits for the browser window to have the keyboard once <what> has floated, the
 # call as its tab hid if none, as it keeps it on the Mac and X11. Wayland's compositor gives the
 # floating window the keyboard as it maps, and the core gives it back (#1961, #2060), in a line
@@ -409,8 +411,9 @@ kept_keys
 # The call's window moves and sizes as Chrome's does, by its frame, so the page keeps its own
 # scroll, pinch and double-click: a drag on its top bar, off the buttons at its ends, moves it, and
 # one from its bottom right corner, in the 10 its edges keep for sizing, sizes it. The window
-# manager does both, with the display's pointer. The driver through X11 alone, as pip_driven says;
-# Windows answers with its hit test below, and a Mac in CI drags it with check/pointer.mm.
+# manager does both, with the display's pointer, and sway from where the pointer is as it starts,
+# which keeps the drag's threshold. The driver as pip_driven says; Windows answers with its hit
+# test below, and a Mac in CI drags it with check/pointer.mm.
 if [ "${BROWSER_XVFB:-}" = kwin ]; then
   echo "skip: moving and sizing the floating call, under KWin: the driver finds no window for it (#2757)."
 elif pip_driven; then
@@ -770,16 +773,24 @@ fi
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
-# tab and lands it. X11 alone, as pip_driven says.
+# tab and lands it, as pip_driven says. Under Wayland sway places it and keeps it where it is as it
+# grows, and from where the pointer is past the drag's threshold moves it.
 if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
-  mini_player_at "x + w == $((wx + ww - 10)) && y == $((wy + 10))" \
-    "the floating video had no Mini Player 10 in from the top right of the screen"
-  # Two notches up move it down as far as the content would go, 120 a notch: it starts at the top.
-  send pip wheel $((pw / 2)) $((ph / 3)) -2
-  mini_player_at "x == px && y == py + 240 && w == pw && h == ph" \
-    "a scroll over the Mini Player didn't move it with the content"
+  if wayland; then
+    mini_player_at 1 "the floating video had no Mini Player"
+    echo "skip: the Mini Player 10 in from the top right, and moved with a scroll: under Wayland" \
+      "the compositor places it."
+  else
+    mini_player_at "x + w == $((wx + ww - 10)) && y == $((wy + 10))" \
+      "the floating video had no Mini Player 10 in from the top right of the screen"
+    # Two notches up move it down as far as the content would go, 120 a notch: it starts at the
+    # top.
+    send pip wheel $((pw / 2)) $((ph / 3)) -2
+    mini_player_at "x == px && y == py + 240 && w == pw && h == ph" \
+      "a scroll over the Mini Player didn't move it with the content"
+  fi
   # Off its controls, left of the 10 seconds back by more than its width, and away from the
   # screen's right edge, which would push it in as it grows.
   # The window manager moves it with the pointer, as by a title bar, from when the core asks it,
@@ -791,11 +802,12 @@ if pip_driven; then
   expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
   send pip dragto $((pw / 8 - 200)) $((ph / 2))
   send pip release $((pw / 8 - 200)) $((ph / 2))
-  mini_player_at "x == px - 200 && y == py && w == pw && h == ph" \
-    "a drag didn't move the Mini Player"
+  moved="x == px - 200" grown="(2 * x + w - 2 * px - pw) ^ 2 <= 16 && (2 * y + h - 2 * py - ph) ^ 2 <= 16"
+  ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
+  mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
   send pip wheel $((pw / 2)) $((ph / 3)) -2 cmd
-  mini_player_at "w > pw * 1.15 && h > ph * 1.15 && (2 * x + w - 2 * px - pw) ^ 2 <= 16 &&
-    (2 * y + h - 2 * py - ph) ^ 2 <= 16" "Ctrl with a scroll didn't grow the Mini Player in place"
+  mini_player_at "w > pw * 1.15 && h > ph * 1.15 && $grown" \
+    "Ctrl with a scroll didn't grow the Mini Player in place"
   ../tools/window-screenshot.sh "$pid" "$out/mini-player.png" || fail "no window to capture"
   # By its row: ⌘ and a number in the page whose video floats shows no tab on Linux yet.
   send click $(row $(($(today | tr ' ' '\n' | grep -nx "$b" | cut -d: -f1) - 1)))
@@ -814,7 +826,7 @@ else
       "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
       "there."
   fi
-  # Clear of the page's middle, where sway floats the Mini Player wherever the core asks for it.
+  # Clear of the page's middle, where the Mini Player can float.
   send click 300 200
   send key x
   expect "^browser: title $v landed\$" "the floating video didn't come back"
@@ -850,7 +862,7 @@ placed_where_left ||
   fail "the second Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 none_since 'browser: mini player back in its tab$' ||
   fail "the Mini Player went back to its tab as the menu that floated it closed"
-if pip_driven; then
+if pip_driven && ! wayland; then
   send pip
   mini_player_at "$across && $down" "the second Mini Player didn't show where the last was left"
 fi
