@@ -3260,6 +3260,11 @@ impl link_preview::Host for PreviewPeek {
         true
     }
 
+    fn open_waits(&self) -> bool {
+        // No core says when a page is on screen here.
+        false
+    }
+
     fn release(&self) {}
 
     fn hide(&self) {}

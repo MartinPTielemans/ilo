@@ -557,7 +557,6 @@ impl Preview {
                     else {
                         return;
                     };
-                    // check.sh reads this line.
                     log!("browser: link preview page not shown in 150 ms");
                     shown.there = true;
                     cx.notify();
