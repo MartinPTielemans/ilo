@@ -128,6 +128,7 @@ fn pump() {
                     _ = watch.connection.change_window_attributes(map.window, &events).map(|c| c.check());
                     crate::log!("browser: probe map {:#x} override", map.window);
                 }
+                Event::ConfigureNotify(c) if c.event == watch.root => crate::log!("browser: probe stack {:#x} above {:#x} at {} {} {}x{}", c.window, c.above_sibling, c.x, c.y, c.width, c.height),
                 Event::UnmapNotify(unmap) => crate::log!("browser: probe unmap {:#x}", unmap.window),
                 Event::EnterNotify(cross) => crate::log!("browser: probe enter {:#x} mode {:?} detail {:?} child {:#x} at {} {} time {}", cross.event, cross.mode, cross.detail, cross.child, cross.root_x, cross.root_y, cross.time),
                 Event::LeaveNotify(cross) => crate::log!("browser: probe leave {:#x} mode {:?} detail {:?} child {:#x} at {} {} time {}", cross.event, cross.mode, cross.detail, cross.child, cross.root_x, cross.root_y, cross.time),
@@ -243,11 +244,23 @@ fn probe_select(watch: &Watch, ui_view: *mut c_void) {
     }
     SEEN.with_borrow_mut(|seen| seen.push(view));
     let parent = watch.connection.query_tree(view).ok().and_then(|c| c.reply().ok()).map_or(0, |t| t.parent);
-    let events = ChangeWindowAttributesAux::new().event_mask(EventMask::FOCUS_CHANGE);
+    let crossing = EventMask::ENTER_WINDOW | EventMask::LEAVE_WINDOW;
+    let events = ChangeWindowAttributesAux::new().event_mask(EventMask::FOCUS_CHANGE | crossing);
     _ = watch.connection.change_window_attributes(view, &events).map(|c| c.check());
     let events = ChangeWindowAttributesAux::new()
-        .event_mask(EventMask::FOCUS_CHANGE | EventMask::PROPERTY_CHANGE);
+        .event_mask(EventMask::FOCUS_CHANGE | EventMask::PROPERTY_CHANGE | crossing);
     _ = watch.connection.change_window_attributes(parent, &events).map(|c| c.check());
+    // PROBE #2763: and the window manager's frames up to the root.
+    let mut each = parent;
+    while let Some(tree) = watch.connection.query_tree(each).ok().and_then(|c| c.reply().ok()) {
+        if tree.parent == tree.root || tree.parent == 0 {
+            break;
+        }
+        each = tree.parent;
+        let events = ChangeWindowAttributesAux::new().event_mask(crossing);
+        _ = watch.connection.change_window_attributes(each, &events).map(|c| c.check());
+        crate::log!("browser: probe frame {each:#x} round {view:#x}");
+    }
     PROBED.with_borrow_mut(|probed| probed.push(parent));
     let id = crate::browser_windows::window_with_view(ui_view);
     crate::log!("browser: probe window {id} ui {view:#x} in {parent:#x}");
