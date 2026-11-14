@@ -208,7 +208,9 @@ upgraded() {
   expect "^browser: page $1 back [0-9]* forward 0 loading 0 http://$2/\$" \
     "$3 didn't come to http://$2/: $(grep "^browser: page $1 " "$log" | tail -1)"
   if [ "$major" -ge 157 ]; then
-    expect "^browser: page $1 trouble network -20\$" \
+    # The core's line, which comes at each warning: the app's trouble line comes only when the
+    # tab's trouble changes, and the agent's navigate goes from one warning to the next.
+    expect "browser: tab $1 error -20\$" \
       "$3 to http://$2/ had no warning before http: $(grep "^browser: loaded $1 " "$log" | tail -1)"
   else
     expect "^browser: loaded $1 http://$2/\$" \
