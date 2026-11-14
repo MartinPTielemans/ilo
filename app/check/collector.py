@@ -101,8 +101,9 @@ class Collector(http.server.BaseHTTPRequestHandler):
 
 
 # TCPServer, as site.sh's server binds: HTTPServer's bind looks 127.0.0.1's name up, 35 s
-# on the hosted Mac (#2022).
-server = socketserver.TCPServer(("127.0.0.1", 0), Collector)
-with open(sys.argv[1], "w", encoding="utf-8") as port:
-    port.write(str(server.server_address[1]))
-server.serve_forever()
+# on the hosted Mac (#2022). Imported, it only reads annotations, as tools/flatpak-crashes.sh does.
+if __name__ == "__main__":
+    server = socketserver.TCPServer(("127.0.0.1", 0), Collector)
+    with open(sys.argv[1], "w", encoding="utf-8") as port:
+        port.write(str(server.server_address[1]))
+    server.serve_forever()
