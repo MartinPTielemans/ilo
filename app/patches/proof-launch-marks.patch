@@ -1,5 +1,5 @@
 diff --git a/crates/gpui/src/app.rs b/crates/gpui/src/app.rs
-index 2fc922724f..1c27efab9f 100644
+index 2fc9227..1c27efa 100644
 --- a/crates/gpui/src/app.rs
 +++ b/crates/gpui/src/app.rs
 @@ -1582,8 +1582,10 @@ impl App {
@@ -14,7 +14,7 @@ index 2fc922724f..1c27efab9f 100644
                      cx.window_handles.insert(id, window.handle);
                      cx.windows.get_mut(id).unwrap().replace(Box::new(window));
 diff --git a/crates/gpui/src/gpui.rs b/crates/gpui/src/gpui.rs
-index 2328e954df..559b83961d 100644
+index 2328e95..559b839 100644
 --- a/crates/gpui/src/gpui.rs
 +++ b/crates/gpui/src/gpui.rs
 @@ -413,3 +413,51 @@ pub struct GpuSpecs {
@@ -70,7 +70,7 @@ index 2328e954df..559b83961d 100644
 +#[cfg(not(target_os = "windows"))]
 +pub fn launch_mark(_: &str) {}
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index af067cbfec..f707a858c8 100644
+index af067cb..f707a85 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -1913,7 +1913,20 @@ impl Window {
@@ -122,11 +122,26 @@ index af067cbfec..f707a858c8 100644
                                  arena_clear_needed.clear(cx);
                              })
                              .log_err();
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index dca7354..fd3dfc2 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -331,6 +331,10 @@ impl WindowsWindowInner {
+     /// had held nearly every launch's first frame for the paint.
+     fn handle_vsync_frame(&self, handle: HWND) -> Option<isize> {
+         self.state.frame_want.unqueue();
++        crate::platform::vsync_mark(format_args!(
++            "frame message for {handle:?}, input queued {}",
++            unsafe { GetQueueStatus(QS_KEY | QS_MOUSEBUTTON) } >> 16 != 0
++        ));
+         if unsafe { GetQueueStatus(QS_KEY | QS_MOUSEBUTTON) } >> 16 != 0 {
+             unsafe { RedrawWindow(Some(handle), None, None, RDW_INVALIDATE).ok().log_err() };
+             return Some(0);
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index ca96f169ff..ba1e3ee54b 100644
+index bbb5dcc..517b571 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
-@@ -186,9 +186,11 @@ impl Drop for PowerRequest {
+@@ -188,9 +188,11 @@ impl Drop for PowerRequest {
  
  impl WindowsPlatform {
      pub fn new(headless: bool) -> Result<Self> {
@@ -137,8 +152,8 @@ index ca96f169ff..ba1e3ee54b 100644
 +        gpui::launch_mark("gw ole initialized");
          // A platform that can become windowed needs the real text system from the start: the app
          // keeps the one it's created with. It gets DirectX devices when it becomes windowed.
-         let (text_system, direct_write_text_system) = if !headless {
-@@ -206,6 +208,7 @@ impl WindowsPlatform {
+         let (early_text_system, early_devices) = match (!headless).then(take_early).flatten() {
+@@ -216,6 +218,7 @@ impl WindowsPlatform {
              )
          };
  
@@ -146,7 +161,7 @@ index ca96f169ff..ba1e3ee54b 100644
          let (main_sender, main_receiver) = PriorityQueueReceiver::new();
          let validation_number = if usize::BITS == 64 {
              rand::random::<u64>() as usize
-@@ -252,6 +255,7 @@ impl WindowsPlatform {
+@@ -262,6 +265,7 @@ impl WindowsPlatform {
              .take()
              .context("CreateWindowExW did not run correctly")?;
          let handle = result?;
@@ -154,7 +169,7 @@ index ca96f169ff..ba1e3ee54b 100644
  
          let disable_direct_composition = std::env::var(DISABLE_DIRECT_COMPOSITION)
              .is_ok_and(|value| value == "true" || value == "1");
-@@ -266,6 +270,7 @@ impl WindowsPlatform {
+@@ -276,6 +280,7 @@ impl WindowsPlatform {
          } else {
              None
          };
@@ -162,12 +177,15 @@ index ca96f169ff..ba1e3ee54b 100644
          let icon = if !headless {
              load_icon().unwrap_or_default()
          } else {
-@@ -422,12 +427,16 @@ impl WindowsPlatform {
+@@ -433,15 +438,19 @@ impl WindowsPlatform {
  
      /// Creates the DirectX devices that windows draw with, and starts vsync.
      fn attach_gpu(&self) -> Result<()> {
 +        gpui::launch_mark("gw devices making");
-         let devices = DirectXDevices::new().context("Creating DirectX devices")?;
+         let devices = match self.early_devices.take() {
+             Some(devices) => devices,
+             None => DirectXDevices::new().context("Creating DirectX devices")?,
+         };
 +        gpui::launch_mark("gw devices new returned");
          if let Some(text_system) = &self.direct_write_text_system {
              text_system.handle_gpu_lost(&devices)?;
@@ -179,7 +197,41 @@ index ca96f169ff..ba1e3ee54b 100644
          Ok(())
      }
  
-@@ -704,6 +713,7 @@ impl Platform for WindowsPlatform {
+@@ -516,7 +525,9 @@ impl WindowsPlatform {
+                     let wanted = windows.read().iter().any(|window| window.frame_want.wanted());
+                     drop(windows);
+                     if !wanted {
++                        vsync_mark(format_args!("vsync parking"));
+                         std::thread::park();
++                        vsync_mark(format_args!("vsync unparked"));
+                         continue;
+                     }
+                     let signal_source = vsync_provider.wait_for_vsync();
+@@ -546,6 +557,7 @@ impl WindowsPlatform {
+                             // WM_PAINT only once nothing else is queued, so in an embedder's busy
+                             // loop, such as Chromium's at launch, it waited 18–24 ms after the
+                             // vsync. A hidden window is invalidated, so it draws once it's shown.
++                            vsync_mark(format_args!("vsync for {:?} shown {shown}", hwnd.as_raw()));
+                             if !shown {
+                                 RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE)
+                                     .ok()
+@@ -642,6 +654,15 @@ unsafe extern "system" fn wake_vsync_thread(_: *mut std::ffi::c_void, _: bool) {
+     }
+ }
+ 
++/// Proof only (#2384): the first 80 vsync marks.
++pub(crate) fn vsync_mark(what: std::fmt::Arguments) {
++    use std::sync::atomic::{AtomicUsize, Ordering};
++    static COUNT: AtomicUsize = AtomicUsize::new(0);
++    if COUNT.fetch_add(1, Ordering::Relaxed) < 80 {
++        gpui::launch_mark(&what.to_string());
++    }
++}
++
+ /// Stops the vsync thread, which may be parked waiting for a window to want a frame.
+ fn stop_vsync(stop: &AtomicBool) {
+     stop.store(true, Ordering::Release);
+@@ -737,6 +758,7 @@ impl Platform for WindowsPlatform {
      }
  
      fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>) {
@@ -187,15 +239,16 @@ index ca96f169ff..ba1e3ee54b 100644
          if !self.headless {
              self.connect_initially();
          }
-@@ -2148,5 +2158,6 @@ pub(crate) static EMBEDDED: std::sync::atomic::AtomicBool = std::sync::atomic::A
+@@ -2181,6 +2203,7 @@ pub(crate) static EMBEDDED: std::sync::atomic::AtomicBool = std::sync::atomic::A
  /// `Application::run_embedded` returns once GPUI has launched, rather than running a loop of its
  /// own, and windows take their key presses from the embedder's dispatch. Call it before starting.
  pub fn embed() {
 +    gpui::launch_mark("gw embed");
      EMBEDDED.store(true, std::sync::atomic::Ordering::Relaxed);
  }
+ 
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index 6977a8c79d..e4eb14ee32 100644
+index 6977a8c..e4eb14e 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -159,8 +159,10 @@ impl WindowsWindowState {
