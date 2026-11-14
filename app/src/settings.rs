@@ -38,22 +38,26 @@ use gpui::{
 use crate::{bc, ns_view, platform, show_menu};
 use browser::menu::{self, Look};
 use browser::palette::{INK, PAPER};
-use browser::settings_card::{self, Card};
+use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Chip, Look as RowLook, SLIDE, chip, detailed_row, end, frame, glyph_plate, group, group_lined,
-    named_button, row, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
+    Chip, Look as RowLook, SLIDE, chevron_slot, chip, detailed_row, end, frame, glyph_plate, group,
+    group_lined, named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore,
+    stop_switch, text,
 };
-use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
+use browser::settings_search::{
+    self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
+    Search,
+};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
-    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP,
-    FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP,
-    HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME,
-    PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP,
-    TEXT_X, TITLE, WIDTH,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
+    DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
+    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
+    LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK,
+    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -446,12 +450,14 @@ pub struct Settings {
     look: RowLook,
     /// The card the section shows on, which a section starts at the top of.
     card: Card,
+    /// The column's sections, which scroll at the window's least height.
+    sections: settings_column::Sections,
     /// It was asked to show, or changed section, and logs the section it draws next.
     shown: bool,
     /// An assistive app asks for the tree, so Settings names what it draws (#1381).
     a11y: bool,
     /// Which switch last changed, and when, for its knob's slide.
-    switched: Option<(&'static str, Instant)>,
+    switched: Option<(SharedString, Instant)>,
     /// The pop-up menu that is open, whose button shows pressed.
     choosing: Option<Popup>,
     /// The profile whose name is in a field for renaming.
@@ -465,6 +471,8 @@ pub struct Settings {
     /// The search at the column's top, whose rows found replace the section's page while it
     /// holds any words.
     search: Entity<TextInput>,
+    /// Ad Blocking's field that adds a filter to My filters.
+    filter: Entity<TextInput>,
     /// What the search last logged it found, for check.sh.
     searched: String,
     /// The row a click on a found section's name showed, which flashes once, and when.
@@ -511,6 +519,10 @@ pub struct Settings {
     nightly: Entity<NightlyRow>,
     /// Draws Agents again as the agents change.
     _agents: Option<Subscription>,
+    /// The agents' requests opened in their activity, by entry, to show where each went and what
+    /// it sent (#2326), and those of them showing every line.
+    requests_opened: HashSet<u64>,
+    requests_all: HashSet<u64>,
 }
 
 /// Settings' dialog, which it draws in its own content, so there's nothing to show.
@@ -1248,6 +1260,12 @@ fn view(cx: &mut App) -> Entity<Settings> {
                 .caret_color(look.ink)
         });
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
+        let filter = cx.new(|cx| {
+            TextInput::new("example.com##.banner", cx)
+                .placeholder_color(look.detail)
+                .caret_color(look.ink)
+                .spoken("New filter")
+        });
         // ⇥ stops at the field, after the sections.
         let _ = search.read(cx).focus_handle(cx).tab_stop(true);
         Settings {
@@ -1265,6 +1283,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             appearance: shell::app_appearance(cx),
             look,
             card: Card::default(),
+            sections: Default::default(),
             shown: false,
             a11y: false,
             switched: None,
@@ -1274,6 +1293,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             recording: None,
             refused: None,
             search,
+            filter,
             searched: String::new(),
             flash: None,
             focus_row: None,
@@ -1286,6 +1306,8 @@ fn view(cx: &mut App) -> Entity<Settings> {
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
+            requests_opened: HashSet::new(),
+            requests_all: HashSet::new(),
             import: None,
             _import: None,
             drawn_size: None,
@@ -1605,6 +1627,10 @@ impl Settings {
         let placeholder = self.base().opacity(DETAIL);
         self.search.update(cx, |search, cx| {
             search.set_colors(placeholder.into(), look.ink.into(), selection);
+            cx.notify();
+        });
+        self.filter.update(cx, |filter, cx| {
+            filter.set_colors(look.detail.into(), look.ink.into(), selection);
             cx.notify();
         });
         // check.sh waits for this line.
@@ -1944,12 +1970,12 @@ impl Settings {
                 ],
             ),
         ];
-        // The Dock's, which the Mac alone has.
-        if cfg!(target_os = "macos") {
+        // Where the host draws the dot: the Dock icon's, or Windows' taskbar button's.
+        if let Some(switch) = browser::dock_dot::SWITCH {
             let colored = !off(DOCK_ICON_PLAIN);
             let colored = self.toggle(
                 "dock icon color",
-                "Dock icon takes the Space's color",
+                switch.name,
                 colored,
                 set_dock_icon_color,
                 accent,
@@ -1957,15 +1983,8 @@ impl Settings {
             );
             looks.push(setting(
                 look,
-                "Dock icon takes the Space's color",
-                Some(
-                    concat!(
-                        "Its dot shows the Space in front. Off, the icon stays ",
-                        env!("APP_NAME"),
-                        " green."
-                    )
-                    .into(),
-                ),
+                switch.name,
+                Some(switch.line.into()),
                 vec![colored],
             ));
         }
@@ -2120,7 +2139,8 @@ impl Settings {
         ];
         let right = shell::sidebar_right(cx);
         let line: SharedString =
-            "The side of the window the sidebar and the window's buttons are on.".into();
+            "The side of the window the sidebar, the Library and the window's buttons are on."
+                .into();
         let pair = browser::settings_pictures::picker(
             look,
             self.base(),
@@ -2320,11 +2340,26 @@ impl Settings {
             Some("Counted from when you leave the window.".into()),
             vec![little_archive.into_any_element()],
         ));
+        let sign_in_close = self.toggle(
+            "sign-in pages close",
+            "Close sign-in pages when done",
+            crate::sign_in_close::sign_in_close(),
+            set_sign_in_close,
+            accent,
+            cx,
+        );
+        let sign_in_close = nested(setting(
+            look,
+            "Close sign-in pages when done",
+            Some("When an app's sign-in finishes in Little ilo, its window closes.".into()),
+            vec![sign_in_close],
+        ));
         // Its own settings only while it's on.
         let little: Vec<Row> = [little]
             .into_iter()
             .chain(menu_bar)
             .chain(little_on.then_some(little_archive))
+            .chain(little_on.then_some(sign_in_close))
             .collect();
         let previews = unsafe { bc::bc_link_previews() };
         let previews = self.toggle(
@@ -2483,33 +2518,12 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Privacy: ad blocking and the sites it's off on, whether copied links leave out trackers,
-    /// whether calls are only relayed, each
+    /// Privacy: whether copied links leave out trackers, whether sites may ask to send
+    /// notifications, whether calls are only relayed, each
     /// profile's browsing data, crash reports where the build names a collector, and the daily
     /// usage count where it names a server.
-    fn privacy(
-        &self,
-        profiles: &[Profile],
-        off_sites: &[OffSite],
-        accent: Rgba,
-        cx: &mut Context<Self>,
-    ) -> Page {
+    fn privacy(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
-        let ad_blocking = unsafe { bc::bc_ad_blocking() };
-        let ad_blocking = self.toggle(
-            "ad blocking",
-            "Block ads and trackers",
-            ad_blocking,
-            set_ad_blocking,
-            accent,
-            cx,
-        );
-        let ad_blocking = setting(
-            look,
-            "Block ads and trackers",
-            Some("uBlock Origin, built in. A site's Site Controls turn it off there.".into()),
-            vec![ad_blocking],
-        );
         let clean_links = self.toggle(
             "clean links",
             "Copy links without tracking",
@@ -2547,15 +2561,7 @@ impl Settings {
             Some(prompts_line.into()),
             vec![prompts_switch],
         );
-        let mut blocks = vec![
-            Block::Rows(vec![ad_blocking]),
-            Block::Rows(vec![clean_links]),
-            Block::Rows(vec![prompts]),
-        ];
-        if !off_sites.is_empty() {
-            blocks.push(Block::Heading("Ads are shown on".into()));
-            blocks.push(Block::Group(self.off_sites(off_sites, cx)));
-        }
+        let mut blocks = vec![Block::Rows(vec![clean_links]), Block::Rows(vec![prompts])];
         let relay = unsafe { bc::bc_relay_calls() };
         let relay = self.toggle(
             "relay calls",
@@ -2671,6 +2677,140 @@ impl Settings {
         )
     }
 
+    /// Ad Blocking: the switch for it everywhere, the sites it's off on, the user's own filters,
+    /// and its filter lists by group, each with its switch, or as an administrator's policy chose
+    /// them. The browser's model (bc_ad_block_lists), which the blocker applies.
+    fn ad_blocking(&self, off_sites: &[OffSite], accent: Rgba, cx: &mut Context<Self>) -> Page {
+        let look = &self.look;
+        let on = unsafe { bc::bc_ad_blocking() };
+        const NAME: &str = "Block ads and trackers";
+        let switch = self.toggle("ad blocking", NAME, on, set_ad_blocking, accent, cx);
+        let line = "A site's Site Controls turn it off there, and say how much it blocked.";
+        let mut blocks = vec![Block::Rows(vec![setting(
+            look,
+            NAME,
+            Some(line.into()),
+            vec![switch],
+        )])];
+        if !off_sites.is_empty() {
+            blocks.push(Block::Heading("Ads are shown on".into()));
+            blocks.push(Block::Group(self.off_sites(off_sites, cx)));
+        }
+        blocks.push(Block::Heading("My filters".into()));
+        blocks.push(Block::Group(self.my_filters(cx)));
+        let lists = ad_block_lists();
+        let locked = unsafe { bc::bc_ad_block_lists_locked() };
+        for (group, heading) in AD_BLOCK_GROUPS {
+            let rows: Vec<Row> = (lists.iter().filter(|list| list.group == group))
+                .map(|list| {
+                    let control = match locked {
+                        true => div()
+                            .text_color(look.detail)
+                            .child(if list.on { "On" } else { "Off" })
+                            .into_any_element(),
+                        false => {
+                            let key = list.key.clone();
+                            let name = format!("ad block list {}", list.key);
+                            let set = move |on, _: &mut App| set_ad_block_list(&key, on);
+                            self.toggle(name, list.title.clone(), list.on, set, accent, cx)
+                        }
+                    };
+                    setting(look, list.title.clone(), None, vec![control])
+                })
+                .collect();
+            if !rows.is_empty() {
+                blocks.push(Block::Heading(heading.into()));
+                blocks.push(Block::Rows(rows));
+            }
+        }
+        let lede = match locked {
+            true => "uBlock Origin, built in, with the filter lists your organization chose.",
+            false => "uBlock Origin, built in, with the filter lists you turn on.",
+        };
+        Page::new(Section::AdBlocking, lede, blocks)
+    }
+
+    /// My filters: the user's own, one a row with Remove, then the field that adds one; or an
+    /// administrator's, as their policy set them.
+    fn my_filters(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let look = &self.look;
+        let locked = unsafe { bc::bc_ad_block_filters_locked() };
+        let rows = ad_block_filters()
+            .into_iter()
+            .enumerate()
+            .map(|(index, filter)| {
+                let remove = (!locked).then(|| {
+                    let remove =
+                        self.button(("ad-block-filter-remove", index as u64), "Remove")
+                            .relative()
+                            .child(self.drawn(format!("remove filter {index}")))
+                            .on_click(cx.listener(move |settings, _, _, cx| {
+                                settings.remove_filter(index, cx)
+                            }));
+                    remove.into_any_element()
+                });
+                line_row(look, filter, None, remove.into_iter().collect())
+            });
+        let mut rows: Vec<gpui::Div> = rows.collect();
+        if locked {
+            rows.push(line_row(look, "Set by your organization", None, Vec::new()));
+            return group(look, rows);
+        }
+        let field = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h(px(CONTROL_HEIGHT))
+            .px(px(FIELD_PADDING))
+            .flex()
+            .items_center()
+            .rounded(px(CONTROL_RADIUS))
+            .bg(look.control)
+            .key_context("Naming")
+            .on_action(
+                cx.listener(|settings, _: &KeepName, window, cx| settings.add_filter(window, cx)),
+            )
+            .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                (settings.filter).update(cx, |field, cx| field.reset("".into(), window, cx));
+            }))
+            .child(self.drawn("filter field".into()))
+            .child(self.filter.clone());
+        let add = self
+            .button("ad-block-filter-add", "Add")
+            .relative()
+            .child(self.drawn("add filter".into()))
+            .on_click(cx.listener(|settings, _, window, cx| settings.add_filter(window, cx)));
+        rows.push(frame().gap(px(CONTROL_GAP)).child(field).child(add));
+        group(look, rows)
+    }
+
+    /// Adds the filter typed in My filters' field, after the others, and empties the field.
+    fn add_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typed = self.filter.read(cx).text().trim().to_string();
+        if typed.is_empty() {
+            return;
+        }
+        let mut filters = ad_block_filters();
+        filters.push(typed.clone());
+        set_ad_block_filters(&filters);
+        // check.sh waits for this line.
+        log!("browser: ad block filter added {typed}");
+        (self.filter).update(cx, |field, cx| field.reset("".into(), window, cx));
+        cx.notify();
+    }
+
+    /// My filters' Remove on the filter at `index`.
+    fn remove_filter(&mut self, index: usize, cx: &mut Context<Self>) {
+        let mut filters = ad_block_filters();
+        if index < filters.len() {
+            let removed = filters.remove(index);
+            set_ad_block_filters(&filters);
+            // check.sh waits for this line.
+            log!("browser: ad block filter removed {removed}");
+            cx.notify();
+        }
+    }
+
     /// The languages a page's translate card said to always translate, each with Remove, after
     /// which a page in it asks again (#671).
     fn always_translated(&self, languages: &[SharedString], cx: &mut Context<Self>) -> gpui::Div {
@@ -2733,7 +2873,7 @@ impl Settings {
         group(look, rows)
     }
 
-    /// Logs the sites Privacy lists with ad blocking off when they change, for check.sh: each
+    /// Logs the sites Ad Blocking lists with ad blocking off when they change, for check.sh: each
     /// site, and its profile when there are others.
     fn log_off_sites(&mut self, sites: &[OffSite]) {
         let listed: Vec<String> = (sites.iter())
@@ -2812,29 +2952,39 @@ impl Settings {
     /// The switch `name`, `on` now, that calls `set` with the other way when clicked.
     fn toggle(
         &self,
-        name: &'static str,
-        spoken: &'static str,
+        name: impl Into<SharedString>,
+        spoken: impl Into<SharedString>,
         on: bool,
         set: impl Fn(bool, &mut App) + 'static,
         accent: Rgba,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let slid = match self.switched {
-            Some((switched, at)) if switched == name => {
+        let name: SharedString = name.into();
+        let slid = match &self.switched {
+            Some((switched, at)) if *switched == name => {
                 (at.elapsed().as_secs_f32() / SLIDE).min(1.)
             }
             _ => 1.,
         };
-        stop_switch(&self.look, name, spoken, on, slid, accent, self.a11y)
-            .on_click(cx.listener(move |settings, _, _, cx| {
-                // check.sh waits for this line.
-                log!("browser: {name} {}", if on { "off" } else { "on" });
-                set(!on, cx);
-                settings.switched = Some((name, browser::motion::start(cx)));
-                cx.notify();
-            }))
-            .child(self.drawn(format!("switch {name}")))
-            .into_any_element()
+        let drawn = self.drawn(format!("switch {name}"));
+        stop_switch(
+            &self.look,
+            name.clone(),
+            spoken,
+            on,
+            slid,
+            accent,
+            self.a11y,
+        )
+        .on_click(cx.listener(move |settings, _, _, cx| {
+            // check.sh waits for this line.
+            log!("browser: {name} {}", if on { "off" } else { "on" });
+            set(!on, cx);
+            settings.switched = Some((name.clone(), browser::motion::start(cx)));
+            cx.notify();
+        }))
+        .child(drawn)
+        .into_any_element()
     }
 
     /// Opens a profile's archive pop-up menu over its button, with the time chosen now, `chosen`,
@@ -3629,7 +3779,7 @@ impl Settings {
                     let ago = div()
                         .text_color(look.detail)
                         .child(agents::ago(entry.at, now));
-                    line_row(look, what, detail, vec![ago.into_any_element()])
+                    self.request_row(agents, entry, what, detail, ago, cx)
                 })
                 .collect();
             if grants.is_none() && entries.is_empty() {
@@ -3732,6 +3882,114 @@ impl Settings {
         blocks
     }
 
+    /// An entry of an agent's activity, its time at its end and then the chevron's place, which a
+    /// request fills: a press opens it to show where it went and what it sent (#2326). Every row
+    /// keeps the place, so every time ends on one edge.
+    fn request_row(
+        &self,
+        agents: &Entity<Agents>,
+        entry: &agents::Activity,
+        what: String,
+        detail: Option<SharedString>,
+        ago: gpui::Div,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        let look = &self.look;
+        let id = entry.id;
+        let opens = !entry.url.is_empty();
+        let opened = self.requests_opened.contains(&id);
+        let slot = chevron_slot(opens.then_some(opened), look.detail.into());
+        let controls = vec![ago.into_any_element(), slot.into_any_element()];
+        let head = line_row(look, what.clone(), detail, controls);
+        if !opens {
+            return head;
+        }
+        let head = head
+            .id(("request", id))
+            .relative()
+            .tab_index(0)
+            .focus_from_keys_only()
+            .focus_visible(browser::settings_rows::ring(look.ink))
+            .when(self.a11y, |head| {
+                named_button(head, what.clone()).aria_expanded(opened)
+            })
+            // Its method, which check.sh tells reads from changes by, and no path: its "/" would
+            // end the run's pattern.
+            .child(self.drawn(format!("request {id} {}", method(&entry.target))))
+            .on_click({
+                let (agents, agent) = (agents.clone(), entry.agent.clone());
+                cx.listener(move |settings, _, _, cx| {
+                    settings.open_request(&agents, &agent, id, cx)
+                })
+            });
+        let all = self.requests_all.contains(&id);
+        let refused = !entry.refused.is_empty();
+        let colors = (look.ink.into(), look.detail.into());
+        let more = cx.listener(move |settings: &mut Self, _: &gpui::ClickEvent, _, cx| {
+            settings.requests_all.insert(id);
+            // check.sh waits for this line.
+            log!("browser: settings request {id} shows all");
+            cx.notify();
+        });
+        let part = opened.then(|| {
+            sent_part(
+                ("request-all", id),
+                &entry.url,
+                &entry.sent,
+                refused,
+                all,
+                colors,
+                self.a11y,
+                move |window, cx| more(&gpui::ClickEvent::default(), window, cx),
+            )
+            .px(px(ROW_X))
+            .pb(px(browser::tokens::settings::PADDING))
+            .mt(px(-SENT_TUCK))
+        });
+        div().child(head).children(part)
+    }
+
+    /// Opens an agent's request in its activity, or closes it, and says what it shows.
+    fn open_request(
+        &mut self,
+        agents: &Entity<Agents>,
+        agent: &str,
+        id: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.requests_opened.remove(&id) {
+            self.requests_opened.insert(id);
+        }
+        let opened = self.requests_opened.contains(&id);
+        let said = |sent: &[agents::request::Sent]| {
+            let lines = sent.iter().map(|line| match line.name.is_empty() {
+                true => line.value.clone(),
+                false => format!("{}: {}", line.name, line.value),
+            });
+            lines.collect::<Vec<_>>().join(" · ")
+        };
+        let found = (agents.read(cx).activity(agent))
+            .find(|entry| entry.id == id)
+            .map(|entry| {
+                (
+                    entry.url.clone(),
+                    entry.refused.is_empty(),
+                    said(&entry.sent),
+                )
+            });
+        // check.sh reads this line: where it went, and what it sent, secrets hidden.
+        match (opened, found) {
+            (true, Some((url, true, sent))) => {
+                log!("browser: settings request {id} opened to {url}, sent: {sent}")
+            }
+            (true, Some((url, false, sent))) => {
+                log!("browser: settings request {id} opened to {url}, not sent: {sent}")
+            }
+            _ => log!("browser: settings request {id} closed"),
+        }
+        cx.notify();
+    }
+
     /// The tasks ⇥ asks in ⌘T: the agent they run on, then each CLI, whether it's installed and
     /// signed in, with the command that does it to copy, as ilo runs neither, and the model it runs
     /// tasks with.
@@ -3805,11 +4063,8 @@ impl Settings {
         }
         let chosen = model.task_model(cli).to_string();
         let models = model.task_models(cli);
-        let label: SharedString = match models.iter().find(|(id, _)| *id == chosen) {
-            Some((_, name)) => name.clone().into(),
-            None if chosen.is_empty() => MenuEntry::label("Default"),
-            None => chosen.clone().into(),
-        };
+        let label: SharedString = (models.iter().find(|(id, _)| *id == chosen))
+            .map_or(MenuEntry::label("Default"), |(_, name)| name.clone().into());
         let agents = agents.clone();
         let popup = self.popup(
             Popup::TaskModel(cli),
@@ -3870,20 +4125,7 @@ impl Settings {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let model = agents.read(cx);
-        let chosen = model.task_model(cli).to_string();
-        let mut models = vec![(String::new(), MenuEntry::label("Default").to_string())];
-        models.extend(model.task_models(cli));
-        let items = (models.iter())
-            .map(|(id, name)| {
-                let on = *id == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::named(name.clone(), true)
-                }
-            })
-            .collect();
+        let (models, items) = agents.read(cx).task_model_menu(cli);
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some((id, _)) = picked.and_then(|index| models.get(index)) {
@@ -4534,6 +4776,10 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
     crate::set_little_in_menu_bar(on);
 }
 
+fn set_sign_in_close(on: bool, cx: &mut App) {
+    crate::sign_in_close::set_sign_in_close(on, cx);
+}
+
 fn set_little_windows(on: bool, cx: &mut App) {
     crate::set_little_windows(on, cx);
 }
@@ -4606,6 +4852,75 @@ fn set_ad_blocking(on: bool, _: &mut App) {
     unsafe { bc::bc_set_ad_blocking(on) };
 }
 
+/// Ad Blocking's groups of filter lists, in its order, as the core names them and as the page
+/// heads them.
+const AD_BLOCK_GROUPS: [(&str, &str); 7] = [
+    ("default", "Built-in"),
+    ("ads", "Ads"),
+    ("privacy", "Privacy"),
+    ("malware", "Malware"),
+    ("multipurpose", "Multipurpose"),
+    ("annoyances", "Annoyances"),
+    ("regions", "Regional"),
+];
+
+/// One of the ad blocker's filter lists, as Ad Blocking lists it.
+struct AdBlockList {
+    key: SharedString,
+    group: SharedString,
+    title: SharedString,
+    on: bool,
+}
+
+/// The ad blocker's filter lists, by group and title, each on or off.
+fn ad_block_lists() -> Vec<AdBlockList> {
+    let lists = core_string(bc::bc_ad_block_lists);
+    (lists.lines())
+        .filter_map(|line| {
+            let mut parts = line.splitn(4, '\t');
+            let (key, group, on) = (parts.next()?, parts.next()?, parts.next()?);
+            Some(AdBlockList {
+                key: key.to_owned().into(),
+                group: group.to_owned().into(),
+                on: on == "1",
+                title: parts.next()?.to_owned().into(),
+            })
+        })
+        .collect()
+}
+
+fn set_ad_block_list(key: &str, on: bool) {
+    let Ok(key) = CString::new(key) else {
+        return;
+    };
+    unsafe { bc::bc_set_ad_block_list(key.as_ptr(), on) };
+}
+
+/// My filters, each line that holds one.
+fn ad_block_filters() -> Vec<String> {
+    let filters = core_string(bc::bc_ad_block_filters);
+    (filters.lines().map(str::trim))
+        .filter(|filter| !filter.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn set_ad_block_filters(filters: &[String]) {
+    let Ok(filters) = CString::new(filters.join("\n")) else {
+        return;
+    };
+    unsafe { bc::bc_set_ad_block_filters(filters.as_ptr()) };
+}
+
+/// A string the core's `copy` copies, as bc_crash_reports_collector does.
+fn core_string(copy: unsafe extern "C" fn(*mut std::ffi::c_char, usize) -> usize) -> String {
+    let length = unsafe { copy(std::ptr::null_mut(), 0) };
+    let mut text = vec![0u8; length + 1];
+    unsafe { copy(text.as_mut_ptr().cast(), text.len()) };
+    text.truncate(length);
+    String::from_utf8_lossy(&text).into_owned()
+}
+
 /// On, a page's WebRTC goes only through its TURN relays, as it does in a profile with a proxy.
 fn set_relay_calls(on: bool, _: &mut App) {
     unsafe { bc::bc_set_relay_calls(on) };
@@ -4637,11 +4952,7 @@ pub(crate) fn collector_name(host: &str) -> String {
 
 /// The host crash reports go to, or nothing in a build that names none.
 pub(crate) fn crash_reports_collector() -> String {
-    let length = unsafe { bc::bc_crash_reports_collector(std::ptr::null_mut(), 0) };
-    let mut host = vec![0u8; length + 1];
-    unsafe { bc::bc_crash_reports_collector(host.as_mut_ptr().cast(), host.len()) };
-    host.truncate(length);
-    String::from_utf8_lossy(&host).into_owned()
+    core_string(bc::bc_crash_reports_collector)
 }
 
 fn set_link_previews(previews: bool, _: &mut App) {
@@ -4849,6 +5160,11 @@ fn manage_passwords(profile: u64, cx: &mut App) {
     log!("browser: manage passwords {profile}");
     crate::open_in_profile(profile, "chrome://password-manager/passwords");
     hide(cx);
+}
+
+/// A request's method, the first word of its target ("POST /api/items").
+fn method(target: &str) -> &str {
+    target.split(' ').next().unwrap_or_default()
 }
 
 /// A row: its name, the line under it, if any, and its controls at its end.
@@ -5113,6 +5429,7 @@ impl Render for Settings {
             );
         if self
             .switched
+            .as_ref()
             .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < SLIDE)
         {
             window.request_animation_frame();
@@ -5189,6 +5506,7 @@ impl Render for Settings {
             }))
             .child(field);
         let column = settings_column::column(
+            &self.sections,
             self.section,
             self.dark,
             self.drawn_logged.clone(),
@@ -5222,6 +5540,7 @@ impl Render for Settings {
                 settings.record(&event.keystroke, cx)
             }))
             .on_key_down(cx.listener(|settings, event: &KeyDownEvent, window, cx| {
+                settings.space_pages(event, window, cx);
                 settings.type_to_search(event, window, cx)
             }))
             .on_action(|_: &CloseSettings, _, cx| hide(cx))
@@ -5231,6 +5550,20 @@ impl Render for Settings {
                 window.focus(&focus, cx);
                 cx.notify();
             }))
+            .on_action(
+                cx.listener(|settings, _: &PageDown, _, cx| settings.page_card(Paging::Down, cx)),
+            )
+            .on_action(
+                cx.listener(|settings, _: &PageUp, _, cx| settings.page_card(Paging::Up, cx)),
+            )
+            .on_action(
+                cx.listener(|settings, _: &PageTop, _, cx| settings.page_card(Paging::Top, cx)),
+            )
+            .on_action(
+                cx.listener(|settings, _: &PageBottom, _, cx| {
+                    settings.page_card(Paging::Bottom, cx)
+                }),
+            )
             .on_action(|_: &NextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &PreviousControl, window, cx| window.focus_prev(cx))
             .on_action(cx.listener(|settings, _: &EndSearch, window, cx| {
@@ -5292,10 +5625,11 @@ impl Settings {
                 self.profiles(&profiles, cx)
             }
             Section::Passwords => self.passwords(&profiles(), accent, cx),
-            Section::Privacy => {
+            Section::Privacy => self.privacy(&profiles(), accent, cx),
+            Section::AdBlocking => {
                 let off_sites = off_sites();
                 self.log_off_sites(&off_sites);
-                self.privacy(&profiles(), &off_sites, accent, cx)
+                self.ad_blocking(&off_sites, accent, cx)
             }
             Section::Sync => Page::new(
                 Section::Sync,
@@ -5348,7 +5682,8 @@ impl Settings {
             pages.push(self.agents(&agents, accent, cx));
         }
         pages.push(self.shortcuts(accent, cx));
-        pages.push(self.privacy(&profiles, &off_sites(), accent, cx));
+        pages.push(self.privacy(&profiles, accent, cx));
+        pages.push(self.ad_blocking(&off_sites(), accent, cx));
         pages.push(self.import_export(cx));
         pages.push(self.about(accent, cx));
         // In the column's order, as the results run.
@@ -5432,6 +5767,23 @@ impl Settings {
                 found.join(", ")
             ),
         }
+    }
+
+    /// The card's page moves as `to` says, as Page Down, Page Up, Home and End ask.
+    fn page_card(&mut self, to: Paging, cx: &mut Context<Self>) {
+        if self.card.page(to) {
+            cx.notify();
+        }
+    }
+
+    /// Space and ⇧Space page the card while Settings itself has the keyboard.
+    fn space_pages(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(to) = Paging::space(&event.keystroke).filter(|_| self.focus.is_focused(window))
+        else {
+            return;
+        };
+        cx.stop_propagation();
+        self.page_card(to, cx);
     }
 
     /// Typing a character with Settings itself holding the keyboard, as it opens, starts a search

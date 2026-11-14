@@ -165,6 +165,23 @@ fn a_site_turned_off_and_settings_all_off_show_nothing_until_turned_on() {
 }
 
 #[test]
+fn safe_starts_hold_shows_nothing_and_leaves_settings_switch_as_it_is() {
+    let folder = Folder::new();
+    folder.write("Boosts/wiki.org.css", "nav {}\n");
+    let mut boosts = Boosts::default();
+    assert_eq!(boosts.set_held(true), Vec::new());
+    // Held before the profile is read, as at launch, nothing reaches the core.
+    assert_eq!(boosts.load(1, folder.0.clone()), Vec::new());
+    assert!(boosts.all_off());
+    // Settings' switch turned on and off meanwhile shows nothing either.
+    assert_eq!(boosts.set_all_off(false), Vec::new());
+    assert_eq!(boosts.set_all_off(true), Vec::new());
+    assert_eq!(boosts.set_all_off(false), Vec::new());
+    assert_eq!(boosts.set_held(false), vec![change("wiki.org", "nav {}\n")]);
+    assert!(!boosts.all_off());
+}
+
+#[test]
 fn zap_starts_a_boost_turns_it_on_and_undo_and_delete_take_it_back() {
     let folder = Folder::new();
     let mut boosts = Boosts::default();

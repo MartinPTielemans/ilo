@@ -1,3 +1,4 @@
+# check.sh runs this at 270.
 # A page's submitted login brings our offer to save its password, a card 18 in from the page
 # card's top right corner, which keeps its place through a resize. Showing another tab closes it,
 # and showing the tab again doesn't bring it back, but the key after the host in the URL field
@@ -134,15 +135,18 @@ sed -n "/^browser: drive $back: /,\$p" "$log" | grep -q '^browser: offer shown$'
 grep -q "^browser: key $tab offer\$" "$log" || fail "the offer gave its tab no key"
 # Where the key was drawn last, its centre in the window.
 key_at() { grep '^browser: key drawn at ' "$log" | tail -1 | cut -d' ' -f5-6; }
-[ -n "$(key_at)" ] || fail "the key wasn't drawn"
-../tools/window-screenshot.sh "$pid" "$out/password-key.png" || fail "no window to capture"
 # The pointer on the key hovers the sidebar, whose tools come out in the URL field and move the
 # key: it's clicked where it is with them out, or the press can land on what took its place.
-if [ "$(grep '^browser: sidebar tools ' "$log" | tail -1)" != "browser: sidebar tools shown" ]; then
-  send move $(key_at)
-  expect '^browser: sidebar tools shown$' "the pointer on the key didn't bring the sidebar's tools out"
-fi
-send click $(key_at)
+click_key() {
+  if [ "$(grep '^browser: sidebar tools ' "$log" | tail -1)" != "browser: sidebar tools shown" ]; then
+    send move $(key_at)
+    expect '^browser: sidebar tools shown$' "the pointer on the key didn't bring the sidebar's tools out"
+  fi
+  send click $(key_at)
+}
+[ -n "$(key_at)" ] || fail "the key wasn't drawn"
+../tools/window-screenshot.sh "$pid" "$out/password-key.png" || fail "no window to capture"
+click_key
 expect "^browser: key $tab clicked\$" "a click on the key didn't reach it"
 offered save
 skip_on_sway_xwayland "the offer's keys and the steps after them"
@@ -187,7 +191,7 @@ go_from_bar "${site#http://}login.html"
 expect "^browser: title $tab filled\$" "the login page didn't fill the saved password in"
 # The saved login gives the page a key, and a click on it opens the Site Controls, which list it.
 await "^browser: key $tab saved\$" || fail "the saved login gave the page no key"
-send click $(key_at)
+click_key
 expect "^browser: key $tab clicked\$" "a click on the saved login's key didn't reach it"
 expect '^browser: command site-controls via key$' \
   "the saved login's key didn't open the Site Controls"
@@ -241,21 +245,18 @@ send click $(offer_never)
 expect "^browser: offer $tab answered Never check@example.test\$" "Never didn't answer"
 expect '^browser: offer hidden$' "Never didn't hide the offer"
 
-# The Site Controls list the site set to Never in a Passwords row, whose menu takes it off Never at
-# once. With no extension pinned and no permission set, it's the row under the ones the log lists
-# between its semicolons: ad blocking's, whose middle is at y 262 (clear.sh measures the panel), and
-# Developer Mode's on localhost, each 43 under the last.
+# The Site Controls list the site set to Never in a Passwords line, whose menu takes it off Never at
+# once. The panel logs where it drew the line.
 last_controls() { grep '^browser: site controls http' "$log" | tail -1; }
-passwords_y() { echo $((262 + 43 * $(last_controls | cut -d';' -f2 | tr ',' '\n' | grep -c .))); }
 controls="^browser: site controls http://localhost:$port: "
 bar_command site-controls "Site Controls" "site controls"
 expect "${controls}.*; passwords never localhost:$port\$" \
   "the Site Controls didn't list localhost as set to Never: $(last_controls)"
 expect '^browser: site controls settled$' "the Site Controls didn't open"
 ../tools/window-screenshot.sh "$pid" "$out/site-controls-never.png" || fail "no window to capture"
-post click 207 $(passwords_y)
+click_placed post "line Passwords"
 expect "^browser: menu shown $(cased 'Offer to Save Passwords, All Passwords…')\$" \
-  "the Passwords row didn't offer to take localhost off Never"
+  "the Passwords line didn't offer to take localhost off Never"
 send choose "$(cased 'Offer to Save Passwords')"
 expect "^browser: site controls allow saving localhost:$port\$" "Offer to Save Passwords didn't run"
 expect "^browser: remove login [0-9]* never localhost:$port\$" \
@@ -278,9 +279,9 @@ expect "${controls}.*; passwords 127.0.0.1:$port check@example.test\$" \
 expect '^browser: site controls settled$' "the Site Controls didn't open on the first site"
 ../tools/window-screenshot.sh "$pid" "$out/site-controls-passwords.png" ||
   fail "no window to capture"
-post click 207 $(passwords_y)
+click_placed post "line Passwords"
 expect "^browser: menu shown $(cased 'Remove “check@example.test”…, All Passwords…')\$" \
-  "the Passwords row didn't offer to remove the saved login"
+  "the Passwords line didn't offer to remove the saved login"
 send choose "$(cased 'All Passwords…')"
 expect '^browser: site controls run passwords$' "All Passwords… didn't run"
 expect '^browser: settings tab Passwords$' "All Passwords… didn't show Settings' Passwords tab"
@@ -310,9 +311,9 @@ else
       grep 'gpui dropped\|panicked\|already borrowed' | head -3 | tr '\n' ';')"
 fi
 none_since '^browser: remove login' || fail "Cancel removed the login"
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses off$' "a click on Save and fill addresses didn't switch it off"
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses on$' "a second click didn't switch addresses back on"
 # Manage Passwords…, under the box of the login's row, opens Chrome's password manager page in a
 # new tab, where a search for the username finds the login. Its device check guards only Show,
@@ -353,9 +354,9 @@ expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login'
 send click $page_point
 bar_command site-controls "Site Controls" "site controls"
 expect '^browser: site controls settled$' "the Site Controls didn't open again"
-post click 207 $(passwords_y)
+click_placed post "line Passwords"
 expect "^browser: menu shown $(cased 'Remove “check@example.test”…, All Passwords…')\$" \
-  "the Passwords row didn't offer to remove the saved login again"
+  "the Passwords line didn't offer to remove the saved login again"
 send choose 'Remove “check@example.test”…'
 expect '^browser: site controls run remove-login$' "Remove didn't run"
 expect "^browser: dialog shown Remove the password for “check@example.test” on 127.0.0.1:$port?\$" \
@@ -368,10 +369,12 @@ expect "^browser: remove login [0-9]* 127.0.0.1:$port check@example.test\$" \
 expect "^browser: passwords [0-9]*: none\$" "Settings didn't hear the login was removed"
 
 # With no login saved for the site, Chrome's popup in a sign-up form's new-password field offers
-# Choose Your Own and Use Strong Password, and previews its password in the field. Down selects
-# Choose Your Own, whose return leaves the field to the user. On the page again, down twice selects
-# Use Strong Password, whose return fills the password in; Chrome saves it in the profile, which
-# Settings hears, and the sign-up brings no offer to save it. Made-up usernames only.
+# Choose Your Own and Use Strong Password, and previews its password in the field. Up selects
+# Choose Your Own, whose return leaves the field to the user. On the page again, up then down
+# selects Use Strong Password, whose return fills the password in; Chrome saves it in the profile,
+# which Settings hears, and the sign-up brings no offer to save it. Made-up usernames only. Up
+# first, since the popup's first down selects Choose Your Own on 156 and Use Strong Password on
+# 157, where up selects Choose Your Own on both, and either key then moves to the other button.
 # Loads the sign-up page and types username $1, then tab takes the keyboard to the password field,
 # where down brings the popup: Chrome's desktop Autofill opens on a click, typing or an arrow key in
 # a field, not on focus from the keyboard.
@@ -386,11 +389,11 @@ generation_offered() {
 }
 generation_offered own@example.test
 ../tools/window-screenshot.sh "$pid" "$out/password-generation.png" || fail "no window to capture"
-send key down
+send key up
 send key return
 expect "^browser: title $tab own\$" "Choose Your Own didn't leave the password field to the user"
 generation_offered new@example.test
-send key down
+send key up
 send key down
 send key return
 expect "^browser: title $tab generated\$" "Use Strong Password didn't fill a password in"
@@ -407,14 +410,14 @@ bar_command site-controls "Site Controls" "site controls"
 expect "${controls}.*; passwords 127.0.0.1:$port new@example.test\$" \
   "the Site Controls didn't list the generated login: $(last_controls)"
 expect '^browser: site controls settled$' "the Site Controls didn't open after the sign-up"
-post click 207 $(passwords_y)
+click_placed post "line Passwords"
 expect "^browser: menu shown $(cased 'Remove “new@example.test”…, All Passwords…')\$" \
-  "the Passwords row didn't offer to remove the generated login"
+  "the Passwords line didn't offer to remove the generated login"
 send choose "$(cased 'All Passwords…')"
 expect '^browser: site controls run passwords$' "All Passwords… didn't run again"
 expect '^browser: settings shown Passwords$' "All Passwords… didn't show Settings' Passwords tab again"
 settings_drew Passwords
-send clickkey $(drawn "switch offer to save passwords")
+click_in_sight "switch offer to save passwords"
 expect '^browser: offer to save passwords off$' "a click on Offer to save passwords didn't switch it off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-passwords-off.png" || fail "no window to capture"
 send key w cmd
@@ -550,6 +553,8 @@ if [ "$(uname)" = Darwin ]; then
   settings_drew Passwords
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings after Edit › AutoFill"
+else
+  echo "skip: Edit › AutoFill: the menu bar is the Mac's alone."
 fi
 # Settings' Passwords tab, which ⌘, shows again, lists the saved address under the logins, and its
 # Remove asks first, as a login's does, and removes it, which Settings hears. The card declined
@@ -626,9 +631,9 @@ done
 # Save and fill addresses and Save and fill payment methods, switched off for the profile, keep a
 # new address and the card just removed from bringing an offer. The pages they post to loading,
 # and the command bar opening and closing, take longer than the core reporting an offer.
-send clickkey $(drawn "switch save and fill addresses")
+click_in_sight "switch save and fill addresses"
 expect '^browser: save and fill addresses off$' "a click on Save and fill addresses didn't switch it off"
-send clickkey $(drawn "switch save and fill payment methods")
+click_in_sight "switch save and fill payment methods"
 expect '^browser: save and fill payment methods off$' \
   "a click on Save and fill payment methods didn't switch it off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-autofill-off.png" || fail "no window to capture"

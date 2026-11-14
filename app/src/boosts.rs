@@ -136,6 +136,8 @@ pub struct Boost {
 pub struct Boosts {
     profiles: HashMap<u64, Kept>,
     all_off: bool,
+    /// Safe start holds them all off for the launch, whatever Settings says (crate::safe_start).
+    held: bool,
 }
 
 thread_local! {
@@ -269,13 +271,24 @@ impl Boosts {
         Some(self.profiles.get(&profile)?.boosts())
     }
 
+    /// Whether none shows: Settings has them all off, or safe start holds them.
     pub fn all_off(&self) -> bool {
-        self.all_off
+        self.all_off || self.held
+    }
+
+    /// Safe start's hold: every Boost off for the launch, leaving Settings' switch as it is.
+    pub fn set_held(&mut self, held: bool) -> Vec<Change> {
+        self.held = held;
+        self.every_change()
     }
 
     /// Settings' switch: every Boost off, or back as each site has it.
     pub fn set_all_off(&mut self, off: bool) -> Vec<Change> {
         self.all_off = off;
+        self.every_change()
+    }
+
+    fn every_change(&mut self) -> Vec<Change> {
         let profiles: Vec<u64> = self.profiles.keys().copied().collect();
         profiles
             .into_iter()
@@ -437,7 +450,7 @@ impl Boosts {
     /// What the core should show that it doesn't yet: each site's CSS, or none for a site turned
     /// off, there no more, or with Settings' switch off.
     fn changes(&mut self, profile: u64) -> Vec<Change> {
-        let all_off = self.all_off;
+        let all_off = self.all_off();
         let Some(kept) = self.profiles.get_mut(&profile) else {
             return Vec::new();
         };

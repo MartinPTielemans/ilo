@@ -292,7 +292,7 @@ pub fn favorites_picker(
 ) -> gpui::Stateful<gpui::Div> {
     let choices = FavoritesScope::ALL
         .map(|scope| Choice {
-            title: scope.title(),
+            title: scope.caption(),
             drawing: favorites(base, dark, scope),
         })
         .into();

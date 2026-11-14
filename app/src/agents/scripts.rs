@@ -92,6 +92,9 @@ impl Agents {
             refused: SharedString::from(refused.to_string()),
             steps: Vec::new(),
             by: SharedString::from(by.to_string()),
+            id: super::entry_id(),
+            url: SharedString::default(),
+            sent: Vec::new(),
         };
         let same = event != 0 && self.script_event == event;
         match self.log.iter().rposition(|each| each.agent == AGENT) {

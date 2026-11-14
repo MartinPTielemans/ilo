@@ -480,6 +480,9 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     skip_to(&shell, cx, Step::OptIns);
     assert_eq!(offered(&shell, cx), vec![(OptIn::Agents, false)]);
     host.take();
+    // It's set once the Shell's update is over, as turning agents off ends their ask, which reads
+    // every Shell (#2459).
+    host.reads_shell(shell.downgrade());
     shell.update(cx, |shell, cx| shell.onboarding_switch(OptIn::Agents, cx));
     assert_eq!(host.take(), vec!["agents true".to_string()]);
     assert_eq!(offered(&shell, cx), vec![(OptIn::Agents, true)]);

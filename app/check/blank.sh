@@ -1,3 +1,4 @@
+# check.sh runs this at 230.
 # A Blank Window, Arc's (⌃⌘N on the Mac; New Blank Window in the command bar everywhere): one Space
 # of its own in the profile of the Space shown, unsaved and listed nowhere, whose pages load in that
 # profile and whose tabs stay in it. A tab's Move to › a Space of that profile moves it out, live, to

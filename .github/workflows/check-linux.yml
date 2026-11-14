@@ -53,27 +53,29 @@ env:
   # The runs that pass on X11 so far.
   LINUX_RUNS: >-
     tabs window find agents spaces crash profiles private blank quit mcp appearance access history
-    load preview import adblock adblock-lists passkeys onboarding links relaunch split
-    extensions capture popup pinned about windows dialogs trouble cards passwords updates
+    load preview import adblock adblock-lists adblock-cosmetic adblock-page passkeys onboarding links relaunch
+    split extensions capture popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
     webrtc tab-drag count ranking everyday hosts policies translate pictures boosts rules
-    switch-frames foot-bar
+    switch-frames foot-bar later-launch peek-motion
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
-    favorites cards extensions adblock adblock-lists private little capture passwords preview access
-    dialogs crash import quit onboarding passkeys appearance about sync sync-account sync-devices
+    favorites cards extensions adblock adblock-lists adblock-cosmetic adblock-page private little capture
+    passwords preview access dialogs crash import quit onboarding passkeys appearance about
+    sync sync-account sync-devices
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
     blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
     window windows
-    media pictures boosts links notifications switch-frames foot-bar
+    media pictures boosts links notifications switch-frames foot-bar peek-motion rules later-launch
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |
     keychain: it checks the Mac's Keychain across a change of signing identity, in a check VM
     scripting: AppleScript is the Mac's alone
     filled: it hides the Dock and the menu bar, so it runs only in a Mac check VM
+    sidebar-right: it checks AppKit's window buttons, the Mac's alone
 
 jobs:
   # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
@@ -104,7 +106,7 @@ jobs:
           SESSION: ${{ inputs.session || 'xvfb' }}
         run: |
           # check.sh's own list, the runs it does with no names and the ones it does only when named.
-          all=$(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p; s/^named="\(.*\)"$/\1/p' app/check.sh | tr '\n' ' ')
+          all=$(sh app/check.sh --runs)
           # X11's runs, then Wayland's, unless runs are named or Wayland's alone are asked for.
           case $SESSION in
           wayland) sessions=wayland ;;
@@ -281,7 +283,8 @@ jobs:
       # clipboard (check/lib.sh's clipboard_holds). The access run reads the app's tree over
       # AT-SPI, on buses of its own from dbus-daemon and at-spi2-core, and the notifications and mcp runs'
       # notification server is python3-gi's, on a bus of its own. check/ime.sh types through
-      # fcitx5, with check/vkbd's keyboard, whose keymap xkbcli makes.
+      # fcitx5, with check/vkbd's keyboard, whose keymap xkbcli makes, and Korean through
+      # fcitx5-hangul, drawn in its captures with fonts-nanum's Hangul.
       # Ubuntu's AppArmor denies Chromium's sandbox the user namespaces it needs, so the runner
       # allows them, and the sandbox stays on.
       # The packages come from the Actions cache, and from the mirror only on a miss (#1969), in
@@ -293,11 +296,15 @@ jobs:
             libclang-dev libfontconfig-dev libwayland-dev
             libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 mesa-vulkan-drivers libegl1
             libgl1-mesa-dri xvfb xauth openbox imagemagick xdotool xclip ffmpeg sway grim xwayland
-            dbus-daemon at-spi2-core fcitx5 libxkbcommon-tools wl-clipboard python3-gi
+            dbus-daemon at-spi2-core fcitx5 fcitx5-hangul fonts-nanum libxkbcommon-tools wl-clipboard python3-gi
 
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # The runner has no sound card, so a page's audio would fail to open ALSA's default, which
+          # ALSA reports on the shared standard error in pieces, and a browser: line written between
+          # them is lost to a check's wait (#2734). Its null device opens and plays to nothing.
+          printf 'pcm.!default { type null }\n' > ~/.asoundrc
           rustup update stable --no-self-update
           mkdir -p "$RUNNER_TEMP/bin"
           # ImageMagick 6 has a tool for each of 7's magick subcommands, such as headless.sh's
@@ -315,8 +322,9 @@ jobs:
           packages: kwin-x11 x11-utils dbus-bin
 
       # The updates run builds ilo's Flatpak (tools/flatpak.sh) and updates it through Flatpak's
-      # portal and permission store, which only it needs.
-      - if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' updates ')) && contains(format(' {0} ', matrix.runs), ' updates ') }}
+      # portal and permission store, which only it needs. The leg's runs alone decide, so main's
+      # nightly check, which names no runs, installs them too; before, updates skipped there as passed.
+      - if: ${{ steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' updates ') }}
         uses: ./.github/actions/apt-install
         with:
           packages: flatpak flatpak-builder ostree xdg-desktop-portal
@@ -396,11 +404,14 @@ jobs:
       # have it: ilo's Flatpak, installed from the release's bundle, which runs in bubblewrap's
       # user namespaces as Chromium's sandbox does.
       - if: ${{ steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' sync-versions ') }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: flatpak
+      - if: ${{ steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' sync-versions ') }}
         env:
           GH_TOKEN: ${{ github.token }}
           OLD: 0.1.12
         run: |
-          sudo apt-get install -yq flatpak
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           dir=$(mktemp -d)

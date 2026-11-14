@@ -621,6 +621,9 @@ text = 13.0
 header-text = 11.0
 # Between the check, the title and what trails it.
 gap = 6.0
+# Between an item's title and its detail in the secondary ink, as Default's model follows
+# "Default": a word space at 13 pt.
+detail-gap = 4.0
 check = 12.0
 chevron = 12.0
 min-width = 200.0
@@ -983,6 +986,18 @@ on-hovered = 0.14
 on-pressed = 0.18
 on-switch-off = 0.13
 on-detail = 0.77
+# Ours (#2326): an agent's request in the activity log opens in place under its title, in the
+# small size: "To" and its whole address, then "Sent", or "Not sent" for a refused one, each label
+# in a column 64 wide, a line each, 4 apart, nested fields 12 further in a level, the opened part
+# 4 into the row's bottom padding. Eight lines show, the eighth "Show all" when there are more,
+# which opens the rest in place, a value cut at the row's edge until then. Every row of the list
+# keeps the chevron's 12 at its end, so the times end on one edge (the orchestrator, 2026-11-10).
+sent-label = 64.0
+sent-gap = 4.0
+sent-indent = 12.0
+sent-tuck = 4.0
+sent-lines = 8
+sent-chevron = 12.0
 # Ours (#2407): Sidebar position is two drawings of the window, under its row's line, 6 down from
 # it with their ring's room around them. Each is 128 by 80 at the window's radius, 20 apart, named
 # 6 under it in the row's small text, the chosen one's name in the row's ink at medium. A drawing
@@ -1357,6 +1372,12 @@ update-banner = 24.0
 update-banner-gap = 6.0
 update-banner-glyph = 14.0
 update-banner-open = 86.0
+# The safe-start card over the footer (#2345, ours), under the update banner, in its gaps: this
+# far in at its top and foot, its title's lines and its detail's this tall, all wrapped on the
+# rows' title column.
+safe-start-pad = 8.0
+safe-start-title-line = 18.0
+safe-start-detail-line = 14.0
 # The Clear divider's line, 0.15 (Arc).
 divider = 0.15
 # The edges under the favorites while the list is scrolled and at its foot while rows are hidden
@@ -2352,14 +2373,31 @@ plus-glyph = 16.5
 heading-size = 13.0
 link-size = 11.0
 name-size = 13.0
-state-size = 13.0
-circle = 32.0
-row-pitch = 43.0
-# A permission's circle when it isn't allowed, a plate with the ink's glyph on it; allowed, it's
-# the accent with its label (#350), where Arc's is white with its glyph cut out.
-off = 0.3
-off-glyph = 0.9
-row-glyph = 17.0
+# Ours (#2334): the action row's last tile is the shield, and under the row go only the switches
+# special to the site. One alone is a strip as tall as a tile, its state in words; two or more are
+# tiles this tall, two to a line, a glyph over its name.
+switch-height = 52.0
+switch-glyph = 16.0
+switch-name-gap = 5.0
+strip-left = 12.0
+strip-name-gap = 10.0
+# A switch while on, and the shield while it blocks: the accent over the plate at this, a step
+# more under the pointer and another pressed. Off is the plain plate.
+tint = 0.16
+tint-hovered = 0.22
+tint-pressed = 0.28
+# Ours (#2334): "This site"'s lines, each a glyph, a name and its value at the right in the
+# secondary ink, in place of Arc's 43 pt rows with a circle and a second line.
+item-height = 28.0
+item-pitch = 30.0
+item-inset = 8.0
+item-glyph = 16.0
+# The name's widest, past which the value gives way first.
+item-name = 132.0
+# The glyph's ink while its value isn't on or Allow; on, it's the accent.
+item-glyph-off = 0.6
+heading-to-items = 17.0
+items-to-divider = 9.0
 # Ours: a policy's row, which the user can't change.
 managed-opacity = 0.5
 divider = 0.17
@@ -2384,7 +2422,6 @@ disabled-opacity = 0.5
 more-fill = 0.05
 more-glyph = 17.5
 heading-to-tiles = 23.0
-heading-to-rows = 25.0
 divider-to-footer = 11.0
 # SF's ascent, descent and cap height for its size, which put a line's cap where it was measured.
 ascent = 0.967

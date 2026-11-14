@@ -31,10 +31,10 @@ index a91818acd0..2d1de9aa21 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..cda50bc677 100644
+index a5390e77f8..5cbec0765f 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
-@@ -1,4 +1,25 @@
+@@ -1,4 +1,26 @@
  #![cfg(any(target_os = "linux", target_os = "freebsd"))]
  mod linux;
  
@@ -46,9 +46,10 @@ index a5390e77f8..cda50bc677 100644
 +};
 +pub use linux::{
 +    Corner, CursorPicture, EmbeddedKeyboard, EmbedderDrag, EmbedderDropped, answered_key, current_platform, dispatch_embedded,
-+    dispatch_embedded_after_read, embed, embed_wayland, embed_x11, embedded_fd, embedder_size, embedder_windows_going,
++    dispatch_embedded_after_read, embed, embed_wayland, embed_x11, embedded_fd, embedder_scale, embedder_size, embedder_windows_going,
 +    give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
-+    linux_platform, move_overlay, new_host_window, overlay_size, overlays_blend, overlays_blur,
++    linux_platform, move_overlay, new_host_window, overlay_first_frame_scale, overlay_size, overlays_blend, overlays_blur,
++    pointer_pressed,
 +    set_overlay_blur, set_overlay_cursor, set_overlay_keyboard,
 +    set_overlay_menu, set_overlay_outline, set_overlay_outlines, set_overlay_panel,
 +    set_overlay_pointer, set_overlay_under,
@@ -62,7 +63,7 @@ index a5390e77f8..cda50bc677 100644
 +    open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..a8604a2a42 100644
+index e4da54b52b..ca5b025ee3 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -97,9 +98,9 @@ index e4da54b52b..a8604a2a42 100644
  pub(crate) use headless::*;
  pub(crate) use keyboard::*;
 +pub use overlay::{
-+    Corner, CursorPicture, answered_key, embedder_size, embedder_windows_going, give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
-+    move_overlay, overlay_size, overlays_blend, overlays_blur,
-+    set_overlay_blur, set_overlay_cursor, set_overlay_keyboard, set_overlay_menu, set_overlay_outline,
++    Corner, CursorPicture, answered_key, embedder_scale, embedder_size, embedder_windows_going, give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
++    move_overlay, overlay_first_frame_scale, overlay_size, overlays_blend, overlays_blur,
++    pointer_pressed, set_overlay_blur, set_overlay_cursor, set_overlay_keyboard, set_overlay_menu, set_overlay_outline,
 +    set_overlay_outlines,
 +    set_overlay_panel, set_overlay_pointer, set_overlay_under, show_overlay, show_window,
 +    shown_keyboard_overlay,
@@ -243,10 +244,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..b21bc89d9f
+index 0000000000..5c32450ea7
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1252 @@
+@@ -0,0 +1,1383 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -294,6 +295,9 @@ index 0000000000..b21bc89d9f
 +    /// Which time it shows, so leaving it is never told to its next showing: a right-click
 +    /// elsewhere hides a menu and shows the next under the same view before it's told.
 +    showing: u64,
++    /// On X11, off screen with the window it shows over, which the window manager hid (`away`):
++    /// the keyboard leaving it then isn't the user leaving it.
++    away: bool,
 +}
 +
 +#[allow(dead_code)]
@@ -616,6 +620,48 @@ index 0000000000..b21bc89d9f
 +    });
 +}
 +
++thread_local! {
++    /// The buttons down under Wayland, a bit each, which GPUI's pointer hears over the embedder's
++    /// surfaces too (`wayland_button`).
++    static WAYLAND_BUTTONS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
++}
++
++/// A button of the Wayland pointer, by its evdev code, went down or up, over any surface.
++pub(crate) fn wayland_button(code: u32, down: bool) {
++    let bit = 1u32 << (code & 31);
++    WAYLAND_BUTTONS.set(match down {
++        true => WAYLAND_BUTTONS.get() | bit,
++        false => WAYLAND_BUTTONS.get() & !bit,
++    });
++}
++
++/// The pointer left our surfaces, which a release no longer reaches.
++pub(crate) fn wayland_buttons_gone() {
++    WAYLAND_BUTTONS.set(0);
++}
++
++/// Whether a mouse button is down, over the embedder's windows or GPUI's. On X11 the embedder's
++/// presses go to its own connection, so this asks the server.
++pub fn pointer_pressed() -> bool {
++    #[cfg(feature = "x11")]
++    if let Some(Some(pressed)) = super::platform::with_embedded_connection(|connection| {
++        let DisplayConnection::X11(x11) = connection else {
++            return None;
++        };
++        use x11rb::connection::Connection as _;
++        let x11 = x11.0.borrow();
++        let root = x11.xcb_connection.setup().roots[x11.x_root_index].root;
++        let pointer = x11.xcb_connection.query_pointer(root).ok()?.reply().ok()?;
++        let buttons = xproto::KeyButMask::BUTTON1
++            | xproto::KeyButMask::BUTTON2
++            | xproto::KeyButMask::BUTTON3;
++        Some(pointer.mask.intersects(buttons))
++    }) {
++        return pressed;
++    }
++    WAYLAND_BUTTONS.get() != 0
++}
++
 +/// The pointer is `at` over `surface`, the embedder's or GPUI's.
 +pub(crate) fn pointer_over(surface: usize, at: Point<Pixels>) {
 +    if let Some((parent, moved)) = POINTER_OVER.get()
@@ -714,6 +760,7 @@ index 0000000000..b21bc89d9f
 +            ready: false,
 +            left: Some(left),
 +            showing,
++            away: false,
 +        })
 +    });
 +    later(Op::Show {
@@ -846,6 +893,30 @@ index 0000000000..b21bc89d9f
 +    .flatten()
 +}
 +
++/// The scale of GPUI's window in the embedder's `parent`, under Wayland, where each surface has its
++/// own (#2592). X11 has one for the process, so there none.
++pub fn embedder_scale(parent: *mut c_void) -> Option<f32> {
++    super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => super::wayland::embedded_scale(parent),
++        #[allow(unreachable_patterns)]
++        _ => None,
++    })
++    .flatten()
++}
++
++/// The scale the overlay `view` drew its first frame at since it showed, once it has, under Wayland
++/// (`embedder_scale`).
++pub fn overlay_first_frame_scale(view: *mut c_void) -> Option<f32> {
++    super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => super::wayland::overlay_first_frame_scale(view),
++        #[allow(unreachable_patterns)]
++        _ => None,
++    })
++    .flatten()
++}
++
 +/// The size of the overlay `view`, as GPUI opened it or it last showed, in logical pixels.
 +pub fn overlay_size(view: *mut c_void) -> Option<Size<Pixels>> {
 +    super::platform::with_embedded_connection(|connection| match connection {
@@ -890,6 +961,26 @@ index 0000000000..b21bc89d9f
 +
 +pub(crate) fn is_shown(view: usize) -> bool {
 +    SHOWN.with_borrow(|all| all.iter().any(|shown| shown.view == view))
++}
++
++/// On X11, takes the overlay `view` off screen with the window it shows over, which the window
++/// manager hid, or says it's back (`away`). It says whether the overlay had the keys.
++#[cfg(feature = "x11")]
++pub(crate) fn set_away(view: usize, away: bool) -> bool {
++    SHOWN.with_borrow_mut(|all| {
++        all.iter_mut()
++            .find(|shown| shown.view == view)
++            .is_some_and(|shown| {
++                shown.away = away;
++                shown.keyboard && shown.ready
++            })
++    })
++}
++
++/// Whether the overlay `view` is off screen with the window it shows over (`set_away`).
++#[cfg(feature = "x11")]
++pub(crate) fn is_away(view: usize) -> bool {
++    SHOWN.with_borrow(|all| all.iter().any(|shown| shown.view == view && shown.away))
 +}
 +
 +/// The overlay that shows with the keyboard, if one does.
@@ -1193,7 +1284,7 @@ index 0000000000..b21bc89d9f
 +        Op::Left(view, showing) => {
 +            let left = SHOWN.with_borrow_mut(|all| {
 +                let shown = all.iter_mut().find(|shown| shown.view == view)?;
-+                if shown.showing != showing {
++                if shown.showing != showing || shown.away {
 +                    return None;
 +                }
 +                shown.left.take()
@@ -1497,6 +1588,47 @@ index 0000000000..b21bc89d9f
 +        }
 +        #[allow(unreachable_patterns)]
 +        _ => {}
++    }
++}
++
++#[cfg(all(test, feature = "x11"))]
++mod tests {
++    use super::*;
++
++    thread_local! {
++        static TOLD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
++    }
++
++    fn told(_: *mut c_void) {
++        TOLD.set(TOLD.get() + 1);
++    }
++
++    #[test]
++    fn the_keys_leaving_an_overlay_away_with_its_window_is_not_the_user_leaving() {
++        let (view, showing) = (7, 1);
++        SHOWN.with_borrow_mut(|all| {
++            all.push(Shown {
++                view,
++                keyboard: true,
++                ready: true,
++                left: Some(told),
++                showing,
++                away: false,
++            })
++        });
++        // The window manager hid its window, and the keyboard went with it (#2711).
++        assert!(
++            set_away(view, true),
++            "an overlay with the keys takes them back on return"
++        );
++        assert!(is_away(view));
++        run_op(Op::Left(view, showing));
++        assert_eq!(TOLD.get(), 0);
++        // Back on screen, the keyboard leaving it is the user leaving it, told once.
++        set_away(view, false);
++        run_op(Op::Left(view, showing));
++        run_op(Op::Left(view, showing));
++        assert_eq!(TOLD.get(), 1);
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/platform.rs b/crates/gpui_linux/src/linux/platform.rs
@@ -1928,7 +2060,7 @@ index cbc962bcff..46c3b3e249 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..82f0296198 100644
+index 2d40cf7fa9..78e709800d 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -2271,12 +2403,12 @@ index 2d40cf7fa9..82f0296198 100644
 +                    .collect();
 +                shm_buffer(self, picture.width, picture.height, &bgra).ok_or(())
 +            }
++        };
++        let Ok(buffer) = made else {
++            return false;
          };
 -        let scale = focused_window.primary_output_scale();
 -        self.cursor.set_icon(
-+        let Ok(buffer) = made else {
-+            return false;
-+        };
 +        let hot = |at: u32| (at / scale) as i32;
 +        self.cursor.set_buffer(
              &wl_pointer,
@@ -2351,7 +2483,16 @@ index 2d40cf7fa9..82f0296198 100644
                          let output = globals.registry().bind::<wl_output::WlOutput, _, _>(
                              global.name,
                              wl_output_version(global.version)?,
-@@ -1065,6 +1273,9 @@ impl WaylandConnection {
+@@ -1027,6 +1235,8 @@ impl WaylandConnection {
+         })?;
+ 
+         let compositor_gpu = detect_compositor_gpu();
++        // Before the app's make_instance_early, whose device is chosen with it (#2384).
++        gpui_wgpu::WgpuContext::note_compositor_gpu(compositor_gpu);
+         let gpu_context = Rc::new(RefCell::new(None));
+ 
+         let (frame_ping, frame_ping_source) =
+@@ -1065,6 +1275,9 @@ impl WaylandConnection {
              wl_keyboard: None,
              pinch_gesture: None,
              pinch_scale: 1.0,
@@ -2361,7 +2502,7 @@ index 2d40cf7fa9..82f0296198 100644
              cursor_shape_device: None,
              data_device,
              primary_selection,
-@@ -1088,6 +1299,7 @@ impl WaylandConnection {
+@@ -1088,6 +1301,7 @@ impl WaylandConnection {
                  position: Point::default(),
                  uri_read_generation: 0,
              },
@@ -2369,7 +2510,7 @@ index 2d40cf7fa9..82f0296198 100644
              external_drag: None,
              click: ClickState {
                  last_click: Instant::now(),
-@@ -1110,6 +1322,8 @@ impl WaylandConnection {
+@@ -1110,6 +1324,8 @@ impl WaylandConnection {
              },
              capslock: Capslock { on: false },
              scroll_event_received: false,
@@ -2378,7 +2519,7 @@ index 2d40cf7fa9..82f0296198 100644
              axis_source: AxisSource::Wheel,
              mouse_location: None,
              continuous_scroll_delta: None,
-@@ -1117,11 +1331,13 @@ impl WaylandConnection {
+@@ -1117,11 +1333,13 @@ impl WaylandConnection {
              vertical_modifier: -1.0,
              horizontal_modifier: -1.0,
              button_pressed: None,
@@ -2392,7 +2533,7 @@ index 2d40cf7fa9..82f0296198 100644
              cursor_hidden_window: None,
              clipboard: Clipboard::new(conn.clone(), handle.clone()),
              data_offers: Vec::new(),
-@@ -1202,6 +1418,16 @@ impl WaylandConnection {
+@@ -1202,6 +1420,16 @@ impl WaylandConnection {
              .context("failed to receive initial Wayland state")
              .log_err();
  
@@ -2409,7 +2550,7 @@ index 2d40cf7fa9..82f0296198 100644
          client.register_source(
              handle.insert_source(WaylandSource::new(conn, event_queue), {
                  let mut client = pointer;
-@@ -1341,6 +1567,17 @@ impl WaylandConnection {
+@@ -1341,6 +1569,17 @@ impl WaylandConnection {
              state.consume_startup_activation_token(&window.0.surface());
          }
          state.windows.insert(surface_id, window.0.clone());
@@ -2427,7 +2568,7 @@ index 2d40cf7fa9..82f0296198 100644
  
          Ok(Box::new(window))
      }
-@@ -1367,22 +1604,7 @@ impl WaylandConnection {
+@@ -1367,22 +1606,7 @@ impl WaylandConnection {
          }
  
          let serial = state.serial_tracker.get(SerialKind::MouseEnter);
@@ -2451,7 +2592,7 @@ index 2d40cf7fa9..82f0296198 100644
      }
  
      pub(crate) fn hide_cursor_until_mouse_moves(&self) {
-@@ -1472,11 +1694,29 @@ impl WaylandConnection {
+@@ -1472,11 +1696,29 @@ impl WaylandConnection {
              };
              let data_source = data_device_manager
                  .create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
@@ -2483,7 +2624,7 @@ index 2d40cf7fa9..82f0296198 100644
          }
      }
  
-@@ -1500,6 +1740,13 @@ impl WaylandConnection {
+@@ -1500,6 +1742,13 @@ impl WaylandConnection {
          None
      }
  
@@ -2497,7 +2638,7 @@ index 2d40cf7fa9..82f0296198 100644
      pub(crate) fn compositor_name(&self) -> &'static str {
          "Wayland"
      }
-@@ -1517,7 +1764,7 @@ impl WaylandConnection {
+@@ -1517,7 +1766,7 @@ impl WaylandConnection {
  
          let client_state = self.0.borrow();
          let active_window = client_state.keyboard_focused_window.as_ref();
@@ -2506,7 +2647,7 @@ index 2d40cf7fa9..82f0296198 100644
      }
  }
  
-@@ -1617,7 +1864,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1617,7 +1866,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                      state.wl_seat.release();
                      state.wl_seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version, qh, ());
                  }
@@ -2516,7 +2657,7 @@ index 2d40cf7fa9..82f0296198 100644
                      let Ok(version) = wl_output_version(version) else {
                          log::error!("ignoring wl_output below the required version");
                          return;
-@@ -1656,6 +1904,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1656,6 +1906,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
  delegate_noop!(WaylandClientStatePtr: ignore xdg_activation_v1::XdgActivationV1);
  delegate_noop!(WaylandClientStatePtr: ignore xdg_system_bell_v1::XdgSystemBellV1);
  delegate_noop!(WaylandClientStatePtr: ignore wl_compositor::WlCompositor);
@@ -2525,7 +2666,7 @@ index 2d40cf7fa9..82f0296198 100644
  delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
  delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
  delegate_noop!(WaylandClientStatePtr: ignore wl_data_device_manager::WlDataDeviceManager);
-@@ -1738,6 +1988,82 @@ pub(crate) fn get_window(
+@@ -1738,6 +1990,82 @@ pub(crate) fn get_window(
      state.windows.get(surface_id).cloned()
  }
  
@@ -2608,7 +2749,7 @@ index 2d40cf7fa9..82f0296198 100644
  impl Dispatch<wl_surface::WlSurface, ()> for WaylandClientStatePtr {
      fn event(
          this: &mut Self,
-@@ -1993,10 +2319,10 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -1993,10 +2321,10 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                      state.composing = false;
                  }
  
@@ -2623,7 +2764,7 @@ index 2d40cf7fa9..82f0296198 100644
                      .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
  
                  if let Some(wl_keyboard) = &state.wl_keyboard {
-@@ -2023,6 +2349,14 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -2023,6 +2351,14 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                          gesture_manager.get_pinch_gesture(&pointer, qh, ())
                      },
                  );
@@ -2638,7 +2779,7 @@ index 2d40cf7fa9..82f0296198 100644
  
                  if let Some(wl_pointer) = &state.wl_pointer {
                      wl_pointer.release();
-@@ -2057,7 +2391,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2057,7 +2393,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  ..
              } => {
                  if format != wl_keyboard::KeymapFormat::XkbV1 {
@@ -2650,7 +2791,7 @@ index 2d40cf7fa9..82f0296198 100644
                      return;
                  }
                  let xkb_context = match new_xkb_context() {
-@@ -2086,16 +2424,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2086,16 +2426,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  this.handle_keyboard_layout_change();
              }
              wl_keyboard::Event::Enter { surface, .. } => {
@@ -2674,7 +2815,7 @@ index 2d40cf7fa9..82f0296198 100644
                  state.keyboard_focused_window = None;
                  state.enter_token.take();
                  // Prevent keyboard events from repeating after opening e.g. a file chooser and closing it quickly
-@@ -2110,7 +2453,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2110,7 +2455,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                      drop(state);
                      window.handle_ime(ImeInput::DeleteText);
                      window.set_focused(false);
@@ -2684,7 +2825,7 @@ index 2d40cf7fa9..82f0296198 100644
              }
              wl_keyboard::Event::Modifiers {
                  mods_depressed,
-@@ -2119,9 +2464,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2119,9 +2466,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  group,
                  ..
              } => {
@@ -2698,7 +2839,7 @@ index 2d40cf7fa9..82f0296198 100644
                  let old_layout =
                      keymap_state.serialize_layout(xkbcommon::xkb::STATE_LAYOUT_EFFECTIVE);
                  keymap_state.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
-@@ -2138,6 +2485,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2138,6 +2487,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  if let Some(focused_window) = focused_window {
                      focused_window.handle_input(input);
                  }
@@ -2707,7 +2848,7 @@ index 2d40cf7fa9..82f0296198 100644
  
                  if group != old_layout {
                      this.handle_keyboard_layout_change();
-@@ -2152,13 +2501,37 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2152,13 +2503,37 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  if key_state == wl_keyboard::KeyState::Pressed {
                      state.serial_tracker.update(SerialKind::KeyPress, serial);
                  }
@@ -2747,7 +2888,7 @@ index 2d40cf7fa9..82f0296198 100644
                  let keycode = Keycode::from(key + MIN_KEYCODE);
                  let keysym = keymap_state.key_get_one_sym(keycode);
  
-@@ -2218,16 +2591,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2218,16 +2593,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                          let rate = state.repeat.characters_per_second;
                          let repeat_interval = Duration::from_secs(1) / rate.max(1);
                          let id = state.repeat.current_id;
@@ -2769,7 +2910,7 @@ index 2d40cf7fa9..82f0296198 100644
                                      let Some(client) = this.0.upgrade() else {
                                          return TimeoutAction::Drop;
                                      };
-@@ -2240,8 +2614,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2240,8 +2616,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                          return TimeoutAction::Drop;
                                      }
  
@@ -2783,7 +2924,7 @@ index 2d40cf7fa9..82f0296198 100644
  
                                      drop(state);
                                      focused_window.handle_input(input.clone());
-@@ -2249,8 +2626,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2249,8 +2628,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                      // If the new scheduled time is in the past the event will repeat as soon as possible
                                      TimeoutAction::ToInstant(event_timestamp + repeat_interval)
                                  }
@@ -2795,7 +2936,7 @@ index 2d40cf7fa9..82f0296198 100644
  
                          drop(state);
                          focused_window.handle_input(input);
-@@ -2377,7 +2755,7 @@ fn linux_button_to_gpui(button: u32) -> Option<MouseButton> {
+@@ -2377,7 +2757,7 @@ fn linux_button_to_gpui(button: u32) -> Option<MouseButton> {
  impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
      fn event(
          this: &mut Self,
@@ -2804,7 +2945,7 @@ index 2d40cf7fa9..82f0296198 100644
          event: wl_pointer::Event,
          _: &(),
          _: &Connection,
-@@ -2398,6 +2776,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2398,6 +2778,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  state.serial_tracker.update(SerialKind::MouseEnter, serial);
                  state.mouse_location = Some(position);
                  state.button_pressed = None;
@@ -2815,7 +2956,7 @@ index 2d40cf7fa9..82f0296198 100644
  
                  if let Some(window) = get_window(&mut state, &surface.id()) {
                      state.mouse_focused_window = Some(window.clone());
-@@ -2407,17 +2789,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2407,17 +2791,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      }
                      state.restore_cursor_after_hide();
                      if let Some(style) = state.cursor_style {
@@ -2834,10 +2975,13 @@ index 2d40cf7fa9..82f0296198 100644
                      }
                      let modifiers = state.modifiers;
                      drop(state);
-@@ -2432,9 +2804,24 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2432,9 +2806,27 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  }
              }
              wl_pointer::Event::Leave { .. } => {
++                // A press holds the pointer in its surface until its release, so the pointer
++                // leaving our surfaces with a button down means the compositor took it.
++                crate::linux::overlay::wayland_buttons_gone();
 +                state.embedder_pointer = None;
 +                state.pointer_surface = 0;
                  if let Some(focused_window) = state.mouse_focused_window.clone() {
@@ -2860,7 +3004,7 @@ index 2d40cf7fa9..82f0296198 100644
                          pressed_button: state.button_pressed,
                          modifiers: state.modifiers,
                      });
-@@ -2444,6 +2831,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2444,6 +2836,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      state.cursor_hidden_window = None;
  
                      drop(state);
@@ -2871,7 +3015,7 @@ index 2d40cf7fa9..82f0296198 100644
                      focused_window.handle_input(input);
                      focused_window.set_hovered(false);
                  }
-@@ -2453,12 +2844,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2453,12 +2849,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  surface_y,
                  ..
              } => {
@@ -2902,8 +3046,14 @@ index 2d40cf7fa9..82f0296198 100644
                  if let Some(window) = state.mouse_focused_window.clone() {
                      if window.is_blocked() {
                          let default_style = CursorStyle::Arrow;
-@@ -2514,11 +2922,42 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2512,13 +2925,48 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+                 if button_state == wl_pointer::ButtonState::Pressed {
+                     state.serial_tracker.update(SerialKind::MousePress, serial);
                  }
++                crate::linux::overlay::wayland_button(
++                    button,
++                    button_state == wl_pointer::ButtonState::Pressed,
++                );
                  let button = linux_button_to_gpui(button);
                  let Some(button) = button else { return };
 +                // A press anywhere but in an embedder's overlay leaves it, in the embedder's
@@ -2945,7 +3095,7 @@ index 2d40cf7fa9..82f0296198 100644
                          if let Some(window) = state.keyboard_focused_window.clone() {
                              if state.composing && state.text_input.is_some() {
                                  drop(state);
-@@ -2574,10 +3013,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2574,10 +3022,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      wl_pointer::ButtonState::Released => {
                          state.button_pressed = None;
  
@@ -2963,7 +3113,7 @@ index 2d40cf7fa9..82f0296198 100644
                                  modifiers: state.modifiers,
                                  click_count: state.click.current_count,
                              });
-@@ -2595,11 +3039,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2595,11 +3048,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
              } => {
                  state.axis_source = axis_source;
              }
@@ -2984,7 +3134,7 @@ index 2d40cf7fa9..82f0296198 100644
                  if state.axis_source == AxisSource::Wheel {
                      return;
                  }
-@@ -2688,17 +3141,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2688,17 +3150,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      state.scroll_event_received = false;
                      let continuous = state.continuous_scroll_delta.take();
                      let discrete = state.discrete_scroll_delta.take();
@@ -3031,7 +3181,7 @@ index 2d40cf7fa9..82f0296198 100644
                          }
                      } else if let Some(discrete) = discrete
                          && let Some(window) = state.mouse_focused_window.clone()
-@@ -2733,6 +3206,68 @@ impl Dispatch<zwp_pointer_gestures_v1::ZwpPointerGesturesV1, ()> for WaylandClie
+@@ -2733,6 +3215,68 @@ impl Dispatch<zwp_pointer_gestures_v1::ZwpPointerGesturesV1, ()> for WaylandClie
      }
  }
  
@@ -3100,7 +3250,7 @@ index 2d40cf7fa9..82f0296198 100644
  impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()>
      for WaylandClientStatePtr
  {
-@@ -2895,6 +3430,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2895,6 +3439,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                      let Some(drag_window) = get_window(&mut state, &surface.id()) else {
                          return;
                      };
@@ -3125,7 +3275,7 @@ index 2d40cf7fa9..82f0296198 100644
                      let uri_read_generation = state.drag.begin_uri_read();
  
                      const ACTIONS: DndAction = DndAction::Copy;
-@@ -2968,6 +3521,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2968,6 +3530,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Motion { x, y, .. } => {
@@ -3138,7 +3288,7 @@ index 2d40cf7fa9..82f0296198 100644
                  let Some(drag_window) = state.drag.window.clone() else {
                      return;
                  };
-@@ -2979,6 +3538,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2979,6 +3547,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  drag_window.handle_input(input);
              }
              wl_data_device::Event::Leave => {
@@ -3154,7 +3304,7 @@ index 2d40cf7fa9..82f0296198 100644
                  let input = state.drag.handle_leave();
                  drop(state);
                  if let Some((drag_window, input)) = input {
-@@ -2986,6 +3554,22 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2986,6 +3563,22 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Drop => {
@@ -3177,7 +3327,7 @@ index 2d40cf7fa9..82f0296198 100644
                  let input = state.drag.handle_drop();
                  drop(state);
                  if let Some((drag_window, input)) = input {
-@@ -3015,7 +3599,10 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
+@@ -3015,7 +3608,10 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
  
          if let wl_data_offer::Event::Offer { mime_type } = event {
              // Drag and drop
@@ -3189,7 +3339,7 @@ index 2d40cf7fa9..82f0296198 100644
                  let serial = state.serial_tracker.get(SerialKind::DataDevice);
                  let mime_type = mime_type.clone();
                  data_offer.accept(serial.as_raw(), Some(mime_type));
-@@ -3050,6 +3637,7 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+@@ -3050,6 +3646,7 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
                  state.clipboard.send(mime_type, fd);
              }
              (DataSourceKind::Clipboard, wl_data_source::Event::Cancelled) => {
@@ -3197,7 +3347,7 @@ index 2d40cf7fa9..82f0296198 100644
                  data_source.destroy();
              }
              (DataSourceKind::Drag, wl_data_source::Event::Send { fd, .. }) => {
-@@ -3059,18 +3647,32 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+@@ -3059,18 +3656,32 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
                  let bytes = external_drag.bytes.clone();
                  state.clipboard.send_bytes(fd, bytes);
              }
@@ -3232,7 +3382,7 @@ index 2d40cf7fa9..82f0296198 100644
              }
              _ => {}
          }
-@@ -3479,3 +4081,691 @@ mod tests {
+@@ -3479,3 +4090,715 @@ mod tests {
          );
      }
  }
@@ -3283,22 +3433,26 @@ index 2d40cf7fa9..82f0296198 100644
 +    };
 +    let caret = embedded_text_window(parent).and_then(|(window, origin)| {
 +        let caret = window.text_caret()?;
-+        Some(Bounds::new(caret.origin + origin, caret.size))
++        Some(caret.map(|caret| Bounds::new(caret.origin + origin, caret.size)))
 +    });
-+    let changed = EMBEDDED_CARETS.with_borrow_mut(|all| {
-+        match all.iter_mut().find(|(each, _)| *each == parent as usize) {
-+            Some((_, last)) if *last == caret => false,
-+            Some((_, last)) => {
-+                *last = caret;
-+                true
-+            }
-+            None => {
-+                all.push((parent as usize, caret));
-+                true
-+            }
-+        }
++    let told = EMBEDDED_CARETS.with_borrow_mut(|all| {
++        let Some((_, last)) = all.iter_mut().find(|(each, _)| *each == parent as usize) else {
++            let caret = caret.flatten();
++            all.push((parent as usize, caret));
++            return Some(caret);
++        };
++        // A field that has the keys but no place yet keeps the caret it had: telling the embedder
++        // none would end its composition, committing a syllable the next key was to change.
++        let caret = match caret {
++            Some(None) => *last,
++            caret => caret.flatten(),
++        };
++        (*last != caret).then(|| {
++            *last = caret;
++            caret
++        })
 +    });
-+    if changed {
++    if let Some(caret) = told {
 +        (keyboard.text_input)(parent, caret);
 +    }
 +}
@@ -3473,6 +3627,19 @@ index 2d40cf7fa9..82f0296198 100644
 +/// The size of the overlay window of the `view` surface.
 +pub(crate) fn overlay_size(view: *mut std::ffi::c_void) -> Option<Size<Pixels>> {
 +    Some(overlay_window(view)?.bounds_size())
++}
++
++/// The scale of GPUI's window in the embedder's `parent` surface, as `embedded_size` finds it.
++pub(crate) fn embedded_scale(parent: *mut std::ffi::c_void) -> Option<f32> {
++    match embedded_window_with_parent(parent) {
++        Some(window) => Some(window.scale()),
++        None => Some(overlay_window(parent)?.scale()),
++    }
++}
++
++/// The scale the overlay window of the `view` surface drew its first frame at since it showed.
++pub(crate) fn overlay_first_frame_scale(view: *mut std::ffi::c_void) -> Option<f32> {
++    overlay_window(view)?.first_frame_scale()
 +}
 +
 +/// Starts the data device's drag of `data`, as `mime`, from the surface the left button is held in
@@ -3836,11 +4003,18 @@ index 2d40cf7fa9..82f0296198 100644
 +    keyboard: bool,
 +) -> anyhow::Result<()> {
 +    let window = overlay_window(view).context("no window has the overlay's surface")?;
-+    let parent = match embedded_window_with_parent(parent) {
-+        Some(embedded) => embedded.embedded_parent_surface(),
-+        None => overlay_window(parent).map(|own| own.surface()),
-+    }
-+    .context("GPUI has no window in or of the overlay's parent")?;
++    let (parent, scale) = match embedded_window_with_parent(parent) {
++        Some(embedded) => (embedded.embedded_parent_surface(), embedded.scale()),
++        None => match overlay_window(parent) {
++            Some(own) => (Some(own.surface()), own.scale()),
++            None => (None, 1.),
++        },
++    };
++    let parent = parent.context("GPUI has no window in or of the overlay's parent")?;
++    // Its first frame at the scale of the window it shows over: its own surface hears its scale
++    // from the compositor only once it's on screen, and kept the last one, from over a window on
++    // a display at another scale, or from where it was made (#2592).
++    window.rescale(scale);
 +    window.show_over(&parent, bounds)?;
 +    if keyboard {
 +        window.set_focused(true);
@@ -4070,7 +4244,7 @@ index 2d66fed95c..89242e3f08 100644
          &mut self,
          wl_pointer: &WlPointer,
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234ef1..2ea3302106 100644
+index 8d92234ef1..40ffe5a914 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -11,12 +11,13 @@ use calloop::ping::Ping;
@@ -4099,7 +4273,7 @@ index 8d92234ef1..2ea3302106 100644
      appearance: WindowAppearance,
      blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
      viewport: Option<wp_viewport::WpViewport>,
-@@ -132,6 +136,10 @@ pub struct WaylandWindowState {
+@@ -132,6 +136,13 @@ pub struct WaylandWindowState {
      active: bool,
      hovered: bool,
      redraw_requested: bool,
@@ -4107,10 +4281,13 @@ index 8d92234ef1..2ea3302106 100644
 +    commit_parent: bool,
 +    /// Where an overlay is in its parent.
 +    over_origin: Point<Pixels>,
++    /// The scale an overlay drew its first frame at since it last showed, for the embedder's
++    /// checks to hold against its parent's (#2592).
++    first_frame_scale: Option<f32>,
      presentation: PresentationState,
      pending_frame_callback: Option<wl_callback::WlCallback>,
      in_progress_configure: Option<InProgressConfigure>,
-@@ -146,6 +154,24 @@ pub enum WaylandSurfaceState {
+@@ -146,6 +157,24 @@ pub enum WaylandSurfaceState {
      Xdg(WaylandXdgSurfaceState),
      LayerShell(WaylandLayerSurfaceState),
      Popup(WaylandPopupSurfaceState),
@@ -4135,7 +4312,7 @@ index 8d92234ef1..2ea3302106 100644
  }
  
  impl WaylandSurfaceState {
-@@ -157,6 +183,36 @@ impl WaylandSurfaceState {
+@@ -157,6 +186,36 @@ impl WaylandSurfaceState {
          popup_grab: Option<(u32, wl_seat::WlSeat)>,
          target_output: Option<wl_output::WlOutput>,
      ) -> anyhow::Result<Self> {
@@ -4172,7 +4349,7 @@ index 8d92234ef1..2ea3302106 100644
          // For layer_shell windows, create a layer surface instead of an xdg surface
          if let WindowKind::LayerShell(options) = &params.kind {
              let Some(layer_shell) = globals.layer_shell.as_ref() else {
-@@ -384,6 +440,9 @@ impl WaylandSurfaceState {
+@@ -384,6 +443,9 @@ impl WaylandSurfaceState {
              WaylandSurfaceState::Popup(WaylandPopupSurfaceState { xdg_surface, .. }) => {
                  xdg_surface.ack_configure(serial);
              }
@@ -4182,7 +4359,7 @@ index 8d92234ef1..2ea3302106 100644
          }
      }
  
-@@ -411,7 +470,10 @@ impl WaylandSurfaceState {
+@@ -411,7 +473,10 @@ impl WaylandSurfaceState {
              WaylandSurfaceState::Popup(WaylandPopupSurfaceState { xdg_surface, .. }) => {
                  Some(xdg_surface)
              }
@@ -4194,7 +4371,7 @@ index 8d92234ef1..2ea3302106 100644
          }
      }
  
-@@ -437,6 +499,9 @@ impl WaylandSurfaceState {
+@@ -437,6 +502,9 @@ impl WaylandSurfaceState {
              WaylandSurfaceState::Popup(WaylandPopupSurfaceState { xdg_surface, .. }) => {
                  xdg_surface.set_window_geometry(x, y, width, height);
              }
@@ -4204,7 +4381,7 @@ index 8d92234ef1..2ea3302106 100644
          }
      }
  
-@@ -538,6 +603,10 @@ impl WaylandSurfaceState {
+@@ -538,6 +606,10 @@ impl WaylandSurfaceState {
                  xdg_popup.destroy();
                  xdg_surface.destroy();
              }
@@ -4215,7 +4392,7 @@ index 8d92234ef1..2ea3302106 100644
          }
      }
  }
-@@ -588,7 +657,7 @@ impl WaylandWindowState {
+@@ -588,7 +660,7 @@ impl WaylandWindowState {
          };
  
          if let WaylandSurfaceState::Xdg(ref xdg_state) = surface_state {
@@ -4224,7 +4401,7 @@ index 8d92234ef1..2ea3302106 100644
                  xdg_state.toplevel.set_title(title.to_string());
              }
  
-@@ -610,6 +679,10 @@ impl WaylandWindowState {
+@@ -610,6 +682,10 @@ impl WaylandWindowState {
              children: FxHashMap::default(),
              surface,
              app_id: options.app_id,
@@ -4235,16 +4412,17 @@ index 8d92234ef1..2ea3302106 100644
              blur: None,
              viewport,
              globals,
-@@ -634,6 +707,8 @@ impl WaylandWindowState {
+@@ -634,6 +710,9 @@ impl WaylandWindowState {
              active: false,
              hovered: false,
              redraw_requested: false,
 +            commit_parent: false,
 +            over_origin: Point::default(),
++            first_frame_scale: None,
              presentation: PresentationState::Unpresented,
              pending_frame_callback: None,
              in_progress_window_controls: None,
-@@ -896,6 +971,293 @@ impl WaylandWindowStatePtr {
+@@ -896,6 +975,304 @@ impl WaylandWindowStatePtr {
          self.state.borrow().surface.clone()
      }
  
@@ -4265,6 +4443,16 @@ index 8d92234ef1..2ea3302106 100644
 +
 +    pub fn bounds_size(&self) -> Size<Pixels> {
 +        self.state.borrow().bounds.size
++    }
++
++    /// Device pixels a logical one, as the compositor last told this window's surface.
++    pub fn scale(&self) -> f32 {
++        self.state.borrow().scale
++    }
++
++    /// The scale this overlay drew its first frame at since it last showed, once it has.
++    pub fn first_frame_scale(&self) -> Option<f32> {
++        self.state.borrow().first_frame_scale
 +    }
 +
 +    /// What a configure does for a toplevel: the embedder, not the compositor, sizes a subsurface.
@@ -4360,6 +4548,7 @@ index 8d92234ef1..2ea3302106 100644
 +            subsurface.set_desync();
 +            state.surface_state = WaylandSurfaceState::Over(subsurface, parent.clone());
 +            state.over_origin = bounds.origin;
++            state.first_frame_scale = None;
 +            state.commit_parent = true;
 +            // What it last drew isn't what it shows now.
 +            state.redraw_requested = true;
@@ -4538,7 +4727,7 @@ index 8d92234ef1..2ea3302106 100644
      pub fn toplevel(&self) -> Option<xdg_toplevel::XdgToplevel> {
          self.state.borrow().surface_state.toplevel().cloned()
      }
-@@ -936,6 +1298,21 @@ impl WaylandWindowStatePtr {
+@@ -936,6 +1313,21 @@ impl WaylandWindowStatePtr {
      }
  
      pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
@@ -4560,7 +4749,7 @@ index 8d92234ef1..2ea3302106 100644
          self.frame_loop.set(FrameLoop::Ticking);
          let mut state = self.state.borrow_mut();
          state.resize_throttle = false;
-@@ -966,7 +1343,8 @@ impl WaylandWindowStatePtr {
+@@ -966,7 +1358,8 @@ impl WaylandWindowStatePtr {
          let mut state = self.state.borrow_mut();
  
          let frame_loop = self.frame_loop.get();
@@ -4570,7 +4759,7 @@ index 8d92234ef1..2ea3302106 100644
              return;
          }
  
-@@ -1024,6 +1402,12 @@ impl WaylandWindowStatePtr {
+@@ -1024,6 +1417,12 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -4583,7 +4772,7 @@ index 8d92234ef1..2ea3302106 100644
      pub fn retry_timer_fired(&self, signal_at: Instant) {
          if self.frame_loop.get() == FrameLoop::RetryScheduled {
              self.frame(
-@@ -1060,6 +1444,10 @@ impl WaylandWindowStatePtr {
+@@ -1060,6 +1459,10 @@ impl WaylandWindowStatePtr {
      }
  
      fn update_ime_enabled(&self) {
@@ -4594,17 +4783,17 @@ index 8d92234ef1..2ea3302106 100644
          let mut state = self.state.borrow_mut();
          if !state.active {
              return;
-@@ -1493,6 +1881,17 @@ impl WaylandWindowStatePtr {
+@@ -1493,6 +1896,17 @@ impl WaylandWindowStatePtr {
          }
      }
  
-+    /// Where the caret of the text field that has the keys is, if one has.
-+    pub fn text_caret(&self) -> Option<Bounds<Pixels>> {
++    /// Where the caret of the text field that has the keys is, if one has: `Some(None)` while
++    /// that isn't known, as when the field's text changed since it was last laid out.
++    pub fn text_caret(&self) -> Option<Option<Bounds<Pixels>>> {
 +        let mut input_handler = self.state.borrow_mut().input_handler.take()?;
 +        let caret = input_handler
 +            .query_accepts_text_input()
-+            .then(|| input_handler.ime_candidate_bounds())
-+            .flatten();
++            .then(|| input_handler.ime_candidate_bounds());
 +        self.state.borrow_mut().input_handler = Some(input_handler);
 +        caret
 +    }
@@ -4612,7 +4801,7 @@ index 8d92234ef1..2ea3302106 100644
      pub fn get_ime_area(&self) -> Option<Bounds<Pixels>> {
          let mut state = self.state.borrow_mut();
          let mut bounds: Option<Bounds<Pixels>> = None;
-@@ -1598,6 +1997,29 @@ impl WaylandWindowStatePtr {
+@@ -1598,6 +2012,29 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -4642,7 +4831,7 @@ index 8d92234ef1..2ea3302106 100644
      pub fn set_focused(&self, focus: bool) {
          self.state.borrow_mut().active = focus;
          let callback = self.callbacks.borrow_mut().active_status_change.take();
-@@ -1888,9 +2310,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -1888,9 +2325,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn set_title(&mut self, title: &str) {
@@ -4655,7 +4844,7 @@ index 8d92234ef1..2ea3302106 100644
      }
  
      fn set_app_id(&mut self, app_id: &str) {
-@@ -2011,6 +2435,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2011,6 +2450,13 @@ impl PlatformWindow for WaylandWindow {
      fn draw(&self, scene: &Scene) {
          let mut state = self.borrow_mut();
          let state = &mut *state;
@@ -4669,19 +4858,20 @@ index 8d92234ef1..2ea3302106 100644
          let Some(renderer) = &mut state.renderer else {
              return;
          };
-@@ -2046,6 +2477,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2046,6 +2492,12 @@ impl PlatformWindow for WaylandWindow {
          if renderer.draw(scene) {
              state.presentation = PresentationState::Presented;
              self.0.frame_loop.set(FrameLoop::AwaitingCallback);
-+            if let WaylandSurfaceState::Over(_, parent) = &state.surface_state
-+                && std::mem::take(&mut state.commit_parent)
-+            {
-+                parent.commit();
++            if let WaylandSurfaceState::Over(_, parent) = &state.surface_state {
++                state.first_frame_scale.get_or_insert(state.scale);
++                if std::mem::take(&mut state.commit_parent) {
++                    parent.commit();
++                }
 +            }
          } else {
              state.presentation = state.presentation.failed();
              self.0.frame_loop.set(FrameLoop::PresentationFailed);
-@@ -2208,6 +2644,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2208,6 +2660,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -4693,7 +4883,7 @@ index 8d92234ef1..2ea3302106 100644
          let state = self.borrow();
          if !state.active {
              return;
-@@ -2215,6 +2656,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2215,6 +2672,13 @@ impl PlatformWindow for WaylandWindow {
          state.client.update_ime_position(bounds);
      }
  
@@ -4732,7 +4922,7 @@ index f9b9727330..6d0cfcaabb 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..ea0a587ee2 100644
+index e21f019c64..13e49010b6 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -4751,7 +4941,7 @@ index e21f019c64..ea0a587ee2 100644
      protocol::xinput::ConnectionExt,
      protocol::xkb::ConnectionExt as _,
      protocol::xproto::{
-@@ -58,12 +60,22 @@ use crate::linux::{
+@@ -58,12 +60,40 @@ use crate::linux::{
  };
  use crate::linux::{LinuxCommon, LinuxKeyboardLayout, X11Window, modifiers_from_xinput_info};
  
@@ -4763,6 +4953,24 @@ index e21f019c64..ea0a587ee2 100644
 +    /// directly over that one as a window manager moves or raises it (`ConfigureNotify`).
 +    static OVER: RefCell<Vec<(xproto::Window, xproto::Window, i16, i16)>> =
 +        const { RefCell::new(Vec::new()) };
++    /// The overlays off screen with the top-level they show over, which the window manager hid, as
++    /// it does to show the desktop, minimize or change workspace (`overlays_away`).
++    static AWAY: RefCell<Vec<Away>> = const { RefCell::new(Vec::new()) };
++}
++
++/// Whether `window` is a top-level an overlay with the keys is off screen with (`overlays_away`).
++fn is_away_top(window: xproto::Window) -> bool {
++    AWAY.with_borrow(|all| all.iter().any(|each| each.top == window && each.keyboard))
++}
++
++/// An overlay the window manager hid with its top-level, whose own window no window manager takes.
++struct Away {
++    view: xproto::Window,
++    top: xproto::Window,
++    /// It had the keys, which it takes back once the window manager gives the top-level them.
++    keyboard: bool,
++    /// The top-level shows again, and the overlay with it.
++    back: bool,
 +}
 +
  use gpui::{
@@ -4775,7 +4983,7 @@ index e21f019c64..ea0a587ee2 100644
  };
  use gpui_wgpu::{CompositorGpuHint, GpuContext};
  
-@@ -163,8 +175,106 @@ pub struct Xdnd {
+@@ -163,8 +193,106 @@ pub struct Xdnd {
  struct PointerDeviceState {
      horizontal: ScrollAxisState,
      vertical: ScrollAxisState,
@@ -4783,8 +4991,8 @@ index e21f019c64..ea0a587ee2 100644
 +    /// touchpad doesn't end their scroll (`FingerScrolls`): Xwayland's devices and libinput's
 +    /// driver's do.
 +    lifts: bool,
- }
- 
++}
++
 +/// Fingers scrolling on a touchpad. XInput's smooth scrolling has no begin or end, so the first
 +/// scroll that isn't a wheel's starts it, and the scroll of nothing that libinput's driver and
 +/// Xwayland send as the fingers lift ends it, or for a driver that sends none (synaptics, evdev),
@@ -4801,8 +5009,8 @@ index e21f019c64..ea0a587ee2 100644
 +    position: Point<Pixels>,
 +    modifiers: Modifiers,
 +    last: Instant,
-+}
-+
+ }
+ 
 +/// A finger scroll's event, with the window it goes to.
 +type FingerEvent = (xproto::Window, gpui::ScrollEvent);
 +
@@ -4882,7 +5090,7 @@ index e21f019c64..ea0a587ee2 100644
  #[derive(Debug, Default)]
  struct ScrollAxisState {
      /// Valuator number for looking up this axis's scroll value.
-@@ -176,7 +286,7 @@ struct ScrollAxisState {
+@@ -176,7 +304,7 @@ struct ScrollAxisState {
      /// This gets set to `None` whenever it might be invalid - when devices change or when window focus changes.
      /// The logic errs on the side of invalidating this, since the consequence is just skipping the delta of one scroll event.
      /// The consequence of not invalidating it can be large invalid deltas, which are much more user visible.
@@ -4891,7 +5099,7 @@ index e21f019c64..ea0a587ee2 100644
  }
  
  pub struct X11ClientState {
-@@ -204,12 +314,17 @@ pub struct X11ClientState {
+@@ -204,12 +332,17 @@ pub struct X11ClientState {
      pub(crate) xcb_connection: Rc<XCBConnection>,
      xkb_device_id: i32,
      client_side_decorations_supported: bool,
@@ -4909,7 +5117,7 @@ index e21f019c64..ea0a587ee2 100644
      pub(crate) xkb: xkbc::State,
      keyboard_layout: LinuxKeyboardLayout,
      pub(crate) ximc: Option<X11rbClient<Rc<XCBConnection>>>,
-@@ -228,10 +343,16 @@ pub struct X11ClientState {
+@@ -228,10 +361,16 @@ pub struct X11ClientState {
      pub(crate) cursor_handle: cursor::Handle,
      pub(crate) cursor_styles: HashMap<xproto::Window, CursorStyle>,
      pub(crate) cursor_cache: HashMap<CursorStyle, Option<xproto::Cursor>>,
@@ -4926,7 +5134,7 @@ index e21f019c64..ea0a587ee2 100644
  
      pub(crate) supports_xinput_gestures: bool,
  
-@@ -239,6 +360,9 @@ pub struct X11ClientState {
+@@ -239,6 +378,9 @@ pub struct X11ClientState {
      pub(crate) clipboard: Clipboard,
      pub(crate) clipboard_item: Option<ClipboardItem>,
      pub(crate) xdnd_state: Xdnd,
@@ -4936,7 +5144,7 @@ index e21f019c64..ea0a587ee2 100644
  }
  
  #[derive(Clone)]
-@@ -416,7 +540,11 @@ impl X11Connection {
+@@ -416,7 +558,11 @@ impl X11Connection {
              .context("Failed to get XCB atoms")?;
  
          let root = xcb_connection.setup().roots[0].root;
@@ -4949,10 +5157,13 @@ index e21f019c64..ea0a587ee2 100644
          let gtk_frame_extents_supported =
              check_gtk_frame_extents_supported(&xcb_connection, &atoms, root);
          let client_side_decorations_supported = compositor_present && gtk_frame_extents_supported;
-@@ -488,6 +616,17 @@ impl X11Connection {
+@@ -487,6 +633,19 @@ impl X11Connection {
+ 
          let screen = &xcb_connection.setup().roots[x_root_index];
          let compositor_gpu = detect_compositor_gpu(&xcb_connection, screen);
- 
++        // Before the app's make_instance_early, whose device is chosen with it (#2384).
++        gpui_wgpu::WgpuContext::note_compositor_gpu(compositor_gpu);
++
 +        // The window manager's active window, which it names on the root, says whether the app
 +        // is active: GPUI's windows inside an embedder's hear no focus of their own.
 +        let active_root = screen.root;
@@ -4963,11 +5174,10 @@ index e21f019c64..ea0a587ee2 100644
 +            )
 +            .ok();
 +        let app_active = app_active(&xcb_connection, &atoms, active_root, &HashMap::default());
-+
+ 
          let xcb_connection = Rc::new(xcb_connection);
  
-         let ximc = X11rbClient::init(Rc::clone(&xcb_connection), x_root_index, None).ok();
-@@ -525,12 +664,15 @@ impl X11Connection {
+@@ -525,12 +684,15 @@ impl X11Connection {
                  xcb_connection,
                  xkb_device_id,
                  client_side_decorations_supported,
@@ -4983,7 +5193,7 @@ index e21f019c64..ea0a587ee2 100644
                  xkb: xkb_state,
                  keyboard_layout,
                  ximc,
-@@ -544,16 +686,21 @@ impl X11Connection {
+@@ -544,16 +706,21 @@ impl X11Connection {
                  cursor_handle,
                  cursor_styles: HashMap::default(),
                  cursor_cache: HashMap::default(),
@@ -5005,7 +5215,7 @@ index e21f019c64..ea0a587ee2 100644
              })
          })));
          // From here on, `Drop` removes whatever was registered if a later step fails.
-@@ -745,6 +892,10 @@ impl X11Client {
+@@ -745,6 +912,10 @@ impl X11Client {
              }
  
              for event in events.into_iter() {
@@ -5016,7 +5226,7 @@ index e21f019c64..ea0a587ee2 100644
                  let mut state = self.0.borrow_mut();
                  if !state.has_xim() {
                      drop(state);
-@@ -879,8 +1030,184 @@ impl X11Client {
+@@ -879,9 +1050,202 @@ impl X11Client {
              .map(|window_reference| window_reference.window.clone())
      }
  
@@ -5198,12 +5408,32 @@ index e21f019c64..ea0a587ee2 100644
 +                    },
 +                );
 +            }
++            // A window manager hides its windows by unmapping them, and the overlays over one,
++            // windows of their own that it doesn't take, go with it and come back with it.
++            Event::FocusIn(event) if is_away_top(event.event) => {
++                if !matches!(
++                    event.mode,
++                    xproto::NotifyMode::GRAB | xproto::NotifyMode::UNGRAB
++                ) && !matches!(
++                    event.detail,
++                    xproto::NotifyDetail::POINTER
++                        | xproto::NotifyDetail::POINTER_ROOT
++                        | xproto::NotifyDetail::NONE
++                ) {
++                    self.0.borrow().overlay_keys_back(event.event).log_err();
++                }
++            }
++            Event::FocusOut(event) if is_away_top(event.event) => {}
              Event::UnmapNotify(event) => {
++                self.0.borrow().overlays_away(event.window).log_err();
                  let mut state = self.0.borrow_mut();
                  if let Some(window_ref) = state.windows.get_mut(&event.window) {
-@@ -890,10 +1217,21 @@ impl X11Client {
+                     window_ref.is_mapped = false;
+@@ -889,11 +1253,23 @@ impl X11Client {
+                 handle_visibility_changed(state, event.window);
              }
              Event::MapNotify(event) => {
++                self.0.borrow().overlays_back(event.window).log_err();
                  let mut state = self.0.borrow_mut();
 -                if let Some(window_ref) = state.windows.get_mut(&event.window) {
 +                let window = (state.windows.get_mut(&event.window)).map(|window_ref| {
@@ -5225,7 +5455,7 @@ index e21f019c64..ea0a587ee2 100644
              }
              Event::VisibilityNotify(event) => {
                  let mut state = self.0.borrow_mut();
-@@ -1044,12 +1382,65 @@ impl X11Client {
+@@ -1044,12 +1420,65 @@ impl X11Client {
                          height: event.height.into(),
                      },
                  };
@@ -5291,7 +5521,7 @@ index e21f019c64..ea0a587ee2 100644
              Event::PropertyNotify(event) => {
                  let window = self.get_window(event.window)?;
                  window
-@@ -1069,6 +1460,19 @@ impl X11Client {
+@@ -1069,6 +1498,20 @@ impl X11Client {
                  self.enable_ime();
              }
              Event::FocusOut(event) => {
@@ -5305,13 +5535,14 @@ index e21f019c64..ea0a587ee2 100644
 +                    event.detail,
 +                    xproto::NotifyDetail::INFERIOR | xproto::NotifyDetail::POINTER
 +                ) && !crate::linux::overlay::to_show(event.event as usize)
++                    && !crate::linux::overlay::is_away(event.event as usize)
 +                {
 +                    crate::linux::overlay::left(event.event as usize);
 +                }
                  let window = self.get_window(event.event)?;
                  window.set_active(false);
                  let mut state = self.0.borrow_mut();
-@@ -1117,6 +1521,12 @@ impl X11Client {
+@@ -1117,6 +1560,12 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xkb(&state.xkb);
                  let capslock = capslock_from_xkb(&state.xkb);
@@ -5324,7 +5555,7 @@ index e21f019c64..ea0a587ee2 100644
                  if state.last_modifiers_changed_event == modifiers
                      && state.last_capslock_changed_event == capslock
                  {
-@@ -1156,7 +1566,17 @@ impl X11Client {
+@@ -1156,7 +1605,17 @@ impl X11Client {
                      let mut keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
                      let keysym = key_event_state.key_get_one_sym(code);
  
@@ -5342,7 +5573,7 @@ index e21f019c64..ea0a587ee2 100644
                          return Some(());
                      }
  
-@@ -1200,6 +1620,7 @@ impl X11Client {
+@@ -1200,6 +1659,7 @@ impl X11Client {
                      keystroke
                  };
                  drop(state);
@@ -5350,7 +5581,7 @@ index e21f019c64..ea0a587ee2 100644
                  window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
                      keystroke,
                      is_held: false,
-@@ -1220,6 +1641,9 @@ impl X11Client {
+@@ -1220,6 +1680,9 @@ impl X11Client {
                      let keysym = key_event_state.key_get_one_sym(code);
  
                      if keysym.is_modifier_key() {
@@ -5360,7 +5591,7 @@ index e21f019c64..ea0a587ee2 100644
                          return Some(());
                      }
  
-@@ -1230,7 +1654,24 @@ impl X11Client {
+@@ -1230,7 +1693,24 @@ impl X11Client {
              }
              Event::XinputButtonPress(event) => {
                  let window = self.get_window(event.event)?;
@@ -5385,7 +5616,7 @@ index e21f019c64..ea0a587ee2 100644
  
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
-@@ -1307,7 +1748,12 @@ impl X11Client {
+@@ -1307,7 +1787,12 @@ impl X11Client {
                      }
                  }
              }
@@ -5399,7 +5630,7 @@ index e21f019c64..ea0a587ee2 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  let modifiers = modifiers_from_xinput_info(event.mods);
-@@ -1332,7 +1778,26 @@ impl X11Client {
+@@ -1332,7 +1817,26 @@ impl X11Client {
                      None => {}
                  }
              }
@@ -5427,7 +5658,7 @@ index e21f019c64..ea0a587ee2 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  state.restore_cursor_after_hide();
-@@ -1384,15 +1849,15 @@ impl X11Client {
+@@ -1384,15 +1888,15 @@ impl X11Client {
                  if let Some(pointer) = state.pointer_device_states.get_mut(&event.sourceid) {
                      let scroll_delta = get_scroll_delta_and_update_state(pointer, &event);
                      drop(state);
@@ -5449,7 +5680,7 @@ index e21f019c64..ea0a587ee2 100644
              Event::XinputEnter(event) if event.mode == xinput::NotifyMode::NORMAL => {
                  let window = self.get_window(event.event)?;
                  window.set_hovered(true);
-@@ -1413,9 +1878,15 @@ impl X11Client {
+@@ -1413,9 +1917,15 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
@@ -5465,7 +5696,7 @@ index e21f019c64..ea0a587ee2 100644
                  window.handle_input(PlatformInput::MouseExited(gpui::MouseExitEvent {
                      pressed_button,
                      position,
-@@ -1523,6 +1994,35 @@ impl X11Client {
+@@ -1523,6 +2033,35 @@ impl X11Client {
          };
      }
  
@@ -5501,7 +5732,7 @@ index e21f019c64..ea0a587ee2 100644
      fn xim_handle_event(&self, event: Event) -> Option<()> {
          match event {
              Event::KeyPress(event) | Event::KeyRelease(event) => {
-@@ -1781,7 +2281,7 @@ impl X11Client {
+@@ -1781,7 +2320,7 @@ impl X11Client {
              return;
          }
  
@@ -5510,7 +5741,7 @@ index e21f019c64..ea0a587ee2 100644
              return;
          };
  
-@@ -1842,8 +2342,9 @@ impl X11Client {
+@@ -1842,8 +2381,9 @@ impl X11Client {
          let mut state = self.0.borrow_mut();
          state
              .clipboard
@@ -5521,7 +5752,7 @@ index e21f019c64..ea0a587ee2 100644
                  clipboard::ClipboardKind::Clipboard,
                  clipboard::WaitConfig::None,
              )
-@@ -1888,6 +2389,11 @@ impl X11Client {
+@@ -1888,6 +2428,11 @@ impl X11Client {
          })
      }
  
@@ -5533,7 +5764,7 @@ index e21f019c64..ea0a587ee2 100644
      pub(crate) fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
          let state = self.0.borrow();
          let root = state.xcb_connection.setup().roots[state.x_root_index].root;
-@@ -2052,6 +2558,9 @@ impl X11ClientState {
+@@ -2052,6 +2597,9 @@ impl X11ClientState {
          x_window: xproto::Window,
          refresh_rate: Duration,
      ) -> RegistrationToken {
@@ -5543,7 +5774,7 @@ index e21f019c64..ea0a587ee2 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,6 +2596,614 @@ impl X11ClientState {
+@@ -2087,6 +2635,739 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
@@ -5686,14 +5917,7 @@ index e21f019c64..ea0a587ee2 100644
 +            }
 +            // The embedder's, whose moves and raises GPUI hears of; not one of GPUI's, whose events
 +            // it already has.
-+            let top = self.top_level(parent)?;
-+            if !self.windows.contains_key(&top) {
-+                let watch = xproto::EventMask::STRUCTURE_NOTIFY;
-+                xcb.change_window_attributes(
-+                    top,
-+                    &xproto::ChangeWindowAttributesAux::new().event_mask(watch),
-+                )?;
-+            }
++            self.watch_top(self.top_level(parent)?)?;
 +        }
 +        self.move_overlay(view, parent, bounds, outline, panel)?;
 +        // A shadow under another overlay would be drawn opaque without a compositor.
@@ -5983,10 +6207,142 @@ index e21f019c64..ea0a587ee2 100644
 +        let focus = self.xcb_connection.get_input_focus()?.reply()?.focus;
 +        let elsewhere = !gave && from != x11rb::NONE && focus != view && focus != from;
 +        OVER.with_borrow_mut(|all| all.retain(|&(each, ..)| each != view));
++        let away = AWAY.with_borrow_mut(|all| {
++            let top = all
++                .iter()
++                .find(|each| each.view == view)
++                .map(|each| each.top);
++            all.retain(|each| each.view != view);
++            top
++        });
++        if let Some(top) = away {
++            self.watch_top(top)?;
++        }
 +        let xcb = &self.xcb_connection;
 +        xcb.unmap_window(view)?;
 +        xcb.flush()?;
 +        Ok(elsewhere)
++    }
++
++    /// The window manager hid `top`, the top-level overlays show over: they go off screen with it,
++    /// and the keyboard leaving one then isn't the user leaving it. `top` is watched for the input
++    /// focus until the one with the keys has them back (`overlay_keys_back`).
++    fn overlays_away(&self, top: xproto::Window) -> anyhow::Result<()> {
++        let views: Vec<_> = OVER.with_borrow(|all| {
++            (all.iter())
++                .filter(|&&(_, each, ..)| each == top)
++                .map(|&(view, ..)| view)
++                .collect()
++        });
++        if views.is_empty() {
++            return Ok(());
++        }
++        let xcb = &self.xcb_connection;
++        for view in views {
++            // A shadow under another overlay, which shows only where a compositor blends it.
++            let attributes = xcb.get_window_attributes(view)?.reply()?;
++            if attributes.map_state == xproto::MapState::UNMAPPED
++                || AWAY.with_borrow(|all| all.iter().any(|each| each.view == view))
++            {
++                continue;
++            }
++            let keyboard = crate::linux::overlay::set_away(view as usize, true);
++            AWAY.with_borrow_mut(|all| {
++                all.push(Away {
++                    view,
++                    top,
++                    keyboard,
++                    back: false,
++                })
++            });
++            xcb.unmap_window(view)?;
++        }
++        self.watch_top(top)?;
++        xcb.flush()?;
++        Ok(())
++    }
++
++    /// The window manager shows `top` again: its overlays come back over it, in their order. The
++    /// one with the keys takes them once the window manager gives `top` the input focus, as a
++    /// window manager does to a window it shows again, rather than racing it for them now.
++    fn overlays_back(&self, top: xproto::Window) -> anyhow::Result<()> {
++        let back: Vec<_> = AWAY.with_borrow_mut(|all| {
++            (all.iter_mut())
++                .filter(|each| each.top == top && !each.back)
++                .map(|each| {
++                    each.back = true;
++                    (each.view, each.keyboard)
++                })
++                .collect()
++        });
++        if back.is_empty() {
++            return Ok(());
++        }
++        let xcb = &self.xcb_connection;
++        for &(view, keyboard) in &back {
++            xcb.map_window(view)?;
++            let over = (xproto::ConfigureWindowAux::new())
++                .sibling(top)
++                .stack_mode(xproto::StackMode::ABOVE);
++            xcb.configure_window(view, &over)?;
++            if !keyboard {
++                crate::linux::overlay::set_away(view as usize, false);
++                AWAY.with_borrow_mut(|all| all.retain(|each| each.view != view));
++            }
++        }
++        // One that shows under another goes back under it.
++        for &(view, _) in &back {
++            if let Some(above) = crate::linux::overlay::under(view as usize)
++                .filter(|&above| crate::linux::overlay::is_shown(above))
++            {
++                let under = (xproto::ConfigureWindowAux::new())
++                    .sibling(above as xproto::Window)
++                    .stack_mode(xproto::StackMode::BELOW);
++                xcb.configure_window(view, &under)?;
++            }
++        }
++        self.watch_top(top)?;
++        xcb.flush()?;
++        Ok(())
++    }
++
++    /// The window manager gave `top`, shown again, the input focus: the overlay over it that had
++    /// the keys takes them back, as it had them when `top` was hidden.
++    fn overlay_keys_back(&self, top: xproto::Window) -> anyhow::Result<()> {
++        let views: Vec<_> = AWAY.with_borrow_mut(|all| {
++            let views = (all.iter())
++                .filter(|each| each.top == top && each.back)
++                .map(|each| each.view)
++                .collect();
++            all.retain(|each| !(each.top == top && each.back));
++            views
++        });
++        for view in views {
++            crate::linux::overlay::set_away(view as usize, false);
++            if crate::linux::overlay::is_shown(view as usize) {
++                self.overlay_takes_focus(view, None)?;
++            }
++        }
++        self.watch_top(top)
++    }
++
++    /// Watches the top-level `top` for its moves and raises, and while an overlay over it waits to
++    /// take the keys back, for the input focus.
++    fn watch_top(&self, top: xproto::Window) -> anyhow::Result<()> {
++        if self.windows.contains_key(&top) {
++            return Ok(());
++        }
++        let mut watch = xproto::EventMask::STRUCTURE_NOTIFY;
++        if AWAY.with_borrow(|all| all.iter().any(|each| each.top == top && each.keyboard)) {
++            watch |= xproto::EventMask::FOCUS_CHANGE;
++        }
++        let xcb = &self.xcb_connection;
++        xcb.change_window_attributes(
++            top,
++            &xproto::ChangeWindowAttributesAux::new().event_mask(watch),
++        )?;
++        xcb.flush()?;
++        Ok(())
 +    }
 +
 +    /// Shows `view`, a window of GPUI's opened with `show: false`, as a window of its own, in front
@@ -6158,7 +6514,7 @@ index e21f019c64..ea0a587ee2 100644
      fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
          if let Some(cursor) = self.cursor_cache.get(&style) {
              return *cursor;
-@@ -2197,7 +3314,7 @@ impl X11ClientState {
+@@ -2197,7 +3478,7 @@ impl X11ClientState {
              .get(&hidden_window)
              .copied()
              .unwrap_or(CursorStyle::Arrow);
@@ -6167,7 +6523,7 @@ index e21f019c64..ea0a587ee2 100644
              log::warn!(
                  "X11: no cursor icon available to restore {:?} after hide; cursor may stay invisible",
                  style
-@@ -2232,6 +3349,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+@@ -2232,6 +3513,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
      Duration::from_micros(micros)
  }
  
@@ -6208,7 +6564,7 @@ index e21f019c64..ea0a587ee2 100644
  /// Applies a mapped/obscured change to the refresh loop and reports the
  /// resulting visibility to the window. Consumes the client borrow because the
  /// visibility callback re-enters GPUI.
-@@ -2246,10 +3397,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +3561,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -6263,7 +6619,7 @@ index e21f019c64..ea0a587ee2 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +3468,40 @@ fn detect_compositor_gpu(
+@@ -2273,73 +3632,40 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -6291,8 +6647,15 @@ index e21f019c64..ea0a587ee2 100644
 -    // Method 2: Check for _NET_WM_CM_OWNER
 -    let atom_name = "_NET_WM_CM_OWNER";
 -    let atom2 = get_reply(
--        || format!("Failed to intern {atom_name}"),
--        xcb_connection.intern_atom(false, atom_name.as_bytes()),
++/// Whether a compositor runs on the screen `screen`: one owns its `_NET_WM_CM_S<screen>` selection,
++/// as EWMH has a compositing manager do. A window manager that only says it's one, such as openbox
++/// under Xvfb, sets `_NET_SUPPORTING_WM_CHECK` but composites nothing, and the X server then draws
++/// a window's transparent pixels opaque.
++fn check_compositor_present(xcb_connection: &XCBConnection, screen: usize) -> bool {
++    let atom_name = format!("_NET_WM_CM_S{screen}");
++    let owner = get_reply(
+         || format!("Failed to intern {atom_name}"),
+         xcb_connection.intern_atom(false, atom_name.as_bytes()),
 -    );
 -    let method2 = match atom2.log_with_level(Level::Debug) {
 -        Some(reply) if reply.atom != x11rb::NONE => {
@@ -6310,15 +6673,8 @@ index e21f019c64..ea0a587ee2 100644
 -    // Method 3: Check for _NET_SUPPORTING_WM_CHECK
 -    let atom_name = "_NET_SUPPORTING_WM_CHECK";
 -    let atom3 = get_reply(
-+/// Whether a compositor runs on the screen `screen`: one owns its `_NET_WM_CM_S<screen>` selection,
-+/// as EWMH has a compositing manager do. A window manager that only says it's one, such as openbox
-+/// under Xvfb, sets `_NET_SUPPORTING_WM_CHECK` but composites nothing, and the X server then draws
-+/// a window's transparent pixels opaque.
-+fn check_compositor_present(xcb_connection: &XCBConnection, screen: usize) -> bool {
-+    let atom_name = format!("_NET_WM_CM_S{screen}");
-+    let owner = get_reply(
-         || format!("Failed to intern {atom_name}"),
-         xcb_connection.intern_atom(false, atom_name.as_bytes()),
+-        || format!("Failed to intern {atom_name}"),
+-        xcb_connection.intern_atom(false, atom_name.as_bytes()),
 -    );
 -    let method3 = match atom3.log_with_level(Level::Debug) {
 -        Some(reply) if reply.atom != x11rb::NONE => {
@@ -6368,7 +6724,7 @@ index e21f019c64..ea0a587ee2 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +3627,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +3791,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -6389,7 +6745,7 @@ index e21f019c64..ea0a587ee2 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +3674,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +3838,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -6398,7 +6754,7 @@ index e21f019c64..ea0a587ee2 100644
                          },
                      ))
                  }
-@@ -2539,10 +3717,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +3881,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -6412,7 +6768,7 @@ index e21f019c64..ea0a587ee2 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +3735,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +3899,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -6429,7 +6785,7 @@ index e21f019c64..ea0a587ee2 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +3750,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +3914,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -6465,7 +6821,7 @@ index e21f019c64..ea0a587ee2 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +3829,11 @@ fn get_scale_factor(
+@@ -2620,6 +3993,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -6477,7 +6833,7 @@ index e21f019c64..ea0a587ee2 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +4112,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +4276,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
@@ -6608,7 +6964,7 @@ index e21f019c64..ea0a587ee2 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +4551,101 @@ mod tests {
+@@ -3213,3 +4715,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }

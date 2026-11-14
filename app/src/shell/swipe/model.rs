@@ -3,8 +3,9 @@
 //! `SWIPE_MODEL_CSV=path cargo test --release --lib write_swipe_model -- --ignored` writes the
 //! page's place over time for each, to plot, and `swipe_model_stats` tries many gestures. The
 //! trackpad's rate, its noise and AppKit's momentum are assumed; the demo's `?trace=1` records a
-//! real swipe's wheel events to check them against.
+//! real swipe's wheel events to check them against, and `replay_wheel_trace` replays one.
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 use web_time::Instant;
@@ -45,6 +46,11 @@ struct Event {
 /// AppKit's momentum at the speed they lifted at. A trackpad's own events come a little unevenly,
 /// and its fingers' deltas by a quarter either way, from `seed`; the momentum's are smooth.
 fn gesture(lift_ms: f64, seed: u64, speed: impl Fn(f64) -> f64) -> Vec<Event> {
+    gesture_falling(lift_ms, seed, MOMENTUM_TAU_MS, speed)
+}
+
+/// The same, with the momentum falling away as e^(−t/`tau_ms`).
+fn gesture_falling(lift_ms: f64, seed: u64, tau_ms: f64, speed: impl Fn(f64) -> f64) -> Vec<Event> {
     let mut random = seed
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
@@ -83,7 +89,7 @@ fn gesture(lift_ms: f64, seed: u64, speed: impl Fn(f64) -> f64) -> Vec<Event> {
     let mut t = 0.;
     loop {
         t += EVENT_MS;
-        let dx = lifted * EVENT_MS * (-t / MOMENTUM_TAU_MS).exp();
+        let dx = lifted * EVENT_MS * (-t / tau_ms).exp();
         if dx.abs() < 0.1 {
             break;
         }
@@ -287,6 +293,10 @@ type Send = Box<dyn Fn(&mut Shell, Instant, &mut gpui::Window, &mut gpui::Contex
 /// What a run gives: the page's place each step, and the Spaces the shell asked to show.
 struct Run {
     slides: Vec<f32>,
+    /// Each step, the pages drawn and where, as `pages` has them, in Spaces from the shown's place.
+    pages: Vec<Vec<(u64, f32)>>,
+    /// Each step, whether fingers are down on a swipe.
+    down: Vec<bool>,
     shown: Vec<u64>,
     /// When the shell first asked for another Space.
     first_shown_ms: Option<f64>,
@@ -304,8 +314,9 @@ impl Run {
 }
 
 /// The fingers' and momentum's events, each `(ms, what)` as `send` gives it to the shell, which
-/// shows a Space as soon as it asks to, as the core does, with the page's place each step.
-fn run(cx: &mut TestAppContext, end_ms: f64, mut events: Vec<(f64, Send)>) -> Run {
+/// shows a Space as soon as it asks to, as the core does, with the page's place each step. The
+/// window draws at `frames`, in ms, after the events up to each.
+fn run(cx: &mut TestAppContext, end_ms: f64, mut events: Vec<(f64, Send)>, frames: &[f64]) -> Run {
     let (shell, host, cx) = five_spaces(cx);
     let start = cx.executor().now();
     let at = |ms: f64| start + Duration::from_secs_f64(ms / 1000.);
@@ -318,6 +329,8 @@ fn run(cx: &mut TestAppContext, end_ms: f64, mut events: Vec<(f64, Send)>) -> Ru
     events.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut events = events.into_iter().peekable();
     let mut slides = Vec::new();
+    let mut pages = Vec::new();
+    let mut down = Vec::new();
     let mut first_shown_ms = None;
     // The core shows a Space as soon as the shell asks, whether an event or a timer asked.
     let show = |cx: &mut gpui::VisualTestContext, when: f64, first: &mut Option<f64>| {
@@ -331,23 +344,45 @@ fn run(cx: &mut TestAppContext, end_ms: f64, mut events: Vec<(f64, Send)>) -> Ru
             }
         });
     };
+    // The Library's motion, among others, ends only as it's drawn: undrawn, a closed Library
+    // stayed in motion, and the next swipe moved it instead of the Spaces.
+    let mut frames = frames.iter().copied().peekable();
+    let draw = |cx: &mut gpui::VisualTestContext, frame: f64| {
+        to(cx, frame);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    };
     let mut ms = 0.;
     while ms <= end_ms {
         while let Some((when, send)) = events.next_if(|(when, _)| *when <= ms) {
+            // A browser hands on the events a frame heard before it draws that frame.
+            while let Some(frame) = frames.next_if(|&frame| frame < when) {
+                draw(cx, frame);
+            }
             to(cx, when);
             show(cx, when, &mut first_shown_ms);
             let now = at(when);
             shell.update_in(cx, |shell, window, cx| send(shell, now, window, cx));
             show(cx, when, &mut first_shown_ms);
         }
+        while let Some(frame) = frames.next_if(|&frame| frame <= ms) {
+            draw(cx, frame);
+        }
         to(cx, ms);
         show(cx, ms, &mut first_shown_ms);
         slides.push(shell.read_with(cx, |shell, _| slide(shell)));
+        pages.push(shell.read_with(cx, |shell, _| {
+            let width = shell.width();
+            let pages = shell.pages().into_iter();
+            pages.map(|(space, x)| (space, x / width)).collect()
+        }));
+        down.push(shell.read_with(cx, |shell, _| shell.swipe.is_some()));
         ms += STEP_MS;
     }
     let shown = host.shown.borrow().clone();
     Run {
         slides,
+        pages,
+        down,
         shown,
         first_shown_ms,
     }
@@ -387,7 +422,7 @@ fn in_app(cx: &mut TestAppContext, events: &[Event], end_ms: f64) -> Run {
             (event.at_ms, send)
         })
         .collect();
-    run(cx, end_ms, sends)
+    run(cx, end_ms, sends, &[])
 }
 
 /// The site's demo: the browser's wheel events, each at its stamp, and the quiet timers they set.
@@ -408,7 +443,7 @@ fn in_demo_wheels(cx: &mut TestAppContext, wheels: Vec<Wheel>, end_ms: f64) -> R
             (at_ms, send)
         })
         .collect();
-    run(cx, end_ms, sends)
+    run(cx, end_ms, sends, &[])
 }
 
 /// The deliveries the demo is compared in.
@@ -445,6 +480,18 @@ fn the_demo_swipes_as_the_app_does_while_the_fingers_drift(cx: &mut TestAppConte
     }
 }
 
+/// Drags that turn back past where they began, which a browser summing two events a frame at 60
+/// Hz once had the demo lift and land on the next Space mid-drag, where the app turns to the one
+/// before: seed 13 a hand slowing evenly enough, over a few frames, to read as momentum's steady
+/// fall, and seed 25 the hand braking for its turn as momentum's gentle one.
+#[gpui::test]
+fn the_demo_turns_back_as_the_app_does(cx: &mut TestAppContext) {
+    for seed in [13, 25] {
+        let events = random_gesture(2, seed);
+        swipes_as_the_app_does(cx, &format!("turn back, seed {seed}"), &events);
+    }
+}
+
 fn swipes_as_the_app_does(cx: &mut TestAppContext, name: &str, events: &[Event]) {
     const STEP_SLACK: f32 = 0.05;
     let end = events.last().map_or(0., |event| event.at_ms) + 400.;
@@ -466,6 +513,134 @@ fn swipes_as_the_app_does(cx: &mut TestAppContext, name: &str, events: &[Event])
             step <= app_step + STEP_SLACK,
             "{way}: {step} of a Space in a frame, the app {app_step}"
         );
+    }
+}
+
+/// A hard flick toward the next Space, at `peak` points a millisecond as the fingers lift, with
+/// momentum falling as e^(−t/`tau_ms`), seconds long.
+fn hard_flick(peak: f64, tau_ms: f64, seed: u64) -> Vec<Event> {
+    let lift = 70. + 50. * draw(seed, 7);
+    gesture_falling(lift, seed, tau_ms, move |t| -ramp(t, 0., lift, 0., peak))
+}
+
+impl Run {
+    /// The step the fingers last lifted at, after which the page only settles.
+    fn released(&self) -> usize {
+        self.down
+            .iter()
+            .rposition(|&down| down)
+            .map_or(0, |step| step + 1)
+    }
+
+    /// How far the page went past the Space it ends on, toward the one after, in Spaces.
+    fn past(&self) -> f32 {
+        let end = self.slides.last().copied().unwrap_or(0.);
+        let start = self.slides.first().copied().unwrap_or(0.);
+        let ahead = (end - start).signum();
+        let most = self.slides.iter().map(|place| (place - end) * ahead);
+        most.fold(0., f32::max)
+    }
+
+    /// Once the fingers lifted, the first step the page went further from the place it ends at,
+    /// and from how far to how far, in Spaces: the settle heading on past its place.
+    fn heads_away(&self) -> Option<(f64, f32, f32)> {
+        const SLACK: f32 = 0.002;
+        let end = self.slides.last().copied().unwrap_or(0.);
+        let mut nearest = f32::MAX;
+        for (step, &place) in self.slides.iter().enumerate().skip(self.released()) {
+            let off = (place - end).abs();
+            if off > nearest + SLACK {
+                return Some((step as f64 * STEP_MS, nearest, off));
+            }
+            nearest = nearest.min(off);
+        }
+        None
+    }
+
+    /// The first step two pages were drawn closer than a width apart, over each other.
+    fn overlaps(&self) -> Option<(f64, f32)> {
+        self.pages.iter().enumerate().find_map(|(step, pages)| {
+            let pairs = pages.iter().zip(pages.iter().skip(1));
+            let gaps = pairs.map(|((_, x), (_, y))| (x - y).abs());
+            let gap = gaps.fold(f32::MAX, f32::min);
+            (gap < 0.998).then_some((step as f64 * STEP_MS, gap))
+        })
+    }
+}
+
+/// How much further than the app's a hard flick may take the page past its Space, in Spaces: a
+/// browser's lift comes some events late, and at 60 Hz the frame that straddles it can read as the
+/// fingers' fastest and stretch the band a pixel.
+const PAST_SLACK: f32 = 0.005;
+
+/// A hard flick lands on the next Space, as the app's does, goes no further past it than the app's
+/// give or take PAST_SLACK, and once the demo finds the fingers lifted, the page settles there
+/// without heading on toward the Space after, however long the momentum runs; the two pages drawn
+/// as it moves never overlap.
+#[gpui::test]
+fn a_hard_flick_settles_on_one_space(cx: &mut TestAppContext) {
+    for (peak, tau) in [(2., 400.), (4., 400.), (6., 400.), (4., 800.)] {
+        for (slope, wobble) in [(0., 0.), (0.5, 0.5)] {
+            for seed in 0..3 {
+                let events = drifting(hard_flick(peak, tau, seed), slope, wobble, seed);
+                let end = events.last().map_or(0., |event| event.at_ms) + 400.;
+                let app = in_app(cx, &events, end);
+                assert_eq!(app.shown, vec![4], "the app's");
+                for delivery in deliveries() {
+                    let demo = in_demo(cx, &events, delivery, end);
+                    let way = format!(
+                        "{peak} pt/ms, τ {tau} ms, drift {slope}/{wobble}, seed {seed}, {}",
+                        delivery.name()
+                    );
+                    assert_eq!(demo.shown, app.shown, "{way}: the Spaces shown");
+                    assert_eq!(demo.heads_away(), None, "{way}: after the lift");
+                    assert_eq!(demo.overlaps(), None, "{way}: pages over each other");
+                    let (past, app_past) = (demo.past(), app.past());
+                    assert!(
+                        past <= app_past + PAST_SLACK,
+                        "{way}: {past:.3} of a Space past its place, the app {app_past:.3}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// For hard flicks of each speed and momentum, drifting or not, in each way a browser hands them
+/// on: in how many the demo shows other Spaces than the app, the page heads away from its place
+/// after the lift, or goes further past it than the app's, and the most it went past in each.
+#[gpui::test]
+#[ignore]
+fn hard_flick_stats(cx: &mut TestAppContext) {
+    for (peak, tau) in [
+        (2., 400.),
+        (3., 400.),
+        (4., 400.),
+        (6., 400.),
+        (4., 800.),
+        (6., 800.),
+    ] {
+        for (slope, wobble) in [(0., 0.), (0.5, 0.5)] {
+            for delivery in deliveries() {
+                let (mut shown, mut away, mut further) = (0, 0, 0);
+                let (mut app_past, mut demo_past) = (0f32, 0f32);
+                for seed in 0..12 {
+                    let events = drifting(hard_flick(peak, tau, seed), slope, wobble, seed);
+                    let end = events.last().map_or(0., |event| event.at_ms) + 400.;
+                    let app = in_app(cx, &events, end);
+                    let demo = in_demo(cx, &events, delivery, end);
+                    shown += usize::from(demo.shown != app.shown);
+                    away += usize::from(demo.heads_away().is_some());
+                    further += usize::from(demo.past() > app.past() + PAST_SLACK);
+                    app_past = app_past.max(app.past());
+                    demo_past = demo_past.max(demo.past());
+                }
+                eprintln!(
+                    "{peak} pt/ms τ {tau:>3} drift {slope}/{wobble} {:>22}: other Spaces {shown:>2}/12, heads away after the lift {away:>2}/12, further past {further:>2}/12, most past app {app_past:.3} demo {demo_past:.3}",
+                    delivery.name()
+                );
+            }
+        }
     }
 }
 
@@ -608,12 +783,19 @@ fn random_gesture(kind: usize, seed: u64) -> Vec<Event> {
 }
 
 /// For many gestures of each kind, how often the demo shows other Spaces than the app, and how
-/// much later it first asks for one.
+/// much later it first asks for one. `SWIPE_KIND=0` to `3` runs one kind, so the four can run
+/// apart.
 #[gpui::test]
 #[ignore]
 fn swipe_model_stats(cx: &mut TestAppContext) {
     let kinds = ["slow drag", "flick", "turn back", "two flicks"];
+    let only = std::env::var("SWIPE_KIND")
+        .ok()
+        .and_then(|kind| kind.parse().ok());
     for (kind, name) in kinds.iter().enumerate() {
+        if only.is_some_and(|only: usize| only != kind) {
+            continue;
+        }
         for delivery in deliveries() {
             let (mut wrong, mut lags, mut examples) = (0, Vec::new(), Vec::new());
             for seed in 0..60 {
@@ -772,4 +954,193 @@ fn a_swipe_never_moves_more_than_one_space_in_many_timings(cx: &mut TestAppConte
         }
     }
     assert_eq!(doubles, 0, "swipes that moved more than one Space");
+}
+
+/// What the demo decided of a swipe: the trace's event it decided at, and the kind and what.
+type Decision = (usize, String, String);
+
+/// `trace`, as the demo's `?trace` saves it, through the demo from `space` of five, with what it
+/// decided. A version 2 trace marks the events the demo took, and the rest went elsewhere on the
+/// page; an earlier one gives them all.
+fn replay(cx: &mut TestAppContext, trace: &serde_json::Value, space: u64) -> (Run, Vec<Decision>) {
+    let events = trace["events"].as_array().cloned().unwrap_or_default();
+    let marked = events.iter().any(|event| event.get("demo").is_some());
+    let number = |event: &serde_json::Value, key: &str| event[key].as_f64().unwrap_or(0.);
+    let first = events.first().map_or(0., |event| number(event, "heard"));
+    let decided = Rc::new(RefCell::new(Vec::new()));
+    let index = Rc::new(Cell::new(0));
+    let (notes, at) = (decided.clone(), index.clone());
+    let listen: Send = Box::new(move |shell, _, _, cx| {
+        shell.set_space(space, cx);
+        shell.settle = None;
+        let (notes, at) = (notes.clone(), at.clone());
+        // As the page's trace does, "wheel" only marks an event the demo took.
+        shell.note_wheel(Rc::new(move |kind, what| {
+            if kind != "wheel" {
+                notes
+                    .borrow_mut()
+                    .push((at.get(), kind.into(), what.into()));
+            }
+        }));
+    });
+    let mut sends = vec![(0., listen)];
+    for (i, event) in events.iter().enumerate() {
+        if marked && event.get("demo").is_none() {
+            continue;
+        }
+        let heard = number(event, "heard") - first;
+        let stamped =
+            Duration::from_secs_f64((heard + first - number(event, "stamp")).max(0.) / 1000.);
+        // As gpui_web hands them on.
+        let (dx, dy) = (-number(event, "x") as f32, -number(event, "y") as f32);
+        let lines = number(event, "mode") == 1.;
+        let index = index.clone();
+        let send: Send = Box::new(move |shell, now, window, cx| {
+            index.set(i);
+            let mut event = scroll(TouchPhase::Moved, dx, dy);
+            if lines {
+                event.delta = ScrollDelta::Lines(point(dx, dy));
+            }
+            shell.web_scroll(&event, now - stamped, window, cx);
+        });
+        sends.push((heard, send));
+    }
+    let end = sends.last().map_or(0., |(heard, _)| *heard) + 1000.;
+    let frames: Vec<f64> = trace["frames"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|frame| Some(frame.as_f64()? - first))
+        .filter(|&frame| frame >= 0.)
+        .collect();
+    let run = run(cx, end, sends, &frames);
+    let decided = decided.borrow().clone();
+    (run, decided)
+}
+
+/// `WHEEL_TRACE=path cargo test --release --lib replay_wheel_trace -- --ignored --nocapture`
+/// replays a trace the demo's `?trace` saved through the demo, and prints what it decides at each
+/// event beside what the page decided, marking where they differ. The model decides as the page
+/// did unless the page's events came at other times than they say, or the code has changed since.
+/// Space moves are counted from where the swipe began. The replay starts on the Space
+/// `WHEEL_TRACE_SPACE` names, 1 to 5 and the middle one by default, so give the one the page's
+/// swipes began on, such as 1 for the site's first. The app can't be replayed: a browser's events
+/// don't say where AppKit's phases fall.
+#[gpui::test]
+#[ignore]
+fn replay_wheel_trace(cx: &mut TestAppContext) {
+    let path = std::env::var("WHEEL_TRACE").expect("WHEEL_TRACE names a trace");
+    let trace: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("the trace")).expect("JSON");
+    let recorded: Vec<Decision> = trace["decisions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|decision| {
+            let text = |key: &str| decision[key].as_str().unwrap_or_default().to_string();
+            let event = decision["event"].as_u64().unwrap_or(0) as usize;
+            (event, text("kind"), text("what"))
+        })
+        .collect();
+    let space =
+        std::env::var("WHEEL_TRACE_SPACE").map_or(3, |space| space.parse().expect("1 to 5"));
+    let (run, replayed) = replay(cx, &trace, space);
+    let frames: Vec<f64> = trace["frames"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|frame| frame.as_f64())
+        .collect();
+    let mut gaps: Vec<f64> = frames.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    gaps.sort_by(f64::total_cmp);
+    println!(
+        "{} events, {} frames, median frame {:.1} ms, version {}",
+        trace["events"].as_array().map_or(0, Vec::len),
+        frames.len(),
+        gaps.get(gaps.len() / 2).copied().unwrap_or(0.),
+        trace["version"].as_u64().unwrap_or(1),
+    );
+    let at = |decisions: &[Decision], event: usize| {
+        let them = decisions.iter().filter(|decision| decision.0 == event);
+        them.map(|(_, kind, what)| format!("{kind} {what}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut events: Vec<usize> = recorded.iter().chain(&replayed).map(|d| d.0).collect();
+    events.sort_unstable();
+    events.dedup();
+    let mut differ = 0;
+    for event in events {
+        let (page, model) = (at(&recorded, event), at(&replayed, event));
+        let same = page == model || recorded.is_empty();
+        differ += usize::from(!same);
+        let mark = if same { ' ' } else { '≠' };
+        println!("{mark} event {event:>4}  page: {page:<40} model: {model}");
+    }
+    println!("the model showed Spaces {:?}", run.shown);
+    if recorded.is_empty() {
+        println!("the trace has no decisions to compare: it's from before version 2");
+    } else {
+        println!("{differ} events decided differently");
+    }
+}
+
+/// A trace the demo's `?trace` would save of a quick flick across at 60 Hz, replayed, decides as
+/// the demo does as it's swiped: across, then a lift, then the next Space.
+#[gpui::test]
+fn a_replayed_trace_tells_the_demos_decisions(cx: &mut TestAppContext) {
+    let wheels = Delivery::Frames(60.).wheels(&flick(2));
+    let events: Vec<serde_json::Value> = wheels
+        .iter()
+        .map(|&(heard, stamp, dx, dy)| {
+            let (x, y) = (-dx, -dy);
+            serde_json::json!({ "stamp": stamp, "heard": heard, "x": x, "y": y, "mode": 0 })
+        })
+        .collect();
+    let trace = serde_json::json!({ "version": 2, "events": events });
+    let (run, decided) = replay(cx, &trace, 3);
+    let kinds: Vec<&str> = decided.iter().map(|(_, kind, _)| kind.as_str()).collect();
+    let said = |kind: &str| decided.iter().find(|d| d.1 == kind).map(|d| d.2.as_str());
+    assert_eq!(said("axis"), Some("across"), "{decided:?}");
+    assert_eq!(said("space"), Some("+1"), "{decided:?}");
+    let (land, axis, lift, space) = (
+        kinds.iter().position(|&kind| kind == "land"),
+        kinds.iter().position(|&kind| kind == "axis"),
+        kinds.iter().position(|&kind| kind == "lift"),
+        kinds.iter().position(|&kind| kind == "space"),
+    );
+    assert!(land < axis && axis < lift && lift < space, "{decided:?}");
+    assert_eq!(run.shown, vec![4], "{decided:?}");
+}
+
+/// A trace of flicks that open the Library from the first Space, close it and go on to the next
+/// Space, replayed with the frames the page drew, goes on to that Space as the demo does: the
+/// Library at rest once closed, not still on its way (#2409).
+#[gpui::test]
+fn a_replayed_trace_swipes_on_after_the_library(cx: &mut TestAppContext) {
+    let mut events = Vec::new();
+    let mut from = 0.;
+    // Toward the Library, back, then on.
+    for way in [-1., 1., 1.] {
+        for (heard, stamp, dx, dy) in Delivery::Frames(60.).wheels(&flick(2)) {
+            let (x, y) = (-dx * way, -dy);
+            let (heard, stamp) = (from + heard, from + stamp);
+            events.push(
+                serde_json::json!({ "stamp": stamp, "heard": heard, "x": x, "y": y, "mode": 0 }),
+            );
+        }
+        from += 1500.;
+    }
+    let frames: Vec<f64> = (0..(from / (1000. / 60.)) as usize)
+        .map(|frame| frame as f64 * 1000. / 60.)
+        .collect();
+    let trace = serde_json::json!({ "version": 2, "events": events, "frames": frames });
+    let (run, decided) = replay(cx, &trace, 1);
+    let said: Vec<&str> = decided
+        .iter()
+        .filter(|(_, kind, _)| kind == "library" || kind == "space")
+        .map(|(_, _, what)| what.as_str())
+        .collect();
+    assert_eq!(said, ["open", "closed", "+1"], "{decided:?}");
+    assert_eq!(run.shown, vec![2], "{decided:?}");
 }

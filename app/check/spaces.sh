@@ -1,3 +1,4 @@
+# check.sh runs this at 70.
 # New Space in the Spaces menu makes a Space and shows it, empty and without a page, with a form
 # that takes the keyboard from the page. Japanese input composes in its field, return while
 # composing only commits, and return names the Space and sends the form away; ⌘T then opens a tab in
@@ -175,9 +176,22 @@ expect "^browser: themed space $second $red\$" "the core didn't keep the Space's
 send clickkey 211.5 316.5
 expect "^browser: themed space $second $red_at colors=2 $rest\$" "+ didn't add a second colour"
 ../tools/window-screenshot.sh "$pid" "$out/theme-picker.png" || fail "no window to capture"
+# On the Mac, AppKit can make an overlay's panel key as it shrinks away after the UI hid it, and
+# what the user typed went to it unseen (#2594). The driver makes the picker key as its shrink
+# starts: the keyboard still comes back to the form, for the return below.
+if [ "$(uname)" = Darwin ]; then
+  send makekey theme picker
+fi
 send key escape
 expect '^browser: theme picker dismissed$' "escape didn't close the theme picker"
 expect '^browser: theme picker hidden$' "escape didn't hide the theme picker"
+if [ "$(uname)" = Darwin ]; then
+  expect '^browser: made theme picker key$' "the theme picker wasn't made key as its shrink started"
+  expect '^browser: theme picker hidden, its browser window takes the keyboard$' \
+    "the theme picker, made key as it shrank, kept the keyboard"
+else
+  echo "skip: the theme picker made key as it shrinks away: AppKit making a shrinking panel key is the Mac's (#2594)."
+fi
 send state
 in_browser AccessKitSubclassOfGPUIView "after the theme picker, in the new Space's form"
 send key return
@@ -1196,10 +1210,22 @@ expect "^browser: iconed space $first none\$" "Remove Icon didn't take the Space
 # its own hex, at its hue and lightness in the field, and the wave's knob dragged left washes the
 # window's colours out, the window following as it goes; the core keeps the theme once it's let go.
 # A click outside the picker closes it.
-post rightclick $name_point
+# The menu opens as a hand opens it, the release once it shows, which the menu takes: on Windows the
+# press left the browser window holding the mouse captured, so every drag in the picker went to it
+# and moved it (#2516). The picker's drags, and one from where it has nothing, leave the window's
+# frame where it was.
+post rightpress $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name didn't offer Edit Theme Color…"
+send rightrelease $name_point
+send order
+window_frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+frame_kept() {
+  send order
+  [ "$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)" = "$window_frame" ] ||
+    fail "$1 moved the window from $window_frame: $(grep '^browser: frame window 1 ' "$log" | tail -1)"
+}
 record space-theme-open 2
 send choose "$(cased 'Edit Theme Color…')"
 expect "^browser: theme picker for $first\$" "Edit Theme Color… didn't open the theme picker"
@@ -1221,7 +1247,21 @@ if [ "$(uname)" = Darwin ]; then
   shadow=$(grep '^browser: theme picker shadow off by' "$log" | tail -1)
   [ "$shadow" = "browser: theme picker shadow off by 0 0 0 0" ] ||
     fail "the theme picker's shadow isn't round it: ${shadow#browser: theme picker }"
+else
+  echo "skip: the theme picker's shadow round it: only the Mac's host draws its own."
 fi
+# Between the swatches and the wave there's nothing: a drag from there changes nothing.
+themes=$(grep -c "^browser: themed space $first " "$log" || true)
+empty=$(echo "$at" | awk '{ print $1 + 13 + 178.5, $2 + 410 }')
+emptied=$(echo "$at" | awk '{ print $1 + 13 + 218.5, $2 + 410 }')
+send press $empty
+send dragto $emptied
+send release $emptied
+frame_kept "a drag from the picker's empty space"
+[ "$(grep -c "^browser: themed space $first " "$log")" = "$themes" ] ||
+  fail "a drag from the picker's empty space changed the theme: $(grep "^browser: themed space $first " "$log" | tail -1)"
+[ "$(grep '^browser: theme picker \(shown\|hidden\)$' "$log" | tail -1)" = "browser: theme picker shown" ] ||
+  fail "a drag from the picker's empty space closed it"
 send clickkey "$(swatch_x 7)" $swatch_y
 blue='x=-0.619[0-9] y=-0.242[0-9] colors=1'
 expect "^browser: theme picker set $first $blue intensity=0.810 " "the blue swatch gave no colour"
@@ -1241,6 +1281,16 @@ expect "^browser: theme picker set $first $blue intensity=0.3[45][0-9] " \
   "the wave's knob dragged left didn't wash the colour out"
 expect "^browser: themed space $first $blue intensity=0.3[45][0-9] " \
   "the core didn't keep the theme's intensity"
+frame_kept "a drag on the wave's knob"
+# The grain's dial, 298.5 across the card and 452 down, turns for a drag across its top.
+dial=$(echo "$at" | awk '{ print $1 + 13 + 298.5, $2 + 425 }')
+turned=$(echo "$at" | awk '{ print $1 + 13 + 338.5, $2 + 425 }')
+send press $dial
+send dragto $turned
+send release $turned
+expect "^browser: themed space $first $blue intensity=0.3[45][0-9] grain=0\.[0-9]*[1-9]" \
+  "a drag on the grain's dial didn't give the theme grain"
+frame_kept "a drag on the grain's dial"
 # + twice puts three colours round the blue, the others 150° and 210° on, and the third dragged
 # alone goes to a place of its own, the other two staying, which the core keeps.
 send clickkey 211.5 316.5
@@ -1261,6 +1311,7 @@ send release $placed
 alone="x=-0.619[0-9] y=-0.242[0-9] colors=3 .* places=150.00,0.0000,9[6-8]\.[0-9]*,-0.0[2-5][0-9]*"
 expect "^browser: theme picker set $first $alone\$" "the third colour dragged alone didn't go to its own place"
 expect "^browser: themed space $first $alone\$" "the core didn't keep the third colour's place"
+frame_kept "a drag on a colour's dot"
 ../tools/window-screenshot.sh "$pid" "$out/space-theme.png" || fail "no window to capture"
 send click $page_point
 # The host closes the picker for a click outside it, and only escape's own dismissal logs one.

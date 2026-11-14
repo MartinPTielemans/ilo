@@ -512,10 +512,6 @@ fn type_is_on_the_scale() {
         ),
         ("site_controls::LINK_SIZE", super::site_controls::LINK_SIZE),
         ("site_controls::NAME_SIZE", super::site_controls::NAME_SIZE),
-        (
-            "site_controls::STATE_SIZE",
-            super::site_controls::STATE_SIZE,
-        ),
         ("toast::TEXT_SIZE", super::toast::TEXT_SIZE),
         ("tooltip::TEXT_SIZE", super::tooltip::TEXT_SIZE),
         ("tooltip::CHIP_TEXT_SIZE", super::tooltip::CHIP_TEXT_SIZE),

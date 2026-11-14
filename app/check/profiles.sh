@@ -1,3 +1,4 @@
+# check.sh runs this at 90.
 # The New Space form's Profile row makes a profile, asks for its name, and puts the Space in it, and its Choose a Theme
 # row colours the Space. The Space's tabs open in the new profile, without the first profile's
 # cookies, from a command bar opened in the first profile's Space too, which follows the Space shown. While it's empty the Space's menu moves it between profiles, and with a tab it keeps its
@@ -353,7 +354,7 @@ settings_drew General
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
 settings_drew 'Tabs & Sidebar'
-in_sight "share favorites option In Every Space" || fail "Settings didn't draw In Every Space's drawing"
+in_sight "share favorites option In every Space" || fail "Settings didn't draw In Every Space's drawing"
 send clickkey $at
 expect "^browser: favorites scope In Every Space\$" "a click on In Every Space's drawing didn't set it"
 expect '^browser: favorites [0-9][0-9]*$' "the favorite has no twin in the other profile's Space"
@@ -404,7 +405,7 @@ send menu Settings…
 expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
 settings_drew 'Tabs & Sidebar'
 in_sight "share favorites In Every Space" || fail "Share favorites didn't show In Every Space chosen"
-in_sight "share favorites option In Each Profile's Spaces" ||
+in_sight "share favorites option In each profile's Spaces" ||
   fail "Settings didn't draw In Each Profile's Spaces' drawing"
 send clickkey $at
 expect "^browser: favorites scope In Each Profile's Spaces\$" \
@@ -534,20 +535,20 @@ expect '^browser: settings tab Profiles$' "a click on Profiles didn't show its s
 settings_drew 'Profiles'
 # Rename, or a double-click on a name, puts it in a field, where escape leaves it and return
 # keeps a new one.
-send clickkey $(drawn "rename profile $work")
+click_in_sight "rename profile $work"
 expect "^browser: rename profile $work\$" "Rename on Profile 2 didn't put its name in a field"
 send type personal
 send key escape
 expect '^browser: rename cancelled$' "escape didn't cancel the renaming"
 none_since '^browser: renamed profile' || fail "escape renamed the profile"
-send doubleclickkey $(drawn "profile $work")
+click_in_sight "profile $work" doubleclickkey
 expect "^browser: rename profile $work\$" "a double-click on Profile 2 didn't put it in a field"
 send type personal
 send key return
 expect "^browser: renamed profile $work personal\$" "return didn't rename the profile"
 # New Profile makes one, with its name in a field, which takes Japanese input. Its Delete asks
 # first, and Cancel keeps it.
-send clickkey $(drawn "new profile")
+click_in_sight "new profile"
 expect '^browser: create profile [0-9]* Profile 3$' "New Profile didn't make a profile"
 spare=$(sed -n 's/^browser: create profile \([0-9]*\) .*/\1/p' "$log" | tail -1)
 expect "^browser: rename profile $spare\$" "the new profile's name didn't take the keyboard"
@@ -600,7 +601,7 @@ done
 send clickkey $(drawn "toolbar Privacy")
 expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
 settings_drew Privacy
-send clickkey $(drawn "clear $default")
+click_in_sight "clear $default"
 expect "^browser: clear browsing data of profile $default in space $first\$" \
   "the first profile's Clear… didn't open Clear browsing data in its Space"
 expect '^browser: settings hidden$' "Clear… didn't hide Settings"
@@ -734,7 +735,7 @@ new_note_switch() {
     expect '^browser: settings tab Features$' "a click on Features didn't show its section"
   fi
   settings_drew Features
-  send clickkey $(drawn "switch new note")
+  click_in_sight "switch new note"
   expect "^browser: new note $1\$" "a click on New Note's switch didn't turn it $1"
   [ "$1" = on ] || ../tools/window-screenshot.sh "$pid" "$out/settings-new-note-off.png" ||
     fail "no window to capture"

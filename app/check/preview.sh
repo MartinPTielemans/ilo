@@ -1,3 +1,4 @@
+# check.sh runs this at 290.
 # The link preview. ⇧-click on a link in any tab's page, here a Today tab's, opens it in a card over
 # the window, and so does Open Link in Peek in the link's menu, with no tab opened and the tab on its
 # page (#1370). A link to another site in a pinned tab's page opens in one too, its page in a tab of
@@ -158,12 +159,162 @@ open_preview "from the pinned tab"
 first_frame=$(grep -m1 '^browser: link preview first frame in ' "$log" | sed 's/.* in //')
 [ -n "$first_frame" ] || fail "the preview didn't log its first frame"
 ../tools/window-screenshot.sh "$pid" "$out/preview-open.png" || fail "no window to capture"
+# On Windows the card holds Peek's page where the core shows it: the frame the UI draws it in, at its
+# window's scale, and the page's in the browser window, in pixels, each edge within 3 of the other's,
+# as the core rounds the page's frame in DIPs. The page is under the preview's window there, which
+# is made once and hidden between previews (#2541). Either may still be moving, for up to 5 s.
+peek_frame() { # <when>
+  for _ in $(seq 10); do
+    send peek
+    expect '^browser: peek page ' "$1: the driver found no page"
+    page=$(grep '^browser: peek page ' "$log" | tail -1 | cut -d' ' -f4-)
+    card=$(grep '^browser: link preview page frame ' "$log" | tail -1 | cut -d' ' -f6-)
+    echo "$card $page" | awk '{ for (i = 1; i <= 4; i++) { d = $i - $(i + 7); if (i > 2) d += $(i - 2) - $(i + 5); if (d > 3 || d < -3) exit 1 } }' &&
+      break
+    page=
+    sleep 0.5
+  done
+  send dpis
+  expect '^browser: dpis ' "$1: the driver named no DPIs"
+  dpis=$(grep '^browser: dpis ' "$log" | tail -1 | cut -d' ' -f3-)
+  page=${page:-$(grep '^browser: peek page ' "$log" | tail -1 | cut -d' ' -f4-)}
+  echo "$1: the card holds the page at $card, and the page is at $page; DPIs: $dpis" >> "$out/preview-frames.txt"
+  echo "$card $page" | awk '{ for (i = 1; i <= 4; i++) { d = $i - $(i + 7); if (i > 2) d += $(i - 2) - $(i + 5); if (d > 3 || d < -3) exit 1 } }' ||
+    fail "$1: Peek's card holds its page at $card, in pixels, but the page is at $page (DPIs: $dpis)"
+}
+rm -f "$out/preview-frames.txt"
+windows && peek_frame "at launch"
 
 # Esc in its page closes it, and its page once it has left.
 send key escape
 in_order "after Esc" '^browser: link preview closing (escape)$' '^browser: link preview released$' \
   '^browser: link preview hidden$' "^browser: tab $p closed\$"
 still_home "after Esc"
+
+# On Windows, the display's scale goes up a step while the preview's window is hidden, as Settings'
+# Scale changes it, and back, and the preview opens at each, and then up a step again while it's
+# open: the card still holds the page where the core shows it (#2541). The display goes back to its
+# scale even if the run fails.
+scaled="its display's scale stayed as it was"
+if windows; then
+  read -r scale_at scale_least scale_most << EOF
+$(python3 -I check/scale.py get)
+EOF
+  # The browser window's content in points, from the layout, until it isn't $1, for up to 10 s, as
+  # the UI lays out once it has heard the scale.
+  content_not() {
+    for _ in $(seq 20); do
+      send layout
+      content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' | cut -d' ' -f4 | tr -d ,)
+      [ -n "$content" ] && [ "$content" != "$1" ] && return 0
+      sleep 0.5
+    done
+    return 1
+  }
+  if [ -n "$scale_most" ] && [ "$scale_most" -gt "$scale_at" ]; then
+    content_not none
+    content_at=$content
+    run_undo="python3 -I check/scale.py set $scale_at"
+    python3 -I check/scale.py set $((scale_at + 1)) > /dev/null
+    content_not "$content_at" || fail "the window's content stayed $content_at points at the display's next scale"
+    open_preview "at the display's next scale"
+    peek_frame "at the display's next scale"
+    send key escape
+    expect '^browser: link preview hidden$' "Esc didn't close the preview at the display's next scale"
+    python3 -I check/scale.py set "$scale_at" > /dev/null
+    run_undo=
+    content_not "$content" || fail "the window's content stayed $content points back at the display's scale"
+    open_preview "back at the display's scale"
+    peek_frame "back at the display's scale"
+    # And up a step with the preview open, which lays out again over the window at the new scale.
+    content_at=$content
+    run_undo="python3 -I check/scale.py set $scale_at"
+    python3 -I check/scale.py set $((scale_at + 1)) > /dev/null
+    content_not "$content_at" || fail "the window's content stayed $content_at points at the display's next scale, the preview open"
+    await '^browser: link preview page frame .* at scale [0-9.]*$' || true
+    peek_frame "at the display's next scale, the preview open"
+    send key escape
+    expect '^browser: link preview hidden$' "Esc didn't close the preview at the display's next scale, opened at the one before"
+    python3 -I check/scale.py set "$scale_at" > /dev/null
+    run_undo=
+    content_not "$content" || fail "the window's content stayed $content points back at the display's scale"
+    scaled="it held as the display's scale went a step up and back with the preview hidden, and up with it open"
+  fi
+fi
+# On Windows the preview's window may have heard another scale than its display's: made hidden on a
+# display at one scale, at the screen's top left, and moved to the browser window on one at another,
+# as the owner's was, drawing its card at 0.8 of the page's frame (#2541). The runner has one
+# display, so the driver tells the hidden window alone a scale a step from the display's, as
+# Windows tells a window that moved, and the preview opens: the card still holds the page.
+if windows; then
+  send dpis
+  expect '^browser: dpis ' "the driver named no DPIs before the preview's window heard another scale"
+  case "$(grep '^browser: dpis ' "$log" | tail -1)" in
+    *", window 96,"*) told=125 ;;
+    *) told=100 ;;
+  esac
+  send dpi "$told" link preview
+  expect '^browser: dpi [0-9]* told link preview$' "the driver found no preview window to tell $told %"
+  open_preview "its window told $told % while hidden"
+  ../tools/window-screenshot.sh "$pid" "$out/preview-told.png" || fail "no window to capture"
+  peek_frame "its window told $told % while hidden"
+  send key escape
+  expect '^browser: link preview hidden$' "Esc didn't close the preview whose window was told $told %"
+  scaled="$scaled; and the preview's window, told $told % while hidden, drew it at the display's"
+fi
+# Under Wayland an overlay's surface hears its scale from the compositor only once it's on screen.
+# The output's scale goes a step up while the preview is hidden, and back, and at each the preview,
+# last shown at the other, draws its first frame at its browser window's scale (#2592). The output
+# goes back to its scale even if the run fails.
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  # Its mode grows with its scale, as headless.sh makes it, so the window keeps its size in points.
+  read -r output width height scale_at << EOF
+$(swaymsg -t get_outputs | jq -r '.[0] | "\(.name) \(.current_mode.width) \(.current_mode.height) \(.scale)"')
+EOF
+  scale_at=$(awk "BEGIN { print $scale_at + 0 }")
+  # Sway's command that gives the output the scale $1.
+  scale_output() { # <scale>
+    echo "swaymsg output $output resolution $(awk "BEGIN { printf \"%dx%d\", $width / $scale_at * $1, $height / $scale_at * $1 }") scale $1"
+  }
+  # Gives the output the scale $1, read back from sway for up to 10 s. Swaymsg gives up on its
+  # answer after 3 s, which a busy runner's sway can take to change the output's mode, though it
+  # changes it all the same (#2684).
+  give_scale() { # <scale>
+    $(scale_output "$1") > /dev/null 2>&1 || true
+    for _ in $(seq 20); do
+      now=$(swaymsg -t get_outputs 2> /dev/null | jq -r --arg name "$output" '.[] | select(.name == $name) | .scale')
+      [ "$(awk "BEGIN { print ${now:-0} + 0 }")" = "$1" ] && return 0
+      sleep 0.5
+    done
+    fail "sway didn't give $output the scale $1 within 10 s: it's ${now:-unread}"
+  }
+  # The browser window's scale and its overlays' first frames', once the window's is $1, for up to
+  # 10 s, as the window hears the output's scale from the compositor.
+  window_scaled() { # <scale> <when>
+    for _ in $(seq 20); do
+      send scales
+      scales=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: scales ')
+      case "$scales" in "browser: scales window $1,"*) return 0 ;; esac
+      sleep 0.5
+    done
+    fail "$2: the browser window's scale didn't become $1: ${scales:-the driver named none}"
+  }
+  for to in $(awk "BEGIN { print $scale_at + 1 }") "$scale_at"; do
+    run_undo=$(scale_output "$scale_at")
+    give_scale "$to"
+    window_scaled "$to" "at the output's scale $to"
+    open_preview "at the output's scale $to"
+    window_scaled "$to" "with the preview open at the output's scale $to"
+    for drawn in ${scales#*, overlays }; do
+      [ "$drawn" = "$to" ] ||
+        fail "at the output's scale $to, an overlay drew its first frame at $drawn: $scales"
+    done
+    send key escape
+    expect '^browser: link preview hidden$' "Esc didn't close the preview at the output's scale $to"
+  done
+  run_undo=
+  scaled="its first frame was at its browser window's scale as the output's went a step up and back with it hidden"
+fi
 
 # Its look in a light and a dark Space theme: the theme picker's first swatch, then the sun, and
 # later the moon, each 13 right of its appearance-x token, as cards.sh and little.sh pick them.
@@ -419,4 +570,6 @@ exec 3>&-
 quit
 echo "ok: ⇧-click on a Today tab's link and $in_peek in its menu open it in a preview, with no tab opened. A link to another site in a pinned tab or a favorite opens in a preview over the window, which Esc, a click on the dim and ⌘W close, with its page, leaving the tab and the page behind as they were, ⇧⌘C copies the address of, and ⌘↩ keeps as the top Today tab, shown, without loading it again. ⌘Z reopens a closed one over its tab, and so does ⇧⌘T. A Google Meet link opens as a tab of the Space shown instead. With the Settings switch off, the link goes in the pinned tab, ⇧-click opens it in a new tab and its menu has no $in_peek, and back on, a link rule to another Space sends it there as a tab instead. Resting on its keep button shows Open as Tab and its key in a tooltip over it. Windows: $out/preview-shift-click.png, $out/preview-menu.png, $out/preview-menu-chosen.png, $out/preview-open.png, $out/preview-light.png, $out/preview-dark.png, $out/preview-tooltip.png, $out/preview-kept.png, $out/preview-reopened.png, $out/preview-meeting.png, $out/preview-ruled.png"
 echo "  The first preview's first frame came $first_frame after the click reached the UI."
+! windows || echo "  Its card held its page where the core showed it, and $scaled: $(tr '\n' ' ' < "$out/preview-frames.txt")"
+[ "$(uname)" != Linux ] || [ -z "${WAYLAND_DISPLAY:-}" ] || echo "  Under Wayland, $scaled."
 [ -z "$recording" ] || echo "  Its motion, opening and kept: $recording"

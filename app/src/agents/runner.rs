@@ -78,9 +78,10 @@ impl Cli {
         }
     }
 
-    /// The models its Model pop-up offers after its own default, which is the empty id: ilo runs
-    /// the CLI without the user's settings files, so the default is the CLI's, not theirs.
-    pub fn models(self) -> &'static [(&'static str, &'static str)] {
+    /// The models its Model pop-up offers after its own default while the CLI hasn't listed its
+    /// own: Claude's aliases, which every Claude Code takes, for one too old to answer initialize
+    /// with its list (ready::claude_models).
+    pub fn unlisted_models(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Cli::Claude => &[("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")],
             Cli::Codex => &[],

@@ -1,3 +1,4 @@
+# check.sh runs this at 160.
 # A Today tab's menu is Arc's, whose Copy Link is Copy Link as Markdown with ⌥ held, and its row
 # dragged onto the Space's name takes the tab out of Today into a tile above the Space's rows, its
 # press having shown it. Resting on the tile shows its hover card, which other apps don't take for
@@ -326,7 +327,7 @@ expect '^browser: command settings via page$' "⌘, from the page didn't run Set
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
 settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings.png" || fail "no window to capture"
-send clickkey $(drawn "switch warn before quitting")
+click_in_sight "switch warn before quitting"
 expect '^browser: warn before quitting off$' "a click on Ask before quitting didn't turn it off"
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
@@ -342,7 +343,7 @@ in_sight "share favorites In Each Profile's Spaces" ||
 # Picked in the dark look, and in the light one below, to capture the row in each.
 send menu "Appearance › Dark"
 expect '^browser: appearance dark$' "View › Appearance › Dark didn't change the appearance"
-in_sight "share favorites option In Each Space" || fail "Settings didn't draw In Each Space's drawing"
+in_sight "share favorites option In each Space" || fail "Settings didn't draw In Each Space's drawing"
 send clickkey $at
 expect "^browser: favorites scope In Each Space\$" "a click on In Each Space's drawing didn't set it"
 expect "^browser: settings share favorites In Each Space at " "Share favorites didn't show In Each Space"
@@ -356,6 +357,8 @@ if [ "$(uname)" = Darwin ]; then
   in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
   send clickkey $at
   expect '^browser: haptics off$' "a click on the haptics switch didn't turn them off"
+else
+  echo "skip: the haptics switch: Settings draws it on the Mac alone."
 fi
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -752,7 +755,7 @@ expect '^browser: profile [0-9]* archive tabs after 12 hours (default)$' \
 in_sight "share favorites In Each Space" || fail "Settings didn't keep Each Space across the quit"
 send menu "Appearance › Light"
 expect '^browser: appearance light$' "View › Appearance › Light didn't change the appearance"
-in_sight "share favorites option In Each Profile's Spaces" ||
+in_sight "share favorites option In each profile's Spaces" ||
   fail "Settings didn't draw In Each Profile's Spaces' drawing"
 send clickkey $at
 expect "^browser: favorites scope In Each Profile's Spaces\$" \
@@ -767,6 +770,8 @@ if [ "$(uname)" = Darwin ]; then
   in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
   send clickkey $at
   expect '^browser: haptics on$' "Settings didn't keep the haptics off across the quit"
+else
+  echo "skip: the haptics switch kept across the quit: Settings draws it on the Mac alone."
 fi
 # The driver's done for a click that closes its window can be lost with the window, as it always
 # was in a VM, so the click isn't waited for; Settings going is.

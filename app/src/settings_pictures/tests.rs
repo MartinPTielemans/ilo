@@ -365,7 +365,7 @@ fn share_favorites_draws_its_three_scopes_and_a_click_or_voiceover_picks_one(
     let at = |scope: FavoritesScope, cx: &mut VisualTestContext| {
         let prefix = format!(
             "browser: settings share favorites option {} at ",
-            scope.title()
+            scope.caption()
         );
         let logged = view.read_with(cx, |view, _| view.logged.borrow().clone());
         let line = (logged.iter())
@@ -385,9 +385,9 @@ fn share_favorites_draws_its_three_scopes_and_a_click_or_voiceover_picks_one(
     cx.simulate_a11y_activation();
     cx.run_until_parked();
     named(cx, Role::RadioGroup, "Share favorites");
-    let (_, node) = named(cx, Role::RadioButton, "In Each Space");
+    let (_, node) = named(cx, Role::RadioButton, "In each Space");
     assert_eq!(node.toggled(), Some(Toggled::True));
-    let (every, _) = named(cx, Role::RadioButton, "In Every Space");
+    let (every, _) = named(cx, Role::RadioButton, "In every Space");
     cx.simulate_a11y_action(every, Action::Click);
     cx.run_until_parked();
     let picks = view.read_with(cx, |view, _| view.picks.clone());

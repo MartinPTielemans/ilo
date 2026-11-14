@@ -1,3 +1,4 @@
+# check.sh runs this at 40.
 # The page view keeps its margins and GPUI's view fills the window through a resize and full screen,
 # and the window's buttons stay in the header row. A page that goes full screen takes the window
 # with it, and escape or the page leaving brings both back, the page resized once each way, straight
@@ -29,7 +30,7 @@
 # size shows the page's own background. In a check VM, the sidebar over grey backdrops is Dia's composite,
 # dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
 # and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
-# in Settings › General off.
+# in Settings › General off; on Windows, the taskbar button's switch turns off and on.
 
 # A long page that times its frames while it scrolls and puts the numbers in its title.
 page=$(base64 << 'HTML' | tr -d '\n'
@@ -123,6 +124,17 @@ url="data:text/html;base64,$page#${site}wait"
 motion=
 if [ "$(uname)" = Darwin ] || windows; then
   motion=full
+fi
+# The sidebar's rests below measure what the browser takes while nothing draws. On a new profile
+# uBlock Origin writes its selfie about 80 s in, which took 0.8 s of the browser's pool on the Mac,
+# in whichever rest the run had reached (#2502). A user's launches after the first are on it, so on
+# a profile with none a launch first stays until it's written, and quits, which also ends what the
+# write leaves for its store to compact.
+if ublock_selfie; then
+  echo "window: the profile has uBlock Origin's selfie"
+else
+  selfie_launch "$url" "$out/window-selfie.log"
+  echo "window: uBlock Origin wrote its selfie $selfie_at s into a launch before the run's"
 fi
 BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -1127,50 +1139,98 @@ hover_out() {
   send move $(row 0)
   expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
 }
-# drawing_cpu: "<seconds> <processes>", as cpu gives them, of what draws. uBlock Origin works when
-# it will, which isn't the windows' drawing measured here: its background page, in an extension's
-# process, took about 0.8 s of 4 s on Wayland, and what it asks of the browser runs in Chromium's
-# worker pools and IO threads, where it took 1.6 s of 4 s on Wayland while neither window drew a
-# frame (#2400). On Linux the threads say what they are, so those are left out of every process;
-# elsewhere only the extension's process is.
-drawing_cpu() {
-  if windows || [ ! -d /proc ]; then
-    cpu --extension-process
-    return
-  fi
-  for p in $(pgrep -f -- "$procs"); do
-    tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -qF -e --extension-process && continue
-    echo "$p 0"
-    for t in /proc/$p/task/*; do
-      case $(cat "$t/comm" 2> /dev/null) in ThreadPool* | Chrome_IOThread | Chrome_ChildIOT) continue ;; esac
-      echo "$p $(sed 's/^.*) //' "$t/stat" 2> /dev/null | awk '{ print $12 + $13 }')"
+# drawing_procs: "<seconds>\t<command line>" of each process of what draws. uBlock Origin works
+# when it will, which isn't the windows' drawing measured here: its background page, in an
+# extension's process, took about 0.8 s of 4 s on Wayland, and what it asks of the browser runs in
+# Chromium's worker pools and IO threads, where it took 1.6 s of 4 s on Wayland while neither window
+# drew a frame (#2400). On Linux the threads say what they are, so those are left out of every
+# process; elsewhere only the extension's process is.
+drawing_procs() {
+  if windows; then
+    powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' -and \
+      \$_.CommandLine -notlike '*--extension-process*' } | ForEach-Object {
+      ('{0:F2}' -f ((\$_.UserModeTime + \$_.KernelModeTime) / 1e7)) + [char]9 + \$_.CommandLine }" | tr -d '\r'
+  elif [ -d /proc ]; then
+    for p in $(pgrep -f -- "$procs"); do
+      line=$(tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null)
+      case $line in *--extension-process*) continue ;; esac
+      for t in /proc/$p/task/*; do
+        case $(cat "$t/comm" 2> /dev/null) in ThreadPool* | Chrome_IOThread | Chrome_ChildIOT) continue ;; esac
+        sed 's/^.*) //' "$t/stat" 2> /dev/null
+      done | awk -v hz="$(getconf CLK_TCK)" -v line="$line" '{ t += $12 + $13 } END { printf "%.2f\t%s\n", t / hz, line }'
     done
-  done | awk -v hz="$(getconf CLK_TCK)" '!($1 in seen) { seen[$1]; n++ } { t += $2 } END { printf "%.2f %d\n", t / hz, n }'
+  else
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' -e --extension-process | awk '{
+      s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]
+      $1 = ""; printf "%.2f\t%s\n", s, substr($0, 2) }'
+  fi
 }
-# rest_cpu: $rest, the CPU in seconds what draws takes in 4 s with the pointer still, below the
-# rows. Not in a subshell, which would lose send's step.
+# drawing_cpu: "<seconds> <processes> <kind>=<seconds>...", the CPU of what draws and each kind of
+# process's share: the browser's own, the GPU's, the network service's, the pages' renderers, other
+# utilities and anything else (#2502).
+drawing_cpu() {
+  drawing_procs | awk -F '\t' '{
+    kind = "browser"
+    if (match($2, /--type=[^ ]*/)) kind = substr($2, RSTART + 7, RLENGTH - 7)
+    else if (index($2, "crashpad")) kind = "other"
+    if (kind == "gpu-process") kind = "gpu"
+    else if (kind == "utility" && index($2, "NetworkService")) kind = "network"
+    else if (kind != "browser" && kind != "renderer" && kind != "utility") kind = "other"
+    n++; t += $1; by[kind] += $1 }
+    END { printf "%.2f %d", t, n; for (k in by) printf " %s=%.2f", k, by[k]; print "" }'
+}
+# rest_cpu [name]: $rest, the CPU in seconds what draws takes in 4 s with the pointer still, below
+# the rows, $rest_procs the processes it counts, and $rest_kinds each kind's share, such as
+# "browser 0.02 s, GPU 0.01 s". With a name, on the Mac, whose ps counts no threads apart, the
+# browser's stacks over the same 4 s go in window-rest-<name>-sample.txt, every 10 ms: a burst
+# inside the 4 s was over by the time a sample after the step could see it (#2502). Not in a
+# subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
   sleep 1 # the hover's fade out, before the window measured
-  local from
+  local from to sampler=
+  if [ -n "${1:-}" ] && [ "$(uname)" = Darwin ]; then
+    sample "$pid" 4 10 -file "$out/window-rest-$1-sample.txt" \
+      > "$out/window-rest-$1-sample.log" 2>&1 &
+    sampler=$!
+  fi
   from=$(drawing_cpu)
   sleep 4 # the window measured
-  set -- $from $(drawing_cpu)
-  rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
+  to=$(drawing_cpu)
+  [ -z "$sampler" ] || wait "$sampler" ||
+    echo "window: the $1 rest's sample failed: $(tail -1 "$out/window-rest-$1-sample.log")"
+  rest=$(printf '%s\n%s\n' "$from" "$to" | awk 'NR == 1 { from = $1 } NR == 2 { printf "%.2f", $1 - from }')
+  rest_procs=$(echo "$to" | cut -d' ' -f2)
+  rest_kinds=$(printf '%s\n%s\n' "$from" "$to" | awk '{
+    for (i = 3; i <= NF; i++) { split($i, kv, "="); if (NR == 1) from[kv[1]] = kv[2]; else to[kv[1]] = kv[2] } }
+    END {
+      n = split("browser gpu network renderer utility other", kinds, " ")
+      split("browser,GPU,network,renderers,other utilities,other", names, ",")
+      for (i = 1; i <= n; i++) if (kinds[i] in to)
+        printf "%s%s %.2f s", (said++ ? ", " : ""), names[i], to[kinds[i]] - from[kinds[i]] }')
 }
-rest_cpu
-docked_cpu=$rest
+# The sampling adds nothing the rest reads: sampled, docked read 0.00 s on the Mac (#2632).
+rest_cpu docked
+docked_cpu=$rest docked_kinds=$rest_kinds
 send key s cmd
 toggle page hidden "⌘S from the page before the sidebar out is hovered"
 send move 400 300
 reveal_at_edge "the pointer at the edge didn't bring the sidebar out after ⌘S from the page"
 hover_out "the sidebar out by the edge"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
-rest_cpu
+rest_cpu out
 out_cpu=$rest
-echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked and ${out_cpu} s with it out"
-awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }' &&
-  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s, against ${docked_cpu} s docked"
+echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU" \
+  "with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)"
+if awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }'; then
+  # Its age, for work that comes at a time after launch, as uBlock Origin's selfie did (#2502).
+  up=$(ps -o etime= -p "$pid" | tr -d ' ')
+  sampled=
+  [ ! -s "$out/window-rest-out-sample.txt" ] ||
+    sampled=", the browser's stacks over the rest in window-rest-out-sample.txt"
+  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds), against ${docked_cpu} s docked ($docked_kinds), the browser up $up$sampled"
+fi
 send move 600 300
 expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
 send key s cmd
@@ -1440,6 +1500,27 @@ if [ "$(uname)" = Darwin ]; then
     dock="dot $black in a black Space, $plain with its switch off, $again on again"
     dock_shots=", $out/dock-icon-black.png, $out/dock-icon-off.png, $out/dock-icon-on.png"
   fi
+elif windows; then
+  # The taskbar button carries the same dot, and Settings names its switch for it (#2681). The
+  # taskbar's overlay isn't read back, so this proves the switch is there and turns off and on.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings for the taskbar button's switch"
+  send clickkey $(drawn "toolbar General")
+  settings_drew General
+  in_sight "switch dock icon color" || fail "Settings didn't draw the taskbar button's switch"
+  send clickkey $at
+  expect '^browser: dock icon color off$' "a click on the taskbar button's switch didn't turn it off"
+  ../tools/window-screenshot.sh "$pid" "$out/taskbar-dot-switch.png" all || fail "no window to capture"
+  send clickkey $at
+  expect '^browser: dock icon color on$' \
+    "a click on the taskbar button's switch didn't turn it on again"
+  send key w cmd
+  expect '^browser: settings hidden$' "Ctrl+W didn't hide Settings"
+  echo "skip: the taskbar button's dot in the Space's color: the taskbar's overlay isn't read back yet, so only its switch is checked."
+  dock="the taskbar button's switch off and on again in Settings"
+  dock_shots=", $out/taskbar-dot-switch.png"
+else
+  echo "skip: the Dock icon's dot in the Space's color: Linux's host draws none."
 fi
 
 # Esc in full screen goes to the page first, so a page that keeps it stays full screen on one
@@ -1523,7 +1604,12 @@ else
   sed -n "/^browser: drive $behind: /,/^browser: drive $step: /p" "$log" |
     grep -q '^browser: reveal \(waits\|shown\)$' &&
     fail "the pointer at the edge of the window behind brought its sidebar out"
-  reveal_at_edge "the pointer at the edge of the first window, in front, didn't bring its sidebar out"
+  # Windows' pointer is real: it rests at the edge as the window comes in front, which hears it
+  # there as a hand's, so the sidebar can come out with the step that brings the window forward.
+  in_front=$((step + 1))
+  windows && in_front=$step
+  reveal_at_edge "the pointer at the edge of the first window, in front, didn't bring its sidebar out" \
+    "$in_front"
   check_reveal "with the first window's sidebar out in front of the second" shown
   send move 400 300
   expect '^browser: reveal hidden$' "the pointer past the first window's sidebar out didn't send it away"

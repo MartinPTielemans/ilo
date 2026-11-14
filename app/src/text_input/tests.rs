@@ -268,3 +268,100 @@ fn a_line_scrolls_no_further_than_it_must() {
         "text deleted"
     );
 }
+
+/// The text the field shows after each of `calls`: what's committed, then what's composing.
+fn composed(calls: &[korean::Ime]) -> Vec<String> {
+    let mut committed = String::new();
+    (calls.iter())
+        .map(|call| match call {
+            korean::Ime::Mark(marked) => format!("{committed}{marked}"),
+            korean::Ime::Commit(syllable) => {
+                committed.push_str(syllable);
+                committed.clone()
+            }
+        })
+        .collect()
+}
+
+/// Korean from a 2-set keyboard, where one key can commit a syllable and start the next (#2457).
+/// Each syllable stays whole, the caret follows what's composing, and Find searches each committed
+/// syllable as it comes, never a lone consonant or vowel.
+#[gpui::test]
+fn korean_composes_syllable_by_syllable(cx: &mut TestAppContext) {
+    for (word, calls) in [("한글", korean::HANGEUL), ("안녕하세요", korean::ANNYEONG)] {
+        let (input, mut cx) = shown("", cx);
+        let mut searched = String::new();
+        let mut finds = Vec::new();
+        for (call, shows) in calls.iter().zip(composed(calls)) {
+            input.update_in(&mut cx, |input, window, cx| call.apply(input, window, cx));
+            let (text, selection, composing) = input.read_with(&cx, |input, _| {
+                if let Some(text) = input.committed_change(&searched) {
+                    searched = text.to_string();
+                    finds.push(searched.clone());
+                }
+                (
+                    input.text().to_string(),
+                    input.selection(),
+                    input.composing(),
+                )
+            });
+            assert_eq!(text, shows, "after {call:?}");
+            assert_eq!(selection, text.len()..text.len(), "after {call:?}");
+            assert_eq!(
+                composing,
+                matches!(call, korean::Ime::Mark(_)),
+                "after {call:?}"
+            );
+        }
+        let last = word.chars().last().unwrap().to_string();
+        input.update_in(&mut cx, |input, window, cx| {
+            input.replace_text_in_range(None, &last, window, cx)
+        });
+        input.read_with(&cx, |input, _| {
+            assert_eq!(input.text(), word);
+            assert!(!input.composing());
+            finds.push(input.committed_change(&searched).unwrap().to_string());
+        });
+        let mut syllables = String::new();
+        let expected: Vec<String> = (word.chars())
+            .map(|syllable| {
+                syllables.push(syllable);
+                syllables.clone()
+            })
+            .collect();
+        assert_eq!(finds, expected);
+    }
+}
+
+/// Backspace while a syllable composes takes its last letter off, as the Korean input method
+/// rebuilds it, down to nothing; then it deletes committed text as usual. Korean composes in the
+/// middle of text too.
+#[gpui::test]
+fn korean_backspace_takes_a_syllable_apart(cx: &mut TestAppContext) {
+    let (input, mut cx) = shown("", cx);
+    let compose = |input: &Entity<TextInput>, calls: &[korean::Ime], cx: &mut VisualTestContext| {
+        for call in calls {
+            input.update_in(cx, |input, window, cx| call.apply(input, window, cx));
+        }
+    };
+    compose(&input, korean::HANGEUL, &mut cx);
+    use korean::Ime::Mark;
+    compose(&input, &[Mark("그"), Mark("ㄱ"), Mark("")], &mut cx);
+    let shows = |input: &Entity<TextInput>, cx: &mut VisualTestContext| {
+        input.read_with(cx, |input, _| {
+            (
+                input.text().to_string(),
+                input.selection(),
+                input.composing(),
+            )
+        })
+    };
+    assert_eq!(shows(&input, &mut cx), ("한".into(), 3..3, false));
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(shows(&input, &mut cx), (String::new(), 0..0, false));
+
+    cx.simulate_input("ab");
+    cx.simulate_keystrokes("left");
+    compose(&input, korean::HANGEUL, &mut cx);
+    assert_eq!(shows(&input, &mut cx), ("a한글b".into(), 7..7, true));
+}

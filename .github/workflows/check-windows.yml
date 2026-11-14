@@ -102,13 +102,14 @@ jobs:
     needs: engine
     if: ${{ needs.engine.outputs.found == 'true' }}
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
-    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/3', matrix.shard) || '' }}
+    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, inputs.runs == 'all' && 3 || 2) || '' }}
     # runs=all takes longer than the job's 120 minutes, so it's dealt across three jobs, each with
-    # its share of the runs (.github/scripts/runs.sh, #2271). Any other list is one job's.
+    # its share of the runs (.github/scripts/runs.sh, #2271). Since 11-12 the default runs take longer
+    # too, so they're dealt across two (#2618). Any other list is one job's.
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || '[0]') }}
+        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || inputs.runs == '' && '[1, 2]' || '[0]') }}
     runs-on: windows-2022
     timeout-minutes: 120
     permissions:
@@ -122,19 +123,28 @@ jobs:
     env:
       # The areas of the app's debug log a dispatch asks for, on stderr, so in each run's log.
       BROWSER_LOG: ${{ inputs.log }}
+      # The driver sends the pointer and the keys as real input, as a hand's go through Windows'
+      # capture, foreground and hit test (platform/windows/drive.cc, #2544). The runner's desktop is
+      # the check's own, which the driver asks before it takes it.
+      BROWSER_DRIVE_REAL: 1
+      # How many jobs the runs are dealt across, for runs.sh shard.
+      SHARDS: ${{ inputs.runs == 'all' && 3 || 2 }}
       # The runs the Windows driver (platform/windows/drive.cc) is meant to pass so far.
       WINDOWS_RUNS: >-
         load tabs dialogs crash about onboarding import agents access passkeys passwords quit relaunch
         private blank links capture spaces pinned profiles devices pair history appearance adblock-live find
         mcp keys sync sync-account sync-devices split trouble window clear handback restore little
-        battery-os adblock adblock-lists battery calls cards count everyday extensions favorites hosts
+        battery-os adblock adblock-lists adblock-cosmetic adblock-page
+        battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
-        pictures boosts foot-bar
+        pictures boosts foot-bar peek-motion rules overlays
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
         scripting: AppleScript is the Mac's alone
         filled: it hides the Dock and the menu bar, so it runs only in a Mac check VM
+        later-launch: a lock left on the keyboard is the X server's
+        sidebar-right: it checks AppKit's window buttons, the Mac's alone
     steps:
       # setup.sh and the patches it applies need the repository's line endings.
       - run: git config --global core.autocrlf false
@@ -159,7 +169,12 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: |
           case $RUNS in
-          '') runs=$WINDOWS_RUNS ;;
+          '')
+            runs=
+            for run in $(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS"); do
+              case " $(echo $WINDOWS_RUNS) " in *" $run "*) runs="$runs $run" ;; esac
+            done
+            ;;
           all) runs=$(../.github/scripts/runs.sh shard "$SHARD") ;;
           *) runs=$RUNS ;;
           esac
@@ -271,29 +286,30 @@ jobs:
           if (-not (& $started)) { Start-Process explorer.exe }
           "Explorer: " + (Get-Process explorer | ForEach-Object Id)
 
-      # Microsoft's Japanese IME, one of the user's input methods, for the runs that compose with it
-      # (the driver's ime ja), which look for it in the user's language list. Language.Basic is the
-      # capability that has it, about 100 s from Windows Update; Server 2022 has no Install-Language.
-      - name: Japanese IME
-        id: japanese
+      # Microsoft's Japanese and Korean IMEs, among the user's input methods, for the runs that
+      # compose with them (the driver's ime ja and ime ko), which look for them in the user's
+      # language list. Language.Basic is the capability that has each, about 100 s from Windows
+      # Update; Server 2022 has no Install-Language.
+      - name: Japanese and Korean IMEs
+        id: ime
         env:
-          RUNS: ${{ inputs.runs }}
+          RUNS: ${{ steps.runs.outputs.list }}
         run: |
-          runs=" ${RUNS:-$WINDOWS_RUNS} "
           need=
-          [ "$runs" != " all " ] || need=1
           for run in $(grep -l Get-WinUserLanguageList check/*.sh | sed 's|^check/\(.*\)\.sh$|\1|'); do
-            case $runs in *" $run "*) need=1 ;; esac
+            case $RUNS in *" $run "*) need=1 ;; esac
           done
-          [ -n "$need" ] || { echo "No run composes with the Japanese IME, so none is installed."; exit 0; }
+          [ -n "$need" ] || { echo "No run composes with an IME, so none is installed."; exit 0; }
           echo "need=1" >> "$GITHUB_OUTPUT"
-      - if: ${{ steps.japanese.outputs.need == '1' }}
+      - if: ${{ steps.ime.outputs.need == '1' }}
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
           Add-WindowsCapability -Online -Name "Language.Basic~~~ja-JP~0.0.1.0" | Out-Null
+          Add-WindowsCapability -Online -Name "Language.Basic~~~ko-KR~0.0.1.0" | Out-Null
           $languages = Get-WinUserLanguageList
           $languages.Add("ja-JP")
+          $languages.Add("ko-KR")
           Set-WinUserLanguageList $languages -Force
           Get-WinUserLanguageList | Format-List LanguageTag, InputMethodTips
 
@@ -303,13 +319,11 @@ jobs:
       - name: MSIX
         id: msix
         env:
-          RUNS: ${{ inputs.runs }}
+          RUNS: ${{ steps.runs.outputs.list }}
         run: |
-          runs=" ${RUNS:-$WINDOWS_RUNS} "
           need=
-          [ "$runs" != " all " ] || need=1
           for run in $(grep -l CHECK_MSIX check/*.sh | sed 's|^check/\(.*\)\.sh$|\1|'); do
-            case $runs in *" $run "*) need=1 ;; esac
+            case $RUNS in *" $run "*) need=1 ;; esac
           done
           [ -n "$need" ] || { echo "No run sends anything to the MSIX, so none is installed."; exit 0; }
           platform/windows/package/msix.sh build/Browser "$RUNNER_TEMP/check.msix"
@@ -406,7 +420,7 @@ jobs:
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
-          all=$(../.github/scripts/runs.sh shard "$SHARD")
+          all=$(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS")
           runs=$RUNS
           # check.sh runs on Windows, and the app has a driver there, only once
           # feat/windows-drive-454 is in.
