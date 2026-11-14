@@ -584,7 +584,7 @@ listed=$(grep '^browser: history lists [0-9]* pages$' "$log" | tail -1 | cut -d'
 post rightclick 300 $visited_y
 expect "^browser: menu shown $(cased 'Open in New Tab, Copy URL, Remove from History')\$" \
   "a right-click on a visited page's row didn't show its menu"
-send choose Remove from History
+send choose "$(cased 'Remove from History')"
 expect '^browser: history removed a page$' "Remove from History didn't remove the visited page"
 expect "^browser: history lists $((listed - 1)) pages\$" \
   "History didn't list $((listed - 1)) pages, one fewer than $listed, once the core took the page out"
