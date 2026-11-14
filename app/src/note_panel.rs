@@ -13,9 +13,9 @@ use std::{rc::Rc, sync::Arc};
 
 use gpui::{
     App, Bounds, Context, Entity, Focusable, Global, Hsla, KeyBinding, Pixels, RenderImage,
-    SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, accesskit::Role, actions, canvas, div, img, point, prelude::*, px,
-    rgb, rgba, size, svg,
+    ScrollHandle, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, accesskit::Role, actions, canvas, div, img,
+    linear_color_stop, linear_gradient, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::elevation::Level;
@@ -29,6 +29,7 @@ use crate::tokens::note_panel::{
     PICTURE_MOST, PICTURE_RADIUS, RADIUS, ROW_GAP, ROWS_TOP, SMALL, TEXT, THUMB_GAP, THUMB_HEIGHT,
     THUMB_WIDTH, WIDTH, WITHHELD,
 };
+use crate::tokens::settings::FADE;
 
 actions!(note_panel, [Add, Dismiss]);
 
@@ -75,6 +76,10 @@ pub struct NotePanel {
     host: Rc<dyn Host>,
     input: Entity<TextInput>,
     shown: Option<Shown>,
+    /// The opened rows' scroll, past `MOST` tall.
+    rows: ScrollHandle,
+    /// Whether the rows last drew with more under their bottom edge.
+    more_below: Option<bool>,
 }
 
 struct NotePanelWindow(WindowHandle<NotePanel>);
@@ -125,6 +130,8 @@ pub fn open_at(
             host,
             input,
             shown: None,
+            rows: ScrollHandle::new(),
+            more_below: None,
         })
     });
     match window {
@@ -171,6 +178,8 @@ pub fn show(window: u64, panel: Panel, cx: &mut App) {
             return;
         }
         FOLD_DRAWN.set(None);
+        note.rows.set_offset(point(px(0.), px(0.)));
+        note.more_below = None;
         // check.sh reads this line.
         log!(
             "browser: note panel {} {}",
@@ -332,6 +341,9 @@ impl NotePanel {
     fn toggle(&mut self, cx: &mut Context<Self>) {
         if let Some(shown) = self.shown.as_mut() {
             shown.opened = !shown.opened;
+            // Opened again, its rows start at their top.
+            self.rows.set_offset(point(px(0.), px(0.)));
+            self.more_below = None;
             cx.notify();
         }
     }
@@ -457,6 +469,44 @@ impl Render for NotePanel {
                 )
                 .into_any_element(),
             true => {
+                // Past `MOST` tall the rows scroll, and while more is under their bottom edge it
+                // fades into the panel, as Settings' card does, from the last layout's scroll.
+                let (offset, max) = (self.rows.offset().y, self.rows.max_offset().y);
+                let more = -offset < max - px(1.);
+                if self.more_below.replace(more) != Some(more) {
+                    // check.sh reads this line, to capture the rows scrolled to their end.
+                    log!(
+                        "browser: note panel rows {}",
+                        if more { "go on below" } else { "end in sight" }
+                    );
+                }
+                let fill = rgb(FILL);
+                let fade = more.then(|| {
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .h(px(FADE))
+                        .bg(linear_gradient(
+                            180.,
+                            linear_color_stop(Hsla::from(fill).opacity(0.), 0.),
+                            linear_color_stop(fill, 1.),
+                        ))
+                });
+                let scroll = self.rows.clone();
+                let after = canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        let (offset, max) = (scroll.offset().y, scroll.max_offset().y);
+                        // Not refresh, which does nothing while the frame draws.
+                        if (-offset < max - px(1.)) != more {
+                            window.request_animation_frame();
+                        }
+                    },
+                )
+                .absolute()
+                .inset_0();
                 let rows = element.rows().into_iter().map(|row| {
                     let picture = (row.name == "Picture")
                         .then(|| picture(None, PICTURE_MOST))
@@ -498,12 +548,22 @@ impl Render for NotePanel {
                     )))
                     .child(
                         div()
-                            .id("note-rows")
+                            .relative()
                             .flex()
                             .flex_col()
                             .min_h_0()
-                            .overflow_y_scroll()
-                            .children(rows),
+                            .child(
+                                div()
+                                    .id("note-rows")
+                                    .flex()
+                                    .flex_col()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.rows)
+                                    .children(rows),
+                            )
+                            .children(fade)
+                            .child(after),
                     )
                     .into_any_element()
             }

@@ -71,7 +71,6 @@ impl Host for Recorder {
     }
 }
 
-/// The panel's window, and what its note's Add and its closing told the shell.
 /// The element's picture is drawable on the panel's first frame, in the BGRA GPUI draws.
 #[test]
 fn the_picture_is_decoded_as_it_opens() {
@@ -85,6 +84,7 @@ fn the_picture_is_decoded_as_it_opens() {
     assert!(decoded(b"not a png").is_none());
 }
 
+/// The panel's window, and what its note's Add and its closing told the shell.
 fn panel_window(
     cx: &mut TestAppContext,
 ) -> (
@@ -137,6 +137,38 @@ fn add_notes_what_the_user_wrote_and_esc_drops_it(cx: &mut TestAppContext) {
     visual.simulate_keystrokes("escape");
     assert_eq!(host.0.take(), ["show 4", "hide"]);
     assert_eq!(told.take(), ["dropped"]);
+}
+
+/// Past its most height the opened rows scroll, and fade at their bottom edge while more is below
+/// it, as Settings' card does, until they're scrolled to their end.
+#[gpui::test]
+fn opened_rows_past_its_height_fade_until_their_end(cx: &mut TestAppContext) {
+    let (_, told, window) = panel_window(cx);
+    let mut long = panel(&told);
+    long.element.text = (1..=60)
+        .map(|n| format!("Line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    cx.update(|cx| show(4, long, cx));
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    // A frame shows what the last layout's scroll does, so two: as the window asks for one more
+    // when they differ.
+    let more = |visual: &mut VisualTestContext| {
+        for _ in 0..2 {
+            visual.update(|window, _| window.refresh());
+            visual.run_until_parked();
+        }
+        window.update(visual, |note, _, _| note.more_below).unwrap()
+    };
+    assert_eq!(more(&mut visual), None, "folded, it has no rows");
+    _ = window.update(&mut visual, |note, _, cx| note.toggle(cx));
+    assert_eq!(more(&mut visual), Some(true));
+    _ = window.update(&mut visual, |note, _, cx| {
+        let end = note.rows.max_offset().y;
+        note.rows.set_offset(point(px(0.), -end));
+        cx.notify();
+    });
+    assert_eq!(more(&mut visual), Some(false));
 }
 
 #[gpui::test]
