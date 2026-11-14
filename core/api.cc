@@ -23,6 +23,8 @@
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
+#include "browser_core/arrange.h"
+#include "browser_core/arrangement.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
 #include "browser_core/boosts.h"
@@ -532,6 +534,13 @@ bool bc_agent_may_act(const char* agent,
   if (refused.empty() && browser_core::IsHeld(tab)) {
     refused = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
   }
+  if (refused.empty() && contents) {
+    // An agent's tab is never arranged, but the rule is the core's to keep, not the UI's.
+    const browser_core::Arrange* arrange = browser_core::Arrange::FromWebContents(contents);
+    if (arrange && arrange->on()) {
+      refused = "The user is arranging this page. Try again once they're done.";
+    }
+  }
   if (refused.empty() && contents &&
       browser_core::Tab::FromWebContents(contents)->system_page()) {
     // Its Space never switches a tab there, but the rule is the core's to keep, not the UI's.
@@ -593,6 +602,12 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   // where it would load again.
   if (!from || from->agent() || !to || !to->agent() || from->profile() != to->profile()) {
     return false;
+  }
+  // Arrange is the user's alone.
+  content::WebContents* contents = browser_core::Tab::FromId(tab);
+  if (browser_core::Arrange* arrange =
+          contents ? browser_core::Arrange::FromWebContents(contents) : nullptr) {
+    arrange->End(/*tell=*/true);
   }
   browser_core::Window::MoveToSpace(tab, space, /*to_agent=*/true);
   if (browser_core::Space::Holding(tab) != to) {
@@ -1647,6 +1662,37 @@ void bc_set_ad_blocking(bool on) {
   browser_core::SessionChanged();
 }
 
+size_t bc_ad_block_lists(char* lists, size_t capacity) {
+  std::string lines;
+  for (const browser_core::AdBlockList& list : browser_core::AdBlockLists()) {
+    lines += (lines.empty() ? "" : "\n") + list.key + "\t" + list.group + "\t" +
+             (list.on ? "1" : "0") + "\t" + list.title;
+  }
+  return CopyString(lines, lists, capacity);
+}
+
+bool bc_ad_block_lists_locked(void) {
+  return browser_core::AdBlockListsLocked();
+}
+
+void bc_set_ad_block_list(const char* key, bool on) {
+  if (key) {
+    browser_core::SetAdBlockList(key, on);
+  }
+}
+
+size_t bc_ad_block_filters(char* filters, size_t capacity) {
+  return CopyString(browser_core::AdBlockFilters(), filters, capacity);
+}
+
+bool bc_ad_block_filters_locked(void) {
+  return browser_core::AdBlockFiltersLocked();
+}
+
+void bc_set_ad_block_filters(const char* filters) {
+  browser_core::SetAdBlockFilters(filters ? filters : "");
+}
+
 bool bc_relay_calls(void) {
   return browser_core::UserSettings().relay_calls;
 }
@@ -2228,6 +2274,68 @@ void bc_tab_boost_zap(bc_id id, bool on) {
           contents ? browser_core::Boosts::FromWebContents(contents) : nullptr) {
     boosts->Zap(on);
   }
+}
+
+bool bc_tab_arrange(bc_id id, bool on, const bc_arrange_look* look) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  browser_core::Arrange* arrange =
+      contents ? browser_core::Arrange::FromWebContents(contents) : nullptr;
+  if (!arrange) {
+    return false;
+  }
+  if (!on || !look) {
+    arrange->End(/*tell=*/false);
+    return false;
+  }
+  browser_core::Arrange::Look marks = {
+      .accent = look->accent,
+      .label = look->label,
+      .ink = look->ink,
+      .line_width = look->line,
+      .radius = look->radius,
+      .other = look->other ? look->other : "",
+  };
+  // The app fills how it moves from its tokens; a value it left out keeps the default.
+  const browser_core::Arrange::Look defaults;
+  marks.rest = browser_core::arrangement::Within(look->rest, 0.05, 1, defaults.rest);
+  marks.room_omega =
+      browser_core::arrangement::Within(look->room_omega, 5, 100, defaults.room_omega);
+  marks.land_response =
+      browser_core::arrangement::Within(look->land_response, 0.05, 1, defaults.land_response);
+  marks.land_damping =
+      browser_core::arrangement::Within(look->land_damping, 0.2, 0.99, defaults.land_damping);
+  for (size_t i = 0; look->kinds && i < look->count; ++i) {
+    if (look->kinds[i].kind && look->kinds[i].word) {
+      marks.kinds.emplace_back(look->kinds[i].kind, look->kinds[i].word);
+    }
+  }
+  return arrange->Start(marks);
+}
+
+void bc_tab_arrange_do(bc_id id, int action) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (browser_core::Arrange* arrange =
+          contents ? browser_core::Arrange::FromWebContents(contents) : nullptr) {
+    arrange->Do(action);
+  }
+}
+
+int bc_profile_set_arrangement(bc_id profile,
+                               const char* site,
+                               const char* arrangement,
+                               size_t size) {
+  return browser_core::Arrange::Set(
+      profile, site ? site : "",
+      arrangement ? std::optional<std::string_view>(std::string_view(arrangement, size))
+                  : std::nullopt);
+}
+
+bool bc_profile_turn_on_arrangement(bc_id profile,
+                                    const char* site,
+                                    const char* arrangement,
+                                    size_t size) {
+  return site && arrangement &&
+         browser_core::Arrange::TurnOn(profile, site, std::string_view(arrangement, size));
 }
 
 void bc_tab_picture_in_picture(bc_id id) {

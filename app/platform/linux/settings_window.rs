@@ -32,7 +32,7 @@ pub extern "C" fn host_show_settings() {
     SHOWN.set(true);
     SHOWN_ANEW.set(true);
     // check.sh waits for this line. The window's title is its tab's name, as on the Mac.
-    eprintln!("browser: settings shown {}", crate::settings::title());
+    browser::log!("browser: settings shown {}", crate::settings::title());
 }
 
 /// Settings' view while it shows, for the driver.

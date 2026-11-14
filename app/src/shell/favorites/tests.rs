@@ -174,14 +174,9 @@ fn a_tile_under_the_pointer_after_a_drag_has_its_card(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         assert!(shell.cancel_drag(cx));
         // Its tile is still sliding home.
-        shell.tile_slides.insert(
-            10,
-            (
-                [0.; 3],
-                std::time::Instant::now(),
-                crate::shell::Curve::Slide,
-            ),
-        );
+        shell
+            .tile_slides
+            .insert(10, ([0.; 3], shell.clock.now(), crate::shell::Curve::Slide));
         cx.notify();
     });
     cx.run_until_parked();

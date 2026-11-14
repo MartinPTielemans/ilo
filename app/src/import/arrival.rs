@@ -8,7 +8,7 @@
 //!
 //! Every frame it asks for is for motion under way, which ends once the import's work does.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{
     Div, FontWeight, HighlightStyle, Hsla, Rgba, SharedString, StyledText, div, linear_color_stop,

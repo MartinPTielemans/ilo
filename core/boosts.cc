@@ -11,6 +11,7 @@
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "browser_core/arrange.h"
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
 #include "browser_core/space.h"
@@ -360,6 +361,10 @@ void Boosts::Zap(bool on) {
     // Nothing to zap on a page that isn't http(s): the app hears it ended.
     EndZap(true);
     return;
+  }
+  // Arrange takes the page's presses too.
+  if (Arrange* arrange = Arrange::FromWebContents(web_contents())) {
+    arrange->End(/*tell=*/true);
   }
   zapping_ = true;
   web_contents()->ForEachRenderFrameHost(

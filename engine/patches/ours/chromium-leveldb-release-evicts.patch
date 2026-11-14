@@ -1,0 +1,28 @@
+Evicts from leveldb's LRU cache when an entry is released and its shard is over capacity, as
+Insert does (#2316). Insert evicts only entries no one holds, and the block it inserts is held
+until its read is done, so a block larger than the shard stayed until the next Insert into that
+shard. Chromium's shared block cache is 8 MiB in 16 shards of 512 KiB, and uBlock Origin's
+chrome.storage.local reads multi-MB blocks at launch, so up to 16 of them sat in the browser
+process: 21-39 MiB, against Chrome's 0, on the perf run's hosted runners. leveldb is
+google/leveldb at the commit Chromium's DEPS pins, under its BSD licence.
+
+--- a/third_party/leveldatabase/src/util/cache.cc
++++ b/third_party/leveldatabase/src/util/cache.cc
+@@ -234,6 +234,17 @@
+     // No longer in use; move to lru_ list.
+     LRU_Remove(e);
+     LRU_Append(&lru_, e);
++    // browser_core: an entry larger than the shard's capacity outlives its own
++    // Insert, as it's in use then, so it's evicted once released rather than at
++    // the shard's next Insert, which may never come (#2316).
++    while (usage_ > capacity_ && lru_.next != &lru_) {
++      LRUHandle* old = lru_.next;
++      assert(old->refs == 1);
++      bool erased = FinishErase(table_.Remove(old->key(), old->hash));
++      if (!erased) {  // to avoid unused variable when compiled NDEBUG
++        assert(erased);
++      }
++    }
+   }
+ }
+ 

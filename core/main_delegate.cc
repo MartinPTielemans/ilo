@@ -24,6 +24,7 @@
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/arrange.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
 #include "browser_core/cast_dialog.h"
@@ -73,6 +74,7 @@
 #include "chrome/browser/ui/startup/features.h"
 #include "chrome/browser/ui/startup/startup_tab.h"
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -244,6 +246,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     developer_mode::RegisterProfilePrefs();
     Boosts::RegisterPrefs();
     notes::RegisterProfilePrefs();
+    Arrange::RegisterProfilePrefs();
     RegisterWebRtc();
     widevine::Start();
   }
@@ -331,8 +334,8 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
   }
 
   void OnAppTerminating() {
-    // check.sh reads this line. It names the way a quit came, whatever started it: the app's
-    // own (bc_quit) logs its reason before this, and the system's Apple Event on the Mac too.
+    // The line names the way a quit came, whatever started it: the app's own (bc_quit) logs its
+    // reason before this, and the system's Apple Event on the Mac too.
     fprintf(stderr, "browser: terminating, %s\n",
             ShutdownName(browser_shutdown::GetShutdownType()));
     keep_alive_.reset();
@@ -403,6 +406,32 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
         network_context_params->persist_session_cookies) {
       network_context_params->restore_old_session_cookies = true;
     }
+  }
+
+  // Chrome's, and the browser's own ad blocker where it blocks (ad_block.h).
+  void WillCreateURLLoaderFactory(
+      content::BrowserContext* browser_context,
+      content::RenderFrameHost* frame,
+      int render_process_id,
+      URLLoaderFactoryType type,
+      const url::Origin& request_initiator,
+      const net::IsolationInfo& isolation_info,
+      std::optional<int64_t> navigation_id,
+      ukm::SourceIdObj ukm_source_id,
+      network::URLLoaderFactoryBuilder& factory_builder,
+      mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>* header_client,
+      bool* bypass_redirect_checks,
+      bool* disable_secure_dns,
+      network::mojom::URLLoaderFactoryOverridePtr* factory_override,
+      scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner,
+      bool is_for_network_service) override {
+    ChromeContentBrowserClient::WillCreateURLLoaderFactory(
+        browser_context, frame, render_process_id, type, request_initiator, isolation_info,
+        navigation_id, ukm_source_id, factory_builder, header_client, bypass_redirect_checks,
+        disable_secure_dns, factory_override, navigation_response_task_runner,
+        is_for_network_service);
+    ProxyForAdBlock(browser_context, frame, type, request_initiator, isolation_info,
+                    factory_builder);
   }
 
   void CreateThrottlesForNavigation(content::NavigationThrottleRegistry& registry) override {
@@ -619,9 +648,12 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     // as the profile starts, ilo having no startup preference for it to read (#1934).
     std::string disabled = command_line->GetSwitchValueASCII(switches::kDisableFeatures);
     disabled += disabled.empty() ? "" : ",";
+    // And a new extension isn't pinned, as on 156, unless the browser imported from pinned it (the
+    // app's import/extensions.rs): Chromium 157 pins each one as it's installed.
     command_line->AppendSwitchASCII(
         switches::kDisableFeatures,
-        disabled + features::kClearSessionStorageDiskStateOnStartup.name);
+        disabled + features::kClearSessionStorageDiskStateOnStartup.name + "," +
+            features::kExtensionsPinnedByDefault.name);
     // Blink's eye in a password field, Chrome's on Windows: it shows only once the user types into
     // the empty field, and goes, masking it again, as the field loses focus or is filled in or set
     // by the page, so a saved password is never shown. The core blurs a tab's page each time the

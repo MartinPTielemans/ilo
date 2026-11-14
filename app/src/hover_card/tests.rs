@@ -42,6 +42,7 @@ fn row(tab: u64) -> Anchor {
     Anchor {
         row: Bounds::new(point(px(8.), px(top)), size(px(224.), px(34.))),
         window: window(),
+        left: false,
     }
 }
 
@@ -321,6 +322,40 @@ fn a_card_back_before_its_window_hid_stays(cx: &mut TestAppContext) {
     assert_eq!(after(cx, &host, FADE * 4), [shown(2, waiting_height())]);
 }
 
+/// Windows can ask for the card's frame while the App is in an update, from a nested message pump,
+/// where the frame can't run. The card's motion still goes on to rest at the next frame, or the card
+/// stays on screen faded out and never settles, as in #2685's stall.
+#[gpui::test]
+fn a_frame_asked_while_the_app_is_busy_still_brings_the_card_to_rest(cx: &mut TestAppContext) {
+    use gpui::RequestFrameOptions;
+
+    let (host, told) = open_card(cx);
+    // As the app is, so the frames aren't throttled as a background window's are.
+    cx.set_app_active(Some(true));
+    rest_on(cx, &told, card(1, false));
+    after(cx, &host, DWELL);
+    let window = card_window(cx);
+    let platform = cx.test_window(window.into());
+    let frame = || platform.simulate_frame_request(RequestFrameOptions::default());
+    let settled = |cx: &mut TestAppContext| {
+        window
+            .update(cx, |card, _, _| card.settled)
+            .expect("no card window")
+    };
+    // Its first frame on screen starts its motion, which asks for the next.
+    frame();
+    cx.run_until_parked();
+    assert!(!settled(cx), "it came on screen at rest");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.update(|_| frame());
+    frame();
+    cx.run_until_parked();
+    assert!(
+        settled(cx),
+        "its motion stopped with the frame asked while the App was busy"
+    );
+}
+
 /// Whether `pose` is `scale` big and `opacity` opaque, to a thousandth, as the curves solve.
 fn near(pose: Pose, scale: f32, opacity: f32) -> bool {
     (pose.scale - scale).abs() < 0.001 && (pose.opacity - opacity).abs() < 0.001
@@ -510,6 +545,26 @@ fn a_card_goes_beside_its_row_and_stays_inside_the_window() {
     assert_eq!(place(narrow, tall).0, 400. - WIDTH - EDGE);
 }
 
+/// With the sidebar on the right, a card opens on its row's left, toward the page, as far from it as
+/// on the left, and keeps EDGE from the window's left edge (#2375).
+#[test]
+fn a_card_opens_toward_the_page_from_a_sidebar_on_the_right() {
+    let tall = height(INNER * PICTURE_MOST);
+    let mirrored = Anchor {
+        row: Bounds::new(point(px(768.), px(136.)), size(px(224.), px(34.))),
+        left: true,
+        ..row(1)
+    };
+    let (left, top) = place(mirrored, tall);
+    assert_eq!((left, top), (768. - GAP - WIDTH, 136.));
+    let narrow = Anchor {
+        row: Bounds::new(point(px(176.), px(136.)), size(px(224.), px(34.))),
+        window: size(px(400.), px(700.)),
+        ..mirrored
+    };
+    assert_eq!(place(narrow, tall).0, EDGE);
+}
+
 /// Each button, clicked where the card draws it, as the pointer comes onto the card from the row,
 /// makes its call on that first click (#818).
 #[gpui::test]
@@ -575,4 +630,28 @@ fn a_card_after_a_click_doesn_t_take_the_pointer_left_on_a_button_for_its_own(
         "it stays while its row is rested on"
     );
     assert_eq!(*told.borrow(), ["shown 2"]);
+}
+
+#[gpui::test]
+fn a_picture_taken_before_the_cards_window_is_made_is_the_windows(cx: &mut TestAppContext) {
+    let kept = cx.update(|cx| asking(1, cx));
+    let dropped = cx.update(|cx| asking(2, cx));
+    cx.update(|cx| answered(kept, Some(picture(528, 352)), cx));
+    cx.update(|cx| answered(dropped, Some(picture(528, 352)), cx));
+    cx.update(|cx| forget(2, cx));
+    let late = cx.update(|cx| asking(3, cx));
+    open_card(cx);
+    cx.update(|cx| answered(late, Some(picture(528, 352)), cx));
+    let held = card_window(cx)
+        .read_with(cx, |card, _| {
+            let mut tabs: Vec<u64> = card.pictures.keys().copied().collect();
+            tabs.sort();
+            tabs
+        })
+        .unwrap();
+    assert_eq!(
+        held,
+        [1, 3],
+        "the window lost a picture taken early, or kept one forgotten"
+    );
 }

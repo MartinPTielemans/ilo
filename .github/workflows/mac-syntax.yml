@@ -1,7 +1,7 @@
 # The Mac host's code, which a branch pushed from Linux can't compile, checked for errors in
 # minutes on GitHub's hosted Mac rather than hours later on the owner's: clang -fsyntax-only on
 # app/platform/mac with the flags build.rs gives it, against the runner's macOS SDK. The core's Mac
-# files compile only against a Chromium tree, so this doesn't check them.
+# files compile only against Chromium's headers, so core-mac-syntax.yml checks them.
 name: Mac syntax
 
 on:
@@ -13,6 +13,9 @@ on:
       - app/platform/host.h
       - core/public/**
       - .github/workflows/mac-syntax.yml
+  # A push runs it only for commits new to the repo: a commit already on another ref is skipped, so
+  # a header that doesn't parse can reach an engine build unchecked. This runs it on any ref.
+  workflow_dispatch:
 
 concurrency:
   group: mac-syntax-${{ github.ref }}

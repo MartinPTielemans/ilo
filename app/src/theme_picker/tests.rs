@@ -39,6 +39,11 @@ struct Picker {
 
 impl Picker {
     fn new(theme: Option<Theme>, cx: &mut TestAppContext) -> Self {
+        Self::opened(theme, false, cx)
+    }
+
+    /// The picker opened to the row's left if `left`, from a sidebar on the right.
+    fn opened(theme: Option<Theme>, left: bool, cx: &mut TestAppContext) -> Self {
         let host = Rc::new(Recorder::default());
         let window = cx
             .update(|cx| open(host.clone(), cx))
@@ -47,7 +52,8 @@ impl Picker {
         let changed: Changed =
             Rc::new(move |theme, done, _| recorded.themes.borrow_mut().push((theme, done)));
         // From browser window 2, as a context menu in a window behind another asks (#1432).
-        cx.update(|cx| show(2, 7, theme, At::Row(point(262., 300.)), 900., changed, cx));
+        let at = At::Row(point(262., 300.));
+        cx.update(|cx| show(2, 7, theme, at, left, 900., changed, cx));
         let cx = VisualTestContext::from_window(window.into(), cx);
         cx.run_until_parked();
         Picker { cx, window, host }
@@ -212,7 +218,16 @@ fn a_click_before_the_first_frame_still_places_the_colour(cx: &mut TestAppContex
     // One update, so no frame comes between the opening and the click. Through the window rather
     // than its view, which the press updates.
     cx.update(|cx| {
-        show(2, 7, None, At::Row(point(262., 300.)), 900., changed, cx);
+        show(
+            2,
+            7,
+            None,
+            At::Row(point(262., 300.)),
+            false,
+            900.,
+            changed,
+            cx,
+        );
         cx.update_window(window.into(), |_, window, cx| {
             let down = MouseDownEvent {
                 position: at,
@@ -423,6 +438,52 @@ fn the_wave_sets_the_intensity_and_the_dial_the_grain(cx: &mut TestAppContext) {
     assert_eq!(picker.theme().unwrap().grain, 1.);
 }
 
+/// A drag that moves before the picker has drawn the hold still moves the knob and the dial: a
+/// quick flick, or the driver's press and dragto, puts both in one frame (#2605).
+#[gpui::test]
+fn a_drag_that_moves_before_the_hold_is_drawn_still_moves(cx: &mut TestAppContext) {
+    let mut picker = Picker::new(Some(Theme::at(0.5, 0.)), cx);
+    let knob = knob_x(DEFAULT_INTENSITY);
+    let quarter = (DIAL.0 + DIAL_RING, DIAL.1);
+    let drags = [
+        ((knob, SLIDER_Y), (knob_x(0.25), SLIDER_Y)),
+        ((DIAL.0, DIAL.1 - DIAL_RING), quarter),
+    ];
+    for (from, to) in drags {
+        let (from, to) = (Picker::at(from.0, from.1), Picker::at(to.0, to.1));
+        // One update, with no draw between the press and the move, as in one frame.
+        picker.cx.update(|window, cx| {
+            let down = MouseDownEvent {
+                position: from,
+                modifiers: Modifiers::none(),
+                button: MouseButton::Left,
+                click_count: 1,
+                first_mouse: false,
+            };
+            window.dispatch_event(PlatformInput::MouseDown(down), cx);
+            let moved = MouseMoveEvent {
+                position: to,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::none(),
+            };
+            window.dispatch_event(PlatformInput::MouseMove(moved), cx);
+        });
+        // The hold is drawn, then it's let go where it moved to.
+        picker.cx.run_until_parked();
+        picker
+            .cx
+            .simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+        picker.cx.run_until_parked();
+    }
+    let theme = picker.theme().unwrap();
+    assert!(
+        (theme.intensity - 0.25).abs() < 0.001,
+        "intensity {}",
+        theme.intensity
+    );
+    assert!((theme.grain - 0.25).abs() < 0.001, "grain {}", theme.grain);
+}
+
 #[gpui::test]
 fn without_a_colour_only_the_field_swatches_and_appearance_answer(cx: &mut TestAppContext) {
     let mut picker = Picker::new(None, cx);
@@ -454,19 +515,19 @@ fn escape_closes_it_and_a_click_outside_leaves_it_closed(cx: &mut TestAppContext
 #[test]
 fn the_card_centres_on_its_arrow_inside_the_window() {
     // Room above and below: centred, the tip at the card's middle.
-    let (left, top, arrow_y) = placed(At::Row(point(250., 400.)), 1000.);
+    let (left, top, arrow_y) = placed(At::Row(point(250., 400.)), false, 1000.);
     assert!((left - (250. + GAP - TIP_SHORT)).abs() < 0.01);
     assert_eq!((top, arrow_y), (400. - HEIGHT / 2., Some(HEIGHT / 2.)));
     // Near the top, the card stays in and the arrow moves up it, clear of the corner.
-    let (_, top, arrow_y) = placed(At::Row(point(250., 60.)), 1000.);
+    let (_, top, arrow_y) = placed(At::Row(point(250., 60.)), false, 1000.);
     assert_eq!((top, arrow_y), (MARGIN, Some(52.)));
-    let (_, top, arrow_y) = placed(At::Row(point(250., 10.)), 1000.);
+    let (_, top, arrow_y) = placed(At::Row(point(250., 10.)), false, 1000.);
     assert_eq!(
         (top, arrow_y),
         (MARGIN, Some(RADIUS + ARROW + ARROW_FOOT_RADIUS))
     );
     // Near the bottom, the same.
-    let (_, top, arrow_y) = placed(At::Row(point(250., 950.)), 1000.);
+    let (_, top, arrow_y) = placed(At::Row(point(250., 950.)), false, 1000.);
     assert_eq!((top, arrow_y), (1000. - MARGIN - HEIGHT, Some(950. - top)));
 }
 
@@ -474,11 +535,11 @@ fn the_card_centres_on_its_arrow_inside_the_window() {
 /// window's top, as Arc 1.171's does inside its 382 × 534 window there, growing in from its top left.
 #[test]
 fn from_the_menu_the_card_sits_against_the_sidebar_at_the_window_s_top() {
-    let (left, top, arrow_y) = placed(At::Edge(240.), 1000.);
+    let (left, top, arrow_y) = placed(At::Edge(240.), false, 1000.);
     assert_eq!(arrow_y, None);
     let (card_left, card_top) = (left + ARROW, top);
     assert_eq!((card_left, card_top), (254., 14.));
-    let corners = corners(None);
+    let corners = corners(None, false);
     assert_eq!(corners.len(), 4, "the card has an arrow");
     assert_eq!(
         corners[0],
@@ -488,6 +549,52 @@ fn from_the_menu_the_card_sits_against_the_sidebar_at_the_window_s_top() {
     assert!(
         corners.iter().all(|&(x, _, _)| x >= ARROW),
         "the card reaches into the arrow's room"
+    );
+}
+
+/// From a sidebar on the right, the picker opens toward the page: to the left of what opened it,
+/// its arrow on its right edge with the same gap, and against the sidebar's left edge from the
+/// Space's menu, growing in from its top right.
+#[test]
+fn from_a_sidebar_on_the_right_the_card_opens_to_the_left() {
+    let (left, top, arrow_y) = placed(At::Row(point(750., 400.)), true, 1000.);
+    assert!((left + WIDTH - TIP_SHORT - (750. - GAP)).abs() < 0.01);
+    assert_eq!((top, arrow_y), (400. - HEIGHT / 2., Some(HEIGHT / 2.)));
+    let arrowed = corners(arrow_y, true);
+    assert_eq!(arrowed[0], (WIDTH, HEIGHT / 2., ARROW_TIP_RADIUS));
+    assert!(
+        arrowed
+            .iter()
+            .all(|&(x, _, _)| x == WIDTH || x <= CARD_WIDTH),
+        "the card reaches into the arrow's room"
+    );
+    // Clockwise from the tip, as the outline rounds each corner the way it bulges: down the
+    // arrow's lower side first.
+    assert!(arrowed[1].1 > arrowed[0].1, "{arrowed:?}");
+
+    let (left, top, arrow_y) = placed(At::Edge(760.), true, 1000.);
+    assert_eq!(arrow_y, None);
+    assert_eq!((left + CARD_WIDTH, top), (746., 14.));
+    let card = corners(None, true);
+    assert_eq!(card[0], (CARD_WIDTH, 0., RADIUS), "not from its top right");
+    assert_eq!(card[1], (CARD_WIDTH, HEIGHT, RADIUS), "not clockwise");
+}
+
+/// Opened to the left, the card starts at its window's left, and presses land on what's drawn.
+#[gpui::test]
+fn opened_to_the_left_a_press_lands_on_the_field(cx: &mut TestAppContext) {
+    let mut picker = Picker::opened(None, true, cx);
+    let (x, y) = Picker::in_field(0.2, 0.45);
+    picker
+        .cx
+        .simulate_click(point(px(x), px(y)), Modifiers::none());
+    picker.cx.run_until_parked();
+    let theme = picker.theme().expect("no colour placed");
+    assert!(
+        close((theme.x, theme.y), (0.2, 0.45)),
+        "at {}, {}",
+        theme.x,
+        theme.y
     );
 }
 

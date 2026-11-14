@@ -5,6 +5,8 @@
 //! note, until the Site Controls turn it off (decision 1). The site's session goes with the tab, so
 //! the user stays signed in. Where the Mac has no engine to give, on macOS 13, and in an agent's
 //! Space, whose tabs never switch, it opens the page in Safari instead and leaves the tab as it is.
+//! On Windows, while ilo isn't the system's default browser, it offers that browser instead, and on
+//! Linux nothing (Elsewhere::on).
 //! Its ×, shown under the pointer, and escape while the UI has the keyboard close it for the site in
 //! the profile, across launches, or for a private window's session: the core no longer reports it
 //! there, and the Site Controls offer Safari's engine for the site instead, the way back to its
@@ -28,14 +30,14 @@
 //! goes to another site, as the cause is the desk's and not the site's.
 
 use gpui::{
-    App, Context, Div, FontWeight, KeyBinding, MouseButton, SharedString, Stateful, actions, div,
-    prelude::*, px,
+    App, Context, FontWeight, KeyBinding, MouseButton, SharedString, actions, div, prelude::*, px,
 };
 
 use super::{
     KEY_CONTEXT, Shell, TITLE,
-    permission::{BESIDE_CLOSE, BUTTONS_TOP, card_button, card_close, card_listener},
+    permission::{BESIDE_CLOSE, BUTTONS_TOP, card_button_wrapping, card_close, card_listener},
 };
+use crate::default_browser::Os;
 use crate::tooltip::{Anchor, Tip};
 use crate::widevine::Widevine;
 
@@ -62,9 +64,12 @@ const PLAYREADY_X64: &str = concat!(
 const PLAYREADY_HARDWARE: &str =
     "This site's video needs hardware DRM, which this PC's graphics don't offer.";
 const PLAYREADY_PRIVATE: &str = "This site's video doesn't play in a private window.";
-const OPEN: &str = "Open in Safari";
-/// A private window's page leaves it for Safari's own window, which keeps history.
-const OPEN_PRIVATE: &str = "Open in Safari, not private";
+const OPEN_SAFARI: &str = "Open in Safari";
+/// A private window's page leaves it for the other browser's own window, which keeps history.
+const OPEN_SAFARI_PRIVATE: &str = "Open in Safari, not private";
+/// Named for what it does, as the user picked the browser and ilo needn't (#2468).
+const OPEN_DEFAULT: &str = "Open in Default Browser";
+const OPEN_DEFAULT_PRIVATE: &str = "Open in Default Browser, not private";
 /// Ours, naming the module as Google's, as the user downloads a proprietary file from Google.
 const WIDEVINE: &str = "com.widevine.alpha";
 const WIDEVINE_WORDS: &str = concat!(
@@ -94,6 +99,68 @@ const OUTPUT_CLOSE_TIP: &str = "Close";
 const CLOSE_KEY: &str = "drm-note-close";
 
 actions!(drm_note, [CloseNote]);
+
+/// The other browser the note offers for video ilo can't play (#2468).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Elsewhere {
+    Safari,
+    DefaultBrowser,
+}
+
+impl Elsewhere {
+    /// Safari on the Mac, which plays these sites with Apple's DRM. On Windows the default browser
+    /// while it isn't ilo, as Edge and Chrome play what ilo can't on Windows 10, on ARM and without
+    /// the graphics' hardware DRM. On Linux none: there a Widevine page's note offers Google's
+    /// module, no Linux browser has the other DRMs, and a Flatpak can't tell whether it's the
+    /// default, so the page could come back to ilo.
+    pub fn on(os: Os, is_default: impl FnOnce() -> bool) -> Option<Self> {
+        match os {
+            Os::Mac => Some(Self::Safari),
+            Os::Windows => (!is_default()).then_some(Self::DefaultBrowser),
+            Os::Linux | Os::Flatpak => None,
+        }
+    }
+
+    fn label(self, private: bool) -> &'static str {
+        match (self, private) {
+            (Self::Safari, false) => OPEN_SAFARI,
+            (Self::Safari, true) => OPEN_SAFARI_PRIVATE,
+            (Self::DefaultBrowser, false) => OPEN_DEFAULT,
+            (Self::DefaultBrowser, true) => OPEN_DEFAULT_PRIVATE,
+        }
+    }
+}
+
+/// What the note's one button does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Offer {
+    /// Shows the page in Safari's engine, in the tab.
+    Switch,
+    DownloadWidevine,
+    RestartForWidevine,
+    /// Opens the page in the other browser, leaving the tab as it is.
+    Elsewhere,
+}
+
+impl Offer {
+    fn id(self) -> &'static str {
+        match self {
+            Offer::Switch => "drm-note-switch",
+            Offer::DownloadWidevine => "drm-note-widevine",
+            Offer::RestartForWidevine => "drm-note-restart",
+            Offer::Elsewhere => "drm-note-elsewhere",
+        }
+    }
+
+    fn take(self, shell: &mut Shell, cx: &mut Context<Shell>) {
+        match self {
+            Offer::Switch => shell.use_system_engine(cx),
+            Offer::DownloadWidevine => shell.download_widevine(cx),
+            Offer::RestartForWidevine => shell.restart_for_widevine(cx),
+            Offer::Elsewhere => shell.open_elsewhere(cx),
+        }
+    }
+}
 
 /// What Windows' PlayReady needs that the PC may lack, as the core says (bc_playready_needs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -259,25 +326,15 @@ impl Shell {
     }
 
     /// The note's words and button, if it has one, for Google's Widevine module in `state`.
-    fn widevine_card(
-        &self,
-        state: Widevine,
-        cx: &mut Context<Self>,
-    ) -> (&'static str, Option<Stateful<Div>>) {
-        let download = |label| {
-            card_button(&self.palette, "drm-note-widevine", label)
-                .on_click(cx.listener(|shell, _, _, cx| shell.download_widevine(cx)))
-        };
+    fn widevine_note(state: Widevine) -> (&'static str, Option<(Offer, &'static str)>) {
+        let download = |label| Some((Offer::DownloadWidevine, label));
         match state {
-            Widevine::Absent => (WIDEVINE_WORDS, Some(download(WIDEVINE_DOWNLOAD))),
-            Widevine::Failed => (WIDEVINE_FAILED_WORDS, Some(download(WIDEVINE_RETRY))),
+            Widevine::Absent => (WIDEVINE_WORDS, download(WIDEVINE_DOWNLOAD)),
+            Widevine::Failed => (WIDEVINE_FAILED_WORDS, download(WIDEVINE_RETRY)),
             Widevine::Downloading => (WIDEVINE_DOWNLOADING_WORDS, None),
             Widevine::Restart => (
                 WIDEVINE_RESTART_WORDS,
-                Some(
-                    card_button(&self.palette, "drm-note-restart", WIDEVINE_RESTART)
-                        .on_click(cx.listener(|shell, _, _, cx| shell.restart_for_widevine(cx))),
-                ),
+                Some((Offer::RestartForWidevine, WIDEVINE_RESTART)),
             ),
             // Loaded, the core reports no note; one shown after Remove plays until a restart.
             Widevine::Ready | Widevine::None => (WORDS, None),
@@ -296,13 +353,30 @@ impl Shell {
         }
     }
 
-    /// Opens the page of the tab shown in Safari. The tab keeps its page, and its note.
-    fn open_in_safari(&mut self, cx: &mut Context<Self>) {
-        if self.drm_note().is_none() || self.output_note() {
+    /// Opens the page of the tab shown in the other browser, where there's one. The tab keeps its
+    /// page, and its note.
+    fn open_elsewhere(&mut self, cx: &mut Context<Self>) {
+        if self.drm_note().is_none() || self.output_note() || self.browser.elsewhere().is_none() {
             return;
         }
         let url = self.page(self.selected).url;
-        self.browser.open_in_safari(&url, cx);
+        self.browser.open_elsewhere(&url, cx);
+    }
+
+    /// What the note of the tab shown says, and its button's offer and words, if it has one. Where
+    /// there's nothing to offer, it says why.
+    fn note_offer(&self) -> (&'static str, Option<(Offer, &'static str)>) {
+        if self.output_note() {
+            (OUTPUT_WORDS, None)
+        } else if let Some(state) = self.widevine_offer() {
+            Self::widevine_note(state)
+        } else if self.can_switch() {
+            (SWITCH_WORDS, Some((Offer::Switch, SWITCH)))
+        } else {
+            let open = self.browser.elsewhere();
+            let open = open.map(|elsewhere| (Offer::Elsewhere, elsewhere.label(self.private)));
+            (self.unplayable_words(), open)
+        }
     }
 
     /// The note of the tab shown, as a card under the URL field.
@@ -315,29 +389,11 @@ impl Shell {
             }
             return None;
         }
-        let output = self.output_note();
-        let switch = !output && self.can_switch();
-        // Where none is, the note says why and offers nothing.
-        let (words, button) = if output {
-            (OUTPUT_WORDS, None)
-        } else if let Some(state) = self.widevine_offer() {
-            self.widevine_card(state, cx)
-        } else if switch {
-            (
-                SWITCH_WORDS,
-                Some(
-                    card_button(&self.palette, "drm-note-switch", SWITCH)
-                        .on_click(cx.listener(|shell, _, _, cx| shell.use_system_engine(cx))),
-                ),
-            )
-        } else {
-            let open = self.browser.can_open_in_safari().then(|| {
-                let label = if self.private { OPEN_PRIVATE } else { OPEN };
-                card_button(&self.palette, "drm-note-safari", label)
-                    .on_click(cx.listener(|shell, _, _, cx| shell.open_in_safari(cx)))
-            });
-            (self.unplayable_words(), open)
-        };
+        let (words, offer) = self.note_offer();
+        let button = offer.map(|(offer, label)| {
+            card_button_wrapping(&self.palette, offer.id(), label)
+                .on_click(cx.listener(move |shell, _, _, cx| offer.take(shell, cx)))
+        });
         // Shown under the pointer, as a row's ×, and always to VoiceOver's cursor, which is no
         // pointer. It takes clicks either way, as the pointer is over the card to click it.
         let close = card_close(&self.palette, CLOSE_KEY)
@@ -379,8 +435,12 @@ mod tests {
     use gpui::{App, AppContext, Modifiers, TestAppContext};
 
     use super::{
-        CLOSE_KEY, OUTPUT_RESTRICTED, PLAYREADY_PRIVATE, PLAYREADY_WINDOWS_11, PlayReady, WORDS,
+        CLOSE_KEY, OPEN_DEFAULT, OPEN_DEFAULT_PRIVATE, OPEN_SAFARI, OUTPUT_RESTRICTED, Offer,
+        PLAYREADY_PRIVATE, PLAYREADY_WINDOWS_11, PlayReady, SWITCH, WIDEVINE_DOWNLOAD,
+        WIDEVINE_WORDS, WORDS,
     };
+
+    use crate::default_browser::Os;
 
     use crate::widevine::Widevine;
 
@@ -507,22 +567,134 @@ mod tests {
         assert!(host.take().is_empty());
     }
 
+    /// The card's words and its button's offer and words, for the tab shown.
+    fn offered(
+        shell: &gpui::Entity<Shell>,
+        cx: &mut TestAppContext,
+    ) -> (&'static str, Option<(Offer, &'static str)>) {
+        shell.read_with(cx, |shell, _| shell.note_offer())
+    }
+
+    /// Takes what the card's button offers, as its click does, and returns what the host was asked.
+    fn take_offer(
+        shell: &gpui::Entity<Shell>,
+        host: &Recorder,
+        cx: &mut TestAppContext,
+    ) -> Vec<String> {
+        host.take();
+        let (_, offer) = offered(shell, cx);
+        let (offer, _) = offer.expect("the card offers nothing");
+        shell.update(cx, |shell, cx| offer.take(shell, cx));
+        host.take()
+    }
+
+    /// The Mac, where Safari's engine isn't there to give, as on macOS 13: the card offers Safari,
+    /// which opens the tab's page, and the tab keeps its page and its note.
     #[gpui::test]
-    fn the_button_asks_the_host_to_open_the_tabs_page_in_safari(cx: &mut TestAppContext) {
+    fn on_the_mac_the_card_opens_the_page_in_safari(cx: &mut TestAppContext) {
         let (shell, host) = window_with_tabs(cx);
+        host.os.set(Some(Os::Mac));
         shell.update(cx, |shell, cx| {
             // Without a note, there's nothing to open.
-            shell.open_in_safari(cx);
+            shell.open_elsewhere(cx);
             shell.set_media_unsupported(10, "com.widevine.alpha", cx);
-            host.take();
-            shell.open_in_safari(cx);
         });
         assert_eq!(
-            host.take(),
-            ["open in safari https://www.netflix.com/browse"]
+            offered(&shell, cx),
+            (WORDS, Some((Offer::Elsewhere, OPEN_SAFARI)))
         );
-        // The tab keeps its page and its note.
+        assert_eq!(
+            take_offer(&shell, &host, cx),
+            ["open elsewhere https://www.netflix.com/browse"]
+        );
         shell.update(cx, |shell, _| assert!(shell.drm_note().is_some()));
+        // Where Safari's engine is, the card plays the page in the tab instead.
+        host.system_engine.set(true);
+        assert_eq!(offered(&shell, cx).1, Some((Offer::Switch, SWITCH)));
+        assert_eq!(take_offer(&shell, &host, cx), ["system engine 10"]);
+    }
+
+    /// Windows, while ilo isn't the default browser: the card offers that browser, named for what
+    /// it does, which opens the tab's page; a private window's says it won't be private. Once ilo is
+    /// the default, it offers nothing, as the page would come back. It never names Safari.
+    #[gpui::test]
+    fn on_windows_the_card_opens_the_page_in_the_default_browser_unless_thats_ilo(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, host) = window_with_tabs(cx);
+        host.os.set(Some(Os::Windows));
+        host.default_browser.set(false);
+        host.system_engine.set(false);
+        host.playready.set(PlayReady::Windows11);
+        shell.update(cx, |shell, cx| {
+            shell.set_media_unsupported(10, "com.microsoft.playready", cx)
+        });
+        assert_eq!(
+            offered(&shell, cx),
+            (PLAYREADY_WINDOWS_11, Some((Offer::Elsewhere, OPEN_DEFAULT)))
+        );
+        assert_eq!(
+            take_offer(&shell, &host, cx),
+            ["open elsewhere https://www.netflix.com/browse"]
+        );
+        shell.update(cx, |shell, _| shell.private = true);
+        assert_eq!(
+            offered(&shell, cx).1,
+            Some((Offer::Elsewhere, OPEN_DEFAULT_PRIVATE))
+        );
+        host.default_browser.set(true);
+        assert_eq!(offered(&shell, cx), (PLAYREADY_WINDOWS_11, None));
+        host.take();
+        shell.update(cx, |shell, cx| shell.open_elsewhere(cx));
+        assert!(host.take().is_empty(), "the hidden button still opened");
+        let (words, _) = offered(&shell, cx);
+        assert!(!words.contains("Safari"));
+    }
+
+    /// Linux, the Flatpak's and a native install's, default browser or not: a Widevine page's card
+    /// offers Google's module, which downloads it, and any other's offers nothing, never Safari.
+    #[gpui::test]
+    fn on_linux_the_card_offers_the_module_or_nothing(cx: &mut TestAppContext) {
+        let (shell, host) = window_with_tabs(cx);
+        host.system_engine.set(false);
+        for os in [Os::Linux, Os::Flatpak] {
+            host.os.set(Some(os));
+            for default in [false, true] {
+                host.default_browser.set(default);
+                host.widevine.set(Widevine::Absent);
+                shell.update(cx, |shell, cx| {
+                    shell.set_media_unsupported(10, "com.widevine.alpha", cx)
+                });
+                assert_eq!(
+                    offered(&shell, cx),
+                    (
+                        WIDEVINE_WORDS,
+                        Some((Offer::DownloadWidevine, WIDEVINE_DOWNLOAD))
+                    )
+                );
+                assert_eq!(take_offer(&shell, &host, cx), ["download widevine"]);
+                shell.update(cx, |shell, cx| {
+                    shell.set_media_unsupported(10, "com.microsoft.playready", cx)
+                });
+                assert_eq!(
+                    offered(&shell, cx),
+                    (WORDS, None),
+                    "{os:?}, default {default}"
+                );
+                host.widevine.set(Widevine::None);
+                shell.update(cx, |shell, cx| {
+                    shell.set_media_unsupported(10, "com.widevine.alpha", cx)
+                });
+                assert_eq!(
+                    offered(&shell, cx),
+                    (WORDS, None),
+                    "{os:?}, default {default}"
+                );
+                host.take();
+                shell.update(cx, |shell, cx| shell.open_elsewhere(cx));
+                assert!(host.take().is_empty(), "{os:?} opened another browser");
+            }
+        }
     }
 
     /// Closing asks the core to keep the site closed: it stops reporting the note for each of the
@@ -618,7 +790,7 @@ mod tests {
             assert!(shell.output_note());
             host.take();
             shell.use_system_engine(cx);
-            shell.open_in_safari(cx);
+            shell.open_elsewhere(cx);
         });
         assert!(host.take().is_empty());
     }

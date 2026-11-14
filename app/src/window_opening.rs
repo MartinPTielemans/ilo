@@ -318,7 +318,13 @@ pub(crate) fn open_window_as(
         }
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         emoji::keep(cx);
-        // In front, as it's about to be key, or a saved one behind the others.
+        // In front, as it's about to be key, or a saved one behind the others. One in front is the
+        // key shell from now, as macOS reports no key change for the window first in the list, so
+        // a window made key before it, such as the one left as another closed, hears too late to
+        // take the shortcuts back (#2648).
+        if saved.is_none() {
+            update_app_later(shell::window_became_key(shell.downgrade()));
+        }
         WINDOWS.with_borrow_mut(|windows| {
             windows.insert(
                 if saved.is_some() { windows.len() } else { 0 },
@@ -654,38 +660,60 @@ pub(crate) fn finish_opening(
         elevate(COMMAND_BAR, Level::Modal);
         unsafe { platform::host_add_overlay(COMMAND_BAR, view, radius, command_bar_dismissed) };
     }
-    if let Some(picker) = icon_picker::open(Rc::new(PickerHost), recent_emoji(), cx)
-        && let Ok(view) = picker.update(cx, |_, window, _| ns_view(window))
-    {
-        let corners: Vec<f64> = icon_picker::corners()
-            .iter()
-            .flat_map(|&(x, y, radius)| [x, y, radius].map(f64::from))
-            .collect();
-        elevate(ICON_PICKER, Level::Modal);
-        unsafe {
-            platform::host_add_overlay(ICON_PICKER, view, 0., icon_picker_dismissed);
-            platform::host_set_overlay_shape(ICON_PICKER, corners.as_ptr(), corners.len() / 3);
-            let (x, y) = icon_picker::ARROW_TIP;
-            platform::host_set_overlay_growth(ICON_PICKER, x.into(), y.into());
-        }
-    }
-    if let Some(preview) = folder_preview::open(Rc::new(FolderPreviewHost), cx)
-        && let Ok(view) = preview.update(cx, |_, window, _| ns_view(window))
-    {
-        let radius = folder_preview::RADIUS.into();
-        elevate(FOLDER_PREVIEW, Level::Popover);
-        let dismissed = folder_preview_dismissed;
-        unsafe { platform::host_add_overlay(FOLDER_PREVIEW, view, radius, dismissed) };
-    }
-    if let Some(picker) = theme_picker::open(Rc::new(ThemeHost), cx)
-        && let Ok(view) = picker.update(cx, |_, window, _| ns_view(window))
-    {
-        elevate(THEME_PICKER, Level::Modal);
-        unsafe {
-            platform::host_add_overlay(THEME_PICKER, view, 0., theme_picker_dismissed);
-            platform::host_set_overlay_shrink(THEME_PICKER);
-        }
-    }
+    // The rest are made the first time one shows: a hidden overlay's window still holds what its
+    // drawing needs, which a user who never opens it shouldn't pay for (#2138).
+    use browser::lazy_window::when_asked;
+    when_asked::<icon_picker::IconPicker>(
+        |cx| {
+            if let Some(picker) = icon_picker::open(Rc::new(PickerHost), recent_emoji(), cx)
+                && let Ok(view) = picker.update(cx, |_, window, _| ns_view(window))
+            {
+                let corners: Vec<f64> = icon_picker::corners()
+                    .iter()
+                    .flat_map(|&(x, y, radius)| [x, y, radius].map(f64::from))
+                    .collect();
+                elevate(ICON_PICKER, Level::Modal);
+                unsafe {
+                    platform::host_add_overlay(ICON_PICKER, view, 0., icon_picker_dismissed);
+                    platform::host_set_overlay_shape(
+                        ICON_PICKER,
+                        corners.as_ptr(),
+                        corners.len() / 3,
+                    );
+                    let (x, y) = icon_picker::ARROW_TIP;
+                    platform::host_set_overlay_growth(ICON_PICKER, x.into(), y.into());
+                }
+            }
+        },
+        cx,
+    );
+    when_asked::<folder_preview::FolderPreview>(
+        |cx| {
+            if let Some(preview) = folder_preview::open(Rc::new(FolderPreviewHost), cx)
+                && let Ok(view) = preview.update(cx, |_, window, _| ns_view(window))
+            {
+                let radius = folder_preview::RADIUS.into();
+                elevate(FOLDER_PREVIEW, Level::Popover);
+                let dismissed = folder_preview_dismissed;
+                unsafe { platform::host_add_overlay(FOLDER_PREVIEW, view, radius, dismissed) };
+            }
+        },
+        cx,
+    );
+    when_asked::<theme_picker::ThemePicker>(
+        |cx| {
+            if let Some(picker) = theme_picker::open(Rc::new(ThemeHost), cx)
+                && let Ok(view) = picker.update(cx, |_, window, _| ns_view(window))
+            {
+                elevate(THEME_PICKER, Level::Modal);
+                unsafe {
+                    platform::host_add_overlay(THEME_PICKER, view, 0., theme_picker_dismissed);
+                    platform::host_set_overlay_shrink(THEME_PICKER);
+                }
+            }
+        },
+        cx,
+    );
     let opener: boost_editor::Opener = Rc::new(|cx| {
         let editor = boost_editor::open(Rc::new(BoostEditorHost), cx)?;
         let view = editor.update(cx, |_, window, _| ns_view(window)).ok()?;
@@ -697,11 +725,16 @@ pub(crate) fn finish_opening(
         Some(editor)
     });
     boost_editor::open_when_asked(opener, cx);
-    if let Some(dialog) = dialog::open(Rc::new(DialogHost), cx)
-        && let Ok(view) = dialog.update(cx, |_, window, _| ns_view(window))
-    {
-        unsafe { platform::host_add_dialog(view) };
-    }
+    when_asked::<dialog::Dialog>(
+        |cx| {
+            if let Some(dialog) = dialog::open(Rc::new(DialogHost), cx)
+                && let Ok(view) = dialog.update(cx, |_, window, _| ns_view(window))
+            {
+                unsafe { platform::host_add_dialog(view) };
+            }
+        },
+        cx,
+    );
     // The window the toast shows over gives its colour and palette.
     let look = |cx: &App| {
         let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
@@ -711,79 +744,152 @@ pub(crate) fn finish_opening(
     let toast_host = Rc::new(ToastHost {
         view: Cell::new(std::ptr::null_mut()),
     });
-    if let Some(toast) = toast::open(
-        toast_host.clone(),
-        move |cx| look(cx).unwrap_or_default(),
+    when_asked::<toast::Toast>(
+        {
+            let toast_host = toast_host.clone();
+            move |cx| {
+                if let Some(toast) = toast::open(
+                    toast_host.clone(),
+                    move |cx| look(cx).unwrap_or_default(),
+                    cx,
+                ) && let Ok(view) = toast.update(cx, |_, window, _| ns_view(window))
+                {
+                    toast_host.view.set(view);
+                    TOAST_VIEW.set(view);
+                    unsafe { platform::host_add_toast(view) };
+                }
+            }
+        },
         cx,
-    ) && let Ok(view) = toast.update(cx, |_, window, _| ns_view(window))
-    {
-        toast_host.view.set(view);
-        TOAST_VIEW.set(view);
-        unsafe { platform::host_add_toast(view) };
-        // Auto-archive at launch can come before there's a toast to show its note in.
-        show_archive_note(cx);
-    }
-    if let Some(capture) = capture::open(Rc::new(CaptureHost { toast: toast_host }), cx)
-        && let Ok(view) = capture.update(cx, |_, window, _| ns_view(window))
-    {
-        unsafe { platform::host_add_capture(view, capture_dismissed) };
-    }
-    let host = Rc::new(LinkPreviewHost {
-        holder: Cell::new(std::ptr::null_mut()),
-        over: Cell::new(0),
-    });
-    if let Some(preview) = link_preview::open(host.clone(), cx)
-        && let Ok(view) = preview.update(cx, |_, window, _| ns_view(window))
-    {
-        let holder = unsafe { platform::host_add_link_preview(view, link_preview_dismissed) };
-        host.holder.set(holder);
-        LINK_PREVIEWS.set(!holder.is_null());
-    }
-    let host = Rc::new(SiteControlsHost {
-        view: Cell::new(std::ptr::null_mut()),
-    });
-    if let Some(panel) = site_controls::open(host.clone(), cx)
-        && let Ok(view) = panel.update(cx, |_, window, _| ns_view(window))
-    {
-        host.view.set(view);
-        elevate(SITE_CONTROLS, Level::Popover);
-        unsafe { platform::host_add_site_controls(view, site_controls_dismissed) };
-    }
-    if let Some(menu) = menu::open(Rc::new(MenuHost), cx)
-        && let Ok(view) = menu.update(cx, |_, window, _| ns_view(window))
-    {
-        unsafe { platform::host_add_menu_window(view, menu_pointer, menu_dismissed, menu_choose) };
-    }
+    );
+    // Auto-archive at launch can come before the toast its note shows in is asked for.
+    show_archive_note(cx);
+    // A mode's foot bar takes the main button's accent from the window it shows over.
+    when_asked::<browser::foot_bar::FootBar>(
+        |cx| {
+            let palette = |window: u64, cx: &App| {
+                let shell = WINDOWS.with_borrow(|windows| {
+                    (windows.iter().find(|w| w.id == window)).map(|w| w.shell.clone())
+                });
+                Some(shell?.upgrade()?.read(cx).palette())
+            };
+            if let Some(foot_bar) = browser::foot_bar::open(
+                Rc::new(FootBarHost),
+                move |window, cx| palette(window, cx).unwrap_or_default(),
+                cx,
+            ) && let Ok(view) = foot_bar.update(cx, |_, window, _| ns_view(window))
+            {
+                unsafe { platform::host_add_foot_bar(view) };
+            }
+        },
+        cx,
+    );
+    when_asked::<capture::Capture>(
+        move |cx| {
+            if let Some(capture) = capture::open(Rc::new(CaptureHost { toast: toast_host }), cx)
+                && let Ok(view) = capture.update(cx, |_, window, _| ns_view(window))
+            {
+                unsafe { platform::host_add_capture(view, capture_dismissed) };
+            }
+        },
+        cx,
+    );
+    // Each host holds a preview, so a link goes to one before its window is made, which then says
+    // whether this one did.
+    LINK_PREVIEWS.set(true);
+    when_asked::<link_preview::LinkPreview>(
+        |cx| {
+            let host = Rc::new(LinkPreviewHost {
+                holder: Cell::new(std::ptr::null_mut()),
+                over: Cell::new(0),
+            });
+            let mut holder = std::ptr::null_mut();
+            if let Some(preview) = link_preview::open(host.clone(), cx)
+                && let Ok(view) = preview.update(cx, |_, window, _| ns_view(window))
+            {
+                holder = unsafe { platform::host_add_link_preview(view, link_preview_dismissed) };
+                host.holder.set(holder);
+            }
+            LINK_PREVIEWS.set(!holder.is_null());
+        },
+        cx,
+    );
+    when_asked::<site_controls::SiteControls>(
+        |cx| {
+            let host = Rc::new(SiteControlsHost {
+                view: Cell::new(std::ptr::null_mut()),
+            });
+            if let Some(panel) = site_controls::open(host.clone(), cx)
+                && let Ok(view) = panel.update(cx, |_, window, _| ns_view(window))
+            {
+                host.view.set(view);
+                elevate(SITE_CONTROLS, Level::Popover);
+                unsafe { platform::host_add_site_controls(view, site_controls_dismissed) };
+            }
+        },
+        cx,
+    );
+    when_asked::<menu::ContextMenu>(
+        |cx| {
+            if let Some(menu) = menu::open(Rc::new(MenuHost), cx)
+                && let Ok(view) = menu.update(cx, |_, window, _| ns_view(window))
+            {
+                unsafe {
+                    platform::host_add_menu_window(view, menu_pointer, menu_dismissed, menu_choose)
+                };
+            }
+        },
+        cx,
+    );
     // Their windows reach this far past the plate, for its shadow.
     let margin = f64::from(browser::elevation::WINDOW_MARGIN);
-    if let Some(tip) = tooltip::open(Rc::new(TooltipHost), cx)
-        && let Ok(view) = tip.update(cx, |_, window, _| fading_view(window))
-    {
-        unsafe { platform::host_add_tooltip(view, margin, tooltip_away) };
-    }
-    if let Some(card) = hover_card::open(Rc::new(CardHost), cx)
-        && let Ok(view) = card.update(cx, |_, window, _| ns_view(window))
-    {
-        unsafe {
-            platform::host_add_hover_card(view, margin, card_away);
-            platform::host_watch_memory_pressure(memory_pressed);
-        }
-    }
-    if let Some(target) = link_target::open(
-        Rc::new(LinkTargetHost),
-        move |cx| look(cx).unwrap_or_default(),
+    when_asked::<tooltip::Tooltip>(
+        move |cx| {
+            if let Some(tip) = tooltip::open(Rc::new(TooltipHost), cx)
+                && let Ok(view) = tip.update(cx, |_, window, _| fading_view(window))
+            {
+                unsafe { platform::host_add_tooltip(view, margin, tooltip_away) };
+            }
+        },
         cx,
-    ) && let Ok(view) = target.update(cx, |_, window, _| fading_view(window))
-    {
-        unsafe { platform::host_add_link_target(view, margin, link_pointer) };
-    }
-    if let Some(hud) = zoom_hud::open(Rc::new(HudHost), cx)
-        && let Ok(view) = hud.update(cx, |_, window, _| ns_view(window))
-    {
-        let (right, top) = (zoom_hud::WINDOW_RIGHT, zoom_hud::WINDOW_TOP);
-        let margin = f64::from(zoom_hud::MARGIN);
-        unsafe { platform::host_add_hud(view, f64::from(right), f64::from(top), margin) };
-    }
+    );
+    // The card's pictures are kept from the first switch, before its window is made.
+    unsafe { platform::host_watch_memory_pressure(memory_pressed) };
+    when_asked::<hover_card::HoverCard>(
+        move |cx| {
+            if let Some(card) = hover_card::open(Rc::new(CardHost), cx)
+                && let Ok(view) = card.update(cx, |_, window, _| ns_view(window))
+            {
+                unsafe { platform::host_add_hover_card(view, margin, card_away) };
+            }
+        },
+        cx,
+    );
+    when_asked::<link_target::LinkTarget>(
+        move |cx| {
+            if let Some(target) = link_target::open(
+                Rc::new(LinkTargetHost),
+                move |cx| look(cx).unwrap_or_default(),
+                cx,
+            ) && let Ok(view) = target.update(cx, |_, window, _| fading_view(window))
+            {
+                unsafe { platform::host_add_link_target(view, margin, link_pointer) };
+            }
+        },
+        cx,
+    );
+    when_asked::<zoom_hud::ZoomHud>(
+        |cx| {
+            if let Some(hud) = zoom_hud::open(Rc::new(HudHost), cx)
+                && let Ok(view) = hud.update(cx, |_, window, _| ns_view(window))
+            {
+                let (right, top) = (zoom_hud::WINDOW_RIGHT, zoom_hud::WINDOW_TOP);
+                let margin = f64::from(zoom_hud::MARGIN);
+                unsafe { platform::host_add_hud(view, f64::from(right), f64::from(top), margin) };
+            }
+        },
+        cx,
+    );
     drop_targets::open(cx);
 }
 

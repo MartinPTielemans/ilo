@@ -5,11 +5,8 @@
 //! shows over the browser window, as its child, and the mouse goes through it. What it asks of its
 //! window goes through `Host`.
 
-use std::{
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, Div, FontWeight, Global, Pixels, Rgba, SharedString, Size, Task, TextRun,
@@ -103,6 +100,9 @@ pub enum Align {
     /// Right of it, starting BESIDE past the anchor's x, its right edge, and centred on it
     /// top to bottom, as Arc's is beside the footer's Library button.
     Beside,
+    /// `Beside` to its left, ending BESIDE short of the anchor's x, its left edge: toward the page
+    /// from a sidebar on the right.
+    BesideLeft,
 }
 
 /// What a tooltip hangs from: the tile, row or button it names, in the browser window.
@@ -140,12 +140,15 @@ impl Anchor {
         }
     }
 
-    /// Right of a button whose plate's frame is `frame`.
-    pub fn beside(frame: Bounds<Pixels>, window: Size<Pixels>) -> Self {
-        let x = f32::from(frame.right());
+    /// Beside a button whose plate's frame is `frame`, on its right, or on its `left`.
+    pub fn beside(frame: Bounds<Pixels>, window: Size<Pixels>, left: bool) -> Self {
+        let (x, align) = match left {
+            true => (f32::from(frame.left()), Align::BesideLeft),
+            false => (f32::from(frame.right()), Align::Beside),
+        };
         Anchor {
             x,
-            align: Align::Beside,
+            align,
             ..Self::under(frame, window)
         }
     }
@@ -154,9 +157,14 @@ impl Anchor {
 /// Whether a tooltip `width` wide under what it hangs from has its square corner on the right, for
 /// want of room to its right: it goes left from the anchor then, if there's room that side.
 fn mirrored(anchor: Anchor, width: f32) -> bool {
-    anchor.align == Align::Under
-        && anchor.x + BUTTON_X + width > anchor.window.0 - EDGE_INSET
-        && anchor.x - BUTTON_X - width >= EDGE_INSET
+    match anchor.align {
+        Align::Under => {
+            anchor.x + BUTTON_X + width > anchor.window.0 - EDGE_INSET
+                && anchor.x - BUTTON_X - width >= EDGE_INSET
+        }
+        Align::BesideLeft => true,
+        Align::Text | Align::Beside => false,
+    }
 }
 
 /// Where a tooltip of `size` has its top left: off the bottom right of a button's glyph, under a
@@ -168,6 +176,7 @@ pub fn place(anchor: Anchor, (width, height): (f32, f32)) -> (f32, f32) {
         Align::Under => anchor.x + BUTTON_X,
         Align::Text => anchor.x - TEXT_X,
         Align::Beside => anchor.x + BESIDE,
+        Align::BesideLeft => anchor.x - BESIDE - width,
     };
     // Past the edges it keeps EDGE_INSET from them, the left one first if it can't be both.
     let left = left
@@ -175,7 +184,7 @@ pub fn place(anchor: Anchor, (width, height): (f32, f32)) -> (f32, f32) {
         .max(EDGE_INSET);
     let middle = (anchor.top + anchor.bottom) / 2.;
     let top = match anchor.align {
-        Align::Beside => middle - height / 2.,
+        Align::Beside | Align::BesideLeft => middle - height / 2.,
         Align::Under if above(anchor, height) => middle - BUTTON_Y - height,
         Align::Under => middle + BUTTON_Y,
         _ if above(anchor, height) => anchor.top - GAP - height,
@@ -187,7 +196,7 @@ pub fn place(anchor: Anchor, (width, height): (f32, f32)) -> (f32, f32) {
 /// Whether a tooltip `height` tall goes above what it hangs from, for want of room below.
 fn above(anchor: Anchor, height: f32) -> bool {
     match anchor.align {
-        Align::Beside => false,
+        Align::Beside | Align::BesideLeft => false,
         Align::Under => (anchor.top + anchor.bottom) / 2. + BUTTON_Y + height > anchor.window.1,
         Align::Text => anchor.bottom + GAP + height > anchor.window.1,
     }
@@ -375,6 +384,7 @@ pub fn hover(window: u64, tip: Tip, anchor: Anchor, cx: &mut App) {
 
 /// As `hover`, with what the tooltip names in the window it's `over`, which may be an overlay's.
 pub fn hover_over(over: Over, tip: Tip, anchor: Anchor, cx: &mut App) {
+    crate::lazy_window::ready::<Tooltip>(cx);
     let Some(tooltip) = cx.try_global::<TooltipWindow>().map(|tooltip| tooltip.0) else {
         return;
     };

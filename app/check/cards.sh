@@ -1,3 +1,4 @@
+# check.sh runs this at 170.
 # Resting on a sidebar tab's row shows its hover card beside the rows (#430): a picture of a tab
 # not shown, taken once the switches that hid it are quiet and never on a switch, its title and
 # host, and its buttons. The tab shown has no picture, as its page is beside the card. The next row

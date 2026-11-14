@@ -1,3 +1,4 @@
+# check.sh runs this at 440.
 # Settings › Sync signs the browser in to an ilo account, on an ilo-server of the run's own: SQLite,
 # DEV_MODE, which logs its sign-in codes, and a throwaway address, never the hosted server or a real
 # account. ILO_SERVER names the server's binary, built from its repo (check-linux.yml builds it);
@@ -123,6 +124,8 @@ if [ "$(uname)" = Darwin ]; then
   done
   [ "$keyed" = "$sign_in_key" ] && [ "$focus" = RenderWidgetHostViewCocoa ] ||
     fail "with Chrome's passkey dialog gone, the keyboard is in $keyed on $focus, not the page's"
+else
+  echo "skip: the keyboard back in the sign-in window's page once Chrome's passkey dialog is gone: it's read from AppKit's key window, and off the Mac it isn't checked yet."
 fi
 # Touched, the key adds the passkey. The page blurred Add a Passkey as it went disabled, so the
 # next tab is from it, to Not Now, and shift-tab comes back to it.
@@ -155,15 +158,18 @@ if [ "$(uname)" = Darwin ]; then
     sleep 0.1
   done
   expect "$words" "Copy didn't put the 24 recovery words on the run's pasteboard"
+else
+  echo "skip: Copy putting the 24 recovery words on the pasteboard, and their leaving it 90 s after: off the Mac it isn't tried yet."
 fi
 send clickkey $(drawn_after "sync done" "$on")
 await 'browser: sync service active$' ||
   fail "sync's service didn't become active: $(grep 'browser: sync service ' "$log" | tail -1)"
 grep -q 'browser: sync engine ' "$log" || fail "sync's engine made no request"
 
-# What the server keeps, once the Spaces are there: Chromium leaves Nigori, its device records and
-# its priority preferences unencrypted (ilo-server's README, What the server can see); every other
-# item the browser sent holds only ciphertext. The server's own folders, with a server tag, aren't.
+# What the server keeps, once the Spaces are there: Chromium leaves Nigori and its device records
+# unencrypted (ilo-server's README, What the server can see); it would its priority preferences
+# too, which ilo doesn't sync (chromium-sync-no-priority-preferences.patch). Every other item the
+# browser sent holds only ciphertext. The server's own folders, with a server tag, aren't.
 check_store() {
   python3 -I - "$db" << 'PY'
 import sqlite3, sys
@@ -226,7 +232,10 @@ for data_type, deleted, server_tag, entity in rows:
             if n == DEVICE_INFO:
                 labels += [w.decode() for m, j, w in fields(v) if m == 2]
         continue
-    if data_type in (NIGORI, PRIORITY_PREFERENCE):
+    if data_type == NIGORI:
+        continue
+    if data_type == PRIORITY_PREFERENCE:
+        plain.append("a priority preference")
         continue
     names = [v for n, k, v in item if n == 7]
     if data_type == PASSWORD:
@@ -251,6 +260,12 @@ case $store in
 "spaces 0,"*) fail "no Space reached the server: $store" ;;
 *", plain none") ;;
 *) fail "the server holds what it can read: $store" ;;
+esac
+# Nor does the device ask the server for them, so none the server writes reaches it.
+types=$(grep 'browser: sync types ' "$log" | tail -1)
+[ -n "$types" ] || fail "the device's sync never said what it carries"
+case $types in
+*"Priority Preferences"*) fail "the device syncs priority preferences: $types" ;;
 esac
 case $store in
 *", devices $label"*) ;;

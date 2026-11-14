@@ -149,6 +149,33 @@ fn core_shows_users(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     });
 }
 
+/// The watched page's zoom.
+fn zoom(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Zoom {
+    shell.read_with(cx, |shell, _| {
+        shell
+            .task_area
+            .as_ref()
+            .unwrap()
+            .page
+            .as_ref()
+            .unwrap()
+            .zoom
+    })
+}
+
+fn set_zoom(shell: &Entity<Shell>, cx: &mut VisualTestContext, zoom: Zoom) {
+    shell.update(cx, |shell, _| {
+        shell
+            .task_area
+            .as_mut()
+            .unwrap()
+            .page
+            .as_mut()
+            .unwrap()
+            .zoom = zoom;
+    });
+}
+
 /// A conversation open, and the task's tab 30 watched, at rest in place, with the core showing it.
 fn watching(shell: &Entity<Shell>, host: &Recorder, cx: &mut VisualTestContext) {
     still(cx);
@@ -321,8 +348,14 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
     cx.update(|_, cx| cx.set_reduce_motion(false));
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
     host.take();
+    // The zooms run on the real clock, so the test sets each one's start: a minute ahead holds it
+    // where it starts however slow the runner, and a second back has it over.
+    let begun = Instant::now() + Duration::from_secs(60);
+    let over = Instant::now() - Duration::from_secs(1);
     shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx));
     assert_eq!(host.take(), ["select 30", "focus ui"]);
+    assert!(matches!(zoom(&shell, cx), Zoom::Out(_)), "it zooms out");
+    set_zoom(&shell, cx, Zoom::Out(begun));
     core_shows_task(&shell, cx, 30);
     draw(&shell, cx);
     let (card, laid) = frames(&shell, cx);
@@ -331,43 +364,33 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
         pushed(watched(card), away(&shell, cx)),
         "out of the window as it zooms"
     );
-    shell.update(cx, |shell, _| {
-        let page = shell.task_area.as_mut().unwrap().page.as_mut().unwrap();
-        page.zoom = Zoom::Out(Instant::now() - Duration::from_secs(1));
-    });
+    set_zoom(&shell, cx, Zoom::Out(over));
     draw(&shell, cx);
     assert_eq!(frames(&shell, cx).1, watched(card), "in place");
 
     shell.update(cx, |shell, cx| shell.task_page_back(cx));
     let calls = host.take();
     assert_eq!(calls, ["picture 30", "focus ui"]);
-    let request = shell.read_with(cx, |shell, _| {
-        match shell
-            .task_area
-            .as_ref()
-            .unwrap()
-            .page
-            .as_ref()
-            .unwrap()
-            .zoom
-        {
-            Zoom::Asked(request) => request,
-            zoom => panic!("{zoom:?}"),
-        }
-    });
+    let Zoom::Asked(request) = zoom(&shell, cx) else {
+        panic!("{:?}", zoom(&shell, cx));
+    };
     assert!(
         host.shown.borrow().is_empty(),
         "the page stays till its picture comes"
     );
     shell.update(cx, |shell, cx| shell.page_pictured(request, None, cx));
     assert_eq!(*host.shown.borrow(), [1]);
+    assert!(matches!(zoom(&shell, cx), Zoom::In(_)), "it zooms back in");
+    set_zoom(&shell, cx, Zoom::In(begun));
     core_shows_users(&shell, cx);
     draw(&shell, cx);
     assert_eq!(frames(&shell, cx).1, pushed(card, away(&shell, cx)));
-    shell.update(cx, |shell, _| {
-        let page = shell.task_area.as_mut().unwrap().page.as_mut().unwrap();
-        page.zoom = Zoom::In(Instant::now() - Duration::from_secs(1));
-    });
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_page_drawn()),
+        Some((3, 30)),
+        "drawn as it zooms in"
+    );
+    set_zoom(&shell, cx, Zoom::In(over));
     draw(&shell, cx);
     assert!(shell.read_with(cx, |shell, _| {
         shell.task_area.as_ref().unwrap().page.is_none()
@@ -640,6 +663,57 @@ fn a_scroll_in_the_agents_page_never_takes_it_over(cx: &mut TestAppContext) {
         !calls.iter().any(|call| call.starts_with("take over")),
         "{calls:?}"
     );
+}
+
+/// An agent at work in a tab it then closes is at work nowhere: the page watched, its Space's other
+/// tab, shows no bar for it, and Take Over offers nothing, until it acts in a tab again.
+#[gpui::test]
+fn an_agent_is_at_work_in_no_tab_once_it_closes_the_one_it_was_in(cx: &mut TestAppContext) {
+    use crate::shell::agent_bar::Bar;
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(31, thumb, None, cx)));
+    core_shows_task(&shell, cx, 31);
+    draw(&shell, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Clicked “Report”".into(),
+                held: Vec::new(),
+            }],
+            cx,
+        );
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    let at_work = |cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| match shell.agent_bar() {
+            Some(Bar::Working { tab, .. }) => Some(tab),
+            _ => None,
+        })
+    };
+    assert_eq!(at_work(cx), Some(30));
+
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(3, Vec::new(), vec![31], Vec::new(), Folders::default(), cx)
+    });
+    draw(&shell, cx);
+    assert_eq!(
+        at_work(cx),
+        None,
+        "the bar still shows the agent at work in its closed tab"
+    );
+    host.take();
+    shell.update(cx, |shell, cx| shell.agent_bar_primary(cx));
+    assert!(host.take().is_empty(), "Take Over asked for the closed tab");
+
+    shell.update(cx, |shell, cx| shell.agent_acted("task-1".into(), 31, cx));
+    assert_eq!(at_work(cx), Some(31));
 }
 
 /// Escape on a task's page watched steps back to the conversation from the page's keyboard, which

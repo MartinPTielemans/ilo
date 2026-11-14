@@ -1,0 +1,19 @@
+# ungoogled-chromium-macos's bindgen-disable-static.patch at 31f01756a43d (its 156.0.8078.79 tag),
+# rebased by ilo onto Chromium 157.0.8103.50 until it tags 157. Changed from upstream's: context
+# only. 157 drops the f prefix from the cargo arguments it changes.
+--- a/tools/rust/build_bindgen.py
++++ b/tools/rust/build_bindgen.py
+@@ -161,12 +161,11 @@ def main():
+         ]
+         + cargo_shared_args
+     )
+-    static_feature = ",static" if ('windows' not in RustTargetTriple()) else ""
+     cargo_args = [
+         'build',
+         f'--target={rust_target}',
+         '--no-default-features',
+-        '--features=logging' + static_feature,
++        '--features=logging',
+         '--release',
+         '--bin',
+         'bindgen',

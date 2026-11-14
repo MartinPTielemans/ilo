@@ -58,7 +58,17 @@ ucl_tag=$(git config -f "$engine/pins.ini" ungoogled-chromium-portablelinux.tag)
 ucw=$work/ucw
 ucl=$work/ucl
 clone ungoogled-chromium-windows "$ucw_tag" "$ucw"
-clone ungoogled-chromium-portablelinux "$ucl_tag" "$ucl"
+# On the pinned Chromium, Windows takes portablelinux's host patches as the Linux engine does,
+# rebased by ilo if it was (tree.sh).
+ucl_stamp=$ucl_tag
+[ "${ucw_tag%%-*}" != "$(git config -f "$engine/pins.ini" chromium.version)" ] ||
+  ucl_stamp=$(platform_stamp ungoogled-chromium-portablelinux "$ucl_tag")
+if [ "$(cat "$ucl/.ilo-platform" 2>/dev/null)" != "$ucl_stamp" ]; then
+  rm -rf "$ucl"
+  clone ungoogled-chromium-portablelinux "$ucl_tag" "$ucl"
+  [ "$ucl_stamp" = "$ucl_tag" ] || rebase_platform "$ucl" ungoogled-chromium-portablelinux || exit 1
+  echo "$ucl_stamp" >"$ucl/.ilo-platform"
+fi
 check_ungoogled "$ucw/ungoogled-chromium" "ungoogled-chromium-windows $ucw_tag"
 [ "$(git -C "$ucw/ungoogled-chromium" rev-parse HEAD)" = "$(git -C "$ucl/ungoogled-chromium" rev-parse HEAD)" ] ||
   fail "ungoogled-chromium-windows $ucw_tag and ungoogled-chromium-portablelinux $ucl_tag build different ungoogled-chromium commits"
@@ -112,9 +122,11 @@ grep -vE '(^|/)win_build_output/|^chrome/app/etw_events/|^third_party/rust/chrom
 # update.py downloads clang's Windows runtime when the .gclient beside src targets Windows.
 echo "target_os = ['win']" >"$work/.gclient"
 
-# ungoogled-chromium's GN args and ungoogled-chromium-windows's, less its LLVM's version, and with
-# portablelinux's sysroot and V8 metagen settings for the Linux host, which builds the build's
-# tools. V8's snapshot goes into chrome.dll: a cross build has no context snapshot, as making one
+# ungoogled-chromium's GN args and ungoogled-chromium-windows's, less its LLVM's version and its
+# own Crubit build's root, and with portablelinux's sysroot and V8 metagen settings for the Linux
+# host, which builds the build's tools. Chromium's Rust package has Crubit where the root defaults
+# to, //third_party/rust-toolchain, and metagen's libclang is one of the paths ungoogled-chromium
+# prunes. V8's snapshot goes into chrome.dll: a cross build has no context snapshot, as making one
 # would build Blink for Linux too, and the plain snapshot_blob.bin it would load instead is in
 # neither FILES.cfg nor mini_installer's dependencies, which stops gn gen. PlayReady, which Chromium
 # turns on only for Chrome's own builds, plays protected video on Windows (decision 1).
@@ -122,8 +134,8 @@ write_args() {
   mkdir -p "$1"
   {
     awk 1 "$_main_repo/flags.gn"
-    grep -vE '^(clang_version|use_sysroot)=' "$ucw/flags.windows.gn"
-    printf '%s\n' 'target_os="win"' 'use_sysroot=true' 'v8_use_metagen_instance_types=false' \
+    grep -vE '^(clang_version|use_sysroot|rust_crubit_root)=' "$ucw/flags.windows.gn"
+    printf '%s\n' 'target_os="win"' 'use_sysroot=true' 'v8_use_metagen=false' \
       'v8_use_external_startup_data=false' 'enable_playready=true'
   } >"$1/args.gn"
 }
@@ -149,7 +161,7 @@ target_tools() {
   fi
 }
 
-tags="$ucw_tag $ucl_tag"
+tags="$ucw_tag $ucl_stamp"
 if [ "$(cat "$src/.windows-tags" 2>/dev/null)" != "$tags" ]; then
   # portablelinux's scripts/build.sh, with the Windows patches and downloads, in the scratch tree.
   # Each step leaves a stamp there, so a run that stopped goes on where it was.

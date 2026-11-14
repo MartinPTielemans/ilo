@@ -1,3 +1,4 @@
+# check.sh runs this at 530.
 # Chrome's Battery Saver as ilo shows it (#686), on the check's battery (--battery-for-testing,
 # core/battery_saver.h), which a run on mains needs.
 # At 50% on battery it stays off. Below 20% on battery it turns on: the toast says so with Turn Off,
