@@ -1359,6 +1359,17 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                 "browser: command bar lists \"{text}\": {}",
                 listed.join(", ")
             );
+            // ranking.sh reads this line: what a closed tab's or a visited page's row says at its end.
+            let said: Vec<String> = (bar.rows.iter())
+                .filter(|row| row.tab == 0 && !row.named())
+                .filter_map(|row| match row.archived {
+                    0 => (!row.visited.is_empty()).then(|| format!("{} {}", row.url, row.visited)),
+                    _ => Some(format!("{} {}", row.url, row.closed)),
+                })
+                .collect();
+            if !said.is_empty() {
+                log!("browser: command bar says \"{text}\": {}", said.join("; "));
+            }
         })
         .ok();
 }

@@ -7,7 +7,8 @@
 # being at most three. Each is read from the rows the bar logs as it lists them and captured.
 # GitHub's host goes to an https server of the run's own, with a certificate made for this run,
 # which the browser takes by its key alone, so no other site's errors are let by and nothing
-# reaches GitHub.
+# reaches GitHub. A row that's a closed tab ends "Closed today · Reopen", and a page only visited
+# "Visited today" (#2337).
 
 serve
 mkdir -p "$out/github/a" "$out/github/b"
@@ -16,7 +17,7 @@ for name in a b; do
   printf '<meta charset=utf-8><title>loading Pull requests · ilo</title><p style="font:24px system-ui">GitHub %s</p>
 <script>%s</script>' "$name" "$ready" > "$out/github/$name/index.html"
 done
-for name in one two; do
+for name in one two closed visited; do
   printf '<meta charset=utf-8><title>loading Ranking %s</title><p style="font:24px system-ui">Ranking %s</p>
 <script>%s</script>' "$name" "$name" "$ready" > "$out/site/ranking-$name.html"
 done
@@ -198,6 +199,29 @@ want="${site}rise-delta.html tab $rise_delta https://duckduckgo.com/?q=rise ${si
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
+# Where a page is: one whose tab ⌘W closed ends "Closed today · Reopen", and one only visited ends
+# "Visited today", read from what the bar logs its rows say.
+closed="${site}ranking-closed.html"
+visited="${site}ranking-visited.html"
+go_to "$visited" "Ranking visited"
+go_to "$two" "Ranking two"
+open_page "$closed" "Ranking closed"
+send key w cmd
+expect "^browser: tab $tab closed\$" "⌘W didn't close the tab for $closed"
+expect '^browser: archive [1-9][0-9]* tabs$' "⌘W didn't archive the tab for $closed"
+type_for ranking "^$closed\$" ranking-closed-visited.png
+said=$(grep '^browser: command bar says "ranking": ' "$log" | tail -1 | sed 's/^browser: command bar says "ranking": //')
+case "; $said;" in
+*"; $closed Closed today · Reopen;"*) ;;
+*) fail "the row for $closed, whose tab ⌘W closed, doesn't end \"Closed today · Reopen\": the rows say \"$said\", listed $(listed ranking | tr '\n' ' ')" ;;
+esac
+case "; $said;" in
+*"; $visited Visited today;"*) ;;
+*) fail "the row for $visited, visited in a tab that then went elsewhere, doesn't end \"Visited today\": the rows say \"$said\", listed $(listed ranking | tr '\n' ' ')" ;;
+esac
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar"
+
 exec 3>&-
 quit
-echo "ok: the command bar lists the page shown last for \"ranking\" ($shown_rows), one row for two GitHub pages from history with one title, and for \"rise\" the last of four open tabs shown first, as Switch to Tab, the search second and the two tabs shown before it after, the first not risen. Windows: $out/ranking-shown-last.png, $out/ranking-one-title.png, $out/ranking-tabs-rise.png"
+echo "ok: the command bar lists the page shown last for \"ranking\" ($shown_rows), one row for two GitHub pages from history with one title, and for \"rise\" the last of four open tabs shown first, as Switch to Tab, the search second and the two tabs shown before it after, the first not risen, and a closed tab's row ends "Closed today · Reopen" and a visited page's "Visited today". Windows: $out/ranking-shown-last.png, $out/ranking-one-title.png, $out/ranking-tabs-rise.png, $out/ranking-closed-visited.png"
