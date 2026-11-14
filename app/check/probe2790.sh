@@ -6,6 +6,9 @@ p2790() { python3 -I "$X" "$@"; }
 note() { echo "probe2790 $*" >> "$out/probe2790.txt"; }
 wm=${BROWSER_XVFB:-}
 [ "$wm" = 1 ] && wm=openbox
+# i3, and i3 told to tile dialogs (i3tile), where an overlay's place is refused.
+tiling=
+case $wm in i3*) tiling=1 ;; esac
 
 # The JSON line of window $2 in snap file $1, or nothing.
 line_of() { grep "\"id\": \"$2\"" "$1" | head -1; }
@@ -97,8 +100,9 @@ battery() {
   note "$name root $(grep '"root"' "$snap")"
   root_shot "$name-shown"
   kwin_windows "$name-shown"
+  [ -n "$tiling" ] || covered "$b" "$o" "$name"
   # Following: ten moves, then five resizes, each timed from the browser frame's configure.
-  if [ "$wm" = i3 ]; then
+  if [ -n "$tiling" ]; then
     # Tiled, so i3 moves it only by retiling: another window opens beside it and goes.
     p2790 watch 4 > "$out/probe2790-$name-retile.json" &
     w=$!
@@ -140,7 +144,7 @@ print(" ".join(map(str, json.load(sys.stdin)["start_browser"])))')
   p2790 state "$b" remove FULLSCREEN
   sleep 1
   # Minimised, and back.
-  if [ "$wm" != i3 ]; then
+  if [ -z "$tiling" ]; then
     p2790 iconify "$b"
     until_field "$b" viewable false || true
     sleep 0.3
@@ -157,7 +161,7 @@ print(" ".join(map(str, json.load(sys.stdin)["start_browser"])))')
     note "$name minimised i3 has no minimise"
   fi
   # Another desktop: the browser's sent to the second, which is then shown, and back.
-  if [ "$wm" = i3 ]; then
+  if [ -n "$tiling" ]; then
     i3-msg "[id=$(printf %d "$b")] move container to workspace 2" > /dev/null 2>&1 || true
     sleep 0.6
     p2790 snap > "$snap"
@@ -191,8 +195,9 @@ print(" ".join(map(str, json.load(sys.stdin)["start_browser"])))')
   p2790 snap > "$snap"
   note "$name home-overlay $(line_of "$snap" "$o")"
   note "$name home-root $(grep '"root"' "$snap")"
+  root_shot "$name-home"
   # Alt-Tab, held while it shows its list, then let go and ilo's window taken back.
-  if [ "$wm" != i3 ]; then
+  if [ -z "$tiling" ]; then
     xdotool keydown alt key Tab 2> /dev/null || true
     sleep 0.8
     root_shot "$name-alt-tab"
@@ -203,6 +208,68 @@ print(" ".join(map(str, json.load(sys.stdin)["start_browser"])))')
     p2790 activate "$b"
     sleep 0.5
   fi
+}
+
+# Another app's window raised over browser $1 while overlay $2, named $3, shows: a white window over
+# the overlay's middle, made active as a click on it would. The overlay should be under it, drawn
+# and stacked: the root's pixel at the overlay's middle is the window's white, and the overlay is
+# below it in the manager's stacking order. Then the browser's made active again.
+covered() {
+  b=$1 o=$2 name=$3
+  p2790 snap > "$out/probe2790-cov0.json"
+  rect=$(field_of "$out/probe2790-cov0.json" "$o" rect)
+  [ -n "$rect" ] && [ "$rect" != null ] || { note "$name covered {\"error\": \"no overlay\"}"; return 0; }
+  rm -f "$out/p2790-cover"
+  mkfifo "$out/p2790-cover"
+  python3 -I check/other-window.py < "$out/p2790-cover" > "$out/p2790-cover.id" &
+  exec 9> "$out/p2790-cover"
+  for _ in $(seq 50); do [ -s "$out/p2790-cover.id" ] && break; sleep 0.05; done
+  other=$(printf '0x%x' "$(cat "$out/p2790-cover.id")")
+  # shellcheck disable=SC2046
+  set -- $(python3 -I -c 'import json,sys
+r = json.loads(sys.argv[1])
+w, h = min(r[2], 400), max(min(r[3], 300), 120)
+print(r[0] + r[2] // 2 - w // 2, r[1] + r[3] // 2 - h // 2, w, h, r[0] + r[2] // 2, r[1] + r[3] // 2)' "$rect")
+  sleep 0.3
+  p2790 moveresize "$other" "$1" "$2" "$3" "$4"
+  sleep 0.3
+  xdotool windowactivate "$(printf %d "$other")" 2> /dev/null || p2790 activate "$other"
+  sleep 0.8
+  p2790 snap > "$out/probe2790-cov1.json"
+  root_shot "$name-covered"
+  note "$name covered $(python3 -I -c 'import json,sys
+snap = [json.loads(l) for l in open(sys.argv[1])]
+root = [o for o in snap if o.get("root")][0]
+by = {o.get("id"): o for o in snap}
+o, other = sys.argv[2], sys.argv[3]
+st = root["stacking"]
+print(json.dumps({"other": other, "other_rect": by.get(other, {}).get("rect"),
+                  "overlay_rect": by.get(o, {}).get("rect"), "overlay_viewable": by.get(o, {}).get("viewable"),
+                  "pixel_at_overlay_middle": sys.argv[4], "at": sys.argv[5],
+                  "stacking_overlay": st.index(o) if o in st else None,
+                  "stacking_other": st.index(other) if other in st else None,
+                  "tree_overlay": by.get(o, {}).get("order"), "tree_other": by.get(other, {}).get("order"),
+                  "active": root["active"]}))' "$out/probe2790-cov1.json" "$o" "$other" "$(p2790 pixel "$5" "$6")" "$5,$6")"
+  kwin_windows "$name-covered"
+  exec 9>&-
+  sleep 0.3
+  p2790 activate "$b"
+  sleep 0.6
+}
+
+# The root's whole image each time it changes, and its children's maps and configures, for
+# $2 seconds from just before the command $3... is sent, to probe2790-film-$1.*, with the command's
+# time in the notes.
+film_open() {
+  name=$1 secs=$2
+  shift 2
+  p2790 film "$secs" "$out/probe2790-film-$name" > "$out/p2790-film-$name.out" &
+  fp=$!
+  for _ in $(seq 50); do grep -q ready "$out/p2790-film-$name.out" 2> /dev/null && break; sleep 0.05; done
+  note "$name film {\"sent\": $(date +%s.%N)}"
+  "$@"
+  wait $fp 2> /dev/null || true
+  note "$name film-done $(tail -1 "$out/p2790-film-$name.out")"
 }
 
 # The time from now to the root's pixel at $1,$2 changing, in ms, after the command $3... is sent.
