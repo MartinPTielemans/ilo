@@ -311,9 +311,29 @@ def firstframe(px, py, seconds):
     print(json.dumps({"changed": None, "mapped": mapped}), flush=True)
 
 
+class Rect(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_short), ("y", ctypes.c_short), ("width", ctypes.c_ushort),
+                ("height", ctypes.c_ushort)]
+
+
+def shapes(w):
+    xext = ctypes.CDLL("libXext.so.6")
+    xext.XShapeGetRectangles.restype = ctypes.POINTER(Rect)
+    out = {}
+    for name, kind in (("bounding", 0), ("input", 2)):
+        n, order = ci(), ci()
+        rects = xext.XShapeGetRectangles(d, ul(w), kind, ctypes.byref(n), ctypes.byref(order))
+        out[name] = [[rects[i].x, rects[i].y, rects[i].width, rects[i].height] for i in range(n.value)]
+    return out
+
+
 cmd, args = sys.argv[1], sys.argv[2:]
 if cmd == "snap":
     snap()
+elif cmd == "shape":
+    w = int(args[0], 0)
+    f = frame_of(w)
+    print(json.dumps({"window": hex(w), "shapes": shapes(w), "frame": hex(f), "frame_shapes": shapes(f) if f != w else None}))
 elif cmd == "state":
     names = args[2].split(",")
     message(int(args[0], 0), "_NET_WM_STATE", {"remove": 0, "add": 1}[args[1]],
