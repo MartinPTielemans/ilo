@@ -6,10 +6,13 @@
 # tool's answer. The page is a sign-in section holding an email and a password the page's script
 # filled, as autofill would, at an address with a query and a fragment: the answer has the section's
 # text and none of the fields' values, says a field's value never goes, and gives the address
-# without its query or fragment. The answer is in the activity log. A second ask, answered with
-# its card's Not Now, tells the agent the user pointed at nothing. Through all of it the page's
-# own MutationObserver hears nothing, so Point added nothing to the page's DOM, not even an
-# attribute.
+# without its query or fragment, and the panel's Show what's sent lists the rows that go. The
+# answer is in the activity log. It's done light, then dark. A third ask, with about:blank in front,
+# has Point dimmed on the card, saying why under the pointer, and the card's Not Now there tells
+# the agent the user pointed at nothing. Through all of it the page's own MutationObserver hears
+# nothing, so Point added nothing to the page's DOM, not even an attribute. Each state is captured,
+# light and dark (-dark), as point-ask, point-hover, point-note, point-note-open, point-noted and
+# point-cant.
 
 serve
 log="$out/point.log"
@@ -77,81 +80,124 @@ printf '%s\n' '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocol
 next_answer > "$out/point-initialize.json" || fail "the browser didn't answer the client's hello"
 printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&4
 
-# The ask waits for the user, so its answer is read once they've sent.
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"point","arguments":{"question":"Which part of the page looks wrong?"}}}' >&4
-await '^browser: agent mcp-client asks to point [0-9]*$' || fail "the agent's ask to point didn't come"
-id=$(sed -n 's/^browser: agent mcp-client asks to point \([0-9]*\)$/\1/p' "$log" | tail -1)
-await '^browser: task chip task-[0-9]* Point at ' || fail "the agent's card drew no Point"
-read -r cx cy cw ch << CHIP
-$(grep '^browser: task chip task-[0-9]* Point at ' "$log" | tail -1 | sed 's/.* Point at //')
-CHIP
-send click $((cx + cw / 2)) $((cy + ch / 2))
-if [ "$active" != 1 ]; then
-  exec 3>&- 4>&-
-  quit
-  echo "skip: point. Browser wasn't the active app, so its page ignored the clicks."
-  exit 0
-fi
-expect "^browser: point $id started in $tab\$" "Point on the card didn't start pointing in tab $tab"
+# Waits up to 30 s for more lines matching $1 than the $2 there were.
+more() {
+  for _ in $(seq 300); do
+    [ "$(grep -c "$1" "$log" || true)" -gt "$2" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+# The agent asks to point, as JSON-RPC call $1 asking $2, and $id is the ask's.
+ask() {
+  asked=$(grep -c '^browser: agent mcp-client asks to point ' "$log" || true)
+  printf '{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"point","arguments":{"question":"%s"}}}\n' "$1" "$2" >&4
+  more '^browser: agent mcp-client asks to point ' "$asked" || fail "the agent's ask to point $1 didn't come"
+  id=$(sed -n 's/^browser: agent mcp-client asks to point \([0-9]*\)$/\1/p' "$log" | tail -1)
+}
+# The middle of the card's chip $1, from the last place it was drawn at.
+chip() {
+  grep "^browser: task chip task-[0-9]* $1 at " "$log" | tail -1 | sed "s/.* $1 at //" |
+    awk '{ print int($1 + $3 / 2), int($2 + $4 / 2) }'
+}
+# One ask, pointed at and sent, as JSON-RPC call $1, its captures named with $2: "" for light and
+# "-dark" for dark. The ask waits for the user, so its answer is read once they've sent.
+round() {
+  ask "$1" "Which part of the page looks wrong?"
+  expect '^browser: task chip task-[0-9]* Point at ' "the agent's card drew no Point"
+  ../tools/window-screenshot.sh "$pid" "$out/point-ask$2.png" || fail "no window to capture"
+  send click $(chip Point)
+  if [ "$active" != 1 ]; then
+    exec 3>&- 4>&-
+    quit
+    echo "skip: point. Browser wasn't the active app, so its page ignored the clicks."
+    exit 0
+  fi
+  expect "^browser: point $id started in $tab\$" "Point on the card didn't start pointing in tab $tab"
 
-# Over the section, its mark; a click opens the note panel at it, saying a field's value in it is
-# withheld.
-send move $page_point
-expect "browser: tab $tab point over region\$" "the section under the pointer wasn't marked"
-../tools/window-screenshot.sh "$pid" "$out/point-hover.png" || fail "no window to capture"
-send click $page_point
-expect '^browser: point picked region section withheld$' \
-  "a click on the section didn't pick it, with its fields' values withheld"
-await '^browser: note panel 1 withheld$' || fail "the note panel didn't open at the section"
-../tools/window-screenshot.sh "$pid" "$out/point-note.png" || fail "no window to capture"
-send type the title is cut off
-send key return
-expect '^browser: point note 1 added$' "↩ in the note panel didn't add the note"
-../tools/window-screenshot.sh "$pid" "$out/point-noted.png" || fail "no window to capture"
-send key return cmd
-expect "^browser: point $id sent 1\$" "⌘↩ didn't send the note"
+  # Over the section, its mark; a click opens the note panel at it, saying a field's value in it
+  # is withheld. Show what's sent opens the rows, which say the password's value never goes.
+  send move $page_point
+  expect "browser: tab $tab point over region\$" "the section under the pointer wasn't marked"
+  ../tools/window-screenshot.sh "$pid" "$out/point-hover$2.png" || fail "no window to capture"
+  send click $page_point
+  expect '^browser: point picked region section withheld$' \
+    "a click on the section didn't pick it, with its fields' values withheld"
+  expect '^browser: note panel 1 withheld$' "the note panel didn't open at the section"
+  expect '^browser: note panel fold at ' "the note panel drew no Show what's sent"
+  ../tools/window-screenshot.sh "$pid" "$out/point-note$2.png" || fail "no window to capture"
+  read -r fx fy fw fh << FOLD
+$(grep '^browser: note panel fold at ' "$log" | tail -1 | sed 's/.* at //')
+FOLD
+  send click $((fx + fw / 2)) $((fy + fh / 2))
+  expect '^browser: note panel fold at ' "Show what's sent didn't open the panel's rows"
+  ../tools/window-screenshot.sh "$pid" "$out/point-note-open$2.png" || fail "no window to capture"
+  # Esc drops the note, and the section picked again opens the panel with the keyboard.
+  send key escape
+  expect '^browser: note panel dismissed$' "esc in the note panel didn't drop the note"
+  send click $page_point
+  expect '^browser: note panel 1 withheld$' "the section picked again opened no note panel"
+  send type the title is cut off
+  send key return
+  expect '^browser: point note 1 added$' "↩ in the note panel didn't add the note"
+  ../tools/window-screenshot.sh "$pid" "$out/point-noted$2.png" || fail "no window to capture"
+  logged_before=$(grep -c '^browser: agent logged mcp-client pointed ' "$log" || true)
+  off_before=$(grep -c "browser: tab $tab point off\$" "$log" || true)
+  send key return cmd
+  expect "^browser: point $id sent 1\$" "⌘↩ didn't send the note"
 
-answer=$(next_answer | python3 -I -c '
+  answer=$(next_answer | python3 -I -c '
 import json, sys
 result = json.load(sys.stdin)["result"]
 print(("error: " if result.get("isError") else "") + result["content"][0]["text"])') ||
-  fail "the point tool didn't answer"
-printf '%s\n' "$answer" > "$out/point-answer.txt"
-for part in 'Their note: the title is cut off' 'Sign in' 'Forgot your password?' '/point.html' \
-  "A form field's value never goes"; do
-  case "$answer" in *"$part"*) ;; *) fail "the answer didn't have \"$part\": $answer" ;; esac
-done
-for part in 'ada@example.com' 'lovelace-check' 's3cr3t' 'session=' '#top'; do
-  case "$answer" in *"$part"*) fail "the answer gave away \"$part\": $answer" ;; esac
-done
-await '^browser: agent logged mcp-client pointed ' || fail "the answer didn't reach the activity log"
-await "browser: tab $tab point off\$" || fail "Point didn't turn off in the page once sent"
-grep -q "^browser: title $tab changed\$" "$log" && fail "the page's DOM changed while the user pointed"
+    fail "the point tool didn't answer"
+  printf '%s\n' "$answer" > "$out/point-answer$2.txt"
+  for part in 'Their note: the title is cut off' 'Sign in' 'Forgot your password?' '/point.html' \
+    "A form field's value never goes"; do
+    case "$answer" in *"$part"*) ;; *) fail "the answer didn't have \"$part\": $answer" ;; esac
+  done
+  for part in 'ada@example.com' 'lovelace-check' 's3cr3t' 'session=' '#top'; do
+    case "$answer" in *"$part"*) fail "the answer gave away \"$part\": $answer" ;; esac
+  done
+  more '^browser: agent logged mcp-client pointed ' "$logged_before" ||
+    fail "the answer didn't reach the activity log"
+  more "browser: tab $tab point off\$" "$off_before" || fail "Point didn't turn off in the page once sent"
+  grep -q "^browser: title $tab changed\$" "$log" && fail "the page's DOM changed while the user pointed"
+}
+round 1 ""
+send menu "Appearance › Dark"
+expect '^browser: appearance dark$' "View › Appearance › Dark didn't make the app dark"
+round 2 -dark
 
-# Asked again, the user's Not Now on the card answers that they pointed at nothing.
-printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"point","arguments":{"question":"And the footer?"}}}' >&4
-asked=$(grep -c '^browser: agent mcp-client asks to point ' "$log")
-for _ in $(seq 300); do
-  [ "$(grep -c '^browser: agent mcp-client asks to point ' "$log")" -gt "$asked" ] && break
-  sleep 0.1
+# On a page that isn't http(s), Point is dimmed on the card and says why under the pointer. The
+# user's Not Now there answers that they pointed at nothing.
+go_from_bar about:blank
+expect "^browser: page $tab back [0-9]* forward 0 loading 0 about:blank\$" "the tab didn't go to about:blank"
+ask 3 "And the footer?"
+expect '^browser: task chip task-[0-9]* Point at ' "the agent's card drew no Point for its ask on about:blank"
+for look in dark light; do
+  if [ $look = light ]; then
+    send menu "Appearance › Light"
+    expect '^browser: appearance light$' "View › Appearance › Light didn't make the app light"
+    away
+  fi
+  send move $(chip Point)
+  expect '^browser: tooltip shown ' "resting on the dimmed Point showed no reason"
+  name=point-cant-$look
+  [ $look = dark ] || name=point-cant
+  ../tools/window-screenshot.sh "$pid" "$out/$name.png" || fail "no window to capture"
 done
-again=$(sed -n 's/^browser: agent mcp-client asks to point \([0-9]*\)$/\1/p' "$log" | tail -1)
-[ "$again" != "$id" ] || fail "the agent's second ask to point didn't come"
-expect '^browser: task chip task-[0-9]* Not Now at ' "the agent's card drew no Not Now for its second ask"
-read -r nx ny nw nh << CHIP
-$(grep '^browser: task chip task-[0-9]* Not Now at ' "$log" | tail -1 | sed 's/.* Not Now at //')
-CHIP
-send click $((nx + nw / 2)) $((ny + nh / 2))
-expect "^browser: point $again not now\$" "Not Now on the card didn't answer the ask"
-expect "^browser: point $again unanswered\$" "the agent didn't hear its ask went unanswered"
+send click $(chip 'Not Now')
+expect "^browser: point $id not now\$" "Not Now on the card didn't answer the ask"
+expect "^browser: point $id unanswered\$" "the agent didn't hear its ask went unanswered"
 nothing=$(next_answer | python3 -I -c '
 import json, sys
-print(json.load(sys.stdin)["result"]["content"][0]["text"])') || fail "the second ask didn't answer"
+print(json.load(sys.stdin)["result"]["content"][0]["text"])') || fail "the ask on about:blank didn't answer"
 [ "$nothing" = "The user didn't point at anything." ] || fail "Not Now answered: $nothing"
-grep -q "^browser: title $tab changed\$" "$log" && fail "the page's DOM changed after Not Now"
 exec 4>&-
 quit
 echo "ok: the agent's ask to point started from its card, marked the section, took a note in the" \
-  "panel and sent it, with the section's text, no field's value and the address without its" \
-  "query, logged, and nothing added to the page. Not Now answered a second ask with nothing." \
-  "Windows: $out/point-hover.png $out/point-note.png $out/point-noted.png"
+  "panel, whose rows said what goes, and sent it, with the section's text, no field's value and" \
+  "the address without its query, logged, and nothing added to the page, light and dark. On" \
+  "about:blank Point was dimmed with its reason, and Not Now answered with nothing. Windows:" \
+  "$out/point-*.png"
