@@ -1475,6 +1475,10 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
         return Some(());
     };
     let (x, y) = drive::point(&mut words)?;
+    if action != "dragto" && action != "release" && !in_front(&pip, pip.x + x, pip.y + y)? {
+        log!("browser: pip {action}: another window is over the Mini Player there");
+        return Some(());
+    }
     match action {
         "doubleclick" => {
             click(pip.x + x, pip.y + y, BTN_LEFT, 0, false)?;
@@ -1489,17 +1493,6 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
         }
         "press" => {
             let (at_x, at_y) = (pip.x + x, pip.y + y);
-            // tools/headless.sh floats every window, so sway raises the browser window over it as
-            // the core gives that the keyboard back, where on a desktop the browser window tiles
-            // and a floating one stays over it. sway raises the one it focuses, and the press
-            // gives it the keyboard anyway, as it does on X11.
-            if front_at(at_x, at_y) != Some(pip.id) {
-                sway_command(&format!("[con_id={}] focus", pip.id))?;
-                if front_at(at_x, at_y) != Some(pip.id) {
-                    log!("browser: pip press: another window is over the Mini Player there");
-                    return Some(());
-                }
-            }
             first_press(at_x, at_y, BTN_LEFT, false);
             motion(at_x, at_y)?;
             PIP_HELD.set(Some((x, y, [pip.x, pip.y, pip.width, pip.height])));
@@ -1542,6 +1535,17 @@ fn mini_player_command<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<(
         }
         _ => None,
     }
+}
+
+/// Whether the Mini Player is in front at (`x`, `y`), raised if another window was. tools/headless.sh
+/// floats every window, so sway raises the browser window over it as that takes the keyboard,
+/// where on a desktop the browser window tiles and a floating one stays over it. sway raises the
+/// one it focuses, and a press on it gives it the keyboard anyway, as it does on X11.
+fn in_front(pip: &Node, x: f64, y: f64) -> Option<bool> {
+    if front_at(x, y) != Some(pip.id) {
+        sway_command(&format!("[con_id={}] focus", pip.id))?;
+    }
+    Some(front_at(x, y) == Some(pip.id))
 }
 
 /// sway's window in front at (`x`, `y`) in its layout, as `others_at` finds it.
