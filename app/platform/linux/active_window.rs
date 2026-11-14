@@ -127,8 +127,14 @@ fn pump() {
                         .event_mask(EventMask::ENTER_WINDOW | EventMask::LEAVE_WINDOW);
                     _ = watch.connection.change_window_attributes(map.window, &events).map(|c| c.check());
                     crate::log!("browser: probe map {:#x} override", map.window);
+                    probe_order(&watch);
                 }
-                Event::ConfigureNotify(c) if c.event == watch.root => crate::log!("browser: probe stack {:#x} above {:#x} at {} {} {}x{}", c.window, c.above_sibling, c.x, c.y, c.width, c.height),
+                Event::ConfigureNotify(c) if c.event == watch.root => {
+                    crate::log!("browser: probe stack {:#x} above {:#x} at {} {} {}x{}", c.window, c.above_sibling, c.x, c.y, c.width, c.height);
+                    if c.above_sibling != 0 && c.width > 1000 {
+                        probe_order(&watch);
+                    }
+                }
                 Event::UnmapNotify(unmap) => crate::log!("browser: probe unmap {:#x}", unmap.window),
                 Event::EnterNotify(cross) => crate::log!("browser: probe enter {:#x} mode {:?} detail {:?} child {:#x} at {} {} time {}", cross.event, cross.mode, cross.detail, cross.child, cross.root_x, cross.root_y, cross.time),
                 Event::LeaveNotify(cross) => crate::log!("browser: probe leave {:#x} mode {:?} detail {:?} child {:#x} at {} {} time {}", cross.event, cross.mode, cross.detail, cross.child, cross.root_x, cross.root_y, cross.time),
@@ -280,4 +286,26 @@ fn probe_atom(watch: &Watch, name: &[u8]) -> Option<xproto::Atom> {
 fn probe_card(watch: &Watch, window: u32, property: xproto::Atom) -> String {
     let reply = watch.connection.get_property(false, window, property, AtomEnum::CARDINAL, 0, 1).ok().and_then(|c| c.reply().ok());
     reply.and_then(|r| r.value32().and_then(|mut v| v.next())).map_or("none".into(), |v| v.to_string())
+}
+
+/// PROBE #2763: the root's children bottom to top that are mapped, and where the window manager's
+/// supporting window is, mapped or not.
+fn probe_order(watch: &Watch) {
+    let support = probe_atom(watch, b"_NET_SUPPORTING_WM_CHECK")
+        .and_then(|atom| window_in(watch, watch.root, atom));
+    let Some(tree) = watch.connection.query_tree(watch.root).ok().and_then(|c| c.reply().ok()) else {
+        return;
+    };
+    let mut order = Vec::new();
+    for child in tree.children {
+        let attributes = watch.connection.get_window_attributes(child).ok().and_then(|c| c.reply().ok());
+        let mapped = attributes.as_ref().is_some_and(|a| a.map_state == xproto::MapState::VIEWABLE);
+        if Some(child) == support {
+            order.push(format!("SUPPORT {child:#x}{}", if mapped { "" } else { " unmapped" }));
+        } else if mapped {
+            let over = attributes.is_some_and(|a| a.override_redirect);
+            order.push(format!("{child:#x}{}", if over { "o" } else { "" }));
+        }
+    }
+    crate::log!("browser: probe order {}", order.join(" "));
 }
