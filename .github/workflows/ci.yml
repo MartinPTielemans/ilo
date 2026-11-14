@@ -49,11 +49,15 @@ jobs:
             .github/actions/ci-changes/
             tools/core-same.sh
             tools/core-same-test.sh
+            tools/nightly-commit.sh
+            tools/nightly-commit-test.sh
             core/public/browser_core.h
           sparse-checkout-cone-mode: false
 
       # The comparison detect uses, and the engines use, proven on the core's header first.
       - run: tools/core-same-test.sh
+      # And the night's commit, which the engines it's paired with decide (#2697).
+      - run: tools/nightly-commit-test.sh
 
       - id: detect
         uses: ./.github/actions/ci-changes

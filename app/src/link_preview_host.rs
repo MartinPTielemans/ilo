@@ -41,6 +41,18 @@ impl link_preview::Host for LinkPreviewHost {
         cfg!(any(target_os = "linux", target_os = "windows"))
     }
 
+    fn open_waits(&self) -> bool {
+        // Only Wayland's runs on main showed the window's page in the card as it came to rest;
+        // X11's and Windows' never did, so their hole opens the frame after, as it did.
+        WAYLAND.get()
+    }
+
+    fn close_waits(&self) -> bool {
+        // Wayland's and X11's runs on main showed Peek's page round the shrinking card; Windows'
+        // did only under a probe sampling the screen every millisecond, so it closes as it did.
+        cfg!(target_os = "linux")
+    }
+
     fn release(&self) {
         unsafe { platform::host_release_link_preview() };
         // The window's page has the keyboard back from the preview's, which goes, or no page has
@@ -106,6 +118,17 @@ impl link_preview::Host for LinkPreviewHost {
             None => tooltip::dismiss(cx),
         }
     }
+}
+
+/// The core says the preview's page is on screen where the preview laid it out, under its window,
+/// on Windows and Linux. Never on the Mac.
+pub(crate) extern "C" fn tab_shown_in(_: *mut c_void, tab: bc::bc_id, frame: bc::bc_rect) {
+    // The frame the preview passed, as it was, so it matches.
+    let page = Bounds::new(
+        point(px(frame.x as f32), px(frame.y as f32)),
+        size(px(frame.width as f32), px(frame.height as f32)),
+    );
+    update_app_later(move |cx| link_preview::page_shown(tab, page, cx));
 }
 
 pub(crate) extern "C" fn link_preview_dismissed() {

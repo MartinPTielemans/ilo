@@ -199,7 +199,15 @@ frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layo
   grep -o 'WebContentsViewCocoa [0-9,]*' | head -1 | cut -d' ' -f2)
 x=${frame%%,*}
 y=${frame#*,}
+# The pointer rests on the link until its bubble shows, then ⌥⌘ go down and it clicks. On Windows'
+# real input, with the keys down before the pointer came onto the link, the page opened nothing
+# about half the time (#2666).
+rest_on_link() {
+  send move $((x + 20)) $((y + 20))
+  expect '^browser: link target window shown$' "the pointer resting on the page's link showed no bubble"
+}
 send click $page_point
+rest_on_link
 # Grown in from under the pointer, which the driver's clicks leave where it was.
 record little-click-open 2
 send click $((x + 20)) $((y + 20)) alt cmd
@@ -800,6 +808,7 @@ frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layo
 x=${frame%%,*}
 y=${frame#*,}
 send click $page_point
+rest_on_link
 send click $((x + 20)) $((y + 20)) alt cmd
 expect '^browser: tab [0-9]* opened by [0-9]* in the background$' \
   "with Little ilo off, ⌥⌘-click on a link didn't open it behind"

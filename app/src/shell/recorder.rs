@@ -1378,7 +1378,9 @@ impl Browser for Recorder {
         }
     }
 
-    fn start_window_move(&self, _: &mut App) {}
+    fn start_window_move(&self, _: &mut App) {
+        self.record("window move".into())
+    }
 
     fn window_maximized(&self) -> bool {
         false

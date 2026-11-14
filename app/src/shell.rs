@@ -117,6 +117,8 @@ mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
 mod undo_tests;
+#[cfg(test)]
+mod window_move_tests;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
 mod picture;
 mod recent_downloads;
@@ -305,6 +307,15 @@ const NAV_PRESS_SCALE: f32 = (NAV_SIZE - 2.) / NAV_SIZE;
 // A pressed row comes away once the pointer has moved this far (ours), and the tiles make room for
 // a dragged tab critically damped, as Arc's do (docs/ux-spec.md › Motion: Favorites room).
 const DRAG_START: f32 = 4.;
+
+/// Whether the pointer, pressed on the window's background at `press`, has gone far enough to
+/// `at` to move the window.
+fn moves_window(press: Option<Point<Pixels>>, at: Point<Pixels>) -> bool {
+    press.is_some_and(|press| {
+        let moved = at - press;
+        moved.x.abs().max(moved.y.abs()) >= px(DRAG_START)
+    })
+}
 const ROOM_OMEGA: f32 = 25.;
 // A dragged row turning into a tile has faded its title by this far through the turn (ours).
 const TURN_TITLE_FADE: f32 = 0.5;
@@ -1834,8 +1845,10 @@ pub struct Shell {
     page_dialog_shown: Option<(u64, u64, (Bounds<Pixels>, f32))>,
     /// The tab or Space the user asked for and when, until it's shown.
     switching: Option<(Switch, Instant)>,
-    /// A press on the window's background, until the pointer moves and it moves the window.
-    background_pressed: bool,
+    /// Where the window's background was pressed, until the pointer moves past DRAG_START and it
+    /// moves the window. A move that goes nowhere isn't a drag: Windows sends one to a resting
+    /// pointer as windows show or hide, which turned a double-click into a window move.
+    background_pressed: Option<Point<Pixels>>,
     /// What the chrome draws with, for the Space shown (palette.rs), and each theme's, worked
     /// out once.
     palette: Palette,
@@ -2207,7 +2220,7 @@ impl Shell {
             card_picker: None,
             card_move: None,
             switching: None,
-            background_pressed: false,
+            background_pressed: None,
             palette: Palette::default(),
             palettes: RefCell::default(),
             system_tone: Tone::Dark,
@@ -4564,11 +4577,13 @@ impl Render for Shell {
             // background, which moves the window as a title bar does.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|shell, _, _, _| shell.background_pressed = true),
+                cx.listener(|shell, event: &MouseDownEvent, _, _| {
+                    shell.background_pressed = Some(event.position)
+                }),
             )
             .on_mouse_move(cx.listener(|shell, event: &MouseMoveEvent, window, cx| {
-                if shell.background_pressed && event.dragging() {
-                    shell.background_pressed = false;
+                if moves_window(shell.background_pressed, event.position) && event.dragging() {
+                    shell.background_pressed = None;
                     // check.sh reads this line.
                     log!("browser: window move");
                     window.start_window_move();
@@ -4587,7 +4602,7 @@ impl Render for Shell {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|shell, event: &MouseUpEvent, window, cx| {
-                    if std::mem::take(&mut shell.background_pressed) && event.click_count == 2 {
+                    if shell.background_pressed.take().is_some() && event.click_count == 2 {
                         shell.double_click_background(event.position, window, cx);
                     }
                 }),
