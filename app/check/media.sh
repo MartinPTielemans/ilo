@@ -274,9 +274,9 @@ EOF
   fail "$2"
 }
 # pip_driven: whether the driver finds a Picture in Picture window, which it does through X11 or
-# sway's tree: drive.mm has no pip. Under KWin it finds none (#2757).
+# sway's tree: drive.mm has no pip.
 pip_driven() {
-  [ "$(uname)" = Linux ] && [ "${BROWSER_XVFB:-}" != kwin ]
+  [ "$(uname)" = Linux ]
 }
 # Under Wayland the compositor places a window, not the app, so the core's place for the Mini
 # Player is where it asked, not where it shows.
@@ -414,9 +414,7 @@ kept_keys
 # manager does both, with the display's pointer, and sway from where the pointer is as it starts,
 # which keeps the drag's threshold. The driver as pip_driven says; Windows answers with its hit
 # test below, and a Mac in CI drags it with check/pointer.mm.
-if [ "${BROWSER_XVFB:-}" = kwin ]; then
-  echo "skip: moving and sizing the floating call, under KWin: the driver finds no window for it (#2757)."
-elif pip_driven; then
+if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at 1 "the floating call had no window"
@@ -825,14 +823,9 @@ if pip_driven; then
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
   expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
 else
-  if [ "${BROWSER_XVFB:-}" = kwin ]; then
-    echo "skip: the Mini Player's place, and moving, sizing and double-clicking it, under KWin:" \
-      "the driver finds no window for it (#2757)."
-  else
-    echo "skip: moving, sizing and double-clicking the Mini Player on" \
-      "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
-      "there."
-  fi
+  echo "skip: moving, sizing and double-clicking the Mini Player on" \
+    "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
+    "there."
   # Clear of the page's middle, where the Mini Player can float.
   send click 300 200
   send key x
