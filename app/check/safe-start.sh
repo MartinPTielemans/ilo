@@ -160,6 +160,16 @@ done
 if windows; then
   python3 -I check/app-windows.py close "$relaunched"
 else
+  # On Linux the restarted browser logs on in this launch's log. Its mark comes 40 ms into the
+  # launch, and a quit as early ended it before it could quit, leaving the mark.
+  if [ "$(uname)" = Linux ]; then
+    for _ in $(seq 300); do
+      sed -n '/^browser: stopping$/,$p' "$log" | grep -q '^browser: UI shown at ' && break
+      sleep 0.1
+    done
+    sed -n '/^browser: stopping$/,$p' "$log" | grep -q '^browser: UI shown at ' ||
+      fail "the launch Turn Back On started didn't show its UI"
+  fi
   pid=$relaunched
   quit_app
 fi
