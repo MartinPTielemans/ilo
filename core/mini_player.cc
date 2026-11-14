@@ -16,6 +16,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+#include "chrome/browser/ui/views/overlay/minimize_button.h"
 #include "chrome/browser/ui/views/overlay/video_overlay_window_views.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -38,7 +39,10 @@
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/highlight_path_generator.h"
+#include "ui/views/controls/image_view.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/view.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -282,6 +286,11 @@ constexpr SkColor kButton = SkColorSetA(SK_ColorWHITE, 0x17);
 // The white ink drop's highlight over the button's 0.09, together about 0.13.
 constexpr float kButtonHover = 0.045f;
 
+// Between the × and Chrome's favicon, and the origin's end and the button after it.
+constexpr int kTitleGap = 8;
+// Between Chrome's favicon and its origin, as Chrome has it.
+constexpr int kFaviconGap = 4;
+
 // The rim's view, among the window's own, found again at each layout.
 constexpr int kRimId = 0x1b0;
 
@@ -299,6 +308,57 @@ void Restyle(views::View* button, const gfx::Size& size) {
   if (views::InkDrop::Get(button)) {
     views::InkDrop::Get(button)->SetHighlightOpacity(kButtonHover);
   }
+}
+
+// The first child of |parent| that's a |T|, as Chrome's views have no getters for these.
+template <typename T>
+T* ChildOf(views::View* parent) {
+  if (!parent) {
+    return nullptr;
+  }
+  for (views::View* child : parent->children()) {
+    if (T* found = views::AsViewClass<T>(child)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+// Chrome's origin, the label in its title by the favicon.
+views::Label* Origin(VideoOverlayWindowViews* window) {
+  return ChildOf<views::Label>(window->GetTitleView());
+}
+
+// Chrome's origin, its word on whose video this is, and its favicon, beside the × rather than under
+// it, now that the × is at the top left: on the buttons' row, the origin ending short of the "–",
+// or of back to the tab without one, and eliding its start as Chrome's does. The "–" goes on the
+// row too. Returns the "–".
+views::View* PlaceTitle(VideoOverlayWindowViews* window,
+                        const gfx::Size& size,
+                        views::View* close) {
+  views::View* minimize = ChildOf<OverlayWindowMinimizeButton>(window->GetControlsContainerView());
+  const int middle = kButtonInset + kCloseSize.height() / 2;
+  int end = size.width() - kButtonInset - kBackSize.width();
+  if (minimize) {
+    minimize->SetY(middle - minimize->height() / 2);
+    if (minimize->GetVisible()) {
+      end = std::min(end, minimize->x());
+    }
+  }
+  views::View* title = window->GetTitleView();
+  views::ImageView* favicon = ChildOf<views::ImageView>(title);
+  views::Label* origin = Origin(window);
+  if (!close || !favicon || !origin) {
+    return minimize;
+  }
+  favicon->SetPosition(
+      gfx::Point(close->bounds().right() + kTitleGap, middle - favicon->height() / 2));
+  const int left = favicon->bounds().right() + kFaviconGap;
+  origin->SetBounds(left, middle - origin->height() / 2, std::max(0, end - kTitleGap - left),
+                    origin->height());
+  // The title clips what's in it, and Chrome sizes it to its own row.
+  title->SetBounds(0, 0, size.width(), 2 * kButtonInset + kCloseSize.height());
+  return minimize;
 }
 
 // Once Chrome has laid out |window|'s controls, as it shows and each time it's sized: Dia's look.
@@ -343,10 +403,14 @@ void LaidOut(VideoOverlayWindowViews* window) {
   if (back) {
     back->SetPosition(gfx::Point(size.width() - kButtonInset - kBackSize.width(), kButtonInset));
   }
+  views::View* minimize = PlaceTitle(window, size, close);
   // check.sh reads this line.
+  views::View* origin = Origin(window);
   LOG(ERROR) << "browser: mini player look " << size.ToString() << " close "
              << (close ? close->bounds().ToString() : "none") << " back "
-             << (back ? back->bounds().ToString() : "none");
+             << (back ? back->bounds().ToString() : "none") << " origin "
+             << (origin ? origin->bounds().ToString() : "none") << " minimize "
+             << (minimize && minimize->GetVisible() ? minimize->bounds().ToString() : "none");
 }
 
 }  // namespace
