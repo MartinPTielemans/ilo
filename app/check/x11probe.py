@@ -9,6 +9,9 @@ Usage: python3 -I check/x11probe.py <command> [args]
                                 time, timing each step's overlay from its browser window's
   watch <seconds>               the root's children's configures, maps and unmaps, timed
   firstframe <x> <y> <seconds>  the time the root's pixel at <x>,<y> first changes, and each map
+  film <seconds> <path>         the root's whole image each time it changes, to <path>.frames, and
+                                the root's children's maps and configures, to <path>.events, timed
+  pixel <x> <y>                 the root's pixel at <x>,<y>, as hex
 """
 import ctypes
 import json
@@ -322,6 +325,67 @@ def firstframe(px, py, seconds):
     print(json.dumps({"changed": None, "mapped": mapped}), flush=True)
 
 
+x.XFree.argtypes = [vp]
+
+
+def grab(width, height):
+    """The root's image as bytes, or None."""
+    img = x.XGetImage(d, root, 0, 0, width, height, 0xFFFFFFFF, 2)  # ZPixmap
+    if not img:
+        return None
+    addr = ctypes.cast(img, vp).value
+    data = ctypes.c_void_p.from_address(addr + 16).value
+    bpl = ctypes.c_int.from_address(addr + 44).value
+    raw = ctypes.string_at(data, bpl * height) if data else None
+    if data:
+        x.XFree(data)
+    x.XFree(ctypes.cast(img, vp))
+    return raw
+
+
+def film(seconds, path):
+    import struct
+    import zlib
+    x.XSelectInput(d, root, (1 << 19))  # SubstructureNotify
+    x.XSync(d, 0)
+    a = attrs(root)
+    width, height = a.width, a.height
+    frames = open(path + ".frames", "wb")
+    evs = open(path + ".events", "w")
+    frames.write((json.dumps({"width": width, "height": height}) + "\n").encode())
+    previous = None
+    grabs = 0
+    print(json.dumps({"ready": time.time()}), flush=True)
+    until = time.monotonic() + seconds
+    e = Event()
+    while time.monotonic() < until:
+        while x.XPending(d):
+            x.XNextEvent(d, ctypes.byref(e))
+            raw = (ctypes.c_long * 24).from_buffer_copy(bytes(e))
+            ints = (ctypes.c_int * 48).from_buffer_copy(bytes(e))
+            kind = {22: "configure", 19: "map", 18: "unmap", 21: "reparent", 16: "create",
+                    17: "destroy"}.get(e.type)
+            if kind:
+                window = raw[5]
+                rect = [ints[12], ints[13], ints[14], ints[15]] if e.type == 22 else None
+                if e.type == 16:  # CreateNotify: parent at long 4, window at 5, x y w h at int 12..15
+                    rect = [ints[12], ints[13], ints[14], ints[15]]
+                evs.write(json.dumps({"t": round(time.time(), 4), "kind": kind, "window": hex(window),
+                                      "rect": rect}) + "\n")
+        t = time.time()
+        img = grab(width, height)
+        grabs += 1
+        if img is not None and img != previous:
+            z = zlib.compress(img, 1)
+            frames.write(struct.pack("<dI", t, len(z)))
+            frames.write(z)
+            previous = img
+    evs.write(json.dumps({"grabs": grabs, "seconds": seconds}) + "\n")
+    frames.close()
+    evs.close()
+    print(json.dumps({"done": time.time(), "grabs": grabs}), flush=True)
+
+
 class Rect(ctypes.Structure):
     _fields_ = [("x", ctypes.c_short), ("y", ctypes.c_short), ("width", ctypes.c_ushort),
                 ("height", ctypes.c_ushort)]
@@ -367,5 +431,10 @@ elif cmd == "watch":
     watch(float(args[0]))
 elif cmd == "firstframe":
     firstframe(int(args[0]), int(args[1]), float(args[2]))
+elif cmd == "film":
+    film(float(args[0]), args[1])
+elif cmd == "pixel":
+    v = pixel(int(args[0]), int(args[1]))
+    print(v[:3][::-1].hex() if v else "none")
 else:
     sys.exit(f"unknown command {cmd}")

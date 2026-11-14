@@ -169,7 +169,12 @@ if [ -n "$p2790on" ]; then
     p2790 snap > "$out/probe2790-pshown.json"
     i3-msg -t get_tree > "$out/probe2790-pshown-i3.json" 2>/dev/null) &
 fi
-open_preview "from the pinned tab"
+if [ -n "$p2790on" ]; then
+  # Peek's open filmed: every change of the screen from just before the press.
+  film_open peek 1.5 open_preview "from the pinned tab"
+else
+  open_preview "from the pinned tab"
+fi
 first_frame=$(grep -m1 '^browser: link preview first frame in ' "$log" | sed 's/.* in //')
 [ -n "$first_frame" ] || fail "the preview didn't log its first frame"
 ../tools/window-screenshot.sh "$pid" "$out/preview-open.png" || fail "no window to capture"
