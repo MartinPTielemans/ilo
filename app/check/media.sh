@@ -274,6 +274,8 @@ expect "^browser: page $c camera 0 microphone 0 sharing 0 shared 0\$" \
 # and ph, then makes it the last.
 mini_player_at() {
   for _ in $(seq 100); do
+    # Windows' driver says where the window is only when asked; Linux's as it moves too.
+    ! windows || send pip
     at=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: pip at ' | tail -1 |
       cut -d' ' -f4-)
     if [ -n "$at" ] && echo "$at" | awk -v px="$px" -v py="$py" -v pw="$pw" -v ph="$ph" \
@@ -879,11 +881,12 @@ if pip_driven || windows; then
   # The window manager moves it with the pointer, as by a title bar, from when the core asks it,
   # past the drag's threshold, and tells it where it is at the release. The core's lines carry
   # Chromium's prefix.
+  # On Windows, Chromium's move loop moves it with the desktop's pointer, which the driver moves
+  # only with real input, as it has in CI, from where the pointer is past the drag's threshold.
   grown="(2 * x + w - 2 * px - pw) ^ 2 <= 16 && (2 * y + h - 2 * py - ph) ^ 2 <= 16"
-  if windows; then
-    # Chromium's move loop moves it there with the desktop's pointer, which the driver never moves.
-    echo "skip: moving the Mini Player with a drag on Windows: the driver can't move the pointer" \
-      "Windows moves it with."
+  if windows && [ "${BROWSER_DRIVE_REAL:-}" != 1 ]; then
+    echo "skip: moving the Mini Player with a drag on Windows without real input: Windows moves" \
+      "it with the desktop's pointer."
   else
     send pip press $((pw / 8)) $((ph / 2))
     expect 'browser: mini player pressed at ' "a press off its controls didn't reach the Mini Player"
@@ -892,6 +895,7 @@ if pip_driven || windows; then
     send pip dragto $((pw / 8 - 200)) $((ph / 2))
     send pip release $((pw / 8 - 200)) $((ph / 2))
     moved="x == px - 200"
+    ! windows || moved="x >= px - 200 && x <= px - 190"
     ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
     mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
   fi

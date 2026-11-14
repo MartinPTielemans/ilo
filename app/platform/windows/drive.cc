@@ -1891,7 +1891,10 @@ bool Run(const std::string& line) {
   // for a part a press moves the window by, bottomright for a corner it sizes it from, client for
   // the page. Windows moves and sizes it with the desktop's pointer, which the driver never moves.
   // pip doubleclick <x> <y> and pip wheel <x> <y> <notches> [cmd] click twice and turn the wheel
-  // there, a notch down for each of a positive <notches>, as Linux's driver does.
+  // there, a notch down for each of a positive <notches>, as Linux's driver does, each notch where
+  // the window is by then, as a scroll moves it. With real input, pip press, pip dragto and pip
+  // release <x> <y>, at points where the window was at the press, hold the desktop's pointer down
+  // on it, move it and let it go, as a hand does, so Windows' move loop moves the window.
   if (action == "pip") {
     HWND pip = PictureInPicture();
     if (!pip) {
@@ -1909,11 +1912,30 @@ bool Run(const std::string& line) {
       return true;
     }
     double x, y;
-    if ((step != "hit" && step != "doubleclick" && step != "wheel") || !(words >> x >> y)) {
+    const bool hold = step == "press" || step == "dragto" || step == "release";
+    if ((step != "hit" && step != "doubleclick" && step != "wheel" && !hold) ||
+        !(words >> x >> y) || (hold && !g_real)) {
       return false;
     }
-    const LONG at_x = rect.left + std::lround(x * scale);
-    const LONG at_y = rect.top + std::lround(y * scale);
+    // Where the window was at the press, which the hold's points are from as it moves.
+    static RECT pressed;
+    if (step == "press") {
+      pressed = rect;
+    }
+    const RECT& from = hold ? pressed : rect;
+    const LONG at_x = from.left + std::lround(x * scale);
+    const LONG at_y = from.top + std::lround(y * scale);
+    if (hold) {
+      const Target target = At(pip, POINT{at_x, at_y});
+      if (step == "press") {
+        AddPress(target, MK_LBUTTON, 0);
+      } else if (step == "dragto") {
+        g_steps.push_back({[=] { Move(target, 0, MK_LBUTTON); }});
+      } else {
+        g_steps.push_back({[=] { Release(target, MK_LBUTTON, 0); }});
+      }
+      return true;
+    }
     if (step == "doubleclick") {
       AddClick(At(pip, POINT{at_x, at_y}), MK_LBUTTON, 0, true);
       return true;
@@ -1923,18 +1945,24 @@ bool Run(const std::string& line) {
       if (!(words >> notches) || !notches) {
         return false;
       }
-      const Target target = At(pip, POINT{at_x, at_y});
       const int modifiers = PointerModifiers(words);
       // Windows' positive delta is a notch up, away from the user.
       const int along = notches > 0 ? -WHEEL_DELTA : WHEEL_DELTA;
-      g_steps.push_back({[=] { Move(target, modifiers, 0); }});
+      // The point in the window as it is by the notch, which the notch before may have moved.
+      const auto aim = [pip, x, y, scale] {
+        RECT now;
+        GetWindowRect(pip, &now);
+        return At(pip, POINT{now.left + std::lround(x * scale), now.top + std::lround(y * scale)});
+      };
       for (int notch = 0; notch < std::abs(notches); notch++) {
+        g_steps.push_back({[=] { Move(aim(), modifiers, 0); }});
         g_steps.push_back({[=] {
           HoldKeys(modifiers);
           if (g_real) {
             RealPointer(MOUSEEVENTF_WHEEL, static_cast<DWORD>(along));
             return;
           }
+          const Target target = aim();
           PostMessageW(target.hwnd, WM_MOUSEWHEEL, MAKEWPARAM(MouseKeys(modifiers, 0), along),
                        MAKELPARAM(target.screen.x, target.screen.y));
         }});
