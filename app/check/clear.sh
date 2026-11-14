@@ -1501,7 +1501,10 @@ exec 3>&-
 quit
 # In a launch of its own, with a DevTools client that says when Clear browsing data's dialog has the
 # keyboard (cdp.py), as a DevTools pipe for the whole run keeps the Widevine note above from coming.
-# The history is the profile's, kept from the launch before.
+# The history is the profile's, kept from the launch before. On the Mac that launch gave the served
+# sites to Safari's engine, where ⇧-click on a link loads it in the tab rather than in Peek, so the
+# profile forgets them first.
+forget_engine_sites
 log="$out/clear-delete.log"
 cdp_log="$out/clear-cdp.log"
 step=0
