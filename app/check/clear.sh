@@ -1589,6 +1589,13 @@ for kind in ("sites", "listed_off"):
   store_launch '?webkit' before
   await '^browser: title [0-9]* session safari sees w back$' ||
     fail "the session page didn't keep its cookie and item in Safari's engine: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
+  # The tab leaves the page that sets them for the one that only reads them: the next launch brings
+  # the Spaces back, kept outside the profile's folder, and loads the tab shown, which would set them
+  # again in the new profile's store.
+  go_from_bar "127.0.0.1:$port/session"
+  expect "^browser: loaded [0-9]* http://127.0.0.1:$port/session\$" "the plain session page didn't load"
+  expect '^browser: title [0-9]* session safari sees w back$' \
+    "Safari's engine's plain session page didn't see what the one before stored"
   exec 3>&-
   quit
   rm -rf "$store_dir/Default"
