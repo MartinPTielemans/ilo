@@ -1676,14 +1676,15 @@ bool Run(const std::string& line) {
   const std::string rest =
       line.size() > action.size() ? line.substr(action.size() + 1) : std::string();
   // The pointer's and text's input comes with no Ctrl the last key left down (LetGoKeyCtrl), so a
-  // click after ⌘T is no Ctrl-click. A key takes it from there, and flags lets it go itself.
+  // click after ⌘T is no Ctrl-click. A key takes it from there, and flags lets it go itself. So does
+  // a real key, which names its own: Win+D after ⌘T was Ctrl+Win+D, a new virtual desktop (#2616).
   static const char* const kInput[] = {
       "click",         "rightclick",     "middleclick", "doubleclick", "clickkey",
       "rightclickkey", "doubleclickkey", "drag",        "dragover",    "dragdrop",
       "dragleave",     "press",          "dragto",      "release",     "rightpress",
       "rightdragto",   "rightrelease",   "move",        "scroll",      "swipe",
       "wheel",         "keydown",        "keyup",       "type",        "ime",
-      "insert",        "choose",         "dismiss",     "savepanel"};
+      "insert",        "choose",         "dismiss",     "savepanel",   "realkey"};
   for (const char* input : kInput) {
     if (action == input) {
       g_steps.push_back({[] { LetGoKeyCtrl(); }});
