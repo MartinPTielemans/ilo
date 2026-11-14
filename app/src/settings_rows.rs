@@ -699,6 +699,19 @@ pub fn sent_aside(text: &'static str, detail: gpui::Hsla) -> gpui::Div {
         .child(text)
 }
 
+/// What an opened log row sent, as one line of the log check.sh reads: each line "name: value",
+/// joined by " · ", with a value's line breaks as "⏎", which a page's text has (#2462).
+pub fn sent_said(sent: &[Sent]) -> String {
+    let lines = sent.iter().map(|line| {
+        let value = line.value.replace("\r\n", "⏎").replace(['\n', '\r'], "⏎");
+        match line.name.is_empty() {
+            true => value,
+            false => format!("{}: {value}", line.name),
+        }
+    });
+    lines.collect::<Vec<_>>().join(" · ")
+}
+
 /// The label of an opened log row's address: "Page" for what Point sent, "To" for a request.
 pub fn address_label(action: &str) -> &'static str {
     match action {
@@ -816,6 +829,27 @@ mod tests {
         assert_eq!(sent_shown(9, false), (7, true));
         assert_eq!(sent_shown(200, false), (7, true));
         assert_eq!(sent_shown(200, true), (200, false));
+    }
+
+    /// What was sent is one line of the log, a page's text with its line breaks too, as check.sh
+    /// reads the line alone (#2462's check read the text's first line and missed the rest).
+    #[test]
+    fn what_was_sent_is_said_on_one_line() {
+        let line = |depth, name: &str, value: &str| Sent {
+            depth,
+            name: name.into(),
+            value: value.into(),
+        };
+        let sent = [
+            line(0, "1", ""),
+            line(1, "text", "Sign in\nForgot your password?\r\nDone"),
+            line(1, "", "alone"),
+            line(1, "value", "Not sent"),
+        ];
+        assert_eq!(
+            sent_said(&sent),
+            "1:  · text: Sign in⏎Forgot your password?⏎Done · alone · value: Not sent"
+        );
     }
 
     /// A button, a switch and a pop-up, named as Settings names them while VoiceOver asks.

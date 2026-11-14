@@ -2969,10 +2969,7 @@ impl Shell {
             .flatten()
             .and_then(|past| past.steps.get(step));
         if let Some(each) = shown {
-            let lines = (each.sent.iter())
-                .map(|line| format!("{}: {}", line.name, line.value))
-                .collect::<Vec<_>>()
-                .join(" · ");
+            let lines = crate::settings_rows::sent_said(&each.sent);
             log!(
                 "browser: library step {step} shows {}, sent: {lines}",
                 each.url

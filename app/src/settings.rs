@@ -4001,20 +4001,13 @@ impl Settings {
             self.requests_opened.insert(id);
         }
         let opened = self.requests_opened.contains(&id);
-        let said = |sent: &[agents::request::Sent]| {
-            let lines = sent.iter().map(|line| match line.name.is_empty() {
-                true => line.value.clone(),
-                false => format!("{}: {}", line.name, line.value),
-            });
-            lines.collect::<Vec<_>>().join(" · ")
-        };
         let found = (agents.read(cx).activity(agent))
             .find(|entry| entry.id == id)
             .map(|entry| {
                 (
                     entry.url.clone(),
                     entry.refused.is_empty(),
-                    said(&entry.sent),
+                    browser::settings_rows::sent_said(&entry.sent),
                 )
             });
         // check.sh reads this line: where it went, and what it sent, secrets hidden.
