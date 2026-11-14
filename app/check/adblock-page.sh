@@ -102,7 +102,8 @@ send click $page_point
 expect "^browser: tab [0-9]* opened by $tab in the foreground\$" \
   "the tab the link opened wasn't listed while its page hadn't come: the hold waits for more than the filters' answer"
 link_tab=$(sed -n "/^browser: drive $step: /,\$s/^browser: tab \([0-9]*\) opened by $tab in the foreground\$/\1/p" "$log" | head -1)
-grep -q '/held' "$out/site.log" && fail "/held answered before the run let it"
+# The site logs a request as it comes, and its answer's line only once it's sent.
+grep -q '"GET /held HTTP' "$out/site.log" && fail "/held answered before the run let it"
 link_cost=$(sed -n "s/^browser: tab $link_tab listed +\([0-9.]*\) ms after the press in tab $tab\$/\1/p" "$log")
 link_held=$(sed -n "s/^browser: pop-up $link_tab held \([0-9.]*\) ms\$/\1/p" "$log")
 [ -n "$link_cost" ] && [ -n "$link_held" ] ||
