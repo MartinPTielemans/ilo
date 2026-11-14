@@ -90,6 +90,7 @@
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
+#include "content/public/browser/focused_node_details.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -299,6 +300,14 @@ class SignInWindow : public views::WidgetObserver,
   void DidFinishLoad(content::RenderFrameHost* frame, const GURL& url) override {
     if (frame->IsInPrimaryMainFrame()) {
       LOG(ERROR) << "browser: sync sign-in loaded " << url.path();
+    }
+  }
+  // For the checks, which type only once the page has put its focus in a field: keys typed
+  // before land nowhere, and Return then sends an empty form (#2554).
+  void OnFocusChangedInPage(const content::FocusedNodeDetails& details) override {
+    if (details.editable_level != content::EditableLevel::kNotEditable) {
+      LOG(ERROR) << "browser: sync sign-in focused a field on "
+                 << web_contents()->GetLastCommittedURL().path();
     }
   }
 

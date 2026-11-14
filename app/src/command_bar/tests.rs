@@ -18,6 +18,8 @@ use crate::text_input::{self, Chosen, FieldMenu, korean};
 #[derive(Default)]
 struct Recorder {
     calls: RefCell<Vec<String>>,
+    /// What the user typed for each load, which the core reads for an http address written out.
+    typed: RefCell<Vec<String>>,
     /// What the core was asked to suggest for, the text and whether it may complete it.
     asked: RefCell<Vec<(String, bool)>>,
     shown: RefCell<Vec<String>>,
@@ -87,15 +89,18 @@ impl Host for Recorder {
 
     fn page_favicon(&self, _: &str) {}
 
-    fn open_tab(&self, url: &str, behind: bool) {
+    fn open_tab(&self, url: &str, typed: &str, behind: bool) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("open {url}{}", if behind { " behind" } else { "" }));
     }
 
-    fn open_window(&self, url: &str, _: &mut App) {
+    fn open_window(&self, url: &str, typed: &str, _: &mut App) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("window {url}"));
     }
 
-    fn navigate(&self, tab: u64, url: &str) {
+    fn navigate(&self, tab: u64, url: &str, typed: &str) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("navigate {tab} {url}"));
     }
 
@@ -119,7 +124,8 @@ impl Host for Recorder {
         self.record(format!("split {tab} with {with}"));
     }
 
-    fn open_split(&self, url: &str, with: u64, _: &mut App) {
+    fn open_split(&self, url: &str, typed: &str, with: u64, _: &mut App) {
+        self.typed.borrow_mut().push(typed.to_string());
         self.record(format!("open {url} beside {with}"));
     }
 
@@ -411,6 +417,11 @@ impl Bar {
     /// What the bar asked of the host since the last time.
     fn calls(&self) -> Vec<String> {
         self.host.calls.take()
+    }
+
+    /// What the user typed for each load since the last time.
+    fn typed(&self) -> Vec<String> {
+        self.host.typed.take()
     }
 
     /// The tooltips asked for and ended since the last time.
@@ -1318,6 +1329,64 @@ fn the_input_method_composes_and_commits_in_the_bar(cx: &mut TestAppContext) {
     bar.input_method(|input, window, cx| input.unmark_text(window, cx));
     assert!(!bar.composing());
     assert_eq!(bar.input(), ("ねこ".into(), 6..6));
+}
+
+/// `key` pressed and released as Wayland's platform hands it to the window: down, then its
+/// character typed into the field if the window didn't take the key, then up. A macro, since
+/// GPUI's test window can't be named here.
+macro_rules! press {
+    ($platform:expr, $key:expr) => {{
+        use gpui::PlatformWindow as _;
+        let keystroke = gpui::Keystroke::parse($key).unwrap().with_simulated_ime();
+        let down = gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        if !$platform.simulate_input(down) {
+            let mut field = $platform.take_input_handler().expect("no input handler");
+            field.replace_text_in_range(None, keystroke.key_char.as_deref().unwrap());
+            $platform.set_input_handler(field);
+        }
+        $platform.simulate_input(gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
+    }};
+}
+
+/// A character typed while the App is in an update, as a nested event pump delivers it, lands in
+/// the bar once the update is over, and ahead of the one typed after it (#2672).
+#[gpui::test]
+fn a_character_typed_mid_update_lands_in_the_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    let mut platform = bar.cx.cx.test_window(bar.window.into());
+    (bar.window)
+        .update(&mut bar.cx.cx, |_, _, _| press!(platform, "a"))
+        .unwrap();
+    press!(platform, "b");
+    bar.cx.run_until_parked();
+    assert_eq!(bar.input(), ("ab".into(), 2..2));
+}
+
+/// Japanese the input method composes and commits while the App is in an update, with no key of
+/// its own, as a candidate picked with the pointer is: once the update is over the bar has the
+/// committed text and nothing marked (#2672).
+#[gpui::test]
+fn a_japanese_commit_mid_update_lands_in_the_bar(cx: &mut TestAppContext) {
+    use gpui::PlatformWindow as _;
+    let mut bar = Bar::new(cx);
+    bar.compose("にほん");
+    let mut platform = bar.cx.cx.test_window(bar.window.into());
+    (bar.window)
+        .update(&mut bar.cx.cx, |_, _, _| {
+            let mut ime = platform.take_input_handler().expect("no input handler");
+            ime.replace_and_mark_text_in_range(None, "にほんご", None);
+            ime.replace_text_in_range(None, "日本語");
+            platform.set_input_handler(ime);
+        })
+        .unwrap();
+    bar.cx.run_until_parked();
+    assert!(!bar.composing());
+    assert_eq!(bar.input(), ("日本語".into(), 9..9));
+    assert_eq!(bar.calls(), Vec::<String>::new());
 }
 
 /// Korean from a 2-set keyboard, where one key can commit a syllable and start the next (#2457):
@@ -2336,6 +2405,34 @@ fn the_bar_is_closed_as_it_asks_to_go(cx: &mut TestAppContext) {
         !bar.follow(Vec::new()),
         "a Space shown since opens no new tab"
     );
+}
+
+/// Each load from the bar says what the user typed for it, from which the core keeps an http
+/// address written out over http, as Chrome's bar does (#2417).
+#[gpui::test]
+fn each_load_says_what_was_typed(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.edit("https://example.com/", None);
+    bar.type_text("http://example.org");
+    bar.keys("enter");
+    assert_eq!(bar.typed(), ["http://example.org"], "↩ in the tab");
+    let mut bar = Bar::new(cx);
+    bar.type_text("http://example.net");
+    bar.keys("enter");
+    assert_eq!(bar.typed(), ["http://example.net"], "↩ in a new tab");
+    let mut bar = Bar::new(cx);
+    bar.type_text("http://example.net");
+    bar.keys("cmd-enter");
+    assert_eq!(bar.typed(), ["http://example.net"], "⌘↩'s tab behind");
+    // What the bar completed isn't typed, so the core reads the completed page as a suggestion.
+    let mut bar = Bar::new(cx);
+    bar.type_text("http://exa");
+    bar.suggest(
+        "http://exa",
+        vec![completing("http://example.com/", "mple.com")],
+    );
+    bar.keys("enter");
+    assert_eq!(bar.typed(), ["http://exa"], "↩ on a completion");
 }
 
 /// ↩ on the URL ⌘L opened the bar on loads the page again, as Arc's does; typed over, it goes

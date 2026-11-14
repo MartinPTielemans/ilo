@@ -322,6 +322,40 @@ fn a_card_back_before_its_window_hid_stays(cx: &mut TestAppContext) {
     assert_eq!(after(cx, &host, FADE * 4), [shown(2, waiting_height())]);
 }
 
+/// Windows can ask for the card's frame while the App is in an update, from a nested message pump,
+/// where the frame can't run. The card's motion still goes on to rest at the next frame, or the card
+/// stays on screen faded out and never settles, as in #2685's stall.
+#[gpui::test]
+fn a_frame_asked_while_the_app_is_busy_still_brings_the_card_to_rest(cx: &mut TestAppContext) {
+    use gpui::RequestFrameOptions;
+
+    let (host, told) = open_card(cx);
+    // As the app is, so the frames aren't throttled as a background window's are.
+    cx.set_app_active(Some(true));
+    rest_on(cx, &told, card(1, false));
+    after(cx, &host, DWELL);
+    let window = card_window(cx);
+    let platform = cx.test_window(window.into());
+    let frame = || platform.simulate_frame_request(RequestFrameOptions::default());
+    let settled = |cx: &mut TestAppContext| {
+        window
+            .update(cx, |card, _, _| card.settled)
+            .expect("no card window")
+    };
+    // Its first frame on screen starts its motion, which asks for the next.
+    frame();
+    cx.run_until_parked();
+    assert!(!settled(cx), "it came on screen at rest");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.update(|_| frame());
+    frame();
+    cx.run_until_parked();
+    assert!(
+        settled(cx),
+        "its motion stopped with the frame asked while the App was busy"
+    );
+}
+
 /// Whether `pose` is `scale` big and `opacity` opaque, to a thousandth, as the curves solve.
 fn near(pose: Pose, scale: f32, opacity: f32) -> bool {
     (pose.scale - scale).abs() < 0.001 && (pose.opacity - opacity).abs() < 0.001

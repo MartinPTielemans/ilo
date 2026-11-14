@@ -502,3 +502,47 @@ fn a_card_s_more_button_opens_its_space_s_menu(cx: &mut TestAppContext) {
     });
     assert!(matches!(renamed, Some(Naming::Space(2))), "not Work's menu");
 }
+
+/// A click on one card's slot and then another's, with no frame between them, as the check's
+/// driver sends them under Wayland, shows no Space and leaves the Library open: the first card
+/// keeps no click of its own for the second's release (#2689).
+#[gpui::test]
+fn a_slot_s_click_leaves_its_card_no_click_for_the_next_release(cx: &mut TestAppContext) {
+    use gpui::{MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput};
+    let _ = pickers(cx);
+    let (shell, cx, host) = library(cx);
+    cx.update(|window, cx| {
+        for at in [slot(1), slot(0)] {
+            let modifiers = Modifiers::none();
+            let events = [
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position: at,
+                    pressed_button: None,
+                    modifiers,
+                }),
+                PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: at,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                PlatformInput::MouseUp(MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: at,
+                    modifiers,
+                    click_count: 1,
+                }),
+            ];
+            for event in events {
+                window.dispatch_event(event, cx);
+            }
+        }
+    });
+    cx.run_until_parked();
+    assert!(
+        host.shown.borrow().is_empty(),
+        "the first card showed its Space"
+    );
+    assert!(library_open(&shell, cx), "the Library closed");
+}

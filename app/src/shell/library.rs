@@ -673,7 +673,7 @@ impl Shell {
         let Some((from, start)) = self.library_resize else {
             return to;
         };
-        let t = start.elapsed().as_secs_f32();
+        let t = self.since(start);
         spring_to(t, from, to, 0., LIBRARY_RESPONSE, LIBRARY_DAMPING).map_or(to, |(width, _)| width)
     }
 
@@ -682,7 +682,7 @@ impl Shell {
     fn library_step(&self) -> Option<(f32, f32)> {
         let (from, speed, start) = self.library_motion?;
         let to = if self.library_open { 1. } else { 0. };
-        let t = start.elapsed().as_secs_f32();
+        let t = self.since(start);
         spring_to(t, from, to, speed, LIBRARY_RESPONSE, LIBRARY_DAMPING)
     }
 
@@ -723,7 +723,7 @@ impl Shell {
     /// The sidebar's opacity under the Library: receding with the card, or, after a click, gone
     /// fast as the Library comes and back late as it goes.
     pub(super) fn sidebar_opacity(&self) -> f32 {
-        self.sidebar_opacity_at(Instant::now())
+        self.sidebar_opacity_at(self.clock.now())
     }
 
     /// The sidebar's opacity at `now`.
@@ -865,8 +865,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         // Under Reduce Motion the card is where it goes at once, and the sidebar still fades.
-        self.library_motion = Some((out, speed, crate::motion::start(cx)));
-        self.sidebar_fade = opacity.map(|opacity| (opacity, Instant::now()));
+        self.library_motion = Some((out, speed, crate::motion::start_at(self.clock.now(), cx)));
+        self.sidebar_fade = opacity.map(|opacity| (opacity, self.clock.now()));
         self.library_open = open;
         if open {
             self.conceal_now(cx);
@@ -924,7 +924,10 @@ impl Shell {
         // Ours: the Library goes to the new section's width on the push's spring, as Arc's
         // isn't recorded.
         if self.library.is_some() && self.section_width(section) != self.library_width() {
-            self.library_resize = Some((self.library_width(), crate::motion::start(cx)));
+            self.library_resize = Some((
+                self.library_width(),
+                crate::motion::start_at(self.clock.now(), cx),
+            ));
         }
         self.section = section;
         let placeholder = match section {
@@ -995,10 +998,7 @@ impl Shell {
             window.request_animation_frame();
         }
         if let Some((from, start)) = self.library_resize {
-            let (t, to) = (
-                start.elapsed().as_secs_f32(),
-                self.section_width(self.section),
-            );
+            let (t, to) = (self.since(start), self.section_width(self.section));
             match spring_to(t, from, to, 0., LIBRARY_RESPONSE, LIBRARY_DAMPING) {
                 Some(_) => window.request_animation_frame(),
                 None => {

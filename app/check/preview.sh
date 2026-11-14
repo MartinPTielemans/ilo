@@ -276,6 +276,18 @@ EOF
   scale_output() { # <scale>
     echo "swaymsg output $output resolution $(awk "BEGIN { printf \"%dx%d\", $width / $scale_at * $1, $height / $scale_at * $1 }") scale $1"
   }
+  # Gives the output the scale $1, read back from sway for up to 10 s. Swaymsg gives up on its
+  # answer after 3 s, which a busy runner's sway can take to change the output's mode, though it
+  # changes it all the same (#2684).
+  give_scale() { # <scale>
+    $(scale_output "$1") > /dev/null 2>&1 || true
+    for _ in $(seq 20); do
+      now=$(swaymsg -t get_outputs 2> /dev/null | jq -r --arg name "$output" '.[] | select(.name == $name) | .scale')
+      [ "$(awk "BEGIN { print ${now:-0} + 0 }")" = "$1" ] && return 0
+      sleep 0.5
+    done
+    fail "sway didn't give $output the scale $1 within 10 s: it's ${now:-unread}"
+  }
   # The browser window's scale and its overlays' first frames', once the window's is $1, for up to
   # 10 s, as the window hears the output's scale from the compositor.
   window_scaled() { # <scale> <when>
@@ -289,7 +301,7 @@ EOF
   }
   for to in $(awk "BEGIN { print $scale_at + 1 }") "$scale_at"; do
     run_undo=$(scale_output "$scale_at")
-    $(scale_output "$to") > /dev/null || fail "sway didn't give $output the scale $to"
+    give_scale "$to"
     window_scaled "$to" "at the output's scale $to"
     open_preview "at the output's scale $to"
     window_scaled "$to" "with the preview open at the output's scale $to"
