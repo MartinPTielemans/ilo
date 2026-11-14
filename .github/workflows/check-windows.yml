@@ -137,7 +137,7 @@ jobs:
         battery-os adblock adblock-lists adblock-cosmetic adblock-page
         battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
-        pictures boosts foot-bar peek-motion rules overlays safe-start
+        pictures boosts foot-bar peek-motion rules overlays safe-start update-checks shots
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
