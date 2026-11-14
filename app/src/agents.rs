@@ -1167,12 +1167,18 @@ impl Agents {
 
     /// The core's answer to the read `request`: the page's text, or None if it had none.
     pub fn text_read(&mut self, request: u64, text: Option<String>, cx: &mut Context<Self>) {
-        let Some((_, tab, reply)) = self.reading.remove(&request) else {
+        let Some((_, id, reply)) = self.reading.remove(&request) else {
             return;
         };
-        let tab = self.browser.tab(tab, cx);
+        let tab = self.browser.tab(id, cx);
         _ = reply.send(match text {
-            Some(text) => ToolResult::text(tools::page_text(&tab, &text)),
+            Some(text) => {
+                let page = tools::page_text(&tab, &text);
+                ToolResult::text(match self.bells.get(&id) {
+                    Some(site) => format!("{site} {HELD}\n\n{page}"),
+                    None => page,
+                })
+            }
             None => ToolResult::error(
                 "The tab has no page loaded: it loads once the user shows it. Try another tab.",
             ),

@@ -6041,9 +6041,19 @@ fn a_request_held_behind_the_bell_is_named(cx: &mut TestAppContext) {
     let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
     let read = page_done(&agents, &browser, answer, shop_tree(), cx);
     assert!(read.text.contains(held), "{}", read.text);
+    let answer = call(&agents, "claude-code", "read_page", json!({ "tab": 20 }), cx);
+    let request = browser.reads.borrow()[0].1;
+    agents.update(cx, |agents, cx| agents.text_read(request, Some("Shop".into()), cx));
+    let read = answer.recv().unwrap();
+    assert!(read.text.starts_with(held), "{}", read.text);
 
     agents.update(cx, |agents, cx| agents.held_notifications(20, None, cx));
     let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
     let read = page_done(&agents, &browser, answer, shop_tree(), cx);
+    assert!(!read.text.contains(held), "{}", read.text);
+    let answer = call(&agents, "claude-code", "read_page", json!({ "tab": 20 }), cx);
+    let request = browser.reads.borrow()[1].1;
+    agents.update(cx, |agents, cx| agents.text_read(request, Some("Shop".into()), cx));
+    let read = answer.recv().unwrap();
     assert!(!read.text.contains(held), "{}", read.text);
 }
