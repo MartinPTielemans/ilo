@@ -211,3 +211,16 @@ fn hidden_with_its_page_it_doesnt_drop_the_note(cx: &mut TestAppContext) {
     assert_eq!(host.0.take(), ["show 4", "hide"]);
     assert_eq!(told.take(), Vec::<String>::new());
 }
+
+/// A picture in its row is drawn at the column's width, its height kept in proportion, so the
+/// rows end with it (#2462's capture had its full height under it, empty, as the panel's end).
+#[test]
+fn a_rows_picture_is_as_tall_as_it_is_drawn() {
+    // Point's 520 × 320 section with 8 around it, at 1× and 2×.
+    let (w, h) = fitted((536., 336.), 1., 250., 160.);
+    assert_eq!((w, (h * 10.).round() / 10.), (250., 156.7));
+    assert_eq!(fitted((1072., 672.), 2., 250., 160.), (w, h));
+    // A tall one is held to the most, and a small one keeps its own size.
+    assert_eq!(fitted((100., 400.), 1., 250., 160.), (40., 160.));
+    assert_eq!(fitted((120., 60.), 1., 250., 160.), (120., 60.));
+}
