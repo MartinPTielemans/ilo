@@ -3055,9 +3055,12 @@ void host_centered(double width, double height, double* x, double* y) {
   *y = (work.top + work.bottom) / 2.0 / scale - height / 2;
 }
 
+void ProofMark(const char* what);
+
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
                              double height, bool maximized, double picture_width,
                              double picture_height, double foot_top) {
+  ProofMark("launch window starts");
   static const wchar_t* launch_class = [] {
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = LaunchProc;
@@ -3067,12 +3070,15 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
     // GetAppIcon takes it: chrome.exe names its icons, so it has no 101.
     window_class.hIcon = LoadIconW(GetModuleHandleW(L"chrome.dll"), MAKEINTRESOURCEW(101));
     window_class.lpszClassName = L"BrowserLaunch";
+    ProofMark("launch icon loaded");
     RegisterClassW(&window_class);
     return window_class.lpszClassName;
   }();
+  ProofMark("launch class registered");
   const double scale = GetDpiForSystem() / 96.0;
   g_launch.owner = CreateWindowExW(0, launch_class, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr,
                                    GetModuleHandleW(nullptr), nullptr);
+  ProofMark("launch owner made");
   // The browser window's frame, as Windows draws it. Clicks go through it, as they do through the
   // Mac's, and Chromium's occlusion tracker passes over a window they go through, so it can stay
   // over the browser window, whose pages still paint, until the UI has drawn under it.
@@ -3081,6 +3087,7 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
       static_cast<int>(std::lround(x * scale)), static_cast<int>(std::lround(y * scale)),
       static_cast<int>(std::lround(width * scale)), static_cast<int>(std::lround(height * scale)),
       g_launch.owner, nullptr, GetModuleHandleW(nullptr), nullptr);
+  ProofMark("launch window made");
   if (!window) {
     host_close_launch_window();
     return;
@@ -3103,6 +3110,7 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
     g_launch.grows = grows;
     g_launch.foot = std::clamp(std::lround(foot_top * scale), 0L, g_launch.picture_size.cy);
   }
+  ProofMark("launch window set up");
   g_launch.background = CreateSolidBrush(color);
   g_launch.hwnd = window;
   if (g_launch.picture) {
@@ -3111,8 +3119,10 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   }
   // Maximized on the screen of the frame it was made at, which it un-maximizes to.
   ShowWindow(window, maximized ? SW_SHOWMAXIMIZED : SW_SHOW);
+  ProofMark("launch ShowWindow returned");
   // On screen now, as Chromium's startup holds the main thread for a while before its loop.
   UpdateWindow(window);
+  ProofMark("launch UpdateWindow returned");
 }
 
 void host_close_launch_window(void) {
