@@ -688,8 +688,11 @@ unsafe extern "C" fn agent_request_done(
 }
 
 unsafe extern "C" fn launching(_: *mut c_void) {
+    gpui::launch_mark("app launching starts");
     safe_start_host::launching();
+    gpui::launch_mark("app safe start read");
     ad_block_host::launching();
+    gpui::launch_mark("app ad block read");
     // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
     // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
     #[cfg(target_os = "linux")]
@@ -700,6 +703,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
         gpui_windows::make_early();
     }
+    gpui::launch_mark("app early devices asked");
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
@@ -752,6 +756,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     });
     // The sidebar's picture, taken in a window near enough this one's size to show in it. A
     // maximized one is another size, kept by none.
+    gpui::launch_mark("app launch frame read");
     let taken = std::fs::read_to_string(launch_layout_path())
         .ok()
         .and_then(|line| launch_picture::read(&line));
@@ -771,6 +776,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
         (taken.width, taken.height, taken.foot_top)
     });
+    gpui::launch_mark("app launch picture read");
     unsafe {
         platform::host_show_launch_window(
             profile.as_ptr(),
@@ -792,6 +798,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
         platform::host_since_launch()
     });
     unsafe { platform::host_dock_dot_launch(profile.as_ptr()) };
+    gpui::launch_mark("app launching ends");
 }
 
 /// Back from another app, such as System Settings, where the user may have changed the default
@@ -1155,6 +1162,7 @@ pub extern "C" fn bc_app_host(
     argc: *mut c_int,
     argv: *mut *const *const c_char,
 ) -> *const bc::bc_host {
+    gpui::launch_mark("app host asked");
     // The arguments the process was given, from the core: Chromium on Linux has written its process
     // title over the ones std::env::args reads, joining each to the next (#605).
     let given = match unsafe { (*argc, *argv) } {
@@ -1178,5 +1186,6 @@ pub extern "C" fn bc_app_host(
         *argc = pointers.len() as c_int;
         *argv = pointers.leak().as_ptr();
     }
+    gpui::launch_mark("app host made");
     Box::leak(Box::new(host))
 }
