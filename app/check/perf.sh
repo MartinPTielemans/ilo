@@ -252,11 +252,12 @@ perf_launch() {
     # shellcheck disable=SC2046,SC2086 # the flags, a word each
     BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch \
       $([ "$3" != warm ] || crlset_flags "$PWD/$perf_dir/crlset-warm.log" fast) \
-      < /dev/null > "$log" 2>&1 &
+      ${perf_launch_args:-} < /dev/null > "$log" 2>&1 &
   else
     BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch < /dev/null > "$log" 2>&1 &
   fi
   pid=$!
+  [ -z "${perf_launch_args:-}" ] || proof_anchor "$pid" "$perf_dir/launch-$3.anchor"
   # A tab put back has its last title, an earlier launch's paint, until its page loads.
   fcp=0
   for _ in $(seq 300); do
@@ -350,6 +351,44 @@ perf_row launch-restore "Launch, restored page painted${selfied:-}" \
 perf_row launch-held "Launch, the page held for uBlock Origin${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
 
+# Proof only (#2384): the process's creation (GetProcessTimes, the app's own zero) and the clocks
+# now, read together: FILETIME creation, FILETIME now, QPC now, QPC frequency. Chromium's trace
+# times are QPC in µs, so these put the trace on the process's start.
+proof_anchor() {
+  # $! is Git Bash's fork until it has run chrome.exe.
+  for _ in $(seq 200); do
+    case $(cat "/proc/$1/exename" 2> /dev/null) in *chrome.exe) break ;; esac
+    sleep 0.01
+  done
+  echo "perf: proof only: anchor of $(cat "/proc/$1/exename" 2> /dev/null) $(cat "/proc/$1/winpid" 2> /dev/null)"
+  python3 -I -c '
+import ctypes, sys
+from ctypes import wintypes
+k = ctypes.windll.kernel32
+h = k.OpenProcess(0x1000, False, int(sys.argv[1]))
+c, e, kt, ut, now = (wintypes.FILETIME() for _ in range(5))
+k.GetProcessTimes(h, ctypes.byref(c), ctypes.byref(e), ctypes.byref(kt), ctypes.byref(ut))
+q, f = ctypes.c_int64(), ctypes.c_int64()
+k.GetSystemTimePreciseAsFileTime(ctypes.byref(now))
+k.QueryPerformanceCounter(ctypes.byref(q))
+k.QueryPerformanceFrequency(ctypes.byref(f))
+ft = lambda x: (x.dwHighDateTime << 32) | x.dwLowDateTime
+print(ft(c), ft(now), q.value, f.value)' "$(cat "/proc/$1/winpid")" > "$2" ||
+    echo "perf: proof only: no anchor for $2"
+}
+proof_categories=startup,toplevel,disabled-by-default-toplevel.flow,browser,content,navigation,loading,ui,views,gpu,viz,cc,benchmark,base,mojom
+# Proof only (#2384): three more link launches, traced from Chromium's start, not counted. The
+# trace is written as the browser quits, after its page painted.
+for n in 1 2 3; do
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  trace="$PWD/$perf_dir/trace-launch-$n.json"
+  perf_launch_args="--enable-tracing=$proof_categories --enable-tracing-format=json --trace-startup-file=$(cygpath -w "$trace")"
+  perf_launch "$page?trace$n" "trace$n" "trace$n"
+  perf_launch_args=
+  [ -s "$trace" ] || echo "perf: proof only: launch trace $n wasn't written"
+  echo "perf: proof only: traced launch $n: launch window $on_screen ms, browser window $browser_on_screen ms, page painted $painted ms"
+done
+if false; then # Proof only (#2384): ilo's session skipped, to Chrome's launches.
 log="$perf_dir/session.log"
 step=0
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
@@ -619,6 +658,7 @@ if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
   rm -rf "$scratch"
   scratch=
 fi
+fi # Proof only (#2384): the end of ilo's skipped session.
 
 # Google Chrome, where the runner has it, as GitHub's images do, measured on this machine as ilo was,
 # for each of the gate's rows that compares with it, on the same page. Chrome has no driver, so
@@ -797,6 +837,49 @@ chrome_quit() {
   done
   fail "Chrome's processes outlived it: $(python3 -I check/usage.py kinds "$perf_dir/chrome-left.json")"
 }
+# Proof only (#2384): Chrome's launches as main's perf times them, five, each with its first paint
+# (Startup.BrowserWindow.FirstPaint, from its main), then three traced with ilo's categories and
+# anchored as ilo's are; then the run ends.
+if [ ! -x "$chrome" ]; then
+  echo "skip: proof only: no Chrome at $chrome"
+  return 0
+fi
+snap_procs=$chrome_procs
+: > "$perf_dir/chrome.log"
+# shellcheck disable=SC2046 # the flags, a word each
+chrome_launch warm $(crlset_flags "$PWD/$perf_dir/crlset-chrome-warm.log" fast) ||
+  fail "Chrome didn't stay open for its warm launch: $(tail -3 "$perf_dir/chrome.log")"
+sleep 15
+crlset_await "$PWD/$perf_dir/crlset-chrome-warm.log" "$chrome_dir" $((launched / 1000)) "Chrome's"
+chrome_quit
+: > "$perf_dir/chrome-proof.tsv"
+for n in 1 2 3 4 5 6 7 8; do
+  trace=
+  if [ "$n" -gt 5 ]; then
+    trace="$PWD/$perf_dir/trace-chrome-launch-$((n - 5)).json"
+    chrome_launch "cl$n" "--enable-tracing=$proof_categories" --enable-tracing-format=json \
+      "--trace-startup-file=$(cygpath -w "$trace")" ||
+      fail "Chrome didn't stay open for traced launch $n: $(tail -3 "$perf_dir/chrome.log")"
+    proof_anchor "$pid" "$perf_dir/chrome-launch-$((n - 5)).anchor"
+  else
+    chrome_launch "cl$n" || fail "Chrome didn't stay open for launch $n: $(tail -3 "$perf_dir/chrome.log")"
+  fi
+  chrome_await "^cdp: title [^ ]* cl$n fcp " "Chrome's launch $n didn't paint its page"
+  link=$(($(chrome_stamp "cl$n" fcp) - launched))
+  main=$(chrome_histogram Startup.LoadTime.ProcessCreateToApplicationStart)
+  shown=$(chrome_histogram Startup.BrowserWindowDisplay)
+  first=$(chrome_histogram Startup.BrowserWindow.FirstPaint)
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "${trace:+traced}" "$link" "$main" "$shown" "$first" \
+    >> "$perf_dir/chrome-proof.tsv"
+  echo "perf: proof only: Chrome launch $n${trace:+, traced}: link to painted $link ms, start to main $main ms," \
+    "main to window shown $shown ms, main to first paint ${first:-none} ms"
+  chrome_quit
+  [ -z "$trace" ] || [ -s "$trace" ] || echo "perf: proof only: Chrome's launch trace $n wasn't written"
+done
+snap_procs=
+echo "ok: proof only (#2384): ilo's launches timed and 3 traced, Chrome's 5 timed and 3 traced, in $perf_dir;" \
+  "the rest of perf skipped"
+return 0
 if [ "$active" != 1 ]; then
   :
 elif [ ! -x "$chrome" ]; then
