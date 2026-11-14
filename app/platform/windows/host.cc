@@ -3118,8 +3118,11 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
     fprintf(stderr, "browser: launch picture shown\n");
   }
   // Maximized on the screen of the frame it was made at, which it un-maximizes to.
-  ShowWindow(window, maximized ? SW_SHOWMAXIMIZED : SW_SHOW);
+  // Proof only (#2384): shown without activating, then activated, to tell the two costs apart.
+  ShowWindow(window, maximized ? SW_SHOWMAXIMIZED : SW_SHOWNA);
   ProofMark("launch ShowWindow returned");
+  SetForegroundWindow(window);
+  ProofMark("launch SetForegroundWindow returned");
   // On screen now, as Chromium's startup holds the main thread for a while before its loop.
   UpdateWindow(window);
   ProofMark("launch UpdateWindow returned");
