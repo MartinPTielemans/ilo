@@ -82,17 +82,21 @@ alt_press() {
 }
 for _ in 1 2 3 4; do
   alt_press $((x + 1)) $x
+  # Each word is matched alone: a pattern of two, as *" mda "*" ck "*, misses them side by side,
+  # since both would need the one space between them.
+  case " $seen " in *" mda "*) ;; *) fail "press $pressed: the page didn't see the ⌥ press on the link. The page saw: $seen" ;; esac
   case " $seen " in
-    *" mda "*" ck "*) ;;
+    *" ck "*) ;;
     *) fail "press $pressed: ⌥⌘ on a link, moved a pixel and back with the button down, didn't click it. The page saw: $seen" ;;
   esac
 done
 # Past the drag distance, 4 px (3 on the Mac), it selects the link's text and doesn't click.
 for _ in 1 2; do
   alt_press $((x + 6)) $((x + 12))
+  case " $seen " in *" mda "*) ;; *) fail "press $pressed: the page didn't see the ⌥ press on the link. The page saw: $seen" ;; esac
   case " $seen " in
     *" ck "*) fail "press $pressed: ⌥⌘-drag on a link past the drag distance clicked it. The page saw: $seen" ;;
-    *" mda "*" ss "*) ;;
+    *" ss "*) ;;
     *) fail "press $pressed: ⌥⌘-drag on a link past the drag distance selected nothing. The page saw: $seen" ;;
   esac
 done
