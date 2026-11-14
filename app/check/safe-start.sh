@@ -187,9 +187,8 @@ loaded_all
 exec 3>&-
 quit
 
-# What the safe launch held, checked last, from its whole log: the core holds none of the command
-# line's extensions, the run's and the ad blocker, until #2631 (#2629), and these steps are
-# quarantined on the Mac (quarantine.mac) while the rest of the run is checked as before.
+# What the safe launch held, from its whole log: the command line's extensions, the run's and the
+# ad blocker, load after the core's first sweep and are held as each loads (#2629).
 grep -q 'browser: safe start holds 2 extensions$' "$held_log" ||
   fail "the core didn't hold Check Safe Start and the ad blocker: $(grep 'safe start holds' "$held_log")"
 grep '^browser: extensions menu' "$held_log" | grep -q '[a-p]' &&
