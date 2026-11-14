@@ -252,11 +252,12 @@ perf_launch() {
     # shellcheck disable=SC2046,SC2086 # the flags, a word each
     BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch \
       $([ "$3" != warm ] || crlset_flags "$PWD/$perf_dir/crlset-warm.log" fast) \
-      < /dev/null > "$log" 2>&1 &
+      ${perf_launch_args:-} < /dev/null > "$log" 2>&1 &
   else
     BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch < /dev/null > "$log" 2>&1 &
   fi
   pid=$!
+  [ -z "${perf_launch_args:-}" ] || proof_anchor "$pid" "$perf_dir/launch-$3.anchor"
   # A tab put back has its last title, an earlier launch's paint, until its page loads.
   fcp=0
   for _ in $(seq 300); do
@@ -359,6 +360,41 @@ perf_row launch-restore "Launch, restored page painted${selfied:-}" \
 perf_row launch-held "Launch, the page held for uBlock Origin${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
 
+# Proof only (#2384): the process's creation (GetProcessTimes, the app's own zero) and the clocks
+# now, read together: FILETIME creation, FILETIME now, QPC now, QPC frequency. Chromium's trace
+# times are QPC in µs, so these put the trace on the process's start.
+proof_anchor() {
+  # $! is Git Bash's fork until it has run chrome.exe.
+  for _ in $(seq 200); do
+    case $(cat "/proc/$1/exename" 2> /dev/null) in *chrome.exe) break ;; esac
+    sleep 0.01
+  done
+  python3 -I -c '
+import ctypes, sys
+from ctypes import wintypes
+k = ctypes.windll.kernel32
+h = k.OpenProcess(0x1000, False, int(sys.argv[1]))
+c, e, kt, ut, now = (wintypes.FILETIME() for _ in range(5))
+k.GetProcessTimes(h, ctypes.byref(c), ctypes.byref(e), ctypes.byref(kt), ctypes.byref(ut))
+q, f = ctypes.c_int64(), ctypes.c_int64()
+k.GetSystemTimePreciseAsFileTime(ctypes.byref(now))
+k.QueryPerformanceCounter(ctypes.byref(q))
+k.QueryPerformanceFrequency(ctypes.byref(f))
+ft = lambda x: (x.dwHighDateTime << 32) | x.dwLowDateTime
+print(ft(c), ft(now), q.value, f.value)' "$(cat "/proc/$1/winpid")" > "$2" ||
+    echo "perf: proof only: no anchor for $2"
+}
+proof_categories=startup,toplevel,disabled-by-default-toplevel.flow,browser,content,navigation,loading,ui,views,gpu,viz,cc,benchmark,base,mojom
+# Proof only (#2384): five more link launches, traced from Chromium's start, not counted. The
+# trace is written as the browser quits, after its page painted.
+for n in 1 2 3 4 5; do
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  trace="$PWD/$perf_dir/trace-launch-$n.json"
+  perf_launch_args="--enable-tracing=$proof_categories --enable-tracing-format=json --trace-startup-file=$(cygpath -w "$trace")"
+  perf_launch "$page?trace$n" "trace$n" "trace$n"
+  perf_launch_args=
+  [ -s "$trace" ] || echo "perf: proof only: launch trace $n wasn't written"
+done
 # Proof only (#2384): the launches' logs hold the launch marks; the rest of perf is skipped.
 echo "ok: proof only (#2384): 40 launches, before and after UI Automation is loaded on the early thread, with launch marks in $perf_dir/launch-*.log; the rest of perf skipped"
 return 0
