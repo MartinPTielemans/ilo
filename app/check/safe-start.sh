@@ -187,11 +187,13 @@ loaded_all
 exec 3>&-
 quit
 
-# What the safe launch held, from its whole log: the command line's extensions, the run's and the
-# ad blocker, load after the core's first sweep and are held as each loads (#2629).
-grep -q 'browser: safe start holds 2 extensions$' "$held_log" ||
-  fail "the core didn't hold Check Safe Start and the ad blocker: $(grep 'safe start holds' "$held_log")"
-grep '^browser: extensions menu' "$held_log" | grep -q '[a-p]' &&
-  fail "the Extensions menu listed an extension in a safe start: $(grep '^browser: extensions menu' "$held_log" | tail -1)"
+# What the safe launch held, from its log up to its quit, as on Linux the normal launch Turn Back On
+# started logs on after it: the command line's extensions, the run's and the ad blocker, load after
+# the core's first sweep and are held as each loads (#2629).
+held=$(sed '/^browser: stopping$/q' "$held_log")
+echo "$held" | grep -q 'browser: safe start holds 2 extensions$' ||
+  fail "the core didn't hold Check Safe Start and the ad blocker: $(echo "$held" | grep 'safe start holds')"
+echo "$held" | grep '^browser: extensions menu' | grep -q '[a-p]' &&
+  fail "the Extensions menu listed an extension in a safe start: $(echo "$held" | grep '^browser: extensions menu' | tail -1)"
 echo "ok: safe start held the extension, the ad blocker and the Boost after two crashes at launch," \
   "showed its card ($out/safe-start.png), and Turn Back On restarted into a normal launch"
