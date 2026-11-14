@@ -1921,6 +1921,11 @@ pub struct Shell {
 }
 
 impl Shell {
+    /// What the window's pages show until they draw their first frame, as last given to the core.
+    pub fn page_color(&self) -> Option<u32> {
+        self.page_color
+    }
+
     /// Makes the shell, the one the browser's shortcuts act on.
     pub fn new(browser: Rc<dyn Browser>, cx: &mut Context<Self>) -> Self {
         cx.set_global(ShellHandle(cx.weak_entity()));
