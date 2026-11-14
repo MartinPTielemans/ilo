@@ -2540,11 +2540,24 @@ HBITMAP LoadLaunchPicture(const std::wstring& path, LONG height, SIZE* size, COL
   return bitmap;
 }
 
+int TopEdge(HWND root);
+
 LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
   switch (message) {
     case WM_NCACTIVATE:
       // Its frame stands for the browser window's, which has the keyboard once it's under it.
       return DefWindowProcW(hwnd, message, TRUE, lparam);
+    // With no caption, as FrameProc gives the browser window none: its client area is then as high
+    // as the picture of the browser window's, which LoadLaunchPicture checks. As it's made, before
+    // any frame change, Windows asks with the window's rectangle alone.
+    case WM_NCCALCSIZE: {
+      RECT* rect = wparam ? &reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam)->rgrc[0]
+                          : reinterpret_cast<RECT*>(lparam);
+      const LONG top = rect->top;
+      const LRESULT result = DefWindowProcW(hwnd, message, wparam, lparam);
+      rect->top = top + (IsZoomed(hwnd) ? TopEdge(hwnd) : 0);
+      return result;
+    }
     case WM_ERASEBKGND:
       return 1;
     case WM_PAINT: {
