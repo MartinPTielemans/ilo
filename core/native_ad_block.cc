@@ -685,6 +685,34 @@ struct Warned : public content::WebContentsUserData<Warned> {
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(Warned);
 
+// A tab a page opened, while the pop-up filters are asked about its first page, and the report of
+// the tab to the app (HoldPopupReport), which waits for their answer: a tab they close is never
+// listed or shown (#2806).
+struct PopupHeld : public content::WebContentsUserData<PopupHeld> {
+  explicit PopupHeld(content::WebContents* contents)
+      : content::WebContentsUserData<PopupHeld>(*contents) {}
+
+  // Lets |contents|'s tab be listed: the report it held goes, after the navigation's call.
+  static void Release(content::WebContents* contents) {
+    PopupHeld* held = FromWebContents(contents);
+    if (!held || held->closing) {
+      return;
+    }
+    base::OnceClosure report = std::move(held->report);
+    contents->RemoveUserData(UserDataKey());
+    if (report) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(report));
+    }
+  }
+
+  base::OnceClosure report;
+  // The filters close the tab, so nothing reports it.
+  bool closing = false;
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(PopupHeld);
+
 // The page a blocked page shows in its place, in the look of the core's error page (error_page.cc):
 // its host, its address, the way back where there is one, and Open anyway, which lets its host
 // through for kLetThrough, as uBlock Origin's warning does. Only the user |can_open| it: an agent's
@@ -791,6 +819,13 @@ class PageThrottle : public content::NavigationThrottle {
   explicit PageThrottle(content::NavigationThrottleRegistry& registry)
       : content::NavigationThrottle(registry),
         page_of_tab_(!registry.GetNavigationHandle().GetParentFrameOrOuterDocument()) {}
+  // A pop-up whose navigation went before the filters answered, as when its page sends it on,
+  // is listed as any tab.
+  ~PageThrottle() override {
+    if (held_) {
+      PopupHeld::Release(held_.get());
+    }
+  }
 
   // content::NavigationThrottle:
   ThrottleCheckResult WillStartRequest() override { return Ask(/*started=*/true); }
@@ -821,6 +856,11 @@ class PageThrottle : public content::NavigationThrottle {
       const std::optional<GURL> opener = Opener();
       const bool warns = !LetThroughNow(url, started);
       checking = opener || warns;
+      if (opener) {
+        content::WebContents* contents = navigation->GetWebContents();
+        PopupHeld::CreateForWebContents(contents);
+        held_ = contents->GetWeakPtr();
+      }
       if (checking) {
         // First on the sequence, so it doesn't wait behind what the page hides.
         Sequence()->PostTaskAndReplyWithResult(
@@ -892,12 +932,19 @@ class PageThrottle : public content::NavigationThrottle {
     if (asked != asked_) {
       return;
     }
+    content::WebContents* contents = navigation_handle()->GetWebContents();
+    if (decision != Decision::kClose) {
+      PopupHeld::Release(contents);
+    }
     if (decision == Decision::kLoad) {
       Resume();
       return;
     }
-    content::WebContents* contents = navigation_handle()->GetWebContents();
     if (decision == Decision::kClose) {
+      if (PopupHeld* held = PopupHeld::FromWebContents(contents)) {
+        held->closing = true;
+        held->report.Reset();
+      }
       // After the navigation goes, which closing the tab now would take with it mid-call.
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(
@@ -942,6 +989,8 @@ class PageThrottle : public content::NavigationThrottle {
   std::optional<Page> page_;
   int asked_ = 0;
   bool waiting_ = false;
+  // The tab whose report this navigation holds, while the pop-up filters are asked about it.
+  base::WeakPtr<content::WebContents> held_;
   base::WeakPtrFactory<PageThrottle> weak_factory_{this};
 };
 
@@ -965,6 +1014,17 @@ void UseNativeAdBlock(const base::FilePath& folder,
     base::StrAppend(&files, {list.AsUTF8Unsafe(), "\n"});
   }
   host.ad_block_use(host.context, folder.AsUTF8Unsafe().c_str(), files.c_str(), filters.c_str());
+}
+
+bool HoldPopupReport(content::WebContents* contents, base::OnceClosure report) {
+  PopupHeld* held = PopupHeld::FromWebContents(contents);
+  if (!held) {
+    return false;
+  }
+  if (!held->closing) {
+    held->report = std::move(report);
+  }
+  return true;
 }
 
 void SetNativeAdBlockOn(bool on) {

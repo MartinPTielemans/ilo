@@ -39,6 +39,11 @@ void UseNativeAdBlock(const base::FilePath& folder,
                       const std::vector<base::FilePath>& lists,
                       const std::string& filters);
 
+// Whether the tab |contents|, which a page opened, waits on the pop-up filters' answer about its
+// first page. If it does, |report|, the tab's report to the app, runs once they let the page load
+// or warn, and never if they close the tab: a pop-up they block is never listed or shown (#2806).
+bool HoldPopupReport(content::WebContents* contents, base::OnceClosure report);
+
 // Whether it blocks at all, as Settings' Ad blocking says. Off, the pages already open stop
 // blocking at their next request, as uBlock Origin turned off does.
 void SetNativeAdBlockOn(bool on);

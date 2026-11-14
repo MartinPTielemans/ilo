@@ -66,6 +66,12 @@ for _ in $(seq 30); do
 done
 [ "$(today)" = "$tab" ] || fail "the pop-up's tab stayed: Today is \"$(today)\""
 grep -q '/popup\.html' "$out/site.log" && fail "the pop-up's page reached the server"
+# The filter answers before the app hears of the tab, which it never lists or shows (#2806).
+if engine_has ../core/native_ad_block.cc; then
+  held=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: \(today\|selected\) ' |
+    grep -v "^browser: \(today\|selected\) $tab\$" || true)
+  [ -z "$held" ] || fail "the app listed or showed the pop-up's tab before it closed: $held"
+fi
 
 quit
 echo "ok: a host a list names on a line of its own never reached the server: the tab showed the" \

@@ -34,6 +34,7 @@
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
 #include "browser_core/mini_player.h"
+#include "browser_core/native_ad_block.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/profiles.h"
@@ -3359,7 +3360,14 @@ void Window::ReportTabOpened(bc_id tab,
                              std::optional<bc_rect> popup,
                              bool popup_placed) {
   // A popup can close itself at once.
-  if (!Tab::FromId(tab)) {
+  content::WebContents* contents = Tab::FromId(tab);
+  if (!contents) {
+    return;
+  }
+  // A page's pop-up waits for the ad blocker's pop-up filters, which may close it (#2806).
+  if (HoldPopupReport(contents, base::BindOnce(&Window::ReportTabOpened, weak_factory_.GetWeakPtr(),
+                                               tab, opener, foreground, split_with, popup,
+                                               popup_placed))) {
     return;
   }
   if (Space* space = SpaceForOpened(opener)) {
