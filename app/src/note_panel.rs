@@ -168,6 +168,7 @@ pub fn show(window: u64, panel: Panel, cx: &mut App) {
             }
             return;
         }
+        FOLD_DRAWN.set(None);
         // check.sh reads this line.
         log!(
             "browser: note panel {} {}",
@@ -240,14 +241,17 @@ pub fn dismissed(cx: &mut App) {
     }
 }
 
+thread_local! {
+    /// Where the open panel's fold was last logged, none for a panel that hasn't drawn it yet.
+    static FOLD_DRAWN: std::cell::Cell<Option<Bounds<Pixels>>> = const { std::cell::Cell::new(None) };
+}
+
 /// Logs where "Show what's sent" or "Hide what's sent" is, in the browser window's points, when
-/// that changes. check.sh reads this line, to open the rows as a user does.
+/// that changes, and once for each panel opened, which may open where the last one was. check.sh
+/// reads this line, to open the rows as a user does.
 fn fold_drawn(origin: gpui::Point<Pixels>, size: gpui::Size<Pixels>) {
-    thread_local! {
-        static DRAWN: std::cell::Cell<Option<Bounds<Pixels>>> = const { std::cell::Cell::new(None) };
-    }
     let bounds = Bounds::new(origin, size);
-    if DRAWN.replace(Some(bounds)) != Some(bounds) {
+    if FOLD_DRAWN.replace(Some(bounds)) != Some(bounds) {
         log!(
             "browser: note panel fold at {:.0} {:.0} {:.0} {:.0}",
             f32::from(origin.x),
