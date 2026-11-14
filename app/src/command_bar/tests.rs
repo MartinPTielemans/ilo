@@ -3882,3 +3882,17 @@ fn a_completion_to_a_closed_tab_reopens_it(cx: &mut TestAppContext) {
     bar.keys("enter");
     assert_eq!(bar.calls(), ["restore archived 5", "hide"]);
 }
+
+/// A visited page's day, with no tile after it, ends at the right edge of the glyph a closed tab's
+/// ↺ tile draws, inside the tile's plate, whatever the tile's size (the orchestrator, 11-14).
+#[test]
+fn a_day_alone_ends_where_the_tiles_glyph_does() {
+    let end = super::bare_end();
+    let plate = (super::END_TILE_RIGHT, super::END_TILE_RIGHT + ICON_BOX);
+    assert!(
+        plate.0 < end && end < plate.1,
+        "the day ends {end} from the row's end, outside the tile's plate, {plate:?}"
+    );
+    // The glyph's box is centred on the plate, so its right edge is as far inside it as its left.
+    assert_eq!(end - plate.0, plate.1 - (end + super::END_GLYPH));
+}
