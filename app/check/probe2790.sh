@@ -214,8 +214,10 @@ print(" ".join(map(str, json.load(sys.stdin)["start_browser"])))')
 # the overlay's middle, made active as a click on it would. The overlay should be under it, drawn
 # and stacked: the root's pixel at the overlay's middle is the window's white, and the overlay is
 # below it in the manager's stacking order. Then the browser's made active again.
+# Another app's window raised over overlay $2 of browser $1, centred on the overlay, or on point
+# $4,$5 when given, as for the toast, whose window is mostly see-through around its plate.
 covered() {
-  b=$1 o=$2 name=$3
+  b=$1 o=$2 name=$3 at=${4:+$4,$5}
   p2790 snap > "$out/probe2790-cov0.json"
   rect=$(field_of "$out/probe2790-cov0.json" "$o" rect)
   [ -n "$rect" ] && [ "$rect" != null ] || { note "$name covered {\"error\": \"no overlay\"}"; return 0; }
@@ -229,7 +231,8 @@ covered() {
   set -- $(python3 -I -c 'import json,sys
 r = json.loads(sys.argv[1])
 w, h = min(r[2], 400), max(min(r[3], 300), 120)
-print(r[0] + r[2] // 2 - w // 2, r[1] + r[3] // 2 - h // 2, w, h, r[0] + r[2] // 2, r[1] + r[3] // 2)' "$rect")
+x, y = (map(int, sys.argv[2].split(","))) if sys.argv[2] else (r[0] + r[2] // 2, r[1] + r[3] // 2)
+print(x - w // 2, y - h // 2, w, h, x, y)' "$rect" "$at")
   sleep 0.3
   p2790 moveresize "$other" "$1" "$2" "$3" "$4"
   sleep 0.3
