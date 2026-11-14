@@ -152,8 +152,8 @@ BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$profile_dir" XDG_DATA_
 pid=$!
 exec 3> "$out/drive"
 await_load
-# The browser's own ad blocker, uBlock Origin, is in every profile, and never listed: it's Settings'
-# Ad Blocking (#2107).
+# The ad blocker is never listed, the browser's own nor uBlock Origin on the way back: it's
+# Settings' Ad Blocking (#2107).
 listing="^browser: extensions menu [a-p]* [a-p]* [a-p]* [a-p]*\$"
 await "$listing" ||
   fail "the Extensions menu didn't list the four extensions alone: $(grep '^browser: extensions' "$log")"

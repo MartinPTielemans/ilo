@@ -1,5 +1,5 @@
 //! The browser's own ad blocker (#2111): Brave's adblock-rust on the lists uBlock Origin comes with,
-//! in place of uBlock Origin with `--ad-block-engine=native`. The core finds the requests pages make
+//! the default (decision 12), with uBlock Origin the way back (`choice`). The core finds the requests pages make
 //! and asks the app about each (core/native_ad_block.h), which `ad_block_host.rs` answers from the
 //! engine here, on the core's sequence, never the main thread.
 

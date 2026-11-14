@@ -135,3 +135,9 @@ Once a UTC day a copy sends one count, unless Settings › Privacy › Send a Da
 - **How:** about 30 s after launch or on coming back on a new day, with no timer after; through the core and Chromium's network stack, without credentials, to the one endpoint the build names (`app/branding/daily-count`, prod only), never a general fetch. A build naming none sends nothing.
 
 Revisit if the totals stop telling releases apart without telling copies apart.
+
+## 12. Ad blocking: the browser's own engine
+
+The browser blocks with its own engine, Brave's adblock-rust in the app, on the lists uBlock Origin comes with, and the core asks it about each request (owner, 2026-11-10: "i want to go native", #2111). Earlier, on 2026-11-08: "as long as we do it at least as good". uBlock Origin is an extension process of its own, which ran out of memory on Windows (#2069), held a launch's first page until it was ready, and runs only while Manifest V2 lives on in our engine patches. The native engine passed the parity gate first: the same sites blocked on one list snapshot on three OSes, no protection lost (the warning page for a blocked page, pop-ups, response filters), My filters and lists carried over, and launch, memory and idle no worse (#2111 lists the runs). Settings › Ad Blocking's Block with uBlock Origin goes back to the extension for one release, and the browser's own leaves its data as it was.
+
+Revisit if adblock-rust stops being maintained, or a list's authors ship filters it can't run that uBlock Origin can.
