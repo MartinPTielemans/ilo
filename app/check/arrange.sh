@@ -284,7 +284,7 @@ case "$preview" in
     ;;
   Trades)
     expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade with the side"
-    shows 'c,b,a,s,n side c,b,a,s,n hidden - float w:absolute' \
+    shows 'b,c,s,a,n side b,c,s,a,n hidden - float w:absolute' \
       "the trade of Wide with the side didn't put the side in the column, as #3003 has it today"
     kept 2 "the trade with the side wasn't saved"
     send key z cmd
