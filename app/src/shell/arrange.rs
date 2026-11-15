@@ -62,7 +62,6 @@ impl Shell {
         }
         // What the core arranges is Chromium's page, hidden while Safari's engine shows the tab's.
         if self.page(tab).system_engine {
-            // check.sh reads this line.
             log!("browser: arrange {tab} refused in Safari's engine");
             return;
         }
