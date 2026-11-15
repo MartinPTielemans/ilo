@@ -45,6 +45,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
@@ -1008,10 +1009,12 @@ class PageThrottle : public content::NavigationThrottle {
   // The address of the page that opened this tab, while the tab has shown nothing else, as uBlock
   // Origin asks its pop-up filters about a tab a page opens, with or without window.opener, and
   // about each address it's sent on to. None from a site the user turned ad blocking off on.
+  // Nothing else is the tab's initial entry, which the about:blank that window.open() with no
+  // address commits at once keeps, though it ends the controller's initial navigation (#2839).
   std::optional<GURL> Opener() {
     content::WebContents* contents = navigation_handle()->GetWebContents();
-    if (!contents->GetController().IsInitialNavigation() ||
-        !contents->HasLiveOriginalOpenerChain()) {
+    content::NavigationEntry* shown = contents->GetController().GetLastCommittedEntry();
+    if (!shown || !shown->IsInitialEntry() || !contents->HasLiveOriginalOpenerChain()) {
       return std::nullopt;
     }
     const GURL opener = contents->GetFirstWebContentsInLiveOriginalOpenerChain()

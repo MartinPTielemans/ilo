@@ -4,8 +4,9 @@
 # them, blocks the host's pages, and the tab shows a warning in the page's place, which never
 # reached the server. Its Open anyway, pressed from the keyboard, opens the page, and the host's
 # pages for a while after. A pop-up filter closes the tab a page's link opens, before its page
-# reaches the server, as uBlock Origin does. A private window blocks a script a filter names, as
-# its profile's requests go through the same engine (#2111's private windows gate). A filter on a
+# reaches the server, as uBlock Origin does, and the tab window.open() opens with no address once
+# it's sent on to such a page (#2839). A private window blocks a script a filter names, as its
+# profile's requests go through the same engine (#2111's private windows gate). A filter on a
 # response's header (#2758) fails a script whose response has it before the page runs any of it,
 # and a redirect's response too, whose target is never asked for. My filters uBlock Origin kept, as
 # typed in its own dashboard before Settings had them, carry over once: a profile uBlock Origin kept
@@ -149,6 +150,26 @@ whose x-ad is 1 goes"
 served '/headed?x-ad=1&n=a' "a's request never reached the server"
 grep -q '/headed?n=c' "$out/site.log" &&
   fail "the redirect whose response has the header went on to c"
+# A pop-up window.open() opens with no address commits about:blank at once, and the filters still
+# judge the first page it's sent to (#2839): sent on to the page a pop-up filter names, its tab
+# closes before that page reaches the server. The press first, as the opener's above.
+printf '%s' '<title>the empty opener</title>
+<script>
+onclick = () => { open("").location = "popup.html?empty" };
+onmousedown = () => document.title = "the empty opener pressed";
+requestAnimationFrame(() => requestAnimationFrame(() => document.title = "the empty opener ready"));
+</script>' > "$out/site/opener-empty.html"
+go_from_bar "${site#http://}opener-empty.html"
+expect "^browser: title $tab the empty opener ready\$" "the empty opener page didn't draw"
+send press $page_point
+expect "^browser: title $tab the empty opener pressed\$" "the empty opener page didn't take the press"
+send release $page_point
+expect "^browser: \(ad block closed a pop-up at ${site}popup.html?empty\|loaded [0-9]* ${site}popup.html?empty\)\$" \
+  "the tab window.open() opened with no address, sent on to the page a pop-up filter names, neither closed nor loaded it"
+grep -q "^browser: loaded [0-9]* ${site}popup.html?empty\$" "$log" &&
+  fail "the tab window.open() opened with no address loaded the page a pop-up filter names, sent on to it after its about:blank"
+expect '^browser: tab [0-9]* closed$' "the empty pop-up's tab didn't close"
+grep -q '/popup\.html?empty' "$out/site.log" && fail "the empty pop-up's page reached the server"
 # A private window's profile blocks too: its requests go through the same engine, with the same
 # filters, though it has a profile of its own.
 send key n cmd shift
@@ -218,7 +239,8 @@ if filters != "/carried-ad.js":
 
 echo "ok: a host a list names on a line of its own never reached the server: the tab showed the" \
   "warning, whose Open anyway, from the keyboard, opened the page. A pop-up filter closed the tab" \
-  "a link opened before its page reached the server. A header filter failed a script and a" \
+  "a link opened before its page reached the server, and one window.open() opened with no address" \
+  "and sent on to the page it names. A header filter failed a script and a" \
   "redirect by their responses' header. In a private window, a script a filter names never" \
   "reached the server. A filter uBlock Origin kept in its own storage blocked with the browser's" \
   "own engine on that profile's next launch, given no filters, and stayed as its My filters, with" \
