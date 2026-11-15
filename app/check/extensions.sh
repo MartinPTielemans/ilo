@@ -941,7 +941,7 @@ crash_block() {
 if ! crash_block; then
   exec 3>&-
   quit
-  echo "skip: an extension turned off after two crashes: the page chrome://crash crashed didn't end in 30 s on this machine, so the core heard no crash."
+  echo "skip: an extension turned off after two crashes: the page chrome://crash crashed didn't end in 30 s on this machine, as its core handler (/proc/sys/kernel/core_pattern) still took its core, so the core heard no crash."
 else
   echo "ok: an extension whose own process crashes twice, across a relaunch, is turned off, and the browser's dialog says so, with Turn On Again, which turns it on. Window: $out/extension-crashed-off.png"
 fi
