@@ -2,6 +2,7 @@
 #define BROWSER_CORE_ARRANGEMENT_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -70,6 +71,22 @@ void Forget(PrefService& prefs, std::string_view site);
 // keeps to what reads as motion, and a value left out, 0 in a zeroed struct, or NaN takes the
 // default.
 double Within(double value, double low, double high, double fallback);
+
+// How an element Arrange lifts stands off the page, bc_arrange_lift: colours as 0xRRGGBBAA and
+// sizes in CSS pixels, from the app's tokens.
+struct Lift {
+  uint32_t rim = 0;
+  uint32_t outline = 0;
+  uint32_t shadow = 0;
+  double outline_blur = 0;
+  double shadow_y = 0;
+  double shadow_blur = 0;
+};
+
+// |lift| as a CSS box-shadow: the rim 1 px inside the element's edge, the outline round its
+// outside, then the drop shadow, each left out when its colour has no alpha, and empty when none
+// is. Only the app's numbers go in, written here, never the page's or a file's.
+std::string Shadow(const Lift& lift);
 
 }  // namespace browser_core::arrangement
 

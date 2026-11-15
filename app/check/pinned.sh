@@ -75,7 +75,10 @@ switch "3 cmd" "$b"
 # it, as Arc's does. Today's top row is under the pinned rows, the divider and "+ New Tab".
 today_top="100 $((90 + 44 + 41 * 2 + 15 + 41 + 20))"
 clicks=$(detents)
-send drag $(pinned_row 1) 100 150
+# Let go over the first row's bottom quarter, still nearer the gap before it, not its middle, where
+# a rest of SPLIT_REST before a late release, as Windows' real pointer can make, would join that
+# tab in a split view. Over its top quarter the tile the favorites would make room for is nearer.
+send drag $(pinned_row 1) 100 169
 expect "^browser: dragged $a to pinned 0\$" "a drag of the second pinned tab up didn't move it"
 # It passed one row, so the trackpad clicked once, and letting go added none.
 passed=$(($(detents) - clicks))
@@ -470,19 +473,24 @@ if [ "$active" != 1 ]; then
   echo "skip: the restored pinned tab's way back. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-# The window opened under the pointer the quit left on the favicon, so it drew that hover with no
+# Where the window opened under the pointer the quit left on the favicon, it drew that hover with no
 # move, and the driver's real click in the page jumped the pointer away with none either: off every
-# row first, or the move back to the favicon changes no hover and draws no line (#2831).
+# row first, or the move back to the favicon changes no hover and draws no line (#2831). Where it
+# opened under no row, as on the hosted Mac, whose pointer the driver doesn't move, it drew no hover
+# and there's none to clear.
 send move $sidebar_point
 drawn_hover() {
   grep '^browser: hover \(tab\|new\|none\) ' "$log" | tail -1
 }
+off_rows() {
+  case "$(drawn_hover)" in '' | 'browser: hover none '*) return 0 ;; esac
+  return 1
+}
 for _ in $(seq 100); do
-  drawn_hover | grep -q '^browser: hover none ' && break
+  off_rows && break
   sleep 0.1
 done
-drawn_hover | grep -q '^browser: hover none ' ||
-  fail "the pointer off every row left a row hovered: $(drawn_hover)"
+off_rows || fail "the pointer off every row left a row hovered: $(drawn_hover)"
 # Unloaded, its row has the remove button in its −'s place.
 send move $(pinned_favicon 0)
 expect "^browser: hover tab $c close remove favicon $c\$" \

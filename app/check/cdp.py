@@ -27,10 +27,18 @@ takes a command a line on its standard input:
                   starting with PREFIX has TEXT in a text node or an attribute, shadow trees
                   included, or none for no such page, such as Chrome's password manager page, a
                   WebUI page
-  focus PREFIX    logs "cdp: focus NAME|none": the name of what has the keyboard in the page opened
-                  last at an address starting with PREFIX, through its shadow trees, its label,
-                  its text or its id, or none for no such page or nothing focused: a WebUI dialog
-                  takes the keyboard a moment after its page loads
+  focus PREFIX    logs "cdp: focus NAME|none|nothing ...": the name of what has the keyboard in
+                  the page opened last at an address starting with PREFIX, through its shadow
+                  trees, its label, its text or its id, or none for no such page: a WebUI dialog
+                  takes the keyboard a moment after its page loads. With nothing focused, it says
+                  why one mightn't be, as "nothing, visible|hidden, focused|unfocused, dialogs
+                  open N": whether the page is shown, whether it has the window's keyboard, and
+                  its open dialogs, shadow trees included
+  focus-within PREFIX ID
+                  logs "cdp: focus-within ID yes|no|none": whether what has the keyboard in the
+                  page opened last at an address starting with PREFIX is the element with the id
+                  ID or in it, through its shadow hosts, or none for no such page: a WebUI page's
+                  control, as chrome://extensions' Allow in Incognito switch, is in a row by id
   video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|-", or "cdp: video
                   none" for no such page or no video in it: how far the first video in the page
                   opened last at an address starting with PREFIX has played, whether it's paused,
@@ -419,7 +427,12 @@ FOCUSED = """(() => {
   while (focused && focused.shadowRoot && focused.shadowRoot.activeElement) {
     focused = focused.shadowRoot.activeElement;
   }
-  if (!focused || focused === document.body) return "";
+  if (!focused || focused === document.body) {
+    const open = (root) => [...root.querySelectorAll("*")].reduce(
+      (n, e) => n + (e.matches("dialog[open]") ? 1 : 0) + (e.shadowRoot ? open(e.shadowRoot) : 0), 0);
+    return "nothing, " + document.visibilityState + ", " +
+      (document.hasFocus() ? "focused" : "unfocused") + ", dialogs open " + open(document);
+  }
   const name = focused.getAttribute("aria-label") || focused.textContent || focused.id || "";
   return name.trim().replace(/\\s+/g, " ").slice(0, 60);
 })()"""
@@ -429,6 +442,27 @@ def focus(prefix):
     on = page_session(prefix)
     value = on and call("Runtime.evaluate", {"expression": FOCUSED, "returnByValue": True},
                         on).get("result", {}).get("value")
+    return value or "none"
+
+
+# Whether the element with the id given, or one in it, has the keyboard, through shadow hosts.
+FOCUSED_WITHIN = """((id) => {
+  let focused = document.activeElement;
+  while (focused && focused.shadowRoot && focused.shadowRoot.activeElement) {
+    focused = focused.shadowRoot.activeElement;
+  }
+  for (let node = focused; node; node = node.parentNode || node.host) {
+    if (node.id === id) return "yes";
+  }
+  return "no";
+})"""
+
+
+def focus_within(prefix, element):
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {
+        "expression": "%s(%s)" % (FOCUSED_WITHIN, json.dumps(element)),
+        "returnByValue": True}, on).get("result", {}).get("value")
     return value or "none"
 
 
@@ -582,6 +616,8 @@ for line in sys.stdin:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:
         log("focus " + focus(words[1]))
+    elif words[:1] == ["focus-within"] and len(words) == 3:
+        log("focus-within %s %s" % (words[2], focus_within(words[1], words[2])))
     elif words == ["content"]:
         log("content " + content())
     elif words[:1] == ["video"] and len(words) == 2:
