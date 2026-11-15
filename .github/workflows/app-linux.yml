@@ -125,7 +125,9 @@ jobs:
       # drive the app's views on a host that records what they ask (#2995). The crate is in zed's
       # workspace, not the app's, so they run there, on the toolchain the app builds with rather than
       # the one zed pins. Their build isn't cached and takes about 5 minutes, so it runs only when the
-      # branch changes that code, or the app's Linux host beside it.
+      # branch changes that code, or the app's Linux host beside it. Not --locked: the patch gives
+      # gpui_linux a dependency, image, that zed's Cargo.lock doesn't list for it, and Cargo adds
+      # that one line, leaving every version as zed locked it.
       - id: gpui-linux
         name: Does this change GPUI's Linux code?
         env:
@@ -142,7 +144,7 @@ jobs:
         working-directory: app/.deps/zed
         env:
           RUSTUP_TOOLCHAIN: stable
-        run: cargo test --release --locked -p gpui_linux --lib --target-dir "$RUNNER_TEMP/gpui-linux"
+        run: cargo test --release -p gpui_linux --lib --target-dir "$RUNNER_TEMP/gpui-linux"
       # libBrowser.so, the browser on Linux (linux/Cargo.toml): main.rs and platform/linux, which
       # neither the tests nor the preview compile. It names none of the engine's symbols until chrome
       # loads it, so a check needs no engine, and finds what wouldn't compile, such as a call to a
