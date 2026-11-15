@@ -1,11 +1,11 @@
 #!/bin/bash
-# Downloads the prebuilt engine, checked against its hash, into .deps/prebuilt, and prints the
-# path of its Chromium.app, or on Linux and Windows its Chromium directory. It's the newest
-# engine-mac, engine-linux or engine-windows release built from a commit in this checkout's
-# history, in the repository prebuilt.ini names: the owner's Mac publishes the Mac's
-# (tools/mac-engine-publish.sh), and .github/workflows/engine-linux.yml and engine-windows-cross.yml
-# the others. It exits with 2 when no engine fits this checkout, which CI takes for a reason to
-# skip, and 1 on any other failure.
+# Downloads the prebuilt engine, checked against its hash, into .deps/prebuilt, and prints the path
+# of its Chromium.app, or on Linux and Windows its Chromium directory. It's the nearest engine-mac,
+# engine-linux or engine-windows release built from a commit in this checkout's history with this
+# commit's core, or else the nearest, in the repository prebuilt.ini names: the owner's Mac
+# publishes the Mac's (tools/mac-engine-publish.sh), and .github/workflows/engine-linux.yml and
+# engine-windows-cross.yml the others. It exits with 2 when no engine fits this checkout, which CI
+# takes for a reason to skip, and 1 on any other failure.
 # `fetch.sh symbols` does the same for the Windows engine's PDBs, which its release has beside it,
 # for crash reports (tools/symbols.sh). `fetch.sh commit` only prints the commit that engine was
 # built from, without the header's check or a download (tools/mac-nightly.sh).
@@ -48,22 +48,36 @@ esac
 
 repo=$(git config -f prebuilt.ini prebuilt.repository)
 # A release is named for the commit it was built from, which is ilo's, not the engine repository's,
-# where its tag is. The nearest one in this history wins.
-commit=
-best=
+# where its tag is. The nearest one in this history whose core is this commit's wins, or with none,
+# the nearest: by commit count alone, an engine built on main after a batch branched is nearer than
+# the batch's own once the batch lands, and lacks its core (#2913). tools/engine-changed.sh picks
+# the same way. An engine the nearest was built over has this commit's core, when the nearest
+# hasn't, only if a later commit reverted the core, where the nearest serves anyway, so only
+# engines off the nearest's history are compared: on a core branch, which no engine has yet, they
+# are the few a landing brought in, not every engine since the first.
+built=
 while read -r _ ref; do
   case $ref in *"^{}") continue ;; esac
   tagged=$(git rev-parse -q --verify "${ref#refs/tags/engine-"$platform"-}^{commit}" 2>/dev/null) ||
     continue
   git merge-base --is-ancestor "$tagged" HEAD 2>/dev/null || continue
-  distance=$(git rev-list --count "$tagged..HEAD")
-  if [ -z "$best" ] || [ "$distance" -lt "$best" ]; then
-    commit=$tagged
-    best=$distance
-  fi
+  built+="$(git rev-list --count "$tagged..HEAD") $tagged"$'\n'
 done < <(git ls-remote --tags "$repo.git" "refs/tags/engine-$platform-*")
-[ -n "$commit" ] ||
+[ -n "$built" ] ||
   none "no prebuilt $platform engine in $repo was built from this checkout's history. Fetch the history with git fetch --unshallow, or publish one with $publisher."
+nearest=
+commit=
+while read -r _ tagged; do
+  if [ -z "$nearest" ]; then
+    nearest=$tagged commit=$tagged
+  elif git merge-base --is-ancestor "$tagged" "$nearest"; then
+    continue
+  fi
+  if ../tools/core-same.sh "$tagged" HEAD core engine/series engine/patches ':(exclude)*.md' 2>/dev/null; then
+    commit=$tagged
+    break
+  fi
+done < <(printf '%s' "$built" | sort -n)
 if [ -n "$only_commit" ]; then
   echo "$commit"
   exit 0
