@@ -10,7 +10,8 @@
 # the default for a moment, so the run never changes a desk's. The opt-ins' shows always, with
 # the agents' switch, as every build has their server, and the daily count's, off, as the run
 # names an endpoint; the dark pass turns the agents' on in its new profile and sees their server
-# start. The account's comes between the colour and the opt-ins while
+# start, and turns the count's on and off again from the keyboard. The account's comes between
+# the colour and the opt-ins while
 # the build names a sync server (branding/sync-server), and Esc leaves it signed out: the run never
 # signs in to the hosted server, as sync-account signs in on a server of its own. Help › Welcome to
 # ilo plays it again, in the window while it shows no page and in a new window while it shows one. A
@@ -275,6 +276,20 @@ expect '^browser: onboarding agents at ' "dark: the opt-ins step didn't draw the
 send click $(grep '^browser: onboarding agents at ' "$log" | tail -1 | cut -d' ' -f5-6)
 expect '^browser: onboarding agents on$' "dark: a click on the agents' row didn't turn them on"
 expect '^browser: agents server on ' "dark: the agents' switch didn't start their server"
+# The keyboard reaches the switches too: ⇥ to the count's, the first, where Space turns it on, ⇥ on
+# and ⇧⇥ back to it, and Space turns it off again, so Esc still leaves it as it was (#2985).
+send key tab
+send key space
+expect '^browser: onboarding daily-count on$' "dark: ⇥ then Space didn't turn the count's switch on"
+# Captured once the knob has slid all the way on.
+expect '^browser: onboarding daily-count slid$' "dark: the count's switch didn't finish its slide on"
+capture_step dark-opt-ins-keys
+send key tab
+send key tab shift
+send key space
+expect '^browser: onboarding daily-count off$' \
+  "dark: ⇥ then ⇧⇥ didn't come back to the count's switch for Space to turn it off"
+grep -q '^browser: onboarding agents off$' "$log" && fail "dark: a key meant for the count's switch turned the agents' off"
 send key escape
 expect '^browser: onboarding left opt-ins via escape$' "dark: Esc didn't leave the opt-ins step"
 grep -q '^browser: onboarding daily-count set ' "$log" && fail "dark: Esc set the count, left off"

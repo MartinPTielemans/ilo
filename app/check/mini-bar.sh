@@ -211,6 +211,20 @@ float_inner() {
   expect "^browser: arrange $tab foot bar: Inner .* | Undo on, Reset on\$" \
     "$1: the foot bar didn't say Inner floats and offer Undo and Reset. Its lines: $(foot_lines)"
   expect '^browser: foot bar drawn over [0-9]*$' "$1: the foot bar didn't draw"
+  foot_bar_sized "$1"
+}
+# Each of the foot bar's words so far drew first in a window their bar's size, within a point, as
+# the host sizes the window after the UI asks: a frame before that drew them at the old size, which
+# the Mac stretched to the new one (#2991). For $1.
+foot_bar_sized() {
+  sizes=$(grep '^browser: foot bar drew ' "$log" | sed 's/.* drew \([0-9]*\)x\([0-9]*\) in \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/')
+  [ -n "$sizes" ] || fail "$1: the foot bar didn't say the size it drew at. Its lines: $(foot_lines)"
+  while read -r w h ww wh; do
+    near "$w" "$ww" && near "$h" "$wh" && continue
+    fail "$1: the foot bar drew new words, ${w}x$h, in a window still ${ww}x$wh. Before it: $(grep -B6 "^browser: foot bar drew ${w}x$h in ${ww}x$wh\$" "$log" | grep 'foot bar' | head -6)"
+  done <<EOF
+$sizes
+EOF
 }
 # Clicks the foot bar's button $1 (arrange-undo, arrange-reset or arrange-done) in its middle, where
 # it last drew in the window, for $2.
