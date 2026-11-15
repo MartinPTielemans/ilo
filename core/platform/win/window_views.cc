@@ -155,12 +155,16 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
                      public ui::HWNDMessageFilter,
                      public views::WidgetObserver {
  public:
-  // |took_keyboard| runs each time the slot's HWND takes the keyboard.
-  PaneKeyboard(views::Widget* widget, base::RepeatingClosure took_keyboard)
+  // |took_keyboard| runs each time the slot's HWND takes the keyboard, and |pressed_elsewhere|
+  // says whether the window is giving it back to the pane for a press on the UI or another pane.
+  PaneKeyboard(views::Widget* widget,
+               base::RepeatingClosure took_keyboard,
+               base::RepeatingCallback<bool()> pressed_elsewhere)
       : widget_(widget),
         hwnd_(views::HWNDForWidget(widget)),
         client_(aura::client::GetFocusClient(widget->GetNativeView())),
-        took_keyboard_(std::move(took_keyboard)) {
+        took_keyboard_(std::move(took_keyboard)),
+        pressed_elsewhere_(std::move(pressed_elsewhere)) {
     if (client_) {
       client_->AddObserver(this);
     }
@@ -176,8 +180,11 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   void OnWindowFocused(aura::Window* gained_focus, aura::Window*) override {
     // A click on a page whose tab shows a dialog focuses the pane here, as the page, ignoring input
     // under the dialog, won't take it, and every key the pane then has is lost: the dialog takes
-    // the keyboard back, as on the Mac (#2625).
-    dialog_keys::PageViewFocused(gained_focus);
+    // the keyboard back, as on the Mac (#2625). Not as the window gives the pane the keyboard back
+    // for a press elsewhere: the dialog then took it from the UI the user pressed (#2910).
+    if (!pressed_elsewhere_.Run()) {
+      dialog_keys::PageViewFocused(gained_focus);
+    }
     const bool take =
         gained_focus && GetFocus() != hwnd_ && GetActiveWindow() == GetAncestor(hwnd_, GA_ROOT);
     VLOG(1) << "pane " << hwnd_ << " focuses " << Describe(gained_focus)
@@ -278,6 +285,7 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   HWND hwnd_;
   raw_ptr<aura::client::FocusClient> client_;
   base::RepeatingClosure took_keyboard_;
+  base::RepeatingCallback<bool()> pressed_elsewhere_;
   bool taking_ = false;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
   base::WeakPtrFactory<PaneKeyboard> weak_factory_{this};
@@ -541,7 +549,8 @@ class WindowViews : public views::WidgetObserver,
       slot.keyboard = std::make_unique<PaneKeyboard>(
           slot.widget.get(),
           base::BindRepeating(&WindowViews::PaneTookKeyboard, base::Unretained(this),
-                              slot.widget.get()));
+                              slot.widget.get()),
+          base::BindRepeating(&WindowViews::GivingBackForPressElsewhere, base::Unretained(this)));
     }
     return slot.widget.get();
   }
@@ -572,6 +581,8 @@ class WindowViews : public views::WidgetObserver,
       }
     }
   }
+
+  bool GivingBackForPressElsewhere() const { return giving_back_for_press_elsewhere_; }
 
   // The window's child |hwnd| is or is in, the UI's or a pane's, or null if it's none of them.
   HWND ChildHolding(HWND hwnd) const {
