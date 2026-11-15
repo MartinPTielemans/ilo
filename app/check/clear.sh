@@ -634,9 +634,26 @@ view=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layou
 send menu Open Library…
 expect '^browser: command view-library via ui$' "Open Library… didn't run"
 expect '^browser: library shown$' "Open Library… didn't open the Library"
-# Delete from Archive in a tab's menu takes it out, and the Library stays open.
+# Delete from Archive in a tab's menu takes it out, and the Library stays open. The tab ⌘-click
+# restored has loaded since, so its page can be newer than every closed tab and History's first
+# row: the closed tab is the first row the pointer finds closed.
 archived=$(grep '^browser: archive [0-9]* tabs$' "$log" | tail -1 | cut -d' ' -f3)
-post rightclick 300 111
+closed_y=
+rows=
+for y in 111 167 223 279 335 391 447 503 559 615 671 727; do
+  send move 300 $y
+  expect '^browser: history pointed \(closed\|visited\) [0-9][0-9]*$' \
+    "the pointer on History's row at y $y didn't point at it"
+  pointed=$(since | grep -m1 '^browser: history pointed ' | cut -d' ' -f4)
+  rows="$rows $pointed"
+  if [ "$pointed" = closed ]; then
+    closed_y=$y
+    break
+  fi
+done
+[ -n "$closed_y" ] ||
+  fail "History listed no closed tab in the rows the window shows, which were:$rows"
+post rightclick 300 $closed_y
 expect "^browser: menu shown $(cased 'Reopen Tab, Copy URL, Delete from Archive')\$" \
   "a right-click on an archived tab didn't show its menu"
 send choose "$(cased 'Delete from Archive')"
