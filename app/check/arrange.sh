@@ -236,6 +236,8 @@ kept 1 "the settle wasn't saved"
 send click $(slot 1)
 expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Alpha\$" \
   "a click didn't select Alpha, settled under Beta"
+# The UI places the bar after the core says what's selected, so each press waits for the place.
+expect '^browser: mini bar at ' "the UI placed no mini bar over Alpha"
 press_mini_bar last "put back"
 expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put back"
 shows "$own" "Put back didn't take the settle back"
@@ -271,7 +273,7 @@ picks 0 Gamma
 carry $(slot 3) $(side_edge)
 expect "^browser: arrange $tab Preview " "a rest at the side's edge showed no drop"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-refused.png" || fail "no window to capture"
-preview=$(grep "^browser: arrange $tab Preview " "$log" | tail -1 | cut -d' ' -f4)
+preview=$(grep "^browser: arrange $tab Preview " "$log" | tail -1 | cut -d' ' -f5)
 send release $(side_edge)
 expect "^browser: arrange $tab Selected " "letting go where the thing doesn't fit left no selection"
 case "$preview" in
@@ -300,6 +302,7 @@ carry $(side_slot 1) $(page_at 300 760) cmd
 expect "^browser: arrange $tab Preview Floats " "a rest with ⌘ held didn't show a float"
 send release $(page_at 300 760) cmd
 expect "^browser: arrange $tab Selected Floats selected " "letting go with ⌘ held didn't float"
+expect '^browser: mini bar at ' "the UI placed no mini bar over the float"
 expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the float"
 kept 2 "the float wasn't saved"
 for _ in $(seq 100); do
@@ -327,6 +330,7 @@ kept 1 "⌘Z's step back wasn't saved"
 # Hide, the mini bar's first button on a thing with no change, is Zap's rule, which ⌘Z takes back.
 send click $(slot 3)
 expect "^browser: arrange $tab Selected None selected " "a click didn't select the wide section"
+expect '^browser: mini bar at ' "the UI placed no mini bar over the wide section"
 press_mini_bar first hide
 expect "browser: tab $tab arrange hid " "the core didn't hand Hide to Zap"
 mini_bar_went "Hide hid the thing it was over"
@@ -348,6 +352,7 @@ grep -q '/\* Zap \*/$' "$css" && fail "⌘Z left Zap's rule in the Boost: $(cat 
 send click $(slot 0)
 expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Gamma\$" \
   "a click didn't select Gamma, which the trade moved"
+expect '^browser: mini bar at ' "the UI placed no mini bar over Gamma"
 press_mini_bar last "put back"
 expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put back"
 shows "$own" "Put back on Gamma didn't take the trade back"
