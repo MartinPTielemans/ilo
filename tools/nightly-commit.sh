@@ -36,23 +36,48 @@ fits() {
   built=$(engine "$1" "$2") && tools/core-same.sh "$built" "$2" core engine
 }
 
-mac=$(engine mac HEAD) || { echo "No Mac engine in $repo was built from main's history." >&2; exit 1; }
-# The first commit since the Mac engine's whose core/ or engine/ isn't the engine's, which it
-# doesn't have.
-changed=
-for each in $(git rev-list --first-parent --reverse "$mac..HEAD" -- core engine); do
-  tools/core-same.sh "$mac" "$each" core engine 2> /dev/null || { changed=$each; break; }
-done
-if [ -n "$changed" ]; then
+# The newest commit on main's line that the Mac engine taken at $head fits. An engine built on a
+# branch reaches main's line at the merge that brought it in, and a branch that merged main after
+# its engine was built brings in a core the engine doesn't have (#2697), so where no commit of the
+# line has the engine's core, the night goes on from before that merge, with the engine taken there.
+head=$(git rev-parse HEAD)
+while :; do
+  mac=$(engine mac "$head") ||
+    { echo "No Mac engine in $repo was built from main's history." >&2; exit 1; }
+  # The first commit of main's line that has the engine's commit: the one after it, or a merge.
+  start=
+  for each in $(git rev-list --first-parent --reverse "$mac..$head"); do
+    if git merge-base --is-ancestor "$mac" "$each"; then
+      start=$each
+      break
+    fi
+  done
+  # From there, the first commit whose core/ or engine/ isn't the engine's, which it doesn't have.
+  changed=
+  if [ -n "$start" ]; then
+    for each in "$start" $(git rev-list --first-parent --reverse "$start..$head" -- core engine); do
+      tools/core-same.sh "$mac" "$each" core engine 2> /dev/null || { changed=$each; break; }
+    done
+  fi
+  if [ -z "$changed" ]; then
+    commit=$head
+    newest=
+    [ "$commit" = "$(git rev-parse HEAD)" ] && newest=", the newest commit"
+    echo "The Mac engine (${mac:0:12}) has the core of ${commit:0:12}$newest." >&2
+    break
+  fi
   commit=$(git rev-parse "$changed^")
-  echo "The Mac engine (${mac:0:12}) is from before ${changed:0:12}, which changed core/ or" \
-    "engine/, so the nightly is ${commit:0:12}, the commit before it." >&2
-else
-  commit=$(git rev-parse HEAD)
-  echo "The Mac engine (${mac:0:12}) has the core of ${commit:0:12}, the newest commit." >&2
-fi
+  if git merge-base --is-ancestor "$mac" "$commit"; then
+    echo "The Mac engine (${mac:0:12}) is from before ${changed:0:12}, which changed core/ or" \
+      "engine/, so the nightly is ${commit:0:12}, the commit before it." >&2
+    break
+  fi
+  echo "The Mac engine (${mac:0:12}) was built on a branch that ${changed:0:12} merged with" \
+    "another core, so no commit of main's has its core; trying the one taken at ${commit:0:12}." >&2
+  head=$commit
+done
 fits mac "$commit" || {
-  echo "The Mac engine at ${commit:0:12} has another core: it was built on a branch main merged." >&2
+  echo "The Mac engine engine/fetch.sh takes at ${commit:0:12} has another core." >&2
   exit 1
 }
 windows=true

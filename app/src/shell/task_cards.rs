@@ -2003,7 +2003,7 @@ fn logged(bounds: Bounds<Pixels>) -> String {
 
 /// A chip on a card, the sidebar's scale: the URL field's plate at a control's corners, as wide
 /// as its words, cut to the room it has.
-fn card_chip(
+pub(super) fn card_chip(
     palette: &Palette,
     id: impl Into<gpui::ElementId>,
     label: SharedString,

@@ -3,12 +3,14 @@
 #include <cmath>
 #include <initializer_list>
 #include <utility>
+#include <vector>
 
 #include "base/containers/span.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -296,6 +298,25 @@ void Forget(PrefService& prefs, std::string_view site) {
 
 double Within(double value, double low, double high, double fallback) {
   return value >= low && value <= high ? value : fallback;
+}
+
+std::string Shadow(const Lift& lift) {
+  const auto colour = [](uint32_t rgba) {
+    return base::StringPrintf("#%08x", static_cast<unsigned>(rgba));
+  };
+  const auto px = [](double size) { return base::NumberToString(size) + "px"; };
+  std::vector<std::string> parts;
+  if (lift.rim & 0xFF) {
+    parts.push_back("inset 0 0 0 1px " + colour(lift.rim));
+  }
+  if (lift.outline & 0xFF) {
+    parts.push_back("0 0 " + px(lift.outline_blur) + " " + colour(lift.outline));
+  }
+  if (lift.shadow & 0xFF) {
+    parts.push_back("0 " + px(lift.shadow_y) + " " + px(lift.shadow_blur) + " " +
+                    colour(lift.shadow));
+  }
+  return base::JoinString(parts, ", ");
 }
 
 }  // namespace browser_core::arrangement
