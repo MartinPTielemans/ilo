@@ -848,8 +848,15 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     let mut args: Vec<String> = vec![
         format!("--user-data-dir={profile}"),
         // Chrome would copy the app bundle to check its signature against, which an
-        // ad-hoc-signed build doesn't need.
-        "--disable-features=MacAppCodeSignClone".into(),
+        // ad-hoc-signed build doesn't need. And Chrome's toasts, such as Link copied after a page
+        // menu's Copy Link Address: one anchors to the BrowserView, and with none Chrome CHECKs and
+        // ends the browser (#2950).
+        concat!(
+            "--disable-features=MacAppCodeSignClone,",
+            "LinkCopiedToast,ImageCopiedToast,VideoFrameCopiedToast,LinkToHighlightCopiedToast,",
+            "ReadingListToast,TranslateToast"
+        )
+        .into(),
         // An idle browser shouldn't wake: Chrome's stack sampling feeds metrics nobody receives,
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
