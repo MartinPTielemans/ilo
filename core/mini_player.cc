@@ -609,10 +609,12 @@ void LaidOut(VideoOverlayWindowViews* window) {
     rim->layer()->SetFillsBoundsOpaquely(false);
     rim->SetCanProcessEventsWithinSubtree(false);
     rim->SetBorder(views::CreateRoundedRectBorder(1, kCornerRadius, kRim));
-    // One flat scrim, rather than Chrome's and its gradients at the top and bottom.
+    // One flat scrim, rather than Chrome's and its gradients at the top and bottom. The gradients'
+    // views lose their backgrounds rather than being hidden, since the controls' fade shows each
+    // view it fades in (#2881).
     window->GetControlsScrimView()->SetBackground(views::CreateSolidBackground(kScrim));
-    window->GetControlsTopScrimView()->SetVisible(false);
-    window->GetControlsBottomScrimView()->SetVisible(false);
+    window->GetControlsTopScrimView()->SetBackground(nullptr);
+    window->GetControlsBottomScrimView()->SetBackground(nullptr);
   }
   const gfx::Size size = window->GetBounds().size();
   rim->SetBoundsRect(gfx::Rect(size));
