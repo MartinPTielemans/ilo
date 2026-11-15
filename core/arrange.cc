@@ -567,9 +567,16 @@ constexpr char16_t kScript[] =
         else groups.push({ parent: sl.parent, prev: sl.prev, next: sl.next, axis: sl.axis, slots: [sl] });
       }
       for (const g of groups) {
+        const start = (r) => (g.axis === 'row' ? r.left : r.top);
+        g.slots.sort((a, b) => start(a.r) - start(b.r));
+      }
+      // Each room is opened before either thing is pinned, the one earlier on the page first, so
+      // each place is measured in the layout it rests in: a room opened after a thing was pinned
+      // further down would move the place from under it (#2980).
+      groups.sort((x, y) => (x.slots[0].el.compareDocumentPosition(y.slots[0].el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+      for (const g of groups) {
         const row = g.axis === 'row';
         const start = (r) => (row ? r.left : r.top), end = (r) => (row ? r.right : r.bottom);
-        g.slots.sort((a, b) => start(a.r) - start(b.r));
         if (g.next && g.slots.some((sl) => sl.next !== g.next)) g.next = g.slots[g.slots.length - 1].next;
         const firstSlot = g.slots[0], last = g.slots[g.slots.length - 1];
         const pcs = getComputedStyle(g.parent);
@@ -584,6 +591,9 @@ constexpr char16_t kScript[] =
         // the parent's edge, which a margin collapsing through it moves.
         const anchor = start(firstSlot.r) - before;
         const roomStart = () => (g.prev ? end(rect(g.prev)) : anchor);
+        g.roomStart = roomStart;
+        g.before = before;
+        g.inner = inner;
         const span = () => {
           const b = g.next ? start(rect(g.next)) : row ? rect(g.parent).right : rect(g.parent).bottom;
           return b - roomStart();
@@ -608,18 +618,24 @@ constexpr char16_t kScript[] =
             set(keeper, prop, px(base));
           }
         }
-        let at = roomStart() + before;
+        // A row's height is a room too, for a thing taller than the place it takes.
+        for (const sl of g.slots) {
+          if (row && sl.inCross > sl.r.height + 0.5) {
+            keepers.push(g.parent);
+            set(g.parent, 'min-height', px(sl.pr.height + sl.inCross - sl.r.height));
+          }
+        }
+      }
+      for (const g of groups) {
+        const row = g.axis === 'row';
+        let at = g.roomStart() + g.before;
         const prNow = rect(g.parent);
         g.slots.forEach((sl, i) => {
           const m = sl.incoming, o = origin(m);
           const cross = row ? prNow.top + (sl.r.top - sl.pr.top) : prNow.left + (sl.r.left - sl.pr.left);
           set(m, 'left', px((row ? at : cross) - o.x));
           set(m, 'top', px((row ? cross : at) - o.y));
-          at += sl.inMain + (inner[i] || 0);
-          if (row && sl.inCross > sl.r.height + 0.5) {
-            keepers.push(g.parent);
-            set(g.parent, 'min-height', px(sl.pr.height + sl.inCross - sl.r.height));
-          }
+          at += sl.inMain + (g.inner[i] || 0);
         });
       }
       const over = (m) => Math.max(0, m.scrollWidth - m.clientWidth);
