@@ -370,9 +370,11 @@ impl TabSwitcher {
                     .flex()
                     .gap(px(TITLE_GAP))
                     .child(div().min_w_0().truncate().child(item.title.clone()))
+                    // The host gives way as ⌘T's does, so a long one, a data: URL's, never hides
+                    // the title.
                     .when(!item.host.is_empty(), |line| {
                         let host = format!("— {}", item.host);
-                        line.child(div().flex_none().text_color(dim).child(host))
+                        line.child(div().min_w_0().truncate().text_color(dim).child(host))
                     }),
             )
             .when_some(item.speaker, |line, speaker| {
