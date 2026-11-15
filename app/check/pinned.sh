@@ -75,7 +75,9 @@ switch "3 cmd" "$b"
 # it, as Arc's does. Today's top row is under the pinned rows, the divider and "+ New Tab".
 today_top="100 $((90 + 44 + 41 * 2 + 15 + 41 + 20))"
 clicks=$(detents)
-send drag $(pinned_row 1) 100 150
+# Let go over the first row's top quarter, not its middle, where a rest of SPLIT_REST before a late
+# release, as Windows' real pointer can make, would join that tab in a split view.
+send drag $(pinned_row 1) 100 139
 expect "^browser: dragged $a to pinned 0\$" "a drag of the second pinned tab up didn't move it"
 # It passed one row, so the trackpad clicked once, and letting go added none.
 passed=$(($(detents) - clicks))
