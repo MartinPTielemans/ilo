@@ -103,7 +103,9 @@ const frame = time => {
   time - first > 600 ? call() : done || requestAnimationFrame(frame);
 };
 requestAnimationFrame(frame);
+onkeydown = e => e.key === "t" && chrome.tabs.create({url: "opened.html"});
 EOF2
+echo '<title>opened</title>A tab the popup opened' > "$extensions/popup/opened.html"
 cat > "$extensions/third/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Third", "version": "1",
  "action": {"default_popup": "popup.html"}, "options_ui": {"page": "options.html"},
@@ -215,9 +217,6 @@ expect "^browser: extension actions $popup:1 $clicked:7\$" \
 # Under Wayland the popup gets the keyboard on an engine with the core that lends it the UI's
 # (#2836). On an older one a click on its action again closes it, as in Chrome, or on the page, $1.
 popup_keys=yes
-if [ -n "${WAYLAND_DISPLAY:-}" ] && ! engine_has ../core/platform/linux/window_views.cc; then
-  popup_keys=no
-fi
 # Closes the popup: escape, where it has the keyboard.
 close_popup() {
   if [ "$popup_keys" = no ] && [ -n "${1:-}" ]; then
@@ -260,6 +259,42 @@ else
   send state
   [ "$key" = BrowserCoreNSWindow ] ||
     fail "the browser window didn't get the keyboard back from the popup: it's in $key"
+  echo "probe: after escape: key $key, focus $focus"
+  # Probe 1: the popup opens a tab and closes.
+  send click $first_place
+  expect "^browser: extension popup $popup\$" "probe: the popup didn't show for the tab it opens"
+  send state
+  echo "probe: popup open: key $key, focus $focus"
+  mark=$(wc -l < "$log")
+  send key t
+  expect "^browser: loaded [0-9]* chrome-extension://$popup/opened.html\$" "probe: the popup didn't open its tab"
+  opened=$(grep "^browser: loaded [0-9]* chrome-extension://$popup/opened.html\$" "$log" | tail -1 | cut -d' ' -f3)
+  await '^browser: extension popup none$' || true
+  send state
+  send state
+  echo "probe: after the popup opened tab $opened: key $key, focus $focus"
+  tail -n +"$mark" "$log" | grep -nE "extension popup|^browser: selected|^browser: window [0-9]+ shows|today|drive [0-9]+:" | head -20 | sed 's/^/probe order: /'
+  send key w cmd
+  expect "^browser: today " "probe: closing the opened tab"
+  index=$(today | tr ' ' '\n' | grep -n "^$first\$" | cut -d: -f1)
+  send click $(row $((index - 1)))
+  expect "^browser: selected $first\( in .*\)\{0,1\}\$" "probe: the first tab didn't show again"
+  # Probe 2: a tab-switch shortcut while the popup is open.
+  send click $first_place
+  expect "^browser: extension popup $popup\$" "probe: the popup didn't show for the shortcut"
+  mark=$(wc -l < "$log")
+  send key 2 cmd
+  send state
+  send state
+  echo "probe: after the shortcut: key $key, focus $focus"
+  tail -n +"$mark" "$log" | grep -nE "extension popup|^browser: selected|drive [0-9]+:" | head -12 | sed 's/^/probe shortcut: /'
+  if [ "$(grep '^browser: extension popup ' "$log" | tail -1)" != "browser: extension popup none" ]; then
+    send key escape
+    expect '^browser: extension popup none$' "probe: escape didn't close the popup after the shortcut"
+  fi
+  index=$(today | tr ' ' '\n' | grep -n "^$first\$" | cut -d: -f1)
+  send click $(row $((index - 1)))
+  await "^browser: selected $first\( in .*\)\{0,1\}\$" || true
 fi
 # The Extensions menu runs a pinned one too, its popup hanging from its action.
 send menu "Check Popup"
