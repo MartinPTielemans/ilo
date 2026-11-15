@@ -142,12 +142,23 @@ fn a_right_click_on_empty_space_shows_new_tab_and_the_spaces_menu(cx: &mut TestA
         "New Tab showed another Space"
     );
 
+    // The line over Today leads with Today's own commands, then the same menu (#2344).
     let (x, top) = at_slot(&shell, cx, Slot::Divider, 30.);
     let menus = right_click(cx, &host, (x, top + DIVIDER_HEIGHT / 2.));
     assert_eq!(menus.len(), 1, "{menus:?}");
-    assert!(
-        space_one_menu(&menus[0]),
+    assert_eq!(
+        menus[0][..3],
+        ["Sort Today Tabs by Site", "Clear Today", "—"],
         "the gap between pinned and Today: {menus:?}"
+    );
+    assert!(space_one_menu(&menus[0][3..]), "{menus:?}");
+    let entries = host.entries.borrow().clone();
+    let profile = (entries.iter())
+        .position(|entry| entry.title == "Set Profile")
+        .unwrap();
+    assert!(
+        (entries.iter()).all(|entry| entry.parent.is_none_or(|parent| parent >= profile)),
+        "the Set Profile submenu moved"
     );
 }
 

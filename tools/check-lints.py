@@ -10,6 +10,10 @@
 - A file in app/check/ that check.sh runs starts with its place among the runs, in the form
   check.sh reads (#2562). A file without one is a helper or a script of its own, which another
   file names as check/<file>; a run whose line is missing or misspelt would never run, unsaid.
+- A key a run presses with a modifier, outside a Windows-only block, isn't one of the keybinds in
+  app/check/openbox.xml. On X11 the driver presses keys through the X server as a hand does, so
+  Openbox, under Xvfb, would take that key before the app (#2721). Only openbox.xml is read: a
+  key that KWin or sway takes isn't caught here, and a step that loses one there is a finding.
 
 Run from anywhere in the checkout. Prints each finding and exits 1 if there are any.
 """
@@ -226,8 +230,74 @@ def run_places():
     return found
 
 
+# --- Keys Openbox takes ----------------------------------------------------------------------
+
+OPENBOX = "app/check/openbox.xml"
+# A drive command's key and the Mac's modifiers after it, quoted or not, as in show_space's
+# "key 1 ctrl".
+DRIVE_KEY = re.compile(r"\b(?:key|keydown|keyonreturn)\s+([^\s\"'$;]+)((?:\s+(?:cmd|ctrl|alt|shift|again))+)")
+# The driver's key names whose X keysym is named otherwise.
+KEYSYM = {"pageup": "prior", "pagedown": "next"}
+
+
+def x11_chord(key, words):
+    """The X11 chord, as Openbox names its keys, that the Linux driver presses for drive.mm's `key`
+    with the Mac's modifiers `words`, as drive.rs's modifiers() maps them: ⌘ to Control, ⌃ and ⌥
+    to Alt, and ⌃Tab to Control+Tab."""
+    mods = set()
+    for word in words:
+        mods |= {"cmd": {"C"}, "ctrl": {"A"}, "alt": {"A"}, "shift": {"S"}}.get(word, set())
+    if key == "tab" and "ctrl" in words and "cmd" not in words:
+        mods = mods - {"A"} | {"C"} | ({"A"} if "alt" in words else set())
+    return frozenset(mods), KEYSYM.get(key, key).lower()
+
+
+def openbox_keys():
+    """openbox.xml's keybinds, each as its modifiers and its key, by its name there."""
+    binds = {}
+    for name in re.findall(r'<keybind key="([^"]+)"', read(OPENBOX)):
+        *mods, key = name.split("-")
+        binds[(frozenset(mods), key.lower())] = name
+    return binds
+
+
+def windows_only(lines):
+    """Whether each of a run's lines is inside an `if windows; then` block, to its else or fi."""
+    inside, out = None, []
+    for line, code in lines:
+        indent = len(line) - len(line.lstrip())
+        if inside is not None and indent == inside and re.match(r"\s*(else|elif|fi)\b", code):
+            inside = None
+        elif inside is None and re.fullmatch(r"\s*if windows; then\s*", code):
+            out.append(True)
+            inside = indent
+            continue
+        out.append(inside is not None)
+    return out
+
+
+def openbox_takes():
+    found, binds = [], openbox_keys()
+    for path in tracked(*RUNS):
+        lines = run_lines(path)
+        for n, ((line, code), windows) in enumerate(zip(lines, windows_only(lines))):
+            if windows or not code.strip():
+                continue
+            for key in DRIVE_KEY.finditer(re.split(r"\s#", line)[0]):
+                words = key.group(2).split()
+                bind = binds.get(x11_chord(key.group(1), words))
+                if bind:
+                    found.append((path, n + 1, f"\"key {key.group(1)} {' '.join(words)}\" is X11's "
+                                  f"{bind}, which {OPENBOX} binds, so under Xvfb Openbox takes it "
+                                  "before the app: move the bind to Super there, as its others "
+                                  "are. This reads openbox.xml alone; KWin's and sway's binds "
+                                  "aren't checked"))
+    return found
+
+
 def main():
-    found = unread_markers() + bare_sleeps() + quiet_after_send() + run_places()
+    found = (unread_markers() + bare_sleeps() + quiet_after_send() + run_places() +
+             openbox_takes())
     for path, line, message in found:
         print(f"::error file={path},line={line}::{message}")
     print(f"{len(found)} found")

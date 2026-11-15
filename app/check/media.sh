@@ -15,9 +15,10 @@
 # any it asks as the call starts. A video's page menu floats it in Picture in Picture, the Mini
 # Player, 10 in from the top right of the screen, with Dia's corners and rim, and its scrim under the
 # pointer, on the Mac in mini-player-rest.png and mini-player-hover.png. A scroll or a drag moves
-# it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab, shown. The next shows where it was left,
-# after a relaunch too, and coming back to its tab's window from another window, or from another
-# app with a menu open, puts it back in the tab.
+# it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab, shown. On the
+# Mac a throw settles it 10 in at a corner, and a slow release near a side 10 in along it. The next
+# shows where it was left, after a relaunch too, and coming back to its tab's window from another
+# window, or from another app with a menu open, puts it back in the tab.
 # A page asks to share the screen only from a click or a key: asked with neither, its promise is
 # refused, and nothing is shared (decision 12).
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
@@ -849,11 +850,13 @@ fi
 # Its look, Dia's: 6 pt corners and a rim, one flat scrim, and its close button 28 × 28 at the top
 # left and back to its tab 29 × 28 at the top right, 12 in. An engine older than its core has
 # Chrome's.
+looked=
 if engine_has ../core/mini_player.cc ../engine/patches/ours/chromium-core-mini-player.patch; then
+  looked=1
   expect 'browser: mini player look ' "the core didn't give the Mini Player its look" "$floated"
   look=$(grep 'browser: mini player look ' "$log" | tail -1)
   case "$look" in
-  *" close 12,12 28x28 back "*",12 29x28") ;;
+  *" close 12,12 28x28 back "*",12 29x28 origin "*) ;;
   *) fail "the Mini Player's buttons weren't Dia's: $look" ;;
   esac
 fi
@@ -896,7 +899,8 @@ fi
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
 # tab and lands it. Under Wayland sway places it and keeps it where it is as it grows, and from
-# where the pointer is past the drag's threshold moves it.
+# where the pointer is past the drag's threshold moves it. On the Mac drive.mm throws it first,
+# from the top right, and the steps after go on from where the throws leave it.
 px=0 py=0 pw=0 ph=0
 send pip
 if wayland; then
@@ -906,8 +910,39 @@ if wayland; then
 else
   mini_player_at "x + w == $((wx + ww - 10)) && y == $((wy + 10))" \
     "the floating video had no Mini Player 10 in from the top right of the screen"
+  if [ "$(uname)" = Darwin ]; then
+    # A throw, or a release near a side, settles it 10 in from the screen's visible frame, on Dia's
+    # spring: a throw at the corner within 45° of it, a release near a side along that side (#2099).
+    # Off its controls, as the Linux drag. Down and left at 2000 pt/s from the top right: the bottom
+    # left corner is within 45° of it, the top left and bottom right aren't the nearest.
+    send pip drag $((pw / 8)) $((ph / 2)) -300 200 150
+    expect 'browser: mini player let go at .*, settling at ' "a throw didn't settle the Mini Player"
+    mini_player_at "x == $((wx + 10)) && y + h == $((wy + wh - 10))" \
+      "a throw down and left didn't settle the Mini Player 10 in at the bottom left of the screen"
+    ../tools/window-screenshot.sh "$pid" "$out/mini-player-corner.png" screen ||
+      fail "no window to capture"
+    # Up at 100 pt/s, let go 30 in from its place along the left side: it's caught there, 10 in.
+    send pip drag $((pw / 8)) $((ph / 2)) 30 -300 3000
+    expect 'browser: mini player let go at .*, settling at ' \
+      "a slow release near the left side didn't settle the Mini Player"
+    mini_player_at "x == $((wx + 10)) && (y - (py - 300)) ^ 2 <= 4 && w == pw && h == ph" \
+      "a slow release near the left side didn't settle the Mini Player 10 in along it"
+    ../tools/window-screenshot.sh "$pid" "$out/mini-player-side.png" screen ||
+      fail "no window to capture"
+    # And one let go slowly away from the sides stays where it's let go.
+    send pip drag $((pw / 8)) $((ph / 2)) 300 0 3000
+    thrown=$step
+    expect 'browser: mini player let go at .*, staying$' \
+      "a slow release away from the sides didn't leave the Mini Player where it was let go"
+    mini_player_at "(x - (px + 300)) ^ 2 <= 4 && y == py" \
+      "a slow release away from the sides moved the Mini Player"
+    # The throw, a press that made the Mini Player key, gave the window the keyboard back as its
+    # move loop let go (#2896), so the steps after it start from the page's window.
+    expect 'browser: mini player pressed gave the keyboard back$' \
+      "a throw of the Mini Player didn't give the window the keyboard back" "$thrown"
+  fi
   # Two notches up move it down as far as the content would go, 120 a notch: it starts at the
-  # top.
+  # top, or on the Mac where the throws left it, above the bottom by more than that.
   send pip wheel $((pw / 2)) $((ph / 3)) -2
   mini_player_at "x == px && y == py + 240 && w == pw && h == ph" \
     "a scroll over the Mini Player didn't move it with the content"
@@ -1037,6 +1072,43 @@ if [ "$(uname)" = Darwin ]; then
     ;;
   esac
 fi
+# A press on the Mini Player leaves the keyboard where it was, as the Mac's own floating video does
+# (#2896): one made key another way, as VoiceOver makes it, keeps it through a press, for its
+# controls' keys, and a click on its buttons that made it key gives the window the keyboard back,
+# so a key then reaches the page. The Mac's alone: Windows and Linux give a window the click that
+# activates it, so a click in the page after a press on the Mini Player isn't lost there.
+if [ "$(uname)" = Darwin ]; then
+  post rightclick $page_point
+  expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
+    "the video's menu had no Picture in Picture for the Mini Player's keys"
+  send choose "$(cased 'Picture in Picture')"
+  expect "^browser: title $v floating\$" "the video didn't float for the Mini Player's keys"
+  px=0 py=0 pw=0 ph=0
+  send pip
+  mini_player_at "w > 0" "the floating video had no Mini Player for its keys"
+  send pip key
+  [ "$key" != BrowserCoreNSWindow ] && [ "$key" != none ] ||
+    fail "the Mini Player didn't take the keyboard as VoiceOver gives it, which stayed in $key"
+  floating_key=$key
+  pressed=$step
+  send pip press $((pw / 8)) $((ph / 2))
+  send pip release $((pw / 8)) $((ph / 2))
+  [ "$key" = "$floating_key" ] ||
+    fail "a press on the Mini Player that had the keyboard gave it to $key"
+  logged 'browser: mini player pressed gave the keyboard back$' "$pressed" &&
+    fail "a press on the Mini Player that had the keyboard gave it back"
+  send window 1
+  [ "$key" = BrowserCoreNSWindow ] || fail "the video's window didn't take the keyboard: $key"
+  # Its play button, in its middle.
+  pressed=$step
+  send pip press $((pw / 2)) $((ph / 2))
+  send pip release $((pw / 2)) $((ph / 2))
+  expect 'browser: mini player pressed gave the keyboard back$' \
+    "a click on the Mini Player's play button didn't give the keyboard back" "$pressed"
+  send key x
+  expect "^browser: title $v landed\$" \
+    "a key after a click on the Mini Player's play button didn't reach the page"
+fi
 # The same with a menu open as the user goes to another app: the menu closes as the app's window
 # takes the keyboard, and coming back puts the Mini Player back (#1614). On X11, as in mcp.sh, a
 # window of another client's takes it from xdotool, and ilo's window takes it back as the driver
@@ -1149,5 +1221,19 @@ placed_where_left ||
   fail "after a relaunch the Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 exec 3>&-
 quit
+
+# Chrome's origin, its word on whose video this is, shows beside the ×, on its row, clear of it, of
+# back to its tab and of the "–", at each size the Mini Player had, from the smallest it opens at
+# (#2802). The core logs a look as "<w>x<h> close <x>,<y> <w>x<h> back … origin … minimize …|none".
+if [ -n "$looked" ]; then
+  bad=$(grep 'browser: mini player look ' "$log" | sed 's/.*mini player look //' | tr ',x' '  ' |
+    awk '{
+      right = $4 + $6; ends = $14 + $16
+      clear = $13 == "origin" && $16 > 0 && $14 >= right && ends <= $9 && 2 * $15 + $17 == 2 * $5 + $7
+      if ($19 != "none") clear = clear && ends <= $19 && $19 >= right && $19 + $21 <= $9
+      if (!clear) { print; exit }
+    }')
+  [ -z "$bad" ] || fail "the Mini Player's origin or its \"–\" was over its buttons: $bad"
+fi
 
 echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, skips back, sets its volume from a drawer, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, after a relaunch too, and coming back to its tab's window from another window, or from another app with a menu open, puts it back in the tab."

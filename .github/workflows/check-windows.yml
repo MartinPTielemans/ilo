@@ -137,7 +137,7 @@ jobs:
         battery-os adblock adblock-lists adblock-cosmetic adblock-page store sync-extensions
         battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
-        pictures boosts foot-bar peek-motion rules overlays safe-start update-checks shots
+        pictures boosts foot-bar peek-motion rules overlays safe-start update-checks shots sidebar-right alt-click
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
@@ -147,7 +147,6 @@ jobs:
         widevine: only Linux gets Google's Widevine module (decision 1)
         tab-drag: it checks Wayland's drag; the windows run checks the drag on Windows
         updates: Windows' updater is only in a release build, which check.sh doesn't make
-        sidebar-right: it checks AppKit's window buttons, the Mac's alone
     steps:
       # setup.sh and the patches it applies need the repository's line endings.
       - run: git config --global core.autocrlf false
