@@ -140,6 +140,49 @@ expect "^browser: title $tab the blocked page\$" \
 served '/blocked\.html' "Open anyway didn't ask the server for the page"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-page-opened.png" || fail "no window to capture"
 
+# A pop-up whose first navigation may never reach the browser is still listed: the page that
+# opened it stops it at once, or writes the new window's document over it. The app lists a tab a
+# page opens only once the pop-up filters have answered about its first address (#2806), so
+# nothing may wait on an answer that a navigation like this never asks for. The press first, as the
+# opener's below.
+printf '%s' '<title>the held page</title>' > "$out/site/held.html"
+for how in stops writes; do
+  case $how in
+    stops)
+      opens='const w = open("held.html?stops"); w.stop()'
+      did="stopped its navigation at once"
+      ;;
+    writes)
+      opens='const w = open("held.html?writes"); w.document.open()'
+      did="wrote over its document at once"
+      ;;
+  esac
+  printf '%s' "<title>the opener that $how</title>
+<script>
+onclick = () => { $opens };
+onmousedown = () => document.title = \"the opener that $how pressed\";
+requestAnimationFrame(() => requestAnimationFrame(() => document.title = \"the opener that $how ready\"));
+</script>" > "$out/site/opener-$how.html"
+  go_from_bar "${site#http://}opener-$how.html"
+  expect "^browser: title $tab the opener that $how ready\$" "the opener that $how didn't draw"
+  send press $page_point
+  expect "^browser: title $tab the opener that $how pressed\$" \
+    "the opener that $how didn't take the press"
+  send release $page_point
+  pressed=$step
+  expect "^browser: tab [0-9]* opened by $tab in the foreground\$" \
+    "the tab window.open() opened, whose opener $did, was never listed: $(since "$pressed" | grep -e '^browser: tab ' -e '^browser: pop-up ' -e '^browser: ad block ' | tr '\n' ' ')"
+  opened=$(since "$pressed" | sed -n "s/^browser: tab \([0-9]*\) opened by $tab in the foreground\$/\1/p" | head -1)
+  send key w cmd
+  expect "^browser: tab $opened closed\$" "⌘W didn't close the tab the opener that $how opened"
+  for _ in $(seq 30); do
+    [ "$(today)" = "$tab" ] && break
+    sleep 0.1
+  done
+  [ "$(today)" = "$tab" ] ||
+    fail "the opener that $how's tab didn't stay alone once its pop-up closed: Today is \"$(today)\""
+done
+
 # A pop-up a filter names: its tab closes before the page reaches the server.
 go_from_bar "${site#http://}opener.html"
 expect "^browser: title $tab the opener ready\$" "the opener page didn't draw"
@@ -330,10 +373,11 @@ if filters != "/carried-ad.js":
   fail "uBlock Origin's storage went with the carry-over, so the way back has no filters"
 
 echo "ok: a host a list names on a line of its own never reached the server: the tab showed the" \
-  "warning, whose Open anyway, from the keyboard, opened the page. A pop-up filter closed the tab" \
-  "a link opened before its page reached the server$held_said. A pop-up filter also" \
-  "closed the tab window.open() opened with no address, once sent on to the page it names. A" \
-  "header filter failed a script and a" \
+  "warning, whose Open anyway, from the keyboard, opened the page. A tab window.open() opened was" \
+  "listed though its page stopped its navigation at once, and though it wrote over its document." \
+  "A pop-up filter closed the tab a link opened before its page reached the server$held_said. A" \
+  "pop-up filter also closed the tab window.open() opened with no address, once sent on to the" \
+  "page it names. A header filter failed a script and a" \
   "redirect by their responses' header. In a private window, a script a filter names never" \
   "reached the server. A filter uBlock Origin kept in its own storage blocked with the browser's" \
   "own engine on that profile's next launch, given no filters, and stayed as its My filters, with" \
