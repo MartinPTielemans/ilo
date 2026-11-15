@@ -189,7 +189,7 @@ pub use keys::{
     web_keystroke, written_as,
 };
 pub(crate) use library::bytes;
-pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
+pub use library::{Archived, Captured, Download, DownloadAction, DownloadState, Visited};
 use library::{MediaVideo, RECEDE_X, Section};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
@@ -3011,6 +3011,7 @@ impl Shell {
         self.follow_dock(cx);
         self.update_menus(cx);
         self.update_title(cx);
+        self.history_space_shown(cx);
         cx.notify();
     }
 
