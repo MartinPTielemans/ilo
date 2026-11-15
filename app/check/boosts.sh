@@ -67,7 +67,7 @@ read -r bx by bw bh << EOF
 $(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
 ../tools/window-screenshot.sh "$pid" "$out/boost-card.png" || fail "no window to capture"
-# Zap, the right of the card's two buttons, over Customize….
+# Zap, the right of the card's first two buttons, over Arrange.
 send click $((bx + bw * 3 / 4)) $((by + bh - 62))
 expect "^browser: zap $tab on\$" "the card's Zap didn't turn Zap on"
 expect "browser: tab $tab zap on\$" "the core didn't start Zap on the page"
@@ -132,14 +132,14 @@ both_are() {
   fail "$2: $(grep "^browser: title \($tab\|$other\) " "$log" | tail -2 | tr '\n' ' ')"
 }
 
-# Customize…, the last line of the card the +'s Edit Boost… left open, opens the editor in its
-# place. Its clicks are in its points: its arrow 13 wide, then the card, whose field is 340 wide
-# and 176 tall, 8.5 in and 48 down.
+# Customize…, the left of the two on the last line of the card the +'s Edit Boost… left open,
+# beside Arrange, opens the editor in its place. Its clicks are in its points: its arrow 13 wide,
+# then the card, whose field is 340 wide and 176 tall, 8.5 in and 48 down.
 send layout
 read -r bx by bw bh << EOF
 $(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
-send click $((bx + bw / 2)) $((by + bh - 26))
+send click $((bx + bw / 4)) $((by + bh - 26))
 expect "^browser: boost editor for $host\$" "Customize… didn't open the Boost editor"
 expect '^browser: boost editor drawn$' "the Boost editor didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/boost-editor.png" || fail "no window to capture"
