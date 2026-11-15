@@ -88,8 +88,10 @@ public static class Capture {
 $Out = [IO.Path]::GetFullPath($Out)
 $log = [IO.Path]::ChangeExtension($Out, 'log')
 New-Item -ItemType Directory -Force (Split-Path $Out) | Out-Null
-# Not $program: PowerShell's names ignore case, and that one is the path.
-$process = Start-Process -FilePath $Program -RedirectStandardError $log -PassThru -WindowStyle Normal
+# Not $program: PowerShell's names ignore case, and that one is the path. In this console, not a
+# new one: the preview is a console program, and a console window of its own (Windows Terminal's,
+# where that's the default) can open over the window this captures (#3024).
+$process = Start-Process -FilePath $Program -RedirectStandardError $log -PassThru -NoNewWindow
 try {
   $deadline = (Get-Date).AddSeconds(30)
   while (-not (Select-String -Quiet -Path $log -Pattern $Ready -ErrorAction SilentlyContinue)) {
