@@ -87,8 +87,8 @@ ask p Prompt prompt
 send type grace
 answer return accept "prompt grace"
 # On sway's Xwayland the prompt takes the keys back once its window has sway's focus again after
-# another app's window had it, on another workspace or on its own. wlroots gives the X focus to the
-# browser's window then, not to the prompt that had it (#2894).
+# another app's window had it: back from that window's workspace, and as that window, beside the
+# browser's, quits. wlroots gives the X focus to the browser's window, not to the prompt (#2894).
 if sway_xwayland; then
   ask p Prompt prompt-back
   # Whether the driver's "onscreen" says the X focus is on $1 (overlay, window or none) within 5 s.
@@ -104,6 +104,7 @@ if sway_xwayland; then
   rm -f "$out/other-in"
   mkfifo "$out/other-in"
   python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other=$!
   exec 5> "$out/other-in"
   keys_on none ||
     fail "another app's window on workspace 2 didn't take the keys from the prompt in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1), $(cat "$out/other-window.log")"
@@ -114,10 +115,11 @@ if sway_xwayland; then
     fail "sway didn't bring the other app's window to the browser's workspace"
   keys_on none ||
     fail "the other app's window on the browser's workspace didn't take the keys in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1)"
-  swaymsg "[pid=$pid] focus" > /dev/null || fail "sway couldn't focus the browser's window"
-  keys_on overlay ||
-    fail "with the browser's window focused again after another app's beside it, the prompt didn't take the keys back in 5 s: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  # It quits, and sway gives its focus back to the browser's window.
   exec 5>&-
+  wait "$other" || fail "another app's window didn't go once its stdin closed: $(cat "$out/other-window.log")"
+  keys_on overlay ||
+    fail "once another app's window beside the browser's went, the prompt didn't take the keys back in 5 s: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
   send type ada
   answer return accept "prompt ada"
 fi
