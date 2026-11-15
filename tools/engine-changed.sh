@@ -1,6 +1,6 @@
 #!/bin/bash
 # Whether a night's engine build has anything to build (#871). It compares this commit's engine
-# inputs with those of the newest engine-<os> release built from its history, in the repository
+# inputs with those of the engine-<os> release built from its history, in the repository
 # engine/prebuilt.ini names, the one engine/fetch.sh would download. It exits 3 when they're the
 # same, so the night builds nothing, and 0 when they differ, when there's no such release or its
 # package isn't uploaded, or when it can't tell: a night it can't read builds.
@@ -32,20 +32,30 @@ cd "$(dirname "$0")/.." || build "no checkout to read."
 repo=$(git config -f engine/prebuilt.ini prebuilt.repository) || build "no engine/prebuilt.ini."
 tags=$(git ls-remote --tags "$repo.git" "refs/tags/engine-$platform-*") ||
   build "couldn't list $repo's engine-$platform releases."
-# The nearest one in this history wins, as in fetch.sh.
-commit=
-best=
+# The nearest one in this history whose core is this commit's wins, or with none, the nearest,
+# comparing only the nearest and the engines off its history, as in fetch.sh (#2913).
+built=
 while read -r _ ref; do
   case $ref in "" | *"^{}") continue ;; esac
   tagged=$(git rev-parse -q --verify "${ref#refs/tags/engine-"$platform"-}^{commit}" 2>/dev/null) ||
     continue
   git merge-base --is-ancestor "$tagged" HEAD 2>/dev/null || continue
-  distance=$(git rev-list --count "$tagged..HEAD")
-  if [ -z "$best" ] || [ "$distance" -lt "$best" ]; then
-    commit=$tagged
-    best=$distance
-  fi
+  built+="$(git rev-list --count "$tagged..HEAD") $tagged"$'\n'
 done <<<"$tags"
+nearest=
+commit=
+while read -r _ tagged; do
+  [ -n "$tagged" ] || continue
+  if [ -z "$nearest" ]; then
+    nearest=$tagged commit=$tagged
+  elif git merge-base --is-ancestor "$tagged" "$nearest"; then
+    continue
+  fi
+  if tools/core-same.sh "$tagged" HEAD core engine/series engine/patches ':(exclude)*.md' 2>/dev/null; then
+    commit=$tagged
+    break
+  fi
+done <<<"$(printf '%s' "$built" | sort -n)"
 head=$(git rev-parse --short=12 HEAD)
 [ -n "$commit" ] || build "no engine-$platform release was built from $head's history."
 tag=engine-$platform-${commit:0:12}

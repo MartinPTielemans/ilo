@@ -251,8 +251,8 @@ fn delete_from_archive_takes_a_task_out(cx: &mut TestAppContext) {
     );
 }
 
-/// The Filter's menu offers All, Little ilo and Tasks. Tasks lists the tasks alone, and with none,
-/// says how long they stay.
+/// The Filter's menu offers All, Closed Tabs, Tasks and Visited, without Little ilo while it has
+/// none of its tabs. Tasks lists the tasks alone, and with none, says how long they stay.
 #[gpui::test]
 fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
     let (shell, host, cx) = archive(cx);
@@ -262,8 +262,11 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
         menu,
         [
             ("All".into(), true),
-            ("Little ilo".into(), true),
-            ("Tasks".into(), true)
+            ("".into(), false),
+            ("Closed Tabs".into(), true),
+            ("Tasks".into(), true),
+            ("".into(), false),
+            ("Visited".into(), true)
         ]
     );
     assert_eq!(
@@ -272,7 +275,7 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
             .iter()
             .map(|e| e.checked)
             .collect::<Vec<_>>(),
-        [true, false, false]
+        [true, false, false, false, false, false]
     );
     cx.update(|_, cx| host.choose("Tasks", cx));
     cx.run_until_parked();
@@ -284,7 +287,7 @@ fn the_filter_lists_only_the_tasks(cx: &mut TestAppContext) {
             .iter()
             .map(|e| e.checked)
             .collect::<Vec<_>>(),
-        [false, false, true]
+        [false, false, false, true, false, false]
     );
     cx.update(|_, cx| host.dismiss(cx));
 

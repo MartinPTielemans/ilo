@@ -233,7 +233,8 @@ open() {
       read -r bx by bw bh << EOF
 $(grep "^browser: boost card $a at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
-      send click $((bx + bw / 2)) $((by + bh - 26))
+      # Customize…, the left of the card's last line, beside Arrange.
+      send click $((bx + bw / 4)) $((by + bh - 26))
       expect '^browser: boost editor drawn$' "$2: Customize… didn't open the Boost editor"
       ;;
     'folder preview')

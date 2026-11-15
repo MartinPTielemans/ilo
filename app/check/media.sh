@@ -941,10 +941,15 @@ else
       fail "no window to capture"
     # And one let go slowly away from the sides stays where it's let go.
     send pip drag $((pw / 8)) $((ph / 2)) 300 0 3000
+    thrown=$step
     expect 'browser: mini player let go at .*, staying$' \
       "a slow release away from the sides didn't leave the Mini Player where it was let go"
     mini_player_at "(x - (px + 300)) ^ 2 <= 4 && y == py" \
       "a slow release away from the sides moved the Mini Player"
+    # The throw, a press that made the Mini Player key, gave the window the keyboard back as its
+    # move loop let go (#2896), so the steps after it start from the page's window.
+    expect 'browser: mini player pressed gave the keyboard back$' \
+      "a throw of the Mini Player didn't give the window the keyboard back" "$thrown"
   fi
   # Two notches up move it down as far as the content would go, 120 a notch: it starts at the
   # top, or on the Mac where the throws left it, above the bottom by more than that.

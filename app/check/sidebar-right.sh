@@ -5,13 +5,54 @@
 # right edge as it is from the left, through a resize, the sidebar hidden and revealed from the
 # right edge, and full screen. From a second Space, one long swipe right stops on the first, never
 # past it into the Library; the next brings the Library out on the sidebar's side, at the window's
-# right edge, and one the other way puts it back, recorded to sidebar-right-library.mp4. The
-# command bar lists only the move that acts, which brings it back, buttons and all, and the
-# setting's file goes with it. Elsewhere the UI draws the buttons, which the UI's tests and the
-# parity screens check.
+# right edge, and one the other way puts it back, recorded to sidebar-right-library.mp4. ⌘Q on the
+# right keeps the sidebar's picture, and the next launch shows it at the window's right edge
+# (sidebar-right-launch.png), the buttons there too. The command bar lists only the move that acts,
+# which brings it back, buttons and all, and the setting's file goes with it. Elsewhere the UI draws
+# the buttons, which the UI's tests and the parity screens check, so on Windows only the launch
+# picture is: the command bar's Move Sidebar to the Right, ⌘Q, and the next launch shows the
+# picture, at the window's right edge in sidebar-right-launch.png. Linux has no launch picture.
 
-if [ "$(uname)" != Darwin ]; then
-  echo "skip: sidebar-right checks AppKit's buttons, the Mac's alone."
+if windows; then
+page='data:text/html;charset=utf-8,<title>ready</title><body style="margin:0;height:100vh;background:%23e8edf0">'
+log="$out/sidebar-right.log"
+step=0
+BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await_load
+# move_sidebar <Side>: the command bar's Move Sidebar to the <Side>, its only move that acts.
+move_sidebar() {
+  send key t cmd
+  expect '^browser: command bar shown$' "Ctrl+T didn't open the command bar"
+  send type move sidebar
+  expect "^browser: command bar commands \"move sidebar\": Move Sidebar to the $1\$" \
+    "the command bar didn't list only Move Sidebar to the $1: $(grep '^browser: command bar commands' "$log" | tail -1)"
+  send key return
+  side=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+  expect "^browser: sidebar on the $side\$" "Move Sidebar to the $1 didn't move it"
+}
+move_sidebar Right
+quit_by_key
+grep -q '^browser: launch picture taken$' "$log" ||
+  fail "Ctrl+Q with the sidebar on the right didn't keep its picture: $(grep '^browser: launch picture' "$log" | tail -1)"
+exited
+log="$out/sidebar-right-relaunch.log"
+step=0
+BROWSER_DRIVE=1 BROWSER_LAUNCH_CAPTURE=$(cygpath -w "$PWD/$out/sidebar-right-launch.png") \
+  "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: first frame at ' || fail "the window didn't draw after the relaunch"
+grep -q '^browser: launch picture shown$' "$log" ||
+  fail "the launch after Ctrl+Q on the right didn't show the sidebar's picture: $(grep '^browser: launch picture' "$log")"
+[ -s "$out/sidebar-right-launch.png" ] || fail "the launch window wasn't captured"
+move_sidebar Left
+[ ! -e "$profile_dir/sidebar-right" ] || fail "Left isn't kept: sidebar-right is still in the profile"
+quit
+echo "ok: Ctrl+Q with the sidebar on the right kept its picture, which the next launch showed: $out/sidebar-right-launch.png"
+elif [ "$(uname)" != Darwin ]; then
+  echo "skip: sidebar-right checks AppKit's buttons and the launch picture, which Linux hasn't."
 else
 page='data:text/html;charset=utf-8,<title>ready</title><body style="margin:0;height:100vh;background:%23e8edf0">'
 log="$out/sidebar-right.log"
@@ -126,6 +167,29 @@ echo "$across" | grep -q "^[1-9][0-9]* to $width of $width\$" ||
   fail "the Library opened across $across, not at the window's right edge"
 library_to "-12 0 10" hidden
 recorded
+
+# The launch picture on the right: ⌘Q keeps the column at the window's right edge, and the next
+# launch shows it there. Well inside the screen, as links.sh's window quits, so the next launch
+# opens at the frame the picture was taken at.
+send screen
+corner=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4,5)
+send place $((${corner% *} + 40)) $((${corner#* } + 60)) 900 560
+expect '^browser: drawn at 900x560$' "the window didn't draw at 900 by 560"
+quit_by_key
+grep -q '^browser: launch picture taken$' "$log" ||
+  fail "⌘Q with the sidebar on the right didn't keep its picture: $(grep '^browser: launch picture' "$log" | tail -1)"
+exited
+log="$out/sidebar-right-relaunch.log"
+step=0
+BROWSER_DRIVE=1 BROWSER_LAUNCH_CAPTURE="$PWD/$out/sidebar-right-launch.png" "$browser" \
+  < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: first frame at ' || fail "the window didn't draw after the relaunch"
+grep -q '^browser: launch picture shown$' "$log" ||
+  fail "the launch after ⌘Q on the right didn't show the sidebar's picture: $(grep '^browser: launch picture' "$log")"
+[ -s "$out/sidebar-right-launch.png" ] || fail "the launch window wasn't captured"
+side_buttons "relaunched" right
 
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
