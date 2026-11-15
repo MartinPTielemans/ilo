@@ -86,21 +86,38 @@ answer return accept "confirm true"
 ask p Prompt prompt
 send type grace
 answer return accept "prompt grace"
-# On sway's Xwayland the prompt keeps the keys through its window's move to another workspace and
-# back, as wlroots gives the X focus to none and then to the browser window (#2894).
+# On sway's Xwayland the prompt takes the keys back once its window has sway's focus again after
+# another app's window had it, on another workspace or on its own. wlroots gives the X focus to the
+# browser's window then, not to the prompt that had it (#2894).
 if sway_xwayland; then
-  ask p Prompt prompt-workspace
-  swaymsg 'move container to workspace 2; workspace 2' > /dev/null ||
-    fail "sway didn't move the window to another workspace"
-  swaymsg 'move container to workspace 1; workspace 1' > /dev/null ||
-    fail "sway didn't move the window back"
-  for _ in $(seq 50); do
-    send onscreen
-    grep '^browser: onscreen ' "$log" | tail -1 | grep -q 'keyboard overlay$' && break
-    sleep 0.1
-  done
-  grep '^browser: onscreen ' "$log" | tail -1 | grep -q 'keyboard overlay$' ||
-    fail "the prompt didn't take the keys back in 5 s, back on its window's workspace: $(grep '^browser: onscreen ' "$log" | tail -1)"
+  ask p Prompt prompt-back
+  # Whether the driver's "onscreen" says the X focus is on $1 (overlay, window or none) within 5 s.
+  keys_on() {
+    for _ in $(seq 50); do
+      send onscreen
+      grep '^browser: onscreen ' "$log" | tail -1 | grep -q "keyboard $1\$" && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  swaymsg 'workspace 2' > /dev/null || fail "sway didn't go to another workspace"
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  exec 5> "$out/other-in"
+  keys_on none ||
+    fail "another app's window on workspace 2 didn't take the keys from the prompt in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1), $(cat "$out/other-window.log")"
+  swaymsg 'workspace 1' > /dev/null || fail "sway didn't go back to the browser's workspace"
+  keys_on overlay ||
+    fail "back on the browser's workspace from another app's window, the prompt didn't take the keys back in 5 s, so typing would go to the page: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  swaymsg '[title="^Other app$"] move container to workspace 1, focus' > /dev/null ||
+    fail "sway didn't bring the other app's window to the browser's workspace"
+  keys_on none ||
+    fail "the other app's window on the browser's workspace didn't take the keys in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1)"
+  swaymsg "[pid=$pid] focus" > /dev/null || fail "sway couldn't focus the browser's window"
+  keys_on overlay ||
+    fail "with the browser's window focused again after another app's beside it, the prompt didn't take the keys back in 5 s: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  exec 5>&-
   send type ada
   answer return accept "prompt ada"
 fi
