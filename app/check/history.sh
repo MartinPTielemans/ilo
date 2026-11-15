@@ -371,7 +371,8 @@ if [ "$major" -ge 157 ]; then
   # A click on the page beside the warning while the UI has the keyboard, the browser window
   # active: on Windows the page's pane takes the keyboard, with no window activated for aura to
   # give the warning, and drops every key while the warning's up (#2910). The UI's sidebar, clicked
-  # first, has the keyboard there.
+  # first, has the keyboard there. On Linux the warning takes the keyboard, but ⌘T after it reaches
+  # nothing (#2926).
   send click $sidebar_point
   in_browser AccessKitSubclassOfGPUIView "a click on the sidebar beside $kept's warning before http"
   warning_box
