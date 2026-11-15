@@ -25,8 +25,9 @@
 # tab in the window, never in Little ilo. On Windows a click on a site's notification, which comes
 # as a launch too, reaches the page (#1426). On the Mac ⌘Q keeps the
 # sidebar's picture, which both the launch without a link and the one with it show; Linux has no
-# launch picture (host_show_launch_window). Reports the launch times from the process's start,
-# without a link and with one.
+# launch picture (host_show_launch_window). On Linux two launches at once on a new profile open one
+# window, the one that hands over exiting 0 with no launch window, and leave no crash report
+# (#2494). Reports the launch times from the process's start, without a link and with one.
 
 serve
 log="$out/links.log"
@@ -794,6 +795,67 @@ if [ -n "$fast" ]; then
   launch_frame=$check_launch_frame
 fi
 
+# Two launches at once on a new profile, with no ilo running (#2494): Chromium gives the profile's
+# lock to one, and the other hands its command line over and exits. Started together, both find no
+# lock where the app reads it, so only the core keeps the one that hands over from hearing
+# launching: it shows no launch window, so starts no early Vulkan thread to exit under, as #2488's
+# did, exits 0 and leaves no crash report. One pair, on a profile of its own with the daily count
+# off. Linux only, as #2488's early thread is Linux's, and not in a Flatpak, whose two launches
+# app_pid can't tell apart.
+raced=
+if [ "$(uname)" = Linux ] && [ -z "${BROWSER_FLATPAK:-}" ]; then
+  dir="$out/links-race"
+  rm -rf "$dir"
+  mkdir -p "$dir/Default"
+  count_off "$dir"
+  BROWSER_PROFILE_DIR="$dir" "$browser" > "$out/links-race-a.log" 2>&1 &
+  a=$!
+  BROWSER_PROFILE_DIR="$dir" "$browser" > "$out/links-race-b.log" 2>&1 &
+  b=$!
+  # The one that hands over goes; the other stays, with its window.
+  handed=
+  for _ in $(seq 300); do
+    if ! kill -0 "$a" 2>/dev/null; then handed=$a stays=$b gone_log=a stays_log=b; break; fi
+    if ! kill -0 "$b" 2>/dev/null; then handed=$b stays=$a gone_log=b stays_log=a; break; fi
+    sleep 0.1
+  done
+  if [ -z "$handed" ]; then
+    kill -INT "$a" "$b" 2> /dev/null || true
+    fail "of two launches at once, neither handed over in 30 s"
+  fi
+  status=0
+  wait "$handed" || status=$?
+  gone_log="$out/links-race-$gone_log.log"
+  log="$out/links-race-$stays_log.log"
+  pid=$stays
+  await '^browser: window opened [0-9]' ||
+    fail "of two launches at once, the one that stayed opened no window"
+  quit_app
+  for _ in $(seq 300); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  ! kill -0 "$pid" 2>/dev/null || fail "of two launches at once, the one that stayed didn't quit"
+  # Crashpad's handler, which writes a crash's report, goes once it has, so every process of the
+  # profile's is gone first.
+  for _ in $(seq 300); do
+    pgrep -f -- "$dir" > /dev/null || break
+    sleep 0.1
+  done
+  ! pgrep -f -- "$dir" > /dev/null || fail "a process of the two launches' profile outlived both"
+  [ "$status" = 0 ] || fail "of two launches at once, the one that handed over exited $status"
+  ! grep -q '^browser: launch window at ' "$gone_log" ||
+    fail "of two launches at once, the one that handed over heard launching too"
+  grep -q '^browser: launch window at ' "$log" ||
+    fail "of two launches at once, the one that stayed showed no launch window"
+  reports=$(find "$dir/Crashpad" -name '*.dmp' 2> /dev/null | wc -l | tr -d ' ')
+  [ "$reports" = 0 ] || fail "two launches at once left $reports crash reports"
+  raced=1
+else
+  echo "skip: two launches at once on a new profile: #2488's early thread is Linux's, and a" \
+    "Flatpak's two launches are one sandbox's."
+fi
+
 if [ "$driven" = 1 ]; then
   [ -z "$again" ] ||
     echo "ok: a launch with no link while the window is minimized brings it back and to the front."
@@ -807,5 +869,7 @@ fi
 echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png${mac:+, the launch window 3 points shorter than its picture: $out/links-launch-shorter.png}$(! windows || echo ", the launch window: $out/links-launch.png")"
 [ -z "$toasted" ] || echo "ok: a click on a site's notification, which notification_helper.exe hands" \
   "chrome.exe as a launch with the toast's id, reaches the page, in the browser running."
+[ -z "$raced" ] || echo "ok: of two launches at once on a new profile, the one that handed over" \
+  "showed no launch window, exited 0 and left no crash report."
 [ -z "$mac" ] || echo "ok: an update's notes open as a tab in the window at its first launch, with links from other apps going to Little ilo, and only then."
 echo "  Launch without a link: $plain; with one: $cold"
