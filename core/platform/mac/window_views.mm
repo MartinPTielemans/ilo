@@ -265,11 +265,12 @@ CACornerMask CornersReached(NSView* view, NSRect rect, NSSize frame) {
          (right && max_y ? kCALayerMaxXMaxYCorner : 0);
 }
 
-// Chromium's occlusion checker passes over a window with no page in it, so a window that comes
-// back from full screen or from behind another while the page is out can stay marked occluded,
-// and a page put in it then never draws or hands back the keys it doesn't use. Chrome's windows
-// always hold a page. Asked again only for a window marked occluded: the checker asks the window
-// server about every window, which takes milliseconds.
+// Chromium's occlusion checker passes over a window with no Chromium page in it, so a window that
+// comes back from full screen or from behind another while the page is out, or holds only a
+// Safari's-engine page, can stay marked occluded, and a page put in it then never draws or hands
+// back the keys it doesn't use. Chrome's windows always hold a page. Asked again only for a window
+// marked occluded: the checker asks the window server about every window, which takes
+// milliseconds.
 void UpdateOcclusion(NSWindow* window) {
   if (![window respondsToSelector:@selector(isOccluded)] ||
       ![static_cast<id<BrowserCoreOccludedWindow>>(window) isOccluded]) {
@@ -510,7 +511,10 @@ void ShowPages(views::Widget* widget,
     [view.ring removeFromSuperview];
   }
   [view layOutPage];
-  if (!had_page && !panes.empty()) {
+  // Also whenever a Chromium page arrives: the checker passed over the window while it held only
+  // a Safari's-engine page, which has none of Chromium's page views, so its mark can be stale
+  // though it had a pane all along (#2888).
+  if ((!had_page && !panes.empty()) || arriving) {
     UpdateOcclusion(view.window);
   }
   if (holding) {
