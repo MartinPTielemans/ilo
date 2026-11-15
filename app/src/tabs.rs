@@ -6,7 +6,13 @@ use super::*;
 /// Opens a tab loading `url` at the top of the Today tabs of the Space `window` shows, and shows
 /// it there.
 pub(crate) fn open_tab(window: bc::bc_id, url: &str) {
-    let tab = open_tab_behind(window, url, false);
+    open_tab_typed(window, url, "");
+}
+
+/// As `open_tab`, for the address the user typed as `typed`: an http address written out loads as
+/// written, as Chrome's address bar loads it (`bc_tab_open_typed`).
+pub(crate) fn open_tab_typed(window: bc::bc_id, url: &str, typed: &str) {
+    let tab = open_typed(window, url, typed, false);
     if tab != 0 {
         unsafe { bc::bc_window_select(window, tab) };
     }
@@ -15,9 +21,16 @@ pub(crate) fn open_tab(window: bc::bc_id, url: &str) {
 /// Opens a tab loading `url` at the top of the Today tabs of the Space `window` shows, behind the
 /// one shown, or with `when_shown` loading it only once it's first shown. Returns it, or 0.
 pub(crate) fn open_tab_behind(window: bc::bc_id, url: &str, when_shown: bool) -> u64 {
-    match CString::new(url) {
-        Ok(url) => unsafe { bc::bc_tab_open(window, url.as_ptr(), when_shown) },
-        Err(_) => 0,
+    open_typed(window, url, "", when_shown)
+}
+
+/// As `open_tab_behind`, for the address the user typed as `typed`, as `open_tab_typed` reads it.
+pub(crate) fn open_typed(window: bc::bc_id, url: &str, typed: &str, when_shown: bool) -> u64 {
+    match (CString::new(url), CString::new(typed)) {
+        (Ok(url), Ok(typed)) => unsafe {
+            bc::bc_tab_open_typed(window, url.as_ptr(), when_shown, typed.as_ptr())
+        },
+        _ => 0,
     }
 }
 
@@ -51,12 +64,10 @@ pub(crate) fn shell_of(window: bc::bc_id) -> Option<WeakEntity<Shell>> {
     })
 }
 
-/// Opens a tab loading `url` in a split view with `with`, on its right, and shows it in `window`.
-pub(crate) fn open_split(window: bc::bc_id, url: &str, with: u64, cx: &mut App) {
-    let Ok(url) = CString::new(url) else {
-        return;
-    };
-    let tab = unsafe { bc::bc_tab_open(window, url.as_ptr(), false) };
+/// Opens a tab loading `url` in a split view with `with`, on its right, and shows it in `window`,
+/// for the address the user typed as `typed`, as `open_tab_typed` reads it.
+pub(crate) fn open_split(window: bc::bc_id, url: &str, typed: &str, with: u64, cx: &mut App) {
+    let tab = open_typed(window, url, typed, false);
     if tab != 0 {
         split_tab(window, tab, with, true, cx);
     }
@@ -223,6 +234,46 @@ pub(crate) unsafe extern "C" fn window_page_elsewhere(
 pub(crate) unsafe extern "C" fn tab_loaded(_: *mut c_void, tab: bc::bc_id, url: *const c_char) {
     let url = unsafe { CStr::from_ptr(url) }.to_string_lossy();
     log!("browser: loaded {tab} {url}");
+    let owned = url.to_string();
+    update_app_later(move |cx| crate::sign_in_close::tab_loaded(tab, &owned, cx));
+    sample_foot_bar(tab);
+}
+
+/// check.sh's foot-bar run: BROWSER_FOOT_BAR=arrange, =point or =long shows the foot bar with made-up
+/// words (`foot_bar::sample`) over the window of the first page that loads, as a mode will, so the
+/// host's window for it shows on each OS before a mode uses it.
+fn sample_foot_bar(tab: bc::bc_id) {
+    static KIND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    thread_local!(static SHOWN: Cell<bool> = const { Cell::new(false) });
+    let Some(kind) = KIND.get_or_init(|| std::env::var("BROWSER_FOOT_BAR").ok()) else {
+        return;
+    };
+    let Some(bar) = browser::foot_bar::sample(kind).filter(|_| !SHOWN.replace(true)) else {
+        return;
+    };
+    update_app(move |cx| {
+        let Some(window) = tab_window(tab, cx) else {
+            return;
+        };
+        let Some(shell) = window.shell.upgrade() else {
+            return;
+        };
+        let Ok(content) = window
+            .handle
+            .update(cx, |_, window, _| window.viewport_size())
+        else {
+            return;
+        };
+        let page = shell.read(cx).page_frame(content).0;
+        let id = window.id;
+        with_overlays(
+            move |cx| {
+                browser::foot_bar::show(id, page, content, bar, cx);
+                log!("browser: foot bar shown over {id}");
+            },
+            cx,
+        );
+    });
 }
 
 pub(crate) unsafe extern "C" fn tab_state_changed(
@@ -273,6 +324,7 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
         media_previous: state.media_previous,
         media_next: state.media_next,
         media_picture_in_picture: state.media_picture_in_picture,
+        media_video: state.media_video,
         developer_mode: state.developer_mode,
     };
     if unsafe { bc::bc_tab_window(tab) } == 0 {
@@ -414,10 +466,12 @@ pub(crate) unsafe extern "C" fn tab_closed(_: *mut c_void, tab: bc::bc_id) {
             .spawn(async move {
                 // Outside the update, as closing the pop-up's window calls back into GPUI.
                 popup_closed(tab);
+                crate::sign_in_close::tab_closed(tab);
                 cx.update(|cx| {
                     site_controls::tab_closed(tab, cx);
                     capture::tab_closed(tab, cx);
                     link_preview::tab_closed(tab, cx);
+                    browser::agents::tab_closed(tab, cx);
                 })
             })
             .detach();

@@ -73,6 +73,43 @@ fn a_field_has_its_caret_after_what_it_holds(cx: &mut TestAppContext) {
     );
 }
 
+// A press or a focus gives a field the keyboard, but text gets into it only from the frame that
+// draws it so, which check.sh waits for before it sends any (#2847).
+#[gpui::test]
+fn text_gets_in_from_the_frame_that_draws_the_field_with_the_keyboard(cx: &mut TestAppContext) {
+    cx.update(bind_keys);
+    let (shows, cx) =
+        cx.add_window_view(|_, cx| Shows(cx.new(|cx| TextInput::new("example.com##.banner", cx))));
+    let input = cx.read(|cx| shows.read(cx).0.clone());
+    cx.run_until_parked();
+    let drawn = |cx: &mut VisualTestContext| input.read_with(cx, |input, _| input.keyboard_drawn());
+    assert!(
+        !drawn(cx),
+        "a field drawn without the keyboard says it has it"
+    );
+    let at_focus = input.update_in(cx, |input, window, cx| {
+        window.focus(&input.focus_handle(cx), cx);
+        input.keyboard_drawn()
+    });
+    assert!(
+        !at_focus,
+        "the field says text gets in before a frame has drawn it focused"
+    );
+    cx.run_until_parked();
+    assert!(
+        drawn(cx),
+        "a frame drew the field focused, and it doesn't say text gets in"
+    );
+    cx.simulate_input("x");
+    assert_eq!(input.read_with(cx, |input, _| input.text().to_owned()), "x");
+    cx.update(|window, cx| window.blur(cx));
+    cx.run_until_parked();
+    assert!(
+        !drawn(cx),
+        "a frame drew the field without the keyboard, and it says it has it"
+    );
+}
+
 /// The field and its text run, as an assistive app reads them.
 fn read(cx: &mut VisualTestContext) -> (Node, Node, NodeId) {
     let tree: TreeUpdate = cx.a11y_tree().expect("GPUI built a tree");
@@ -173,6 +210,31 @@ fn cmd_and_option_backspace_delete_back_to_the_start_and_a_word(cx: &mut TestApp
     assert!(input.read_with(cx, |input, _| input.composing()));
 }
 
+thread_local! {
+    static ASKED: std::cell::RefCell<Option<crate::clipboard::Done>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// With the browser's reader, as under Wayland, a field pastes what the reader hands it once it
+/// has it, not what GPUI's clipboard holds: GPUI there can't read a copy Chromium holds (#2463).
+#[gpui::test]
+fn a_paste_lands_once_the_browsers_reader_answers(cx: &mut TestAppContext) {
+    crate::clipboard::read_through(|done| ASKED.set(Some(done)));
+    let (input, mut cx) = shown("go ", cx);
+    let text =
+        |cx: &mut VisualTestContext| input.read_with(cx, |input, _| input.text().to_string());
+    cx.write_to_clipboard(ClipboardItem::new_string("gpui's".into()));
+    cx.simulate_keystrokes("cmd-v");
+    cx.run_until_parked();
+    assert_eq!(text(&mut cx), "go ");
+    let done = ASKED.take().expect("the field asked the reader");
+    // From the app, outside any window's update, as the core hands it from a task of its own.
+    cx.cx.update(|cx| done(Some("chromium's".into()), cx));
+    cx.run_until_parked();
+    assert_eq!(text(&mut cx), "go chromium's");
+    assert!(input.read_with(&cx, |input, _| input.pasted()));
+}
+
 /// A window showing a field 120 wide that fades its edges, focused.
 struct Narrow(Entity<TextInput>);
 
@@ -267,4 +329,101 @@ fn a_line_scrolls_no_further_than_it_must() {
         px(22.),
         "text deleted"
     );
+}
+
+/// The text the field shows after each of `calls`: what's committed, then what's composing.
+fn composed(calls: &[korean::Ime]) -> Vec<String> {
+    let mut committed = String::new();
+    (calls.iter())
+        .map(|call| match call {
+            korean::Ime::Mark(marked) => format!("{committed}{marked}"),
+            korean::Ime::Commit(syllable) => {
+                committed.push_str(syllable);
+                committed.clone()
+            }
+        })
+        .collect()
+}
+
+/// Korean from a 2-set keyboard, where one key can commit a syllable and start the next (#2457).
+/// Each syllable stays whole, the caret follows what's composing, and Find searches each committed
+/// syllable as it comes, never a lone consonant or vowel.
+#[gpui::test]
+fn korean_composes_syllable_by_syllable(cx: &mut TestAppContext) {
+    for (word, calls) in [("한글", korean::HANGEUL), ("안녕하세요", korean::ANNYEONG)] {
+        let (input, mut cx) = shown("", cx);
+        let mut searched = String::new();
+        let mut finds = Vec::new();
+        for (call, shows) in calls.iter().zip(composed(calls)) {
+            input.update_in(&mut cx, |input, window, cx| call.apply(input, window, cx));
+            let (text, selection, composing) = input.read_with(&cx, |input, _| {
+                if let Some(text) = input.committed_change(&searched) {
+                    searched = text.to_string();
+                    finds.push(searched.clone());
+                }
+                (
+                    input.text().to_string(),
+                    input.selection(),
+                    input.composing(),
+                )
+            });
+            assert_eq!(text, shows, "after {call:?}");
+            assert_eq!(selection, text.len()..text.len(), "after {call:?}");
+            assert_eq!(
+                composing,
+                matches!(call, korean::Ime::Mark(_)),
+                "after {call:?}"
+            );
+        }
+        let last = word.chars().last().unwrap().to_string();
+        input.update_in(&mut cx, |input, window, cx| {
+            input.replace_text_in_range(None, &last, window, cx)
+        });
+        input.read_with(&cx, |input, _| {
+            assert_eq!(input.text(), word);
+            assert!(!input.composing());
+            finds.push(input.committed_change(&searched).unwrap().to_string());
+        });
+        let mut syllables = String::new();
+        let expected: Vec<String> = (word.chars())
+            .map(|syllable| {
+                syllables.push(syllable);
+                syllables.clone()
+            })
+            .collect();
+        assert_eq!(finds, expected);
+    }
+}
+
+/// Backspace while a syllable composes takes its last letter off, as the Korean input method
+/// rebuilds it, down to nothing; then it deletes committed text as usual. Korean composes in the
+/// middle of text too.
+#[gpui::test]
+fn korean_backspace_takes_a_syllable_apart(cx: &mut TestAppContext) {
+    let (input, mut cx) = shown("", cx);
+    let compose = |input: &Entity<TextInput>, calls: &[korean::Ime], cx: &mut VisualTestContext| {
+        for call in calls {
+            input.update_in(cx, |input, window, cx| call.apply(input, window, cx));
+        }
+    };
+    compose(&input, korean::HANGEUL, &mut cx);
+    use korean::Ime::Mark;
+    compose(&input, &[Mark("그"), Mark("ㄱ"), Mark("")], &mut cx);
+    let shows = |input: &Entity<TextInput>, cx: &mut VisualTestContext| {
+        input.read_with(cx, |input, _| {
+            (
+                input.text().to_string(),
+                input.selection(),
+                input.composing(),
+            )
+        })
+    };
+    assert_eq!(shows(&input, &mut cx), ("한".into(), 3..3, false));
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(shows(&input, &mut cx), (String::new(), 0..0, false));
+
+    cx.simulate_input("ab");
+    cx.simulate_keystrokes("left");
+    compose(&input, korean::HANGEUL, &mut cx);
+    assert_eq!(shows(&input, &mut cx), ("a한글b".into(), 7..7, true));
 }

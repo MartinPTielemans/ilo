@@ -1,0 +1,76 @@
+# ungoogled-chromium-macos's build-bindgen.patch at 31f01756a43d (its 156.0.8078.79 tag), rebased
+# by ilo onto Chromium 157.0.8103.50 until it tags 157. Changed from upstream's: 157 moved cargo's
+# compiler, archiver and linker out of build_bindgen.py into tools/rust/host_tools.py, still from
+# RUST_HOST_LLVM_INSTALL_DIR, so the two bin_dir lines there point at the prebuilt LLVM in
+# third_party/llvm-build/Release+Asserts as upstream's did in build_bindgen.py; the clang_bins_dir
+# it replaced is gone from 157.
+--- a/tools/rust/build_bindgen.py
++++ b/tools/rust/build_bindgen.py
+@@ -45,10 +45,7 @@ from build import (
+ from update import RmTree
+ 
+ BINDGEN_GIT_VERSION = BINDGEN_REVISION
+-BINDGEN_GIT_REPO = (
+-    'https://chromium.googlesource.com/external/'
+-    + 'github.com/rust-lang/rust-bindgen'
+-)
++BINDGEN_GIT_REPO = 'https://github.com/rust-lang/rust-bindgen'
+ 
+ BINDGEN_SRC_DIR = os.path.join(
+     THIRD_PARTY_DIR, 'rust-toolchain-intermediate', 'bindgen-src'
+@@ -93,16 +90,7 @@ def RunCargo(cargo_args):
+     if sys.platform.startswith('linux'):
+         ncursesw_dir = FetchNcurseswLibrary()
+ 
+-    llvm_dir = RUST_HOST_LLVM_INSTALL_DIR
+-
+-    if not os.path.exists(os.path.join(llvm_dir, 'bin', f'llvm-config{EXE}')):
+-        print(
+-            f'Missing llvm-config in {llvm_dir}. This '
+-            f'script expects to be run after build_rust.py is run as '
+-            f'the build_rust.py script produces the LLVM libraries that '
+-            f'are needed here.'
+-        )
+-        sys.exit(1)
++    llvm_dir = os.path.join(THIRD_PARTY_DIR, 'llvm-build', 'Release+Asserts')
+ 
+     env = GetHostCargoEnv()
+ 
+@@ -180,7 +168,7 @@ def main():
+     install_dir = os.path.join(RUST_TOOLCHAIN_OUT_DIR)
+     print(f'Installing bindgen to {install_dir} ...')
+ 
+-    llvm_dir = RUST_HOST_LLVM_INSTALL_DIR
++    llvm_dir = os.path.join(THIRD_PARTY_DIR, 'llvm-build', 'Release+Asserts')
+     shutil.copy(
+         os.path.join(build_dir, RustTargetTriple(), 'release', f'bindgen{EXE}'),
+         os.path.join(install_dir, 'bin'),
+--- a/tools/rust/host_tools.py
++++ b/tools/rust/host_tools.py
+@@ -26,7 +26,7 @@ from build_rust import (
+     RUST_HOST_LLVM_INSTALL_DIR,
+     RustTargetTriple,
+ )
+-from update_rust import RUST_TOOLCHAIN_OUT_DIR
++from update_rust import RUST_TOOLCHAIN_OUT_DIR, THIRD_PARTY_DIR
+ 
+ # Get variables and helpers from Clang update script
+ sys.path.append(
+@@ -65,7 +65,7 @@ def GetHostCcTools():
+     On Windows the MSVC-style `clang-cl` driver is both the C and the C++
+     compiler.
+     """
+-    bin_dir = os.path.join(RUST_HOST_LLVM_INSTALL_DIR, 'bin')
++    bin_dir = os.path.join(THIRD_PARTY_DIR, 'llvm-build', 'Release+Asserts', 'bin')
+     if sys.platform == 'win32':
+         clang_cl = os.path.join(bin_dir, 'clang-cl.exe')
+         return clang_cl, clang_cl, os.path.join(bin_dir, 'llvm-lib.exe')
+@@ -91,7 +91,7 @@ def GetHostLinker():
+     Windows uses `lld-link` for MSVC compat.  Otherwise, we use `lld` via
+     `clang` (see `GetHostLinkArgs`).
+     """
+-    bin_dir = os.path.join(RUST_HOST_LLVM_INSTALL_DIR, 'bin')
++    bin_dir = os.path.join(THIRD_PARTY_DIR, 'llvm-build', 'Release+Asserts', 'bin')
+     if sys.platform == 'win32':
+         return os.path.join(bin_dir, 'lld-link.exe')
+     return os.path.join(bin_dir, 'clang')

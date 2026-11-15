@@ -26,6 +26,7 @@
 #include <winrt/Windows.UI.Notifications.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cmath>
 #include <cstdio>
@@ -33,6 +34,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -56,8 +58,56 @@ extern "C" void browser_fade_none(void*, double, double, double) {}
 extern "C" const char* host_floating_name(void* hwnd);
 // The app's (src/logging.rs), in the browser and the preview: whether BROWSER_LOG turns on |area|.
 extern "C" bool browser_log_on(const char* area);
+// The app's (src/overlay_life.rs): an overlay's next life, in the low byte, and what the host does.
+extern "C" uint32_t browser_overlay_step(uint8_t life, uint8_t event, uint8_t flags);
+// Below, for Disown, which hides the menu as the UI would.
+extern "C" void host_hide_menu_window(void);
 
 namespace {
+
+// An overlay's life (src/overlay_life.rs, where a unit test walks every order of its events): the
+// host keeps one for each window it floats over a browser window, moves it only through Step, and
+// carries out what Step returns. Of its events, a press and a click outside are GPUI's and the UI's,
+// and a lost device is GPUI's, which draws every window again on a new one (#2536); the host steps
+// the rest. Numbered as overlay_life.rs's Life and Event are.
+enum class Life : uint8_t { kHidden, kPlaced, kShown, kKey, kHiding };
+enum class OverlayEvent : uint8_t {
+  kShow,
+  kHide,
+  kFaded,
+  kPressed,
+  kClickedOutside,
+  kScaleChanged,
+  kDeviceLost,
+  kMinimized,
+  kRestored,
+  kActivated,
+  kDeactivated,
+};
+// Show's and Hide's flags.
+constexpr uint8_t kKeyboard = 1 << 0, kOverMinimized = 1 << 1, kLater = 1 << 2;
+// What the host does, as overlay_life.rs's Actions has it.
+constexpr uint16_t kTakePointer = 1 << 0, kPlace = 1 << 1, kTellScale = 1 << 2,
+                   kOnScreen = 1 << 3, kTakeKeyboard = 1 << 4, kLetGo = 1 << 5,
+                   kOffScreen = 1 << 6, kGiveBack = 1 << 7, kDismiss = 1 << 10;
+
+// Moves |life| on with |event|, returning what the host does for it.
+uint16_t Step(Life& life, OverlayEvent event, uint8_t flags = 0) {
+  const uint32_t next =
+      browser_overlay_step(static_cast<uint8_t>(life), static_cast<uint8_t>(event), flags);
+  life = static_cast<Life>(next & 0xff);
+  return static_cast<uint16_t>(next >> 8);
+}
+
+// Whether the UI shows it: on screen, about to be, or off screen with its minimized window.
+bool Shows(Life life) {
+  return life == Life::kPlaced || life == Life::kShown || life == Life::kKey;
+}
+
+// Whether it's on screen. Windows puts no other there (FloatingProc).
+bool OnScreen(Life life) {
+  return life == Life::kShown || life == Life::kKey || life == Life::kHiding;
+}
 
 // A line in |area| of BROWSER_LOG (src/logging.rs), "browser: [area] ...", in one write, if it's
 // on. Never what the user browses or types.
@@ -198,6 +248,8 @@ void After(double seconds, std::function<void()> task) {
 // with it when it's minimized, and placed in points from its content's top-left.
 struct Floating {
   HWND hwnd = nullptr;
+  // What check.sh calls it, which Adopt asks for, so every window the host floats is named.
+  const char* name = nullptr;
   // Clicks go through it to the browser window under it.
   bool mouse_through = false;
   // Where it takes clicks, in pixels from its top-left, if not all of it: the hover card's or the
@@ -205,18 +257,16 @@ struct Floating {
   std::optional<RECT> plate;
   // Called after the event, when the user leaves it for a window that isn't its own.
   void (*dismissed)(void) = nullptr;
-  // Set while the host hides it, so that isn't the user leaving it.
-  bool hiding = false;
   // Counts its fades, so one that ends after it showed or hid again leaves it be.
   int fades = 0;
   // Counts the overlays' shows and hides, so a show still to come after a hide leaves it hidden.
   int shows = 0;
   // Which of g_overlays it is, or -1.
   int overlay = -1;
-  // Whether the UI has it shown, from the call that shows it, or for an overlay the call whose show
-  // waits for the UI's next frame, until the one that hides it or the user leaving it. Its window
-  // is on screen only while it is, whoever else shows it (FloatingProc).
-  bool shown = false;
+  // Where it is in its life, moved only by Step: shown from the call that shows it, or for an
+  // overlay the call whose show waits for the UI's next frame (placed until then), until the one
+  // that hides it or the user leaving it.
+  Life life = Life::kHidden;
   // It had the keyboard while shown, and the user hasn't taken it elsewhere since: its browser
   // window taking it without them gives it back (KeepKeyboard).
   bool keyboard = false;
@@ -265,7 +315,8 @@ struct Menu {
   void (*dismissed)(void) = nullptr;
   // Chooses an item by title, for the driver.
   bool (*choose)(const char*) = nullptr;
-  bool shown = false;
+  // As an overlay's (Floating::life).
+  Life life = Life::kHidden;
   // Where it sits on screen, device pixels, which the pointer is measured from.
   RECT frame{};
   // The browser window it's over, and the window it's owned by: that one, or its reveal's panel.
@@ -276,11 +327,22 @@ struct Menu {
   bool give_back = true;
   // Bumped by each show and hide, so a show posted before a hide doesn't put the menu back.
   unsigned showing = 0;
+  // Where the pointer rested as it showed, until the pointer leaves it. Windows sends the window
+  // under a resting pointer a move to where it is as windows show and hide, which a native menu
+  // ignores; it would take the highlight from the checked item of a pop-up opened from the
+  // keyboard, so ↓ went from the item under the pointer instead (#2544).
+  bool resting = false;
+  POINT rest{};
 };
 Menu g_menu;
 // The thread hooks that watch the pointer and the keys while the menu shows.
 HHOOK g_menu_mouse_hook = nullptr;
 HHOOK g_menu_key_hook = nullptr;
+
+void KeyboardFromHidden(HWND hwnd);
+void TakePointer(HWND hwnd, uint16_t actions);
+void TellScale(HWND hwnd);
+void PutAway(HWND hwnd, HWND back, uint16_t actions);
 
 LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
                               UINT_PTR, DWORD_PTR data) {
@@ -302,7 +364,7 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
       // as it's minimized and shows them again as it comes back, and a command bar, a tooltip and
       // a menu the UI hid meanwhile came back over the page, empty but for Windows' shadow or
       // their last frame, taking its clicks (#1346).
-      if (!floating->shown) {
+      if (!OnScreen(floating->life)) {
         pos->flags &= ~SWP_SHOWWINDOW;
       }
       const int width = pos->cx, height = pos->cy;
@@ -331,19 +393,36 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
         return MA_NOACTIVATE;
       }
       break;
+    case WM_SHOWWINDOW:
+      // Windows takes it off screen with its minimized browser window, and puts it back as that
+      // comes back, unless the UI hid it meanwhile (WM_WINDOWPOSCHANGING above).
+      if (lparam == SW_PARENTCLOSING) {
+        PutAway(hwnd, nullptr, Step(floating->life, OverlayEvent::kMinimized));
+      } else if (lparam == SW_PARENTOPENING &&
+                 (Step(floating->life, OverlayEvent::kRestored) & kTellScale)) {
+        TellScale(hwnd);
+      }
+      break;
     case WM_ACTIVATE:
       if (LOWORD(wparam) != WA_INACTIVE) {
-        floating->keyboard = floating->shown;
+        const uint16_t actions = Step(floating->life, OverlayEvent::kActivated);
+        floating->keyboard = floating->life == Life::kKey;
+        TakePointer(hwnd, actions);
+        if (actions & kGiveBack) {
+          KeyboardFromHidden(hwnd);
+        }
+      } else {
+        Step(floating->life, OverlayEvent::kDeactivated);
       }
       // Shown, even once Windows has hidden it with its browser window, which takes the keyboard
       // from it only then.
-      if (LOWORD(wparam) == WA_INACTIVE && !floating->hiding && floating->shown) {
+      if (LOWORD(wparam) == WA_INACTIVE && Shows(floating->life)) {
         const HWND to = reinterpret_cast<HWND>(lparam);
         LogIn("focus", "%s loses the keyboard to %p %s%s, pressed %d", FloatingName(hwnd),
               static_cast<void*>(to), ClassName(to).c_str(),
               to && to == GetWindow(hwnd, GW_OWNER) ? " (its browser window)" : "", Pressed());
         // ilo's menu, opened over this overlay, isn't the user leaving it.
-        if (g_menu.shown && to == g_menu.hwnd) {
+        if (Shows(g_menu.life) && to == g_menu.hwnd) {
           break;
         }
         // Chromium makes its browser window the active one by itself, as when a committing page's
@@ -407,8 +486,13 @@ void OwnShadow(HWND hwnd) {
   DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof backdrop);
 }
 
-void Adopt(Floating& floating, void* view, bool mouse_through, void (*dismissed)(void)) {
+void Adopt(Floating& floating,
+           void* view,
+           const char* name,
+           bool mouse_through,
+           void (*dismissed)(void)) {
   floating.hwnd = Hwnd(view);
+  floating.name = name;
   floating.mouse_through = mouse_through;
   floating.dismissed = dismissed;
   ShowWindow(floating.hwnd, SW_HIDE);
@@ -480,13 +564,42 @@ HWND InsertAfter(HWND hwnd) {
   return HWND_TOP;
 }
 
-// Puts |hwnd| at |x|, |y|, |width| by |height| over its browser window and on screen.
-void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate) {
+// With the keyboard, a window takes the pointer too, from a press held in another window. GPUI
+// captures the mouse for the window a press went to until that window hears its release, and
+// Windows sends it all of the thread's mouse input meanwhile: a release that went elsewhere, as the
+// one the menu's hook takes, left the theme picker's presses going to the browser window under it,
+// which moved for them (#2516).
+void TakePointer(HWND hwnd, uint16_t actions) {
+  if (const HWND held = GetCapture(); (actions & kTakePointer) && held && held != hwnd) {
+    ReleaseCapture();
+  }
+}
+
+// GPUI reads the window's DPI again, as a child window's after its parent's changed, and lays out
+// only if it did. Made hidden at the screen's top left, on a display at one scale, and moved to a
+// browser window on one at another, it may not have heard the move, and drew at the old scale in
+// the frame sized at this one: Peek's card at 0.8 of its page's frame (#2541).
+void TellScale(HWND hwnd) {
+  SendMessageW(hwnd, WM_DPICHANGED_AFTERPARENT, 0, 0);
+}
+
+// Carries out a show's |actions| for |hwnd|, a window the app floats over a browser window: puts it
+// at |x|, |y|, |width| by |height|, tells it its scale, and puts it on screen, with the pointer and
+// the keyboard if it takes them. PutAway carries out a hide's.
+void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, uint16_t actions) {
+  TakePointer(hwnd, actions);
   const HWND after = InsertAfter(hwnd);
-  SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
-  if (activate) {
+  if (actions & kPlace) {
+    SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
+  }
+  if (actions & kTellScale) {
+    TellScale(hwnd);
+  }
+  if (actions & kTakeKeyboard) {
     ShowWindow(hwnd, SW_SHOW);
-  } else if (!IsWindowVisible(hwnd)) {
+    SetForegroundWindow(hwnd);
+    SetFocus(hwnd);
+  } else if ((actions & kOnScreen) && !IsWindowVisible(hwnd)) {
     // Shown where it was put. ShowWindow shows a window at the top, and the browser window that
     // owns it with it, over another app's window in front of ilo while ilo has the foreground
     // (#1419). It also sends WM_SHOWWINDOW, which SWP_SHOWWINDOW doesn't, and GPUI draws the
@@ -523,17 +636,24 @@ void Show(Floating& floating, void* ui_view, double left, double top, double wid
   ClientToScreen(root, &origin);
   SetWindowLongPtrW(floating.hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(root));
   WatchOwner(root);
-  floating.shown = true;
   floating.place = std::pair{left, top};
   // With another app in front, as when a page's dialog asks while the user is elsewhere, it goes
   // over its browser window alone, as the Mac's child window does, and not over the app the user
   // is in, which taking the keyboard would bring it in front of (#1365).
   const bool take = keyboard && AppInFront();
+  const uint16_t actions = Step(floating.life, OverlayEvent::kShow,
+                                (take ? kKeyboard : 0) | (IsIconic(root) ? kOverMinimized : 0));
   PlaceAndShow(floating.hwnd, origin.x, origin.y, static_cast<int>(std::lround(width * scale)),
-               static_cast<int>(std::lround(height * scale)), take);
-  if (take) {
-    SetForegroundWindow(floating.hwnd);
-    SetFocus(floating.hwnd);
+               static_cast<int>(std::lround(height * scale)), actions);
+  // Over a minimized window it would stand alone where the window was, so the UI hears it's gone.
+  PutAway(floating.hwnd, root, actions);
+  if (!(actions & kDismiss)) {
+    return;
+  }
+  if (floating.overlay >= 0) {
+    LeaveOverlay(floating.overlay);
+  } else if (void (*dismissed)(void) = floating.dismissed) {
+    Later([dismissed] { dismissed(); });
   }
 }
 
@@ -553,31 +673,79 @@ std::map<HWND, HWND>& FocusAfterOverlay() {
   return views;
 }
 
-// Hides |floating|, giving its browser window the keyboard back if it had it. Hidden already, as
-// Windows hides it with its minimized browser window, it stays so as that window comes back.
-void Hide(Floating& floating) {
-  floating.shown = false;
-  floating.keyboard = false;
-  if (!floating.hwnd || !IsWindowVisible(floating.hwnd)) {
-    return;
-  }
-  const bool had_keyboard = GetForegroundWindow() == floating.hwnd;
-  HWND owner = GetWindow(floating.hwnd, GW_OWNER);
+// Gives |to| the keyboard, and the view in it the UI gave the keyboard to meanwhile if it's a
+// browser window. Not one that's hiding to close, or minimized.
+void GiveKeyboard(HWND to) {
   HWND focus = nullptr;
-  if (auto held = FocusAfterOverlay().find(owner); held != FocusAfterOverlay().end()) {
+  if (auto held = FocusAfterOverlay().find(to); held != FocusAfterOverlay().end()) {
     focus = held->second;
     FocusAfterOverlay().erase(held);
   }
-  floating.hiding = true;
-  ShowWindow(floating.hwnd, SW_HIDE);
-  floating.hiding = false;
-  // Not to a browser window that's hiding to close, or minimized.
-  if (had_keyboard && owner && IsWindowVisible(owner) && !IsIconic(owner)) {
-    SetForegroundWindow(owner);
-    if (focus && IsWindow(focus)) {
-      SetFocus(focus);
-    }
+  if (!to || !IsWindowVisible(to) || IsIconic(to)) {
+    return;
   }
+  SetForegroundWindow(to);
+  if (focus && IsWindow(focus)) {
+    SetFocus(focus);
+  }
+}
+
+// Carries out a hide's |actions| for |hwnd|, PlaceAndShow's counterpart. A hidden window keeps
+// neither the pointer, whose moves would go where nothing shows until its press ends, nor the
+// keyboard, which goes back to |back| if it had it. Windows can make it the active window again
+// while hidden, which KeyboardFromHidden undoes (#2545).
+void PutAway(HWND hwnd, HWND back, uint16_t actions) {
+  const bool had_keyboard = GetForegroundWindow() == hwnd;
+  if ((actions & kLetGo) && GetCapture() == hwnd) {
+    ReleaseCapture();
+  }
+  if (actions & kOffScreen) {
+    ShowWindow(hwnd, SW_HIDE);
+  }
+  if (!(actions & kGiveBack)) {
+    return;
+  }
+  if (had_keyboard) {
+    GiveKeyboard(back);
+  } else {
+    FocusAfterOverlay().erase(back);
+  }
+}
+
+// Hides |floating|, giving its browser window the keyboard back if it had it. Hidden already, as
+// Windows hides it with its minimized browser window, it stays so as that window comes back.
+void Hide(Floating& floating) {
+  const uint16_t actions = Step(floating.life, OverlayEvent::kHide);
+  floating.keyboard = false;
+  if (!floating.hwnd) {
+    return;
+  }
+  PutAway(floating.hwnd, GetWindow(floating.hwnd, GW_OWNER), actions);
+}
+
+// A floating window the UI has hidden never keeps the keyboard. Windows makes the one a browser
+// window last gave the keyboard to the active window again as that window comes back, as after
+// Win+D, even one the host keeps off screen, where it took what the user typed unseen and Ctrl+T
+// closed it again (#2545). Its browser window takes the keyboard back once Windows is done.
+void KeyboardFromHidden(HWND hwnd) {
+  Later([hwnd] {
+    if (!IsWindow(hwnd) || GetForegroundWindow() != hwnd) {
+      return;
+    }
+    const auto found = FloatingByHwnd().find(hwnd);
+    // Shown again since, with the keyboard or about to take it.
+    const Life life = found != FloatingByHwnd().end() ? found->second->life
+                      : g_menu.hwnd == hwnd                ? g_menu.life
+                                                           : Life::kHidden;
+    const bool shown = life == Life::kShown || life == Life::kKey;
+    HWND owner = GetWindow(hwnd, GW_OWNER);
+    if (shown || !owner || !IsWindowVisible(owner) || IsIconic(owner)) {
+      return;
+    }
+    fprintf(stderr, "browser: %s hidden, its browser window takes the keyboard\n",
+            FloatingName(hwnd));
+    GiveKeyboard(owner);
+  });
 }
 
 // Shows |floating| over |ui_view|'s window at |left|, |top|, fading in over |fade| seconds: from
@@ -610,11 +778,15 @@ void FadeOut(Floating& floating, double fade, std::function<void()> hidden) {
     hidden();
     return;
   }
+  floating.keyboard = false;
+  PutAway(floating.hwnd, GetWindow(floating.hwnd, GW_OWNER),
+          Step(floating.life, OverlayEvent::kHide, kLater));
   browser_fade(floating.hwnd, -1, 0, fade);
   Floating* faded = &floating;
   After(fade, [faded, fades, hidden] {
     if (faded->fades == fades) {
-      Hide(*faded);
+      PutAway(faded->hwnd, GetWindow(faded->hwnd, GW_OWNER),
+              Step(faded->life, OverlayEvent::kFaded));
       hidden();
     }
   });
@@ -1058,7 +1230,7 @@ int const kFolderPreview = 3;
 bool CloseOverlay(int index) {
   Floating& floating = g_overlays[index];
   ++floating.shows;
-  const bool was_shown = floating.shown;
+  const bool was_shown = Shows(floating.life);
   TooltipOverlayHiding(index);
   Hide(floating);
   if (was_shown) {
@@ -1186,7 +1358,8 @@ void ShapeLinkPreview() {
 void PlaceLinkPreview() {
   HWND hwnd = g_link_preview.floating.hwnd;
   HWND root = g_link_preview.root;
-  if (!hwnd || !root) {
+  // Minimized, Windows took it off with its browser window, and puts it back as that comes back.
+  if (!hwnd || !root || IsIconic(root)) {
     return;
   }
   const LinkPreviewFrame frame = MeasureLinkPreview(hwnd, root);
@@ -1194,7 +1367,8 @@ void PlaceLinkPreview() {
   // Shaped before it shows: the region is in the root's content, which doesn't need the new size.
   ShapeLinkPreview();
   PlaceAndShow(hwnd, frame.origin.x - frame.inset.x, frame.origin.y - frame.inset.y,
-               frame.client.right + frame.border.cx, frame.client.bottom + frame.border.cy, false);
+               frame.client.right + frame.border.cx, frame.client.bottom + frame.border.cy,
+               Step(g_link_preview.floating.life, OverlayEvent::kShow));
 }
 
 // The browser window under the preview moved or resized, which it follows, or is going.
@@ -1272,6 +1446,38 @@ bool g_settings_placed = false;
 // The UI's view of the browser window the toast shows over, while it shows.
 void* g_toast_over = nullptr;
 
+// The foot bar, the UI's view of the browser window it shows over while it shows, and where: its
+// size, centred between its insets from the content's left and right edges, its bottom over the
+// content's (host_show_foot_bar).
+Floating g_foot_bar;
+void* g_foot_bar_over = nullptr;
+double g_foot_bar_left = 0, g_foot_bar_right = 0, g_foot_bar_bottom = 0;
+double g_foot_bar_width = 0, g_foot_bar_height = 0;
+
+// Where the foot bar's window goes over its browser window, in points from its content's top left.
+std::pair<double, double> FootBarOrigin() {
+  double content_width, content_height;
+  ContentSize(Root(g_foot_bar_over), &content_width, &content_height);
+  const double across = content_width - g_foot_bar_left - g_foot_bar_right;
+  return {g_foot_bar_left + (across - g_foot_bar_width) / 2,
+          content_height - g_foot_bar_bottom - g_foot_bar_height};
+}
+
+// Keeps the foot bar there as its browser window resizes, without raising it.
+void PlaceFootBar() {
+  HWND root = g_foot_bar_over ? Root(g_foot_bar_over) : nullptr;
+  if (!root || !g_foot_bar.hwnd || !IsWindowVisible(g_foot_bar.hwnd)) {
+    return;
+  }
+  auto [left, top] = FootBarOrigin();
+  g_foot_bar.place = std::pair{left, top};
+  const double scale = Scale(root);
+  POINT origin{std::lround(left * scale), std::lround(top * scale)};
+  ClientToScreen(root, &origin);
+  SetWindowPos(g_foot_bar.hwnd, nullptr, origin.x, origin.y, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 // Where the toast's window goes over |ui_view|'s browser window, in points from its content's top
 // left: at the focused page's top right corner, which in a split view is its pane's, and as wide as
 // that page from its left edge, so no toast runs past its window (#1462).
@@ -1306,10 +1512,14 @@ HHOOK g_mouse_hook = nullptr;
 
 // In a driven run only the driver's pointer reaches the app, as drive.cc keeps the desktop's out of
 // its windows. The thread's mouse hooks hear the desktop's before that, and Windows moves it over a
-// window as one shows, so a menu opening where it rests would hover its row (#1125).
+// window as one shows, so a menu opening where it rests would hover its row (#1125). Unless the
+// driver's input is the desktop's own, real as a hand's (#2544).
+// Set by the driver (host_drive_real_input), which the host doesn't call: the preview links no
+// driver, whose core calls it couldn't link.
+bool g_drive_real = false;
 bool DesktopPointerHeard() {
   static const bool driven = GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0;
-  return !driven;
+  return !driven || g_drive_real;
 }
 
 // The pointer at |point| on screen, for the link target and the reveals.
@@ -1471,12 +1681,19 @@ void HoldKeys(HWND window) {
 // browser window the keyboard, and the repeats would go on to the page there, taking it out of its
 // full screen or closing its own dialog (#385). Once the key is let go, the next press goes
 // wherever the keyboard is. Floating windows are owned, not children, so each is its own root.
+// The same hook notes whether the key going down last is the key repeating as it's held, which a
+// page's key reaches the core with while it's dispatched (host_key_repeated): the message's
+// previous-state bit, which Windows sets on each repeat.
 HHOOK g_escape_hook = nullptr;
 HWND g_escape_pressed_in = nullptr;
+bool g_key_repeated = false;
 
 LRESULT CALLBACK HeldEscape(int code, WPARAM wparam, LPARAM lparam) {
   if (code == HC_ACTION && wparam == PM_REMOVE) {
     MSG* msg = reinterpret_cast<MSG*>(lparam);
+    if (msg->message == WM_KEYDOWN || msg->message == WM_SYSKEYDOWN) {
+      g_key_repeated = msg->lParam & (1 << 30);
+    }
     if (msg->wParam == VK_ESCAPE) {
       const HWND root = msg->hwnd ? GetAncestor(msg->hwnd, GA_ROOT) : nullptr;
       const bool repeat = msg->lParam & (1 << 30);
@@ -1521,7 +1738,7 @@ HWND MenuBase(void* ui_view, bool in_reveal) {
 // The user left the menu. Posted, as the UI may be handling what made them leave; the menu's own
 // host_hide_menu_window follows once the UI closes it.
 void PostMenuDismiss(bool give_back) {
-  if (!g_menu.shown) {
+  if (!Shows(g_menu.life)) {
     return;
   }
   g_menu.give_back = g_menu.give_back && give_back;
@@ -1542,9 +1759,9 @@ void Disown(HWND root) {
   // The menu may be over a reveal, which root owns.
   if (HWND owner = g_menu.hwnd ? GetWindow(g_menu.hwnd, GW_OWNER) : nullptr;
       owner && (owner == root || GetWindow(owner, GW_OWNER) == root)) {
-    ShowWindow(g_menu.hwnd, SW_HIDE);
-    SetWindowLongPtrW(g_menu.hwnd, GWLP_HWNDPARENT, 0);
     PostMenuDismiss(false);
+    host_hide_menu_window();
+    SetWindowLongPtrW(g_menu.hwnd, GWLP_HWNDPARENT, 0);
   }
   for (auto& [hwnd, floating] : FloatingByHwnd()) {
     if (GetWindow(hwnd, GW_OWNER) == root) {
@@ -1563,17 +1780,39 @@ void Disown(HWND root) {
 // and the overlays over it, which Windows would show again without the keyboard as it comes back,
 // deaf, and never hearing the user leave them (#1346).
 void Minimized(HWND root) {
-  if (g_menu.shown && g_menu.browser == root) {
+  if (Shows(g_menu.life) && g_menu.browser == root) {
     PostMenuDismiss(false);
   }
   for (int index = 0; index < int(std::size(g_overlays)); ++index) {
-    if (g_overlays[index].shown && GetWindow(g_overlays[index].hwnd, GW_OWNER) == root) {
+    if (Shows(g_overlays[index].life) && GetWindow(g_overlays[index].hwnd, GW_OWNER) == root) {
       DismissOverlay(index);
     }
   }
 }
 
 UINT_PTR const kOwner = 3;
+
+// |root|'s scale changed: the windows over it read theirs again once Windows is done, as one on
+// screen may not have heard it.
+void ScaleChanged(HWND root) {
+  std::vector<HWND> told;
+  for (auto& [hwnd, floating] : FloatingByHwnd()) {
+    if (TopOwner(hwnd) == root && (Step(floating->life, OverlayEvent::kScaleChanged) & kTellScale)) {
+      told.push_back(hwnd);
+    }
+  }
+  if (g_menu.hwnd && TopOwner(g_menu.hwnd) == root &&
+      (Step(g_menu.life, OverlayEvent::kScaleChanged) & kTellScale)) {
+    told.push_back(g_menu.hwnd);
+  }
+  Later([told] {
+    for (HWND hwnd : told) {
+      if (IsWindow(hwnd)) {
+        TellScale(hwnd);
+      }
+    }
+  });
+}
 
 // |root| moved or was resized: the find bar, the offer and the toast showing over it keep to its
 // page's top right corner, as the Mac's child windows and Linux's panels do. Windows moves no owned
@@ -1598,13 +1837,16 @@ void PlaceCorners(HWND root) {
   if (g_toast_over && Root(g_toast_over) == root) {
     PlaceToast();
   }
+  if (g_foot_bar_over && Root(g_foot_bar_over) == root) {
+    PlaceFootBar();
+  }
 }
 
 // |root| moved, or was resized or went to another display: the windows over it keep their place in
 // its content, as the Mac's child windows go with theirs, where they'd stay behind on the screen,
 // and the page's corners keep theirs (#1364). ilo's menu closes, as the Mac's does.
 void Moved(HWND root) {
-  if (g_menu.shown && g_menu.browser == root) {
+  if (Shows(g_menu.life) && g_menu.browser == root) {
     PostMenuDismiss(true);
   }
   const double scale = Scale(root);
@@ -1632,12 +1874,12 @@ void Moved(HWND root) {
 // answered before anything else, else one the user didn't leave (FloatingProc). Not while ilo's
 // menu shows, which takes it back itself (MenuForegroundChanged).
 HWND KeepsKeyboard(HWND root) {
-  if (g_menu.shown) {
+  if (Shows(g_menu.life)) {
     return nullptr;
   }
   HWND keeps = nullptr;
   for (auto& [hwnd, floating] : FloatingByHwnd()) {
-    if (floating->shown && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == root &&
+    if (Shows(floating->life) && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == root &&
         (floating == &g_dialog || (floating->keyboard && !keeps))) {
       keeps = hwnd;
     }
@@ -1655,10 +1897,17 @@ void KeepKeyboard(HWND root) {
   }
   Later([root] {
     HWND hwnd = KeepsKeyboard(root);
-    if (!hwnd || GetForegroundWindow() != root) {
+    // Asked twice for one activation, it has the keyboard already.
+    if (!hwnd || GetForegroundWindow() == hwnd) {
       return;
     }
     const char* name = host_floating_name(hwnd);
+    if (GetForegroundWindow() != root) {
+      // check.sh shows this line when a step's keys went to the wrong window.
+      fprintf(stderr, "browser: %s leaves the keyboard: its window is no longer in front\n",
+              name ? name : "window");
+      return;
+    }
     // check.sh reads this line.
     fprintf(stderr, "browser: %s takes the keyboard back from its window\n",
             name ? name : "window");
@@ -1684,6 +1933,8 @@ LRESULT CALLBACK OwnerProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     }
   } else if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) {
     KeepKeyboard(hwnd);
+  } else if (message == WM_DPICHANGED) {
+    ScaleChanged(hwnd);
   } else if (message == WM_NCDESTROY) {
     RemoveWindowSubclass(hwnd, OwnerProc, kOwner);
   }
@@ -1698,7 +1949,7 @@ void WatchOwner(HWND root) {
 // what's on it, so a press outside closes it and goes no further (a right-press outside passes
 // through, to open that window's own menu), as the Mac's local monitor does.
 bool MenuTakesPointer(WPARAM message, POINT pt) {
-  if (g_menu.shown && g_menu.pointer) {
+  if (Shows(g_menu.life) && g_menu.pointer) {
     int kind = -1;
     switch (message) {
       case WM_MOUSEMOVE:
@@ -1734,17 +1985,32 @@ bool MenuTakesPointer(WPARAM message, POINT pt) {
     }
     if (kind >= 0) {
       const double scale = Scale(g_menu.hwnd);
-      return g_menu.pointer(kind, (pt.x - g_menu.frame.left) / scale,
-                            (pt.y - g_menu.frame.top) / scale);
+      const bool taken = g_menu.pointer(kind, (pt.x - g_menu.frame.left) / scale,
+                                        (pt.y - g_menu.frame.top) / scale);
+      // GPUI captures the mouse for the window a press went to until that window hears the
+      // release, and Windows sends that window all of the thread's mouse input meanwhile: a
+      // release taken here, such as the one of the press that opened the menu, would leave the
+      // theme picker's presses going to the browser window under it, which moves for them (#2516).
+      if (taken && kind == 3) {
+        ReleaseCapture();
+      }
+      return taken;
     }
   }
   return false;
 }
 
 LRESULT CALLBACK MenuMouse(int code, WPARAM wparam, LPARAM lparam) {
-  if (code == HC_ACTION && DesktopPointerHeard() &&
-      MenuTakesPointer(wparam, reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->pt)) {
-    return 1;
+  if (code == HC_ACTION && DesktopPointerHeard()) {
+    const POINT pt = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->pt;
+    const bool moved = wparam == WM_MOUSEMOVE || wparam == WM_NCMOUSEMOVE;
+    if (moved && g_menu.resting && pt.x == g_menu.rest.x && pt.y == g_menu.rest.y) {
+      return 1;
+    }
+    g_menu.resting = g_menu.resting && !moved;
+    if (MenuTakesPointer(wparam, pt)) {
+      return 1;
+    }
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
@@ -1754,7 +2020,7 @@ LRESULT CALLBACK MenuMouse(int code, WPARAM wparam, LPARAM lparam) {
 // window, which has the keyboard.
 bool MenuTakesKey(WPARAM wparam, LPARAM lparam) {
   const bool down = (HIWORD(lparam) & KF_UP) == 0;
-  if (g_menu.shown && down) {
+  if (Shows(g_menu.life) && down) {
     const bool chord = (GetKeyState(VK_CONTROL) & 0x8000) || (GetKeyState(VK_MENU) & 0x8000) ||
                        (GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000);
     const bool modifier = wparam == VK_CONTROL || wparam == VK_MENU || wparam == VK_SHIFT ||
@@ -1797,7 +2063,7 @@ void RemoveMenuHooks() {
 }
 
 void MenuForegroundChanged(HWND root, bool ours) {
-  if (!g_menu.shown) {
+  if (!Shows(g_menu.life)) {
     return;
   }
   if (!ours) {
@@ -2281,11 +2547,24 @@ HBITMAP LoadLaunchPicture(const std::wstring& path, LONG height, SIZE* size, COL
   return bitmap;
 }
 
+int TopEdge(HWND root);
+
 LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
   switch (message) {
     case WM_NCACTIVATE:
       // Its frame stands for the browser window's, which has the keyboard once it's under it.
       return DefWindowProcW(hwnd, message, TRUE, lparam);
+    // With no caption, as FrameProc gives the browser window none: its client area is then as high
+    // as the picture of the browser window's, which LoadLaunchPicture checks. As it's made, before
+    // any frame change, Windows asks with the window's rectangle alone.
+    case WM_NCCALCSIZE: {
+      RECT* rect = wparam ? &reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam)->rgrc[0]
+                          : reinterpret_cast<RECT*>(lparam);
+      const LONG top = rect->top;
+      const LRESULT result = DefWindowProcW(hwnd, message, wparam, lparam);
+      rect->top = top + (IsZoomed(hwnd) ? TopEdge(hwnd) : 0);
+      return result;
+    }
     case WM_ERASEBKGND:
       return 1;
     case WM_PAINT: {
@@ -2357,6 +2636,44 @@ void WritePng(const std::wstring& path, const std::vector<uint8_t>& pixels, UINT
     // held the file open is gone by now.
     DeleteFileW(path.c_str());
   }
+}
+
+// With BROWSER_LAUNCH_CAPTURE, writes the launch window as it has been on screen, its frame too, to
+// that PNG, for check.sh, as the Mac's host does: it's up only until the UI has drawn under it.
+void CaptureLaunchWindow(HWND window) {
+  const char* path = getenv("BROWSER_LAUNCH_CAPTURE");
+  RECT frame{};
+  if (!path || !*path || !GetWindowRect(window, &frame)) {
+    return;
+  }
+  const int width = frame.right - frame.left;
+  const int height = frame.bottom - frame.top;
+  if (width < 1 || height < 1) {
+    return;
+  }
+  BITMAPINFO info{};
+  info.bmiHeader = {sizeof(BITMAPINFOHEADER), width, -height, 1, 32, BI_RGB};
+  void* bits = nullptr;
+  HDC screen = GetDC(nullptr);
+  if (HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &bits, nullptr, 0)) {
+    HDC dc = CreateCompatibleDC(screen);
+    HGDIOBJ was = SelectObject(dc, bitmap);
+    const bool printed = PrintWindow(window, dc, PW_RENDERFULLCONTENT);
+    GdiFlush();
+    SelectObject(dc, was);
+    DeleteDC(dc);
+    if (printed) {
+      const auto* start = static_cast<const uint8_t*>(bits);
+      const std::vector<uint8_t> pixels(start, start + static_cast<size_t>(width) * height * 4);
+      const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+      WritePng(Wide(path), pixels, static_cast<UINT>(width), static_cast<UINT>(height));
+      if (SUCCEEDED(com)) {
+        CoUninitialize();
+      }
+    }
+    DeleteObject(bitmap);
+  }
+  ReleaseDC(nullptr, screen);
 }
 
 }  // namespace
@@ -2807,6 +3124,7 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
 
 void host_close_launch_window(void) {
   if (g_launch.hwnd) {
+    CaptureLaunchWindow(g_launch.hwnd);
     DestroyWindow(g_launch.hwnd);
   }
   if (g_launch.owner) {
@@ -2993,12 +3311,22 @@ void host_maximize_window(void* ui_view) {
   HWND key = GetForegroundWindow();
   DWORD process = 0;
   GetWindowThreadProcessId(key, &process);
+  // With another app in front, as when the app relaunches behind it, the app's own active window
+  // is the one to give back, as it comes in front with the app (#2544).
+  const bool in_front = process == GetCurrentProcessId();
+  if (!in_front) {
+    key = GetActiveWindow();
+  }
   // As Chromium's own Maximize does.
   SendMessageW(root, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
   // Maximizing activates it too, which a window a relaunch brings back behind the one in front
   // mustn't be (#1454): the keyboard goes back to the app's window that had it.
-  if (key && key != root && key != g_launch.hwnd && process == GetCurrentProcessId()) {
-    SetForegroundWindow(key);
+  if (key && key != root && key != g_launch.hwnd) {
+    if (in_front) {
+      SetForegroundWindow(key);
+    } else {
+      SetActiveWindow(key);
+    }
   }
   // Maximizing brings it to the front, and the launch window stays over it until the UI has drawn.
   if (g_launch.hwnd) {
@@ -3008,10 +3336,13 @@ void host_maximize_window(void* ui_view) {
 
 namespace {
 // Whether the app asked for the jump list (host_add_dock_items), which waits for a window with the
-// AppUserModelID it goes under, and whether it's set.
+// AppUserModelID it goes under, and whether it's been written.
 bool g_jump_list_wanted = false;
 bool g_jump_list_set = false;
-void SetJumpList();
+void WriteJumpList();
+// How long after the first window shows the list is written: past the launch's first page, as
+// Chrome waits 2 s (kLongDelayForUpdate) before it writes its own.
+constexpr double kJumpListAfter = 2;
 }  // namespace
 
 void host_show_window(void* ui_view) {
@@ -3020,7 +3351,7 @@ void host_show_window(void* ui_view) {
   ShowWindow(root, SW_SHOW);
   SetForegroundWindow(root);
   if (g_jump_list_wanted && !std::exchange(g_jump_list_set, true)) {
-    SetJumpList();
+    After(kJumpListAfter, WriteJumpList);
   }
   // The launch window stays over it until the UI has drawn (host_close_launch_window).
   if (g_launch.hwnd) {
@@ -3093,71 +3424,14 @@ bool host_window_shown(void* ui_view) {
 namespace {
 std::wstring BrowserModelId();
 
-// The taskbar's jump list, Windows' stand-in for the Mac's Dock menu: New window and New incognito
-// window, each launching ilo again with Chrome's switch for it, which the running browser hears as
-// a second launch (bc_host's app_new_window). Under the AppUserModelID the windows have, so the
-// list is the one their taskbar button shows. Set once, after the first window, which has the ID.
-void SetJumpList() {
-  ComPtr<ICustomDestinationList> list;
-  if (FAILED(CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&list)))) {
-    return;
-  }
-  const std::wstring id = BrowserModelId();
-  if (!id.empty()) {
-    list->SetAppID(id.c_str());
-  }
-  UINT slots = 0;
-  ComPtr<IObjectArray> removed;
-  ComPtr<IObjectCollection> tasks;
-  if (FAILED(list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
-      FAILED(CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&tasks)))) {
-    return;
-  }
-  wchar_t exe[MAX_PATH] = {};
-  GetModuleFileNameW(nullptr, exe, MAX_PATH);
-  // PKEY_Title, named here rather than linked from propsys.
-  constexpr PROPERTYKEY kTitle = {
-      {0xF29F85E0, 0x4FF9, 0x1068, {0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9}}, 2};
-  for (auto [title, switch_name] : {std::pair{L"New window", L"--new-window"},
-                                    std::pair{L"New incognito window", L"--incognito"}}) {
-    ComPtr<IShellLinkW> link;
-    ComPtr<IPropertyStore> store;
-    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
-                                IID_PPV_ARGS(&link))) ||
-        FAILED(link.As(&store))) {
-      continue;
-    }
-    link->SetPath(exe);
-    link->SetArguments(switch_name);
-    link->SetIconLocation(exe, 0);
-    PROPVARIANT value;
-    PropVariantInit(&value);
-    value.vt = VT_LPWSTR;
-    if (FAILED(SHStrDupW(title, &value.pwszVal))) {
-      continue;
-    }
-    store->SetValue(kTitle, value);
-    store->Commit();
-    PropVariantClear(&value);
-    tasks->AddObject(link.Get());
-  }
-  ComPtr<IObjectArray> array;
-  if (SUCCEEDED(tasks.As(&array)) && SUCCEEDED(list->AddUserTasks(array.Get()))) {
-    list->CommitList();
-    // check.sh reads this line.
-    fprintf(stderr, "browser: jump list set\n");
-  }
-}
 }  // namespace
 
-// Windows has no Dock menu; its jump list holds New window and New incognito window instead, once
-// the app has finished launching.
+// Windows has no Dock menu; its jump list holds New window, New incognito window and New Little ilo
+// Window instead, written once the first window has shown (WriteJumpList).
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {
   g_jump_list_wanted = true;
   if (!UiViews().empty() && !std::exchange(g_jump_list_set, true)) {
-    SetJumpList();
+    After(kJumpListAfter, WriteJumpList);
   }
 }
 
@@ -3175,13 +3449,8 @@ static std::map<void*, uint64_t>& WindowIds() {
   return ids;
 }
 
-// Writes the jump list's task host_set_little_task keeps, once a window has the AppUserModelID.
-static void WriteLittleTask();
-
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
-  // The core gave its window the AppUserModelID as it made it (core's AddWindowViews).
-  WriteLittleTask();
   // Opened behind another, it hears it isn't the one the user is in, which no foreground event says.
   TellMain(GetForegroundWindow());
 }
@@ -3326,6 +3595,9 @@ void host_forget_window(void* ui_view) {
     Forget(it->second.floating);
     g_reveals.erase(it);
   }
+  if (g_foot_bar_over == ui_view) {
+    host_hide_foot_bar();
+  }
   g_pane_corners.erase(ui_view);
   g_page_lefts.erase(ui_view);
   std::erase(UiViews(), Hwnd(ui_view));
@@ -3333,7 +3605,7 @@ void host_forget_window(void* ui_view) {
 }
 
 void host_add_overlay(int overlay, void* overlay_view, double, void (*dismissed)(void)) {
-  Adopt(g_overlays[overlay], overlay_view, false, dismissed);
+  Adopt(g_overlays[overlay], overlay_view, kOverlayNames[overlay], false, dismissed);
   g_overlays[overlay].overlay = overlay;
   // The command bar is a rounded rectangle, as Windows' frame is. The pickers and the folder
   // preview have a beak, whose shape a rectangle's corners and shadow would show round.
@@ -3374,7 +3646,7 @@ void host_show_overlay(int overlay,
     left = content_width - 8 - width;
   }
   Floating& floating = g_overlays[overlay];
-  floating.shown = true;
+  Step(floating.life, OverlayEvent::kShow, kLater);
   const int shows = ++floating.shows;
   // The window still holds what it drew when it last closed, such as the previous query, as the
   // Mac's does. It goes on screen once the UI has drawn it as it is now, which can't happen while
@@ -3489,7 +3761,7 @@ void host_release_held_keys(void) {
 
 void host_add_find_bar(void* ui_view, void* find_bar_view, double right, double top) {
   Corner& corner = g_find_bars[ui_view];
-  Adopt(corner.floating, find_bar_view, false, nullptr);
+  Adopt(corner.floating, find_bar_view, "find bar", false, nullptr);
   SystemFrame(corner.floating.hwnd);
   corner.right = right;
   corner.top = top;
@@ -3523,7 +3795,7 @@ void host_hide_find_bar(void* ui_view) {
 
 void host_add_offer(void* ui_view, void* offer_view, double right, double top) {
   Corner& corner = g_offers[ui_view];
-  Adopt(corner.floating, offer_view, false, nullptr);
+  Adopt(corner.floating, offer_view, "offer", false, nullptr);
   SystemFrame(corner.floating.hwnd);
   corner.right = right;
   corner.top = top;
@@ -3559,7 +3831,7 @@ void host_set_pane_corner(void* ui_view, double left, double right, double top) 
 }
 
 void host_add_hud(void* hud_view, double right, double top, double margin) {
-  Adopt(g_hud, hud_view, true, nullptr);
+  Adopt(g_hud, hud_view, "hud", true, nullptr);
   g_hud_right = right;
   g_hud_top = top;
   g_hud_margin = margin;
@@ -3598,7 +3870,7 @@ void host_hide_hud(void) {
 }
 
 void host_add_drop_targets(void* view) {
-  Adopt(g_drop_targets, view, true, nullptr);
+  Adopt(g_drop_targets, view, "drop targets", true, nullptr);
 }
 
 void host_show_drop_targets(void* ui_view) {
@@ -3621,7 +3893,7 @@ void host_hide_drop_targets(void) {
 }
 
 void host_add_dialog(void* dialog_view) {
-  Adopt(g_dialog, dialog_view, false, nullptr);
+  Adopt(g_dialog, dialog_view, "dialog", false, nullptr);
   g_dialog.ui_closes = true;
 }
 
@@ -3635,9 +3907,16 @@ void host_show_dialog(void* ui_view, double x, double y, double width, double he
     ContentSize(Root(ui_view), &width, &height);
   }
   Show(g_dialog, ui_view, x, y, width, height, true);
+  HWND root = Root(ui_view);
+  // Shown with another app in front, it's its thread's active window meanwhile, as a modal dialog
+  // of Windows' own is, without coming in front. The taskbar button and Alt+Tab bring an app back
+  // with that window, so it comes back with the keyboard: its browser window, active before it,
+  // hears nothing of the app coming back to take the keyboard back for it with (#2544).
+  if (g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) && !AppInFront()) {
+    SetActiveWindow(g_dialog.hwnd);
+  }
   // Shown with another app in front, it asks for the user by its window's taskbar button, until
   // they come to that window, as Chrome's dialogs do (#1365).
-  HWND root = Root(ui_view);
   if (root && root != g_dialog_asking && g_dialog.hwnd && IsWindowVisible(g_dialog.hwnd) &&
       !AppInFront()) {
     FLASHWINFO flash{sizeof flash, root, FLASHW_TRAY | FLASHW_TIMERNOFG, 0, 0};
@@ -3660,7 +3939,7 @@ void host_hide_dialog(void) {
 
 void host_add_site_controls(void* view, void (*dismissed)(void)) {
   // Its beak is in the window, whose rectangle Windows' corners and shadow would show round it.
-  Adopt(g_site_controls, view, false, dismissed);
+  Adopt(g_site_controls, view, "site controls", false, dismissed);
 }
 
 void host_set_site_controls_shape(const double*, size_t) {}
@@ -3694,11 +3973,12 @@ void host_release_site_controls(void) {
     return;
   }
   g_site_controls.mouse_through = true;
-  if (GetForegroundWindow() == g_site_controls.hwnd) {
-    g_site_controls.hiding = true;
-    SetForegroundWindow(GetWindow(g_site_controls.hwnd, GW_OWNER));
-    g_site_controls.hiding = false;
-  }
+  // Released, it closes on screen as a fade out does, and gives the keyboard back as one starts.
+  // Still marked as shown with the keyboard, it took the keyboard back from the browser window it
+  // had just given it to, and kept what was typed while it closed (#2563).
+  g_site_controls.keyboard = false;
+  PutAway(g_site_controls.hwnd, GetWindow(g_site_controls.hwnd, GW_OWNER),
+          Step(g_site_controls.life, OverlayEvent::kHide, kLater));
   fprintf(stderr, "browser: site controls released\n");
 }
 
@@ -3714,7 +3994,7 @@ void host_hide_site_controls(void) {
 
 void* host_add_link_preview(void* view, void (*dismissed)(void)) {
   // It never has the keyboard, which stays with the page.
-  Adopt(g_link_preview.floating, view, false, nullptr);
+  Adopt(g_link_preview.floating, view, "link preview", false, nullptr);
   g_link_preview.dismissed = dismissed;
   SetWindowLongPtrW(g_link_preview.floating.hwnd, GWL_EXSTYLE,
                     GetWindowLongPtrW(g_link_preview.floating.hwnd, GWL_EXSTYLE) |
@@ -3737,7 +4017,7 @@ void host_show_link_preview(void* ui_view) {
   }
   g_link_preview.root = root;
   // Shown from here, though it goes on screen after the event (FloatingProc).
-  g_link_preview.floating.shown = true;
+  Step(g_link_preview.floating.life, OverlayEvent::kShow, kLater);
   // All of it until its first frame says where the page is.
   g_link_preview.hole.reset();
   g_link_preview.floating.mouse_through = false;
@@ -3801,7 +4081,7 @@ void host_hide_link_preview(void) {
 }
 
 void host_add_capture(void* view, void (*dismissed)(void)) {
-  Adopt(g_capture, view, false, dismissed);
+  Adopt(g_capture, view, "capture", false, dismissed);
 }
 
 void host_show_capture(void* ui_view, double left, double top, double width, double height) {
@@ -3829,9 +4109,180 @@ void host_hide_capture(void) {
   fprintf(stderr, "browser: capture hidden\n");
 }
 
+namespace {
+
+// What the desktop shows behind the window in front, which is ours when the user asks to capture:
+// its picture's file, or none for a solid colour, filled with |colour|, at |screen|'s size in
+// pixels. Windows Spotlight's pictures aren't a file the system names, so it gives no answer, and
+// Portrait Mode puts the page on white. The caller has CoInitialized this thread.
+bool DesktopShown(std::wstring* file, COLORREF* colour, RECT* screen) {
+  HMONITOR monitor = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY);
+  MONITORINFO info{sizeof info};
+  if (!GetMonitorInfoW(monitor, &info)) {
+    return false;
+  }
+  *screen = info.rcMonitor;
+  // Settings › Personalization › Background's choice: 3 is Spotlight.
+  DWORD type = 0, size = sizeof type;
+  RegGetValueW(HKEY_CURRENT_USER,
+               L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers",
+               L"BackgroundType", RRF_RT_REG_DWORD, nullptr, &type, &size);
+  if (type == 3) {
+    fprintf(stderr, "browser: desktop picture none, Spotlight\n");
+    return false;
+  }
+  *colour = GetSysColor(COLOR_DESKTOP);
+  ComPtr<IDesktopWallpaper> wallpaper;
+  if (SUCCEEDED(CoCreateInstance(CLSID_DesktopWallpaper, nullptr, CLSCTX_ALL,
+                                 IID_PPV_ARGS(&wallpaper)))) {
+    COLORREF background = 0;
+    if (SUCCEEDED(wallpaper->GetBackgroundColor(&background))) {
+      *colour = background;
+    }
+    // Its monitors are named by device path; the one whose rectangle is this monitor's.
+    UINT count = 0;
+    wallpaper->GetMonitorDevicePathCount(&count);
+    for (UINT index = 0; index < count; ++index) {
+      LPWSTR id = nullptr;
+      RECT rect{};
+      LPWSTR path = nullptr;
+      if (SUCCEEDED(wallpaper->GetMonitorDevicePathAt(index, &id)) &&
+          SUCCEEDED(wallpaper->GetMonitorRECT(id, &rect)) && EqualRect(&rect, screen) &&
+          SUCCEEDED(wallpaper->GetWallpaper(id, &path)) && path) {
+        *file = path;
+      }
+      CoTaskMemFree(path);
+      CoTaskMemFree(id);
+      if (!file->empty()) {
+        return true;
+      }
+    }
+  }
+  // Before Windows 8, or a desktop the interface doesn't answer for: the primary monitor's.
+  wchar_t path[MAX_PATH] = {};
+  if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0)) {
+    *file = path;
+  }
+  return true;
+}
+
+// The desktop's picture drawn at |width| by |height|, filling it and centred as the desktop's
+// Fill does, else |colour| alone, as top-down BGRA. The caller has CoInitialized this thread.
+bool DesktopPixels(const std::wstring& file, COLORREF colour, UINT width, UINT height,
+                   std::vector<uint8_t>* pixels) {
+  pixels->assign(static_cast<size_t>(width) * height * 4, 0xff);
+  if (file.empty()) {
+    for (size_t at = 0; at < pixels->size(); at += 4) {
+      (*pixels)[at] = GetBValue(colour);
+      (*pixels)[at + 1] = GetGValue(colour);
+      (*pixels)[at + 2] = GetRValue(colour);
+    }
+    return true;
+  }
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IWICBitmapDecoder> decoder;
+  ComPtr<IWICBitmapFrameDecode> frame;
+  ComPtr<IWICFormatConverter> converter;
+  ComPtr<IWICBitmapScaler> scaler;
+  UINT pictured_width = 0, pictured_height = 0;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&wic))) ||
+      FAILED(wic->CreateDecoderFromFilename(file.c_str(), nullptr, GENERIC_READ,
+                                            WICDecodeMetadataCacheOnDemand, &decoder)) ||
+      FAILED(decoder->GetFrame(0, &frame)) ||
+      FAILED(frame->GetSize(&pictured_width, &pictured_height)) || !pictured_width ||
+      !pictured_height || FAILED(wic->CreateFormatConverter(&converter)) ||
+      FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA,
+                                   WICBitmapDitherTypeNone, nullptr, 0,
+                                   WICBitmapPaletteTypeCustom))) {
+    return false;
+  }
+  const double fill = (std::max)(static_cast<double>(width) / pictured_width,
+                                 static_cast<double>(height) / pictured_height);
+  const UINT drawn_width = (std::max)(width, static_cast<UINT>(std::ceil(pictured_width * fill)));
+  const UINT drawn_height =
+      (std::max)(height, static_cast<UINT>(std::ceil(pictured_height * fill)));
+  const WICRect middle{static_cast<INT>((drawn_width - width) / 2),
+                       static_cast<INT>((drawn_height - height) / 2), static_cast<INT>(width),
+                       static_cast<INT>(height)};
+  return SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
+         SUCCEEDED(scaler->Initialize(converter.Get(), drawn_width, drawn_height,
+                                      WICBitmapInterpolationModeHighQualityCubic)) &&
+         SUCCEEDED(scaler->CopyPixels(&middle, width * 4, static_cast<UINT>(pixels->size()),
+                                      pixels->data()));
+}
+
+// |pixels|, |width| by |height| top-down BGRA, as a PNG. The caller has CoInitialized this thread.
+bool EncodePng(const std::vector<uint8_t>& pixels, UINT width, UINT height,
+               std::vector<uint8_t>* png) {
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IWICBitmap> source;
+  ComPtr<IStream> stream;
+  ComPtr<IWICBitmapEncoder> encoder;
+  ComPtr<IWICBitmapFrameEncode> frame;
+  ComPtr<IPropertyBag2> options;
+  WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+  STATSTG stat{};
+  HGLOBAL global = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&wic))) ||
+      FAILED(wic->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppBGRA, width * 4,
+                                         static_cast<UINT>(pixels.size()),
+                                         const_cast<BYTE*>(pixels.data()), &source)) ||
+      FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) ||
+      FAILED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) ||
+      FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
+      FAILED(encoder->CreateNewFrame(&frame, &options)) ||
+      FAILED(frame->Initialize(options.Get())) || FAILED(frame->SetSize(width, height)) ||
+      FAILED(frame->SetPixelFormat(&format)) ||
+      FAILED(frame->WriteSource(source.Get(), nullptr)) || FAILED(frame->Commit()) ||
+      FAILED(encoder->Commit()) || FAILED(stream->Stat(&stat, STATFLAG_NONAME)) ||
+      FAILED(GetHGlobalFromStream(stream.Get(), &global)) || !global) {
+    return false;
+  }
+  void* data = GlobalLock(global);
+  if (!data) {
+    return false;
+  }
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  png->assign(bytes, bytes + static_cast<size_t>(stat.cbSize.QuadPart));
+  GlobalUnlock(global);
+  return !png->empty();
+}
+
+}  // namespace
+
 bool host_desktop_picture(void* context,
                           void (*png)(void* context, const uint8_t* data, size_t size)) {
-  return false;
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  std::wstring file;
+  COLORREF colour = RGB(0, 0, 0);
+  RECT screen{};
+  std::vector<uint8_t> pixels, encoded;
+  const bool shown = DesktopShown(&file, &colour, &screen);
+  const UINT width = static_cast<UINT>(screen.right - screen.left);
+  const UINT height = static_cast<UINT>(screen.bottom - screen.top);
+  const bool found = shown && width && height &&
+                     DesktopPixels(file, colour, width, height, &pixels) &&
+                     EncodePng(pixels, width, height, &encoded);
+  if (SUCCEEDED(com)) {
+    CoUninitialize();
+  }
+  if (!found) {
+    if (shown) {
+      fprintf(stderr, "browser: desktop picture none, unread\n");
+    }
+    return false;
+  }
+  // check.sh reads this line: the picture's size, and whether it's a file's or a colour.
+  if (file.empty()) {
+    fprintf(stderr, "browser: desktop picture %ux%u, colour %02x%02x%02x\n", width, height,
+            GetRValue(colour), GetGValue(colour), GetBValue(colour));
+  } else {
+    fprintf(stderr, "browser: desktop picture %ux%u, a picture\n", width, height);
+  }
+  png(context, encoded.data(), encoded.size());
+  return true;
 }
 
 void host_copy_png(const uint8_t* png, size_t size) {
@@ -3996,7 +4447,7 @@ void host_share_png(const uint8_t* png,
 }
 
 void host_add_toast(void* toast_view) {
-  Adopt(g_toast, toast_view, true, nullptr);
+  Adopt(g_toast, toast_view, "toast", true, nullptr);
   g_toast.plate = RECT{};
 }
 
@@ -4023,11 +4474,52 @@ void host_show_toast(void* ui_view) {
 void host_hide_toast(void) {
   g_toast_over = nullptr;
   g_toast.plate = RECT{};
+  const bool shown = g_toast.hwnd && IsWindowVisible(g_toast.hwnd);
   Hide(g_toast);
+  // GPUI keeps where the pointer was when the toast hid, and Windows tells a hidden window nothing
+  // of the pointer leaving: a toast clicked away and the next shown in its place took itself as
+  // hovered and stayed past its time (#2544, as #2076 on the Mac). It hears the pointer leave as it
+  // hides, posted, as GPUI drops what a window hears while the UI is busy, as it is here.
+  if (shown) {
+    PostMessageW(g_toast.hwnd, WM_MOUSELEAVE, 0, 0);
+  }
+}
+
+void host_add_foot_bar(void* foot_bar_view) {
+  Adopt(g_foot_bar, foot_bar_view, "foot bar", false, nullptr);
+  // A click on its buttons leaves the keyboard where it was, with the browser window and the page,
+  // where the mode has its keys, as the hover card's does.
+  SetWindowLongPtrW(g_foot_bar.hwnd, GWL_EXSTYLE,
+                    GetWindowLongPtrW(g_foot_bar.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
+}
+
+void host_show_foot_bar(void* ui_view,
+                        double left,
+                        double right,
+                        double bottom,
+                        double width,
+                        double height) {
+  g_foot_bar_over = ui_view;
+  g_foot_bar_left = left;
+  g_foot_bar_right = right;
+  g_foot_bar_bottom = bottom;
+  g_foot_bar_width = width;
+  g_foot_bar_height = height;
+  const bool shown = IsWindowVisible(g_foot_bar.hwnd);
+  auto [x, y] = FootBarOrigin();
+  Show(g_foot_bar, ui_view, x, y, width, height, false);
+  if (!shown) {
+    LogShown(g_foot_bar, "foot bar");
+  }
+}
+
+void host_hide_foot_bar(void) {
+  g_foot_bar_over = nullptr;
+  Hide(g_foot_bar);
 }
 
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
-  Adopt(g_tooltip, tooltip_view, true, nullptr);
+  Adopt(g_tooltip, tooltip_view, "tooltip", true, nullptr);
   g_tooltip_away = away;
   g_tooltip_margin = margin;
 }
@@ -4040,7 +4532,7 @@ void host_show_tooltip(void* ui_view, int overlay, double left, double top, doub
       return;
     }
     const Floating& owner = g_overlays[overlay];
-    if (!owner.shown || !owner.place || GetWindow(owner.hwnd, GW_OWNER) != Root(ui_view)) {
+    if (!Shows(owner.life) || !owner.place || GetWindow(owner.hwnd, GW_OWNER) != Root(ui_view)) {
       return;
     }
     left += owner.place->first;
@@ -4056,7 +4548,7 @@ void host_hide_tooltip(double fade) {
 
 // shortcut: the card ends only as the pointer leaves it or the UI ends it, as a key does.
 void host_add_hover_card(void* card_view, double margin, void (*)(void)) {
-  Adopt(g_card, card_view, false, nullptr);
+  Adopt(g_card, card_view, "hover card", false, nullptr);
   // A click on its buttons leaves the keyboard where it was.
   SetWindowLongPtrW(g_card.hwnd, GWL_EXSTYLE,
                     GetWindowLongPtrW(g_card.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
@@ -4105,7 +4597,7 @@ void host_watch_memory_pressure(void (*pressed)(void)) {
 }
 
 void host_add_link_target(void* link_view, double margin, void (*pointer)(double x, double y)) {
-  Adopt(g_link_target, link_view, true, nullptr);
+  Adopt(g_link_target, link_view, "link target", true, nullptr);
   g_link_margin = margin;
   g_link_pointer = pointer;
 }
@@ -4118,6 +4610,10 @@ void host_show_link_target(void* ui_view, double left, double top, double fade) 
 
 void host_hide_link_target(double fade) {
   FadeOut(g_link_target, fade, MaybeStopWatchingPointer);
+}
+
+bool host_mouse_down(void) {
+  return Pressed();
 }
 
 void host_focus(void* view) {
@@ -4155,8 +4651,23 @@ void host_add_menu_window(void* view,
         if (message == WM_NCCALCSIZE && wparam) {
           return 0;
         }
-        if (message == WM_WINDOWPOSCHANGING && !g_menu.shown) {
+        if (message == WM_WINDOWPOSCHANGING && !OnScreen(g_menu.life)) {
           reinterpret_cast<WINDOWPOS*>(lparam)->flags &= ~SWP_SHOWWINDOW;
+        }
+        if (message == WM_ACTIVATE) {
+          const uint16_t actions =
+              Step(g_menu.life, LOWORD(wparam) != WA_INACTIVE ? OverlayEvent::kActivated
+                                                              : OverlayEvent::kDeactivated);
+          TakePointer(hwnd, actions);
+          if (actions & kGiveBack) {
+            KeyboardFromHidden(hwnd);
+          }
+        }
+        if (message == WM_SHOWWINDOW && lparam == SW_PARENTCLOSING) {
+          PutAway(hwnd, nullptr, Step(g_menu.life, OverlayEvent::kMinimized));
+        } else if (message == WM_SHOWWINDOW && lparam == SW_PARENTOPENING &&
+                   (Step(g_menu.life, OverlayEvent::kRestored) & kTellScale)) {
+          TellScale(hwnd);
         }
         // Asked to close, it closes as Esc does, where Windows would destroy the window the app
         // goes on using, as an overlay's (FloatingProc, #1362).
@@ -4185,11 +4696,11 @@ void host_show_menu_window(void* ui_view,
   if (!g_menu.hwnd || !base || !root) {
     return;
   }
-  if (!g_menu.shown) {
+  if (!Shows(g_menu.life)) {
     HWND key = GetForegroundWindow();
     g_menu.had_keyboard = key == g_menu.hwnd ? nullptr : key;
   }
-  g_menu.shown = true;
+  Step(g_menu.life, OverlayEvent::kShow, kLater);
   g_menu.give_back = true;
   g_menu.parent = base;
   g_menu.browser = root;
@@ -4219,9 +4730,9 @@ void host_show_menu_window(void* ui_view,
     SetWindowPos(g_menu.hwnd, nullptr, frame.left, frame.top, wide, high,
                  SWP_NOACTIVATE | SWP_NOZORDER);
     SendMessageW(g_menu.hwnd, WM_PAINT, 0, 0);
-    PlaceAndShow(g_menu.hwnd, frame.left, frame.top, wide, high, true);
-    SetForegroundWindow(g_menu.hwnd);
-    SetFocus(g_menu.hwnd);
+    PlaceAndShow(g_menu.hwnd, frame.left, frame.top, wide, high,
+                 Step(g_menu.life, OverlayEvent::kShow, kKeyboard));
+    g_menu.resting = GetCursorPos(&g_menu.rest);
     InstallMenuHooks();
     // check.sh reads this line.
     fprintf(stderr, "browser: menu window at %.0f,%.0f %.0fx%.0f\n", left, top, width, height);
@@ -4234,19 +4745,18 @@ void host_show_menu_window(void* ui_view,
 }
 
 void host_hide_menu_window(void) {
-  if (!g_menu.shown) {
+  if (g_menu.life == Life::kHidden) {
     return;
   }
-  g_menu.shown = false;
+  const uint16_t actions = Step(g_menu.life, OverlayEvent::kHide);
   ++g_menu.showing;
   RemoveMenuHooks();
-  ShowWindow(g_menu.hwnd, SW_HIDE);
+  // To what had the keyboard before it, such as the command bar it opened over, or its browser
+  // window, unless the user left it for another window.
   HWND back = g_menu.had_keyboard && IsWindowVisible(g_menu.had_keyboard) ? g_menu.had_keyboard
                                                                          : g_menu.browser;
   g_menu.had_keyboard = nullptr;
-  if (g_menu.give_back && g_active && back && IsWindowVisible(back)) {
-    SetForegroundWindow(back);
-  }
+  PutAway(g_menu.hwnd, g_menu.give_back ? back : nullptr, actions);
   fprintf(stderr, "browser: menu window hidden\n");
 }
 
@@ -4272,11 +4782,11 @@ void host_menu_area(void* ui_view, bool in_reveal, double* area) {
 // For the driver: chooses |title|, or "Submenu › Item", in the menu that shows, or closes it. Each
 // returns whether a menu was showing.
 bool host_menu_window_choose(const char* title) {
-  return g_menu.shown && g_menu.choose && g_menu.choose(title);
+  return Shows(g_menu.life) && g_menu.choose && g_menu.choose(title);
 }
 
 bool host_menu_window_dismiss(void) {
-  if (!g_menu.shown || !g_menu.dismissed) {
+  if (!Shows(g_menu.life) || !g_menu.dismissed) {
     return false;
   }
   g_menu.dismissed();
@@ -4416,7 +4926,7 @@ void host_add_reveal(void* ui_view,
                      void* reveal_view,
                      void (*pointer_moved)(void* ui_view, double x)) {
   Reveal& reveal = g_reveals[ui_view];
-  Adopt(reveal.floating, reveal_view, false, nullptr);
+  Adopt(reveal.floating, reveal_view, "reveal", false, nullptr);
   reveal.pointer_moved = pointer_moved;
 }
 
@@ -4481,11 +4991,12 @@ bool host_close_other_window(void) {
   }
   DWORD process = 0;
   GetWindowThreadProcessId(window, &process);
-  // Our own, but neither a browser window (Ctrl+W closes its tab) nor one of the UI's floating
-  // windows: a Chrome window of its own, such as the Task Manager or undocked DevTools, which carry
+  // Our own, but neither a browser window (Ctrl+W closes its tab), one of the UI's floating windows
+  // nor a window another owns, such as a tab's dialog, whose Ctrl+W closes its tab as in Chrome
+  // (#2651): a Chrome window of its own, such as the Task Manager or undocked DevTools, which carry
   // a system close button. Closing it is that button's click.
   if (process != GetCurrentProcessId() || UiViewOf(window) || FloatingByHwnd().count(window) ||
-      !(GetWindowLongPtrW(window, GWL_STYLE) & WS_SYSMENU)) {
+      GetWindow(window, GW_OWNER) || !(GetWindowLongPtrW(window, GWL_STYLE) & WS_SYSMENU)) {
     return false;
   }
   PostMessageW(window, WM_CLOSE, 0, 0);
@@ -4663,6 +5174,11 @@ void* host_drop_target(void* hwnd) {
 // The driver's: carries the app's own drags in place of DoDragDrop (g_drive_drag).
 void host_drive_drags(HRESULT (*drag)(IDataObject*, DWORD, DWORD*, POINT*)) {
   g_drive_drag = drag;
+}
+
+// The driver's: its input is real, which the menu hooks then hear as a hand's (#2544).
+void host_drive_real_input(void) {
+  g_drive_real = true;
 }
 
 bool host_trash(const char* path) {
@@ -4987,7 +5503,7 @@ void host_forget_secret(void) {
 }
 
 bool host_key_repeated(void) {
-  return false;
+  return g_key_repeated;
 }
 
 size_t host_paste(char* text, size_t capacity) {
@@ -5009,9 +5525,20 @@ size_t host_paste(char* text, size_t capacity) {
 
 void host_open_full_disk_access(void) {}
 
-// There's no Safari: Windows plays protected video with Chromium's own PlayReady (decision 1).
-void host_open_in_safari(const char* url) {
-  fprintf(stderr, "browser: no system engine for %s\n", url);
+// The system's default browser, through the http handler the user chose, as a link from another
+// app reaches it. The card offers it only while that isn't ilo.
+void host_open_elsewhere(const char* url) {
+  // Only web pages go to another app.
+  const std::string page = url;
+  if (page.rfind("http://", 0) != 0 && page.rfind("https://", 0) != 0) {
+    return;
+  }
+  // A driven run only logs it, so checks never launch another browser.
+  fprintf(stderr, "browser: open in default browser %s\n", url);
+  if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
+    return;
+  }
+  ShellExecuteW(nullptr, L"open", Wide(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 void host_share(void* ui_view,
@@ -5137,31 +5664,23 @@ bool host_drive_key(unsigned vk, long lparam) {
 // What check.sh calls the window |hwnd| the host floats over a browser window, for the driver's
 // stack, or nothing if it's none of those.
 const char* host_floating_name(void* hwnd) {
-  const std::pair<const Floating*, const char*> named[] = {
-      {&g_link_target, "link target"}, {&g_tooltip, "tooltip"},
-      {&g_card, "hover card"},         {&g_toast, "toast"},
-      {&g_capture, "capture"},         {&g_hud, "hud"},
-      {&g_dialog, "dialog"},           {&g_site_controls, "site controls"},
-      {&g_link_preview.floating, "link preview"}};
-  for (const auto& [floating, name] : named) {
-    if (floating->hwnd && floating->hwnd == hwnd) {
-      return name;
-    }
-  }
-  for (size_t index = 0; index < std::size(g_overlays); ++index) {
-    if (g_overlays[index].hwnd && g_overlays[index].hwnd == hwnd) {
-      return kOverlayNames[index];
-    }
-  }
-  for (const auto& [corners, name] :
-       {std::pair{&g_find_bars, "find bar"}, std::pair{&g_offers, "offer"}}) {
-    for (const auto& [ui_view, corner] : *corners) {
-      if (corner.floating.hwnd && corner.floating.hwnd == hwnd) {
-        return name;
-      }
-    }
+  if (auto it = FloatingByHwnd().find(static_cast<HWND>(hwnd)); it != FloatingByHwnd().end()) {
+    return it->second->name;
   }
   return g_menu.hwnd && g_menu.hwnd == hwnd ? "menu" : nullptr;
+}
+
+// Each window the host floats over a browser window, made so far, and the menu, by its name, its
+// window and where it is in its life (Life), for the driver's lives (#2563). Every one is made
+// through Adopt, which names it, so a new one is in the list without being added to it.
+void host_floating_lives(void (*each)(void* context, const char* name, void* hwnd, int life),
+                         void* context) {
+  for (const auto& [hwnd, floating] : FloatingByHwnd()) {
+    each(context, floating->name, hwnd, static_cast<int>(floating->life));
+  }
+  if (g_menu.hwnd) {
+    each(context, "menu", g_menu.hwnd, static_cast<int>(g_menu.life));
+  }
 }
 
 }  // extern "C"
@@ -5177,11 +5696,9 @@ constexpr UINT kTrayId = 1;
 HWND g_tray = nullptr;
 void (*g_tray_clicked)(void) = nullptr;
 UINT g_taskbar_created = 0;
-// The task's title, which the icon's tooltip says too, and its arguments, kept until it's
-// written under the windows' AppUserModelID, which the first window has.
+// The jump list's Little ilo task's title, which the icon's tooltip says too, and its arguments.
 std::wstring g_little_title;
 std::wstring g_little_arguments;
-bool g_little_task_waits = false;
 
 // PKEY_Title, named here as kAppId is, rather than linked from propsys.
 constexpr PROPERTYKEY kTitle = {
@@ -5273,20 +5790,23 @@ void host_set_little_status_item(void (*clicked)(void)) {
 void host_set_little_task(const char* title, const char* arguments) {
   g_little_title = Wide(title);
   g_little_arguments = Wide(arguments);
-  g_little_task_waits = true;
-  WriteLittleTask();
+  // Before the list is first written, it's written with the rest then.
+  if (g_jump_list_set) {
+    WriteJumpList();
+  }
 }
 
 }  // extern "C"
 
-static void WriteLittleTask() {
-  // The list goes under the windows' ID, so their taskbar button has it, and no window has it
-  // before the first opens.
-  const std::wstring id = g_little_task_waits ? BrowserModelId() : std::wstring();
-  if (id.empty()) {
-    return;
-  }
-  g_little_task_waits = false;
+namespace {
+
+// Writes the jump list under the windows' AppUserModelID |id|: New window and New incognito window,
+// each launching ilo again with Chrome's switch for it, which the running browser hears as a second
+// launch (bc_host's app_new_window), then Little ilo's task if the app gave one. Each commit
+// replaces the whole list, so all three go in one. The caller has CoInitialized this thread.
+void WriteJumpListNow(const std::wstring& id,
+                      const std::wstring& little_title,
+                      const std::wstring& little_arguments) {
   // check.sh reads these lines: which step refused, and why.
   const auto refused = [](const char* step, HRESULT result) {
     fprintf(stderr, "browser: jump list refused at %s: 0x%08lx\n", step,
@@ -5294,8 +5814,6 @@ static void WriteLittleTask() {
   };
   ComPtr<ICustomDestinationList> list;
   ComPtr<IObjectCollection> tasks;
-  ComPtr<IShellLinkW> link;
-  ComPtr<IPropertyStore> store;
   HRESULT result = CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
                                     IID_PPV_ARGS(&list));
   if (FAILED(result)) {
@@ -5306,43 +5824,87 @@ static void WriteLittleTask() {
   if (FAILED(result)) {
     return refused("the tasks", result);
   }
-  result = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
-  if (FAILED(result) || FAILED(result = link.As(&store))) {
-    return refused("the task", result);
-  }
   if (FAILED(result = list->SetAppID(id.c_str()))) {
     return refused("its app id", result);
   }
-  const std::wstring exe = ExePath();
-  link->SetPath(exe.c_str());
-  link->SetArguments(g_little_arguments.c_str());
-  link->SetIconLocation(exe.c_str(), 0);
-  link->SetDescription(g_little_title.c_str());
-  PROPVARIANT value;
-  PropVariantInit(&value);
-  value.vt = VT_LPWSTR;
-  const size_t bytes = (g_little_title.size() + 1) * sizeof(wchar_t);
-  value.pwszVal = static_cast<LPWSTR>(CoTaskMemAlloc(bytes));
-  if (value.pwszVal) {
-    memcpy(value.pwszVal, g_little_title.c_str(), bytes);
+  std::vector<std::pair<std::wstring, std::wstring>> all = {
+      {L"New window", L"--new-window"}, {L"New incognito window", L"--incognito"}};
+  if (!little_title.empty()) {
+    all.emplace_back(little_title, little_arguments);
   }
-  result = value.pwszVal ? store->SetValue(kTitle, value) : E_OUTOFMEMORY;
-  PropVariantClear(&value);
-  if (FAILED(result) || FAILED(result = store->Commit())) {
-    return refused("its title", result);
+  const std::wstring exe = ExePath();
+  for (const auto& [title, arguments] : all) {
+    ComPtr<IShellLinkW> link;
+    ComPtr<IPropertyStore> store;
+    result = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
+    if (FAILED(result) || FAILED(result = link.As(&store))) {
+      return refused("the task", result);
+    }
+    link->SetPath(exe.c_str());
+    link->SetArguments(arguments.c_str());
+    link->SetIconLocation(exe.c_str(), 0);
+    link->SetDescription(title.c_str());
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    value.vt = VT_LPWSTR;
+    result = SHStrDupW(title.c_str(), &value.pwszVal);
+    if (SUCCEEDED(result)) {
+      result = store->SetValue(kTitle, value);
+    }
+    PropVariantClear(&value);
+    if (FAILED(result) || FAILED(result = store->Commit())) {
+      return refused("its title", result);
+    }
+    if (FAILED(result = tasks->AddObject(link.Get()))) {
+      return refused("the task", result);
+    }
   }
   UINT slots = 0;
   ComPtr<IObjectArray> removed;
   ComPtr<IObjectArray> array;
-  if (FAILED(result = tasks->AddObject(link.Get())) || FAILED(result = tasks.As(&array)) ||
+  if (FAILED(result = tasks.As(&array)) ||
       FAILED(result = list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
       FAILED(result = list->AddUserTasks(array.Get())) || FAILED(result = list->CommitList())) {
     return refused("the commit", result);
   }
-  // check.sh reads this line.
-  fprintf(stderr, "browser: jump list task %ls: %ls\n", g_little_title.c_str(),
-          g_little_arguments.c_str());
+  // check.sh reads these lines.
+  fprintf(stderr, "browser: jump list set\n");
+  if (!little_title.empty()) {
+    fprintf(stderr, "browser: jump list task %ls: %ls\n", little_title.c_str(),
+            little_arguments.c_str());
+  }
 }
+
+// The taskbar's jump list, Windows' stand-in for the Mac's Dock menu, under the AppUserModelID the
+// windows have, so it's the one their taskbar button shows, which is why it waits for the first
+// window to show. COM's shell objects take tens of milliseconds (#2384): on the main thread the
+// first window waited for them, and on a thread of their own while the launch's page loads, that
+// page did. So they're written on a thread of their own, as Chrome writes its list off the UI
+// thread, and at launch kJumpListAfter later. The newest write wins: one that finds a newer one
+// asked for leaves it alone.
+void WriteJumpList() {
+  const std::wstring id = BrowserModelId();
+  if (id.empty()) {
+    return;
+  }
+  // Leaked, as a write may still be going at exit.
+  static auto* lock = new std::mutex;
+  static auto* asked = new std::atomic<uint64_t>(0);
+  const uint64_t ask = ++*asked;
+  std::thread([id, ask, title = g_little_title, arguments = g_little_arguments] {
+    std::lock_guard<std::mutex> hold(*lock);
+    if (ask != asked->load()) {
+      return;
+    }
+    const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+    WriteJumpListNow(id, title, arguments);
+    if (com) {
+      CoUninitialize();
+    }
+  }).detach();
+}
+
+}  // namespace
 
 extern "C" {
 

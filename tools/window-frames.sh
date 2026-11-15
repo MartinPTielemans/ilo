@@ -9,12 +9,19 @@
 # moment between, which on the Mac spans 25 ms or more. It keeps the first ten flat pictures in
 # <flat-dir>, named for when they were asked for: on Linux of the whole window, to show what the UI
 # around the page area drew with it.
-# On the Mac it takes them as tools/window-screenshot.sh does. On Linux it reads check.sh's Xvfb,
-# which holds nothing but the app, and refuses outside it; on Windows it copies the screen where
-# the window is, only on a CI runner, whose desktop holds nothing but the app.
-# Usage: tools/window-frames.sh <pid> <seconds> <stop> <x> <y> <w> <h> <flat-dir>
+# On the Mac it takes them as tools/window-screenshot.sh does. On Linux it reads check.sh's Xvfb or
+# tools/headless.sh's sway session, each holding nothing but the app, and refuses outside them; on
+# Windows it copies the screen where the window is, only on a CI runner, whose desktop holds nothing
+# but the app.
+# With <every-dir>, on Windows and Linux, it also keeps every picture of the rect there, named the
+# same way, written once it stops so writing them doesn't slow the pictures: a motion's frames, to
+# read and to show (check/peek-motion.sh).
+# Usage: tools/window-frames.sh <pid> <seconds> <stop> <x> <y> <w> <h> <flat-dir> [every-dir]
 set -e
-[ $# -eq 8 ] || { echo "usage: $0 <pid> <seconds> <stop> <x> <y> <w> <h> <flat-dir>" >&2; exit 2; }
+[ $# -eq 8 ] || [ $# -eq 9 ] ||
+  { echo "usage: $0 <pid> <seconds> <stop> <x> <y> <w> <h> <flat-dir> [every-dir]" >&2; exit 2; }
+every=${9:-}
+[ -z "$every" ] || mkdir -p "$every"
 kill -0 "$1" 2> /dev/null || { echo "process $1 isn't running" >&2; exit 1; }
 mkdir -p "$8"
 # A rect flat to within this much luma shows no page: a page's text or edges reach far more.
@@ -25,11 +32,13 @@ MINGW* | MSYS*)
     { echo "Copies the screen only on a CI runner, whose desktop holds nothing but the app." >&2; exit 1; }
   exec env PID="$(cat "/proc/$1/winpid")" SECONDS_LONG="$2" STOP="$(cygpath -w "$3")" X="$4" \
     Y="$5" W="$6" H="$7" FLAT_DIR="$(cygpath -w "$8")" FLAT="$flat" \
+    EVERY_DIR="$([ -z "$every" ] || cygpath -w "$every")" \
     powershell.exe -NoProfile -NonInteractive -Command '
 Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -44,7 +53,7 @@ public static class Frames {
   [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT rect, int size);
 
-  public static void Run(uint pid, double seconds, string stop, int x, int y, int w, int h, string flatDir, int flat) {
+  public static void Run(uint pid, double seconds, string stop, int x, int y, int w, int h, string flatDir, int flat, string everyDir) {
     SetProcessDPIAware();
     // The biggest visible window of the process that no other owns: the browser window.
     Rectangle main = Rectangle.Empty;
@@ -63,6 +72,7 @@ public static class Frames {
     DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
     DateTime end = DateTime.UtcNow.AddSeconds(seconds);
     int saved = 0;
+    var every = new List<KeyValuePair<double, Bitmap>>();
     using (Bitmap bitmap = new Bitmap(w, h, PixelFormat.Format32bppRgb))
     using (Graphics graphics = Graphics.FromImage(bitmap)) {
       Console.WriteLine("capturing " + w + "x" + h);
@@ -97,35 +107,57 @@ public static class Frames {
           saved++;
           bitmap.Save(Path.Combine(flatDir, at.ToString("F3", CultureInfo.InvariantCulture) + ".png"), ImageFormat.Png);
         }
+        if (everyDir != "") every.Add(new KeyValuePair<double, Bitmap>(at, (Bitmap)bitmap.Clone()));
       }
+    }
+    foreach (var picture in every) {
+      picture.Value.Save(Path.Combine(everyDir, picture.Key.ToString("F3", CultureInfo.InvariantCulture) + ".png"), ImageFormat.Png);
+      picture.Value.Dispose();
     }
   }
 }
 "@
 [Frames]::Run([uint32]$env:PID, [double]$env:SECONDS_LONG, $env:STOP, [int]$env:X, [int]$env:Y,
-  [int]$env:W, [int]$env:H, $env:FLAT_DIR, [int]$env:FLAT)
+  [int]$env:W, [int]$env:H, $env:FLAT_DIR, [int]$env:FLAT, [string]$env:EVERY_DIR)
 '
   ;;
 Linux)
-  [ "${BROWSER_HEADLESS:-}" = xvfb ] ||
-    { echo "Reads only check.sh's Xvfb (BROWSER_XVFB)." >&2; exit 1; }
   # The process's biggest window, at its place on the screen.
   where=
-  for window in $(xdotool search --onlyvisible --pid "$1" 2> /dev/null); do
-    eval "$(xdotool getwindowgeometry --shell "$window")"
-    if [ -z "$where" ] || [ $((WIDTH * HEIGHT)) -gt "$area" ]; then
-      area=$((WIDTH * HEIGHT))
-      where="$X $Y $WIDTH $HEIGHT"
-    fi
-  done
+  if [ "${BROWSER_HEADLESS:-}" = xvfb ]; then
+    for window in $(xdotool search --onlyvisible --pid "$1" 2> /dev/null); do
+      eval "$(xdotool getwindowgeometry --shell "$window")"
+      if [ -z "$where" ] || [ $((WIDTH * HEIGHT)) -gt "$area" ]; then
+        area=$((WIDTH * HEIGHT))
+        where="$X $Y $WIDTH $HEIGHT"
+      fi
+    done
+  elif [ -n "${BROWSER_HEADLESS:-}" ] && [ -n "${SWAYSOCK:-}" ]; then
+    # tools/headless.sh's sway session, whose tree names each window's process.
+    where=$(swaymsg -t get_tree | python3 -I -c '
+import json, sys
+def nodes(node):
+    yield node
+    for child in node.get("nodes", []) + node.get("floating_nodes", []):
+        yield from nodes(child)
+ours = [node["rect"] for node in nodes(json.load(sys.stdin))
+        if node.get("pid") == int(sys.argv[1]) and node.get("visible")]
+if ours:
+    rect = max(ours, key=lambda rect: rect["width"] * rect["height"])
+    print("%(x)d %(y)d %(width)d %(height)d" % rect)
+' "$1")
+  else
+    echo "Reads only check.sh's Xvfb (BROWSER_XVFB) or tools/headless.sh's sway session." >&2
+    exit 1
+  fi
   [ -n "$where" ] || { echo "no window of process $1" >&2; exit 1; }
   # shellcheck disable=SC2086 # four numbers
-  exec python3 -I - "$2" "$3" $where "$4" "$5" "$6" "$7" "$8" "$flat" << 'PY'
-import ctypes, ctypes.util, os, struct, sys, time, zlib
+  exec python3 -I - "$2" "$3" $where "$4" "$5" "$6" "$7" "$8" "$flat" "$every" << 'PY'
+import ctypes, ctypes.util, os, struct, subprocess, sys, time, zlib
 
 seconds, stop = float(sys.argv[1]), sys.argv[2]
 left, top, width, height, x, y, w, h = (int(each) for each in sys.argv[3:11])
-flat_dir, flat = sys.argv[11], int(sys.argv[12])
+flat_dir, flat, every_dir = sys.argv[11], int(sys.argv[12]), sys.argv[13]
 
 
 class XImage(ctypes.Structure):
@@ -135,22 +167,51 @@ class XImage(ctypes.Structure):
             "bytes_per_line", "bits_per_pixel")]
 
 
-x11 = ctypes.cdll.LoadLibrary(ctypes.util.find_library("X11") or "libX11.so.6")
-x11.XOpenDisplay.restype = ctypes.c_void_p
-x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
-x11.XDefaultRootWindow.restype = ctypes.c_ulong
-x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
-x11.XGetImage.restype = ctypes.POINTER(XImage)
-x11.XGetImage.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
-                          ctypes.c_uint, ctypes.c_uint, ctypes.c_ulong, ctypes.c_int]
-x11.XFree.argtypes = [ctypes.c_void_p]
-display = x11.XOpenDisplay(None)
-if not display:
-    sys.exit("no X display")
-root = x11.XDefaultRootWindow(display)
+# grab() gives the whole window's pixels, the bytes a row, a pixel, and where red, green and blue
+# are in one, or None. The whole window, so a flat picture shows what the UI around the page area
+# drew with it.
+if os.environ.get("BROWSER_HEADLESS") == "xvfb":
+    x11 = ctypes.cdll.LoadLibrary(ctypes.util.find_library("X11") or "libX11.so.6")
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XDefaultRootWindow.restype = ctypes.c_ulong
+    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11.XGetImage.restype = ctypes.POINTER(XImage)
+    x11.XGetImage.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+                              ctypes.c_uint, ctypes.c_uint, ctypes.c_ulong, ctypes.c_int]
+    x11.XFree.argtypes = [ctypes.c_void_p]
+    display = x11.XOpenDisplay(None)
+    if not display:
+        sys.exit("no X display")
+    root = x11.XDefaultRootWindow(display)
+
+    def grab():
+        image = x11.XGetImage(display, root, left, top, width, height, 0xffffffff, 2)  # ZPixmap
+        if not image:
+            return None
+        line, depth = image.contents.bytes_per_line, image.contents.bits_per_pixel
+        data = ctypes.string_at(image.contents.data, line * height)
+        x11.XFree(image.contents.data)
+        x11.XFree(image)
+        if depth != 32:
+            sys.exit("the screen has %d bits a pixel, not 32" % depth)
+        return data, line, 4, (2, 1, 0)
+else:
+    # Wayland lets no client read another's window, but sway's screencopy gives grim its output.
+    # A grim a picture, each a process of its own.
+    where = ["grim", "-t", "ppm", "-g", "%d,%d %dx%d" % (left, top, width, height), "-"]
+    env = dict(os.environ, WAYLAND_DISPLAY=os.environ["BROWSER_HEADLESS"])
+
+    def grab():
+        ppm = subprocess.run(where, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
+        # grim's header: P6, the width and height, and 255, each on a line of its own.
+        head = ppm.split(b"\n", 3)
+        if len(head) < 4 or head[0] != b"P6" or head[1].split() != [b"%d" % width, b"%d" % height]:
+            return None
+        return head[3], width * 3, 3, (0, 1, 2)
 
 
-def png(path, rows):
+def png(path, rows, width=width, height=height):
     def chunk(kind, body):
         return struct.pack(">I", len(body)) + kind + body + struct.pack(
             ">I", zlib.crc32(kind + body) & 0xffffffff)
@@ -160,25 +221,30 @@ def png(path, rows):
                    + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
 
 
+def rgb_rows(picture, left, top, columns, lines):
+    data, line, size, (ri, gi, bi) = picture
+    rows = []
+    for row in range(top, top + lines):
+        pixels = data[row * line + left * size:row * line + (left + columns) * size]
+        rgb = bytearray(columns * 3)
+        rgb[0::3], rgb[1::3], rgb[2::3] = pixels[ri::size], pixels[gi::size], pixels[bi::size]
+        rows.append(bytes(rgb))
+    return rows
+
+
 print("capturing %dx%d" % (w, h), flush=True)
-end, saved = time.time() + seconds, 0
+end, saved, every = time.time() + seconds, 0, []
 while time.time() < end and not os.path.exists(stop):
     at = time.time()
-    # The whole window, so a flat picture shows what the UI around the page area drew with it.
-    image = x11.XGetImage(display, root, left, top, width, height, 0xffffffff, 2)  # ZPixmap
+    picture = grab()
     got = time.time()
-    if not image:
+    if not picture:
         continue
-    line, depth = image.contents.bytes_per_line, image.contents.bits_per_pixel
-    data = ctypes.string_at(image.contents.data, line * height)
-    x11.XFree(image.contents.data)
-    x11.XFree(image)
-    if depth != 32:
-        sys.exit("the screen has %d bits a pixel, not 32" % depth)
+    data, line, size, (ri, gi, bi) = picture
     low, high, red, green, blue, n = 255, 0, 0, 0, 0, 0
     for row in range(y, y + h, 6):
-        for i in range(row * line + x * 4, row * line + (x + w) * 4, 24):
-            b, g, r = data[i], data[i + 1], data[i + 2]
+        for i in range(row * line + x * size, row * line + (x + w) * size, 6 * size):
+            r, g, b = data[i + ri], data[i + gi], data[i + bi]
             luma = (r * 299 + g * 587 + b * 114) // 1000
             low, high = min(low, luma), max(high, luma)
             red, green, blue, n = red + r, green + g, blue + b, n + 1
@@ -187,16 +253,15 @@ while time.time() < end and not os.path.exists(stop):
                                          red // n, green // n, blue // n), flush=True)
     if is_flat and saved < 10:
         saved += 1
-        rows = []
-        for row in range(height):
-            bgrx = data[row * line:row * line + width * 4]
-            rgb = bytearray(width * 3)
-            rgb[0::3], rgb[1::3], rgb[2::3] = bgrx[2::4], bgrx[1::4], bgrx[0::4]
-            rows.append(bytes(rgb))
-        png(os.path.join(flat_dir, "%.3f.png" % at), rows)
+        png(os.path.join(flat_dir, "%.3f.png" % at), rgb_rows(picture, 0, 0, width, height))
+    if every_dir:
+        every.append((at, picture))
+for at, picture in every:
+    png(os.path.join(every_dir, "%.3f.png" % at), rgb_rows(picture, x, y, w, h), w, h)
 PY
   ;;
 esac
+[ -z "$every" ] || { echo "Keeps every picture only on Windows and Linux." >&2; exit 1; }
 PID="$1" SECONDS_LONG="$2" STOP="$3" X="$4" Y="$5" W="$6" H="$7" FLAT_DIR="$8" FLAT="$flat" \
   exec swift - << 'SWIFT'
 import Foundation

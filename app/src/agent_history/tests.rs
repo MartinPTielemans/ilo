@@ -26,6 +26,23 @@ fn past(id: &str, ended: u64) -> Past {
                 "",
                 "Pages outside http(s) are the user's.",
             ),
+            Step {
+                target: "POST /api/notes".into(),
+                url: "https://taberna.example/api/notes".into(),
+                sent: vec![
+                    Sent {
+                        depth: 0,
+                        name: "note".into(),
+                        value: String::new(),
+                    },
+                    Sent {
+                        depth: 1,
+                        name: "title".into(),
+                        value: "Table for four".into(),
+                    },
+                ],
+                ..step(ended - 20, "request", "taberna.example", "")
+            },
         ],
         answers: "claude-code".into(),
     }
@@ -37,6 +54,7 @@ fn step(at: u64, action: &str, site: &str, refused: &str) -> Step {
         action: action.into(),
         site: site.into(),
         refused: refused.into(),
+        ..Default::default()
     }
 }
 

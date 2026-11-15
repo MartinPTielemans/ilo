@@ -188,6 +188,10 @@ jobs:
 
       # An administrator's policies reach the Flatpak through its extension point (docs/policies.md),
       # as check.sh's policies run sets URLBlocklist in an unmanaged extension of the run's own.
+      - if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: xdotool openbox xauth
       - name: Policies
         id: policies
         if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
@@ -195,7 +199,6 @@ jobs:
         env:
           LANG: en_US.UTF-8
         run: |
-          sudo apt-get install -yq xdotool openbox xauth
           XDG_RUNTIME_DIR=$(mktemp -d) BROWSER_FLATPAK=1 BROWSER_XVFB=1 \
             dbus-run-session -- ./check.sh policies
 

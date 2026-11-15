@@ -7,13 +7,14 @@
 //! Arc's. A click on the sidebar's URL field opens a narrower panel over the field,
 //! as Arc's does. What it asks of the core and of its window goes through `Host`.
 
-use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc};
+use web_time::Instant;
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Entity, Focusable, FontWeight, Global, HoverListenerMode,
-    Hsla, Image, KeyBinding, Pixels, Rgba, ScrollHandle, SharedString, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
-    div, img, point, prelude::*, px, size, svg,
+    AnyElement, AnyView, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable,
+    FontWeight, Global, HoverListenerMode, Hsla, Image, KeyBinding, Pixels, Rgba, ScrollHandle,
+    SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, actions, div, img, point, prelude::*, px, size, svg,
 };
 use gpui::{Role, Size, accesskit::Live, canvas};
 
@@ -180,6 +181,17 @@ pub struct Suggestion {
     /// The account's other computer the page is open on, which the row names at its end, or
     /// empty (#1234).
     pub computer: SharedString,
+    /// When the profile's history last saw a visit to the page, in microseconds since 1970, as
+    /// the core gives it, or 0 (#2337).
+    pub last_visit: i64,
+    /// The archived tab at the page, which ↩ reopens as the tab it was rather than loading the
+    /// page afresh, or 0, and what its row says at its end, such as "Closed today · Reopen"
+    /// (#2337).
+    pub archived: u64,
+    pub closed: SharedString,
+    /// What the row of a page the profile's history has says at its end, such as "Visited
+    /// yesterday", or empty (#2337).
+    pub visited: SharedString,
 }
 
 /// A tab open on one of the account's other computers, as sync last brought it (#1234).
@@ -253,6 +265,17 @@ const SET_UP: &str = "Set up Claude or Codex";
 /// size, as the chip's text is the rows' body size.
 const CHIP_MAX: f32 = 180.;
 const CHIP_FAVICON: f32 = 12.;
+/// The tile after a row's end, as Switch to Tab's: its margin from the row's end, and its glyph's
+/// box.
+const END_TILE_RIGHT: f32 = 3.;
+const END_GLYPH: f32 = 14.;
+
+/// How far from the row's end its end ends with no tile after it, as a visited page's day: at the
+/// tile's glyph's right edge, so it lines up with a closed tab's ↺ over or under it, the tile's
+/// plate hanging past (the orchestrator, 11-14).
+fn bare_end() -> f32 {
+    END_TILE_RIGHT + (ICON_BOX - END_GLYPH) / 2.
+}
 
 /// A task ⇥ is making of what's typed: the page that goes with it, as its address and title, which
 /// ⌫ at the field's start takes off.
@@ -327,7 +350,10 @@ impl Suggestion {
             return Icon::Glyph(section.glyph());
         }
         match self.kind() {
-            Kind::Page if self.tab == 0 && self.removable => Icon::Glyph("icons/clock.svg"),
+            // An archived tab comes back as itself, so it has its favicon as an open tab does.
+            Kind::Page if self.tab == 0 && self.removable && self.archived == 0 => {
+                Icon::Glyph("icons/clock.svg")
+            }
             Kind::Page => Icon::Favicon,
             Kind::Search => Icon::Glyph("icons/search.svg"),
             Kind::Command => Icon::Glyph(self.command.map_or(COMMAND_GLYPH, command_glyph)),
@@ -463,12 +489,14 @@ pub trait Host {
     /// through `page_favicon`.
     fn page_favicon(&self, url: &str);
     /// Opens a tab loading `url` at the top of the Space's Today tabs, and shows it unless
-    /// `behind`, when it loads only once it's first shown.
-    fn open_tab(&self, url: &str, behind: bool);
+    /// `behind`, when it loads only once it's first shown. `typed` is what the user typed for it,
+    /// which keeps an http address written out as written (`bc_tab_open_typed`), as for each load
+    /// below.
+    fn open_tab(&self, url: &str, typed: &str, behind: bool);
     /// Opens a browser window after the one the bar shows over, as ⌘N does, and shows a tab
     /// loading `url` in it. The user's: agents get none, as it opens a window (decision 8).
-    fn open_window(&self, url: &str, cx: &mut App);
-    fn navigate(&self, tab: u64, url: &str);
+    fn open_window(&self, url: &str, typed: &str, cx: &mut App);
+    fn navigate(&self, tab: u64, url: &str, typed: &str);
     /// Loads `tab`'s page again, as ↩ does on the URL the bar opened on (Arc).
     fn reload(&self, tab: u64);
     fn select(&self, tab: u64);
@@ -481,7 +509,7 @@ pub trait Host {
     /// Puts `tab` in a split view with `with`, on its right, and shows it there.
     fn split(&self, tab: u64, with: u64, cx: &mut App);
     /// Opens a tab loading `url` in a split view with `with`, on its right, and shows it there.
-    fn open_split(&self, url: &str, with: u64, cx: &mut App);
+    fn open_split(&self, url: &str, typed: &str, with: u64, cx: &mut App);
     /// Copies `text`, a sum's result, and says so.
     fn copy(&self, text: &str, cx: &mut App);
     /// Shows the bar's window, `width` wide, its corners rounded by `radius` and shadowed as
@@ -540,6 +568,38 @@ pub trait Host {
     /// over a window of the profile that syncs, and none over a private one. It only reads.
     fn other_tabs(&self, _: &App) -> Rc<Vec<OtherTab>> {
         Rc::default()
+    }
+    /// The newest tab in the archive at `url`, as the Library lists it: its id and when it
+    /// closed, in milliseconds since 1970. None over a private window, whose pages the archive
+    /// keeps apart. It only reads.
+    fn archived(&self, url: &str, cx: &App) -> Option<(u64, f64)>;
+    /// Reopens the archived tab `archived` at the top of the Today tabs of the Space shown, with
+    /// its history, name and icon, and shows it, as the Library's Reopen does. Whether it did:
+    /// not once it has left the archive. The user's: agents get no path to the bar.
+    fn restore_archived(&self, archived: u64, cx: &mut App) -> bool;
+    /// Now, in milliseconds since 1970, which a row counts the days since its page's visit from.
+    fn now(&self) -> f64 {
+        // web_time's: std's panics in the web preview.
+        web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .map_or(0., |since| since.as_secs_f64() * 1000.)
+    }
+}
+
+/// The day `at`, in milliseconds since 1970, as a row's end says it from `now` in the user's time
+/// zone: today, yesterday, the weekday for the five days before, then the date, such as 3 Nov, so
+/// a weekday is never last week's (#2337). A time after now, from a clock set back, is today.
+fn day_said(at: f64, now: f64) -> String {
+    use chrono::{Local, TimeZone};
+    let local = |ms: f64| Local.timestamp_millis_opt(ms as i64).single();
+    let (Some(at), Some(now)) = (local(at), local(now)) else {
+        return String::new();
+    };
+    match (now.date_naive() - at.date_naive()).num_days() {
+        ..=0 => "today".into(),
+        1 => "yesterday".into(),
+        2..=6 => at.format("%A").to_string(),
+        _ => at.format("%-d %b").to_string(),
     }
 }
 
@@ -649,9 +709,29 @@ pub struct CommandBar {
     open: Cell<bool>,
 }
 
-struct CommandBarWindow(WindowHandle<CommandBar>);
+/// The bar, and the window it draws in: its own, or on the web the browser's one window.
+#[derive(Clone)]
+struct CommandBarWindow {
+    window: AnyWindowHandle,
+    bar: Entity<CommandBar>,
+}
 
 impl Global for CommandBarWindow {}
+
+impl CommandBarWindow {
+    /// Runs `update` on the bar, with the window it draws in, as a `WindowHandle`'s does.
+    fn update<R>(
+        &self,
+        cx: &mut App,
+        update: impl FnOnce(&mut CommandBar, &mut Window, &mut Context<CommandBar>) -> R,
+    ) -> Result<R, ()> {
+        let bar = self.bar.clone();
+        let update = |_: AnyView, window: &mut Window, cx: &mut App| {
+            bar.update(cx, |bar, cx| update(bar, window, cx))
+        };
+        self.window.update(cx, update).map_err(|_| ())
+    }
+}
 
 /// Opens the command bar's window, hidden, for `host` to show over the browser window. Opening it
 /// ahead of time keeps window setup off the path from the shortcut to the bar on screen.
@@ -667,6 +747,66 @@ pub fn open_at(
     show: bool,
     cx: &mut App,
 ) -> Option<WindowHandle<CommandBar>> {
+    bind_keys(cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        // The preview's has none, so it hasn't the window buttons the host's takes off.
+        titlebar: (!show).then_some(TitlebarOptions {
+            title: None,
+            appears_transparent: true,
+            traffic_light_position: None,
+        }),
+        kind: WindowKind::Floating,
+        show,
+        focus: show,
+        is_movable: false,
+        is_resizable: false,
+        is_minimizable: false,
+        // The panel's rounded shape is drawn, so the window around it is clear.
+        window_background: WindowBackgroundAppearance::Transparent,
+        ..Default::default()
+    };
+    let window = cx.open_window(options, |window, cx| {
+        let bar = new_bar(host, true, window, cx);
+        window.focus(&bar.read(cx).input.focus_handle(cx), cx);
+        bar
+    });
+    match window {
+        Ok(window) => {
+            let bar = window.entity(cx).ok()?;
+            cx.set_global(CommandBarWindow {
+                window: window.into(),
+                bar,
+            });
+            Some(window)
+        }
+        Err(error) => {
+            log!("couldn't open the command bar: {error}");
+            None
+        }
+    }
+}
+
+/// Makes the command bar in `window`, the browser's, for a host that draws it there over the shell:
+/// the web's, which has one window. `Host::show` puts it on screen.
+pub fn open_in(host: Rc<dyn Host>, window: &mut Window, cx: &mut App) -> Entity<CommandBar> {
+    bind_keys(cx);
+    let bar = new_bar(host, false, window, cx);
+    let window = window.window_handle();
+    cx.set_global(CommandBarWindow {
+        window,
+        bar: bar.clone(),
+    });
+    bar
+}
+
+/// The bar's field, which a host that draws the bar in the browser's window focuses to show it.
+pub fn input_focus(cx: &App) -> Option<FocusHandle> {
+    let bar = cx.try_global::<CommandBarWindow>()?;
+    Some(bar.bar.read(cx).input.focus_handle(cx))
+}
+
+fn bind_keys(cx: &mut App) {
     // Off the Mac ⌃ and ⌥ are both Alt, and Alt+↩ is ⌥↩'s, near Chrome's Alt+Enter, which opens a
     // tab, so ⌃↩ has no key there. Arc's ⌥⌘⌫ would be Ctrl+Alt+Backspace, which X11 can take to end
     // the session, so there ⇧⌦ alone removes a suggestion, as in Chrome.
@@ -698,38 +838,29 @@ pub fn open_at(
         KeyBinding::new("pagedown", Last, Some("CommandBar")),
         KeyBinding::new("shift-delete", Remove, Some("CommandBar")),
     ]);
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        // The preview's has none, so it hasn't the window buttons the host's takes off.
-        titlebar: (!show).then_some(TitlebarOptions {
-            title: None,
-            appears_transparent: true,
-            traffic_light_position: None,
-        }),
-        kind: WindowKind::Floating,
-        show,
-        focus: show,
-        is_movable: false,
-        is_resizable: false,
-        is_minimizable: false,
-        // The panel's rounded shape is drawn, so the window around it is clear.
-        window_background: WindowBackgroundAppearance::Transparent,
-        ..Default::default()
-    };
-    let window = cx.open_window(options, |window, cx| {
-        let input = cx.new(|cx| {
-            TextInput::new(PLACEHOLDER_TEXT, cx)
-                .placeholder_color(palette::current(cx).on_overlay(PLACEHOLDER))
-                .caret_color(palette::current(cx).accent)
-                .selection_color(palette::current(cx).selection())
-                .paste_and_go()
-        });
-        window.focus(&input.focus_handle(cx), cx);
-        cx.new(|cx| {
-            cx.observe_in(&input, window, |bar: &mut CommandBar, _, window, cx| {
-                bar.edited(window, cx)
-            })
-            .detach();
+}
+
+/// The bar, in its own window if `own_window`, else in the browser's.
+fn new_bar(
+    host: Rc<dyn Host>,
+    own_window: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<CommandBar> {
+    let input = cx.new(|cx| {
+        TextInput::new(PLACEHOLDER_TEXT, cx)
+            .placeholder_color(palette::current(cx).on_overlay(PLACEHOLDER))
+            .caret_color(palette::current(cx).accent)
+            .selection_color(palette::current(cx).selection())
+            .paste_and_go()
+    });
+    cx.new(|cx| {
+        cx.observe_in(&input, window, |bar: &mut CommandBar, _, window, cx| {
+            bar.edited(window, cx)
+        })
+        .detach();
+        // In a window of its own, nothing else there takes the field's focus.
+        if own_window {
             cx.observe_window_activation(window, |bar: &mut CommandBar, window, cx| {
                 bar.activation_changed(window, cx)
             })
@@ -738,50 +869,40 @@ pub fn open_at(
                 bar.keep_focus(window, cx)
             })
             .detach();
-            CommandBar {
-                host,
-                input,
-                target: Target::NewTab,
-                asked: String::new(),
-                asked_at: Instant::now(),
-                complete: false,
-                completion: String::new(),
-                before: (0, 0),
-                rows: Vec::new(),
-                suggested: String::new(),
-                selected: 0,
-                hovered: None,
-                remove_drawn: None,
-                a11y: false,
-                over_field: false,
-                page: String::new(),
-                site: None,
-                commands: None,
-                settings_index: None,
-                opened_at: None,
-                task_agents: None,
-                ask: None,
-                favicons: HashMap::new(),
-                tabs: Vec::new(),
-                spaces: Vec::new(),
-                shown: Vec::new(),
-                scroll: ScrollHandle::new(),
-                tipped: None,
-                remove_frame: Rc::default(),
-                open: Cell::new(false),
-            }
-        })
-    });
-    match window {
-        Ok(window) => {
-            cx.set_global(CommandBarWindow(window));
-            Some(window)
         }
-        Err(error) => {
-            log!("couldn't open the command bar: {error}");
-            None
+        CommandBar {
+            host,
+            input,
+            target: Target::NewTab,
+            asked: String::new(),
+            asked_at: Instant::now(),
+            complete: false,
+            completion: String::new(),
+            before: (0, 0),
+            rows: Vec::new(),
+            suggested: String::new(),
+            selected: 0,
+            hovered: None,
+            remove_drawn: None,
+            a11y: false,
+            over_field: false,
+            page: String::new(),
+            site: None,
+            commands: None,
+            settings_index: None,
+            opened_at: None,
+            task_agents: None,
+            ask: None,
+            favicons: HashMap::new(),
+            tabs: Vec::new(),
+            spaces: Vec::new(),
+            shown: Vec::new(),
+            scroll: ScrollHandle::new(),
+            tipped: None,
+            remove_frame: Rc::default(),
+            open: Cell::new(false),
         }
-    }
+    })
 }
 
 /// Shows the command bar with the keyboard: empty for a new tab, listing `tabs`, or on `editing`'s
@@ -859,7 +980,7 @@ pub fn show_spaces(spaces: Vec<shell::BarSpace>, bar: Bounds<Pixels>, cx: &mut A
     // check.sh reads this line.
     let ids: Vec<String> = spaces.iter().map(|space| space.space.to_string()).collect();
     log!("browser: command bar lists spaces {}", ids.join(" "));
-    let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
         return;
     };
     // Before the reset, which lists them as the bar opens.
@@ -933,7 +1054,7 @@ fn reset(
     over_field: bool,
     cx: &mut App,
 ) -> Option<Rc<dyn Host>> {
-    let window = cx.try_global::<CommandBarWindow>()?.0;
+    let window = cx.try_global::<CommandBarWindow>()?.clone();
     window
         .update(cx, |bar, window, cx| {
             bar.target = target;
@@ -983,9 +1104,11 @@ fn reset(
 /// edited isn't shown now, so ↩ opens a new tab. A new pane's bar goes, as its split view stays
 /// behind. Returns whether its pick opens a new tab.
 pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: &mut App) -> bool {
-    let Some(bar_window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(bar_window) = cx.try_global::<CommandBarWindow>().cloned() else {
         return false;
     };
+    // The handle the commands' list goes through, once out of the shell's update.
+    let later = bar_window.clone();
     bar_window
         .update(cx, |bar, window, cx| {
             if !bar.open.get() {
@@ -1033,7 +1156,7 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
             if bar.commands.is_some() {
                 // Which commands do something now is the shell's to say, once out of its update.
                 cx.defer(move |cx| {
-                    bar_window
+                    later
                         .update(cx, |bar, window, cx| bar.list_commands(text, window, cx))
                         .ok();
                 });
@@ -1061,7 +1184,7 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
 
 /// The user left the bar with a click outside it, or Esc.
 pub fn dismissed(cx: &mut App) {
-    if let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) {
+    if let Some(window) = cx.try_global::<CommandBarWindow>().cloned() {
         window
             .update(cx, |bar, _, cx| {
                 bar.open.set(false);
@@ -1074,7 +1197,7 @@ pub fn dismissed(cx: &mut App) {
 /// What the browser knows of the agents ⇥ asks has changed, as after it learned which are ready:
 /// an ask that shows lists them again.
 pub fn task_agents_changed(cx: &mut App) {
-    let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
         return;
     };
     window
@@ -1099,13 +1222,12 @@ pub fn task_agents_changed(cx: &mut App) {
 /// click outside the bar has closed it by now, but the shell hears so only after the click's press.
 pub fn is_open(cx: &App) -> bool {
     cx.try_global::<CommandBarWindow>()
-        .and_then(|bar| bar.0.read(cx).ok())
-        .is_some_and(|bar| bar.open.get())
+        .is_some_and(|bar| bar.bar.read(cx).open.get())
 }
 
 /// The favicon `Host::page_favicon` asked for, for a row going to `url`.
 pub fn page_favicon(url: &str, favicon: Option<Arc<Image>>, cx: &mut App) {
-    let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
         return;
     };
     window
@@ -1142,7 +1264,7 @@ pub fn field_height(rows: usize) -> f32 {
 
 /// The core's suggestions for `text`.
 pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
-    let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
         return;
     };
     window
@@ -1178,8 +1300,14 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                 bar.asked_at.elapsed().as_secs_f64() * 1000.,
                 urls.join(", ")
             );
+            // An address typed, which ↩ loads where it goes even if it was a tab that closed, as
+            // it does if it's an open tab's page.
+            let address = (rows.first())
+                .filter(|row| row.completion.is_empty() && text.contains(['.', ':', '/']))
+                .map(|row| row.url.clone());
             // A site search lists only the search for what's typed, as Arc's does, and nothing
             // typed lists the Space's tabs. The core's first search is it, by its relevance.
+            let places = bar.site.is_none() && !text.is_empty();
             let mut rows = match &bar.site {
                 Some(site) => rows
                     .into_iter()
@@ -1221,6 +1349,9 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                         .search_url(site, &row.text)
                         .is_some_and(|url| url == row.url);
             }
+            if places {
+                bar.place(&mut rows, address.as_deref(), cx);
+            }
             bar.set_rows(bar.asked.clone(), rows, window, cx);
             // What the rows cost the frame they come in.
             log!(
@@ -1242,15 +1373,37 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                 "browser: command bar lists \"{text}\": {}",
                 listed.join(", ")
             );
+            // ranking.sh reads this line: what a closed tab's or a visited page's row says at its end.
+            let said: Vec<String> = (bar.rows.iter())
+                .filter(|row| row.tab == 0 && !row.named())
+                .filter_map(|row| match row.archived {
+                    0 => (!row.visited.is_empty()).then(|| format!("{} {}", row.url, row.visited)),
+                    _ => Some(format!("{} {}", row.url, row.closed)),
+                })
+                .collect();
+            if !said.is_empty() {
+                log!("browser: command bar says \"{text}\": {}", said.join("; "));
+            }
         })
         .ok();
 }
 
-/// The clipboard's text as a paste puts it in the input: on one line, without a leading
-/// `javascript:`, trimmed. None if it has none.
-fn pasted(cx: &App) -> Option<String> {
-    let text = cx.read_from_clipboard()?.text()?.replace('\n', " ");
-    Some(without_javascript(&text).trim().to_string()).filter(|text| !text.is_empty())
+/// Hands the bar the clipboard's text as a paste puts it in the input: on one line, without a
+/// leading `javascript:`, trimmed. Not if it has none.
+fn pasted(
+    cx: &mut Context<CommandBar>,
+    then: impl FnOnce(&mut CommandBar, &str, &mut Context<CommandBar>) + 'static,
+) {
+    let bar = cx.entity().downgrade();
+    crate::clipboard::read_text(cx, move |text, cx| {
+        let Some(text) = text.map(|text| text.replace('\n', " ")) else {
+            return;
+        };
+        let text = without_javascript(&text).trim();
+        if !text.is_empty() {
+            bar.update(cx, |bar, cx| then(bar, text, cx)).ok();
+        }
+    });
 }
 
 /// Whether a word of `tab`'s title, or of its site's name, starts with `typed`, lowercase. A site's
@@ -1914,6 +2067,9 @@ impl CommandBar {
             }
             Some(TaskRow::SetUp) => {
                 log!("browser: command bar sets up agents");
+                // Ended here, or the next ⌘T ends it from inside the Shell's update, whose slot
+                // closing reads the Shell (#2459).
+                self.end_ask(cx);
                 self.close();
                 self.host.set_up_agents(cx);
             }
@@ -2055,6 +2211,57 @@ impl CommandBar {
         merged.extend(rows);
         merged.extend(commands.map(Suggestion::from));
         merged
+    }
+
+    /// Says on each page's row where its result is, besides an open tab's (#2337): a tab in the
+    /// archive, which ↩ reopens as the tab it was, unless the page is open here, as an open tab is
+    /// the better row, or it's the `address` typed, which loads where ↩ goes; else the day the
+    /// profile's history last saw a visit to it. Once for each list the core gives, over the rows
+    /// shown alone, never as the bar draws.
+    fn place(&self, rows: &mut [Suggestion], address: Option<&str>, cx: &App) {
+        let now = self.host.now();
+        // Over a split's pane, ↩ puts the page beside it, which a reopened tab wouldn't be.
+        let reopens = !matches!(self.target, Target::Beside(_));
+        for row in rows {
+            if row.named() || row.search || row.task.is_some() || row.tab != 0 {
+                continue;
+            }
+            let here = |url: &SharedString| **url == *row.url;
+            let open = self.tabs.iter().any(|tab| here(&tab.url)) || self.shown.iter().any(here);
+            let reopenable = reopens
+                && !open
+                && !row.new_document
+                && row.computer.is_empty()
+                && address != Some(row.url.as_str());
+            let archived = reopenable
+                .then(|| self.host.archived(&row.url, cx))
+                .flatten();
+            if let Some((id, closed)) = archived {
+                row.archived = id;
+                row.closed = format!("Closed {} · Reopen", day_said(closed, now)).into();
+            } else if row.last_visit > 0 {
+                let visited = day_said(row.last_visit as f64 / 1000., now);
+                row.visited = format!("Visited {visited}").into();
+            }
+        }
+    }
+
+    /// What a page's row says at its end about where its result is, and the glyph on the tile
+    /// after it, if it has one: Switch to Tab and its arrow for an open tab, the day it closed
+    /// and Reopen with ↺ for a closed one, and the day in words alone for a page only in the
+    /// history, as ↩ only loads it (#2337).
+    fn end(&self, row: &Suggestion) -> Option<(SharedString, Option<&'static str>)> {
+        if row.tab != 0 {
+            let action = match self.target {
+                Target::Beside(_) => "Add to Split View",
+                _ => "Switch to Tab",
+            };
+            return Some((action.into(), Some("icons/arrow-right.svg")));
+        }
+        if row.archived != 0 {
+            return Some((row.closed.clone(), Some("icons/rotate-ccw.svg")));
+        }
+        (!row.visited.is_empty()).then(|| (row.visited.clone(), None))
     }
 
     /// Takes out of `rows` the open tabs that go above the rest with Switch to Tab, as Arc's bar is
@@ -2307,9 +2514,11 @@ impl CommandBar {
     /// Paste and Go, from the input's menu: goes where ↩ would for the clipboard's text, as
     /// Chrome does.
     fn paste_and_go(&mut self, _: &PasteAndGo, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(url) = pasted(cx).and_then(|text| self.typed_url(&text)) {
-            self.go_to(&url, cx);
-        }
+        pasted(cx, |bar, text, cx| {
+            if let Some(url) = bar.typed_url(text) {
+                bar.go_to_typed(&url, text, cx);
+            }
+        });
     }
 
     /// Paste and Search: searches for the clipboard's text, even if it names a page, as ⇧⌘↩
@@ -2318,17 +2527,24 @@ impl CommandBar {
         if self.lists_own() || self.commands.is_some() || self.ask.is_some() {
             return;
         }
-        let site = self.site.as_ref().map(|site| site.keyword.as_str());
-        if let Some(url) = pasted(cx).and_then(|text| self.host.search_url(site, &text)) {
-            self.go_to(&url, cx);
-        }
+        let site = self.site.as_ref().map(|site| site.keyword.clone());
+        pasted(cx, move |bar, text, cx| {
+            if let Some(url) = bar.host.search_url(site.as_deref(), text) {
+                bar.go_to(&url, cx);
+            }
+        });
     }
 
     /// Shows `url` where the bar shows the page chosen, and closes the bar.
     fn go_to(&self, url: &str, cx: &mut App) {
+        self.go_to_typed(url, &self.typed(cx), cx);
+    }
+
+    /// As `go_to`, for `url` given as `typed`, which an http address written out keeps.
+    fn go_to_typed(&self, url: &str, typed: &str, cx: &mut App) {
         // check.sh reads this line.
         log!("browser: command bar go {url}");
-        self.show_page(url, cx);
+        self.show_page(url, typed, cx);
         self.close();
     }
 
@@ -2342,7 +2558,7 @@ impl CommandBar {
         if let Some(url) = self.return_url(cx) {
             // check.sh reads this line.
             log!("browser: command bar behind {url}");
-            self.host.open_tab(&url, true);
+            self.host.open_tab(&url, &self.typed(cx), true);
         }
     }
 
@@ -2383,7 +2599,7 @@ impl CommandBar {
         log!("browser: command bar window {url}");
         // The bar leaves its window first, which the new one then takes the keyboard from.
         self.close();
-        self.host.open_window(url, cx);
+        self.host.open_window(url, &self.typed(cx), cx);
     }
 
     /// www.<word>.com for a word typed outside a site search, where ⌃↩ goes, as in Chrome.
@@ -2558,12 +2774,12 @@ impl CommandBar {
         self.go(&Go, window, cx);
     }
 
-    /// Shows `url` where the bar shows the page chosen.
-    fn show_page(&self, url: &str, cx: &mut App) {
+    /// Shows `url`, given as `typed`, where the bar shows the page chosen.
+    fn show_page(&self, url: &str, typed: &str, cx: &mut App) {
         match self.target {
-            Target::NewTab | Target::Tabs | Target::Spaces => self.host.open_tab(url, false),
-            Target::Tab(tab) => self.host.navigate(tab, url),
-            Target::Beside(with) => self.host.open_split(url, with, cx),
+            Target::NewTab | Target::Tabs | Target::Spaces => self.host.open_tab(url, typed, false),
+            Target::Tab(tab) => self.host.navigate(tab, url, typed),
+            Target::Beside(with) => self.host.open_split(url, typed, with, cx),
         }
     }
 
@@ -2619,11 +2835,21 @@ impl CommandBar {
             });
             return;
         }
+        // A closed tab comes back as it was, with its history, as the Library's Reopen brings it,
+        // unless it has left the archive since, when its page loads as any page's.
+        if row.archived != 0 && !matches!(self.target, Target::Beside(_)) {
+            let (archived, url) = (row.archived, row.url.clone());
+            if !self.host.restore_archived(archived, cx) {
+                return self.go_to(&url, cx);
+            }
+            self.close();
+            return;
+        }
         match (row.tab, self.target) {
             (0, Target::Tab(_)) if row.new_document => {
                 // check.sh reads this line.
                 log!("browser: command bar new tab {}", row.url);
-                self.host.open_tab(&row.url, false);
+                self.host.open_tab(&row.url, "", false);
             }
             (0, _) => return self.go_to(&row.url, cx),
             (tab, Target::Beside(with)) => {
@@ -2891,12 +3117,8 @@ impl CommandBar {
         if !row.detail.is_empty() && !self.over_field {
             spoken = format!("{spoken}, {}", row.detail);
         }
-        if row.tab != 0 {
-            let action = match self.target {
-                Target::Beside(_) => "Add to Split View",
-                _ => "Switch to Tab",
-            };
-            spoken = format!("{spoken}, {action}");
+        if let Some((said, _)) = self.end(row) {
+            spoken = format!("{spoken}, {}", said.replace(" · ", ", "));
         }
         if !row.computer.is_empty() {
             spoken = format!("{spoken}, open on {}", row.computer);
@@ -2918,6 +3140,7 @@ impl CommandBar {
 
     fn row(&self, index: usize, row: &Suggestion, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = index == self.selected;
+        let end = self.end(row);
         // The selected row keeps its accent under the pointer.
         let hovered = !selected && self.hovered == Some(index);
         let palette = palette::current(cx);
@@ -3012,39 +3235,41 @@ impl CommandBar {
                         line.child(div().min_w_0().truncate().text_color(dim).child(detail))
                     }),
             )
-            .when(row.tab != 0, |line| {
-                let action = match self.target {
-                    Target::Beside(_) => "Add to Split View",
-                    _ => "Switch to Tab",
-                };
-                let arrow = div()
-                    .size(px(ICON_BOX))
-                    .flex_none()
-                    .mr(px(3.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(CHIP_RADIUS))
-                    .bg(if selected {
-                        label
-                    } else {
-                        palette.plate(ARROW_TILE)
-                    })
-                    .child(
-                        svg()
-                            .path("icons/arrow-right.svg")
-                            .size(px(14.))
-                            .text_color(if selected {
-                                accent
-                            } else {
-                                palette.on_overlay(ARROW)
-                            }),
-                    );
+            // Where its result is: an open tab's Switch to Tab on a tile with its arrow, a closed
+            // tab's day and Reopen on one with ↺, as ↩ brings it back as it was, and a visited
+            // page's day in words alone, as ↩ only loads it (#2337).
+            .when_some(end.clone(), |line, (said, glyph)| {
+                let tile = glyph.map(|glyph| {
+                    div()
+                        .size(px(ICON_BOX))
+                        .flex_none()
+                        .mr(px(END_TILE_RIGHT))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(CHIP_RADIUS))
+                        .bg(if selected {
+                            label
+                        } else {
+                            palette.plate(ARROW_TILE)
+                        })
+                        .child(
+                            svg()
+                                .path(glyph)
+                                .size(px(END_GLYPH))
+                                .text_color(if selected {
+                                    accent
+                                } else {
+                                    palette.on_overlay(ARROW)
+                                }),
+                        )
+                });
                 let tint = if selected { label } else { dim };
-                let label = div().flex_none().mr(px(7.)).text_color(tint);
+                let end = if tile.is_some() { 7. } else { bare_end() };
+                let label = div().flex_none().mr(px(end)).text_color(tint);
                 line.child(div().flex_1())
-                    .child(label.child(action))
-                    .child(arrow)
+                    .child(label.child(said))
+                    .children(tile)
             })
             .when_some(row.shortcut.clone(), |line, shortcut| {
                 line.child(div().flex_1()).child(chip(shortcut))
@@ -3068,7 +3293,7 @@ impl CommandBar {
             })
             // Under the pointer, the selected row too, as Arc's.
             .when(row.removable && self.hovered == Some(index), |line| {
-                line.when(row.tab == 0, |line| line.child(div().flex_1()))
+                line.when(end.is_none(), |line| line.child(div().flex_1()))
                     .child(self.remove_button(index, selected, cx))
             })
     }

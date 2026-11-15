@@ -1,10 +1,8 @@
 //! A new download's icon flying from where it was clicked into the footer's Library button, and the
 //! bin it rests in there for a while, as Arc's (docs/ux-spec.md › Downloads).
 
-use std::{
-    collections::HashSet,
-    time::{Duration, Instant},
-};
+use std::{collections::HashSet, time::Duration};
+use web_time::Instant;
 
 use gpui::{AnyElement, App, Context, Task, Window, div, img, prelude::*, px, svg};
 

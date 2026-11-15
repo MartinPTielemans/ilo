@@ -42,8 +42,9 @@ for section in ungoogled-chromium-macos ungoogled-chromium-portablelinux ungoogl
   tag=$(git config -f "$pins" "$section.tag") || continue
   sections+=("$section")
   git ls-remote --tags --refs "$upstream/$section.git" | sed 's#.*refs/tags/##' >"$work/$section.tags"
-  # The sections on [chromium]'s version move together; one on its own alone.
-  [ "$(version_of "$tag")" = "$version" ] && shared+=("$section")
+  # The sections on [chromium]'s version move together, with those ilo rebased onto it (tree.sh);
+  # one on its own alone.
+  { [ "$(version_of "$tag")" = "$version" ] || rebased_platform "$section"; } && shared+=("$section")
 done
 
 # A new major is the owner's call: one file per major, listing the sections that have it.
@@ -59,13 +60,17 @@ for section in "${sections[@]}"; do
 done
 
 # The bump follows the Mac, which ships, so its patch lag never waits on another platform: the
-# newest version on the pinned major that it has a tag for. Sections that have one too move with it.
+# newest version on the pinned major that it has a tag for, or ungoogled-chromium has while ilo
+# rebases the Mac's patches. Sections that have one too move with it, and rebased ones stay on their
+# tag with the new ungoogled-chromium. Each change is "<section> <old tag> <new tag> <version>".
 changes=() lagging=()
 target=
 leader=${shared[0]:-}
 [[ " ${shared[*]:-} " == *" ungoogled-chromium-macos "* ]] && leader=ungoogled-chromium-macos
+leader_tags=$work/$leader.tags
+! rebased_platform "$leader" || leader_tags=$work/ungoogled-chromium.tags
 if [ -n "$leader" ]; then
-  for v in $(sed 's/-.*//' "$work/$leader.tags" | sort -V -u -r); do
+  for v in $(sed 's/-.*//' "$leader_tags" | sort -V -u -r); do
     [ "$(major_of "$v")" = "$(major_of "$version")" ] && newer "$v" "$version" || continue
     target=$v
     break
@@ -81,13 +86,18 @@ if [ -n "$target" ]; then
     problems+=("ungoogled-chromium has no tag for $target.")
   fi
   for section in ${shared[@]+"${shared[@]}"}; do
+    old=$(git config -f "$pins" "$section.tag")
     tag=$(tag_for "$section" "$target")
-    if [ -z "$tag" ]; then
+    if [ -n "$tag" ]; then
+      changes+=("$section $old $tag $target")
+      git config -f "$pins" "$section.tag" "$tag"
+      [ ! -d "$engine/patches/$section" ] || [ "$(version_of "$old")" = "$version" ] ||
+        problems+=("$section has tagged $target, so ilo's rebased copies of its patches in \`engine/patches/$section\` go in this PR.")
+    elif rebased_platform "$section"; then
+      changes+=("$section $old $old $target")
+    else
       lagging+=("$section")
-      continue
     fi
-    changes+=("$section $(git config -f "$pins" "$section.tag") $tag")
-    git config -f "$pins" "$section.tag" "$tag"
   done
 fi
 # A section off [chromium]'s version, such as a platform whose tag lags, follows on its own: to its
@@ -95,11 +105,11 @@ fi
 cap=$(git config -f "$pins" chromium.version)
 for section in "${sections[@]}"; do
   old=$(git config -f "$pins" "$section.tag")
-  [ "$(version_of "$old")" != "$cap" ] || continue
+  [ "$(version_of "$old")" != "$cap" ] && ! rebased_platform "$section" || continue
   v=$(sed 's/-.*//' "$work/$section.tags" | awk -v m="$(major_of "$old")" 'index($0, m ".") == 1' |
     while read -r v; do newer "$v" "$cap" || echo "$v"; done | sort -V | tail -1)
   newer "$v" "$(version_of "$old")" || continue
-  changes+=("$section $old $(tag_for "$section" "$v")")
+  changes+=("$section $old $(tag_for "$section" "$v") $v")
   git config -f "$pins" "$section.tag" "$(tag_for "$section" "$v")"
 done
 if [ ${#changes[@]} -eq 0 ]; then
@@ -110,19 +120,23 @@ fi
 # Each moved section's repository at its new tag, and the files its patches and ours touch.
 conflicts=()
 for change in "${changes[@]}"; do
-  read -r section old tag <<<"$change"
-  v=$(version_of "$tag")
+  read -r section old tag v <<<"$change"
   dir=$work/$section
   rm -rf "$dir"
   git clone -q -c advice.detachedHead=false --depth 1 --branch "$tag" --recurse-submodules \
     --shallow-submodules "$upstream/$section.git" "$dir"
   uc=$dir/ungoogled-chromium
-  msg=$( (check_ungoogled "$uc" "$section $tag") 2>&1 >/dev/null) || problems+=("$msg.")
+  msg=$( (rebase_platform "$dir" "$section" && check_ungoogled "$uc" "$section $tag") 2>&1 >/dev/null) ||
+    problems+=("$msg.")
   {
     series "$uc/patches/series" | sed "s#^#$uc/patches/#"
     series "$dir/patches/series" | sed "s#^#$dir/patches/#"
   } >"$dir.upstream"
-  series "$engine/series" | sed "s#^#$engine/patches/#" >"$dir.ours"
+  # Our series as apply_series in tree.sh takes it for this platform's tree.
+  platform=
+  [ "$section" != ungoogled-chromium-macos ] || platform=mac
+  ours=$(series_for "$(major_of "$v")" "$platform") || fail "engine/series doesn't read"
+  sed "s#^#$engine/patches/#" <<<"$ours" >"$dir.ours"
   # -p1 drops each path's first part, whatever it's called; a patch that adds a file has nothing
   # to extract.
   cat "$dir.upstream" "$dir.ours" | xargs cat | sed -n 's#^[-+]\{3\} [^/]*/\([^[:space:]]*\).*#\1#p' |
@@ -140,7 +154,7 @@ try_patch() {
   fi
 }
 
-for v in $(for change in "${changes[@]}"; do read -r _ _ tag <<<"$change" && version_of "$tag"; done | sort -u); do
+for v in $(for change in "${changes[@]}"; do read -r _ _ _ v <<<"$change" && echo "$v"; done | sort -u); do
   tarball=$work/chromium-$v-lite.tar.xz
   if [ ! -e "$tarball" ]; then
     url=https://commondatastorage.googleapis.com/chromium-browser-official/${tarball##*/}
@@ -159,8 +173,8 @@ for v in $(for change in "${changes[@]}"; do read -r _ _ tag <<<"$change" && ver
     ! grep -v -e 'Not found in archive' -e 'Exiting with failure status' -e 'Error exit delayed' "$base.log" >&2 ||
     fail "${tarball##*/} didn't extract"
   for change in "${changes[@]}"; do
-    read -r section _ tag <<<"$change"
-    [ "$(version_of "$tag")" = "$v" ] || continue
+    read -r section _ _ change_v <<<"$change"
+    [ "$change_v" = "$v" ] || continue
     tree=$work/src-$section
     uc=$work/$section/ungoogled-chromium
     rm -rf "$tree"
@@ -177,7 +191,7 @@ for v in $(for change in "${changes[@]}"; do read -r _ _ tag <<<"$change" && ver
 done
 
 # The PR. Patch lag is the days from Chrome's stable release of the version to this bump.
-versions=$(for change in "${changes[@]}"; do read -r _ _ tag <<<"$change" && version_of "$tag"; done | sort -uV)
+versions=$(for change in "${changes[@]}"; do read -r _ _ _ v <<<"$change" && echo "$v"; done | sort -uV)
 if [ -n "$target" ]; then
   echo "fix(engine): the engine is on Chromium $target, a security point release" >"$work/pr-title"
 else
@@ -185,8 +199,8 @@ else
 fi
 # Named for each section's new version, so a lagging platform's later bump gets a branch of its own.
 for change in "${changes[@]}"; do
-  read -r section _ tag <<<"$change"
-  echo "${section#ungoogled-chromium-}-$(version_of "$tag")"
+  read -r section _ _ v <<<"$change"
+  echo "${section#ungoogled-chromium-}-$v"
 done | paste -sd+ - | sed 's#^#engine/point-#' >"$work/pr-branch"
 {
   echo "## Problem"
@@ -196,8 +210,12 @@ done | paste -sd+ - | sed 's#^#engine/point-#' >"$work/pr-branch"
   echo "## Change"
   echo
   for change in "${changes[@]}"; do
-    read -r section old tag <<<"$change"
-    echo "- $section $old → $tag"
+    read -r section old tag _ <<<"$change"
+    if [ "$old" = "$tag" ]; then
+      echo "- $section has no tag for $target yet, so it stays on $old with ilo's rebased patches (\`engine/patches/$section\`), on ungoogled-chromium $(git config -f "$pins" ungoogled-chromium.tag)."
+    else
+      echo "- $section $old → $tag"
+    fi
   done
   [ -z "$target" ] || echo "- Chromium $version → $target, ungoogled-chromium $(git config -f "$pins" ungoogled-chromium.tag)"
   for section in ${lagging[@]+"${lagging[@]}"}; do
@@ -206,8 +224,7 @@ done | paste -sd+ - | sed 's#^#engine/point-#' >"$work/pr-branch"
   done
   echo
   for change in "${changes[@]}"; do
-    read -r section _ tag <<<"$change"
-    v=$(version_of "$tag")
+    read -r section _ _ v <<<"$change"
     platform=$(chrome_platform "$section")
     lag=$(curl -fsS "https://versionhistory.googleapis.com/v1/chrome/platforms/$platform/channels/stable/versions/$v/releases" |
       jq -r --arg p "$platform" '[.releases[].serving.startTime | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601] |

@@ -1,3 +1,4 @@
+# check.sh runs this at 810, only when named.
 # The profile survives a change of signing identity, as from Apple Development to Developer ID,
 # with no Keychain prompt (platform/mac/updates.mm, tools/requirement.sh). A copy of the prod build
 # signed with identity A and its own requirement, as Apple Development's names its certificate,
@@ -76,7 +77,8 @@ keychain_cleanup() {
     done
   done
 }
-trap 'keychain_cleanup; cleanup' EXIT
+# cleanup takes the run's status, which keychain_cleanup would otherwise replace with its own.
+trap 'status=$?; keychain_cleanup; cleanup "$status"' EXIT
 security create-keychain -p check "$identities"
 security set-keychain-settings "$identities"
 security unlock-keychain -p check "$identities"

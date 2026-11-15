@@ -110,8 +110,8 @@ void (*g_key_window_changed)(void* ui_view);
 void (*g_became_active)(void);
 void (*g_resigning_active)(void);
 
-// The browser windows that have the keyboard, of those whose whole window GPUI hears of: the app is
-// active while one does.
+// The browser windows that have the keyboard, of those whose whole window GPUI hears of, and
+// Settings under Wayland: the app is active while one does.
 std::set<void*>& ActiveWindows() {
   static auto* active = new std::set<void*>;
   return *active;
@@ -587,7 +587,7 @@ bool host_copy_secret(const char* text, uint32_t seconds) {
 // hands a secret to no clipboard manager.
 void host_forget_secret(void) {}
 
-void host_open_in_safari(const char* url) {}
+void host_open_elsewhere(const char* url) {}
 
 void host_open_full_disk_access(void) {}
 

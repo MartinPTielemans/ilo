@@ -1,3 +1,4 @@
+# check.sh runs this at 600.
 # A desktop app's sign-in in the browser hands back to the app (#1914), as Chrome's does, with
 # stand-ins for the app and its sign-in, never a real account or launcher. A stand-in handler for
 # the ilohandback scheme writes each URL it's given to a file the run reads: an xdg desktop entry on
@@ -301,21 +302,26 @@ close_little() {
 }
 
 # On the Mac the stand-in comes to the front to take the URL, as the app a sign-in hands back to
-# does, then quits, and macOS gives ilo the front again a moment later. The next case waits for
-# that, as the user goes back to the browser: typed while the stand-in had the front, its keys
-# went nowhere and its command bar closed as ilo stopped being the active app (#1930).
+# does, then quits, and macOS gives the front to another app a moment later: ilo on a Mac in use,
+# and Finder in a check VM, whose desktop is all it has open (#2396). The next case waits for ilo
+# to have it, as the user goes back to the browser, from the Dock if need be, which `open` does:
+# typed while the stand-in had the front, its keys went nowhere and its command bar closed as ilo
+# stopped being the active app (#1930).
 back_from_standin() {
   [ "$standin" = mac ] || return 0
   for _ in $(seq 100); do
     pgrep -f "$handback_applet/Contents/MacOS/" > /dev/null || break
     sleep 0.1
   done
-  for _ in $(seq 50); do
-    send state
-    [ "$active" = 1 ] && return 0
-    sleep 0.1
+  for try in 1 2; do
+    for _ in $(seq 50); do
+      send state
+      [ "$active" = 1 ] && return 0
+      sleep 0.1
+    done
+    [ "$try" = 2 ] || open -a "$app"
   done
-  fail "ilo didn't become the active app again once the stand-in app had taken the URL and quit"
+  fail "ilo didn't become the active app again once the stand-in app had taken the URL and quit, nor from the Dock: $(grep '^browser: app activated ' "$log" | tail -1)"
 }
 
 # by_scheme <context> <case>: the case's page hands back by the scheme, and the run follows it

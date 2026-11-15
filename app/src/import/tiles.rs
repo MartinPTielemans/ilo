@@ -3,7 +3,7 @@
 //! accent at the cards' badge place, which a click unticks. They're four to a row across the view,
 //! and land as the cards do, in order of most visits.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{AnyElement, Div, FontWeight, div, prelude::*, px, relative, rgb, svg};
 

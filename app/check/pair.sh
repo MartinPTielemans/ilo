@@ -1,3 +1,4 @@
+# check.sh runs this at 480.
 # A Bluetooth device a page pairs with asks the user in the page's card, not in Chrome's dialogs
 # (#1701), which Chrome shows only on Linux and Windows. CI's runners have no Bluetooth, so the
 # driver's pair command asks as "Check device" would, through the core's own prompt

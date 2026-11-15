@@ -109,6 +109,12 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.extensions.badge-radius",
     "shell.recent-downloads.preview-radius",
     "menu.radius",
+    // A drawing of the window, its corners and its page card's at the drawing's scale (#2407).
+    "settings.side-radius",
+    "settings.side-page-radius",
+    // Share favorites' Spaces and their tiles at the drawing's scale (#2430).
+    "settings.share-space-radius",
+    "settings.share-tile-radius",
 ];
 
 #[test]
@@ -147,11 +153,16 @@ fn every_corner_is_one_of_the_four_radii() {
 #[test]
 fn a_corner_inside_another_is_concentric() {
     use super::{
-        command_bar, hover_card, menu, radius, shell,
+        command_bar, foot_bar, hover_card, menu, radius, shell,
         shell::{extensions, recent_downloads},
         site_controls, toast,
     };
     // outer = inner + inset, where the inset is a token (or two).
+    assert_eq!(foot_bar::RADIUS, foot_bar::BUTTON_RADIUS + foot_bar::RIGHT);
+    assert_eq!(
+        foot_bar::TALL_RADIUS,
+        foot_bar::BUTTON_RADIUS + foot_bar::TALL_RIGHT
+    );
     assert_eq!(
         hover_card::RADIUS,
         hover_card::PICTURE_RADIUS + hover_card::PADDING
@@ -501,10 +512,6 @@ fn type_is_on_the_scale() {
         ),
         ("site_controls::LINK_SIZE", super::site_controls::LINK_SIZE),
         ("site_controls::NAME_SIZE", super::site_controls::NAME_SIZE),
-        (
-            "site_controls::STATE_SIZE",
-            super::site_controls::STATE_SIZE,
-        ),
         ("toast::TEXT_SIZE", super::toast::TEXT_SIZE),
         ("tooltip::TEXT_SIZE", super::tooltip::TEXT_SIZE),
         ("tooltip::CHIP_TEXT_SIZE", super::tooltip::CHIP_TEXT_SIZE),

@@ -618,6 +618,9 @@ pub(crate) struct Browser {
     bookmarks_file: RefCell<Option<PathBuf>>,
     /// The passwords file the core is importing, and what waits to hear what came of it.
     importing: RefCell<Option<(PathBuf, Box<dyn FnOnce(Passwords, &mut App)>)>>,
+    /// Reads the window's Shell, as the core's existing() does for each Today tab's URL, once
+    /// `reads_shell` gives it one.
+    shell: RefCell<Option<Box<dyn Fn(&App)>>>,
 }
 
 #[derive(Default)]
@@ -740,6 +743,19 @@ impl Browser {
         self.state.borrow().spaces.clone()
     }
 
+    /// From now on, existing() reads the Shell `read` reads for each Today tab, as the core's
+    /// does for their URLs (#2428).
+    pub(crate) fn reads_shell(&self, read: impl Fn(&App) + 'static) {
+        *self.shell.borrow_mut() = Some(Box::new(read));
+    }
+
+    /// The URLs of the Today tabs the browser has, in each Space.
+    pub(crate) fn today(&self) -> Vec<String> {
+        let state = self.state.borrow();
+        let tabs = state.spaces.iter().flat_map(|space| &space.today);
+        tabs.map(|tab| tab.url.clone()).collect()
+    }
+
     /// The user came back to the app.
     pub(crate) fn activate(&self, cx: &mut App) {
         for then in self.active.take() {
@@ -821,7 +837,12 @@ impl Host for Browser {
             .unwrap_or_else(|| Roots::under(&fixture(), Os::Mac))
     }
 
-    fn existing(&self, _: &App) -> Existing {
+    fn existing(&self, cx: &App) -> Existing {
+        if let Some(read) = self.shell.borrow().as_ref() {
+            for _ in self.today() {
+                read(cx);
+            }
+        }
         self.here()
     }
 

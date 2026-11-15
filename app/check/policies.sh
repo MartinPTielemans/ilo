@@ -1,3 +1,4 @@
+# check.sh runs this at 550.
 # An administrator's policies, set the system's way under ilo's own names, reach the browser
 # (#684, docs/policies.md): URLBlocklist blocks one of the run's pages, whose request the run's
 # server never gets, and whose tab commits Chromium's error page in its place (net error -22,

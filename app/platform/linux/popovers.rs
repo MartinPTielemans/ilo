@@ -151,7 +151,7 @@ fn hide(kind: Kind) -> bool {
         shadows::hide(SITE_CONTROLS);
     }
     // check.sh reads this line.
-    eprintln!("browser: {} hidden", name(kind));
+    browser::log!("browser: {} hidden", name(kind));
     true
 }
 
@@ -262,8 +262,8 @@ pub extern "C" fn host_show_site_controls(
 ) {
     if show(Kind::SiteControls, ui_view, left, top, width, height) {
         // check.sh reads these lines.
-        eprintln!("browser: site controls at {left} {top} {width} {height}");
-        eprintln!("browser: site controls shown");
+        browser::log!("browser: site controls at {left} {top} {width} {height}");
+        browser::log!("browser: site controls shown");
     }
 }
 
@@ -277,7 +277,7 @@ pub extern "C" fn host_set_site_controls_height(height: f64) {
     if let Some(Some((view, bounds))) = moved {
         gpui_linux::move_overlay(view, bounds, px(0.));
         shadows::moved(SITE_CONTROLS, bounds, 0.);
-        eprintln!("browser: site controls height {height}");
+        browser::log!("browser: site controls height {height}");
     }
 }
 
@@ -292,7 +292,7 @@ pub extern "C" fn host_site_controls_drew(scale: f64, opacity: f64, x: f64, y: f
 #[unsafe(no_mangle)]
 pub extern "C" fn host_release_site_controls() {
     if release(Kind::SiteControls) {
-        eprintln!("browser: site controls released");
+        browser::log!("browser: site controls released");
     }
 }
 
@@ -317,7 +317,7 @@ pub extern "C" fn host_show_capture(
     if show(Kind::Capture, ui_view, left, top, width, height) {
         camera();
         // check.sh reads this line.
-        eprintln!("browser: capture shown at {left} {top} {width} {height}");
+        browser::log!("browser: capture shown at {left} {top} {width} {height}");
     }
 }
 

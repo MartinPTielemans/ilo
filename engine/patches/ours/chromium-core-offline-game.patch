@@ -117,8 +117,8 @@ reload waits; what holds it, and when, is the core's.
  namespace chrome_browser_net {
  
  namespace {
-@@ -381,6 +387,19 @@
-   easter_egg_high_score_.SetValue(0);
+@@ -363,6 +369,19 @@
+   easter_egg_high_score_.SetValue(static_cast<int>(high_score));
  }
  
 +void NetErrorTabHelper::SetGameRunning(bool running) {
@@ -134,9 +134,9 @@ reload waits; what holds it, and when, is the core's.
 +  }
 +}
 +
- WEB_CONTENTS_USER_DATA_KEY_IMPL(NetErrorTabHelper);
- 
- }  // namespace chrome_browser_net
+ void NetErrorTabHelper::ResetHighScore() {
+   content::RenderFrameHost& target_frame =
+       network_easter_egg_receivers_.CurrentTargetFrame();
 --- a/components/error_page/content/browser/net_error_auto_reloader.h
 +++ b/components/error_page/content/browser/net_error_auto_reloader.h
 @@ -73,6 +73,11 @@

@@ -159,7 +159,9 @@ jobs:
           repo=$(git config -f engine/prebuilt.ini prebuilt.repository)
           repo=${repo#https://github.com/}
           tag=engine-linux-${GITHUB_SHA::12}
-          tag_ucl=$(git config -f engine/pins.ini ungoogled-chromium-portablelinux.tag)
+          # With ilo's rebase of its patches, it names the ungoogled-chromium tag it's on too.
+          tag_ucl=$(. engine/tree.sh && platform_stamp ungoogled-chromium-portablelinux \
+            "$(git config -f engine/pins.ini ungoogled-chromium-portablelinux.tag)")
           # Never GitHub's Latest, which releases/latest/download/<name> links mean as a release of
           # its repository's own (#804). The tag is on that repository's main, which hasn't this
           # commit: the name carries it.

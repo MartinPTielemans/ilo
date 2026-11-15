@@ -273,6 +273,32 @@ mod tests {
         assert!(cx.a11y_tree().is_some());
     }
 
+    /// With a second profile the name row shows the Space's profile after its name, and VoiceOver
+    /// reads it there (#2339): not with one profile, not where the names are the same, and not in
+    /// a private window, whose session has none of the profile's logins.
+    #[gpui::test]
+    fn the_name_row_says_the_spaces_profile_once_there_are_two(cx: &mut TestAppContext) {
+        let (shell, cx, _) = shell(cx, 2);
+        cx.simulate_a11y_activation();
+        let heading = |shell: &Entity<Shell>, cx: &mut VisualTestContext, profiles: &[&str]| {
+            shell.update(cx, |shell, cx| {
+                let profiles = (1..).zip(profiles).map(|(id, name)| (id, (*name).into()));
+                shell.set_profiles(profiles.collect(), cx);
+            });
+            cx.run_until_parked();
+            let tree = Tree::read(cx);
+            let found = (tree.0.nodes.iter())
+                .find(|(_, node)| node.role() == Role::Heading)
+                .and_then(|(_, node)| node.label().map(str::to_owned));
+            found.expect("the name row")
+        };
+        assert_eq!(heading(&shell, cx, &["Personal"]), "Home");
+        assert_eq!(heading(&shell, cx, &["Personal", "Work"]), "Home, Personal");
+        assert_eq!(heading(&shell, cx, &["Home", "Work"]), "Home");
+        shell.update(cx, |shell, _| shell.private = true);
+        assert_eq!(heading(&shell, cx, &["Personal", "Work"]), "Home");
+    }
+
     /// VoiceOver reads the list as the user sees it: the Space's name, Pinned, New Tab and Today,
     /// each group a list of tabs that says which is selected and where each stands, the mock's
     /// "Mail, tab, selected, 2 of 3, Pinned". A tab says what it's doing after its title.

@@ -112,6 +112,7 @@ pub(crate) unsafe extern "C" fn tab_site_controls(
             bc::BC_AD_BLOCKING_OFF => Some(false),
             _ => None,
         },
+        ad_blocked: string(controls.ad_blocked),
         developer_mode: match controls.developer_mode as u32 {
             bc::BC_DEVELOPER_MODE_ON => Some(true),
             bc::BC_DEVELOPER_MODE_OFF => Some(false),
@@ -581,6 +582,7 @@ pub(crate) unsafe extern "C" fn window_suggestions(
             removable: suggestion.removable,
             keyword: string(suggestion.keyword),
             site: string(suggestion.site).into(),
+            last_visit: suggestion.last_visit,
             ..command_bar::Suggestion::default()
         })
         .collect();

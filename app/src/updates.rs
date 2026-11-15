@@ -7,7 +7,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, Global, Pixels, SharedString, Subscription, Window, canvas, div,
@@ -315,7 +315,8 @@ pub fn first_launch_notes(file: &std::path::Path, own: &str) -> Option<String> {
 }
 
 /// Settings › About's "Show what's new after an update" is off while this file is in the profile
-/// directory: on by default, and on the nightly track a tab every morning is noise.
+/// directory, on by default. A nightly's update opens none either way, as its feed entry names no
+/// notes (tools/appcast.sh).
 pub const NO_WHATS_NEW: &str = "no-whats-new";
 
 /// The notes an update's first launch opens, `notes`, unless the user turned them off in the

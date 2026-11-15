@@ -1,0 +1,9 @@
+Revert GN strict include checks unsupported by the system GN.
+Source: https://github.com/ungoogled-software/ungoogled-chromium/pull/4003
+
+# ungoogled-chromium-macos's fix-gn-compatibility-chromium-156.patch at 31f01756a43d (its
+# 156.0.8078.79 tag) isn't applied on Chromium 157.0.8103.50 by ilo, so this copy has no hunks.
+# 157's tools/gn is at DEPS' gn_version (0035961837fb), which supports check_includes_strict,
+# public_inputs and allow_circular_includes_from_allowlist. 157 also sets check_includes_strict to
+# CHECK_INCLUDES_STRICT_PUBLIC_INCLUDES_PRIVATE in about 70 targets that upstream's removals don't
+# cover, so removing that definition would break gn gen.

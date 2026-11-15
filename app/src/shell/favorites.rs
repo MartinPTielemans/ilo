@@ -4,10 +4,11 @@
 use std::{collections::HashMap, rc::Rc};
 
 use gpui::{
-    Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px, rgba,
-    svg,
+    App, Context, Hsla, MouseButton, MouseDownEvent, Role, canvas, div, hsla, img, prelude::*, px,
+    rgba, svg,
 };
 
+use super::return_mark::{Bitmap, Source};
 use crate::elevation::Level;
 use crate::icon_picker::Subject;
 use crate::tooltip::{self, Anchor, Tip};
@@ -49,6 +50,16 @@ impl FavoritesScope {
             Self::Every => "In Every Space",
             Self::Profile => "In Each Profile's Spaces",
             Self::Space => "In Each Space",
+        }
+    }
+
+    /// Its name under its drawing in Settings, a caption, so in sentence case on every OS as the
+    /// pane's other lines are. Space keeps its capital: it's ours.
+    pub fn caption(self) -> &'static str {
+        match self {
+            Self::Every => "In every Space",
+            Self::Profile => "In each profile's Spaces",
+            Self::Space => "In each Space",
         }
     }
 
@@ -252,9 +263,7 @@ impl Shell {
             .zip(places)
             .map(|(tab, place)| {
                 let way = self.tile_slides.get(&tab).map_or(0., |&(_, start, curve)| {
-                    curve
-                        .at(start.elapsed().as_secs_f32())
-                        .map_or(0., |done| 1. - done)
+                    curve.at(self.since(start)).map_or(0., |done| 1. - done)
                 });
                 let from = self
                     .tile_slides
@@ -292,7 +301,7 @@ impl Shell {
         curve: Curve,
         cx: &gpui::App,
     ) {
-        let now = crate::motion::start(cx);
+        let now = crate::motion::start_at(self.clock.now(), cx);
         let tabs = self.tile_tabs();
         let places = self.tile_places(tabs.len());
         let slides: Vec<_> = tabs
@@ -305,8 +314,9 @@ impl Shell {
             })
             .collect();
         // As the rows' (move_rows): slides over stay for the next frame to say the tiles settled.
-        let over = |(_, start, curve): &([f32; 3], std::time::Instant, Curve)| {
-            curve.at(start.elapsed().as_secs_f32()).is_none()
+        let clock = self.clock.clone();
+        let over = |(_, start, curve): &([f32; 3], web_time::Instant, Curve)| {
+            curve.at(Self::since_on(&clock, *start)).is_none()
         };
         self.tile_slides.retain(|_, slide| over(slide));
         self.tile_slides.extend(slides);
@@ -333,7 +343,7 @@ impl Shell {
         self.list_top()
             + self.list_slide.map_or(0., |(from, start, curve)| {
                 curve
-                    .at(start.elapsed().as_secs_f32())
+                    .at(self.since(start))
                     .map_or(0., |done| from * (1. - done))
             })
     }
@@ -488,7 +498,7 @@ impl Shell {
             false if selected => shown,
             false => fill,
         };
-        let icon = self.tile_middle(tab, theme.as_deref());
+        let icon = self.tile_middle(tab, theme.as_deref(), cx);
         div()
             .id(("tile", tab))
             .when(self.a11y, |tile| {
@@ -619,7 +629,7 @@ impl Shell {
     }
 
     /// A tile's favicon, or a one-colour icon's white template on the tile it themes.
-    fn tile_icon(&self, tab: u64, theme: Option<&TileTheme>) -> gpui::Div {
+    fn tile_icon(&self, tab: u64, theme: Option<&TileTheme>, cx: &App) -> gpui::Div {
         div()
             .size(px(FAVICON_SIZE))
             .flex()
@@ -628,12 +638,27 @@ impl Shell {
             .when(self.page(tab).unloaded, |icon| {
                 icon.opacity(SLEEPING_FAVICON)
             })
-            .child(match theme {
-                Some(TileTheme::Flat { template, .. }) => img(template.clone())
-                    .size(px(FAVICON_DRAWN))
-                    .into_any_element(),
-                _ => self.tab_icon(tab),
-            })
+            .child(self.with_return_mark(
+                &self.palette,
+                tab,
+                FAVICON_SIZE,
+                match theme {
+                    Some(TileTheme::Flat { template, .. }) => Some(Bitmap {
+                        source: Source::Decoded(template.clone()),
+                        drawn: FAVICON_DRAWN,
+                    }),
+                    _ => self.tab_bitmap_in(&self.palette, tab),
+                },
+                || {
+                    match theme {
+                        Some(TileTheme::Flat { template, .. }) => img(template.clone())
+                            .size(px(FAVICON_DRAWN))
+                            .into_any_element(),
+                        _ => self.tab_icon(tab),
+                    }
+                },
+                cx,
+            ))
     }
 
     /// Whether `tab` can become a favorite of the Space shown, or is one already, below the most
@@ -673,7 +698,7 @@ impl Shell {
     /// each after the first behind the split row's line, so it reads as the row it was (ours: Arc's
     /// tile isn't recorded). Three in a narrow tile take a smaller favicon. An icon the user gave
     /// it takes their place.
-    fn split_icons(&self, tabs: &[u64], width: f32) -> gpui::Div {
+    fn split_icons(&self, tabs: &[u64], width: f32, cx: &App) -> gpui::Div {
         let segment = width / tabs.len() as f32;
         let size = match segment < FAVICON_SIZE + 6. {
             true => SPLIT_TILE_FAVICON,
@@ -692,7 +717,14 @@ impl Shell {
                     .when(self.page(tab).unloaded, |icon| {
                         icon.opacity(SLEEPING_FAVICON)
                     })
-                    .child(self.tab_icon_sized(tab, size));
+                    .child(self.with_return_mark(
+                        &self.palette,
+                        tab,
+                        size,
+                        self.tab_bitmap_sized(tab, size),
+                        || self.tab_icon_sized(tab, size),
+                        cx,
+                    ));
                 div()
                     .relative()
                     .flex_1()
@@ -732,23 +764,39 @@ impl Shell {
         }
     }
 
+    /// The bitmap `tab_icon_sized` draws, if it draws one.
+    fn tab_bitmap_sized(&self, tab: u64, size: f32) -> Option<Bitmap> {
+        if size >= FAVICON_SIZE || !self.page(tab).icon.is_empty() {
+            return self.tab_bitmap_in(&self.palette, tab);
+        }
+        Some(Bitmap {
+            source: Source::Encoded(self.tabs.get(&tab)?.favicon.clone()?),
+            drawn: FAVICON_DRAWN * size / FAVICON_SIZE,
+        })
+    }
+
     /// What a tile draws in its middle: a favorite split's segments, unless it has an icon of its
     /// own, else the favicon or the one-colour icon's template.
-    fn tile_middle(&self, tab: u64, theme: Option<&TileTheme>) -> gpui::AnyElement {
+    fn tile_middle(&self, tab: u64, theme: Option<&TileTheme>, cx: &App) -> gpui::AnyElement {
         // A split's row dragged over the favorites is its tile too.
         let panes = self.panes(tab);
         match panes.len() > 1 && self.page(tab).icon.is_empty() {
             true => {
                 let width = self.tile_places(self.tile_tabs().len().max(1))[0][2];
-                self.split_icons(&panes, width).into_any_element()
+                self.split_icons(&panes, width, cx).into_any_element()
             }
-            false => self.tile_icon(tab, theme).into_any_element(),
+            false => self.tile_icon(tab, theme, cx).into_any_element(),
         }
     }
 
     /// The tiles of `favorites` on the page of a Space beside the shown one's, at their places
     /// as they show once it's shown, `selected`'s filled and ringed. They take no input.
-    pub(super) fn still_tiles(&self, favorites: &[u64], selected: u64) -> Option<gpui::Div> {
+    pub(super) fn still_tiles(
+        &self,
+        favorites: &[u64],
+        selected: u64,
+        cx: &App,
+    ) -> Option<gpui::Div> {
         let places = self.tile_places(favorites.len());
         let tiles = places
             .into_iter()
@@ -785,7 +833,7 @@ impl Shell {
                         tile_fill(&self.palette, developer, 0.)
                     })
                     .children(theme.as_deref().and_then(TileTheme::layers))
-                    .child(self.tile_middle(tab, theme.as_deref()))
+                    .child(self.tile_middle(tab, theme.as_deref(), cx))
                     .when(selected && developer, |tile| {
                         tile.child(developer_outline(&self.palette, TILE_RADIUS))
                     });
