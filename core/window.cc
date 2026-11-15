@@ -3068,6 +3068,14 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
   const std::optional<bc_rect> popup = std::exchange(popup_, std::nullopt);
   const bool popup_placed = std::exchange(popup_placed_, false);
   for (const TabStripModelChange::ContentsWithIndex& inserted : change.GetInsert()->contents) {
+    // A tab opened in front from a window of Chromium's that has the keyboard, as an extension's
+    // popup's button or link does, gives the keyboard to its page once the window is active again,
+    // not back to the UI or page that lent it, which a page focused while the window isn't active
+    // can't take (FocusPage).
+    if (tab_strip_model->active_index() == inserted.index && !widget_->IsActive() &&
+        platform::EndKeyboardLoans(widget_.get())) {
+      page_had_keyboard_ = true;
+    }
     tabs::TabInterface* opener = tab_strip_model->GetOpenerOfTabAt(inserted.index);
     bc_id opened_by = agent_opener;
     if (!opened_by && opener) {

@@ -103,7 +103,9 @@ const frame = time => {
   time - first > 600 ? call() : done || requestAnimationFrame(frame);
 };
 requestAnimationFrame(frame);
+addEventListener("keydown", event => event.key === "t" && chrome.tabs.create({url: "opened.html"}));
 EOF2
+echo '<title>opened</title>the tab the popup opened' > "$extensions/popup/opened.html"
 cat > "$extensions/third/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Third", "version": "1",
  "action": {"default_popup": "popup.html"}, "options_ui": {"page": "options.html"},
@@ -260,6 +262,33 @@ else
   send state
   [ "$key" = BrowserCoreNSWindow ] ||
     fail "the browser window didn't get the keyboard back from the popup: it's in $key"
+  # Opened by a click on its action, the popup had the keyboard from the UI, which has it back.
+  [ -z "${WAYLAND_DISPLAY:-}" ] || [ "$focus" = AccessKitSubclassOfGPUIView ] ||
+    fail "the UI didn't get the keyboard back from the popup it opened: focus is on $focus"
+fi
+# A tab the popup opens in front, as its button or a link in it does, has the keyboard once the
+# popup closes, not the UI that lent the popup it. On Linux, the core's, on an engine with it.
+if [ "$popup_keys" = no ] || [ "$(uname)" != Linux ] ||
+  ! engine_has ../core/window.cc ../core/platform/linux/window_views.cc; then
+  echo "skip: the keyboard in the tab an extension's popup opened: Linux's, on an engine with its core (#2935)."
+else
+  send click $first_place
+  expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show to open a tab"
+  send key t
+  expect "^browser: loaded [0-9]* chrome-extension://$popup/opened.html\$" \
+    "the popup's key didn't open its tab"
+  opened=$(grep "^browser: loaded [0-9]* chrome-extension://$popup/opened.html\$" "$log" |
+    tail -1 | cut -d' ' -f3)
+  expect '^browser: extension popup none$' "the popup didn't close as its tab opened"
+  expect "^browser: selected $opened\( in .*\)\{0,1\}\$" "the popup's tab didn't show"
+  send state
+  [ "$key" = BrowserCoreNSWindow ] && [ "$focus" = RenderWidgetHostViewCocoa ] ||
+    fail "the tab the popup opened didn't get the keyboard: it's in $key, focus on $focus"
+  send key w cmd
+  expect "^browser: today " "⌘W didn't close the tab the popup opened"
+  index=$(today | tr ' ' '\n' | grep -n "^$first\$" | cut -d: -f1)
+  send click $(row $((index - 1)))
+  expect "^browser: selected $first\( in .*\)\{0,1\}\$" "the first tab didn't show again"
 fi
 # The Extensions menu runs a pinned one too, its popup hanging from its action.
 send menu "Check Popup"

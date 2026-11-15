@@ -1256,6 +1256,10 @@ void ReleaseKeyboard(views::Widget* widget) {
   }
 }
 
+bool EndKeyboardLoans(views::Widget*) {
+  return false;
+}
+
 bool OverlayHasKeyboard(views::Widget* widget) {
   if (!widget) {
     return false;

@@ -618,6 +618,10 @@ void ReleaseKeyboard(views::Widget* widget) {
   [widget->GetNativeWindow().GetNativeNSWindow() makeFirstResponder:nil];
 }
 
+bool EndKeyboardLoans(views::Widget*) {
+  return false;
+}
+
 bool OverlayHasKeyboard(views::Widget* widget) {
   if (!widget) {
     return false;
