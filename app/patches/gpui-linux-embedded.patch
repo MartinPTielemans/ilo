@@ -244,10 +244,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..1630e1bbcc
+index 0000000000..353412bb88
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1820 @@
+@@ -0,0 +1,1873 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -356,9 +356,9 @@ index 0000000000..1630e1bbcc
 +    },
 +    /// A press in a panel that shows without the keys.
 +    Pressed(usize),
-+    /// On X11, the input focus left an overlay that has the keys: it asks for them again if
-+    /// `asks_again` says so, and otherwise the user left it.
-+    TakenBack(usize),
++    /// On X11, the input focus left an overlay that has the keys, as it showed then: it asks for
++    /// them again if `asks_again` says so, and otherwise the user left it.
++    TakenBack(usize, u64),
 +    /// A window of the embedder's own shows, centred over `over` the first time (`show_window`).
 +    ShowWindow {
 +        view: usize,
@@ -583,13 +583,16 @@ index 0000000000..1630e1bbcc
 +#[cfg(feature = "x11")]
 +pub(crate) fn focus_left(view: usize, to_ancestor: bool, pressed_on: impl FnOnce() -> bool) {
 +    holds(view, false);
-+    let keyboard = SHOWN.with_borrow(|all| {
-+        all.iter().find(|shown| shown.view == view).map(|shown| shown.keyboard)
++    let shown = SHOWN.with_borrow(|all| {
++        (all.iter())
++            .find(|shown| shown.view == view)
++            .map(|shown| (shown.keyboard, shown.showing))
 +    });
++    let keyboard = shown.map(|(keyboard, _)| keyboard);
 +    if keyboard == Some(true) && to_ancestor && is_panel(view) && pressed_on() {
 +        later(Op::Retake { view, pressed: true });
-+    } else if keyboard == Some(true) {
-+        later(Op::TakenBack(view));
++    } else if let Some((true, showing)) = shown {
++        later(Op::TakenBack(view, showing));
 +    } else {
 +        left(view);
 +    }
@@ -668,15 +671,19 @@ index 0000000000..1630e1bbcc
 +/// nothing pressed since it asked and the app still active. Any other way, or a second time, the
 +/// user left it.
 +#[allow(dead_code)]
-+pub(crate) fn asks_again(view: usize, taken: Taken) -> bool {
-+    let showing = SHOWN.with_borrow(|all| {
-+        (all.iter())
-+            .find(|shown| shown.view == view && shown.keyboard && shown.ready && !shown.away)
-+            .map(|shown| shown.showing)
++pub(crate) fn asks_again(view: usize, showing: u64, taken: Taken) -> bool {
++    let shown = SHOWN.with_borrow(|all| {
++        all.iter().any(|shown| {
++            shown.view == view
++                && shown.showing == showing
++                && shown.keyboard
++                && shown.ready
++                && !shown.away
++        })
 +    });
-+    let Some(showing) = showing else {
++    if !shown {
 +        return false;
-+    };
++    }
 +    ASKED.with_borrow_mut(|all| {
 +        let Some(asked) = (all.iter_mut()).find(|asked| asked.view == view && asked.showing == showing)
 +        else {
@@ -1504,7 +1511,7 @@ index 0000000000..1630e1bbcc
 +            false
 +        }
 +        #[cfg(feature = "x11")]
-+        Op::TakenBack(view) => {
++        Op::TakenBack(view, showing) => {
 +            let asked_again = super::platform::with_embedded_connection(|connection| {
 +                let DisplayConnection::X11(x11) = connection else {
 +                    return false;
@@ -1513,7 +1520,7 @@ index 0000000000..1630e1bbcc
 +                let Some(taken) = x11.focus_taken(view as _).log_err() else {
 +                    return false;
 +                };
-+                if !asks_again(view, taken) {
++                if !asks_again(view, showing, taken) {
 +                    return false;
 +                }
 +                log::info!("overlay {view:#x} asks again for the input focus taken back");
@@ -1523,7 +1530,12 @@ index 0000000000..1630e1bbcc
 +                }
 +                asked
 +            });
-+            if asked_again != Some(true) {
++            // Only the showing the focus left is left: one shown since under the same view, as
++            // the menu a right-click on the next row shows in place of the last, isn't (#2993).
++            let still = SHOWN.with_borrow(|all| {
++                all.iter().any(|shown| shown.view == view && shown.showing == showing)
++            });
++            if asked_again != Some(true) && still {
 +                left(view);
 +            }
 +            false
@@ -1726,7 +1738,7 @@ index 0000000000..1630e1bbcc
 +            Op::HideWindow(view) => super::wayland::hide_window(view as _),
 +            Op::Left(..)
 +            | Op::Pressed(_)
-+            | Op::TakenBack(_)
++            | Op::TakenBack(..)
 +            | Op::KeyboardLeft
 +            | Op::Control
 +            | Op::Hear => {}
@@ -1829,7 +1841,7 @@ index 0000000000..1630e1bbcc
 +                }
 +                Op::Left(..)
 +                | Op::Pressed(_)
-+                | Op::TakenBack(_)
++                | Op::TakenBack(..)
 +                | Op::KeyboardLeft
 +                | Op::Control
 +                | Op::Hear => {}
@@ -1969,32 +1981,73 @@ index 0000000000..1630e1bbcc
 +        // Put back on the browser window with no input, as wlroots' Xwayland does at a first map
 +        // (#2943): it asks again, once in a showing.
 +        show(1);
-+        assert!(asks_again(view, taken), "taken back with no input, it didn't ask again");
-+        assert!(!asks_again(view, taken), "taken back a second time, it asked again");
++        assert!(asks_again(view, 1, taken), "taken back with no input, it didn't ask again");
++        assert!(!asks_again(view, 1, taken), "taken back a second time, it asked again");
 +        // A key or a button pressed since it asked: the user left.
 +        show(2);
 +        pressed_key_or_button();
-+        assert!(!asks_again(view, taken), "a press since it asked, and it asked again");
++        assert!(!asks_again(view, 2, taken), "a press since it asked, and it asked again");
 +        // A button down where GPUI doesn't hear it, as a press on the embedder's window.
 +        show(3);
 +        let pressed = Taken { pressed: true, ..taken };
-+        assert!(!asks_again(view, pressed), "a button down, and it asked again");
++        assert!(!asks_again(view, 3, pressed), "a button down, and it asked again");
 +        // The app deactivated.
 +        show(4);
 +        let inactive = Taken { active: false, ..taken };
-+        assert!(!asks_again(view, inactive), "the app deactivated, and it asked again");
++        assert!(!asks_again(view, 4, inactive), "the app deactivated, and it asked again");
 +        // The focus gone to another app's window, or to none.
 +        show(5);
 +        let elsewhere = Taken { to_own: false, ..taken };
-+        assert!(!asks_again(view, elsewhere), "the focus went to another app, and it asked again");
++        assert!(!asks_again(view, 5, elsewhere), "the focus went to another app, and it asked again");
 +        // Each of those left it, so with no input the showing asks again once.
-+        assert!(asks_again(view, taken));
++        assert!(asks_again(view, 5, taken));
 +        // Through the focus leaving it: with no display to say where the focus went, it's left.
 +        focus_left(view, false, || false);
 +        while let Some(op) = OPS.with_borrow_mut(|ops| ops.pop_front()) {
 +            run_op(op);
 +        }
 +        assert_eq!(TOLD.get(), 1, "the focus left with no display to say where, and it wasn't left");
++    }
++
++    #[cfg(feature = "x11")]
++    #[test]
++    fn the_focus_leaving_an_overlays_last_showing_never_leaves_the_next() {
++        let view = 41;
++        let show = |showing, ready| {
++            SHOWN.with_borrow_mut(|all| {
++                all.retain(|shown| shown.view != view);
++                all.push(Shown {
++                    view,
++                    keyboard: true,
++                    ready,
++                    left: Some(told),
++                    showing,
++                    away: false,
++                })
++            });
++        };
++        let run_ops = || {
++            while let Some(op) = OPS.with_borrow_mut(|ops| ops.pop_front()) {
++                run_op(op);
++            }
++        };
++        // A menu with the keys.
++        show(1, true);
++        asked(view);
++        // Openbox moves the focus to the browser window as the user right-clicks the next row,
++        // before GPUI hears the press, which shows that row's menu in place of this one under the
++        // same view (#2993).
++        focus_left(view, false, || false);
++        show(2, false);
++        run_ops();
++        show(2, true);
++        asked(view);
++        run_ops();
++        assert_eq!(TOLD.get(), 0, "the last menu's focus going left the next menu as it showed");
++        // The next menu's own focus going leaves it.
++        focus_left(view, false, || false);
++        run_ops();
++        assert_eq!(TOLD.get(), 1, "the next menu's focus went and it wasn't left");
 +    }
 +
 +    #[cfg(feature = "x11")]
