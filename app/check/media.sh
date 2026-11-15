@@ -910,7 +910,18 @@ if pip_driven || windows; then
   expect "^browser: selected $v\( in .*\)\{0,1\}\$" \
     "a double-click on the Mini Player didn't show its tab"
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
-  expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
+  if windows; then
+    # Windows' driver says there's no window only when asked.
+    for _ in $(seq 100); do
+      send pip
+      sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: pip none$' && break
+      sleep 0.1
+    done
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: pip none$' ||
+      fail "the Mini Player stayed after a double-click"
+  else
+    expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
+  fi
 else
   echo "skip: moving, sizing and double-clicking the Mini Player on" \
     "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
