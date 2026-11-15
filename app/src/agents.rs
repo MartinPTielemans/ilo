@@ -2957,7 +2957,7 @@ impl Agents {
                 .collect::<Vec<_>>()
                 .join(", ");
             let s = if opened_tabs.len() > 1 { "s" } else { "" };
-            note = format!("{note} It opened tab{s} {tabs} in your Space.")
+            note = format!("{note} It opened tab{s} {tabs} among your tabs.")
                 .trim_start()
                 .into();
         }
@@ -3131,8 +3131,8 @@ impl Agents {
                 self.browser.set_pinned(tab, true, cx);
                 self.pins.insert(tab, agent.into());
                 format!(
-                    "Pinned tab {tab} at the page it's at. It stays in your Space's pinned tabs, \
-                     even closed, until you unpin or remove it."
+                    "Pinned tab {tab} at the page it's at. It stays in your pinned tabs, even \
+                     closed, until you unpin or remove it."
                 )
             }
             ("unpin_tab", _) => {

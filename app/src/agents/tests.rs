@@ -700,7 +700,7 @@ fn list_tabs_lists_only_the_agents_own_tabs(cx: &mut TestAppContext) {
         [("claude-code".to_string(), "Claude Code".to_string())]
     );
     assert!(!answer.error);
-    assert!(answer.text.starts_with("Your Space has no tabs yet."));
+    assert!(answer.text.starts_with("You have no tabs yet."));
 
     browser
         .tabs
@@ -1691,7 +1691,7 @@ fn a_tab_the_agents_click_opens_is_named(cx: &mut TestAppContext) {
     let said = clicked.text.split("\n\n").next().unwrap();
     assert_eq!(
         said,
-        "Clicked textbox “Coupon”. It opened tab 26 in your Space."
+        "Clicked textbox “Coupon”. It opened tab 26 among your tabs."
     );
 
     let answer = call(
@@ -4228,8 +4228,7 @@ mod tasks {
             json!({ "result": "Two museums.", "tabs": [30, 50] }),
             cx,
         );
-        let theirs =
-            "Tab 50 isn't one of yours: give the ids of tabs in your Space, from list_tabs.";
+        let theirs = "Tab 50 isn't one of yours: give the ids of your own tabs, from list_tabs.";
         assert_eq!(refused.recv().unwrap(), ToolResult::error(theirs));
         // A result with its other arguments written into it, as Haiku wrote one, calls again.
         let garbled = "MAAT opens at 10:00.</result>\n<parameter name=\"summary\">MAAT 10–19h";
