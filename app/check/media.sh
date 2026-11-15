@@ -13,12 +13,12 @@
 # paused. View › Cast… and the page menu's Cast… open the tab's Cast card, and × closes it; on the
 # Mac the run answers macOS's question for the local network that looking for devices brings, and
 # any it asks as the call starts. A video's page menu floats it in Picture in Picture, the Mini
-# Player, 10 in from the top right of the screen, with Dia's corners and rim, and its scrim under the
-# pointer, on the Mac in mini-player-rest.png and mini-player-hover.png. A scroll or a drag moves
-# it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab, shown. On the
-# Mac a throw settles it 10 in at a corner, and a slow release near a side 10 in along it. The next
-# shows where it was left, after a relaunch too, and coming back to its tab's window from another
-# window, or from another app with a menu open, puts it back in the tab.
+# Player, 10 in from the top right of the screen, with Dia's corners and rim, and its flat scrim
+# under the pointer, on the Mac in mini-player-rest.png and mini-player-hover.png. A scroll or a
+# drag moves it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab,
+# shown. On the Mac a throw settles it 10 in at a corner, and a slow release near a side 10 in along
+# it. The next shows where it was left, after a relaunch too, and coming back to its tab's window
+# from another window, or from another app with a menu open, puts it back in the tab.
 # A page asks to share the screen only from a click or a key: asked with neither, its promise is
 # refused, and nothing is shared (decision 12).
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
@@ -894,6 +894,16 @@ EOF
   done
   [ "$hovered" -lt 170 ] ||
     fail "the pointer on the Mini Player didn't bring its scrim: it stayed at $hovered, where the video is about 204 and under the scrim about 133"
+  # One flat scrim, as Dia's: over the video, one colour in a frame, it's as dark at a third of
+  # the height as at three fifths, off the buttons above and the progress bar below (#2881). An
+  # engine older than its core has Chrome's gradients.
+  if engine_has ../core/mini_player.cc; then
+    upper=$(pixel "$out/mini-player-hover.png" 0.125 0.3)
+    lower=$(pixel "$out/mini-player-hover.png" 0.125 0.6)
+    echo "$upper $lower" |
+      awk '{ for (i = 1; i <= 3; i++) { d = $i - $(i + 3); if (d * d > 16) exit 1 } }' ||
+      fail "the Mini Player's scrim wasn't flat: $upper a third down, $lower three fifths down"
+  fi
 fi
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
