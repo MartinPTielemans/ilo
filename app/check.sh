@@ -108,7 +108,7 @@ runs="$runs split favorites cards extensions adblock adblock-lists windows priva
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
-runs="$runs handback webrtc count translate pictures boosts"
+runs="$runs handback webrtc count translate pictures boosts page-menu"
 named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
 for run in "$@"; do
   case " $runs $named " in
