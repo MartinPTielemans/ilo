@@ -1,6 +1,7 @@
 //! The daily usage count (#1977): what a copy sends, and when, decided from the date of its last
-//! count, the only thing it keeps for it. The core posts it (bc_send_daily_count) to the endpoint
-//! the build names; this decides only whether one is due today and its flags.
+//! count, the only thing it keeps for it besides the user's yes. It's off until the user says yes,
+//! in onboarding or Settings › Privacy (#2978). The core posts it (bc_send_daily_count) to the
+//! endpoint the build names; this decides only whether one is due today and its flags.
 
 use chrono::Datelike;
 // The app's crates on Linux and Windows have no chrono of their own, so the host takes it here.
@@ -8,9 +9,12 @@ pub use chrono::NaiveDate;
 
 /// The file in the app's data, beside the profiles, with the UTC date of the copy's last count.
 pub const LAST: &str = "daily-count";
-/// The file that turns the count off while it's there: Settings › Privacy › Send a Daily Usage
-/// Count, on by default.
-pub const OFF: &str = "no-daily-count";
+/// The file that's the user's yes, in onboarding or Settings › Privacy › Send a Daily Usage Count:
+/// a copy sends a count only while it's there. A copy from before the count was opt-in has none,
+/// so one that sent counts under that default stops, with no ask after the update.
+pub const YES: &str = "daily-count-yes";
+/// The file that turned the count off under that default, which a yes takes away.
+pub const OLD_OFF: &str = "no-daily-count";
 /// The Chromium switch, read by the core too, naming where the count goes. Only a build that names
 /// a server passes it, or a check.
 pub const SWITCH: &str = "--daily-count-url";
@@ -18,8 +22,7 @@ pub const SWITCH: &str = "--daily-count-url";
 /// A count's flags besides `daily`, which is always true.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Flags {
-    /// The copy's first count: its first run, which found no data of an earlier one, before any
-    /// count of its own.
+    /// The copy's first count, the first it sends after the user's yes.
     pub first: bool,
     /// The copy's first count this ISO week.
     pub weekly: bool,
@@ -29,14 +32,14 @@ pub struct Flags {
 
 /// The count due `today`, given the date of the `last` one, or none if today's has gone. A last
 /// date after today, as a clock set back leaves, counts as today's, so no day counts twice.
-pub fn due(last: Option<NaiveDate>, today: NaiveDate, first_run: bool) -> Option<Flags> {
+pub fn due(last: Option<NaiveDate>, today: NaiveDate) -> Option<Flags> {
     if last.is_some_and(|last| last >= today) {
         return None;
     }
     Some(Flags {
-        // Only the copy's first count: a first run left open past midnight counts the next day as
-        // any other copy does, and so does a launch whose profile lost its Local State (#2303).
-        first: first_run && last.is_none(),
+        // Only the copy's first count: whenever the yes came, and however long the first run was
+        // open, and a copy that sent counts before the yes was asked for never counts as new.
+        first: last.is_none(),
         weekly: last.is_none_or(|last| last.iso_week() != today.iso_week()),
         monthly: last
             .is_none_or(|last| (last.year(), last.month()) != (today.year(), today.month())),
@@ -57,6 +60,25 @@ pub fn parse(text: &str) -> Option<NaiveDate> {
         return None;
     };
     NaiveDate::from_ymd_opt(year as i32, month, day)
+}
+
+/// Whether the copy whose app data is `dir` sends a count: only once its user has said yes.
+pub fn on(dir: &std::path::Path) -> bool {
+    dir.join(YES).exists()
+}
+
+/// Keeps the user's answer in `dir`: a yes as its file, and a no as none, so the copy sends
+/// nothing. A yes takes the old default's off file with it.
+pub fn answer(dir: &std::path::Path, yes: bool) -> std::io::Result<()> {
+    if !yes {
+        return match std::fs::remove_file(dir.join(YES)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            done => done,
+        };
+    }
+    std::fs::write(dir.join(YES), "")?;
+    _ = std::fs::remove_file(dir.join(OLD_OFF));
+    Ok(())
 }
 
 /// `2026-11-06`.
@@ -80,7 +102,7 @@ pub fn endpoint(given: &[String], named: Option<&str>) -> Option<String> {
 pub fn words(app: &str) -> String {
     format!(
         "Once a day, with no ID: {app}'s version and channel, your system and its version, your \
-         chip, and whether it's this copy's first run, or its first count this week or month."
+         chip, and whether it's this copy's first count, or its first this week or month."
     )
 }
 
@@ -92,6 +114,50 @@ mod tests {
         parse(text).unwrap()
     }
 
+    /// App data of a copy of its own, made empty, as a new one is.
+    fn copy(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ilo-count-{name}-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_new_copy_sends_nothing_until_its_user_says_yes() {
+        let dir = copy("new");
+        assert!(!on(&dir));
+        answer(&dir, false).unwrap();
+        assert!(!on(&dir), "a no turned the count on");
+        answer(&dir, true).unwrap();
+        assert!(on(&dir), "a yes left the count off");
+        answer(&dir, false).unwrap();
+        assert!(!on(&dir), "a no after a yes left the count on");
+        _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_copy_from_before_the_ask_sends_nothing_until_its_user_says_yes() {
+        // One that sent counts under the old default, on: it kept their date, and no file of yes.
+        let sent = copy("sent");
+        std::fs::write(sent.join(LAST), "2026-11-14").unwrap();
+        assert!(
+            !on(&sent),
+            "a copy that sent counts by default went on sending them"
+        );
+        // One whose user turned it off then stays off, and a yes later takes that file away.
+        let off = copy("off");
+        std::fs::write(off.join(OLD_OFF), "").unwrap();
+        assert!(!on(&off));
+        answer(&off, true).unwrap();
+        assert!(on(&off));
+        assert!(
+            !off.join(OLD_OFF).exists(),
+            "a yes left the old default's off file"
+        );
+        _ = std::fs::remove_dir_all(&sent);
+        _ = std::fs::remove_dir_all(&off);
+    }
+
     #[test]
     fn a_new_copy_counts_as_first_this_week_and_this_month() {
         let today = day("2026-11-06");
@@ -100,32 +166,31 @@ mod tests {
             weekly: true,
             monthly: true,
         };
-        assert_eq!(due(None, today, true), Some(flags));
+        assert_eq!(due(None, today), Some(flags));
     }
 
     #[test]
     fn only_the_copys_first_count_is_first() {
         let today = day("2026-11-06");
-        // The first run, still open on the next day, or a profile that lost its Local State.
-        let flags = due(Some(day("2026-11-05")), today, true).unwrap();
+        // The first run, still open on the next day, or a copy that sent counts before the ask.
+        let flags = due(Some(day("2026-11-05")), today).unwrap();
         assert!(!flags.first);
-        // A first count that never reached the server stays the first.
-        assert!(due(None, today, true).unwrap().first);
-        // A launch after the first, whose first count never went, isn't a new copy.
-        assert!(!due(None, today, false).unwrap().first);
+        // A first count that never reached the server, or that a yes after the first run sends,
+        // is the first.
+        assert!(due(None, today).unwrap().first);
     }
 
     #[test]
     fn a_copy_counts_once_a_day() {
         let today = day("2026-11-06");
-        assert_eq!(due(Some(today), today, false), None);
+        assert_eq!(due(Some(today), today), None);
         // A clock set back doesn't count a day again.
-        assert_eq!(due(Some(day("2026-11-07")), today, false), None);
+        assert_eq!(due(Some(day("2026-11-07")), today), None);
     }
 
     #[test]
     fn a_new_day_says_whether_the_week_and_month_are_new() {
-        let flags = |last, today| due(Some(day(last)), day(today), false).unwrap();
+        let flags = |last, today| due(Some(day(last)), day(today)).unwrap();
         // Friday after Thursday: the same week and month.
         let same = Flags {
             first: false,

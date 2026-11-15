@@ -434,6 +434,9 @@ pub extern "C" fn host_show_foot_bar(
 pub extern "C" fn host_add_mini_bar(mini_bar_view: *mut c_void, margin: f64) {
     MINI_BAR.set((margin, 0., 0.));
     add(Kind::MiniBar, mini_bar_view);
+    // It stays over the thing selected for as long as the mode is on, as the foot bar does, so the
+    // window manager keeps it with ilo's window while the user is in another app (#2790).
+    gpui_linux::set_overlay_managed(mini_bar_view);
 }
 
 #[unsafe(no_mangle)]

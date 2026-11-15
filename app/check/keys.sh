@@ -378,17 +378,44 @@ else
 fi
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
-# Closed first: the find bar opened from the UI before stays open, and ⌘F would make it key at once.
-send key f cmd
-send key escape
-expect '^browser: find bar hidden$' "escape didn't close the find bar"
-send click $sidebar_point
-in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"
-typed_after f abc
-expect '^browser: find bar drew "abc" ' \
-  "keys typed right after ⌘F with the UI focused went elsewhere: $(drew 'find bar')"
-send key escape
-expect '^browser: find bar hidden$' "escape didn't close the find bar"
+# On X11 through sway's Xwayland before wlroots 0.19 (sway 1.11), the find bar, a window inside
+# the browser window, can't keep the X focus: wlroots' window manager gives it to the browser
+# window whenever it's moved into one of its windows (#2904). There the find bar's keys are known
+# not to work, and its close button closes it, which needs none.
+find_keys_refused() {
+  sway_xwayland || return 1
+  set -- $(sway --version 2>/dev/null | sed -n 's/.*version \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')
+  [ $# = 2 ] && { [ "$1" -lt 1 ] || { [ "$1" = 1 ] && [ "$2" -lt 11 ]; }; }
+}
+close_find_bar() {
+  set -- $(grep '^browser: find bar at ' "$log" | tail -1 | cut -d' ' -f5-)
+  [ $# = 4 ] || fail "the find bar didn't say where it is"
+  send click $(($1 + 284)) $(($2 + 16))
+  expect '^browser: find bar hidden$' "a click on the find bar's close button didn't hide it"
+}
+if find_keys_refused; then
+  echo "skip: escape and typing in the find bar, after ⌘F with the UI focused, a second ⌘F and" \
+    "⌘F with Prefer $app_name, known under #2904: on sway's Xwayland before wlroots 0.19" \
+    "($(sway --version)) the find bar can't keep the X focus"
+  send key f cmd
+  expect '^browser: find bar drew ' "⌘F with the UI focused didn't open the find bar"
+  close_find_bar
+  send click $sidebar_point
+  in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"
+else
+  # Closed first: the find bar opened from the UI before stays open, and ⌘F would make it key at
+  # once.
+  send key f cmd
+  send key escape
+  expect '^browser: find bar hidden$' "escape didn't close the find bar"
+  send click $sidebar_point
+  in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"
+  typed_after f abc
+  expect '^browser: find bar drew "abc" ' \
+    "keys typed right after ⌘F with the UI focused went elsewhere: $(drew 'find bar')"
+  send key escape
+  expect '^browser: find bar hidden$' "escape didn't close the find bar"
+fi
 # A page that keeps the shortcut, as this one keeps ⌘F, gets the keys typed after it once it has,
 # in order. Input reaches the page in order, so it has seen none of the keys the bars got.
 send click $page_point
@@ -751,8 +778,12 @@ send key f cmd
 expect '^browser: second press cmd-f$' "a second ⌘F at once wasn't taken as a second press"
 expect '^browser: command find via page$' "a second ⌘F at once didn't run Find"
 expect '^browser: find bar drew ' "a second ⌘F at once didn't open the find bar"
-send key escape
-expect '^browser: find bar hidden$' "escape didn't close the find bar the second ⌘F opened"
+if find_keys_refused; then
+  close_find_bar
+else
+  send key escape
+  expect '^browser: find bar hidden$' "escape didn't close the find bar the second ⌘F opened"
+fi
 prefer() {
   send menu Settings…
   expect '^browser: settings shown Shortcuts$' \
@@ -783,8 +814,12 @@ expect '^browser: find bar drew ' "⌘F with Prefer $app_name didn't open the fi
 saw='^browser: title [0-9]* page saw cmd-f$'
 sed -n "/^browser: drive $pressed: /,\$p" "$log" | grep -q "$saw" &&
   fail "the page saw ⌘F with Prefer $app_name"
-send key escape
-expect '^browser: find bar hidden$' "escape didn't close the find bar"
+if find_keys_refused; then
+  close_find_bar
+else
+  send key escape
+  expect '^browser: find bar hidden$' "escape didn't close the find bar"
+fi
 prefer "Prefer Websites, Prefer $app_name (checked)" websites "Prefer Websites"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"

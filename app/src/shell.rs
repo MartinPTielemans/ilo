@@ -126,6 +126,9 @@ mod window_move_tests;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
 mod picture;
 mod recent_downloads;
+mod recent_tabs;
+#[cfg(test)]
+mod recent_tabs_tests;
 #[cfg(test)]
 mod recorder;
 mod return_mark;
@@ -1312,6 +1315,8 @@ pub struct Shell {
     /// ⌃ is held after a ⌃Tab, which showed this tab. The tabs a walk shows don't count as shown
     /// until ⌃ goes up, and then its last one does, though a click may have shown another since.
     walked: Option<u64>,
+    /// That walk, and its switcher (recent_tabs).
+    held: Option<recent_tabs::Held>,
     hovered: Option<Row>,
     /// The pinned row the pointer is on, whose − or middle press just unloaded it. Its remove
     /// button waits until the pointer has left the row or pressed it, so a second click meant for
@@ -1827,6 +1832,8 @@ pub struct Shell {
     arrange_mode: arrange::Mode,
     /// What Arrange's mini bar was last asked to show, so it's asked again only on a change.
     mini_bar_shown: Option<crate::mini_bar::Shown>,
+    /// What Arrange's foot bar last showed (shell/arrange.rs).
+    foot_bar_shown: Option<arrange::FootShown>,
     boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Library › Boosts' list, the window's profile's, read as it's shown.
     boost_list: Vec<crate::boosts::Boost>,
@@ -1967,6 +1974,7 @@ impl Shell {
             agents_at: HashMap::new(),
             recent: Vec::new(),
             walked: None,
+            held: None,
             selected: 0,
             hovered: None,
             remove_held: None,
@@ -2217,6 +2225,7 @@ impl Shell {
             arranging: None,
             arrange_mode: arrange::Mode::default(),
             mini_bar_shown: None,
+            foot_bar_shown: None,
             boost_card_drawn: Rc::default(),
             boost_list: Vec::new(),
             battery_saver: None,
@@ -3489,15 +3498,6 @@ impl Shell {
         }
     }
 
-    /// ⌃ went up, which ends a ⌃Tab walk on the tab it shows. A click ends it too, and the core
-    /// may report the tab the click showed before this runs, so the walk's tab counts first.
-    pub fn control_released(&mut self, cx: &mut Context<Self>) {
-        if let Some(walked) = self.walked.take().filter(|tab| self.tabs.contains_key(tab)) {
-            self.shown(walked, cx);
-        }
-        self.shown(self.selected, cx);
-    }
-
     // The core reports a tab's title, favicon and state whenever Chromium touches them, often with
     // what it already has, and for tabs nobody sees. Each is kept, but only a change that shows
     // draws a frame.
@@ -4489,6 +4489,7 @@ impl Render for Shell {
         }
         self.show_page_dialog(cx);
         self.show_mini_bar(cx);
+        self.show_foot_bar(cx);
         let card_left = self.card_left();
         self.update_palette(cx);
         let focus_color = packed(self.palette.accent.into());

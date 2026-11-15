@@ -94,10 +94,16 @@ answer return accept "prompt ada"
 
 # On X11, another app's window raised over ilo's while the page's alert shows: the window manager
 # stacks the alert under that window with ilo's, where KWin drew an override-redirect one over every
-# window it manages (#2790). Back in ilo's window, the alert has the keys again for ↩.
+# window it manages (#2790). Back in ilo's window, the alert has the keys again for ↩. While the
+# alert holds the input focus ilo hears each button press on the display, and only counts them
+# (#2943); with another app active it hears none.
 raised_over=
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+  heard() { grep '^browser: x11 hears ' "$log" | tail -1 | cut -d' ' -f4-; }
   ask a Alert alert-raised-over
+  for _ in $(seq 50); do [ "$(heard)" = "button presses" ] && break; sleep 0.1; done
+  [ "$(heard)" = "button presses" ] ||
+    fail "the alert holding the input focus, ilo didn't hear the presses on the display: $(heard)"
   rm -f "$out/other-in"
   mkfifo "$out/other-in"
   python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
@@ -114,6 +120,9 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
     sleep 0.1
   done
   [ -n "$under" ] || fail "the alert isn't under another app's window raised over ilo's: $stacking"
+  for _ in $(seq 50); do [ "$(heard)" = "no button presses" ] && break; sleep 0.1; done
+  [ "$(heard)" = "no button presses" ] ||
+    fail "with another app active, ilo still hears every button press on the display: $(heard)"
   # The manager's stacking, bottom first, for whoever reads the run.
   printf '%s\n' "$stacking" > "$out/alert-raised-over-stacking.json"
   exec 7>&-
