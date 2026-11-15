@@ -1000,15 +1000,17 @@ expect "^browser: title $v landed\$" "the Mini Player didn't land as its window 
 # The same with a menu open as the user goes to another app: the menu closes as the app's window
 # takes the keyboard, and coming back puts the Mini Player back (#1614). On X11, as in mcp.sh, a
 # window of another client's takes it from xdotool, and ilo's window takes it back as the driver
-# makes it active. On Windows, as in mcp.sh, another app's window away from ilo's takes the
-# foreground, and gives it back to ilo's as a click on its taskbar button does.
+# makes it active. Under Wayland, check/drag's window takes it as sway focuses it, as in links.sh,
+# and the driver's sway gives it back. On Windows, as in mcp.sh, another app's window away from
+# ilo's takes the foreground, and gives it back to ilo's as a click on its taskbar button does.
 x11_other_app() { [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; }
-if x11_other_app || windows; then
+if x11_other_app || wayland || windows; then
   post rightclick $page_point
   expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
     "the video's menu had no Picture in Picture the third time"
   send choose "$(cased 'Picture in Picture')"
   expect "^browser: title $v floating\$" "the video didn't float a third time"
+  ! wayland || kept_keys "the video floating from its menu a third time"
   post rightclick $page_point
   expect "^browser: menu shown " "the video's page had no menu over its Mini Player"
   if windows; then
@@ -1022,6 +1024,8 @@ if x11_other_app || windows; then
     done
     grep -q '^cover .*, foreground away$' "$out/other-window.log" ||
       fail "another app's window didn't open and take the foreground: $(cat "$out/other-window.log")"
+  elif wayland; then
+    other_app_click
   else
     rm -f "$out/other-in"
     mkfifo "$out/other-in"
@@ -1041,10 +1045,14 @@ if x11_other_app || windows; then
   expect 'browser: mini player back in its tab$' \
     "coming back from another app with a menu open didn't put the Mini Player back in its tab"
   expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
-  windows || exec 7>&-
-  wait "$other" 2> /dev/null || true
+  if wayland; then
+    other_app_closes
+  else
+    windows || exec 7>&-
+    wait "$other" 2> /dev/null || true
+  fi
 else
-  echo "skip: coming back from another app with a menu open, on $(uname) ${WAYLAND_DISPLAY:+Wayland}: no other app's window to go to."
+  echo "skip: coming back from another app with a menu open, on $(uname)$(! sway_xwayland || echo " under sway's Xwayland"): no other app's window to go to."
 fi
 # Launched again, the next shows where the last was left before the quit, as Arc's does.
 read -r lx ly lw lh <<LEFT
