@@ -655,6 +655,103 @@ fn skip_and_esc_leave_the_count_as_it_stands(cx: &mut TestAppContext) {
     }
 }
 
+/// The step at its three switches, all off, the motion done.
+fn at_three_switches(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    let (shell, cx, host) = first_window(cx);
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    host.daily_count.set(Some(false));
+    host.crash_reports.set(Some(false));
+    host.agents.set(Some(false));
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::OptIns);
+    later(&shell, cx, STEP_MOTION);
+    (shell, cx, host)
+}
+
+/// ⇥ goes along the three switches in order and round again, ⇧⇥ back, and Space turns the one
+/// the keyboard is on, as a click on its row does; an assistive app reads each as its switch
+/// (#2985).
+#[gpui::test]
+fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
+    use crate::settings_rows::spoken::{press, stops};
+    let (shell, cx, host) = at_three_switches(cx);
+    let names: Vec<String> = stops(cx).into_iter().map(|(_, name, _)| name).collect();
+    assert_eq!(
+        names,
+        [
+            "Send a daily usage count",
+            "Send crash reports",
+            "Let agents use the browser"
+        ],
+        "the stops ⇥ goes along"
+    );
+    cx.update(|window, cx| window.blur(cx));
+    host.take();
+    for (at, said) in [
+        (0, None),
+        (1, Some("crash reports true")),
+        (2, Some("agents true")),
+    ] {
+        cx.simulate_keystrokes("tab");
+        press("space", cx);
+        assert!(offered(&shell, cx)[at].1, "Space turned switch {at} on");
+        let said: Vec<String> = said.into_iter().map(str::to_string).collect();
+        assert_eq!(host.take(), said, "Space on switch {at}");
+    }
+    // Round to the first, and back to the last.
+    cx.simulate_keystrokes("tab");
+    cx.simulate_keystrokes("shift-tab");
+    press("space", cx);
+    assert_eq!(
+        offered(&shell, cx),
+        vec![
+            (OptIn::DailyCount, true),
+            (OptIn::CrashReports, true),
+            (OptIn::Agents, false),
+        ],
+        "⇧⇥ from the first went back to the last"
+    );
+}
+
+/// With a switch the keyboard is on, ↩ is still Continue and Esc still Skip: neither turns it,
+/// and the count is set as the step is left, as it stands (#2978).
+#[gpui::test]
+fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
+    use crate::settings_rows::spoken::press;
+    for (leave, turned) in [
+        ("enter", true),
+        ("escape", true),
+        ("enter", false),
+        ("escape", false),
+    ] {
+        let (shell, cx, host) = at_three_switches(cx);
+        cx.simulate_keystrokes("tab");
+        if turned {
+            press("space", cx);
+        }
+        host.take();
+        press(leave, cx);
+        let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+        assert!(ending.is_some(), "{leave} left the step");
+        let said: Vec<String> = turned
+            .then(|| "daily count true".to_string())
+            .into_iter()
+            .collect();
+        assert_eq!(
+            host.take(),
+            said,
+            "{leave} with the count turned on {turned}"
+        );
+        assert_eq!(
+            host.daily_count.get(),
+            Some(turned),
+            "{leave} turned the switch"
+        );
+    }
+}
+
 /// A build that names no server for the count doesn't offer it.
 #[gpui::test]
 fn a_build_without_a_count_server_doesnt_offer_it(cx: &mut TestAppContext) {

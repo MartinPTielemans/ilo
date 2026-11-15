@@ -14,8 +14,9 @@ use std::time::Duration;
 use web_time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, Context, Entity, KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba,
-    SharedString, Subscription, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
+    AnyElement, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
+    KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba, SharedString, Subscription, Window,
+    canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
 use super::{
@@ -26,7 +27,7 @@ use super::{
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
-use crate::settings_rows::{SLIDE, group, switch};
+use crate::settings_rows::{SLIDE, group, stop_switch};
 use crate::theme::Theme;
 use crate::theme_picker::SWATCHES;
 use crate::tokens::palette::{INK, PAPER};
@@ -779,6 +780,10 @@ impl Shell {
                 }
             }
             (Step::Import, _) => {}
+            // ⇥ and ⇧⇥ go along the opt-ins' switches, the window's only stops; Space turns the one
+            // the keyboard is on, as Settings' does, and ↩ stays Continue (#2985).
+            (Step::OptIns, "tab") if key.modifiers.shift => window.focus_prev(cx),
+            (Step::OptIns, "tab") => window.focus_next(cx),
             (_, "enter") if !key.modifiers.modified() => {
                 self.onboarding_continue("return", window, cx)
             }
@@ -1168,7 +1173,21 @@ impl Shell {
                 .relative()
                 .flex_none()
                 .ml(px(PADDING))
-                .child(switch(&look, on, slid, look.accent))
+                .child(
+                    stop_switch(&look, "switch", name, on, slid, look.accent, self.a11y)
+                        // A press is its row's click; here only Space, as ↩ is the step's Continue.
+                        .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                            if matches!(
+                                event,
+                                ClickEvent::Keyboard(KeyboardClickEvent {
+                                    button: KeyboardButton::Space,
+                                    ..
+                                })
+                            ) {
+                                shell.onboarding_switch(opt_in, cx);
+                            }
+                        })),
+                )
                 .child(opt_in_frame(frames.clone(), opt_in, "switch", settled));
             let row = div()
                 .id(opt_in.name())
