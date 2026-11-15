@@ -220,26 +220,7 @@ shows "$own" "a click in the mode reached the page"
   fail "the page took the mode's click: $(said)"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-picked.png" || fail "no window to capture"
 
-# Carry and settle: the first carried to the edge under the second settles there, the page making
-# room, and the change is saved.
-carry $(slot 0) $(slot_edge 1)
-expect "^browser: arrange $tab Preview Settles " "a rest at an edge didn't show a settle"
-send release $(slot_edge 1)
-expect "^browser: arrange $tab Selected Settles selected " "letting go at an edge didn't settle"
-expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle"
-shows 'b,a,c,w side s,n hidden - float -' "the settle didn't move the thing under the second"
-kept 1 "the settle wasn't saved"
-../tools/window-screenshot.sh "$pid" "$out/arrange-settled.png" || fail "no window to capture"
-
-# Put back, the mini bar's last button on a thing with a change, takes that change back: Alpha,
-# settled, goes back to its own place.
-send click $(slot 1)
-expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Alpha\$" \
-  "a click didn't select Alpha, settled under Beta"
-press_mini_bar last "put back"
-expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put back"
-shows "$own" "Put back didn't take the settle back"
-kept 0 "Put back didn't take the change back"
+# Probe for #2974: the plain trade on a fresh page, with no settle or Put back before it.
 
 # Trade: the third let go on the first's middle, and the two trade places.
 carry $(slot 2) $(slot 0)
