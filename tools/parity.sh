@@ -68,6 +68,8 @@ screens=(
   "live-folder-space-menu|menu submenu Live .olders drawn|PREVIEW_LIVE_FOLDER=open PREVIEW_MENU=40,221,l,right"
   "live-folder-menu|menu shown|PREVIEW_LIVE_FOLDER=open PREVIEW_MENU=90,386"
   "live-folder-narrow|live folder 9000 answered|PREVIEW_LIVE_FOLDER=open PREVIEW_SIDEBAR=164"
+  "live-folder-states-light|live folder 9000 answered|PREVIEW_LIVE_FOLDER=states PREVIEW_APPEARANCE=light"
+  "live-folder-states-dark|live folder 9000 answered|PREVIEW_LIVE_FOLDER=states PREVIEW_APPEARANCE=dark"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;

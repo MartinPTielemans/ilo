@@ -417,6 +417,17 @@ impl Shell {
     /// The core's answer for `folder`'s lists. Only its kind is logged: the rows are the user's
     /// account's.
     pub fn set_live_answer(&mut self, folder: u64, answer: LiveAnswer, cx: &mut Context<Self>) {
+        self.set_live_answer_at(folder, answer, Instant::now(), cx);
+    }
+
+    /// The answer for `folder` as of `at`, as the preview gives an older one.
+    pub fn set_live_answer_at(
+        &mut self,
+        folder: u64,
+        answer: LiveAnswer,
+        at: Instant,
+        cx: &mut Context<Self>,
+    ) {
         if self.live_source(folder).is_none() {
             return;
         }
@@ -427,10 +438,7 @@ impl Shell {
         };
         // check.sh reads this line.
         log!("browser: live folder {folder} answered {kind}");
-        self.live
-            .entry(folder)
-            .or_default()
-            .answer(answer, Instant::now());
+        self.live.entry(folder).or_default().answer(answer, at);
         self.update_live_rooms(cx);
         cx.notify();
     }

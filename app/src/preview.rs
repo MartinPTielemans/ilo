@@ -298,11 +298,17 @@ const PAUSED: DownloadState = DownloadState::Paused;
 const DONE: DownloadState = DownloadState::Done;
 
 /// What the preview's Live Folder fetches, as PREVIEW_LIVE_FOLDER asks: made-up pull requests,
-/// the mock's (#2979), or with `signed-out` that answer. With `failed`, the next fetch fails.
+/// the mock's (#2979), or with `signed-out` that answer. With `failed`, the next fetch fails, and
+/// with `states`, #57 has merged.
 fn live_stand_in() -> LiveAnswer {
-    if std::env::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("signed-out") {
+    let mode = std::env::var("PREVIEW_LIVE_FOLDER").unwrap_or_default();
+    if mode == "signed-out" {
         return LiveAnswer::SignedOut;
     }
+    let ferry = match mode.as_str() {
+        "states" => PullState::Merged,
+        _ => PullState::Open,
+    };
     let item = |list, repo: &str, number, title: &str, state| LiveItem {
         list,
         repo: repo.to_string().into(),
@@ -346,10 +352,25 @@ fn live_stand_in() -> LiveAnswer {
             "harbor/timetables",
             57,
             "Parse the ferry timetable's winter page",
-            Open,
+            ferry,
         ),
     ])
 }
+
+/// The tabs PREVIEW_LIVE_FOLDER=states opens in the Live Folder, at their items' URLs: #2961,
+/// selected, and #57, merged since.
+const LIVE_TABS: [(u64, &str, &str); 2] = [
+    (
+        9001,
+        "Recent tabs switcher on a held ⌃Tab · lantern/browser#2961",
+        "https://github.com/lantern/browser/pull/2961",
+    ),
+    (
+        9002,
+        "Parse the ferry timetable's winter page · harbor/timetables#57",
+        "https://github.com/harbor/timetables/pull/57",
+    ),
+];
 
 /// The preview's Live Folder's id, past every tab and folder it makes up.
 const LIVE_FOLDER: u64 = 9000;
@@ -769,13 +790,24 @@ impl Browser for Fake {
     // PREVIEW_LIVE_FOLDER=signed-out or failed, that answer.
     fn fetch_live_folder(&self, folder: u64, _: LiveSource, cx: &mut App) {
         let answer = live_stand_in();
-        let fails = std::env::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("failed");
-        self.later(cx, move |shell, cx| {
-            shell.set_live_answer(folder, answer, cx);
-            // The rows came once; the refresh after them didn't.
-            if fails {
+        let mode = std::env::var("PREVIEW_LIVE_FOLDER").unwrap_or_default();
+        self.later(cx, move |shell, cx| match (mode.as_str(), answer) {
+            // The rows came 12 minutes ago; the refresh now didn't.
+            ("failed", answer) => {
+                let ago = Duration::from_secs(12 * 60);
+                let then = web_time::Instant::now().checked_sub(ago);
+                let then = then.unwrap_or_else(web_time::Instant::now);
+                shell.set_live_answer_at(folder, answer, then, cx);
                 shell.set_live_answer(folder, LiveAnswer::Failed, cx);
             }
+            // The answer before had no #412, so it's new.
+            ("states", LiveAnswer::Items(items)) => {
+                let before = items.iter().filter(|item| item.number != 412);
+                let before = LiveAnswer::Items(before.cloned().collect());
+                shell.set_live_answer(folder, before, cx);
+                shell.set_live_answer(folder, LiveAnswer::Items(items), cx);
+            }
+            (_, answer) => shell.set_live_answer(folder, answer, cx),
         });
     }
 
@@ -941,8 +973,9 @@ impl Browser for Fake {
         0
     }
 
-    fn pinned_url(&self, _: u64) -> String {
-        String::new()
+    fn pinned_url(&self, tab: u64) -> String {
+        let live = LIVE_TABS.iter().find(|&&(each, ..)| each == tab);
+        live.map(|(_, _, url)| url.to_string()).unwrap_or_default()
     }
 
     fn set_pinned_url(&self, _: u64, _: &str, _: &mut App) {}
@@ -2900,7 +2933,7 @@ fn main() {
                         ..Split::default()
                     };
                     shell.set_tabs(first_space, pinned, today, vec![split], folders, cx);
-                    // PREVIEW_LIVE_FOLDER=open, closed, signed-out or failed adds a Live Folder of
+                    // PREVIEW_LIVE_FOLDER=open, closed, signed-out, failed or states adds a Live Folder of
                     // pull requests after the pinned tabs, as the Space's menu makes one (#2979).
                     if let Ok(live) = std::env::var("PREVIEW_LIVE_FOLDER") {
                         let made = LIVE_FOLDER;
@@ -2911,8 +2944,24 @@ fn main() {
                         folders.live.insert(made, LiveSource::PullRequests);
                         let mut pinned = shell.pinned().to_vec();
                         pinned.push(made);
+                        if live == "states" {
+                            for (tab, ..) in LIVE_TABS {
+                                pinned.push(tab);
+                                folders.parents.insert(tab, made);
+                            }
+                        }
                         let (today, splits) = (shell.today().to_vec(), shell.splits());
                         shell.set_tabs(first_space, pinned, today, splits, folders, cx);
+                        if live == "states" {
+                            for (tab, title, url) in LIVE_TABS {
+                                shell.set_title(tab, title.into(), cx);
+                                let page = Page {
+                                    url: url.into(),
+                                    ..Default::default()
+                                };
+                                shell.set_page(tab, page, cx);
+                            }
+                        }
                     }
                     let reading: Vec<u64> = (folder + 1..).take(READING.len()).collect();
                     let (pinned, today) = (reading[..1].to_vec(), reading[1..].to_vec());
@@ -3004,6 +3053,10 @@ fn main() {
                         (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
                         (None, None) => shell.set_selected(1, cx),
+                    }
+                    // A Live Folder's tab is the one selected, as the mock's #2961 is.
+                    if std::env::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("states") {
+                        shell.set_selected(LIVE_TABS[0].0, cx);
                     }
                     // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
                     // so the URL field offers to translate them.
