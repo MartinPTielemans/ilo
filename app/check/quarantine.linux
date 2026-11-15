@@ -1,4 +1,3 @@
 # Runs of check.sh, or a step of one, whose failure doesn't fail Check on Linux while their issue is
 # open (check/quarantine.sh says how). A line lasts 14 days:
 # <run>[@<session>] #<issue> <YYYY-MM-DD> [<its FAIL line's start, as the summary shows it>]
-window@xvfb #2215 2026-11-09 a tab opened to a page that hasn't come doesn't say it's loading
