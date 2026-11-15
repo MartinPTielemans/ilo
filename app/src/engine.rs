@@ -1084,6 +1084,34 @@ impl Browser for Engine {
         on
     }
 
+    fn arrange_do(&self, tab: u64, ask: browser::boosts::arrange::Ask, _: &mut App) {
+        use browser::boosts::arrange::Ask;
+        let action = match ask {
+            Ask::Outer => bc::BC_ARRANGE_DO_OUTER,
+            Ask::Inner => bc::BC_ARRANGE_DO_INNER,
+            Ask::Undo => bc::BC_ARRANGE_DO_UNDO,
+            Ask::Hide => bc::BC_ARRANGE_DO_HIDE,
+            Ask::PutBack => bc::BC_ARRANGE_DO_PUT_BACK,
+            Ask::StaysOnScreen => bc::BC_ARRANGE_DO_STAYS_ON_SCREEN,
+            Ask::ScrollsWithPage => bc::BC_ARRANGE_DO_SCROLLS_WITH_PAGE,
+            Ask::Reset => bc::BC_ARRANGE_DO_RESET,
+        };
+        // check.sh reads this line.
+        log!("browser: arrange {tab} {ask:?}");
+        unsafe { bc::bc_tab_arrange_do(tab, action as std::os::raw::c_int) };
+    }
+
+    fn show_mini_bar(
+        &self,
+        shown: Option<(browser::mini_bar::Shown, browser::mini_bar::OnPress)>,
+        cx: &mut App,
+    ) {
+        let window = self.window;
+        // The shell asks from its render, and the bar's window is made the first time it shows: a
+        // window made while another draws left that one drawing nothing more on Linux and Windows.
+        cx.defer(move |cx| with_overlays(move |cx| browser::mini_bar::show(window, shown, cx), cx));
+    }
+
     fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> browser::boosts::Arranged {
         boosts_host::set_arrangement(profile, site, bytes)
     }

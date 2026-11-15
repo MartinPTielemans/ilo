@@ -82,7 +82,10 @@ fn a_shadow_fades_out_inside_the_margin_of_the_window_that_draws_it() {
 
     let popover = Level::Popover.reach();
     // The tooltip's and the link target's windows are the plate and this much on every side.
-    let margins = [("tooltip and link target", [WINDOW_MARGIN; 4])];
+    let margins = [
+        ("tooltip and link target", [WINDOW_MARGIN; 4]),
+        ("mini bar", [crate::mini_bar::MARGIN; 4]),
+    ];
     // The zoom HUD's window holds its pill at the top right, and the window's width is the widest
     // pill with the margin on both sides.
     assert!(WINDOW_WIDTH >= 2. * MARGIN + 80., "room for \"500%\"");

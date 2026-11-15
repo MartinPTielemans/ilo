@@ -1494,6 +1494,13 @@ void PlaceFootBar() {
                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+// Arrange's mini bar, and the UI's view of the browser window it shows over while it shows. Its
+// place in that window's content goes with the window as it moves (Moved).
+Floating g_mini_bar;
+void* g_mini_bar_over = nullptr;
+// How far its window reaches past the bar, for the shadow the bar draws (host_add_mini_bar).
+double g_mini_bar_margin = 0;
+
 // Where the toast's window goes over |ui_view|'s browser window, in points from its content's top
 // left: at the focused page's top right corner, which in a split view is its pane's, and as wide as
 // that page from its left edge, so no toast runs past its window (#1462).
@@ -3636,6 +3643,9 @@ void host_forget_window(void* ui_view) {
   if (g_foot_bar_over == ui_view) {
     host_hide_foot_bar();
   }
+  if (g_mini_bar_over == ui_view) {
+    host_hide_mini_bar();
+  }
   g_pane_corners.erase(ui_view);
   g_page_lefts.erase(ui_view);
   std::erase(UiViews(), Hwnd(ui_view));
@@ -4563,6 +4573,39 @@ void host_show_foot_bar(void* ui_view,
 void host_hide_foot_bar(void) {
   g_foot_bar_over = nullptr;
   Hide(g_foot_bar);
+}
+
+void host_add_mini_bar(void* mini_bar_view, double margin) {
+  Adopt(g_mini_bar, mini_bar_view, "mini bar", false, nullptr);
+  g_mini_bar_margin = margin;
+  // A click on its buttons leaves the keyboard where it was, with the browser window and the page,
+  // where the mode has its keys, as the hover card's does.
+  SetWindowLongPtrW(g_mini_bar.hwnd, GWL_EXSTYLE,
+                    GetWindowLongPtrW(g_mini_bar.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
+}
+
+void host_show_mini_bar(void* ui_view, double x, double y, double width, double height) {
+  g_mini_bar_over = ui_view;
+  const bool shown = IsWindowVisible(g_mini_bar.hwnd);
+  // Only the bar takes clicks, for its buttons; the margin round it, where its shadow falls, lets
+  // them through to the page, as the hover card's does.
+  const double margin = g_mini_bar_margin;
+  if (HWND root = Root(ui_view)) {
+    const double scale = Scale(root);
+    g_mini_bar.plate = RECT{std::lround(margin * scale), std::lround(margin * scale),
+                            std::lround((margin + width) * scale),
+                            std::lround((margin + height) * scale)};
+  }
+  Show(g_mini_bar, ui_view, x - margin, y - margin, width + 2 * margin, height + 2 * margin,
+       false);
+  if (!shown) {
+    LogShown(g_mini_bar, "mini bar");
+  }
+}
+
+void host_hide_mini_bar(void) {
+  g_mini_bar_over = nullptr;
+  Hide(g_mini_bar);
 }
 
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
