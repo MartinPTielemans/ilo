@@ -1019,6 +1019,18 @@ send window 1
 expect 'browser: mini player back in its tab$' \
   "coming back to the video's window didn't put the Mini Player back in its tab"
 expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
+# The new window's command bar closes as the video's window takes the keyboard, which stays there:
+# the Mac's host gave it back to the bar's window (#2179).
+if [ "$(uname)" = Darwin ]; then
+  first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
+  keys=$(grep '^browser: key window [0-9]*$' "$log" | tail -2 | tr '\n' ' ')
+  case "$keys" in
+  *"key window $first ") ;;
+  *)
+    fail "the video's window didn't keep the keyboard as the new window's command bar closed: $keys"
+    ;;
+  esac
+fi
 # The same with a menu open as the user goes to another app: the menu closes as the app's window
 # takes the keyboard, and coming back puts the Mini Player back (#1614). On X11, as in mcp.sh, a
 # window of another client's takes it from xdotool, and ilo's window takes it back as the driver

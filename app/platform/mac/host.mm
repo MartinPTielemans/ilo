@@ -3160,7 +3160,13 @@ void host_hide_overlay(int index) {
     [overlay->window orderOut:nil];
     overlay->shadow.alphaValue = 0;
   }
-  [KeyWindowAfter(*overlay, browser) makeKeyWindow];
+  // Not when another browser window has the keyboard: the user went there, and taking it back
+  // would leave that window main with the keys going to this one.
+  NSWindow* back = KeyWindowAfter(*overlay, browser);
+  Browser* key_browser = BrowserOf(NSApp.keyWindow);
+  if (!key_browser || key_browser == browser) {
+    [back makeKeyWindow];
+  }
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
   if (overlay->key_at_hide) {
     overlay->key_at_hide = false;
