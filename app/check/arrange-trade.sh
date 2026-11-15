@@ -177,11 +177,12 @@ expect "browser: tab $tab arrange off\$" "escape in the page didn't end Arrange"
 # An arranged page at rest asks for nothing (#2981). Arrange's script runs in a world of its own,
 # so the page can't count the frames it asks for, but each one runs a pass, and a pass that hides a
 # thing and lifts it again fires its toggle events and rewrites its style, which the page sees on
-# its own things. The page counts those from two frames after its things are lifted, over 250 ms,
-# the probe's window (43759327155), before the hold's passes at 1.5 s; again 2.5 s after the lift,
-# once they've run; while another tab covers it; and from two frames after it shows again, past
-# the pass its own title asks for. Each is an absence measured over a stated time, as the idle
-# checks' are: the loop it looks for fired two toggles a frame.
+# its own things. The page counts those over 250 ms: from the first frame after its things are
+# lifted that saw none, with nothing moving, before the hold's passes at 1.5 s; again 2.5 s after
+# the lift, once they've run; while another tab covers it; and from the first such frame after it
+# shows again, past the pass its own title asks for. Each is an absence measured over a stated
+# time, as the idle checks' are: the loop it looks for fired two toggles a frame, so it gives no
+# frame to start from, and the page says "quiet none".
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
 body { margin: 0; height: 100vh; font: 16px sans-serif; background: rgb(243, 245, 246) }
@@ -207,8 +208,20 @@ const lifted = new Promise((done) => {
   const o = new MutationObserver(() => now() && o.disconnect());
   o.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["popover"] });
 });
-const frames = (n) => new Promise((done) => { const f = () => (--n <= 0 ? done() : requestAnimationFrame(f)); requestAnimationFrame(f); });
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+// The frames until one whose passes touched nothing, with nothing moving, or "none" by |by|. The
+// passes of the load, as its things settle, run past two frames on some runners (43767580159). A
+// frame is read after it is drawn, once the passes in its callbacks and observers have run.
+const drawn = () => new Promise((done) => requestAnimationFrame(() => setTimeout(done, 0)));
+const quiet = async (by) => {
+  await drawn();
+  for (let n = 1; ; n++) {
+    const was = seen;
+    await drawn();
+    if (seen === was && !document.getAnimations().some((x) => x.playState === "running")) return n;
+    if (performance.now() > by) return "none";
+  }
+};
 // Until the page is shown, or hidden.
 const until = (hidden) => new Promise((done) => {
   const f = () => { if (document.hidden === hidden) { document.removeEventListener("visibilitychange", f); done(); } };
@@ -224,19 +237,23 @@ const order = () => {
 };
 (async () => {
   const at = await lifted;
-  await frames(2);
+  // After the load, whose end the core may lay the page out again for. The window ends before the
+  // passes of the hold at 1.5 s: a bound that can only turn the step red, as a page with no quiet
+  // frame by then says "quiet none".
+  if (document.readyState !== "complete") await new Promise((done) => addEventListener("load", done, { once: true }));
+  const settled = await quiet(at + 1200);
   const [first] = await count(250);
   await wait(Math.max(0, at + 2500 - performance.now()));
   const [late] = await count(250);
-  let said = "idle " + file + " " + order() + " shown " + first + " late " + late;
+  let said = "idle " + file + " " + order() + " quiet " + settled + " shown " + first + " late " + late;
   document.title = said;
   await until(true);
   const [hidden, ms] = await count(250);
   document.title = said += " hidden " + hidden + " in " + ms + " ms";
   await until(false);
-  await frames(2);
+  const back = await quiet(performance.now() + 1000);
   const [again] = await count(250);
-  document.title = said + " again " + again;
+  document.title = said + " again " + again + " quiet " + back;
 })();
 </script>' > "$out/site/arrange-idle.html"
 
@@ -280,9 +297,9 @@ idle() {
   send key w cmd
   tab=$page
   expect "^browser: selected $tab\( in .*\)*\$" "$1: ⌘W on example.org's tab didn't show the page again"
-  await "^browser: title $tab idle $1 .* again [0-9]*\$" "$1: the page didn't say what it saw shown again: it says $(said)"
+  await "^browser: title $tab idle $1 .* again [0-9]* quiet [0-9a-z]*\$" "$1: the page didn't say what it saw shown again: it says $(said)"
   case "$(said)" in
-    *" shown 0 late 0 hidden 0 in "*" again 0") ;;
+    *" quiet "[0-9]*" shown 0 late 0 hidden 0 in "*" again 0 quiet "[0-9]*) ;;
     *) fail "$1: the arranged page didn't rest: it saw passes while nothing changed: $(said)" ;;
   esac
   rested="$rested $1 ($(said | cut -d' ' -f3-4)),"
