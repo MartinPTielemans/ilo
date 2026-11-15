@@ -118,7 +118,11 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
   wait "$other_app" 2> /dev/null || true
   send window 1
   answer return accept alerted
-  raised_over=1
+  # A tiling manager, as i3, tiles the other app's window beside ilo's, so the alert is beside it.
+  case $stacking in
+    *'"beside"'*) raised_over="beside the other app's window a tiling manager put beside" ;;
+    *) raised_over="under another app's window raised over" ;;
+  esac
 fi
 
 # Another tab takes the alert down, and its own brings it back.
@@ -492,8 +496,8 @@ echo "  and hides 20 times, between the command bar and a tab's menu, with no pa
   "link target and the hover card show under it, and the link target over ilo's window once it's" \
   "gone. Windows: $out/link-target-covered-ilo.png, $out/link-target-covered-away.png," \
   "$out/link-target-uncovered.png"
-[ -z "$raised_over" ] || echo "  On X11 an alert stays under another app's window raised over" \
-  "ilo's, in the window manager's stacking, and has the keys again back in ilo's window."
+[ -z "$raised_over" ] || echo "  On X11 an alert stays $raised_over ilo's, in the window" \
+  "manager's stacking, and has the keys again back in ilo's window."
 [ -z "$background_dialog" ] || echo "  An alert that came with another app in front of ilo's" \
   "window ($background_dialog) went under that app's window and over ilo's, and took the keyboard" \
   "as ilo's window came to the front, with no caption of Windows' behind the window buttons there" \

@@ -1,7 +1,8 @@
 """Whether the overlays ilo's process $2 shows are under another app's window $1 in the X window
 manager's stacking (_NET_CLIENT_LIST_STACKING, bottom first), as the manager keeps an overlay that
 stays while ilo isn't active (#2790). An overlay is a dialog-type window of ilo's, transient for
-another of its windows. Each one in the stacking must also be viewable with a shape that isn't empty,
+another of its windows. One that doesn't overlap $1 is beside it, not over it, as when a tiling
+manager such as i3 tiles $1 beside ilo's window and floats the overlay over ilo's tile. Each one in the stacking must also be viewable with a shape that isn't empty,
 as one the manager mapped with no place yet, its shape kept back, would be under $1 and never seen.
 Prints the order and exits 0 when each one shown is below $1; otherwise says why and exits 1.
 Usage: python3 -I check/x11-stacking.py <window> <pid>"""
@@ -34,6 +35,8 @@ class XWindowAttributes(ctypes.Structure):
 
 
 x11.XGetWindowAttributes.argtypes = [vp, ul, ctypes.POINTER(XWindowAttributes)]
+x11.XTranslateCoordinates.argtypes = [vp, ul, ul, ci, ci, ctypes.POINTER(ci), ctypes.POINTER(ci),
+                                      ctypes.POINTER(ul)]
 xext = ctypes.CDLL("libXext.so.6")
 # XRectangle: x, y as shorts, width, height as unsigned shorts.
 xext.XShapeGetRectangles.restype = vp
@@ -64,6 +67,23 @@ def seen(window):
     if count.value == 0:
         return False, "viewable with an empty shape"
     return True, f"viewable, {count.value} rectangles"
+
+
+def box(window):
+    """`window`'s place and size across the root, or None once it's gone."""
+    attributes = XWindowAttributes()
+    if not x11.XGetWindowAttributes(display, window, ctypes.byref(attributes)):
+        return None
+    x, y, child = ci(), ci(), ul()
+    if not x11.XTranslateCoordinates(display, window, root, 0, 0, ctypes.byref(x), ctypes.byref(y),
+                                     ctypes.byref(child)):
+        return None
+    return x.value, y.value, attributes.width, attributes.height
+
+
+def overlap(a, b):
+    return a and b and a[0] < b[0] + b[2] and b[0] < a[0] + a[2] and a[1] < b[1] + b[3] and \
+        b[1] < a[1] + a[3]
 
 
 def atom(name):
@@ -105,8 +125,13 @@ for i in overlays:
     if not ok:
         sys.exit(f"ilo's overlay {order[i]['window']} is in the manager's stacking but not seen: it's "
                  f"{what}, bottom first: {json.dumps(order)}")
+cover = box(other)
+for i in overlays:
+    if i > stacking.index(other) and cover and not overlap(box(stacking[i]), cover):
+        order[i]["beside"] = True
 said = json.dumps(order)
-above = [order[i]["window"] for i in overlays if i > stacking.index(other)]
+above = [order[i]["window"] for i in overlays
+         if i > stacking.index(other) and not order[i].get("beside")]
 if above:
     sys.exit(f"ilo's overlay {', '.join(above)} is over the other app's window {hex(other)} in the "
              f"manager's stacking, bottom first: {said}")
