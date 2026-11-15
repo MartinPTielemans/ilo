@@ -121,7 +121,7 @@ to_opt_ins() {
 }
 # Clicks the count's switch, where the app says it's drawn, which turns it $1, on or off.
 turn_count() {
-  send click $(grep '^browser: onboarding daily-count at ' "$log" | tail -1 | cut -d' ' -f4-5)
+  send click $(grep '^browser: onboarding daily-count at ' "$log" | tail -1 | cut -d' ' -f5-6)
   expect "^browser: onboarding daily-count $1\$" "a click on the count's switch didn't turn it $1"
 }
 # Leaves the onboarding's last step with key $1, escape or return, which ends it.
