@@ -13,20 +13,34 @@ repo=$(git config -f engine/prebuilt.ini prebuilt.repository)
 tags=$(git ls-remote --tags "$repo.git" 'refs/tags/engine-mac-*' 'refs/tags/engine-windows-*')
 
 # The commit the $1 engine that engine/fetch.sh takes at commit $2 was built from: the nearest one
-# in $2's history.
+# in $2's history whose core is $2's, or with none, the nearest. By commit count alone, at a batch's
+# landing, an engine built on main after the batch branched is nearer than the batch's own, which
+# held the night back to before the landing (#2936). As in fetch.sh, only the nearest and the
+# engines off its history are compared, as one the nearest was built over has $2's core only after
+# a revert, where the nearest serves anyway.
 engine() {
-  local ref tagged distance best='' found=''
+  local ref tagged built='' nearest='' found=''
   while read -r _ ref; do
     case $ref in refs/tags/engine-"$1"-*) ;; *) continue ;; esac
     case $ref in *"^{}") continue ;; esac
     tagged=$(git rev-parse -q --verify "${ref#refs/tags/engine-"$1"-}^{commit}" 2> /dev/null) ||
       continue
     git merge-base --is-ancestor "$tagged" "$2" || continue
-    distance=$(git rev-list --count "$tagged..$2")
-    if [ -z "$best" ] || [ "$distance" -lt "$best" ]; then
-      found=$tagged best=$distance
-    fi
+    built+="$(git rev-list --count "$tagged..$2") $tagged"$'\n'
   done <<< "$tags"
+  while read -r _ tagged; do
+    [ -n "$tagged" ] || continue
+    if [ -z "$nearest" ]; then
+      nearest=$tagged found=$tagged
+    elif git merge-base --is-ancestor "$tagged" "$nearest"; then
+      continue
+    fi
+    if tools/core-same.sh "$tagged" "$2" core engine/series engine/patches ':(exclude)*.md' \
+      2> /dev/null; then
+      found=$tagged
+      break
+    fi
+  done <<< "$(printf '%s' "$built" | sort -n)"
   [ -n "$found" ] && echo "$found"
 }
 # Whether the $1 engine at commit $2 has $2's core and engine, to the compiler: comments in the
