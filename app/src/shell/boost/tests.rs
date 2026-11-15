@@ -551,7 +551,9 @@ fn put_back(shell: &Entity<Shell>, index: usize, count: usize, cx: &mut VisualTe
 /// The calls of Arrange and the Boosts', without the pointer's hovers.
 fn arrange_calls(host: &Recorder) -> Vec<String> {
     let calls = host.take().into_iter();
-    calls.filter(|call| !call.starts_with("card ")).collect()
+    calls
+        .filter(|call| !call.starts_with("card ") && !call.starts_with("foot bar"))
+        .collect()
 }
 
 /// The card's Arrange, beside Customize…, starts Arrange on the page shown in place of the card
@@ -579,7 +581,7 @@ fn arrange_starts_from_the_card_and_its_changes_are_kept(cx: &mut TestAppContext
         shell.boost_zapped(10, Some("#promo"), cx);
     });
     assert_eq!(
-        host.take(),
+        arrange_calls(&host),
         ["boost 1 example.com: #promo { display: none !important; } /* Zap */"],
         "the core was given back what it saved"
     );
@@ -1146,6 +1148,126 @@ fn the_mini_bar_follows_the_thing_selected(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert_eq!(mini_bar_calls(&host), ["mini bar none"]);
+}
+
+/// The foot bar's calls alone, and the others the host was asked meanwhile.
+fn foot_bar_calls(host: &Recorder) -> (Vec<String>, Vec<String>) {
+    let calls = host.take().into_iter();
+    calls.partition(|call| call.starts_with("foot bar"))
+}
+
+/// Presses the foot bar's button `name`, as a click on it does.
+fn press_foot_bar(host: &Recorder, name: &str, cx: &mut VisualTestContext) {
+    let run = host.foot_bar.borrow().as_ref().and_then(|bar| {
+        let button = bar.buttons.iter().find(|button| button.name == name);
+        button
+            .filter(|button| button.enabled)
+            .map(|button| button.run.clone())
+    });
+    let run = run.unwrap_or_else(|| panic!("no {name} on the foot bar to press"));
+    cx.update(|_, cx| run(cx));
+    cx.run_until_parked();
+}
+
+/// Arrange's foot bar shows over the page arranging: the last step's line, then Undo and Reset
+/// together once a change is kept, then Done. Its buttons are the mode's, and it goes with the
+/// mode, the tab shown, and Safari's engine, and never shows where the mode can't start.
+#[gpui::test]
+fn the_foot_bar_says_the_last_step_and_follows_the_mode(cx: &mut TestAppContext) {
+    use crate::boosts::arrange::{Outcome, State, Step};
+    let (shell, host, _folder, cx) = window(cx);
+    let pointing = "foot bar Point at what to move. ↑ ↓ pick the box around it or inside it.";
+    shell.update(cx, |shell, cx| shell.start_arrange(cx));
+    cx.run_until_parked();
+    assert_eq!(foot_bar_calls(&host).0, [format!("{pointing}: Done")]);
+
+    // A kept change brings Undo and Reset, each on while it has something to take back.
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", ARRANGED, cx);
+        let traded = State {
+            step: Step::Selected,
+            change: Outcome::Trades,
+            element: crate::boosts::arrange::Element {
+                kind: "video".into(),
+                name: String::new(),
+            },
+            before: crate::boosts::arrange::Element {
+                kind: "aside".into(),
+                name: "Trending".into(),
+            },
+            can_undo: true,
+            can_reset: true,
+            ..State::default()
+        };
+        shell.arrange_state(10, traded, cx);
+    });
+    cx.run_until_parked();
+    let traded = "foot bar Traded the video with Trending: Undo, Reset, Done";
+    assert_eq!(foot_bar_calls(&host).0, [traded]);
+    press_foot_bar(&host, "arrange-undo", cx);
+    assert!(
+        foot_bar_calls(&host)
+            .1
+            .contains(&"arrange 10 Undo".to_owned()),
+        "Undo didn't ask the core"
+    );
+    press_foot_bar(&host, "arrange-reset", cx);
+    assert!(
+        foot_bar_calls(&host)
+            .1
+            .contains(&"arrange 10 Reset".to_owned()),
+        "Reset didn't ask the core"
+    );
+
+    // Another tab shown takes it away, and the tab arranging brings it back as it was.
+    shell.update(cx, |shell, cx| shell.set_selected(11, cx));
+    cx.run_until_parked();
+    assert_eq!(foot_bar_calls(&host).0, ["foot bar none"]);
+    shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+    cx.run_until_parked();
+    let (shown, _) = foot_bar_calls(&host);
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert!(shown[0].ends_with(": Undo, Reset, Done"), "{shown:?}");
+
+    // Done ends the mode, and the bar with it.
+    press_foot_bar(&host, "arrange-done", cx);
+    let (shown, asked) = foot_bar_calls(&host);
+    assert_eq!(shown, ["foot bar none"]);
+    assert!(asked.contains(&"arrange 10 false".to_owned()), "{asked:?}");
+
+    // A page that goes to Safari's engine ends it.
+    let safari = |on, shell: &mut Shell, cx: &mut gpui::Context<Shell>| {
+        let page = Page {
+            url: "https://www.example.com/news".into(),
+            system_engine: on,
+            ..Page::default()
+        };
+        shell.set_page(10, page, cx);
+    };
+    shell.update(cx, |shell, cx| shell.start_arrange(cx));
+    cx.run_until_parked();
+    assert_eq!(foot_bar_calls(&host).0, [format!("{pointing}: Done")]);
+    shell.update(cx, |shell, cx| safari(true, shell, cx));
+    cx.run_until_parked();
+    assert_eq!(foot_bar_calls(&host).0, ["foot bar none"]);
+
+    // Neither a private window nor an agent's Space starts the mode, so neither shows it.
+    shell.update(cx, |shell, cx| safari(false, shell, cx));
+    for private in [true, false] {
+        shell.update(cx, |shell, cx| {
+            shell.private = private;
+            if !private {
+                host.space_agents.borrow_mut().insert(1, "claude".into());
+            }
+            shell.start_arrange(cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            foot_bar_calls(&host).0,
+            Vec::<String>::new(),
+            "private {private}"
+        );
+    }
 }
 
 /// The core takes its own default for a motion value outside its range (bc_arrange_look), so one

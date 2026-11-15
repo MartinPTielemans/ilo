@@ -313,7 +313,7 @@ await_log "^browser: task space $agent MCP client\$" "the window didn't keep the
 grep -q "^browser: added space $agent " "$log" && fail "the agent's Space reached the switcher"
 grep -q '^browser: session ' "$log" && fail "list_tabs alone started the client's card"
 case "$listed" in
-  "Your Space has no tabs yet."*) ;;
+  "You have no tabs yet."*) ;;
   *) fail "list_tabs in a new Space said: $listed" ;;
 esac
 printf '%s\n' "$listed" | grep -q "^. $user_tab  " && fail "list_tabs listed the user's tab"
@@ -505,7 +505,7 @@ for target in 'link "Open"' 'button "Pop up"'; do
     fail "the agent's $target didn't open a tab behind, from its tab"
   new_tab=$(sed -n "s/^browser: tab \([0-9]*\) opened by $opener in the background\$/\1/p" "$log" | tail -1)
   case "$clicked" in
-    "Clicked "*". It opened tab $new_tab in your Space."*) ;;
+    "Clicked "*". It opened tab $new_tab among your tabs."*) ;;
     *) fail "the agent's click on its $target answered: $clicked" ;;
   esac
   call list_tabs '{}' | grep -q "^. $new_tab  " || fail "the tab its $target opened isn't in its Space"

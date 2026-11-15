@@ -8,14 +8,15 @@
 
 use std::rc::Rc;
 
-use gpui::{Bounds, Context, FontWeight, div, point, prelude::*, px, size, svg};
+use gpui::{Bounds, Context, FontWeight, Pixels, Size, div, point, prelude::*, px, size, svg};
 
 use super::{
     NAV_RADIUS, Shell, TITLE, URL_FIELD,
     permission::{Look, card_button_as},
 };
-use crate::boosts::arrange::{Ask, Outcome, State, Step};
+use crate::boosts::arrange::{Ask, Outcome, State, Step, foot_line};
 use crate::boosts::{self, Arranged};
+use crate::foot_bar;
 use crate::mini_bar::{self, OnPress, Press};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::theme::packed;
@@ -32,6 +33,19 @@ use crate::tokens::shell::permission::{BUTTON_GAP, DETAIL};
 pub(super) enum Undoable {
     Core,
     Hide,
+}
+
+/// What Arrange's foot bar shows over the page of the tab it's on: the mode's line, and Undo and
+/// Reset, which come together once a change is kept, each on while it has one to take back.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct FootShown {
+    pub(super) tab: u64,
+    pub(super) page: Bounds<Pixels>,
+    pub(super) content: Size<Pixels>,
+    pub(super) line: String,
+    pub(super) kept: bool,
+    pub(super) undo: bool,
+    pub(super) reset: bool,
 }
 
 /// The mode on the tab it's on: what the core last said, and the user's steps for ⌘Z.
@@ -160,6 +174,101 @@ impl Shell {
         });
         self.browser
             .show_mini_bar(shown.map(|shown| (shown, on_press)), cx);
+    }
+
+    /// What Arrange's foot bar shows: the mode's line, Undo and Reset once a change is kept, and
+    /// Done, over the page of the tab arranging while it's shown here.
+    fn foot_bar(&self) -> Option<FootShown> {
+        let tab = self.arranging.filter(|&tab| tab != 0)?;
+        let (page, _) = self.pane_frame(tab)?;
+        let mode = &self.arrange_mode;
+        let undo = !mode.history.is_empty();
+        Some(FootShown {
+            tab,
+            page,
+            content: self.viewport,
+            line: foot_line(&mode.state),
+            kept: undo || mode.state.can_reset,
+            undo,
+            reset: mode.state.can_reset,
+        })
+    }
+
+    /// Asks for the foot bar as the mode, its steps, the page's place or the tab shown changed.
+    pub(super) fn show_foot_bar(&mut self, cx: &mut Context<Self>) {
+        let shown = self.foot_bar();
+        if shown == self.foot_bar_shown {
+            return;
+        }
+        self.foot_bar_shown = shown.clone();
+        let Some(shown) = shown else {
+            // check.sh reads this line.
+            log!("browser: arrange foot bar none");
+            return self.browser.show_foot_bar(None, cx);
+        };
+        let tab = shown.tab;
+        let shell = cx.entity().downgrade();
+        let run = |press: fn(&mut Shell, u64, &mut Context<Shell>)| -> Rc<dyn Fn(&mut gpui::App)> {
+            let shell = shell.clone();
+            Rc::new(move |cx| {
+                let _ = shell.update(cx, |shell, cx| press(shell, tab, cx));
+            })
+        };
+        let button = |label: &str, key, primary, enabled, name, press| foot_bar::Button {
+            label: label.to_owned().into(),
+            key,
+            primary,
+            enabled,
+            name,
+            run: run(press),
+        };
+        let mut buttons = Vec::new();
+        if shown.kept {
+            buttons.push(button(
+                "Undo",
+                Some("cmd-z"),
+                false,
+                shown.undo,
+                "arrange-undo",
+                |shell, tab, cx| {
+                    shell.undo_arrange(tab, cx);
+                },
+            ));
+            buttons.push(button(
+                "Reset",
+                None,
+                false,
+                shown.reset,
+                "arrange-reset",
+                |shell, tab, cx| shell.ask_arrange(tab, Ask::Reset, cx),
+            ));
+        }
+        buttons.push(button(
+            "Done",
+            Some("escape"),
+            true,
+            true,
+            "arrange-done",
+            |shell, _, cx| shell.stop_arrange(cx),
+        ));
+        let on = |on: bool| if on { "on" } else { "off" };
+        // check.sh reads this line.
+        log!(
+            "browser: arrange {tab} foot bar: {}{}",
+            shown.line,
+            match shown.kept {
+                true => format!(" | Undo {}, Reset {}", on(shown.undo), on(shown.reset)),
+                false => String::new(),
+            }
+        );
+        let bar = foot_bar::Bar {
+            lead: None,
+            words: shown.line.clone().into(),
+            hint: None,
+            buttons,
+        };
+        self.browser
+            .show_foot_bar(Some((shown.page, shown.content, bar)), cx);
     }
 
     /// A press on the mini bar: the pin moves a floating thing between staying on screen and

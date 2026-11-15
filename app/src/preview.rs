@@ -380,6 +380,7 @@ struct Fake {
     downloads: RefCell<Vec<Download>>,
     /// The onboarding's two switches, both offered and off to begin with.
     opt_ins: Cell<(bool, bool)>,
+    daily_count: Cell<bool>,
     /// The tab each Space opens on where the site names one.
     opens_on: RefCell<HashMap<u64, u64>>,
     /// The tab each Space showed as it was left, which it shows again, and its page beside shows
@@ -1855,6 +1856,9 @@ impl Browser for Fake {
     // And the folder preview's.
     fn folder_preview(&self, _: browser::folder_preview::Ask, _: &mut App) {}
 
+    // And the tab switcher's: its walk ends at each ⌃Tab (watch_control).
+    fn tab_switcher(&self, _: browser::tab_switcher::Ask, _: &mut App) {}
+
     fn card_picture(&self, _: u64, _: f32, _: &mut App) {}
 
     // The same for the link target's, which the preview's made-up pages have no links for.
@@ -1954,6 +1958,14 @@ impl Browser for Fake {
 
     fn set_agents(&self, on: bool, _: &mut App) {
         self.opt_ins.set((self.opt_ins.get().0, on));
+    }
+
+    fn daily_count(&self, _: &App) -> Option<bool> {
+        Some(self.daily_count.get())
+    }
+
+    fn set_daily_count(&self, on: bool, _: &mut App) {
+        self.daily_count.set(on);
     }
 
     fn new_private_window(&self, _: &mut App) {}
@@ -2675,6 +2687,7 @@ fn main() {
                         archive: RefCell::new(archive),
                         downloads: RefCell::new(downloads),
                         opt_ins: Cell::new((false, false)),
+                        daily_count: Cell::new(false),
                         opens_on: RefCell::default(),
                         shows: Rc::default(),
                     });
@@ -2936,8 +2949,17 @@ fn main() {
                     if welcome {
                         shell.set_welcome(cx);
                     }
-                    if let Some(appearance) = &onboarding {
-                        shell.start_onboarding(Some(appearance), cx);
+                    // =dark:opt-ins opens it at that step, and =dark:opt-ins:on turns the
+                    // daily count's switch on there.
+                    if let Some(given) = &onboarding {
+                        let mut parts = given.split(':');
+                        shell.start_onboarding(parts.next(), cx);
+                        if let Some(step) = parts.next() {
+                            shell.onboarding_to(step, cx);
+                        }
+                        if parts.next() == Some("on") {
+                            shell.onboarding_count_on(cx);
+                        }
                     }
                     shell
                 });
@@ -4605,6 +4627,7 @@ mod web {
             archive: RefCell::new(Vec::new()),
             downloads: RefCell::new(Vec::new()),
             opt_ins: Cell::new((false, false)),
+            daily_count: Cell::new(false),
             opens_on: RefCell::default(),
             shows: Rc::default(),
         });
@@ -5107,6 +5130,7 @@ mod tests {
                 archive: Default::default(),
                 downloads: Default::default(),
                 opt_ins: Default::default(),
+                daily_count: Default::default(),
                 opens_on: Default::default(),
                 shows: Default::default(),
             });

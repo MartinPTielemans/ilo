@@ -34,8 +34,8 @@ use browser::window_frames::{self, Frame};
 use browser::{
     account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
     folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
-    log, log_in, menu, offer, passwords, site_controls, theme_picker, toast, tooltip, updates,
-    zoom_hud,
+    log, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker, toast, tooltip,
+    updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -985,7 +985,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     }
     // Where the daily usage count goes, which only the prod build names, unless the process was
     // given it, as a check is. The user's sync server doesn't change it.
-    if let Some(switch) = daily_count_host::prepare(&given, &profile) {
+    if let Some(switch) = daily_count_host::prepare(&given) {
         args.push(switch);
     }
     // The sync server the account signs in to until the user names another, a default service URL

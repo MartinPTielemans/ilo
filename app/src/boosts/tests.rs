@@ -294,29 +294,30 @@ fn a_script_starts_its_boost_and_goes_with_it() {
     assert_eq!(boosts.script_file(2, "example.com"), None);
 }
 
+/// The watch is in place when `watch` returns, and stays on a file already in the folder after it
+/// has told of a write to it. On the Mac it once told of none of 20 writes (#2997).
 #[test]
-fn the_watcher_tells_of_a_write_in_the_folder() {
+fn the_watcher_tells_of_each_write_in_the_folder() {
     let folder = Folder::new();
+    folder.write("Boosts/example.com.css", "p {}\n");
     let boosts = folder.0.join(FOLDER);
     let (told, tells) = mpsc::channel();
     assert!(watch(boosts.clone(), move || {
         let _ = told.send(());
     }));
-    // The watch starts on its thread; a write before it starts would be missed, so write until it
-    // tells, which a working watcher does on the first or second.
-    let mut heard = false;
-    for each in 0..20 {
+    for each in 0..2 {
         std::fs::write(
             boosts.join("example.com.css"),
             format!("p {{ order: {each}; }}"),
         )
         .unwrap();
-        if tells.recv_timeout(Duration::from_millis(250)).is_ok() {
-            heard = true;
-            break;
-        }
+        assert!(
+            tells.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "no notice of write {} of 2 to {} in 5 s",
+            each + 1,
+            boosts.display()
+        );
     }
-    assert!(heard, "no notice of a write in {}", boosts.display());
 }
 
 fn arranged(site: &str, bytes: &str) -> Change {
