@@ -14,8 +14,10 @@ pub(crate) const FOLDER_PREVIEW: c_int = 3;
 
 pub(crate) const BOOST_EDITOR: c_int = 4;
 
+pub(crate) const TAB_SWITCHER: c_int = 5;
+
 /// The Site Controls aren't one of the host's overlays, but its elevation call takes them too.
-pub(crate) const SITE_CONTROLS: c_int = 5;
+pub(crate) const SITE_CONTROLS: c_int = 6;
 
 /// Shows ilo's menu of `items` at `at` in the content of `ui_view`'s window, any of the app's, or
 /// of its reveal's panel if `in_reveal`, in `look`, and calls `chosen` once it closes.
@@ -554,6 +556,38 @@ impl folder_preview::Host for FolderPreviewHost {
 
 pub(crate) extern "C" fn folder_preview_dismissed() {
     update_app(folder_preview::dismissed);
+}
+
+/// The ⌃Tab switcher's requests, to the host's overlay window, where ⌘T's panel shows.
+pub(crate) struct TabSwitcherHost;
+
+impl tab_switcher::Host for TabSwitcherHost {
+    fn show(&self, window: u64, height: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (top, width) = (
+            tab_switcher::ABOVE_MIDDLE.into(),
+            tab_switcher::WIDTH.into(),
+        );
+        // Under Wayland it has the keys only once it has drawn, and a ⌃Tab typed before then is
+        // its, not lost (a walk shows it once).
+        #[cfg(target_os = "linux")]
+        crate::keys::hold_keys_for_overlay();
+        unsafe {
+            platform::host_set_overlay_height(TAB_SWITCHER, height.into());
+            platform::host_show_overlay(TAB_SWITCHER, view, true, 0., top, width);
+        }
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_overlay(TAB_SWITCHER) };
+    }
+}
+
+/// The user left the switcher: a click outside it, or another app.
+pub(crate) extern "C" fn tab_switcher_dismissed() {
+    update_app(tab_switcher::dismissed);
 }
 
 /// The theme picker's requests, to the host's overlay window, over the window that asked.

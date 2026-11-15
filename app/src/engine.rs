@@ -1907,6 +1907,10 @@ impl Browser for Engine {
         folder_preview::ask(ask, cx);
     }
 
+    fn tab_switcher(&self, ask: browser::tab_switcher::Ask, cx: &mut App) {
+        browser::tab_switcher::ask(ask, cx);
+    }
+
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {
         let request = hover_card::asking(tab, cx);
         // check.sh reads this line: a hidden page draws for its picture from here.
