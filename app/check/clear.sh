@@ -1622,8 +1622,11 @@ for kind in ("sites", "listed_off"):
   rm -rf "$store_dir"
   mkdir -p "$store_dir/Default"
   # Launches the app in it at the session page with the query $1, as the run $2, at the host $3:
-  # 127.0.0.1 by default, which is listed and so shows in Safari's engine.
+  # 127.0.0.1 by default, which is listed and so shows in Safari's engine. With no Spaces, which
+  # live outside the profile's folder: they'd bring back the last launch's tabs, whose session page
+  # sets or reads the store before the step does, and loads Safari's engine before the sweep lists.
   store_launch() {
+    rm -f "$store_dir/Spaces.json"
     log="$out/clear-store-$2.log"
     step=0
     BROWSER_DRIVE=1 BROWSER_PROFILE_DIR="$store_dir" BROWSER_STREAMING_TEST_HOST=127.0.0.1 \
@@ -1637,9 +1640,7 @@ for kind in ("sites", "listed_off"):
     fail "the session page didn't keep its cookie and item in Safari's engine: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
   exec 3>&-
   quit
-  # The Spaces go too: kept outside the profile's folder, they'd bring back the tab at the page that
-  # sets the session, which would fill the new store before the step reads it.
-  rm -rf "$store_dir/Default" "$store_dir/Spaces.json"
+  rm -rf "$store_dir/Default"
   # At a query of its own, which sets nothing, so the site's log has this launch's request alone: a
   # new store sends it no cookie.
   store_launch '?after' after
@@ -1753,12 +1754,13 @@ sys.exit(0 if state.get("browser_core", {}).get("system_engine", {}).get("old_st
   exec 3>&-
   quit
   # Unswept again and quit at its page, as a short session is: a sweep may run before the quit,
-  # with nothing left to delete, but none starts or marks once the quit has (#2889). It catches a
-  # sweep after the quit only on a go whose startup ends at the quit, as relaunch's second launch
-  # often did, so a pass doesn't show the order can't happen.
+  # with nothing left to delete, but none starts or marks once the quit has (#2889). At a page in
+  # Chromium, as old-swept's, so the sweep's listing loads Safari's engine and says so when it
+  # starts. It catches a sweep after the quit only on a go whose startup ends at the quit, as
+  # relaunch's second launch often did, so a pass doesn't show the order can't happen.
   old_store_prefs '' unswept
-  store_launch '' old-quit
-  await '^browser: title [0-9]* session safari sees ' ||
+  store_launch '' old-quit localhost
+  await '^browser: title [0-9]* session chromium sees ' ||
     fail "the session page didn't show: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
   exec 3>&-
   quit
