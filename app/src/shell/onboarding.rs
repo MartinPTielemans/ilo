@@ -130,7 +130,7 @@ impl OptIn {
             // Settings' own line while it's off.
             OptIn::Agents => (
                 "Let agents use the browser",
-                "They work in a Space of their own, which you can watch, and never see your \
+                "They work in tabs of their own, which you can watch, and never see your \
                  passwords, cookies or autofill.",
             ),
         }
