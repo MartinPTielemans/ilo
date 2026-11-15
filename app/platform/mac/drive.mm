@@ -128,11 +128,17 @@
 //   pip                                   logs the frame of Chrome's Picture in Picture window, a
 //                                         floating call's or the Mini Player's, as "browser: pip
 //                                         at <x> <y> <width> <height>" in place's terms, or
-//                                         "browser: pip none". The driver doesn't move or size it:
-//                                         the window server does that with the real pointer
+//                                         "browser: pip none". The driver doesn't drag it: the
+//                                         window server and Chromium's move loop follow the real
+//                                         pointer, which check/pointer.mm drags in CI
 //   pip move <x> <y>                      moves the pointer to (x, y) from that window's top-left,
 //                                         as move does in the browser window, or logs "browser:
 //                                         pip none"
+//   pip doubleclick <x> <y>               double-clicks that window at (x, y) from its top-left,
+//                                         or logs "browser: pip none"
+//   pip wheel <x> <y> <notches> [cmd]     scrolls over that window at (x, y) as a trackpad does,
+//                                         120 points a notch, down for content moving up, with
+//                                         the modifiers named, or logs "browser: pip none"
 //   front                                 logs which of the app's windows other apps take for
 //                                         the one in front, as "browser: front <first>, main
 //                                         <window>, key <window>, ax focused <window>, ax main
@@ -1773,14 +1779,30 @@ bool Run(const std::string& line, void (^done)(void)) {
     NSWindow* pip = PictureInPicture();
     std::string what;
     if (words >> what) {
-      double x, y;
-      if (what != "move" || !(words >> x >> y)) {
+      double x, y, notches = 0;
+      if ((what != "move" && what != "doubleclick" && what != "wheel") || !(words >> x >> y) ||
+          (what == "wheel" && !(words >> notches))) {
         return false;
       }
-      if (pip) {
-        MoveIn(pip, x, y);
-      } else {
+      if (!pip) {
         fprintf(stderr, "browser: pip none\n");
+      } else if (what == "move") {
+        MoveIn(pip, x, y);
+      } else if (what == "doubleclick") {
+        Click(pip, x, y, 1);
+        Click(pip, x, y, 2);
+      } else {
+        // In points, as a trackpad's, so Chromium takes the distance as it is rather than as a
+        // mouse's lines, and the Mini Player moves with it as the content would.
+        CGEventRef event = CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitPixel, 1,
+                                                          (int32_t)(-notches * 120), 0, 0);
+        CGEventSetIntegerValueField(event, kWindowNumberField, pip.windowNumber);
+        CGEventSetWindowLocation(event, CGPointMake(x, y));
+        // AppKit's modifier flags are Quartz's bits.
+        CGEventSetFlags(event, (CGEventFlags)Modifiers(words));
+        Pointed(pip, NSMakePoint(x, NSHeight(pip.frame) - y));
+        [NSApp postEvent:[NSEvent eventWithCGEvent:event] atStart:NO];
+        CFRelease(event);
       }
       done();
       return true;

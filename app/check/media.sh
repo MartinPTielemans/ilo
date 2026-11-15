@@ -275,8 +275,9 @@ expect "^browser: page $c camera 0 microphone 0 sharing 0 shared 0\$" \
 # and ph, then makes it the last.
 mini_player_at() {
   for _ in $(seq 100); do
-    # Windows' driver says where the window is only when asked; Linux's as it moves too.
-    ! windows || send pip
+    # Windows' and the Mac's drivers say where the window is only when asked; Linux's as it moves
+    # too.
+    [ "$(uname)" = Linux ] || send pip
     at=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: pip at ' | tail -1 |
       cut -d' ' -f4-)
     if [ -n "$at" ] && echo "$at" | awk -v px="$px" -v py="$py" -v pw="$pw" -v ph="$ph" \
@@ -290,8 +291,8 @@ EOF
   done
   fail "$2"
 }
-# pip_driven: whether the driver finds a Picture in Picture window, which it does through X11 or
-# sway's tree: drive.mm has no pip.
+# pip_driven: whether the driver presses and drags in a Picture in Picture window, which it does
+# through X11 or sway's tree. Windows' and the Mac's leave the drag to the desktop's pointer.
 pip_driven() {
   [ "$(uname)" = Linux ]
 }
@@ -894,78 +895,83 @@ fi
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
-# tab and lands it, as pip_driven says, and on Windows. Under Wayland sway places it and keeps it
-# where it is as it grows, and from where the pointer is past the drag's threshold moves it.
-if pip_driven || windows; then
-  px=0 py=0 pw=0 ph=0
-  send pip
-  if wayland; then
-    mini_player_at 1 "the floating video had no Mini Player"
-    echo "skip: the Mini Player 10 in from the top right, and moved with a scroll: under Wayland" \
-      "the compositor places it."
-  else
-    mini_player_at "x + w == $((wx + ww - 10)) && y == $((wy + 10))" \
-      "the floating video had no Mini Player 10 in from the top right of the screen"
-    # Two notches up move it down as far as the content would go, 120 a notch: it starts at the
-    # top.
-    send pip wheel $((pw / 2)) $((ph / 3)) -2
-    mini_player_at "x == px && y == py + 240 && w == pw && h == ph" \
-      "a scroll over the Mini Player didn't move it with the content"
-  fi
-  # Off its controls, left of the 10 seconds back by more than its width, and away from the
-  # screen's right edge, which would push it in as it grows.
-  # The window manager moves it with the pointer, as by a title bar, from when the core asks it,
-  # past the drag's threshold, and tells it where it is at the release. The core's lines carry
-  # Chromium's prefix.
-  # On Windows, Chromium's move loop moves it with the desktop's pointer, which the driver moves
-  # only with real input, as it has in CI, from where the pointer is past the drag's threshold.
-  grown="(2 * x + w - 2 * px - pw) ^ 2 <= 16 && (2 * y + h - 2 * py - ph) ^ 2 <= 16"
-  if windows && [ "${BROWSER_DRIVE_REAL:-}" != 1 ]; then
-    echo "skip: moving the Mini Player with a drag on Windows without real input: Windows moves" \
-      "it with the desktop's pointer."
-  else
-    send pip press $((pw / 8)) $((ph / 2))
-    expect 'browser: mini player pressed at ' "a press off its controls didn't reach the Mini Player"
-    send pip dragto $((pw / 8 - 10)) $((ph / 2))
-    expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
-    send pip dragto $((pw / 8 - 200)) $((ph / 2))
-    send pip release $((pw / 8 - 200)) $((ph / 2))
-    moved="x == px - 200"
-    ! windows || moved="x >= px - 200 && x <= px - 190"
-    ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
-    mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
-  fi
-  send pip wheel $((pw / 2)) $((ph / 3)) -2 cmd
-  mini_player_at "w > pw * 1.15 && h > ph * 1.15 && $grown" \
-    "Ctrl with a scroll didn't grow the Mini Player in place"
-  ../tools/window-screenshot.sh "$pid" "$out/mini-player.png" || fail "no window to capture"
-  # By its row: ⌘ and a number in the page whose video floats shows no tab on Linux yet.
-  send click $(row $(($(today | tr ' ' '\n' | grep -nx "$b" | cut -d: -f1) - 1)))
-  expect "^browser: selected $b in " "a click on its row didn't show tab $b of \"$(today)\""
-  send pip doubleclick $((pw / 2)) $((ph / 4))
-  expect "^browser: selected $v\( in .*\)\{0,1\}\$" \
-    "a double-click on the Mini Player didn't show its tab"
-  expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
-  if windows; then
-    # Windows' driver says there's no window only when asked.
-    for _ in $(seq 100); do
-      send pip
-      sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: pip none$' && break
-      sleep 0.1
-    done
-    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: pip none$' ||
-      fail "the Mini Player stayed after a double-click"
-  else
-    expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
-  fi
+# tab and lands it. Under Wayland sway places it and keeps it where it is as it grows, and from
+# where the pointer is past the drag's threshold moves it.
+px=0 py=0 pw=0 ph=0
+send pip
+if wayland; then
+  mini_player_at 1 "the floating video had no Mini Player"
+  echo "skip: the Mini Player 10 in from the top right, and moved with a scroll: under Wayland" \
+    "the compositor places it."
 else
-  echo "skip: moving, sizing and double-clicking the Mini Player on" \
-    "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
-    "there."
-  # Clear of the page's middle, where the Mini Player can float.
-  send click 300 200
-  send key x
-  expect "^browser: title $v landed\$" "the floating video didn't come back"
+  mini_player_at "x + w == $((wx + ww - 10)) && y == $((wy + 10))" \
+    "the floating video had no Mini Player 10 in from the top right of the screen"
+  # Two notches up move it down as far as the content would go, 120 a notch: it starts at the
+  # top.
+  send pip wheel $((pw / 2)) $((ph / 3)) -2
+  mini_player_at "x == px && y == py + 240 && w == pw && h == ph" \
+    "a scroll over the Mini Player didn't move it with the content"
+fi
+# Off its controls, left of the 10 seconds back by more than its width, and away from the
+# screen's right edge, which would push it in as it grows.
+# The window manager moves it with the pointer, as by a title bar, from when the core asks it,
+# past the drag's threshold, and tells it where it is at the release. The core's lines carry
+# Chromium's prefix.
+# On Windows, Chromium's move loop moves it with the desktop's pointer, which the driver moves
+# only with real input, as it has in CI, from where the pointer is past the drag's threshold. On
+# the Mac its move loop follows the real pointer too, which check/pointer.mm drags in CI, as for
+# the floating call.
+grown="(2 * x + w - 2 * px - pw) ^ 2 <= 16 && (2 * y + h - 2 * py - ph) ^ 2 <= 16"
+if windows && [ "${BROWSER_DRIVE_REAL:-}" != 1 ]; then
+  echo "skip: moving the Mini Player with a drag on Windows without real input: Windows moves" \
+    "it with the desktop's pointer."
+elif [ "$(uname)" = Darwin ] && [ "${GITHUB_ACTIONS:-}" != true ]; then
+  echo "skip: moving the Mini Player with a drag on Darwin outside CI: it takes the real pointer."
+elif [ "$(uname)" = Darwin ]; then
+  [ -x "$out/pointer" ] ||
+    clang++ -fobjc-arc -framework Cocoa -o "$out/pointer" check/pointer.mm 2> "$out/pointer.log" ||
+    fail "check/pointer.mm didn't build: $(cat "$out/pointer.log")"
+  "$out/pointer" drag $((px + pw / 8)) $((py + ph / 2)) $((px + pw / 8 - 200)) $((py + ph / 2)) \
+    > "$out/pointer.txt" 2>&1 || fail "check/pointer.mm didn't drag: $(cat "$out/pointer.txt")"
+  expect 'browser: mini player pressed at ' \
+    "a press off its controls didn't reach the Mini Player: $(cat "$out/pointer.txt")"
+  expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
+  mini_player_at "x >= px - 200 && x <= px - 190 && y == py && w == pw && h == ph" \
+    "a drag didn't move the Mini Player: $(cat "$out/pointer.txt")"
+else
+  send pip press $((pw / 8)) $((ph / 2))
+  expect 'browser: mini player pressed at ' "a press off its controls didn't reach the Mini Player"
+  send pip dragto $((pw / 8 - 10)) $((ph / 2))
+  expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
+  send pip dragto $((pw / 8 - 200)) $((ph / 2))
+  send pip release $((pw / 8 - 200)) $((ph / 2))
+  moved="x == px - 200"
+  ! windows || moved="x >= px - 200 && x <= px - 190"
+  ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
+  mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
+fi
+send pip wheel $((pw / 2)) $((ph / 3)) -2 cmd
+mini_player_at "w > pw * 1.15 && h > ph * 1.15 && $grown" \
+  "Ctrl, ⌘ on the Mac, with a scroll didn't grow the Mini Player in place"
+../tools/window-screenshot.sh "$pid" "$out/mini-player.png" || fail "no window to capture"
+# By its row: ⌘ and a number in the page whose video floats shows no tab on Linux yet.
+send click $(row $(($(today | tr ' ' '\n' | grep -nx "$b" | cut -d: -f1) - 1)))
+expect "^browser: selected $b in " "a click on its row didn't show tab $b of \"$(today)\""
+send pip doubleclick $((pw / 2)) $((ph / 4))
+expect "^browser: selected $v\( in .*\)\{0,1\}\$" \
+  "a double-click on the Mini Player didn't show its tab"
+expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
+if [ "$(uname)" != Linux ]; then
+  # Windows' and the Mac's drivers say there's no window only when asked.
+  for _ in $(seq 100); do
+    send pip
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: pip none$' && break
+    sleep 0.1
+  done
+  sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: pip none$' ||
+    fail "the Mini Player stayed after a double-click"
+else
+  expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
 fi
 # The next shows where the last was left, at that one's corner nearest its screen's.
 read -r lx ly lw lh <<LEFT
@@ -998,7 +1004,7 @@ placed_where_left ||
   fail "the second Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 none_since 'browser: mini player back in its tab$' ||
   fail "the Mini Player went back to its tab as the menu that floated it closed"
-if { pip_driven || windows; } && ! wayland; then
+if ! wayland; then
   send pip
   mini_player_at "$across && $down" "the second Mini Player didn't show where the last was left"
 fi
@@ -1019,14 +1025,33 @@ send window 1
 expect 'browser: mini player back in its tab$' \
   "coming back to the video's window didn't put the Mini Player back in its tab"
 expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
+# The new window's command bar closes as the video's window takes the keyboard, which stays there:
+# the Mac's host gave it back to the bar's window (#2179).
+if [ "$(uname)" = Darwin ]; then
+  first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
+  keys=$(grep '^browser: key window [0-9]*$' "$log" | tail -2 | tr '\n' ' ')
+  case "$keys" in
+  *"key window $first ") ;;
+  *)
+    fail "the video's window didn't keep the keyboard as the new window's command bar closed: $keys"
+    ;;
+  esac
+fi
 # The same with a menu open as the user goes to another app: the menu closes as the app's window
 # takes the keyboard, and coming back puts the Mini Player back (#1614). On X11, as in mcp.sh, a
 # window of another client's takes it from xdotool, and ilo's window takes it back as the driver
 # makes it active. Under Wayland, check/drag's window takes it as sway focuses it, as in links.sh,
 # and the driver's sway gives it back. On Windows, as in mcp.sh, another app's window away from
-# ilo's takes the foreground, and gives it back to ilo's as a click on its taskbar button does.
+# ilo's takes the foreground, and gives it back to ilo's as a click on its taskbar button does. On
+# the Mac, which lets no process take the activation, the app yields it to check/other-app.mm's
+# window, which yields it back.
 x11_other_app() { [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; }
-if x11_other_app || wayland || windows; then
+if x11_other_app || wayland || windows || [ "$(uname)" = Darwin ]; then
+  if [ "$(uname)" = Darwin ]; then
+    clang++ -fobjc-arc -framework Cocoa -o "$out/other-app" check/other-app.mm \
+      2> "$out/other-app-build.log" ||
+      fail "check/other-app.mm didn't build: $(cat "$out/other-app-build.log")"
+  fi
   post rightclick $page_point
   expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
     "the video's menu had no Picture in Picture the third time"
@@ -1048,6 +1073,20 @@ if x11_other_app || wayland || windows; then
       fail "another app's window didn't open and take the foreground: $(cat "$out/other-window.log")"
   elif wayland; then
     other_app_click
+  elif [ "$(uname)" = Darwin ]; then
+    rm -f "$out/other-in"
+    mkfifo "$out/other-in"
+    "$out/other-app" < "$out/other-in" > "$out/other-window.log" 2>&1 &
+    other=$!
+    exec 7> "$out/other-in"
+    for _ in $(seq 50); do grep -q '^ready ' "$out/other-window.log" && break; sleep 0.1; done
+    grep -q "^ready $other\$" "$out/other-window.log" ||
+      fail "another app's window didn't open: $(cat "$out/other-window.log")"
+    send yield "$other"
+    for _ in $(seq 50); do grep -q '^active$' "$out/other-window.log" && break; sleep 0.1; done
+    grep -q '^active$' "$out/other-window.log" ||
+      fail "another app didn't become the active one as the app yielded to it: $(cat \
+        "$out/other-window.log")"
   else
     rm -f "$out/other-in"
     mkfifo "$out/other-in"
@@ -1061,6 +1100,8 @@ if x11_other_app || wayland || windows; then
   expect '^browser: menu window hidden$' "the menu stayed open as another app took the keyboard"
   if windows; then
     touch "$out/cover-front"
+  elif [ "$(uname)" = Darwin ]; then
+    echo "back $pid" >&7
   else
     send window 1
   fi
@@ -1074,7 +1115,7 @@ if x11_other_app || wayland || windows; then
     wait "$other" 2> /dev/null || true
   fi
 else
-  echo "skip: coming back from another app with a menu open, on $(uname)$(! sway_xwayland || echo " under sway's Xwayland"): no other app's window to go to."
+  echo "skip: coming back from another app with a menu open, under sway's Xwayland: no other app's window to go to."
 fi
 # Launched again, the next shows where the last was left before the quit, as Arc's does.
 read -r lx ly lw lh <<LEFT

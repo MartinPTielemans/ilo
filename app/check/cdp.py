@@ -27,10 +27,13 @@ takes a command a line on its standard input:
                   starting with PREFIX has TEXT in a text node or an attribute, shadow trees
                   included, or none for no such page, such as Chrome's password manager page, a
                   WebUI page
-  focus PREFIX    logs "cdp: focus NAME|none": the name of what has the keyboard in the page opened
-                  last at an address starting with PREFIX, through its shadow trees, its label,
-                  its text or its id, or none for no such page or nothing focused: a WebUI dialog
-                  takes the keyboard a moment after its page loads
+  focus PREFIX    logs "cdp: focus NAME|none|nothing ...": the name of what has the keyboard in
+                  the page opened last at an address starting with PREFIX, through its shadow
+                  trees, its label, its text or its id, or none for no such page: a WebUI dialog
+                  takes the keyboard a moment after its page loads. With nothing focused, it says
+                  why one mightn't be, as "nothing, visible|hidden, focused|unfocused, dialogs
+                  open N": whether the page is shown, whether it has the window's keyboard, and
+                  its open dialogs, shadow trees included
   focus-within PREFIX ID
                   logs "cdp: focus-within ID yes|no|none": whether what has the keyboard in the
                   page opened last at an address starting with PREFIX is the element with the id
@@ -424,7 +427,12 @@ FOCUSED = """(() => {
   while (focused && focused.shadowRoot && focused.shadowRoot.activeElement) {
     focused = focused.shadowRoot.activeElement;
   }
-  if (!focused || focused === document.body) return "";
+  if (!focused || focused === document.body) {
+    const open = (root) => [...root.querySelectorAll("*")].reduce(
+      (n, e) => n + (e.matches("dialog[open]") ? 1 : 0) + (e.shadowRoot ? open(e.shadowRoot) : 0), 0);
+    return "nothing, " + document.visibilityState + ", " +
+      (document.hasFocus() ? "focused" : "unfocused") + ", dialogs open " + open(document);
+  }
   const name = focused.getAttribute("aria-label") || focused.textContent || focused.id || "";
   return name.trim().replace(/\\s+/g, " ").slice(0, 60);
 })()"""
