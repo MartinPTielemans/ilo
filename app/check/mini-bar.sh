@@ -312,9 +312,7 @@ expect 'browser: \[keys\] .* before the page: zap or arrange$' "escape with the 
 expect "browser: tab $tab arrange off\$" "escape with the page focused didn't end Arrange"
 
 # The same with the UI holding the keyboard, from a click on the sidebar, in the other look. The
-# keys reach the shell's bindings, never the page. The sidebar has the keyboard before the Space's
-# menu, as on sway the theme picker hides as it shows after a right-click with the page focused
-# (#2949).
+# keys reach the shell's bindings, never the page.
 send click $sidebar_point
 post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, ")" "the Space's menu didn't offer its theme"
