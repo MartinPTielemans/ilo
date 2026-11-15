@@ -1073,6 +1073,24 @@ void DrawPageIn(views::Widget* widget,
   }
 }
 
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget) {
+  // Aura windows in the pane's one HWND, which Windows doesn't see: DevTools fill the pane, and the
+  // page is at its place in them (LayOut), each from the pane's top-left.
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return std::nullopt;
+  }
+  for (Slot& slot : views->panes()) {
+    if (slot.widget && slot.page && slot.devtools && slot.devtools->IsVisible()) {
+      gfx::Rect frame(views->ContentSize());
+      frame.Inset(slot.insets);
+      const gfx::Vector2d at = frame.OffsetFromOrigin();
+      return std::pair(slot.devtools->bounds() + at, slot.page->bounds() + at);
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<gfx::Rect> FocusRingFrame(views::Widget* widget) {
   WindowViews* views = ViewsOf(widget);
   if (!views) {
