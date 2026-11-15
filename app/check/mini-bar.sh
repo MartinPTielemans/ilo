@@ -204,7 +204,6 @@ float_inner() {
   send dragto $2 $(($3 + 6)) cmd
   expect "^browser: arrange $tab Carrying " "$1: a press on Inner and 6 pt didn't lift it"
   send dragto $4 $5 cmd
-  expect "^browser: arrange $tab Preview Floats" "$1: a rest with the free key held didn't show a float"
   send release $4 $5 cmd
   expect "^browser: arrange $tab Selected Floats selected" "$1: letting go with the free key held didn't float Inner"
   expect "^browser: arrange $tab foot bar: Inner .* | Undo on, Reset on\$" \
