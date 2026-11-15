@@ -295,3 +295,20 @@ fn a_tab_closed_during_the_walk_is_not_listed(cx: &mut TestAppContext) {
     wait(cx, DELAY);
     assert_eq!(asked(&host), ["tab switcher show 13 12 10 at 1"]);
 }
+
+#[gpui::test]
+fn a_press_on_a_row_counts_only_its_tab_as_shown(cx: &mut TestAppContext) {
+    let (shell, host) = walked_window(cx);
+    run(&shell, cx, Command::RecentTab);
+    shows(&shell, cx, 12);
+    wait(cx, DELAY);
+    hear(&host, cx, Heard::Chose(3));
+    // ⌃ goes up before the core has shown the tab chosen.
+    release(&shell, cx);
+    shows(&shell, cx, 10);
+    // The walk's 12 was passed through, never chosen.
+    assert_eq!(recent(&shell, cx), [10, 13, 12, 11]);
+    host.take();
+    run(&shell, cx, Command::RecentTabBack);
+    assert_eq!(asked(&host), ["watch control", "select 11"]);
+}

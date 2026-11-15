@@ -448,7 +448,8 @@ tapped_from=$(wc -l < "$log")
 send key tab ctrl
 tapped=$step
 send flags
-let_go=$(wc -l < "$log")
+# Arithmetic, as the Mac's wc pads its count with spaces, which tail -n refuses.
+let_go=$(($(wc -l < "$log")))
 expect "^browser: selected $a in " "a quick ⌃Tab didn't show $a, the tab shown before $c" "$tapped"
 expect '^browser: command recent-tab via page$' "⌃Tab with the page focused didn't reach the UI" "$tapped"
 # Windows' driver sends its next command later than [tab-switcher.motion] delay, so there the tap
@@ -465,6 +466,17 @@ switcher_row() {
 # but for Tab, and a key without Ctrl would let it go.
 held_key() {
   if [ "$(uname)" = Darwin ]; then send key "$1" ctrl; else send key "$1" cmd; fi
+}
+# A press on the switcher's row $1. Windows' driver presses clickkey's point in the browser window,
+# whose page that is, so there it's the browser window's point the switcher logged its place at,
+# where click finds the overlay on top.
+press_row() {
+  if windows; then
+    send click $(grep '^browser: tab switcher at ' "$log" | tail -1 |
+      awk -v at="$(switcher_row "$1")" '{ split(at, p, " "); print $5 + p[1], $6 + p[2] }')
+  else
+    send clickkey $(switcher_row "$1")
+  fi
 }
 # The number of tabs shown since the log's line $1.
 switches_since() {
@@ -543,7 +555,7 @@ expect "^browser: selected $c in " "letting go of ⌃ on $c didn't show it"
 send key tab ctrl
 expect "^browser: tab switcher lists $c $b $a selected $b\$" \
   "⌃Tab held didn't list $c, $b and $a with $b selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
-send clickkey $(switcher_row 2)
+press_row 2
 expect "^browser: tab switcher chose $a\$" "a press on the switcher's third row didn't choose $a"
 expect "^browser: selected $a in " "a press on the switcher's row didn't show $a"
 send flags

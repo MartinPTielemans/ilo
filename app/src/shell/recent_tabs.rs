@@ -110,7 +110,11 @@ impl Shell {
         if let Some(walked) = self.walked.take().filter(|tab| self.tabs.contains_key(tab)) {
             self.shown(walked, cx);
         }
-        self.shown(self.selected, cx);
+        // A switch still under way, such as the one a press on the switcher's row asked for just
+        // before, counts once the core shows it, not the tab it leaves.
+        if self.tab_asked() == self.selected {
+            self.shown(self.selected, cx);
+        }
     }
 
     /// The walk's switcher, listing its rows with the one selected.
