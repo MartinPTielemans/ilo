@@ -1448,13 +1448,22 @@ history_suggested() {
 history_suggested || fail "the command bar didn't suggest $visited from history: $suggested"
 # The dialog takes the keyboard a moment after its page loads, which a key sent before then misses:
 # the run waits for its Cancel to have it, as cdp.py sees it.
+# A DevTools client that has gone answers nothing, and a line to its pipe ends the run unsaid.
 focused() {
+  if ! kill -0 "$helper" 2>/dev/null; then
+    echo "no DevTools client, as it exited: $(tail -1 "$cdp_log")"
+    return
+  fi
   asked=$(grep -c '^cdp: focus ' "$cdp_log" || true)
   echo "focus chrome://settings/" >&5
   for _ in $(seq 50); do
     [ "$(grep -c '^cdp: focus ' "$cdp_log" || true)" -gt "$asked" ] && break
     sleep 0.1
   done
+  if [ "$(grep -c '^cdp: focus ' "$cdp_log" || true)" -le "$asked" ]; then
+    echo "no answer from the DevTools client in 5 s: $(tail -1 "$cdp_log")"
+    return
+  fi
   grep '^cdp: focus ' "$cdp_log" | tail -1 | cut -d' ' -f3-
 }
 open_clear_browsing_data() {
@@ -1468,7 +1477,8 @@ open_clear_browsing_data() {
   if [ "$(focused)" != Cancel ]; then
     # Which window has the keyboard, and whether ilo is the active app, for the VM's failure (#2396).
     send front
-    fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused); active $active, $(grep '^browser: front ' "$log" | tail -1)"
+    # And whether its page drew, as a page that hasn't drawn may not have opened its dialog (#2888).
+    fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused); active $active, $(grep '^browser: front ' "$log" | tail -1), $(grep '^browser: switch let the page it left go ' "$log" | tail -1)"
   fi
 }
 # Cancel closes the dialog, deleting nothing, and the browser stays up: from Chromium 157 it tells
