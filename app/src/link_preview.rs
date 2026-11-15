@@ -1014,6 +1014,7 @@ impl LinkPreview {
                         Tip {
                             text: name.into(),
                             keys,
+                            detail: SharedString::default(),
                         },
                         Anchor::under(frame, window),
                     )),

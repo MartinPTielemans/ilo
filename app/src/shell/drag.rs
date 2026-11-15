@@ -507,7 +507,11 @@ impl Shell {
                     let (mut pinned, mut today) = (pinned.clone(), today.clone());
                     let tabs = if in_pinned { &mut pinned } else { &mut today };
                     tabs.insert(index, tab);
-                    let layout = slots(self.list_head(), &pinned, &today);
+                    // An open Live Folder's rows take their room among them too (#2979).
+                    let blocks = (self.shown_space())
+                        .map(|space| space.live_blocks(&pinned))
+                        .unwrap_or_default();
+                    let layout = slots(self.list_head(), &pinned, &blocks, &today);
                     ((in_pinned, index), layout[&Slot::Tab(tab)], layout)
                 })
                 .collect();

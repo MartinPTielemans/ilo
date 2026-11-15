@@ -30,6 +30,7 @@ use crate::tokens::tooltip::HEIGHT;
 /// Its window, wide enough for a long name, which truncates past it.
 pub use crate::tokens::tooltip::WINDOW_WIDTH;
 pub use crate::tokens::tooltip::{BUTTON_X, BUTTON_Y};
+use crate::tokens::tooltip::{DETAIL, DETAIL_GAP};
 pub const WINDOW_HEIGHT: f32 = HEIGHT;
 /// Round at half its height, but the corner at what it names, which is nearly square.
 const RADIUS: f32 = HEIGHT / 2.;
@@ -75,6 +76,8 @@ pub trait Host {
 pub struct Tip {
     pub text: SharedString,
     pub keys: Vec<SharedString>,
+    /// Said of it after the name, quieter, as a Live Folder's rows' age (#2979), or empty.
+    pub detail: SharedString,
 }
 
 impl Tip {
@@ -83,6 +86,15 @@ impl Tip {
         Tip {
             text,
             keys: Vec::new(),
+            detail: SharedString::default(),
+        }
+    }
+
+    /// A name with something said of it after.
+    pub fn detailed(text: SharedString, detail: SharedString) -> Self {
+        Tip {
+            detail,
+            ..Tip::named(text)
         }
     }
 }
@@ -287,7 +299,10 @@ pub(crate) fn text_width(
 /// How `tip` lays out: its text, then a chip for each key, as wide as its glyph and its padding
 /// but no less than square.
 fn measure(tip: &Tip, system: &WindowTextSystem) -> Layout {
-    let text = text_width(&tip.text, TEXT_SIZE, FontWeight::SEMIBOLD, system);
+    let mut text = text_width(&tip.text, TEXT_SIZE, FontWeight::SEMIBOLD, system);
+    if !tip.detail.is_empty() {
+        text += DETAIL_GAP + text_width(&tip.detail, TEXT_SIZE, FontWeight::NORMAL, system);
+    }
     let chips: Vec<f32> = (tip.keys.iter())
         .map(|key| {
             let glyph = text_width(key, CHIP_TEXT_SIZE, FontWeight::SEMIBOLD, system);
@@ -479,9 +494,13 @@ impl Tooltip {
 /// How the log names `tip`: its text, then its keys as a menu shows them, Ctrl+Shift+L off the Mac.
 fn label(tip: &Tip) -> String {
     let joint = if crate::shell::OFF_THE_MAC { "+" } else { "" };
-    match tip.keys.is_empty() {
+    let named = match tip.keys.is_empty() {
         true => tip.text.to_string(),
         false => format!("{} {}", tip.text, tip.keys.join(joint)),
+    };
+    match tip.detail.is_empty() {
+        true => named,
+        false => format!("{named} · {}", tip.detail),
     }
 }
 
@@ -507,7 +526,16 @@ impl Render for Tooltip {
             .text_color(rgb(PAPER))
             // Untruncated, it's as wide as it shaped, and a box that wide could round under it.
             .when(layout.truncated, |text| text.w(px(layout.text)).truncate())
-            .child(tip.text);
+            .child(tip.text)
+            .when(!tip.detail.is_empty(), |text| {
+                text.child(
+                    div()
+                        .ml(px(DETAIL_GAP))
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(rgb(PAPER).opacity(DETAIL))
+                        .child(tip.detail),
+                )
+            });
         let chip_top = (HEIGHT - CHIP_BODY) / 2.;
         let chips = tip
             .keys

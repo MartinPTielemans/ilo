@@ -132,9 +132,12 @@ fn a_right_click_on_empty_space_shows_new_tab_and_the_spaces_menu(cx: &mut TestA
     let export = entries
         .iter()
         .position(|entry| entry.title.starts_with("Export “"));
+    let live = entries
+        .iter()
+        .position(|entry| entry.title == "Live Folders");
     let mut parents = entries.iter().filter_map(|entry| entry.parent);
     assert!(
-        parents.all(|parent| parent == profile || Some(parent) == export),
+        parents.all(|parent| parent == profile || Some(parent) == export || Some(parent) == live),
         "the Set Profile submenu moved"
     );
     assert!(

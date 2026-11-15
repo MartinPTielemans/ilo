@@ -437,6 +437,7 @@ impl FindBar {
                     Tip {
                         text: name.into(),
                         keys,
+                        detail: SharedString::default(),
                     },
                     anchor,
                     cx,

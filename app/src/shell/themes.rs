@@ -97,7 +97,11 @@ impl Shell {
             Appearance::Automatic => None,
         };
         self.system_tone = self.forced_tone.or(chosen).unwrap_or(system);
-        self.window_active = window.is_window_active();
+        let active = window.is_window_active();
+        if active && !self.window_active {
+            self.live_window_active(cx);
+        }
+        self.window_active = active;
         if self.window_watches.is_empty() {
             self.window_watches = vec![
                 cx.observe_window_appearance(window, |_, _, cx| cx.notify()),

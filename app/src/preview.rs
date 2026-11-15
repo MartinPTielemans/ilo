@@ -32,8 +32,8 @@ use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
-    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, Visited,
-    Volume, WindowButton,
+    LiveAnswer, LiveItem, LiveList, LiveSource, Match, MediaAction, MenuBar, MenuEntry, Page,
+    PullState, Shell, SpaceEntry, Split, Trouble, Visited, Volume, WindowButton,
 };
 use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
@@ -294,6 +294,63 @@ const DOWNLOADS: [(&str, &str, i64, i64, DownloadState, bool, f64); 6] = [
 const RUNNING: DownloadState = DownloadState::Running;
 const PAUSED: DownloadState = DownloadState::Paused;
 const DONE: DownloadState = DownloadState::Done;
+
+/// What the preview's Live Folder fetches, as PREVIEW_LIVE_FOLDER asks: made-up pull requests,
+/// the mock's (#2979), or with `signed-out` that answer. With `failed`, the next fetch fails.
+fn live_stand_in() -> LiveAnswer {
+    if std::env::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("signed-out") {
+        return LiveAnswer::SignedOut;
+    }
+    let item = |list, repo: &str, number, title: &str, state| LiveItem {
+        list,
+        repo: repo.to_string().into(),
+        number,
+        title: title.to_string().into(),
+        state,
+    };
+    use LiveList::{Created, ReviewRequests};
+    use PullState::{Draft, Open};
+    LiveAnswer::Items(vec![
+        item(
+            ReviewRequests,
+            "quill/editor",
+            412,
+            "Keep ⌘L in the split's own field",
+            Open,
+        ),
+        item(
+            ReviewRequests,
+            "harbor/web",
+            88,
+            "Cache favicons per profile",
+            Open,
+        ),
+        item(
+            Created,
+            "lantern/browser",
+            2961,
+            "Recent tabs switcher on a held ⌃Tab",
+            Open,
+        ),
+        item(
+            Created,
+            "lantern/browser",
+            2990,
+            "Idle check for Live Folders",
+            Draft,
+        ),
+        item(
+            Created,
+            "harbor/timetables",
+            57,
+            "Parse the ferry timetable's winter page",
+            Open,
+        ),
+    ])
+}
+
+/// The preview's Live Folder's id, past every tab and folder it makes up.
+const LIVE_FOLDER: u64 = 9000;
 
 /// Reports the Space shown with `today` as its Today tabs.
 fn set_today(shell: &mut Shell, today: Vec<u64>, cx: &mut gpui::Context<Shell>) {
@@ -679,6 +736,45 @@ impl Browser for Fake {
     fn rename_folder(&self, folder: u64, name: &str, cx: &mut App) {
         let name: SharedString = name.to_string().into();
         self.change_folder(folder, cx, move |entry| entry.0 = name);
+    }
+
+    fn create_live_folder(&self, _: u64, source: LiveSource, name: &str, cx: &mut App) -> u64 {
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        let name: SharedString = name.to_string().into();
+        self.later(cx, move |shell, cx| {
+            let (mut pinned, mut folders) = (shell.pinned().to_vec(), shell.folders());
+            pinned.push(id);
+            folders.folders.insert(id, (name, true));
+            folders.live.insert(id, source);
+            let (today, splits) = (shell.today().to_vec(), shell.splits());
+            shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
+        });
+        id
+    }
+
+    fn end_live_folder(&self, folder: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            let mut folders = shell.folders();
+            folders.live.remove(&folder);
+            let (pinned, today) = (shell.pinned().to_vec(), shell.today().to_vec());
+            let splits = shell.splits();
+            shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
+        });
+    }
+
+    // The stand-in for the core's fetch: the mock's made-up pull requests, or with
+    // PREVIEW_LIVE_FOLDER=signed-out or failed, that answer.
+    fn fetch_live_folder(&self, folder: u64, _: LiveSource, cx: &mut App) {
+        let answer = live_stand_in();
+        let fails = std::env::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("failed");
+        self.later(cx, move |shell, cx| {
+            shell.set_live_answer(folder, answer, cx);
+            // The rows came once; the refresh after them didn't.
+            if fails {
+                shell.set_live_answer(folder, LiveAnswer::Failed, cx);
+            }
+        });
     }
 
     fn set_folder_icon(&self, folder: u64, icon: &str, cx: &mut App) {
@@ -2778,6 +2874,20 @@ fn main() {
                         ..Split::default()
                     };
                     shell.set_tabs(first_space, pinned, today, vec![split], folders, cx);
+                    // PREVIEW_LIVE_FOLDER=open, closed, signed-out or failed adds a Live Folder of
+                    // pull requests after the pinned tabs, as the Space's menu makes one (#2979).
+                    if let Ok(live) = std::env::var("PREVIEW_LIVE_FOLDER") {
+                        let made = LIVE_FOLDER;
+                        let mut folders = shell.folders();
+                        folders
+                            .folders
+                            .insert(made, ("Pull Requests".into(), live != "closed"));
+                        folders.live.insert(made, LiveSource::PullRequests);
+                        let mut pinned = shell.pinned().to_vec();
+                        pinned.push(made);
+                        let (today, splits) = (shell.today().to_vec(), shell.splits());
+                        shell.set_tabs(first_space, pinned, today, splits, folders, cx);
+                    }
                     let reading: Vec<u64> = (folder + 1..).take(READING.len()).collect();
                     let (pinned, today) = (reading[..1].to_vec(), reading[1..].to_vec());
                     shell.set_tabs(

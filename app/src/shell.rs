@@ -100,6 +100,7 @@ mod link_target;
 mod little;
 #[cfg(test)]
 mod little_tests;
+mod live_folders;
 mod media_player;
 mod menu_bar;
 mod menus;
@@ -191,6 +192,7 @@ pub use keys::{
 pub(crate) use library::bytes;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState, Visited};
 use library::{MediaVideo, RECEDE_X, Section};
+pub use live_folders::{LiveAnswer, LiveItem, LiveList, LiveSource, PullState};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
 pub use menus::profile_goes_with;
@@ -704,6 +706,9 @@ struct Space {
     /// Tabs shown in closed folders before, which stay listed there after another tab shows,
     /// until a click on their folder closes it for good, as Arc keeps them, per window (#1405).
     peeked: Vec<u64>,
+    /// How tall each of its open Live Folders' rows are together, under the tabs opened from it,
+    /// which the rows after them make room for (#2979).
+    live_rooms: HashMap<u64, f32>,
 }
 
 impl Space {
@@ -890,7 +895,22 @@ impl Space {
     /// Where its rows are in the list, from its top, under a head `head` tall.
     fn slots(&self, head: f32) -> HashMap<Slot, f32> {
         let (pinned, today) = self.rows();
-        slots(head, &pinned, &today)
+        slots(head, &pinned, &self.live_blocks(&pinned), &today)
+    }
+
+    /// Where each open Live Folder's rows go among `pinned`, its pinned rows listed: after the
+    /// last of the folder's own, by its index there, with the folder and the rows' height.
+    fn live_blocks(&self, pinned: &[u64]) -> Vec<(usize, u64, f32)> {
+        let mut blocks: Vec<_> = (self.live_rooms.iter())
+            .filter(|&(&folder, &room)| room > 0. && self.is_open(folder) && !self.shut(folder))
+            .filter_map(|(&folder, &room)| {
+                let own = |row: u64| row == folder || self.holders(row).any(|each| each == folder);
+                let at = pinned.iter().rposition(|&row| own(row))?;
+                Some((at, folder, room))
+            })
+            .collect();
+        blocks.sort_by_key(|&(at, folder, _)| (at, folder));
+        blocks
     }
 }
 
@@ -969,6 +989,8 @@ enum Slot {
     Tab(u64),
     Divider,
     NewTab,
+    /// An open Live Folder's rows under the tabs opened from it (#2979).
+    Live(u64),
 }
 
 /// The list on its way to a row, from `from` down its top at `start` to `to`, last set at `set`.
@@ -1497,6 +1519,11 @@ pub struct Shell {
     putting_back: bool,
     swipe: Option<Swipe>,
     settle: Option<Settle>,
+    /// Each Live Folder's lists as last fetched, and when to fetch them again (#2979).
+    live: HashMap<u64, live_folders::LiveFolder>,
+    /// A Space was shown, and its Live Folders ask for their lists once its switch's frames are
+    /// drawn, so the fetch never holds the switch.
+    live_after_switch: bool,
     /// The last swipe paged, so its momentum, which comes without a touch, doesn't scroll the list.
     swiped: bool,
     /// A wheel's ticks across the sidebar: their sum and the last one's time, and when they last
@@ -2051,6 +2078,8 @@ impl Shell {
             putting_back: false,
             swipe: None,
             settle: None,
+            live: HashMap::new(),
+            live_after_switch: false,
             swiped: false,
             wheel: None,
             wheel_paged: None,
@@ -2293,6 +2322,7 @@ impl Shell {
             folders: Folders::default(),
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }];
         shell
     }
@@ -2344,6 +2374,7 @@ impl Shell {
             folders: Folders::default(),
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }];
         shell
     }
@@ -2444,7 +2475,7 @@ impl Shell {
     fn layout(&self) -> HashMap<Slot, f32> {
         let head = self.list_head();
         self.shown_space()
-            .map_or_else(|| slots(head, &[], &[]), |space| space.slots(head))
+            .map_or_else(|| slots(head, &[], &[], &[]), |space| space.slots(head))
     }
 
     /// The favorite split holding `tab`, if it's in one.
@@ -2836,6 +2867,7 @@ impl Shell {
                         folders: Folders::default(),
                         shown: 0,
                         peeked: Vec::new(),
+                        live_rooms: Default::default(),
                     };
                 };
                 if space.name != name {
@@ -2875,6 +2907,7 @@ impl Shell {
                     folders: std::mem::take(&mut space.folders),
                     shown: space.shown,
                     peeked: std::mem::take(&mut space.peeked),
+                    live_rooms: std::mem::take(&mut space.live_rooms),
                 }
             })
             .collect();
@@ -2952,6 +2985,7 @@ impl Shell {
         self.end_hovers(cx);
         let before = std::mem::replace(&mut self.space, space);
         self.bar_follows |= before != space;
+        self.live_after_switch |= before != space;
         if before != space {
             self.unchoose(cx);
         }
@@ -3097,6 +3131,8 @@ impl Shell {
         for folder in toggled {
             entry.drop_peeks(folder);
         }
+        entry.live_rooms =
+            live_folders::rooms(entry, &self.live, |tab| self.browser.pinned_url(tab));
         if space == self.space {
             let eliding = (eliding, dotted(entry));
             (self.swaps).folders_changed(&before_folders, &entry.folders, eliding, Instant::now());
@@ -3153,6 +3189,8 @@ impl Shell {
         if space == self.space {
             self.keep_chosen(cx);
         }
+        self.live_folders_changed(space, &before_folders, had_tabs, cx);
+        self.update_live_rooms(cx);
         // Pinning or unpinning the tab shown renames Tabs › Pin Tab.
         self.update_menus(cx);
         cx.notify();
@@ -3653,6 +3691,7 @@ impl Shell {
         // the page differs from its picture in the window it left.
         let page_changed = !page.loading && (entry.page.loading || page.url != entry.page.url);
         let url_changed = page.url != entry.page.url;
+        let committed = url_changed.then(|| page.url.clone());
         let changed =
             entry.keep_page(page) | replace(&mut entry.left_pinned_host, left_pinned_host);
         if card_changed {
@@ -3684,6 +3723,9 @@ impl Shell {
         // A task's Pages draw its pages' speakers (#1080).
         if sounded {
             self.talk_redraw(cx);
+        }
+        if let Some(url) = committed {
+            self.live_page_committed(tab, &url, cx);
         }
     }
 
@@ -4272,6 +4314,12 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
+        // A Space shown asks for its Live Folders' lists only once its switch is drawn, so the
+        // fetch never holds a frame of it.
+        if self.live_after_switch && self.settle.is_none() {
+            self.live_after_switch = false;
+            cx.on_next_frame(window, |shell, _, cx| shell.live_space_shown(cx));
+        }
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);
@@ -5096,8 +5144,15 @@ impl Shell {
                 _ => None,
             });
         self.drawn_rows.replace(drawn.collect());
-        for tab in pinned {
+        let blocks = self
+            .shown_space()
+            .map(|space| space.live_blocks(&pinned))
+            .unwrap_or_default();
+        for (at, tab) in pinned.into_iter().enumerate() {
             rows.push((Some(tab), self.list_row(tab, cx)));
+            for &(_, folder, _) in blocks.iter().filter(|block| block.0 == at) {
+                rows.push((None, self.live_block(folder, cx)));
+            }
         }
         if !today.is_empty() {
             rows.push((None, self.divider(cx).into_any_element()));
@@ -5545,10 +5600,19 @@ pub(crate) fn spring(t: f32, response: f32, damping: f32) -> Option<f32> {
 
 /// Where the list's rows are from its top, under a head `head` tall (`Shell::list_head`), by the
 /// heights they're drawn at in `list`.
-fn slots(head: f32, pinned: &[u64], today: &[u64]) -> HashMap<Slot, f32> {
-    let rows = pinned
-        .iter()
-        .map(|&tab| (Slot::Tab(tab), ROW_PITCH))
+fn slots(
+    head: f32,
+    pinned: &[u64],
+    blocks: &[(usize, u64, f32)],
+    today: &[u64],
+) -> HashMap<Slot, f32> {
+    let rows = (pinned.iter().enumerate())
+        .flat_map(|(at, &tab)| {
+            let live = (blocks.iter())
+                .filter(move |block| block.0 == at)
+                .map(|&(_, folder, room)| (Slot::Live(folder), room));
+            std::iter::once((Slot::Tab(tab), ROW_PITCH)).chain(live)
+        })
         .chain((!today.is_empty()).then_some((Slot::Divider, DIVIDER_HEIGHT)))
         .chain([(Slot::NewTab, ROW_PITCH)])
         .chain(today.iter().map(|&tab| (Slot::Tab(tab), ROW_PITCH)));
@@ -6095,6 +6159,7 @@ mod tests {
             folders: Folders::default(),
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }
     }
 

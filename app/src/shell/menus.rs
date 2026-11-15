@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::{App, Context, Hsla, Image, Pixels, Point, Rgba, SharedString, rgb};
 
 use super::{
-    Command, FavoritesScope, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys,
+    Command, FavoritesScope, LiveSource, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys,
     commands::markdown_text,
     files,
     undo::{Prop, Value},
@@ -395,6 +395,26 @@ impl Shell {
                     shell.run(Command::NewFolder, "space menu", cx)
                 }),
             ));
+        }
+        // Each source, ticked while the Space has its folder, which unticking deletes.
+        let live = self.offers_live_folders(space);
+        if live {
+            let at = items.len();
+            items.push((MenuEntry::new("Live Folders", true), Box::new(|_, _| {})));
+            for source in LiveSource::ALL {
+                let has = self.live_folder_of(space, source).is_some();
+                items.push((
+                    MenuEntry::new(source.menu_title(), true)
+                        .checked(has)
+                        .under(at),
+                    Box::new(move |shell, cx| {
+                        log!("browser: command live-folder via space menu");
+                        shell.toggle_live_folder(space, source, cx)
+                    }),
+                ));
+            }
+        }
+        if new_folder || live {
             items.push((MenuEntry::line(), Box::new(|_, _| {})));
         }
         // Every one of the user's Spaces, its own dimmed as Arc's is, while one can take it.
@@ -762,6 +782,8 @@ impl Shell {
             self.chosen_menu(keys)
         } else if self.favorites.contains(&tab) {
             self.favorite_menu(keys, tab)
+        } else if self.live_source(tab).is_some() {
+            self.live_folder_menu(tab)
         } else if self.is_folder(tab) {
             self.folder_menu(tab)
         } else if self.panes(tab).len() > 1 {
@@ -914,6 +936,35 @@ impl Shell {
         }
         items.extend([line(), copy, line(), close]);
         items
+    }
+
+    /// A Live Folder's menu: Refresh, which the floor doesn't hold back, and the way back to a
+    /// plain folder (#2979's spike).
+    fn live_folder_menu(&self, folder: u64) -> Vec<(MenuEntry, &'static str, MenuAction)> {
+        vec![
+            (
+                MenuEntry::new("Refresh", true),
+                "refresh-live-folder",
+                Box::new(move |shell, cx| shell.refresh_live_folder(folder, cx)),
+            ),
+            (MenuEntry::line(), "", Box::new(|_, _| {})),
+            (
+                MenuEntry::new("Rename Folder", true),
+                "rename-folder",
+                Box::new(move |shell, cx| shell.rename_folder(folder, cx)),
+            ),
+            (
+                MenuEntry::new("Convert to Folder", true),
+                "convert-live-folder",
+                Box::new(move |shell, cx| shell.convert_live_folder(folder, cx)),
+            ),
+            (MenuEntry::line(), "", Box::new(|_, _| {})),
+            (
+                MenuEntry::new("Delete Folder", true).destructive(),
+                "delete-folder",
+                Box::new(move |shell, cx| shell.delete_folder_now(folder, cx)),
+            ),
+        ]
     }
 
     /// A folder's menu, as Arc's.

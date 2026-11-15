@@ -2,6 +2,7 @@
 //! answers.
 
 use super::*;
+use browser::shell::LiveSource;
 use std::time::Instant;
 
 /// A window's shell's requests, as calls to the core. The core reports back once each call has
@@ -185,6 +186,16 @@ impl Browser for Engine {
     fn delete_folder(&self, folder: u64, _: &mut App) {
         unsafe { bc::bc_folder_delete(folder) };
     }
+
+    // The core's half, which keeps a folder live and fetches its lists, rides the core batch after
+    // 1115-1116 (#2979). Until it's in, no folder is live, so nothing asks for a fetch.
+    fn create_live_folder(&self, _: u64, _: LiveSource, _: &str, _: &mut App) -> u64 {
+        0
+    }
+
+    fn end_live_folder(&self, _: u64, _: &mut App) {}
+
+    fn fetch_live_folder(&self, _: u64, _: LiveSource, _: &mut App) {}
 
     fn separate(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_separate(tab) };

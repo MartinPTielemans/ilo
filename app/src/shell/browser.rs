@@ -9,6 +9,7 @@ use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, point, p
 use crate::theme::Appearance;
 use crate::tokens::shell::{WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y};
 
+use super::live_folders::LiveSource;
 use super::{
     Answer, BarSpace, BarTab, DownloadAction, MenuBar, MenuEntry, PageReply, ShownPageDialog,
 };
@@ -81,6 +82,14 @@ pub trait Browser {
     fn move_folder(&self, folder: u64, to: u64, index: usize, cx: &mut App);
     /// Deletes `folder`, leaving what was in it where it was.
     fn delete_folder(&self, folder: u64, cx: &mut App);
+    /// Makes a Live Folder named `name`, filled from `source` on `space`'s profile's session, at
+    /// the bottom of its pinned tabs, and returns it, or 0 if it can't (#2979).
+    fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, cx: &mut App) -> u64;
+    /// Makes the Live Folder a plain one. The tabs opened from it stay in it.
+    fn end_live_folder(&self, folder: u64, cx: &mut App);
+    /// Asks for `folder`'s lists from `source`, on its Space's profile's session. The browser
+    /// answers with `Shell::set_live_answer`.
+    fn fetch_live_folder(&self, folder: u64, source: LiveSource, cx: &mut App);
     /// Takes `tab` out of its split view.
     fn separate(&self, tab: u64, cx: &mut App);
     /// Moves `tab` to `index` in its split view, counted from the left or the top.
@@ -1206,4 +1215,6 @@ pub struct Folders {
     /// Each folder's icon, an emoji, which the sidebar draws in place of the folder; those without
     /// one aren't here.
     pub icons: HashMap<u64, SharedString>,
+    /// What fills each Live Folder; plain folders aren't here.
+    pub live: HashMap<u64, LiveSource>,
 }

@@ -13,6 +13,7 @@ use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, WeakEnti
 
 use crate::theme::Appearance;
 
+use super::live_folders::LiveSource;
 use super::{
     Answer, BarSpace, BarTab, Browser, DownloadAction, MediaAction, MenuBar, MenuEntry, PageReply,
     ShownPageDialog, browser::WindowButton,
@@ -496,6 +497,20 @@ impl Browser for Recorder {
 
     fn delete_folder(&self, folder: u64, _: &mut App) {
         self.edit(format!("delete folder {folder}"));
+    }
+
+    fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, _: &mut App) -> u64 {
+        let made = self.make();
+        self.edit(format!("live folder {made} {space} {source:?} {name}"));
+        made
+    }
+
+    fn end_live_folder(&self, folder: u64, _: &mut App) {
+        self.edit(format!("end live folder {folder}"));
+    }
+
+    fn fetch_live_folder(&self, folder: u64, source: LiveSource, _: &mut App) {
+        self.record(format!("fetch live folder {folder} {source:?}"));
     }
 
     fn separate(&self, tab: u64, _: &mut App) {
