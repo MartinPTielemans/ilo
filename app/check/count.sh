@@ -100,8 +100,18 @@ to_opt_ins() {
     *" opt-ins") ;;
     *) fail "the onboarding's steps were '$steps', with the opt-ins not last" ;;
   esac
+  # The intro settled at launch and goes on by itself, before any key is sent, so the step after
+  # it is waited for in the whole log, and each later one after the Esc that left the one before.
+  await '^browser: onboarding left intro via time$' ||
+    fail "the onboarding's intro didn't go on by itself"
   for each in $steps; do
-    expect "^browser: onboarding step $each settled\$" "the onboarding's $each step didn't come"
+    [ "$each" = intro ] && continue
+    if [ "$step" = 0 ]; then
+      await "^browser: onboarding step $each settled\$" ||
+        fail "the onboarding's $each step didn't come after the intro"
+    else
+      expect "^browser: onboarding step $each settled\$" "the onboarding's $each step didn't come"
+    fi
     [ "$each" = opt-ins ] && break
     send key escape
     expect "^browser: onboarding left $each via escape\$" "Esc didn't leave the $each step"
