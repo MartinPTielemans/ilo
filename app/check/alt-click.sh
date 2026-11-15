@@ -1,4 +1,4 @@
-# check.sh runs this at 245, only when named.
+# check.sh runs this at 245.
 # With Alt held, a press on a link and a move of a pixel and back with the button down still
 # click it, and only a drag past Blink's drag distance selects the link's text instead (#2717).
 # The engine's patch for it holds the selection back until the pointer is that far. ilo's ⌥-click
@@ -9,8 +9,6 @@
 # the press. Only real input holds keys down before a press, which the Mac's and Linux's drivers
 # can't. There the run says it skipped: the Mac's case rests on the source, which has no platform
 # branch on this path but the drag distance's size.
-# It runs only when named until a Windows engine with the patch is out: the engines before it
-# lose the click by design, and a default run would turn main's Windows Check red.
 
 serve
 printf '%s' '<title>alt-click</title>
@@ -82,17 +80,21 @@ alt_press() {
 }
 for _ in 1 2 3 4; do
   alt_press $((x + 1)) $x
+  # Each word is matched alone: a pattern of two, as *" mda "*" ck "*, misses them side by side,
+  # since both would need the one space between them.
+  case " $seen " in *" mda "*) ;; *) fail "press $pressed: the page didn't see the ⌥ press on the link. The page saw: $seen" ;; esac
   case " $seen " in
-    *" mda "*" ck "*) ;;
+    *" ck "*) ;;
     *) fail "press $pressed: ⌥⌘ on a link, moved a pixel and back with the button down, didn't click it. The page saw: $seen" ;;
   esac
 done
 # Past the drag distance, 4 px (3 on the Mac), it selects the link's text and doesn't click.
 for _ in 1 2; do
   alt_press $((x + 6)) $((x + 12))
+  case " $seen " in *" mda "*) ;; *) fail "press $pressed: the page didn't see the ⌥ press on the link. The page saw: $seen" ;; esac
   case " $seen " in
     *" ck "*) fail "press $pressed: ⌥⌘-drag on a link past the drag distance clicked it. The page saw: $seen" ;;
-    *" mda "*" ss "*) ;;
+    *" ss "*) ;;
     *) fail "press $pressed: ⌥⌘-drag on a link past the drag distance selected nothing. The page saw: $seen" ;;
   esac
 done

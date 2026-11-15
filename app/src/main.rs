@@ -214,6 +214,8 @@ thread_local! {
     static MENUS: RefCell<Menus> = RefCell::default();
     // Whether a menu bar built from MENUS waits for the menu open to close.
     static MENUS_HELD: Cell<bool> = const { Cell::new(false) };
+    // Whether the UI runs on Wayland, which it learns as it starts; never off Linux.
+    static WAYLAND: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The keys area's line for `key`, which a page had, `when` the page sees it or after, gone to
@@ -263,14 +265,14 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     {
         return (true, "agent bar");
     }
-    // Escape ends Zap on the page, which the page doesn't see (shell/boost.rs).
+    // Escape ends Zap or Arrange on the page, which the page doesn't see (shell/boost.rs).
     if keystroke == "escape"
         && update_tab_window(tab, |shell, cx| {
-            shell.zapping(tab) && shell.escape_boost(cx)
+            (shell.zapping(tab) || shell.arranging(tab)) && shell.escape_boost(cx)
         })
         .unwrap_or(false)
     {
-        return (true, "zap");
+        return (true, "zap or arrange");
     }
     if update_tab_window(tab, |shell, cx| {
         shell.run_extension_key(&keystroke, "page", cx)
@@ -403,6 +405,8 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
 }
 
 unsafe extern "C" fn started(_: *mut c_void) {
+    // Before the first page, which Arrange may lift an element of.
+    boosts_host::set_arrange_lift();
     // Chromium's message loop dispatches GPUI's messages, as its run loop does on the Mac.
     #[cfg(target_os = "windows")]
     gpui_windows::embed();
@@ -496,6 +500,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 browser::clipboard::held_through(gpui_linux::held_clipboard_text);
             }
         }
+        WAYLAND.set(!display.is_null());
         !display.is_null()
     };
     let application = gpui_platform::application().with_assets(shell::Assets);
@@ -903,8 +908,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // Chrome would copy the app bundle to check its signature against, which an
         // ad-hoc-signed build doesn't need. And off the Mac, every switch would copy and encode
         // the tab it leaves for the hover cards of Chrome's tab strip, which ilo never shows: its
-        // own hover card takes its own picture (core/capture.cc, #2377).
-        "--disable-features=MacAppCodeSignClone,TabHoverCardImages".into(),
+        // own hover card takes its own picture (core/capture.cc, #2377). And Settings' user
+        // journeys, metrics nobody receives, tell Chrome's BrowserView of a change such as Make
+        // default in the search engines page, CHECKing it's there: ilo's windows have none (#2907).
+        "--disable-features=MacAppCodeSignClone,TabHoverCardImages,SettingsGlowupJourneys".into(),
         // An idle browser shouldn't wake: Chrome's stack sampling feeds metrics nobody receives,
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
@@ -1063,6 +1070,9 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_press_released: Some(tab_press_released),
         tab_boost_zapped: Some(tab_boost_zapped),
         tab_boost_zap_ended: Some(tab_boost_zap_ended),
+        tab_arrange_ended: Some(boosts_host::tab_arrange_ended),
+        tab_arrange_saved: Some(boosts_host::tab_arrange_saved),
+        tab_arrangement_fits: Some(boosts_host::tab_arrangement_fits),
         held_keys_unclaimed: Some(held_keys_unclaimed),
         tab_media_unsupported: Some(tab_media_unsupported),
         widevine_changed: Some(widevine_changed),
@@ -1118,6 +1128,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         ad_block_response: Some(ad_block_host::ad_block_response),
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
+        tab_shown_in: Some(tab_shown_in),
         ..Default::default()
     };
     (args, host)

@@ -7,11 +7,12 @@
 //! screen of a desktop's, Xvfb's one "screen" or tools/headless.sh's Xwayland on a headless sway.
 //! Anywhere else it refuses, and its pointer and keys can't do anything.
 //!
-//! The pointer goes through XTEST alone, a click's modifiers as keys held around it. Some keys
-//! still go as X events sent to the window the server would pick, which its client handles as the
-//! device's: a held key's repeat, which the server makes only of a key held past its delay; and,
-//! until the drive moves them too, a key with Alt, which the window manager may take, and the keys
-//! while `flags` holds a modifier, whose modifiers an XKB lock holds.
+//! The pointer goes through XTEST alone, a click's modifiers as keys held around it, and so do keys,
+//! a chord's modifiers as keys pressed before it, Alt's too, which the window manager may take as
+//! it would a hand's. Some keys still go as X events sent to the window the server would pick,
+//! which its client handles as the device's: a held key's repeat, which the server makes only of a
+//! key held past its delay; and, until the drive moves them too, the keys while `flags` holds a
+//! modifier, whose modifiers an XKB lock holds.
 //!
 //! Under Wayland no client can hand another's surfaces input, so there the pointer and keys are
 //! sway's virtual devices, in tools/headless.sh's session alone (drive_wayland.rs).
@@ -1458,17 +1459,16 @@ fn key_on_return(key: String, until: std::time::Instant, done: Box<dyn FnOnce()>
 }
 
 /// The key `code`'s events of `kinds`, with the modifiers `state`, as `key_events` does: through
-/// XTEST, with the modifier keys `state` has going down before the press, unless it's a repeat, a
-/// chord with Alt, or `flags` holds a modifier.
+/// XTEST, with the modifier keys `state` has going down before the press, unless it's a repeat or
+/// `flags` holds a modifier. A chord with Alt, the Mac's ⌃ or ⌥, goes as a hand's does, so a
+/// window manager's bind would take it first: check/openbox.xml leaves the chords the checks press,
+/// which tools/check-lints.py holds it to (#2721).
 fn code_events(code: u8, state: u16, kinds: &[u8]) -> Option<()> {
     // A held key's repeat, a press of a key down already, is what XTEST can't send: the server
     // makes repeats only of a key held past its delay, which is a wait on time.
     let repeat =
         kinds == [xproto::KEY_PRESS_EVENT] && XTEST_KEYS.with_borrow(|down| down.contains(&code));
-    // A chord with Alt, the Mac's ⌃ or ⌥, is slice 2's class (#2721): under Xvfb Openbox takes
-    // Ctrl+Alt with an arrow for itself, so it stays sent.
-    let alt = state & u16::from(KeyButMask::MOD1) != 0;
-    if repeat || alt || FLAGS.get() != 0 {
+    if repeat || FLAGS.get() != 0 {
         return sent_code_events(code, state, kinds);
     }
     let held = (FLAGS.get() | KEY_FLAGS.get()) & u16::from(KeyButMask::CONTROL);

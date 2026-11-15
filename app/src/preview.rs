@@ -470,7 +470,58 @@ impl Fake {
     }
 }
 
+/// PREVIEW_BOOST_CARD=list, nofit or changed: the Boost of the first tab's site, its CSS and an
+/// arrangement of four changes in a profile folder of its own, the last that no longer fits with
+/// nofit, and off as it changed outside ilo with changed.
+fn preview_boost_folder() -> Option<std::path::PathBuf> {
+    std::env::var_os("PREVIEW_BOOST_CARD")?;
+    let folder = std::env::temp_dir().join(format!("ilo-preview-boost-{}", std::process::id()));
+    let boosts = folder.join(browser::boosts::FOLDER);
+    std::fs::create_dir_all(&boosts).ok()?;
+    let site = browser::boosts::site_of(TABS[0].1)?;
+    let css = "#banner { display: none !important; } /* Zap */\n.promo { display: none !important; } /* Zap */\n";
+    let css = css.to_owned() + &"main { max-width: 42em; }\n".repeat(12);
+    std::fs::write(boosts.join(format!("{site}.css")), css).ok()?;
+    let arrangement = r#"{"version": 1, "changes": [
+  {"kind": "settle", "name": "", "role": "video", "before": {"name": "", "role": "article"}},
+  {"kind": "trade", "name": "Trending", "role": "aside", "with": {"name": "Get the newsletter", "role": "form"}},
+  {"kind": "float", "name": "More like this", "role": "complementary", "pin": "screen"},
+  {"kind": "settle", "name": "", "role": "banner", "after": {"name": "", "role": "contentinfo"}}
+]}
+"#;
+    let name = format!("{site}{}", browser::boosts::arrange::SUFFIX);
+    std::fs::write(boosts.join(name), arrangement).ok()?;
+    Some(folder)
+}
+
 impl Browser for Fake {
+    fn profile_folder(&self, _: u64) -> Option<std::path::PathBuf> {
+        preview_boost_folder()
+    }
+
+    fn set_arrangement(&self, _: u64, _: &str, _: &str) -> browser::boosts::Arranged {
+        match std::env::var("PREVIEW_BOOST_CARD").as_deref() {
+            Ok("changed") => browser::boosts::Arranged::Changed,
+            _ => browser::boosts::Arranged::On,
+        }
+    }
+
+    fn show_boosts(&self, changes: Vec<browser::boosts::Change>, cx: &mut App) {
+        for change in changes {
+            if let browser::boosts::Shows::Arrangement(bytes) = change.shows {
+                let state = self.set_arrangement(change.profile, &change.site, &bytes);
+                let nofit = std::env::var("PREVIEW_BOOST_CARD").as_deref() == Ok("nofit");
+                browser::boosts::with(|each| {
+                    each.set_arranged(change.profile, &change.site, state);
+                    if nofit {
+                        each.set_misfits(change.profile, &change.site, vec![3]);
+                    }
+                });
+            }
+        }
+        let _ = cx;
+    }
+
     fn select(&self, tab: u64, cx: &mut App) {
         self.later(cx, move |shell, cx| shell.set_selected(tab, cx));
     }
@@ -943,6 +994,10 @@ impl Browser for Fake {
 
     // The made-up pages have the globe.
     fn page_favicon(&self, _: &str, _: &mut App) {}
+
+    fn url_site(&self, url: &str) -> Option<String> {
+        browser::sort_by_site::made_up_site(url)
+    }
 
     // In UTC, with weeks from Monday.
     // Library › Agents' made-up past tasks: two today, one yesterday, one last week.
@@ -3033,6 +3088,16 @@ fn main() {
                     );
                 }
             }
+            // PREVIEW_BOOST_CARD opens the Boost card of the tab shown (preview_boost_folder).
+            if let Some(shell) =
+                shell_window.filter(|_| std::env::var_os("PREVIEW_BOOST_CARD").is_some())
+            {
+                shell
+                    .update(cx, |shell, _, cx| {
+                        shell.run(Command::EditBoost, "preview", cx)
+                    })
+                    .ok();
+            }
             // PREVIEW_FOOT_BAR=arrange shows the foot bar over the page's bottom centre with one
             // line, as Arrange's, =point with two, as pointing's, and =long with a question past
             // its two lines.
@@ -3409,6 +3474,15 @@ impl link_preview::Host for PreviewPeek {
         true
     }
 
+    fn open_waits(&self) -> bool {
+        // No core says when a page is on screen here.
+        false
+    }
+
+    fn close_waits(&self) -> bool {
+        false
+    }
+
     fn release(&self) {}
 
     fn hide(&self) {}
@@ -3465,6 +3539,7 @@ impl site_controls::Host for PreviewSiteControls {
     fn set_developer_mode(&self, _: u64, _: bool) {}
 
     fn set_boost(&self, _: u64, _: bool) {}
+    fn turn_on_arrangement(&self, _: u64) {}
 
     fn run(&self, _: site_controls::Run, _: u64, _: &mut App) {}
 
@@ -3552,6 +3627,11 @@ fn preview_site() -> Site {
             Ok("off") => Some(false),
             _ => None,
         },
+        // PREVIEW_ARRANGEMENT=nofit or changed: what Site Controls says of the Boost's arrangement.
+        arrangement_misfits: (std::env::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("nofit"))
+            .then(|| "1 change no longer fits".into()),
+        arrangement_off: (std::env::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("changed"))
+            .then(|| "Changed outside ilo, off".into()),
     }
 }
 

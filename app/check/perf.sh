@@ -332,6 +332,15 @@ fi
 # sample (#2111).
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
 perf_launch "$page?warm" warm warm
+# Which urlhaus copy the launches below take their filters from: uBlock Origin fetched it from one
+# of the list's mirrors at random, whose copies have been a month and 2.5 against 12 MB apart and
+# put these rows in two modes 200 ms or more apart, so a comparison pairs goes on the same (#2906).
+if [ -n "${selfied:-}" ]; then
+  urlhaus=$(python3 -I check/ublock_urlhaus.py \
+    "$profile_dir/Default/Local Extension Settings/oghkpboejbohceocapipmnjifoklonij") ||
+    urlhaus=unread
+  selfied="$selfied, urlhaus $urlhaus"
+fi
 for n in 1 2 3 4 5; do
   rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
   perf_launch "$page?link$n" "link$n" "link$n"
