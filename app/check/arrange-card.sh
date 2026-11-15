@@ -2,11 +2,12 @@
 # Arrange (#2347) from the Boost card, on the core: the card's Arrange starts the mode on the page
 # and closes the card; a carry in the page settles a thing under another, which the core saves and
 # the app writes in the site's .arrange.json; escape ends the mode; and the card then lists the
-# change, by the page's own name for it, with its ↺, in the Space's dark look and its light one.
+# change, by the page's own name for it, with its ↺, in the Space's look and then in the other.
 # The mode's bars and keys are #2414's, and arrange.sh's battery #2419's.
 
 serve
-# The page says in its title the order of its column, each time that changes.
+# The page says in its title the look it's shown in and the order of its column, each time that
+# changes.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
 body { margin: 0; font: 16px sans-serif; background: rgb(243, 245, 246) }
@@ -26,7 +27,8 @@ let at = "-";
 let said;
 addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," + Math.round(event.clientY); });
 setInterval(() => {
-  const now = "col " + order() + " at " + at;
+  const scheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  const now = "scheme " + scheme + " col " + order() + " at " + at;
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/arrange-card.html"
@@ -48,8 +50,12 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 await "^browser: boost shown $host " || fail "the app didn't give the core the site's Boost"
-await '^browser: title [0-9]* col a,b,c at -$' || fail "the fixture page didn't draw"
-tab=$(grep '^browser: title [0-9]* col ' "$log" | tail -1 | cut -d' ' -f3)
+await '^browser: title [0-9]* scheme [a-z]* col a,b,c at -$' || fail "the fixture page didn't draw"
+tab=$(grep '^browser: title [0-9]* scheme ' "$log" | tail -1 | cut -d' ' -f3)
+# The look the Space starts in, the system's, and the other, which the theme picker turns it to.
+look=$(grep "^browser: title $tab scheme " "$log" | tail -1 | cut -d' ' -f5)
+other=dark other_at="231.7 49"
+[ "$look" = light ] || other=light other_at="191.3 49"
 said() { grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f4-; }
 
 # A click where the window's page point is tells where the page is in the window.
@@ -111,18 +117,18 @@ for _ in $(seq 100); do
 done
 [ -s "$arranged" ] || fail "the app didn't write the site's arrangement"
 for _ in $(seq 100); do
-  case "$(said)" in "col b,c,a "*) break ;; esac
+  case "$(said)" in *" col b,c,a "*) break ;; esac
   sleep 0.1
 done
-case "$(said)" in "col b,c,a "*) ;; *) fail "Alpha didn't settle under Gamma: the page says $(said)" ;; esac
+case "$(said)" in *" col b,c,a "*) ;; *) fail "Alpha didn't settle under Gamma: the page says $(said)" ;; esac
 # The mode's marks on the page, round the thing it just settled.
 ../tools/window-screenshot.sh "$pid" "$out/arrange-on.png" || fail "no window to capture"
 send key escape
 expect "browser: tab $tab arrange off\$" "escape in the page didn't end Arrange"
 
-# The card lists the change with its ↺, in the Space's look: dark, then light.
+# The card lists the change with its ↺, in the Space's look, then in the other.
 open_card
-../tools/window-screenshot.sh "$pid" "$out/arrange-list-dark.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$pid" "$out/arrange-list-$look.png" || fail "no window to capture"
 send click $((bx + bw - 18)) $((by + 18))
 expect "^browser: boost card $tab closed\$" "the card's × didn't close it"
 post rightclick 100 112
@@ -130,17 +136,18 @@ expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $co
 send choose "$(cased 'Edit Theme Color…')"
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-# The sun, the second appearance button, 13 right of the picker's arrow.
-send clickkey 191.3 49
-expect '^browser: themed space [0-9]* .*appearance=light' "the sun didn't make the Space's theme light"
+# The sun, the second appearance button, or the moon, the third.
+send clickkey $other_at
+expect "^browser: themed space [0-9]* .*appearance=$other" \
+  "the theme picker's $other button didn't make the Space's theme $other"
 send key escape
 expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
 open_card
-../tools/window-screenshot.sh "$pid" "$out/arrange-list-light.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$pid" "$out/arrange-list-$other.png" || fail "no window to capture"
 exec 3>&-
 quit
 echo "ok: the Boost card's Arrange started the mode on the core and closed the card; a carry" \
   "settled Alpha under Gamma, which the core saved and the app wrote in the site's arrangement;" \
-  "escape ended the mode, and the card listed the change, dark and light." \
-  "Windows: $out/arrange-card.png, $out/arrange-on.png, $out/arrange-list-dark.png," \
-  "$out/arrange-list-light.png"
+  "escape ended the mode, and the card listed the change, $look and $other." \
+  "Windows: $out/arrange-card.png, $out/arrange-on.png, $out/arrange-list-$look.png," \
+  "$out/arrange-list-$other.png"
