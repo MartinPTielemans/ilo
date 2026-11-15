@@ -1743,8 +1743,9 @@ else
 fi
 # Sort Today Tabs by Site, from the command bar, puts the served page's tabs together at each
 # site's first tab's place, 127.0.0.1 and localhost being two sites of one server, records the rows
-# sliding there, light and dark, and the Tabs menu shows it dimmed once they're together. ⌘Z and ⇧⌘Z
-# take it back and do it again, and the core keeps the sorted order across a quit (#2344).
+# sliding there, light and dark, and the Tabs menu shows it dimmed once they're together, as does
+# the line over Today's menu, which leads with it and Clear Today. ⌘Z and ⇧⌘Z take it back and do
+# it again, and the core keeps the sorted order across a quit (#2344).
 # The URL of tab $1, as the app last heard it.
 url_of() {
   grep "^browser: page $1 back " "$log" | tail -1 | sed 's/.* //'
@@ -1754,6 +1755,17 @@ sort_item() {
   send menubar Tabs
   expect "^browser: menu bar Tabs: .*, Sort Today Tabs by Site$1, " \
     "the Tabs menu's Sort Today Tabs by Site wasn't ${2:-there}"
+}
+# A right-click on the line over Today, under the Space's name with no pinned tab, shows Sort Today
+# Tabs by Site, dimmed if $1 is "(disabled)", and Clear Today over the empty space's menu, captured
+# in $2.png, which escape closes.
+divider_menu() {
+  post rightclick 60 $((90 + 44 + 7))
+  expect "^browser: menu shown $(cased "Sort Today Tabs by Site$1, Clear Today, New Tab, New Folder…"), " \
+    "a right-click on the line over Today didn't lead with Sort Today Tabs by Site${1:+ dimmed} and Clear Today"
+  ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"
+  send key escape
+  expect '^browser: menu closed$' "escape didn't close the line over Today's menu"
 }
 # Waits for Today as $1, with $s3 still shown, $2 saying what went wrong. A sort and its undo and
 # redo move rows but never the tab shown, which logs no new selected line, so that one is read.
@@ -1772,6 +1784,7 @@ sort_in() {
   [ "$(today)" = "$before" ] ||
     fail "before Sort Today Tabs by Site, $scheme: Today is \"$(today)\", not \"$before\""
   sort_item "" "offered with the sites apart"
+  divider_menu "" "divider-menu-$scheme"
   record "sort-by-site-$scheme" 3
   bar_command sort-by-site "Sort Today Tabs by Site" "sort today"
   expect '^browser: sorted by site ' "Sort Today Tabs by Site didn't sort"
@@ -1779,6 +1792,7 @@ sort_in() {
   recorded
   ../tools/window-screenshot.sh "$pid" "$out/sorted-by-site-$scheme.png" || fail "no window to capture"
   sort_item " (disabled)" "dimmed with every site together"
+  divider_menu " (disabled)" "divider-menu-sorted-$scheme"
   if [ "$(uname)" = Darwin ]; then
     post openmenu Tabs
     expect '^browser: menu tracked New Tab' "the Tabs menu didn't open"
@@ -1857,7 +1871,9 @@ echo "ok: new tabs open at the top and show, the command bar lists the Space's o
 [ "$sorted" = skipped ] || echo "  $sorted: $out/sorted-by-site-light.png," \
   "$out/sorted-by-site-dark.png, the rows sliding in $out/sort-by-site-light.mp4 and" \
   "$out/sort-by-site-dark.mp4, and on the Mac the Tabs menu in $out/tabs-menu-sorted-light.png" \
-  "and $out/tabs-menu-sorted-dark.png."
+  "and $out/tabs-menu-sorted-dark.png, and the line over Today's menu, Sort offered then dimmed, in" \
+  "$out/divider-menu-light.png, $out/divider-menu-dark.png, $out/divider-menu-sorted-light.png" \
+  "and $out/divider-menu-sorted-dark.png."
 echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms): $chrome_ms."
 echo "  A site search for example: the core listed $listed_rows rows, the bar one."
 echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/bar-close.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/numbered.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/remove-tooltip.png, $out/site-search-settings.png, $out/bar-picked.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"
