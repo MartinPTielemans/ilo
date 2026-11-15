@@ -482,6 +482,7 @@ expect "^browser: selected $c in " "⌃Tab didn't show $c, the tab shown before 
 expect "^browser: tab switcher lists $a $c $b selected $c\$" \
   "⌃Tab held didn't list $a, $c and $b with $c selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
 expect '^browser: tab switcher shown$' "the switcher's window didn't show"
+expect '^browser: tab switcher drawn$' "the switcher's window showed but never drew a frame"
 [ "$(tail -n +"$let_go" "$log" | grep -c '^browser: tab switcher lists ')" = 1 ] ||
   fail "a quick ⌃Tab showed the switcher after ⌃ went up"
 [ "$(switches_since "$tapped_from")" = 2 ] ||
@@ -505,6 +506,7 @@ send key tab ctrl
 expect "^browser: selected $a in " "⌃Tab didn't show $a, the tab shown before $b"
 expect "^browser: tab switcher lists $b $a $c selected $a\$" \
   "⌃Tab held didn't list $b, $a and $c with $a selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
+expect '^browser: tab switcher drawn$' "the switcher's window didn't draw a frame"
 ../tools/window-screenshot.sh "$pid" "$out/switcher-dark.png" all || fail "no window to capture"
 send key tab ctrl
 expect "^browser: tab switcher selected $c\$" "⌃Tab with the switcher shown didn't select $c"

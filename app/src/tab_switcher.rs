@@ -128,6 +128,8 @@ pub struct TabSwitcher {
     shown: Option<Show>,
     /// The row under the pointer, which takes the hovered plate while the selection is elsewhere.
     hovered: Option<usize>,
+    /// Whether a frame of this walk's switcher has been drawn on screen.
+    drawn: bool,
 }
 
 struct SwitcherWindow(WindowHandle<TabSwitcher>);
@@ -218,6 +220,7 @@ impl TabSwitcher {
             scroll: ScrollHandle::new(),
             shown: None,
             hovered: None,
+            drawn: false,
         }
     }
 
@@ -242,6 +245,7 @@ impl TabSwitcher {
                     show.items[show.selected.min(count - 1)].tab
                 );
                 let selected = show.selected.min(count - 1);
+                self.drawn &= self.shown.is_some();
                 self.shown = Some(Show { selected, ..show });
                 self.hovered = None;
                 self.scroll.set_offset(point(px(0.), px(0.)));
@@ -370,11 +374,12 @@ impl TabSwitcher {
                     .flex()
                     .gap(px(TITLE_GAP))
                     .child(div().min_w_0().truncate().child(item.title.clone()))
-                    // The host gives way as ⌘T's does, so a long one, a data: URL's, never hides
-                    // the title.
+                    // The host gives way first, so a long one, a data: URL's, never hides the
+                    // title, which shrank as much as it when both could.
                     .when(!item.host.is_empty(), |line| {
                         let host = format!("— {}", item.host);
-                        line.child(div().min_w_0().truncate().text_color(dim).child(host))
+                        let shrinks_first = div().min_w_0().flex_shrink(1000.).truncate();
+                        line.child(shrinks_first.text_color(dim).child(host))
                     }),
             )
             .when_some(item.speaker, |line, speaker| {
@@ -424,7 +429,7 @@ impl Focusable for TabSwitcher {
 }
 
 impl Render for TabSwitcher {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div()
             .key_context(KEY_CONTEXT)
             .size_full()
@@ -432,6 +437,17 @@ impl Render for TabSwitcher {
         let Some(shown) = &self.shown else {
             return root;
         };
+        // The host puts the window on screen some frames after it's asked to, and only then does
+        // GPUI draw it, under Wayland after the host says it showed.
+        if !self.drawn {
+            if window.is_visible() {
+                self.drawn = true;
+                // check.sh waits for this line.
+                log!("browser: tab switcher drawn");
+            } else {
+                window.request_animation_frame();
+            }
+        }
         let palette = palette::current(cx);
         let count = shown.items.len();
         let rows: Vec<AnyElement> = (shown.items.clone().iter().enumerate())
