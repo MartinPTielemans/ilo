@@ -1112,6 +1112,30 @@ impl Browser for Engine {
         cx.defer(move |cx| with_overlays(move |cx| browser::mini_bar::show(window, shown, cx), cx));
     }
 
+    fn show_foot_bar(
+        &self,
+        bar: Option<(Bounds<Pixels>, Size<Pixels>, browser::foot_bar::Bar)>,
+        cx: &mut App,
+    ) {
+        let window = self.window;
+        // As the mini bar's: asked from the shell's render, and its window made at first show.
+        cx.defer(move |cx| {
+            with_overlays(
+                move |cx| match bar {
+                    Some((page, content, bar)) => {
+                        browser::foot_bar::show(window, page, content, bar, cx)
+                    }
+                    // Another window's mode may have it.
+                    None if browser::foot_bar::shown_over(cx) == Some(window) => {
+                        browser::foot_bar::hide(cx)
+                    }
+                    None => {}
+                },
+                cx,
+            )
+        });
+    }
+
     fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> browser::boosts::Arranged {
         boosts_host::set_arrangement(profile, site, bytes)
     }
@@ -1962,6 +1986,14 @@ impl Browser for Engine {
         if let Some(agents) = browser::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.set_on(on, cx));
         }
+    }
+
+    fn daily_count(&self, _: &App) -> Option<bool> {
+        crate::daily_count_host::named().then(crate::daily_count_host::on)
+    }
+
+    fn set_daily_count(&self, on: bool, cx: &mut App) {
+        crate::daily_count_host::set_on(on, cx);
     }
 
     fn new_window(&self, cx: &mut App) {

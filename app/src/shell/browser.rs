@@ -460,6 +460,14 @@ pub trait Browser {
         _cx: &mut App,
     ) {
     }
+    /// Shows Arrange's foot bar, `bar`, over this window's page at `page` in its content `content`
+    /// big, or hides it for none while it shows over this window (`crate::foot_bar`).
+    fn show_foot_bar(
+        &self,
+        _bar: Option<(Bounds<Pixels>, Size<Pixels>, crate::foot_bar::Bar)>,
+        _cx: &mut App,
+    ) {
+    }
     /// Gives `site`'s pages in `profile` the arrangement read from its file, `bytes`, or takes it
     /// away with none, from their next load and at once on those open. The core places it only
     /// while it's what the user kept in the browser, and says what it made of it. The user's
@@ -985,6 +993,12 @@ pub trait Browser {
         None
     }
     fn set_agents(&self, _on: bool, _cx: &mut App) {}
+    /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
+    /// names no server for it.
+    fn daily_count(&self, _cx: &App) -> Option<bool> {
+        None
+    }
+    fn set_daily_count(&self, _on: bool, _cx: &mut App) {}
     /// Opens a private window in the shown Space's profile's off-the-record session, after this
     /// one's draw.
     fn new_private_window(&self, cx: &mut App);

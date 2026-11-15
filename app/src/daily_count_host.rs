@@ -1,5 +1,5 @@
-//! The daily usage count's host (browser::daily_count, #1977): the switch and the last count's date
-//! in the app's data, the launch's count about 30 s in, and one when the app becomes active on a
+//! The daily usage count's host (browser::daily_count, #1977): the user's yes and the last count's
+//! date in the app's data, the launch's count about 30 s in, and one when the app becomes active on a
 //! new UTC day. No timer runs after that first one, so an idle browser never wakes for it. The core
 //! posts it, through Chromium's network stack, to the endpoint the build names.
 
@@ -13,8 +13,6 @@ const AFTER_LAUNCH: Duration = Duration::from_secs(30);
 struct Count {
     /// Where it goes, if the build or a check names it.
     endpoint: Option<String>,
-    /// The launch found no data of an earlier one.
-    first_run: bool,
     /// The launch's count has had its time, so becoming active may send one.
     ready: bool,
     /// The day this launch last tried, so a failed count waits for the next launch.
@@ -27,23 +25,19 @@ thread_local! {
     static COUNT: RefCell<Count> = RefCell::default();
 }
 
-/// As Chromium starts, before it writes its Local State: where the count goes, from the arguments
-/// the process was `given` or the build's branding, and whether this is the copy's first run.
-/// Returns the switch that tells the core, if the build doesn't have it from its arguments already.
-pub(crate) fn prepare(given: &[String], profile: &str) -> Option<String> {
+/// As Chromium starts: where the count goes, from the arguments the process was `given` or the
+/// build's branding. Returns the switch that tells the core, if the build doesn't have it from its
+/// arguments already.
+pub(crate) fn prepare(given: &[String]) -> Option<String> {
     // Only the prod build names ilo's server (branding/daily-count), as only it reaches users. A
     // fork names its own or none.
     let named = cfg!(feature = "prod").then(|| include_str!("../branding/daily-count"));
     let endpoint = daily_count::endpoint(given, named);
-    let first_run = !std::path::Path::new(profile).join("Local State").exists();
     let given_switch = given.iter().any(|arg| arg.starts_with(daily_count::SWITCH));
     let switch = (endpoint.as_ref())
         .filter(|_| !given_switch)
         .map(|url| format!("{}={url}", daily_count::SWITCH));
-    COUNT.with_borrow_mut(|count| {
-        count.endpoint = endpoint;
-        count.first_run = first_run;
-    });
+    COUNT.with_borrow_mut(|count| count.endpoint = endpoint);
     switch
 }
 
@@ -93,8 +87,7 @@ fn send_if_due(cx: &mut App) {
     let last = std::fs::read_to_string(path(daily_count::LAST))
         .ok()
         .and_then(|text| daily_count::parse(&text));
-    let first_run = COUNT.with_borrow(|count| count.first_run);
-    let Some(flags) = daily_count::due(last, today, first_run) else {
+    let Some(flags) = daily_count::due(last, today) else {
         // check.sh waits for this line.
         log!("browser: daily count sent today already");
         return;
@@ -142,26 +135,31 @@ fn path(name: &str) -> std::path::PathBuf {
     std::path::Path::new(&profile_dir()).join(name)
 }
 
+fn dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(profile_dir())
+}
+
 /// Whether the build sends the count at all, for Settings to offer the switch.
 pub(crate) fn named() -> bool {
     COUNT.with_borrow(|count| count.endpoint.is_some())
 }
 
-/// Settings › Privacy › Send a Daily Usage Count: on without its file.
+/// Settings › Privacy › Send a Daily Usage Count: on only once the user has said yes.
 pub(crate) fn on() -> bool {
-    !path(daily_count::OFF).exists()
+    daily_count::on(&dir())
 }
 
-/// Turns the count on or off, now and for the launches after. Off stops it at once: nothing more
-/// is sent, though one already on its way finishes.
-pub(crate) fn set_on(on: bool, _: &mut App) {
-    _ = match on {
-        true => std::fs::remove_file(path(daily_count::OFF)),
-        false => std::fs::write(path(daily_count::OFF), ""),
-    };
+/// Turns the count on or off, now and for the launches after, from Settings or onboarding. Off
+/// stops it at once: nothing more is sent, though one already on its way finishes. On sends the
+/// day's count once the launch's has had its time.
+pub(crate) fn set_on(on: bool, cx: &mut App) {
+    _ = daily_count::answer(&dir(), on);
     // check.sh reads this line.
     log!(
         "browser: daily count switch {}",
         if on { "on" } else { "off" }
     );
+    if on {
+        became_active(cx);
+    }
 }
