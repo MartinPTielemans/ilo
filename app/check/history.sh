@@ -368,10 +368,13 @@ if [ "$major" -ge 157 ]; then
   expect '^browser: command close-tab via ' "⌘W on Chrome's warning before http didn't reach the UI"
   expect_tabs "$kept" "$kept" "after one ⌘W on Chrome's warning before http"
   ran_on_warning close-tab "one ⌘W"
-  # Coming back from another app, as by its taskbar button, with the pointer over the sidebar: no
-  # press activates the window, so the warning, which had the keyboard, has it again wherever the
-  # pointer is. On Windows the pane takes it back first, and the warning only after it (#2910).
-  if windows; then
+  # Coming back from another app: the warning, which had the keyboard, has it again unless a press
+  # on the UI brought the window forward. On Windows the window gives the page's pane the keyboard
+  # back first, which the warning takes from it only then (#2910). Each starts with the warning's
+  # keys and another app's small window beside ilo's in front, the pointer at $2, and brings ilo's
+  # window forward by $1: "taskbar", as its taskbar button does, where no press activates it, or
+  # "press", a real press there. $3 says where the keyboard goes: "warning" or "ui".
+  back_from_another_app() {
     send click $((warning_x + warning_width / 2)) $((warning_y + warning_height + 40))
     clicked=$step
     for _ in $(seq 50); do
@@ -382,7 +385,7 @@ if [ "$major" -ge 157 ]; then
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "a click on the page beside Chrome's warning before http left the keyboard in $key, on $focus, not in the warning: $(since "$clicked" | grep '^browser: drive' | tail -3 | tr '\n' ' ')"
     rm -f "$out/cover-front"
-    python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" away \
+    python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" aside \
       "$(cygpath -w "$out/cover-front")" > "$out/other-window.log" 2>&1 &
     other=$!
     for _ in $(seq 100); do
@@ -391,24 +394,40 @@ if [ "$major" -ge 157 ]; then
     done
     grep -q '^cover .*, foreground away$' "$out/other-window.log" ||
       fail "another app's window didn't open and take the foreground from $kept's warning before http: $(cat "$out/other-window.log")"
-    send move $sidebar_point
-    touch "$out/cover-front"
+    send move $2
+    case $1 in
+      taskbar) how="coming back from another app with the pointer at $2" && touch "$out/cover-front" ;;
+      press) how="a press at $2 from another app" && echo press > "$out/cover-front" ;;
+    esac
     wait "$other" ||
       fail "another app's window didn't give ilo's back the foreground: $(cat "$out/other-window.log")"
     back=$step
+    case $3 in
+      warning) wanted=NativeWidgetMacNSWindow ;;
+      ui) wanted=BrowserCoreNSWindow ;;
+    esac
     for _ in $(seq 50); do
       send state
-      [ "$active" = 1 ] && [ "$key" = NativeWidgetMacNSWindow ] && break
+      [ "$active" = 1 ] && [ "$key" = "$wanted" ] && break
       sleep 0.1
     done
-    [ "$active" = 1 ] && [ "$key" = NativeWidgetMacNSWindow ] ||
-      fail "coming back from another app with the pointer over the sidebar left the keyboard in $key, on $focus (active $active), not in $kept's warning before http: $(since "$back" | grep '^browser: drive' | tail -3 | tr '\n' ' ')"
+    # The warning takes the keyboard in a task posted as the pane gets it, which has run once a
+    # step after it has.
+    send state
+    [ "$active" = 1 ] && [ "$key" = "$wanted" ] ||
+      fail "$how left the keyboard in $key, on $focus (active $active), where $kept's warning before http had it, not in the $3: $(since "$back" | grep '^browser: drive' | tail -3 | tr '\n' ' ')"
+    [ "$3" = warning ] ||
+      in_browser AccessKitSubclassOfGPUIView "$how, beside $kept's warning before http"
     send key t cmd
     expect '^browser: command bar shown$' \
-      "⌘T after coming back from another app with the pointer over the sidebar, beside Chrome's warning before http, didn't open the command bar"
+      "⌘T after $how, beside Chrome's warning before http, didn't open the command bar"
     send key escape
-    expect '^browser: command bar hidden$' \
-      "escape didn't close the command bar ⌘T opened after coming back from another app"
+    expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened after $how"
+  }
+  if windows; then
+    back_from_another_app taskbar "$sidebar_point" warning
+    back_from_another_app press "$((warning_x + warning_width / 2)) $((warning_y + warning_height + 40))" warning
+    back_from_another_app press "$sidebar_point" ui
   fi
   # A click on the page beside the warning while the UI has the keyboard, the browser window
   # active: on Windows the page's pane takes the keyboard, with no window activated for aura to
