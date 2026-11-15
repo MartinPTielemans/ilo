@@ -23,13 +23,16 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/dialog_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/session.h"
+#include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/client/window_types.h"
@@ -478,12 +481,31 @@ class WindowViews : public views::WidgetObserver,
       // root names the browser window's widget, as a page in Chrome's own window reaches it.
       views::NativeWidgetAura::RegisterNativeWidgetForWindow(
           widget_->native_widget_private(), slot.widget->GetNativeView()->GetRootWindow());
-      // A page taking the keyboard ends the UI's hold on it, as on Linux.
       slot.keyboard = std::make_unique<PaneKeyboard>(
-          slot.widget.get(), base::BindRepeating(&WindowViews::set_ui_holds_for_page,
-                                                 base::Unretained(this), false));
+          slot.widget.get(), base::BindRepeating(&WindowViews::PaneTookKeyboard,
+                                                 base::Unretained(this), slot.widget.get()));
     }
     return slot.widget.get();
+  }
+
+  // The page in |holder| took the keyboard, which ends the UI's hold on it, as on Linux. If its
+  // tab has a dialog up, the dialog takes it back (dialog_keys.cc), as the page drops every key
+  // then, ilo's shortcuts with them. The core hears it here: a page whose tab has a dialog ignores
+  // input, and Aura's page view then says nothing of taking the focus
+  // (RenderWidgetHostViewAura::OnWindowFocused), where the Mac's does. Chrome's page never takes
+  // it, as aura keeps a click from a page under its tab's dialog (WindowModalityController), but a
+  // pane is a host of its own, whose window the dialog doesn't belong to (#2855).
+  void PaneTookKeyboard(views::Widget* holder) {
+    set_ui_holds_for_page(false);
+    for (Window* window : Window::All()) {
+      if (window->widget() != widget_) {
+        continue;
+      }
+      content::WebContents* shown = Tab::FromId(window->selected());
+      if (shown && holder->GetNativeView()->Contains(shown->GetNativeView())) {
+        dialog_keys::PageFocused(shown);
+      }
+    }
   }
 
   // Takes |view| out of |holder| if it's there, so closing a slot never deletes a page, and hides
