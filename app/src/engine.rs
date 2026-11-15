@@ -1107,7 +1107,9 @@ impl Browser for Engine {
         cx: &mut App,
     ) {
         let window = self.window;
-        with_overlays(move |cx| browser::mini_bar::show(window, shown, cx), cx);
+        // The shell asks from its render, and the bar's window is made the first time it shows: a
+        // window made while another draws left that one drawing nothing more on Linux and Windows.
+        cx.defer(move |cx| with_overlays(move |cx| browser::mini_bar::show(window, shown, cx), cx));
     }
 
     fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> browser::boosts::Arranged {
