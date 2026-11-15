@@ -120,6 +120,7 @@ pub mod build_info;
 pub mod capture;
 pub mod child;
 pub mod clipboard;
+pub mod clock;
 pub mod command_bar;
 pub mod daily_count;
 pub mod default_browser;

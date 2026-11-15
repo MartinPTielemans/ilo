@@ -228,6 +228,11 @@ bool host_reduce_motion(void);
 // Calls |changed| on the UI thread each time that setting changes.
 void host_watch_reduce_motion(void (*changed)(void));
 
+// Whether the system shows times on a 12-hour clock: the Mac's "24-hour time" in Date & Time,
+// through its locale's preferred hour, and Windows' time format. Linux's desktop says so through
+// its settings portal or its locale, which platform/linux/clock.rs reads instead.
+bool host_twelve_hour_clock(void);
+
 // Whether the system opens http and https links with this app: whether it's the default browser.
 bool host_is_default_browser(void);
 
