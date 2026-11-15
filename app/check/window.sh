@@ -1584,12 +1584,14 @@ if [ "$(uname)" = Darwin ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
   # that is no press it counts, so the repeat after it isn't one held.
   expect "^browser: toast shown $note" "the window full screen again didn't say how to leave"
   send keydown escape
+  held=$step
   expect "^browser: title $keeps kept [0-9]*\$" "the page didn't get the held Esc's press"
   sleep 0.7 # Esc held past the key repeat's delay
   send keydown escape repeat
-  expect '^browser: escape held leaves full screen$' "Esc held 700 ms didn't leave full screen"
+  # Under Wayland GPUI's own repeat can come first, in the sleep, so these look from the press.
+  expect '^browser: escape held leaves full screen$' "Esc held 700 ms didn't leave full screen" "$held"
   # Off the Mac the window leaves as the repeat comes, before the key's let go.
-  expect '^browser: window left full screen$' "Esc held didn't take the window out of full screen"
+  expect '^browser: window left full screen$' "Esc held didn't take the window out of full screen" "$held"
   send keyup escape
 else
   echo "skip: Esc held in full screen, as under X11 and on Windows the host can't tell a held key's repeats from presses, which leave as twice."
