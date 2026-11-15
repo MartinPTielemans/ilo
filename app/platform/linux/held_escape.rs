@@ -40,8 +40,8 @@ thread_local! {
     static WAYLAND: Cell<bool> = const { Cell::new(false) };
     /// Under Wayland, GPUI's number for the Escape press the UI got, while it may be held.
     static WAYLAND_PRESS: Cell<Option<u64>> = const { Cell::new(None) };
-    /// Under Wayland, the key held as the page's last key came, as `held_key` gives it.
-    static PAGE_HELD: Cell<Option<(u32, u64)>> = const { Cell::new(None) };
+    /// Under Wayland, the page's last key, as the app names it.
+    static PAGE_LAST: RefCell<Option<String>> = const { RefCell::new(None) };
     static X: RefCell<Option<X>> = const { RefCell::new(None) };
     /// The windows that tell this connection their key releases while Escape is held.
     static HELD: RefCell<Option<Vec<xproto::Window>>> = const { RefCell::new(None) };
@@ -77,16 +77,16 @@ fn repeating_escape() -> Option<u64> {
     gpui_linux::held_key().and_then(|(keysym, press)| (keysym == ESCAPE).then_some(press))
 }
 
-/// Under Wayland, whether the key going to the page now is a held key's repeat, as the host can't
-/// say (`host_key_repeated`): GPUI's number for the press held is the one it had as the page's
-/// last key came, so no key has gone down since, and that key is still held. A press goes to
-/// Chromium and GPUI from the one read of the display, and GPUI numbers the page's presses as its
-/// own, so it has it by the time the page's key reaches the app. Under X11 GPUI never hears the
-/// page's keys, and this is false.
-pub(crate) fn page_key_repeated() -> bool {
-    let held = gpui_linux::held_key();
-    let last = PAGE_HELD.replace(held);
-    held.is_some() && last == held
+/// Under Wayland, whether `keystroke`, going to the page now, is a held key's repeat, as the host
+/// can't say (`host_key_repeated`): it's the page's last key again, and GPUI still holds a key,
+/// which a release or another key's press ends. GPUI hears a press after the page has it, as
+/// Chromium takes its keys from the display's read first, so at a press it still holds what it
+/// held before, which is nothing once the last key is let go, or another key. Under X11 GPUI never
+/// hears the page's keys, and this is false.
+pub(crate) fn page_key_repeated(keystroke: &str) -> bool {
+    let held = gpui_linux::held_key().is_some();
+    let last = PAGE_LAST.replace(Some(keystroke.to_string()));
+    held && last.as_deref() == Some(keystroke)
 }
 
 /// Whether `key`, going to a page, is the repeat of an Escape held since the UI got its press.

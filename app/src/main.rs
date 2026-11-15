@@ -235,7 +235,7 @@ fn log_key(key: *const bc::bc_key, when: &str, route: &str) {
 fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static str) {
     // Read at each of the page's keys, whichever way it goes, so the next knows the one before.
     #[cfg(target_os = "linux")]
-    let repeated_here = held_escape::page_key_repeated();
+    let repeated_here = held_escape::page_key_repeated(&keystroke(unsafe { &*key }));
     #[cfg(not(target_os = "linux"))]
     let repeated_here = false;
     #[cfg(target_os = "linux")]
