@@ -54,7 +54,8 @@ else
     done
     ! pgrep -f -- "$dir" > /dev/null || fail "go $go: a process of the profile's outlived both"
     reports=$(find "$dir/Crashpad" -name '*.dmp' 2>/dev/null | wc -l | tr -d ' ')
-    windows_shown=$(grep -c '^browser: launch window at ' "$gone_log")
+    # grep -c says 0 with a status of 1 when none match, which the check takes for a failure.
+    windows_shown=$(grep -c '^browser: launch window at ' "$gone_log" || true)
     echo "go $go: $handed handed over, status $status, launch window lines $windows_shown," \
       "reports $reports"
     grep -q '^browser: launch window at ' "$stays_log" && [ "$windows_shown" = 0 ] ||
