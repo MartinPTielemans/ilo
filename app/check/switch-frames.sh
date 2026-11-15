@@ -7,12 +7,13 @@
 # the others example.com's and example.org's text on their backgrounds.
 # On the Mac a page a switch lets go stays in the window, out of sight, until 250 ms after the last
 # let-go, as taking it out at once left the page area empty for a frame (#2248). With an engine
-# whose core does that, the second Space has a page that moves, a background scrolling under its
-# stripes, which the Space switches show, and ten ⌃Tabs back to back between its tabs show a page
+# whose core does that, the second Space has two pages that move, a background scrolling under
+# their stripes, which the Space switches show, and ten ⌃Tabs back to back between them show a page
 # throughout too. Then the pages let go leave the window together, leaving only the page shown, and
-# in those 250 ms a click and a key reach the page shown, ⌘L opens the command bar, ⇧-click opens a
-# link in Peek, full screen keeps the page shown, the tab of a page let go closes, and a quit ends
-# the app.
+# in those 250 ms a pointer move after a ⌃Tab, with the pointer resting over the page area, reaches
+# only the page shown, a click and a key reach the page shown, ⌘L opens the command bar, ⇧-click
+# opens a link in Peek, full screen keeps the page shown, the tab of a page let go closes, and a
+# quit ends the app.
 # The pictures need the Mac's ScreenCaptureKit, check.sh's Xvfb or tools/headless.sh's sway session
 # on Linux, or a CI runner's screen on Windows; elsewhere the run says it can't take them.
 page="data:text/html,<title>ready</title><body onkeydown=\"document.title='key '+event.key\" style=\"margin:0;height:100vh;background:repeating-linear-gradient(45deg,%23cc3333 0 24px,%23ffffff 24px 48px)\">"
@@ -30,10 +31,19 @@ await_load
 await '^browser: title [0-9]* ready$' || fail "the striped page didn't draw"
 first=$(space)
 a=$(today)
+# Whether the engine keeps the pages let go, from the line its core logs as they leave, in the
+# engine the app runs: a check VM's guest has the app but no core. The core is in the framework's
+# library, or with the dev engine in the component library build.sh links beside the app.
 held=
-if [ "$(uname)" = Darwin ] && grep -q kGoneAfter ../core/platform/mac/window_views.mm &&
-  engine_has ../core/platform/mac/window_views.mm; then
+engine_library=build/libchrome_dll.dylib
+[ -e "$engine_library" ] ||
+  engine_library=$(echo "$app"/Contents/Frameworks/*Framework.framework/Versions/Current/*Framework)
+if [ "$(uname)" = Darwin ] &&
+  LC_ALL=C grep -qaF "switch's pages let go left the window" "$engine_library"; then
   held=1
+elif [ "$(uname)" = Darwin ]; then
+  echo "skip: switch-frames' steps for the 250 ms after a let-go: this engine takes the page a" \
+    "switch left out of the window at once (#2248)."
 fi
 send click $page_point
 if [ "$active" != 1 ]; then
@@ -58,7 +68,8 @@ open_from_bar example.org
 o=$tab
 if [ -n "$held" ]; then
   # The page that moves, with a link to itself in its bottom right 200 by 100 for Peek, which is
-  # the card's bottom right, 10 in from the window's edges.
+  # the card's bottom right, 10 in from the window's edges. It counts the pointer's moves in its
+  # title.
   serve
   printf '%s' '<title>loading</title><style>
 @keyframes scroll { to { background-position: 96px 0, 0 0 } }
@@ -67,16 +78,26 @@ body { margin: 0; height: 100vh; animation: scroll 0.5s linear infinite;
     linear-gradient(90deg, #ffffff, #ffcc33) }
 a { position: fixed; right: 0; bottom: 0; width: 200px; height: 100px; font: 24px system-ui }
 </style><a href="switch-moving.html?peek">Peek</a>
-<script>requestAnimationFrame(() => requestAnimationFrame(() => document.title = "moving"))</script>' \
-    > "$out/site/switch-moving.html"
-  before=$(today)
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-  send type "${site}switch-moving.html"
-  send key return
-  expect "^browser: today [0-9][0-9]* $before\$" "the page that moves didn't open at the top of Today"
-  m=$(today | cut -d' ' -f1)
-  expect "^browser: title $m moving\$" "the page that moves didn't draw"
+<script>
+let moves = 0;
+onmousemove = () => document.title = "moved " + ++moves;
+requestAnimationFrame(() => requestAnimationFrame(() => document.title = "moving"));
+</script>' > "$out/site/switch-moving.html"
+  # Opens the page that moves at $1 from the command bar, as $tab.
+  open_moving() {
+    before=$(today)
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    send type "${site}switch-moving.html$1"
+    send key return
+    expect "^browser: today [0-9][0-9]* $before\$" "the page that moves didn't open at the top of Today"
+    tab=$(today | cut -d' ' -f1)
+    expect "^browser: title $tab moving\$" "the page that moves didn't draw"
+  }
+  open_moving "?one"
+  m=$tab
+  open_moving "?two"
+  n=$tab
 fi
 send key 1 ctrl
 expect "^browser: space $first in " "⌃1 didn't show the first Space"
@@ -150,7 +171,8 @@ if [ -n "$held" ]; then
   # Its page in the pictures for as long as each switch before had.
   sleep 0.7
   # One mark for the ten, as each alone is too short for enough pictures. A walk goes on while ⌃
-  # is held, and each of these lets it go, so they go back and forth between the Space's two tabs.
+  # is held, and each of these lets it go, so they go back and forth between the Space's two tabs
+  # shown last, the pages that move.
   mark ctrltabs
   for i in 1 2 3 4 5 6 7 8 9 10; do
     send key tab ctrl
@@ -180,13 +202,27 @@ if [ -n "$held" ]; then
   }
   went=$step
   left "after the ⌃Tabs" "$step"
+  # The page shown last: one of the two that move.
+  shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
+  other=$m
+  [ "$shown" != "$m" ] || other=$n
+  # With the pointer resting over the page area, the move after a ⌃Tab reaches the page it shows,
+  # and not the page it let go, still in the window. Two pages taking the pointer, setting the
+  # cursor each, would show for the 250 ms.
+  send move $page_point
+  expect "^browser: title $shown moved [0-9]*\$" "a pointer move over the page area didn't reach the page shown"
   send key tab ctrl
-  expect "^browser: selected [0-9][0-9]* in " "⌃Tab didn't show a tab"
-  [ "$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)" = "$m" ] || {
-    send key tab ctrl
-    expect "^browser: selected $m in " "⌃Tab didn't show the page that moves"
-  }
-  let_go "⌃Tab to the page that moves"
+  expect "^browser: selected $other in " "⌃Tab didn't show the other page that moves"
+  let_go "⌃Tab with the pointer over the page area"
+  turned=$step
+  send move $(echo $page_point | awk '{ print $1 + 10, $2 + 10 }')
+  expect "^browser: title $other moved [0-9]*\$" "a pointer move just after ⌃Tab didn't reach the page shown"
+  none_since "^browser: title $shown moved " "$turned" ||
+    fail "a pointer move just after ⌃Tab reached the page it let go too"
+  left "after a pointer move" "$step"
+  send key tab ctrl
+  expect "^browser: selected $shown in " "⌃Tab didn't show the first page that moves again"
+  let_go "⌃Tab back"
   send click $((width - 110)) $((height - 60)) shift
   expect '^browser: link preview shown$' "⇧-click just after a switch didn't open the link in Peek"
   left "with Peek open" "$step"
@@ -302,4 +338,5 @@ echo "ok: every Space and tab switch showed a page in the page area at every pic
 [ -z "$held" ] ||
   echo "ok: on the Mac, ten ⌃Tabs back to back and switches to a page that moves showed a page" \
     "throughout, the pages let go left the window together leaving the page shown, and in the" \
-    "250 ms after a let-go a click, a key, ⌘L, Peek, full screen, closing a tab and a quit worked"
+    "250 ms after a let-go a pointer move reached only the page shown, and a click, a key, ⌘L," \
+    "Peek, full screen, closing a tab and a quit worked"
