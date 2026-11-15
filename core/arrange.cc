@@ -505,6 +505,8 @@ constexpr char16_t kScript[] =
       return { el, parent, axis, prev, next, r: rect(el), pr: rect(parent), prevR: prev && rect(prev), nextR: next && rect(next) };
     }
     const roomless = (axis) => axis === 'table' || axis === 'grid' || axis === 'inline';
+    // How many boxes hold |el|, itself included: a list in another list is deeper.
+    const depth = (el) => { let n = 0; for (let p = el; p; p = p.parentElement) n++; return n; };
     const drawn = (el) => el.getClientRects().length > 0;
     const boxOf = (r, pr) => ({ x: r.left - pr.left, y: r.top - pr.top, w: r.width, h: r.height });
 
