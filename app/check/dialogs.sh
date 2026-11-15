@@ -86,27 +86,34 @@ answer return accept "confirm true"
 ask p Prompt prompt
 send type grace
 answer return accept "prompt grace"
-# probe2894: the X focus through a move to another workspace and back, sampled.
+# probe2894: the X focus while another app's window has sway's focus and the browser's gets it back.
 if sway_xwayland; then
   ask p Prompt prompt-workspace
   sample() { for _ in $(seq "$2"); do send onscreen; sleep 0.1; done; echo "probe2894 $1 $(grep '^browser: onscreen ' "$log" | tail -"$2" | sed 's/.*keyboard //' | uniq -c | tr -s ' \n' ' ')"; }
   sample open 5
-  swaymsg 'move container to workspace 2' > /dev/null
-  sample moved 20
+  # Another workspace, with another app's window on it, and back.
   swaymsg 'workspace 2' > /dev/null
-  sample there 20
-  swaymsg 'move container to workspace 1' > /dev/null
-  sample moved-back 20
-  swaymsg 'workspace 1' > /dev/null
-  sample back 40
+  rm -f "$out/other-in"; mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  exec 5> "$out/other-in"
+  sample ws2-other 20
   swaymsg -t get_tree | python3 -I -c 'import json,sys
 t = json.load(sys.stdin)
 def walk(n, d=0):
     if n.get("type") in ("con", "floating_con", "workspace"):
-        print("probe2894 tree", d, n.get("type"), n.get("name"), n.get("focused"), n.get("rect", {}).get("width"), n.get("rect", {}).get("height"))
+        print("probe2894 tree", d, n.get("type"), n.get("name"), n.get("focused"))
     for c in n.get("nodes", []) + n.get("floating_nodes", []):
         walk(c, d + 1)
 walk(t)'
+  swaymsg 'workspace 1' > /dev/null
+  sample ws1-back 40
+  # The other app's window on the browser's workspace, focused, then the browser's.
+  swaymsg '[title="^Other app$"] move container to workspace 1, focus' > /dev/null || echo "probe2894 no move"
+  sample other-here 20
+  swaymsg "[pid=$pid] focus" > /dev/null || echo "probe2894 no focus"
+  sample browser-again 40
+  exec 5>&-
+  sample other-gone 20
   send type ada
   sample typed 5
   send key return
