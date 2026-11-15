@@ -60,6 +60,32 @@ TEST(LiveFolderRule, ReadsRowsWithTheirStates) {
   EXPECT_EQ(answer->items[2].state, State::kDraft);
 }
 
+TEST(LiveFolderRule, RowsReachOnlyASpaceOnTheProfileTheyWereAskedWith) {
+  const std::optional<Answer> review =
+      Parse(Search("true", Row("7", "Review")), List::kReviewRequests);
+  const std::optional<Answer> created = Parse(Search("true", Row("8", "Own")), List::kCreated);
+  ASSERT_TRUE(review && created);
+
+  const Outcome same = OutcomeOf({review, created}, "Default", "Default");
+  EXPECT_EQ(same.kind, Kind::kAnswered);
+  ASSERT_EQ(same.items.size(), 2u);
+  EXPECT_EQ(same.items[0].number, 7u);
+  EXPECT_EQ(same.items[1].number, 8u);
+
+  // Moved while it waited to a Space on another profile, or one that isn't loaded: no rows.
+  const Outcome moved = OutcomeOf({review, created}, "Default", "Profile 1");
+  EXPECT_EQ(moved.kind, Kind::kFailed);
+  EXPECT_TRUE(moved.items.empty());
+  EXPECT_EQ(OutcomeOf({review, created}, "Default", "").kind, Kind::kFailed);
+
+  // On its own profile, a list that failed fails it, and a signed-out one makes it signed out.
+  EXPECT_EQ(OutcomeOf({review, std::nullopt}, "Default", "Default").kind, Kind::kFailed);
+  const std::optional<Answer> out = Parse(Search("false", ""), List::kCreated);
+  const Outcome signed_out = OutcomeOf({review, out}, "Default", "Default");
+  EXPECT_EQ(signed_out.kind, Kind::kSignedOut);
+  EXPECT_TRUE(signed_out.items.empty());
+}
+
 TEST(LiveFolderRule, SignedOutHasNoRows) {
   const std::optional<Answer> answer = Parse(Search("false", Row("7", "x")), List::kCreated);
   ASSERT_TRUE(answer);

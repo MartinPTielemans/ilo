@@ -56,6 +56,25 @@ struct Answer {
   std::vector<Item> items;
 };
 
+// What a fetch reports, as the header's BC_LIVE_ANSWERED, BC_LIVE_SIGNED_OUT and BC_LIVE_FAILED
+// number them.
+enum class Kind { kAnswered = 0, kSignedOut = 1, kFailed = 2 };
+
+struct Outcome {
+  Kind kind = Kind::kFailed;
+  // Both lists' rows, in the lists' order; only with kAnswered.
+  std::vector<Item> items;
+};
+
+// What a fetch reports from its lists' answers, each nullopt for one that failed. It was asked
+// with the profile |asked|, and the folder's Space has |now| as it answers, empty while that
+// profile isn't loaded. Rows asked with one
+// profile's session never reach a Space on another, so a folder moved to another profile's Space
+// while it waited gets kFailed: one answer to the fetch, and the core doesn't ask again on its own.
+Outcome OutcomeOf(const std::vector<std::optional<Answer>>& answers,
+                  std::string_view asked,
+                  std::string_view now);
+
 // What the core asks for |list|: the site's search for the signed-in user's open pull requests,
 // those waiting on their review or their own, most recently updated first.
 GURL ListUrl(List list);

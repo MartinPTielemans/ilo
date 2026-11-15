@@ -114,6 +114,25 @@ std::optional<Answer> Parse(std::string_view body, List list) {
   return parsed;
 }
 
+Outcome OutcomeOf(const std::vector<std::optional<Answer>>& answers,
+                  std::string_view asked,
+                  std::string_view now) {
+  if (now.empty() || asked != now) {
+    return {.kind = Kind::kFailed};
+  }
+  Outcome outcome{.kind = Kind::kAnswered};
+  for (const std::optional<Answer>& answer : answers) {
+    if (!answer) {
+      return {.kind = Kind::kFailed};
+    }
+    if (!answer->signed_in) {
+      return {.kind = Kind::kSignedOut};
+    }
+    outcome.items.insert(outcome.items.end(), answer->items.begin(), answer->items.end());
+  }
+  return outcome;
+}
+
 std::string PlainTitle(std::string_view title) {
   std::string plain;
   bool space = false;

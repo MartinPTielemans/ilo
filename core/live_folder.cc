@@ -68,6 +68,8 @@ constexpr std::array<live_folder::List, 2> kLists = {live_folder::List::kReviewR
 
 // A folder's fetch, until both its lists have come.
 struct Fetch {
+  // The directory of the profile whose session it asked with: its rows are that profile's alone.
+  std::string profile;
   std::array<std::unique_ptr<network::SimpleURLLoader>, kLists.size()> loaders;
   std::array<std::optional<live_folder::Answer>, kLists.size()> answers;
   size_t waiting = kLists.size();
@@ -88,6 +90,10 @@ Profile* ProfileOf(const Space& space) {
   return profile && DirOf(profile) == space.profile() && !profile->IsOffTheRecord() ? profile
                                                                                     : nullptr;
 }
+
+static_assert(static_cast<int>(live_folder::Kind::kAnswered) == BC_LIVE_ANSWERED);
+static_assert(static_cast<int>(live_folder::Kind::kSignedOut) == BC_LIVE_SIGNED_OUT);
+static_assert(static_cast<int>(live_folder::Kind::kFailed) == BC_LIVE_FAILED);
 
 void Report(bc_id folder, int answer, const std::vector<live_folder::Item>& items) {
   // The rows are the user's account's, so nothing of them is logged, here or by the app.
@@ -129,22 +135,15 @@ void Answered(bc_id folder, size_t list, std::optional<std::string> body) {
   Fetches().erase(it);
   // Made plain, deleted or moved to an agent's Space while it waited: nobody asked for this.
   const Space* space = Space::HoldingFolder(folder);
-  if (!space || !space->FolderLive(folder) || !ProfileOf(*space)) {
+  if (!space || !space->FolderLive(folder)) {
     return;
   }
-  std::vector<live_folder::Item> items;
-  for (const std::optional<live_folder::Answer>& answer : done.answers) {
-    if (!answer) {
-      Report(folder, BC_LIVE_FAILED, {});
-      return;
-    }
-    if (!answer->signed_in) {
-      Report(folder, BC_LIVE_SIGNED_OUT, {});
-      return;
-    }
-    items.insert(items.end(), answer->items.begin(), answer->items.end());
-  }
-  Report(folder, BC_LIVE_ANSWERED, items);
+  // Moved while it waited to a Space on another profile, or one not loaded: it fails rather than
+  // give that Space rows from the session it was asked with.
+  const std::string now = ProfileOf(*space) ? space->profile() : std::string();
+  const live_folder::Outcome outcome =
+      live_folder::OutcomeOf({done.answers.begin(), done.answers.end()}, done.profile, now);
+  Report(folder, static_cast<int>(outcome.kind), outcome.items);
 }
 
 std::unique_ptr<network::SimpleURLLoader> Ask(live_folder::List list) {
@@ -197,6 +196,7 @@ void FetchLiveFolder(bc_id folder) {
   scoped_refptr<network::SharedURLLoaderFactory> factory =
       profile->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess();
   Fetch& fetch = Fetches()[folder];
+  fetch.profile = space->profile();
   for (size_t list = 0; list < kLists.size(); ++list) {
     fetch.loaders[list] = Ask(kLists[list]);
   }
