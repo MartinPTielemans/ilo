@@ -1809,8 +1809,11 @@ else
     fail "Make default didn't make the run's site search Chrome's default: its menu stayed enabled"
   # Settings › General's Search engine shows it chosen, among the engines it offers.
   settings_general
-  in_sight 'search engine [0-9]*' || fail "Settings didn't draw the profile's Search engine"
+  # The row is named by the profile's number, which in_sight takes as it is, not as a pattern.
+  drawn 'search engine [0-9]*' > /dev/null || fail "Settings didn't draw the profile's Search engine"
   profile=$(sed -n 's/^browser: settings search engine \([0-9]*\) at .*/\1/p' "$log" | tail -1)
+  in_sight "search engine $profile" ||
+    fail "Settings drew the profile's Search engine, but not in the card's sight once scrolled to it"
   post clickkey $at
   expect "^browser: menu shown .*$engine (checked)" \
     "the profile's Search engine didn't show the run's site search chosen: $(grep '^browser: menu shown' "$log" | tail -1)"
