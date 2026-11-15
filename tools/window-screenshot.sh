@@ -11,7 +11,9 @@
 # order on screen, so nothing of another app's can get into the picture. Where that can't capture,
 # it draws them with PrintWindow, and says so: PrintWindow draws what DirectComposition leaves
 # see-through, as an overlay's margin, black (#1257), and has the browser window repaint its
-# frame, where Windows' theme paints the caption under the UI, on screen too (#1262).
+# frame, where Windows' theme paints the caption under the UI, on screen too (#1262). PrintWindow
+# waits for the app, so it draws only a window that answers in 2 s, and a capture that hasn't
+# finished in 60 s gives up, saying what it was doing then (#2927).
 # On Linux it captures the private session tools/headless.sh --run starts, or check.sh's Xvfb,
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
 # There POINTER=1 draws the display's pointer in, where the driver's warp put it, with the cursor
@@ -27,8 +29,13 @@ set -e
 case "$(uname)" in
   MINGW* | MSYS*)
     [ -e "/proc/$1/winpid" ] || { echo "process $1 isn't running" >&2; exit 1; }
-    exec env PID="$(cat "/proc/$1/winpid")" OUT="$(cygpath -w "$2")" ALL="${3:+all}" \
-      powershell.exe -NoProfile -NonInteractive -Command '
+    # Bounded, and it says where it was: one hung in a run until the run's timeout, while the app
+    # ran on (#2927).
+    stage=$(mktemp)
+    status=0
+    env PID="$(cat "/proc/$1/winpid")" OUT="$(cygpath -w "$2")" ALL="${3:+all}" \
+      STAGE="$(cygpath -w "$stage")" timeout 60 powershell.exe -NoProfile -NonInteractive -Command '
+[IO.File]::WriteAllText($env:STAGE, "compiling the capture")
 Add-Type -ReferencedAssemblies System.Drawing, System.Windows.Forms -TypeDefinition @"
 using System;
 using System.Collections.Generic;
@@ -48,10 +55,16 @@ public static class Capture {
   [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
   [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr dc, uint flags);
+  [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr w, IntPtr l, uint flags, uint ms, out IntPtr result);
   [DllImport("d3d11.dll")] static extern int D3D11CreateDevice(IntPtr adapter, int driver, IntPtr software, uint flags, IntPtr levels, uint count, uint sdk, out IntPtr device, out int level, out IntPtr context);
   [DllImport("d3d11.dll")] static extern int CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgi, out IntPtr device);
   [DllImport("combase.dll", CharSet = CharSet.Unicode)] static extern int WindowsCreateString(string text, int length, out IntPtr name);
   [DllImport("combase.dll")] static extern int RoGetActivationFactory(IntPtr name, ref Guid iid, out IntPtr factory);
+
+  // What it is doing, for the script to say if it runs out of time.
+  public static void Say(string stage) {
+    System.IO.File.WriteAllText(Environment.GetEnvironmentVariable("STAGE"), stage);
+  }
 
   [ComImport, Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
   interface IGraphicsCaptureItemInterop {
@@ -183,6 +196,13 @@ public static class Capture {
         return true;
       }
     }
+    // PrintWindow waits for the window thread, without end, so only once it answers
+    // (WM_NULL; SMTO_ABORTIFHUNG).
+    IntPtr answer;
+    if (SendMessageTimeout(hwnd, 0, IntPtr.Zero, IntPtr.Zero, 2, 2000, out answer) == IntPtr.Zero)
+      throw new Exception("The window " + ClassOf(hwnd) + " did not answer in 2 s, so the app is " +
+          "busy, and PrintWindow would wait for it.");
+    Say("drawing " + ClassOf(hwnd) + " by PrintWindow");
     using (var window = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb)) {
       using (var g = Graphics.FromImage(window)) {
         var dc = g.GetHdc();
@@ -198,6 +218,7 @@ public static class Capture {
   public static string Run(uint pid, string path, bool all, Func<IntPtr, Bitmap> grab) {
     // Rects in pixels, as PrintWindow draws.
     SetProcessDPIAware();
+    Say("listing the windows");
     // Top-level windows come front to back. Each window owned by another, a menu or the command
     // bar, is drawn in the picture of the window that owns it.
     var windows = new List<IntPtr>();
@@ -219,6 +240,7 @@ public static class Capture {
     if (all) mains.ForEach(w => area = Rectangle.Union(area, Shown(w)));
     var shown = all ? mains : mains.GetRange(0, 1);
     if (!Covered(pid, shown)) {
+      Say("copying the screen");
       using (var screen = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
       using (var image = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb)) {
         using (var graphics = Graphics.FromImage(screen))
@@ -246,6 +268,7 @@ public static class Capture {
         if (!(all ? mains.Contains(top) : top == mains[0])) continue;
         if (!Draw(windows[i], graphics, area.Location, grab)) printed.Add(ClassOf(windows[i]));
       }
+      Say("saving the picture");
       image.Save(path, ImageFormat.Png);
     }
     if (printed.Count > 0)
@@ -271,6 +294,7 @@ $grab = [Func[IntPtr, System.Drawing.Bitmap]] {
       [Console]::Error.WriteLine("Windows.Graphics.Capture is not supported here.")
       return $null
     }
+    [Capture]::Say("taking " + [Capture]::ClassOf($hwnd) + " by Windows.Graphics.Capture")
     $item = [Capture]::Item($hwnd)
     # By reflection, which has the runtime ask the device for IDirect3DDevice, as PowerShell does not.
     $pool = [Windows.Graphics.Capture.Direct3D11CaptureFramePool].GetMethod("CreateFreeThreaded").Invoke(
@@ -297,6 +321,12 @@ $grab = [Func[IntPtr, System.Drawing.Bitmap]] {
     $copy = [Windows.Graphics.Imaging.SoftwareBitmap].GetMethod("CreateCopyFromSurfaceAsync",
       [Type[]] @($surface, $alpha)).Invoke($null, @($frame.Surface, $alpha::Premultiplied))
     $task = $asTask.MakeGenericMethod([Windows.Graphics.Imaging.SoftwareBitmap]).Invoke($null, @($copy))
+    if (-not $task.Wait(5000)) {
+      [Console]::Error.WriteLine("Windows.Graphics.Capture did not copy the frame of " +
+        [Capture]::ClassOf($hwnd) + " in 5 s.")
+      $frame.Dispose(); $session.Dispose(); $pool.Dispose()
+      return $null
+    }
     $bitmap = $task.Result
     $buffer = New-Object Windows.Storage.Streams.Buffer ([uint32]($bitmap.PixelWidth * $bitmap.PixelHeight * 4))
     $bitmap.CopyToBuffer($buffer)
@@ -312,8 +342,17 @@ $grab = [Func[IntPtr, System.Drawing.Bitmap]] {
     return $null
   }
 }
-$failed = [Capture]::Run([uint32]$env:PID, $env:OUT, $env:ALL -eq "all", $grab)
-if ($failed) { [Console]::Error.WriteLine($failed); exit 1 }'
+try {
+  $failed = [Capture]::Run([uint32]$env:PID, $env:OUT, $env:ALL -eq "all", $grab)
+} catch {
+  $failed = $_.Exception.InnerException.Message
+  if (-not $failed) { $failed = $_.Exception.Message }
+}
+if ($failed) { [Console]::Error.WriteLine($failed); exit 1 }' || status=$?
+    [ "$status" != 124 ] ||
+      echo "The capture didn't finish in 60 s, while it was $(cat "$stage")." >&2
+    rm -f "$stage"
+    exit "$status"
     ;;
 esac
 if [ "$(uname)" = Linux ]; then
