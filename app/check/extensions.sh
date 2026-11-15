@@ -247,7 +247,21 @@ painted_by_escape() {
 }
 if [ -n "${WAYLAND_DISPLAY:-}" ]; then
   echo "skip: the extension's popup taking the keyboard and escape closing it: under Wayland the popup never gets the keyboard (#2836)."
-  close_popup
+  # Probe for #2934: where main leaves the keyboard as the popup the UI opened closes by escape.
+  send state
+  echo "probe: popup open from the UI: key $key, focus $focus"
+  send key escape
+  send state
+  send state
+  if [ "$(grep '^browser: extension popup ' "$log" | tail -1)" = "browser: extension popup none" ]; then
+    echo "probe: escape closed the popup: key $key, focus $focus"
+  else
+    send state
+    echo "probe: escape left the popup open: key $key, focus $focus"
+    close_popup
+    send state
+    echo "probe: a click on its action closed it: key $key, focus $focus"
+  fi
 else
   send state
   [ "$key" != BrowserCoreNSWindow ] || fail "the extension's popup didn't take the keyboard"
