@@ -1248,6 +1248,30 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: title $tab value 日本語x\$" \
     "return in Safari's engine's text field did more than commit: $(grep "^browser: title $tab " "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/engine-ime.png" || fail "no window to capture"
+  # Escape in full screen goes to Safari's engine's page first, as it does to Chromium's (window.sh):
+  # the page keeps the first, and a second at once leaves anyway, before the page sees it (#2965).
+  # A held one goes the same way, as the key's repeats.
+  if engine_has ../core/platform/mac/system_page.mm; then
+    send fullscreen
+    expect '^browser: window entered full screen$' "the window didn't go full screen over Safari's engine"
+    # An escape before the shell hears of full screen is no press it counts.
+    expect '^browser: toast shown To exit full screen, press ⎋\.' \
+      "the window full screen over Safari's engine didn't say how to leave"
+    send state
+    in_browser WKWebView "with the window full screen over Safari's engine"
+    send key escape
+    first=$step
+    send key escape
+    expect "^browser: title $tab escape 1\$" \
+      "Safari's engine's page didn't get the first of two escapes in full screen" "$first"
+    expect '^browser: escape twice leaves full screen$' \
+      "a second escape at once over Safari's engine didn't leave full screen: $(since "$first" | grep -e '^browser: \[keys\]' -e "^browser: title $tab " | tr '\n' ' ')" "$first"
+    expect '^browser: window left full screen$' "escape twice over Safari's engine didn't take the window out of full screen"
+    none_since "^browser: title $tab escape 2\$" "$first" ||
+      fail "the second escape that left full screen reached Safari's engine's page too"
+  else
+    echo "skip: escape twice in full screen over Safari's engine: the engine linked was built without core/platform/mac/system_page.mm as it is here."
+  fi
   # ⌘W from the page closes the tab, and the site kept opens in Safari's engine in the next one shown.
   page_shortcut w close-tab
   expect '^browser: selected [1-9]' "⌘W over Safari's engine showed no tab"
