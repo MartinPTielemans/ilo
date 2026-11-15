@@ -348,8 +348,8 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
     "the Boost's card offered Arrange over Safari's engine's page"
   expect "^browser: boost card $tab at " "Edit Boost drew no card over Safari's engine's page"
   ../tools/window-screenshot.sh "$pid" "$out/mini-bar-safari-card.png" || fail "no window to capture"
-  send key escape
-  expect "^browser: boost card $tab closed\$" "escape didn't close the Boost's card"
+  # The page keeps the keyboard as the card opens, and escape there is the page's with neither Zap
+  # nor Arrange on, so the card stays open through the keys below, as it would over Chromium's.
   send click $page_point
   page_says ' at [0-9-]*,[0-9-]*$' "the click didn't reach Safari's engine's page"
   send state
