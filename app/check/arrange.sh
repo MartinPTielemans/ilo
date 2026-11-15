@@ -299,7 +299,10 @@ esac
 # A float: the note carried with ⌘ held stays where it's let go, over the page, and the mini bar's
 # pin, its first button, turns it between staying on screen and scrolling with the page.
 carry $(side_slot 1) $(page_at 300 760) cmd
-expect "^browser: arrange $tab Preview Floats " "a rest with ⌘ held didn't show a float"
+# A float shows no preview, as the thing carried is already where it lands: the core says Floats
+# from the lift on.
+carried=$(grep "^browser: arrange $tab " "$log" | tail -1 | cut -d' ' -f4-5)
+[ "$carried" = "Carrying Floats" ] || fail "a carry with ⌘ held wasn't a float: $carried"
 send release $(page_at 300 760) cmd
 expect "^browser: arrange $tab Selected Floats selected " "letting go with ⌘ held didn't float"
 expect '^browser: mini bar at ' "the UI placed no mini bar over the float"
