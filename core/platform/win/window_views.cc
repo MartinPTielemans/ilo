@@ -398,6 +398,49 @@ bool Tapped(HWND root) {
 
 }  // namespace alt_taps
 
+// Which window a press activating a browser window went to. Windows sends it WM_MOUSEACTIVATE
+// first, and a thread's WH_CALLWNDPROC hook sees that whichever window answers it: the window
+// under a page's content is content's own, which answers it without passing it on to the pane
+// (LegacyRenderWidgetHostHWND::OnMouseActivate). The hook is set only while a browser window is
+// in the back, as only a press bringing one forward is asked about.
+namespace presses {
+
+HHOOK g_hook = nullptr;
+int g_waiting = 0;
+HWND g_pressed = nullptr;
+
+LRESULT CALLBACK Sent(int code, WPARAM own, LPARAM sent) {
+  const auto* message = reinterpret_cast<const CWPSTRUCT*>(sent);
+  if (code == HC_ACTION && message->message == WM_MOUSEACTIVATE) {
+    g_pressed = message->hwnd;
+  }
+  return CallNextHookEx(nullptr, code, own, sent);
+}
+
+// A browser window went to the back.
+void Wait() {
+  if (g_waiting++ == 0) {
+    g_pressed = nullptr;
+    g_hook = SetWindowsHookExW(WH_CALLWNDPROC, Sent, nullptr, GetCurrentThreadId());
+  }
+}
+
+// A browser window that went to the back came forward, or went.
+void StopWaiting() {
+  if (--g_waiting == 0) {
+    UnhookWindowsHookEx(std::exchange(g_hook, nullptr));
+    g_pressed = nullptr;
+  }
+}
+
+// The window in |root| the press activating it went to, once.
+HWND Pressed(HWND root) {
+  return g_pressed && GetAncestor(g_pressed, GA_ROOT) == root ? std::exchange(g_pressed, nullptr)
+                                                              : nullptr;
+}
+
+}  // namespace presses
+
 // What runs once the window in front changes, while an overlay that has a window's keyboard is
 // (WhenOverlayLetsGo), and the hook that hears it, set only then.
 std::vector<base::OnceClosure>& OverlayLetGo() {
@@ -455,7 +498,12 @@ class WindowViews : public views::WidgetObserver,
     alt_taps::Watch();
   }
 
-  ~WindowViews() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
+  ~WindowViews() override {
+    ui::HWNDSubclass::RemoveFilterFromAllTargets(this);
+    if (std::exchange(in_back_, false)) {
+      presses::StopWaiting();
+    }
+  }
 
   HWND window() const { return views::HWNDForWidget(widget_); }
   HWND ui() const { return ui_; }
@@ -491,8 +539,9 @@ class WindowViews : public views::WidgetObserver,
       views::NativeWidgetAura::RegisterNativeWidgetForWindow(
           widget_->native_widget_private(), slot.widget->GetNativeView()->GetRootWindow());
       slot.keyboard = std::make_unique<PaneKeyboard>(
-          slot.widget.get(), base::BindRepeating(&WindowViews::PaneTookKeyboard,
-                                                 base::Unretained(this), slot.widget.get()));
+          slot.widget.get(),
+          base::BindRepeating(&WindowViews::PaneTookKeyboard, base::Unretained(this),
+                              slot.widget.get()));
     }
     return slot.widget.get();
   }
@@ -506,6 +555,13 @@ class WindowViews : public views::WidgetObserver,
   // pane is a host of its own, whose window the dialog doesn't belong to (#2855).
   void PaneTookKeyboard(views::Widget* holder) {
     set_ui_holds_for_page(false);
+    // Not as a press elsewhere, on the UI or another pane, activates the window: the window gives
+    // the pane the keyboard back for a moment first (FilterMessage), and the dialog taking it then
+    // took it from the UI the user pressed. Coming back by the keyboard or the taskbar, the pane
+    // keeps it, so the dialog takes it, wherever the pointer is.
+    if (giving_back_for_press_elsewhere_) {
+      return;
+    }
     for (Window* window : Window::All()) {
       if (window->widget() != widget_) {
         continue;
@@ -515,6 +571,17 @@ class WindowViews : public views::WidgetObserver,
         dialog_keys::PageFocused(shown);
       }
     }
+  }
+
+  // The window's child |hwnd| is or is in, the UI's or a pane's, or null if it's none of them.
+  HWND ChildHolding(HWND hwnd) const {
+    if (!hwnd || !IsChild(window(), hwnd)) {
+      return nullptr;
+    }
+    while (GetParent(hwnd) != window()) {
+      hwnd = GetParent(hwnd);
+    }
+    return hwnd;
   }
 
   // Takes |view| out of |holder| if it's there, so closing a slot never deletes a page, and hides
@@ -811,11 +878,25 @@ class WindowViews : public views::WidgetObserver,
       alt_taps::Deactivated(hwnd);
       HWND focus = GetFocus();
       had_keyboard_ = focus && IsChild(hwnd, focus) ? focus : nullptr;
+      pressed_ = nullptr;
+      if (!std::exchange(in_back_, true)) {
+        presses::Wait();
+      }
+    } else if (message == WM_ACTIVATE) {
+      // By a press (WA_CLICKACTIVE), on the UI or a pane, or by the keyboard or the taskbar.
+      HWND pressed = presses::Pressed(hwnd);
+      pressed_ = LOWORD(w_param) == WA_CLICKACTIVE ? ChildHolding(pressed) : nullptr;
+      if (std::exchange(in_back_, false)) {
+        presses::StopWaiting();
+      }
     } else if (message == WM_SETFOCUS) {
       HWND from = reinterpret_cast<HWND>(w_param);
       HWND had = std::exchange(had_keyboard_, nullptr);
+      HWND pressed = std::exchange(pressed_, nullptr);
       if (had && from != hwnd && !(from && IsChild(hwnd, from)) && IsChild(hwnd, had) &&
           IsWindowVisible(had)) {
+        base::AutoReset<bool> elsewhere(&giving_back_for_press_elsewhere_,
+                                        pressed && pressed != ChildHolding(had));
         SetFocus(had);
       }
     } else if (message == WM_SIZE) {
@@ -877,6 +958,13 @@ class WindowViews : public views::WidgetObserver,
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
   bool ui_holds_for_page_ = false;
   HWND had_keyboard_ = nullptr;
+  // The UI or the pane a press activating the window was on, from WM_ACTIVATE until the window
+  // takes the keyboard; null when the keyboard or the taskbar activated it.
+  HWND pressed_ = nullptr;
+  // Between going to the back and coming forward, while presses::Wait() counts it.
+  bool in_back_ = false;
+  // While the window gives the keyboard back to a pane that had it, for a press elsewhere.
+  bool giving_back_for_press_elsewhere_ = false;
   // The DPI the last WM_DPICHANGED carried, 0 before one comes (Scale).
   UINT dpi_ = 0;
   bool minimized_ = false;
