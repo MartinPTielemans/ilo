@@ -87,7 +87,7 @@ const FIELD_LEVEL: Level = Level::Popover;
 /// The level whose shadow the bar's window keeps room for round the bar where it draws its own
 /// shadow (#2988): the modal's, which reaches past the popover's, so the bar keeps one margin as it
 /// moves between the centre and the field.
-pub(crate) const ROOM: Level = Level::Modal;
+pub const ROOM: Level = Level::Modal;
 use crate::elevation::Level;
 use crate::tokens::command_bar::ARROW;
 use crate::tokens::command_bar::ARROW_TILE;
