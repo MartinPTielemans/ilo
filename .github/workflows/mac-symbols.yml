@@ -29,6 +29,12 @@ on:
 permissions:
   contents: read
 
+# GitHub's bash with pipefail, so a failed curl or zstd in a pipe fails its step, not only the tar
+# at its end. Without a shell named, a step runs bash -e alone.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # The dSYMs, from the tree, into the engine's release. Only the last step holds
   # ENGINE_RELEASE_TOKEN.
