@@ -274,6 +274,8 @@ expect "^browser: page $c camera 0 microphone 0 sharing 0 shared 0\$" \
 # and ph, then makes it the last.
 mini_player_at() {
   for _ in $(seq 100); do
+    # Windows' driver says where the window is only when asked; Linux's as it moves too.
+    ! windows || send pip
     at=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: pip at ' | tail -1 |
       cut -d' ' -f4-)
     if [ -n "$at" ] && echo "$at" | awk -v px="$px" -v py="$py" -v pw="$pw" -v ph="$ph" \
@@ -856,9 +858,9 @@ fi
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
-# tab and lands it, as pip_driven says. Under Wayland sway places it and keeps it where it is as it
-# grows, and from where the pointer is past the drag's threshold moves it.
-if pip_driven; then
+# tab and lands it, as pip_driven says, and on Windows. Under Wayland sway places it and keeps it
+# where it is as it grows, and from where the pointer is past the drag's threshold moves it.
+if pip_driven || windows; then
   px=0 py=0 pw=0 ph=0
   send pip
   if wayland; then
@@ -879,15 +881,24 @@ if pip_driven; then
   # The window manager moves it with the pointer, as by a title bar, from when the core asks it,
   # past the drag's threshold, and tells it where it is at the release. The core's lines carry
   # Chromium's prefix.
-  send pip press $((pw / 8)) $((ph / 2))
-  expect 'browser: mini player pressed at ' "a press off its controls didn't reach the Mini Player"
-  send pip dragto $((pw / 8 - 10)) $((ph / 2))
-  expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
-  send pip dragto $((pw / 8 - 200)) $((ph / 2))
-  send pip release $((pw / 8 - 200)) $((ph / 2))
-  moved="x == px - 200" grown="(2 * x + w - 2 * px - pw) ^ 2 <= 16 && (2 * y + h - 2 * py - ph) ^ 2 <= 16"
-  ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
-  mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
+  # On Windows, Chromium's move loop moves it with the desktop's pointer, which the driver moves
+  # only with real input, as it has in CI, from where the pointer is past the drag's threshold.
+  grown="(2 * x + w - 2 * px - pw) ^ 2 <= 16 && (2 * y + h - 2 * py - ph) ^ 2 <= 16"
+  if windows && [ "${BROWSER_DRIVE_REAL:-}" != 1 ]; then
+    echo "skip: moving the Mini Player with a drag on Windows without real input: Windows moves" \
+      "it with the desktop's pointer."
+  else
+    send pip press $((pw / 8)) $((ph / 2))
+    expect 'browser: mini player pressed at ' "a press off its controls didn't reach the Mini Player"
+    send pip dragto $((pw / 8 - 10)) $((ph / 2))
+    expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
+    send pip dragto $((pw / 8 - 200)) $((ph / 2))
+    send pip release $((pw / 8 - 200)) $((ph / 2))
+    moved="x == px - 200"
+    ! windows || moved="x >= px - 200 && x <= px - 190"
+    ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
+    mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
+  fi
   send pip wheel $((pw / 2)) $((ph / 3)) -2 cmd
   mini_player_at "w > pw * 1.15 && h > ph * 1.15 && $grown" \
     "Ctrl with a scroll didn't grow the Mini Player in place"
@@ -899,7 +910,18 @@ if pip_driven; then
   expect "^browser: selected $v\( in .*\)\{0,1\}\$" \
     "a double-click on the Mini Player didn't show its tab"
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
-  expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
+  if windows; then
+    # Windows' driver says there's no window only when asked.
+    for _ in $(seq 100); do
+      send pip
+      sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: pip none$' && break
+      sleep 0.1
+    done
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: pip none$' ||
+      fail "the Mini Player stayed after a double-click"
+  else
+    expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
+  fi
 else
   echo "skip: moving, sizing and double-clicking the Mini Player on" \
     "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver doesn't drag a Picture in Picture window" \
@@ -940,7 +962,7 @@ placed_where_left ||
   fail "the second Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 none_since 'browser: mini player back in its tab$' ||
   fail "the Mini Player went back to its tab as the menu that floated it closed"
-if pip_driven && ! wayland; then
+if { pip_driven || windows; } && ! wayland; then
   send pip
   mini_player_at "$across && $down" "the second Mini Player didn't show where the last was left"
 fi
