@@ -388,12 +388,13 @@ if [ "$major" -ge 157 ]; then
     python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" aside \
       "$(cygpath -w "$out/cover-front")" > "$out/other-window.log" 2>&1 &
     other=$!
+    # Until it says so: Git Bash's kill -0 can find a native process just started gone.
     for _ in $(seq 100); do
-      grep -q '^cover ' "$out/other-window.log" || ! kill -0 "$other" 2> /dev/null && break
+      grep -q '^cover ' "$out/other-window.log" 2> /dev/null && break
       sleep 0.1
     done
-    grep -q '^cover .*, foreground away$' "$out/other-window.log" ||
-      fail "another app's window didn't open and take the foreground from $kept's warning before http: $(cat "$out/other-window.log")"
+    grep -q '^cover .*, foreground away$' "$out/other-window.log" 2> /dev/null ||
+      fail "another app's window didn't open and take the foreground from $kept's warning before http: $(cat "$out/other-window.log" 2>&1)"
     send move $2
     case $1 in
       taskbar) how="coming back from another app with the pointer at $2" && touch "$out/cover-front" ;;
