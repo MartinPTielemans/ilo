@@ -136,7 +136,10 @@ expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $co
 send choose "$(cased 'Edit Theme Color…')"
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-# The sun, the second appearance button, or the moon, the third.
+# The look's buttons take a click once the Space has a colour, as cards.sh's: the first swatch,
+# then the sun, the second appearance button, or the moon, the third.
+send clickkey "$(swatch_x 0)" $swatch_y
+expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first swatch didn't colour the Space"
 send clickkey $other_at
 expect "^browser: themed space [0-9]* .*appearance=$other" \
   "the theme picker's $other button didn't make the Space's theme $other"
