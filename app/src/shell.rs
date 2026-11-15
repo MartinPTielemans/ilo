@@ -3549,6 +3549,10 @@ impl Shell {
         // Asked here, once a report, as the row drawn each frame needs only the answer.
         let left_pinned_host =
             page.away_from_pinned_url && host(&page.url) != host(&self.browser.pinned_url(tab));
+        // Arrange ends as Safari's engine takes the tab's page, the core's being Chromium's, hidden.
+        if page.system_engine && self.arranging == Some(tab) {
+            self.stop_arrange(cx);
+        }
         let entry = self.tabs.entry(tab).or_default();
         if page.unloaded != entry.page.unloaded {
             log!("browser: page {tab} unloaded {}", flag(page.unloaded));

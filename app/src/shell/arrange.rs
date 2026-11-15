@@ -60,6 +60,12 @@ impl Shell {
         if self.shown_boost(cx).is_none() || self.arranging == Some(tab) {
             return;
         }
+        // What the core arranges is Chromium's page, hidden while Safari's engine shows the tab's.
+        if self.page(tab).system_engine {
+            // check.sh reads this line.
+            log!("browser: arrange {tab} refused in Safari's engine");
+            return;
+        }
         self.close_boost_card(cx);
         self.stop_arrange(cx);
         // check.sh reads this line.

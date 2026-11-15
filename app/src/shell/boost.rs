@@ -427,8 +427,14 @@ impl Shell {
         // pointer. Both lines are one grid of two equal columns, so the four buttons' edges line up
         // whatever their labels' widths.
         let zapping = self.zapping == Some(tab);
+        // Safari's engine shows a page Arrange can't reach, so Customize… has the line alone there,
+        // as Done does.
+        let safari = self.page(tab).system_engine;
         let second = (!zapping)
-            .then(|| [customize.into_any_element(), arrange.into_any_element()])
+            .then(|| match safari {
+                true => vec![customize.col_span_full().into_any_element()],
+                false => vec![customize.into_any_element(), arrange.into_any_element()],
+            })
             .into_iter()
             .flatten();
         let arranged = (boost.as_ref())

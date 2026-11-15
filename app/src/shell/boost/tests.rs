@@ -729,6 +729,45 @@ fn arrange_is_on_only_where_the_core_says(cx: &mut TestAppContext) {
 
 /// The card's two lines of buttons are one grid: across the card, a press on either line lands in
 /// the same column, Edit CSS… over Customize… and Zap over Arrange, or in the gap between on both.
+/// Safari's engine shows a page Arrange can't reach, the core's being Chromium's, hidden: the card
+/// has no Arrange there, Customize… having its line alone, nothing starts the mode, and a mode on
+/// ends as the tab goes there.
+#[gpui::test]
+fn no_arrange_on_a_page_in_safaris_engine(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    let safari = |on, shell: &mut Shell, cx: &mut gpui::Context<Shell>| {
+        let page = Page {
+            url: "https://www.example.com/news".into(),
+            system_engine: on,
+            ..Page::default()
+        };
+        shell.set_page(10, page, cx);
+    };
+    let arranged = |host: &Recorder| -> Vec<String> {
+        let calls = host.take().into_iter();
+        calls.filter(|call| call.starts_with("arrange ")).collect()
+    };
+    shell.update(cx, |shell, cx| {
+        safari(true, shell, cx);
+        shell.run(Command::NewBoost, "ui", cx);
+    });
+    host.take();
+    // Where Arrange would be is Customize…, the line's whole width.
+    press(&shell, 0.75, LAST, cx);
+    shell.update(cx, |shell, cx| shell.start_arrange(cx));
+    assert_eq!(arranged(&host), Vec::<String>::new());
+    assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
+
+    shell.update(cx, |shell, cx| {
+        safari(false, shell, cx);
+        shell.start_arrange(cx);
+    });
+    assert_eq!(arranged(&host), ["arrange 10 true"]);
+    shell.update(cx, |shell, cx| safari(true, shell, cx));
+    assert_eq!(arranged(&host), ["arrange 10 false"]);
+    assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
+}
+
 #[gpui::test]
 fn the_cards_buttons_share_their_columns(cx: &mut TestAppContext) {
     let (shell, host, _folder, cx) = window(cx);
