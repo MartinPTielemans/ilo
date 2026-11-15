@@ -45,6 +45,9 @@ pub struct Question {
     pub site: SharedString,
     /// What it asks for, each a phrase that follows "wants to", such as "Use your camera".
     pub permissions: Vec<SharedString>,
+    /// Whether it asks only to show notifications, with no click or key of the user's behind it:
+    /// held quietly, a bell in the URL field, rather than as a card (#2323).
+    pub quiet: bool,
 }
 
 /// The user's answer to a page's question.
@@ -77,9 +80,18 @@ impl Shell {
         cx.notify();
     }
 
-    /// The question of the tab shown, if its page asks one.
+    /// The question of the tab shown, if its page asks one as a card.
     pub(super) fn question(&self) -> Option<&Question> {
-        self.questions.get(&self.selected)
+        self.questions
+            .get(&self.selected)
+            .filter(|question| !question.quiet)
+    }
+
+    /// The site whose request to show notifications `tab`'s page holds quietly, if it holds one.
+    pub(super) fn held_notifications(&self, tab: u64) -> Option<SharedString> {
+        (self.questions.get(&tab))
+            .filter(|question| question.quiet)
+            .map(|question| question.site.clone())
     }
 
     fn answer(&mut self, answer: Answer, cx: &mut Context<Self>) {
@@ -370,6 +382,7 @@ mod tests {
                 Some(Question {
                     site: "example.com".into(),
                     permissions,
+                    quiet: false,
                 }),
                 cx,
             );
@@ -449,5 +462,92 @@ mod tests {
             button.size.height >= px(BUTTON_HEIGHT + LINE),
             "the long label didn't wrap: {button:?}"
         );
+    }
+
+    /// A request to show notifications with no click behind it puts no card over the sidebar and
+    /// doesn't bring a hidden one out: a bell waits in the URL field, in the Site Controls' place
+    /// with the pointer away and over the sidebar alike, whose press opens them, where the user
+    /// answers it (#2323).
+    #[gpui::test]
+    fn a_quiet_request_waits_behind_a_bell(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        let ask = |quiet: bool| Question {
+            site: "example.com".into(),
+            permissions: vec!["Show notifications".into()],
+            quiet,
+        };
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+            shell.set_selected(10, cx);
+            shell.set_question(10, Some(ask(true)), cx);
+        });
+        cx.run_until_parked();
+        let bell = shell.read_with(cx, |shell, _| {
+            assert_eq!(
+                shell.question_drawn.get(),
+                None,
+                "a quiet request drew the card"
+            );
+            shell.bell_drawn.get().expect("the bell wasn't drawn")
+        });
+        let field = shell.read_with(cx, |shell, _| {
+            assert!(!shell.tools_shown(), "the field's tools showed at rest");
+            shell.url_field_bounds().expect("no URL field")
+        });
+        let place = field.right() - px(crate::tokens::shell::header::SITE_CONTROLS_END);
+        assert_eq!(
+            bell.right(),
+            place,
+            "the bell isn't in the Site Controls' place"
+        );
+        cx.simulate_mouse_move(point(px(100.), px(300.)), None, Modifiers::none());
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(shell.tools_shown(), "the field's tools didn't come in");
+            assert_eq!(
+                shell.bell_drawn.get(),
+                Some(bell),
+                "the bell moved with the tools"
+            );
+        });
+        let middle = point(
+            bell.origin.x + bell.size.width / 2.,
+            bell.origin.y + bell.size.height / 2.,
+        );
+        host.take();
+        cx.simulate_click(middle, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            host.site_controls.borrow().last().map(|(tab, _)| *tab),
+            Some(10)
+        );
+        // Asked with a click behind it, it's today's card, and the bell goes.
+        shell.update(cx, |shell, cx| shell.set_question(10, Some(ask(false)), cx));
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(
+                shell.question_drawn.get().is_some(),
+                "the card wasn't drawn"
+            );
+            assert_eq!(shell.bell_drawn.get(), None, "the bell stayed");
+        });
+        // With the sidebar hidden, a quiet one doesn't bring it out.
+        shell.update(cx, |shell, cx| {
+            shell.set_question(10, None, cx);
+            shell.toggle_sidebar(cx);
+            shell.set_question(10, Some(ask(true)), cx);
+        });
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(
+                shell.sidebar_hidden && !shell.revealed,
+                "a quiet request brought the sidebar out"
+            );
+        });
     }
 }

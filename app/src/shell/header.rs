@@ -445,9 +445,15 @@ impl Shell {
     /// Opens the Site Controls under the URL field, hanging from their button, or with the field
     /// hidden at the page's top left corner, as an extension's popup is; or closes them. They list
     /// every turned-on extension, the pinned ones first, which the core reports once they show.
+    /// With a request to show notifications held, they open at Notifications, its row ringed, so
+    /// the bell's press and the keyboard's way in, the command bar's Site Controls, answer it alike
+    /// (#2323).
     pub(super) fn site_controls(&mut self, cx: &mut Context<Self>) {
         if self.field_tab() == 0 {
             return;
+        }
+        if self.held_notifications(self.field_tab()).is_some() {
+            crate::site_controls::open_at_permission("notifications", cx);
         }
         let place = match self.url_field_bounds() {
             Some(field) => {
@@ -598,14 +604,25 @@ impl Shell {
                     cx,
                 ))
         });
-        let site_controls = tools.then(|| {
+        // While a request to show notifications is held quietly, the Site Controls button is its
+        // bell, at rest as well as under the pointer: a press opens them at Notifications, whose
+        // Allow or Block answers it (#2323). One button, so nothing moves as the tools fade in.
+        let held = self.held_notifications(self.field_tab());
+        let site_controls = (tools || held.is_some()).then(|| {
+            let tab = self.field_tab();
+            let from = if held.is_some() { "bell" } else { "sidebar" };
+            let name: SharedString = match &held {
+                Some(site) => format!("{site} wants to send notifications").into(),
+                None => "Site Controls".into(),
+            };
             self.field_tool("site-controls", end)
+                .when(held.is_some(), |button| button.opacity(1.))
                 .when(self.a11y, |button| {
                     button
-                        .button_named("Site Controls")
+                        .button_named(name.clone())
                         .pressed_by_mouse_down(true, false)
                 })
-                .when(live, |button| {
+                .when(live || held.is_some(), |button| {
                     button
                         .block_mouse_except_scroll()
                         .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
@@ -613,15 +630,41 @@ impl Shell {
                         // closes it first, and its press then toggles rather than opens it again.
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|shell, _, _, cx| {
+                            cx.listener(move |shell, _, _, cx| {
                                 cx.stop_propagation();
-                                shell.run(Command::SiteControls, "sidebar", cx);
+                                shell.browser.tooltip(None, cx);
+                                shell.run(Command::SiteControls, from, cx);
                             }),
                         )
                 })
+                .when(held.is_some(), |button| {
+                    button
+                        .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                            let frame = shell.bell_drawn.get();
+                            let tip = (*hovered && shell.dragging().is_none())
+                                .then(|| {
+                                    frame.map(|frame| {
+                                        (
+                                            Tip::named(name.clone()),
+                                            Anchor::under(frame, shell.viewport),
+                                        )
+                                    })
+                                })
+                                .flatten();
+                            shell.hover_tip(tip, cx);
+                        }))
+                        .child(super::permission::card_listener(
+                            "notification bell",
+                            &self.bell_drawn,
+                            tab,
+                        ))
+                })
                 .child(
                     svg()
-                        .path("icons/sliders-horizontal.svg")
+                        .path(match held {
+                            Some(_) => "icons/bell-off.svg",
+                            None => "icons/sliders-horizontal.svg",
+                        })
                         .size(px(URL_BUTTON_GLYPH))
                         .text_color(self.palette.glyph(NAV)),
                 )
@@ -696,6 +739,9 @@ impl Shell {
                 )
                 .child(frame)
         });
+        if held.is_none() {
+            self.bell_drawn.set(None);
+        }
         let engine = self.engine_mark(self.field_tab());
         // The password manager's key, after the host (ours, for Chrome's key icon): a click brings
         // back the offer showing another tab closed, or opens the Site Controls, which list the
@@ -739,6 +785,10 @@ impl Shell {
         };
         let text_end = match leaf {
             Some(_) => text_end.max(leaf_end + URL_BUTTON_SIZE),
+            None => text_end,
+        };
+        let text_end = match held {
+            Some(_) => text_end.max(end + URL_BUTTON_SIZE),
             None => text_end,
         };
         // A button, as it is: a press opens the command bar on the URL, where it's edited. It's
@@ -885,9 +935,12 @@ impl Shell {
                 )
         };
         let devtools = tools && self.page(tab).developer_mode;
+        // A held request's bell, in the Site Controls' place at rest too (#2323).
+        let held = self.held_notifications(tab).is_some();
         let text_end = match tools {
             true if devtools => SITE_CONTROLS_END + 2. * TOOL_PITCH + URL_BUTTON_SIZE,
             true => SITE_CONTROLS_END + TOOL_PITCH + URL_BUTTON_SIZE,
+            false if held => SITE_CONTROLS_END + URL_BUTTON_SIZE,
             false => URL_FIELD_TEXT_X - PLATE_INSET,
         };
         let field = div()
@@ -919,9 +972,13 @@ impl Shell {
                 reach.child(self.key_glyph())
             }))
             .when(tools, |field| {
-                field
-                    .child(tool(SITE_CONTROLS_END + TOOL_PITCH, LINK))
-                    .child(tool(SITE_CONTROLS_END, "icons/sliders-horizontal.svg"))
+                field.child(tool(SITE_CONTROLS_END + TOOL_PITCH, LINK))
+            })
+            .when(tools && !held, |field| {
+                field.child(tool(SITE_CONTROLS_END, "icons/sliders-horizontal.svg"))
+            })
+            .when(held, |field| {
+                field.child(tool(SITE_CONTROLS_END, "icons/bell-off.svg").opacity(1.))
             })
             .when(devtools, |field| {
                 field.child(tool(SITE_CONTROLS_END + 2. * TOOL_PITCH, DEVTOOLS_GLYPH))

@@ -290,6 +290,7 @@ mod tests {
             let asked = PageQuestion {
                 site: "example.com".into(),
                 permissions: Vec::new(),
+                quiet: false,
             };
             shell.set_question(10, Some(asked), cx);
             shell.set_agent_question(Some(question(8)), cx);

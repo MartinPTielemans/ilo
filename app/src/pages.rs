@@ -300,16 +300,26 @@ pub(crate) unsafe extern "C" fn tab_permission_asked(
         }
         _ => {
             let site = string(site);
+            let quiet = unsafe { bc::bc_tab_permission_quiet(tab) };
+            // check.sh reads this line.
             log!(
-                "browser: page {tab} asks {site} to {}",
-                permissions.join("; ")
+                "browser: page {tab} asks {site} to {}{}",
+                permissions.join("; "),
+                if quiet { ", quietly" } else { "" }
             );
             Some(shell::Question {
                 site: site.into(),
                 permissions: permissions.into_iter().map(Into::into).collect(),
+                quiet,
             })
         }
     };
+    // A request held behind the bell, or none any more, which an agent's answers about the tab
+    // say (#2323).
+    let held = (question.as_ref())
+        .filter(|question| question.quiet)
+        .map(|question| question.site.to_string());
+    agents_core::update(move |agents, cx| agents.held_notifications(tab, held.as_deref(), cx));
     update_shells(|shell, cx| shell.set_question(tab, question.clone(), cx));
 }
 

@@ -1581,3 +1581,40 @@ fn voiceover_reads_the_panel(cx: &mut TestAppContext) {
     panel.cx.run_until_parked();
     assert!(!menu(&mut panel).is_empty(), "the extension's menu");
 }
+
+/// Opened at a permission, as the URL field's bell and the command bar's Site Controls open it for a
+/// held request to show notifications, its row is ringed once the core has read the site, the
+/// first time the panel's window is made too; the next opening has no ring (#2323).
+#[gpui::test]
+fn opened_at_a_permission_its_row_is_ringed(cx: &mut TestAppContext) {
+    const NOTIFICATIONS: i32 = 6;
+    let host = Rc::new(Recorder::default());
+    let opener = host.clone();
+    let panel_window = cx.update(|cx| {
+        crate::lazy_window::when_asked::<SiteControls>(
+            move |cx| _ = open(opener, cx).expect("no window for the Site Controls"),
+            cx,
+        );
+        open_at_permission("notifications", cx);
+        cx.global::<SiteControlsWindow>().0
+    });
+    let cx = VisualTestContext::from_window(panel_window.into(), cx);
+    cx.simulate_resize(size(px(WIDTH), px(400.)));
+    let mut panel = Panel {
+        cx,
+        host,
+        profiles: None,
+    };
+    let mut site = site();
+    site.permissions.push(Permission {
+        key: "notifications".into(),
+        ..permission(NOTIFICATIONS, "Notifications", Value::Ask, &Value::ALL)
+    });
+    panel.show(under_button(), window());
+    panel.changed(site.clone());
+    assert_eq!(panel.keyed().0, Some(Stop::Permission(NOTIFICATIONS)));
+    panel.show(under_button(), window());
+    panel.show(under_button(), window());
+    panel.changed(site);
+    assert_eq!(panel.keyed().0, None, "the ring outlived its opening");
+}
