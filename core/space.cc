@@ -293,6 +293,23 @@ bool Space::IsOpen(bc_id folder) const {
   return it != folders_.end() && it->second.open;
 }
 
+int Space::FolderLive(bc_id folder) const {
+  auto it = folders_.find(folder);
+  return it == folders_.end() ? 0 : it->second.live;
+}
+
+bc_id Space::LiveFolderOf(int source) const {
+  if (!source) {
+    return 0;
+  }
+  for (const auto& [id, folder] : folders_) {
+    if (folder.live == source) {
+      return id;
+    }
+  }
+  return 0;
+}
+
 GURL Space::PinnedUrl(bc_id tab) const {
   auto it = pinned_urls_.find(tab);
   return it == pinned_urls_.end() ? GURL() : it->second;
@@ -509,6 +526,19 @@ void Space::SetFolderIcon(bc_id folder, std::string icon) {
   }
 }
 
+void Space::SetFolderLive(bc_id folder, int source) {
+  auto it = folders_.find(folder);
+  if (it == folders_.end() || it->second.live == source) {
+    return;
+  }
+  // The user's account's lists, which are neither an agent's nor a private window's to have.
+  if (source && (agent() || own() || source != BC_LIVE_PULL_REQUESTS || LiveFolderOf(source))) {
+    return;
+  }
+  it->second.live = source;
+  ReportChanged();
+}
+
 void Space::SetOpen(bc_id folder, bool open) {
   if (auto it = folders_.find(folder); it != folders_.end() && it->second.open != open) {
     it->second.open = open;
@@ -558,7 +588,12 @@ void Space::TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& 
     }
     from.folder_of_.erase(row);
     if (auto entry = from.folders_.extract(row)) {
-      folders_[row] = std::move(entry.mapped());
+      Folder& moved = entry.mapped();
+      // One of a source this Space has already comes as a plain folder.
+      if (moved.live && LiveFolderOf(moved.live)) {
+        moved.live = 0;
+      }
+      folders_[row] = std::move(moved);
     } else {
       if (auto url = from.pinned_urls_.extract(row)) {
         pinned_urls_[here(row)] = std::move(url.mapped());

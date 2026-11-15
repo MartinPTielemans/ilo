@@ -76,6 +76,8 @@ struct SavedFolder {
   std::string name;
   std::string icon;
   bool open = true;
+  // A BC_LIVE_ source, or 0 (#2979).
+  int live = 0;
   // The folder it's in, among its Space's saved folders, which is saved before it, else -1.
   int folder = -1;
   // The pinned tab saved under it, counted among them.

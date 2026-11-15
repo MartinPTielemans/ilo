@@ -54,6 +54,7 @@
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
 #include "browser_core/link_target.h"
+#include "browser_core/live_folder.h"
 #include "browser_core/main_delegate.h"
 #include "browser_core/notes.h"
 #include "browser_core/page_dialog.h"
@@ -1172,6 +1173,34 @@ void bc_folder_delete(bc_id folder) {
   if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
     space->DeleteFolder(folder);
   }
+}
+
+bc_id bc_folder_live_create(bc_id id, int source, const char* name) {
+  browser_core::Space* space = browser_core::Space::FromId(id);
+  // Refused here, not only left out of the app's menu: the lists are the user's account's.
+  if (!space || space->agent() || space->own() || source != BC_LIVE_PULL_REQUESTS ||
+      space->LiveFolderOf(source)) {
+    return 0;
+  }
+  const bc_id folder = space->AddFolder(name ? name : "", 0, SIZE_MAX);
+  space->SetFolderLive(folder, source);
+  return folder;
+}
+
+int bc_folder_live(bc_id folder) {
+  browser_core::Space* space = browser_core::Space::HoldingFolder(folder);
+  return space ? space->FolderLive(folder) : 0;
+}
+
+void bc_folder_live_end(bc_id folder) {
+  browser_core::DropLiveFolderFetch(folder);
+  if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
+    space->SetFolderLive(folder, 0);
+  }
+}
+
+void bc_folder_live_fetch(bc_id folder) {
+  browser_core::FetchLiveFolder(folder);
 }
 
 void bc_tab_forget_page(bc_id id) {
