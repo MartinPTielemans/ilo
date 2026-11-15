@@ -24,6 +24,11 @@ on:
         description: Build the app, even if a check of this commit kept one
         type: boolean
         default: false
+      image:
+        description: >-
+          The hosted runner's image, such as windows-2025, whose desktop is Windows 11's, which
+          rounds a window's corners where 2022's doesn't (#2988); empty for windows-2022
+        default: ''
       trace:
         description: >-
           The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
@@ -110,7 +115,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || inputs.runs == '' && '[1, 2]' || '[0]') }}
-    runs-on: windows-2022
+    runs-on: ${{ inputs.image || 'windows-2022' }}
     timeout-minutes: 120
     permissions:
       contents: read
