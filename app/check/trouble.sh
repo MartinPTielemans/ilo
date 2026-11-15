@@ -329,9 +329,11 @@ network=$!
 exec 4> "$out/network"
 # Takes the tab $1, offline or online, or holds its page's next request; $2 says what a miss means.
 network() {
+  # The session's earlier answers stay in its log, so it's the next one that's waited for.
+  said=$(grep -cx "$1" "$out/network.log" || true)
   echo "$1" >&4
   for _ in $(seq 100); do
-    grep -qx "$1" "$out/network.log" && return 0
+    [ "$(grep -cx "$1" "$out/network.log" || true)" -gt "$said" ] && return 0
     kill -0 "$network" 2>/dev/null || fail "DevTools didn't take the tab $1: $(cat "$out/network.log")"
     sleep 0.1
   done
