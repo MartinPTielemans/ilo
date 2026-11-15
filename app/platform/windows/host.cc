@@ -276,6 +276,9 @@ struct Floating {
   // The UI answers Windows asking it to close, as the dialog does by cancelling; Windows would
   // destroy any other, which the host closes itself (FloatingProc).
   bool ui_closes = false;
+  // For an overlay, the window of Chromium's over its browser window's page that had the keyboard
+  // as it showed, such as a tab's dialog, which gets it back as the overlay hides (Hide).
+  HWND keyboard_from = nullptr;
 };
 
 void LeaveOverlay(int index);
@@ -717,10 +720,23 @@ void PutAway(HWND hwnd, HWND back, uint16_t actions) {
 void Hide(Floating& floating) {
   const uint16_t actions = Step(floating.life, OverlayEvent::kHide);
   floating.keyboard = false;
+  HWND from = std::exchange(floating.keyboard_from, nullptr);
   if (!floating.hwnd) {
     return;
   }
-  PutAway(floating.hwnd, GetWindow(floating.hwnd, GW_OWNER), actions);
+  // As the Mac's host does: the window of Chromium's that had the keyboard as the overlay showed,
+  // while it's still over the page, else the browser window. A tab's dialog, such as Chrome's
+  // warning before http, blocks its page's input, which drops ilo's shortcuts too before the core
+  // can ask about them, so with the browser window given the keyboard they'd be lost (#2855).
+  HWND owner = GetWindow(floating.hwnd, GW_OWNER);
+  HWND back = from && IsWindow(from) && IsWindowVisible(from) && GetWindow(from, GW_OWNER) == owner
+                  ? from
+                  : owner;
+  // The view the UI gave the keyboard to meanwhile is in the browser window, which doesn't take it.
+  if (back != owner && (actions & kGiveBack)) {
+    FocusAfterOverlay().erase(owner);
+  }
+  PutAway(floating.hwnd, back, actions);
 }
 
 // A floating window the UI has hidden never keeps the keyboard. Windows makes the one a browser
@@ -3646,6 +3662,14 @@ void host_show_overlay(int overlay,
     left = content_width - 8 - width;
   }
   Floating& floating = g_overlays[overlay];
+  // The window of Chromium's its browser window owns that has the keyboard now, such as a tab's
+  // dialog, gets it back as the overlay hides (Hide). Not the overlay itself, shown again.
+  if (HWND key = GetForegroundWindow(); key != floating.hwnd) {
+    wchar_t name[18] = {};
+    const bool chromium = key && GetClassNameW(key, name, std::size(name)) &&
+                          wcsncmp(name, L"Chrome_WidgetWin_", 17) == 0;
+    floating.keyboard_from = chromium && GetWindow(key, GW_OWNER) == Root(ui_view) ? key : nullptr;
+  }
   Step(floating.life, OverlayEvent::kShow, kLater);
   const int shows = ++floating.shows;
   // The window still holds what it drew when it last closed, such as the previous query, as the

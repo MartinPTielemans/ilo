@@ -340,8 +340,9 @@ if [ "$major" -ge 157 ]; then
   [ "$(grep "^browser: page $tab trouble " "$log" | tail -1)" = "browser: page $tab trouble network -20" ] ||
     fail "Chrome's warning before http went as escape closed the command bar over it: $(grep "^browser: page $tab trouble " "$log" | tail -1)"
   # And gives it back to the warning, as the page under it drops every key, ilo's shortcuts with
-  # them, while the warning's up (#2625). The second ⌘T, next, comes from there.
-  if [ "$(uname)" = Darwin ]; then
+  # them, while the warning's up (#2625, #2855). The second ⌘T, next, comes from there. Linux's
+  # warning is in the browser window, which keeps the keyboard.
+  if [ "$(uname)" != Linux ]; then
     [ "$key" = NativeWidgetMacNSWindow ] ||
       fail "the command bar closing over Chrome's warning before http gave the keyboard to $key, on $focus, not back to the warning"
   fi
