@@ -552,6 +552,10 @@ impl tab_switcher::Host for TabSwitcherHost {
             tab_switcher::ABOVE_MIDDLE.into(),
             tab_switcher::WIDTH.into(),
         );
+        // Under Wayland it has the keys only once it has drawn, and a ⌃Tab typed before then is
+        // its, not lost (a walk shows it once).
+        #[cfg(target_os = "linux")]
+        crate::keys::hold_keys_for_overlay();
         unsafe {
             platform::host_set_overlay_height(TAB_SWITCHER, height.into());
             platform::host_show_overlay(TAB_SWITCHER, view, true, 0., top, width);
