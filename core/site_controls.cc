@@ -126,6 +126,12 @@ bool Resettable(ChromePageInfoUiDelegate& ui_delegate, const PageInfo::Permissio
 // user changed it here since the page loaded (so a line doesn't vanish under their hand), or the
 // tab used it: played sound, registered for automatic Picture in Picture, or holds files open.
 bool Differs(content::WebContents* contents, const PageInfo::PermissionInfo& permission) {
+  // A request to show notifications held quietly lists them at the default (SetPermissionInfo),
+  // as the bell opens the panel there to answer it.
+  if (permission.type == ContentSettingsType::NOTIFICATIONS &&
+      PermissionQuestion::Quiet(Tab::IdOf(contents))) {
+    return true;
+  }
   if (permission.setting || permission.source != SettingSource::kUser ||
       permission.type == ContentSettingsType::SOUND ||
       permission.type == ContentSettingsType::AUTO_PICTURE_IN_PICTURE ||

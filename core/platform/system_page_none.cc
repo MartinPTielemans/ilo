@@ -17,7 +17,13 @@ std::unique_ptr<SystemPage> SystemPage::Create(const SystemStore&, const GURL&, 
   return nullptr;
 }
 
-void SystemPage::DeleteStore(const std::string&) {}
+void SystemPage::DeleteStore(const std::string&, base::OnceCallback<void(bool)> done) {
+  std::move(done).Run(false);
+}
+
+void SystemPage::ListStores(base::OnceCallback<void(std::vector<std::string>)> done) {
+  std::move(done).Run({});
+}
 
 void SystemPage::ReleaseStore(const std::string&) {}
 

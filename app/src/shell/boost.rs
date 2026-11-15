@@ -107,7 +107,7 @@ impl Shell {
     }
 
     /// Reads `profile`'s Boosts the first time, so what's offered knows the ones it has.
-    fn read_profile_boosts(&self, profile: u64, cx: &mut gpui::App) {
+    pub(super) fn read_profile_boosts(&self, profile: u64, cx: &mut gpui::App) {
         if !boosts::with(|boosts| boosts.loaded(profile)) {
             self.browser.load_boosts(profile, cx);
         }
@@ -247,9 +247,14 @@ impl Shell {
         true
     }
 
-    /// Escape: Zap ends on the page shown, or else its card closes. Says whether either did.
+    /// Escape: Zap or Arrange ends on the page shown, or else its card closes. Says whether any
+    /// did.
     pub fn escape_boost(&mut self, cx: &mut Context<Self>) -> bool {
         let tab = self.field_tab();
+        if self.arranging(tab) {
+            self.stop_arrange(cx);
+            return true;
+        }
         match self.zapping == Some(tab) && tab != 0 {
             true => {
                 self.stop_zap(cx);
@@ -270,8 +275,9 @@ impl Shell {
         if self.shown_boost(cx).is_none() || self.zapping == Some(tab) {
             return;
         }
-        // One page at a time, as Zap is the pointer's.
+        // One page at a time, as Zap is the pointer's, and not with Arrange.
         self.stop_zap(cx);
+        self.stop_arrange(cx);
         self.zapping = Some(tab);
         self.browser.zap(tab, true, cx);
         cx.notify();
@@ -284,10 +290,12 @@ impl Shell {
         }
     }
 
-    /// The core says what the user clicked on `tab`'s page with Zap on, as a selector, or none for
-    /// the page itself: its Boost hides it from now on, and at once.
+    /// The core says what the user clicked on `tab`'s page with Zap on, or hid with Arrange's
+    /// Hide, as a selector, or none for the page itself: its Boost hides it from now on, and at
+    /// once.
     pub fn boost_zapped(&mut self, tab: u64, selector: Option<&str>, cx: &mut Context<Self>) {
-        let Some(selector) = selector.filter(|_| self.zapping == Some(tab)) else {
+        let hiding = self.zapping == Some(tab) || self.arranging == Some(tab);
+        let Some(selector) = selector.filter(|_| hiding) else {
             return;
         };
         let Some((profile, site)) = self.boost_site(tab) else {
@@ -376,19 +384,32 @@ impl Shell {
             return None;
         };
         let palette = &self.palette;
-        let quiet =
-            |id: &'static str, label: &'static str| card_button_as(palette, id, label, Look::Quiet);
+        let quiet = |id: &'static str, label: &'static str| {
+            card_button_as(palette, id, label, Look::Quiet).debug_selector(move || id.into())
+        };
         let edit = quiet("boost-edit", "Edit CSS…")
             .on_click(cx.listener(|shell, _, _, cx| shell.edit_boost_css(cx)));
         let zap = card_button_as(palette, "boost-zap", "Zap", Look::Primary)
+            .debug_selector(|| "boost-zap".into())
             .on_click(cx.listener(|shell, _, _, cx| shell.start_zap(cx)));
         let customize = quiet("boost-customize", "Customize…")
             .on_click(cx.listener(|shell, _, _, cx| shell.customize_boost(cx)));
+        let arrange = quiet("boost-arrange", "Arrange")
+            .on_click(cx.listener(|shell, _, _, cx| shell.start_arrange(cx)));
         let zaps = boost.as_ref().map_or(0, |boost| boost.summary.zaps);
-        // Customize… has a line of its own under the other two, as three don't fit the card, so
-        // Zap's row stays where it is as Zap starts and Done comes up under the pointer.
-        let customize =
-            (self.zapping != Some(tab)).then(|| div().mt(px(BUTTON_GAP)).flex().child(customize));
+        // Customize… and Arrange have a line of their own under the other two, as four don't fit
+        // the card, so Zap's row stays where it is as Zap starts and Done comes up under the
+        // pointer. Both lines are one grid of two equal columns, so the four buttons' edges line up
+        // whatever their labels' widths.
+        let zapping = self.zapping == Some(tab);
+        let second = (!zapping)
+            .then(|| [customize.into_any_element(), arrange.into_any_element()])
+            .into_iter()
+            .flatten();
+        let arranged = (boost.as_ref())
+            .and_then(|boost| boost.arrangement.as_ref())
+            .filter(|_| !zapping)
+            .map(|arrangement| self.arranged_list(arrangement, cx));
         let (title, detail, buttons): (String, String, Vec<gpui::AnyElement>) =
             match (self.zapping == Some(tab), boost) {
                 (true, _) => (
@@ -403,6 +424,8 @@ impl Shell {
                         .into_iter()
                         .chain(
                             [card_button_as(palette, "boost-done", "Done", Look::Primary)
+                                // Done alone, before anything's hidden, is the line.
+                                .when(zaps == 0, |done| done.col_span_full())
                                 .on_click(cx.listener(|shell, _, _, cx| shell.stop_zap(cx)))
                                 .into_any_element()],
                         )
@@ -438,14 +461,16 @@ impl Shell {
                         .child(title),
                 )
                 .child(div().text_color(palette.on_overlay(DETAIL)).child(detail))
+                .children(arranged)
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))
-                        .flex()
+                        .grid()
+                        .grid_cols(2)
                         .gap(px(BUTTON_GAP))
-                        .children(buttons),
+                        .children(buttons)
+                        .children(second),
                 )
-                .children(customize)
                 .child(close),
         )
     }

@@ -1,6 +1,9 @@
 #ifndef BROWSER_CORE_DIALOG_KEYS_H_
 #define BROWSER_CORE_DIALOG_KEYS_H_
 
+#include "build/build_config.h"
+#include "ui/gfx/native_ui_types.h"
+
 namespace content {
 class WebContents;
 }
@@ -22,6 +25,13 @@ void Watch(views::Widget* window);
 // page beside the dialog gives it on the Mac: the page drops every key while its dialog shows, so
 // ilo's shortcuts would be lost (#2625).
 void PageFocused(content::WebContents* page);
+
+#if !BUILDFLAG(IS_MAC)
+// The same, for the page whose view holds |view|, or is held by it, which took aura's focus. A page
+// whose tab ignores input, as it does under a dialog, doesn't tell its tab it was focused, and its
+// view doesn't take the focus, so the platform layer, which hears aura's focus, says it (#2625).
+void PageViewFocused(gfx::NativeView view);
+#endif
 
 }  // namespace browser_core::dialog_keys
 

@@ -68,14 +68,43 @@ pub struct Reach {
     pub sides: f32,
 }
 
+/// The level as the core draws it in a page, as Arrange lifts an element off it: colours as
+/// 0xRRGGBBAA and blurs as CSS's, as the tokens have them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lift {
+    pub rim: u32,
+    pub outline: u32,
+    pub shadow: u32,
+    pub outline_blur: f32,
+    pub shadow_y: f32,
+    pub shadow_blur: f32,
+}
+
 impl Level {
     /// The white line inside the surface's edge.
     pub fn rim(self) -> Rgba {
-        rgba(match self {
+        rgba(self.rim_token())
+    }
+
+    fn rim_token(self) -> u32 {
+        match self {
             Level::Resting => t::RESTING_RIM,
             Level::Popover => t::POPOVER_RIM,
             Level::Modal => t::MODAL_RIM,
-        })
+        }
+    }
+
+    /// For a surface the core draws in a page.
+    pub fn lift(self) -> Lift {
+        let (shadow, shadow_y, shadow_blur) = self.drop();
+        Lift {
+            rim: self.rim_token(),
+            outline: t::OUTLINE,
+            shadow,
+            outline_blur: t::OUTLINE_BLUR,
+            shadow_y,
+            shadow_blur,
+        }
     }
 
     /// The rim in the palette's ink, Paper or Ink as the Space's theme has it, at the level's

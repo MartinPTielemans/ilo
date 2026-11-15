@@ -92,15 +92,22 @@ pub fn watch_activation<T: 'static>(
     .detach();
 }
 
-/// Tells the link preview each time Settings, whose view is `view`, takes the keyboard.
+/// Tells the link preview each time Settings, whose view is `view`, takes the keyboard, and under
+/// Wayland the host each time it takes it or loses it, as a browser window's does: there the
+/// keyboard is how the host knows the app is active, which it stays while Settings has it, as on
+/// the Mac and X11, so a need the user is in ilo for posts nothing.
 pub fn watch_settings_activation<T: 'static>(
     window: &mut Window,
     view: *mut c_void,
     cx: &mut Context<T>,
 ) {
     cx.observe_window_activation(window, move |_, window, _| {
-        if window.is_window_active() {
+        let active = window.is_window_active();
+        if active {
             crate::link_preview_window::took_keyboard(view);
+        }
+        if crate::frames::on_x11() == Some(false) {
+            unsafe { platform::host_window_active(view, active, true) }
         }
     })
     .detach();
