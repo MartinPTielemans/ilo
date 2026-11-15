@@ -185,6 +185,14 @@ press_mini_bar() {
   send click $x $((my + mh / 2))
   expect "^browser: mini bar $2 pressed\$" "a click on the mini bar's $2 didn't press it"
 }
+# The mini bar went after $1, as the Mac's and Linux's hosts say. Windows' prints no line as it
+# hides, so there the run can't see it go.
+mini_bar_went() {
+  windows && return 0
+  expect '^browser: mini bar hidden$' "the mini bar stayed after $1"
+}
+went="The mini bar went with the mode and with the thing hidden."
+! windows || went="Windows' host prints no line as the mini bar hides, so the run didn't see it go."
 # Carries from ($1 $2) to ($3 $4) in steps, with $5 held if it's given: 4 pt lifts it, and the
 # drop shows once the pointer rests, which the core says.
 carry() {
@@ -220,13 +228,14 @@ kept 1 "the settle wasn't saved"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-settled.png" || fail "no window to capture"
 
 # Trade: the third let go on the first's middle, and the two trade places. The settle is kept by
-# the thing it was let go beside, Gamma, so Alpha goes with Gamma, ahead of it.
+# the thing it was let go beside, Gamma, so Alpha goes with Gamma, ahead of it, which moves a thing
+# the user didn't touch (#2975): this line changes with its fix.
 carry $(slot 2) $(slot 0)
 expect "^browser: arrange $tab Preview Trades " "a rest on a thing's middle didn't show a trade"
 send release $(slot 0)
 expect "^browser: arrange $tab Selected Trades selected " "letting go on a thing's middle didn't trade"
 expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade"
-shows 'a,c,b,w side s,n hidden - float -' "the trade didn't swap the two"
+shows 'a,c,b,w side s,n hidden - float -' "the trade didn't swap the two, Alpha ahead of Gamma (#2975)"
 kept 2 "the trade wasn't saved"
 
 # A fit refusal: the wide section at the side's edge, where it doesn't fit, and nothing changes.
@@ -268,11 +277,15 @@ expect "browser: tab $tab arrange saved 2 changes\$" "⌘Z with the page focused
 shows 'a,c,b,w side s,n hidden - float -' "⌘Z didn't take back the float"
 kept 2 "⌘Z's step back wasn't saved"
 
-# Put back, the mini bar's last button on a thing with a change, takes that change back.
-send click $(slot 0)
-expect "^browser: arrange $tab Selected [A-Z][a-z]* selected " "a click didn't select the settled thing"
+# Put back, the mini bar's last button on a thing with a change, takes that change back: on Gamma,
+# one of the two traded, the trade, so Beta and Gamma are in their own places again, with Alpha
+# still settled ahead of Gamma.
+send click $(slot 1)
+expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Gamma\$" \
+  "a click didn't select Gamma, which the trade moved"
 press_mini_bar last "put back"
 expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save Put back"
+shows 'b,a,c,w side s,n hidden - float -' "Put back on Gamma didn't take the trade back"
 kept 1 "Put back didn't take the change back"
 
 # Hide, the mini bar's first button on a thing with no change, is Zap's rule, which ⌘Z takes back.
@@ -280,6 +293,7 @@ send click $(slot 3)
 expect "^browser: arrange $tab Selected None selected " "a click didn't select the wide section"
 press_mini_bar first hide
 expect "browser: tab $tab arrange hid " "the core didn't hand Hide to Zap"
+mini_bar_went "Hide hid the thing it was over"
 for _ in $(seq 100); do
   case "$(said)" in *" hidden w "*) break ;; esac
   sleep 0.1
@@ -294,10 +308,15 @@ done
 case "$(said)" in *" hidden - "*) ;; *) fail "⌘Z didn't take back the Hide: $(said)" ;; esac
 grep -q '/\* Zap \*/$' "$css" && fail "⌘Z left Zap's rule in the Boost: $(cat "$css")"
 
-# Escape is Done.
+# Escape is Done, and the mini bar goes with the mode.
+send click $(slot 0)
+expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Beta\$" \
+  "a click didn't select Beta"
+expect '^browser: mini bar at ' "the UI placed no mini bar over Beta"
 send key escape
 expect "^browser: arrange $tab off\$" "escape didn't end the mode"
 expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
+mini_bar_went "escape ended the mode"
 kept_column=$(said | sed 's/^col \([^ ]*\) .*/\1/')
 
 # Reloaded, the page places the arrangement as it loads. The run measures, and says, whether the
@@ -392,8 +411,8 @@ quit
 echo "ok: from the Boost card's Arrange, a click picked a thing with the page taking none, and a" \
   "carry settled it at an edge, traded it on a thing's middle, was refused where it didn't fit," \
   "and with ⌘ floated it, whose pin turned it to scroll with the page and back. ⌘Z took the float" \
-  "back, Put back the settle, and Hide was Zap's rule, which ⌘Z took back. Each change was saved" \
-  "in $host.arrange.json. Reloaded, the page placed the arrangement, and $first_frame." \
+  "back, Put back the trade, and Hide was Zap's rule, which ⌘Z took back. $went" \
+  "Each change was saved in $host.arrange.json. Reloaded, the page placed the arrangement, and $first_frame." \
   "Edited outside ilo it stayed off, and Site Controls' Turn On kept it. A private window's page" \
   "was arranged, with no Boost offered." \
   "Windows: $out/arrange-on.png, $out/arrange-picked.png, $out/arrange-settled.png," \
