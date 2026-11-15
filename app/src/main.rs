@@ -211,6 +211,8 @@ thread_local! {
     static MENUS: RefCell<Menus> = RefCell::default();
     // Whether a menu bar built from MENUS waits for the menu open to close.
     static MENUS_HELD: Cell<bool> = const { Cell::new(false) };
+    // Whether the UI runs on Wayland, which it learns as it starts; never off Linux.
+    static WAYLAND: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The keys area's line for `key`, which a page had, `when` the page sees it or after, gone to
@@ -495,6 +497,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 browser::clipboard::held_through(gpui_linux::held_clipboard_text);
             }
         }
+        WAYLAND.set(!display.is_null());
         !display.is_null()
     };
     let application = gpui_platform::application().with_assets(shell::Assets);
@@ -770,11 +773,11 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken.height
         );
     }
-    // A picture of the column on the left, from before the sidebar moved right, is none of this
+    // A picture of the column on one side, from before the sidebar moved, is none of this
     // window's (settings::set_sidebar_right).
     let right = settings::sidebar_right_kept();
     let picture =
-        taken.filter(|taken| !maximized && !right && launch_picture::shows(taken, width, height));
+        taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height, right));
     let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
         (taken.width, taken.height, taken.foot_top)
     });
@@ -789,6 +792,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken_width,
             taken_height,
             foot_top,
+            right,
         )
     };
     // check.sh reads this line.
@@ -890,8 +894,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // Chrome would copy the app bundle to check its signature against, which an
         // ad-hoc-signed build doesn't need. And off the Mac, every switch would copy and encode
         // the tab it leaves for the hover cards of Chrome's tab strip, which ilo never shows: its
-        // own hover card takes its own picture (core/capture.cc, #2377).
-        "--disable-features=MacAppCodeSignClone,TabHoverCardImages".into(),
+        // own hover card takes its own picture (core/capture.cc, #2377). And Settings' user
+        // journeys, metrics nobody receives, tell Chrome's BrowserView of a change such as Make
+        // default in the search engines page, CHECKing it's there: ilo's windows have none (#2907).
+        "--disable-features=MacAppCodeSignClone,TabHoverCardImages,SettingsGlowupJourneys".into(),
         // An idle browser shouldn't wake: Chrome's stack sampling feeds metrics nobody receives,
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
@@ -1107,6 +1113,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         ad_block_response: Some(ad_block_host::ad_block_response),
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
+        tab_shown_in: Some(tab_shown_in),
         ..Default::default()
     };
     (args, host)

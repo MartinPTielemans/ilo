@@ -102,6 +102,9 @@ pub enum Command {
     Exit,
     /// Closes the Today tabs of the Space shown, but the one shown.
     Clear,
+    /// Brings each site's Today tabs in the Space shown together, at its first tab's place
+    /// (`crate::sort_by_site`).
+    SortBySite,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
     Undo,
     /// Does again what Undo undid.
@@ -472,6 +475,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ),
     ("Archive Tab", Command::CloseTab, &["close tab"]),
     ("Clear Today", Command::Clear, &["unpinned tabs"]),
+    (
+        "Sort Today Tabs by Site",
+        Command::SortBySite,
+        &["group tabs by site", "tidy tabs"],
+    ),
     (
         "Clear Cache and Refresh",
         Command::ClearCacheAndRefresh,
@@ -1224,6 +1232,7 @@ impl Command {
             Command::ToggleFullScreen => "toggle-full-screen",
             Command::Exit => "exit",
             Command::Clear => "clear",
+            Command::SortBySite => "sort-by-site",
             Command::Undo => "undo",
             Command::Redo => "redo",
             Command::CopyUrl => "copy-url",
@@ -1649,6 +1658,7 @@ impl Shell {
             Command::ToggleFullScreen => return self.browser.toggle_full_screen(cx),
             Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
+            Command::SortBySite => return self.sort_by_site(cx),
             Command::Undo => {
                 self.undo(cx);
                 return;
@@ -2297,6 +2307,8 @@ impl Shell {
                     .any(|&folder| !space.is_open(folder))
             }),
             Command::Clear => !self.today().is_empty(),
+            // With every site's tabs together already, it would change nothing.
+            Command::SortBySite => self.sorted_by_site(self.space).is_some(),
             Command::FavoriteTab => {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)

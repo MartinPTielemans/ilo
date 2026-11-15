@@ -912,6 +912,10 @@ impl Browser for Fake {
     // The made-up pages have the globe.
     fn page_favicon(&self, _: &str, _: &mut App) {}
 
+    fn url_site(&self, url: &str) -> Option<String> {
+        browser::sort_by_site::made_up_site(url)
+    }
+
     // In UTC, with weeks from Monday.
     // Library › Agents' made-up past tasks: two today, one yesterday, one last week.
     fn agent_history(&self, _: u64) -> String {
@@ -3383,6 +3387,15 @@ impl link_preview::Host for PreviewPeek {
 
     fn page_under(&self) -> bool {
         true
+    }
+
+    fn open_waits(&self) -> bool {
+        // No core says when a page is on screen here.
+        false
+    }
+
+    fn close_waits(&self) -> bool {
+        false
     }
 
     fn release(&self) {}
