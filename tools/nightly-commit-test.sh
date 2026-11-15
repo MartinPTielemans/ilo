@@ -3,8 +3,9 @@
 # a core change after it, and a batch's engine, built on a branch that main merged, both when the
 # merge keeps the engine's core and when the branch had merged a newer core of main's first, which
 # failed the nightly (#2697), and a landing after main built an engine of its own since the batch
-# branched, which is nearer by commit count but lacks the batch's core (#2936). Each builds its history in a scratch repository, whose engines are
-# tags in a bare one beside it, and changes nothing here. CI's Changes job runs it on every push.
+# branched, which is nearer by commit count but lacks the batch's core (#2936). Each builds its
+# history in a scratch repository, whose engines are tags in a bare one beside it, and changes
+# nothing here. CI's Changes job runs it on every push.
 # Usage: tools/nightly-commit-test.sh
 set -uo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -119,7 +120,7 @@ commit m3 app3.txt main
 engine mac "$m3"
 git merge -q --no-ff -m landing batch
 commit c4 app.txt app
-expect "$c4" false "a landing after main built an engine of its own, nearer but without the batch's core"
+expect "$c4" false "a landing after main built a nearer engine without the batch's core"
 
 [ "$failed" = 0 ] || exit 1
 echo "ok: nightly-commit.sh names the newest commit of main's that a Mac engine fits."
