@@ -9,7 +9,8 @@
 # extensions run puts there, which Chrome installs from. "a" asks to manage windows on all the
 # displays, a permission with no question from macOS, and puts the answer in the title. Keys with
 # ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, /slow text that comes after a
-# second, and /held one that comes once the run has made held.go in the site's folder. login.html is a login form, its username field
+# second, and /held one that comes once the run has made held.go in the site's folder, whose title
+# then names each key it gets. login.html is a login form, its username field
 # across the page's top half and its password field across the bottom, that posts to /login,
 # which sends the browser on to welcome.html, as a site that took the login would.
 # signup.html is the same form asking for a new password, which posts to /signup, as /login.
@@ -497,7 +498,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Every request waiting is let go at once, so one Chrome asked for ahead is no matter.
             while not os.path.exists(sys.argv[1] + "/held.go"):
                 time.sleep(0.05)
-            body = b"<title>held</title>"
+            body = (b"<title>held</title><script>"
+                    b"onkeydown = event => document.title = \"held has \" + event.key</script>")
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", str(len(body)))
