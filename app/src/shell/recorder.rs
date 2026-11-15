@@ -81,6 +81,11 @@ pub(super) struct Recorder {
     pub(super) checked_for_updates: Cell<usize>,
     /// The import finds no browser on the machine.
     pub(super) no_browsers: Cell<bool>,
+    /// The profile's history hasn't loaded, so `list_history` and `remove_history` answer false.
+    pub(super) history_unloaded: Cell<bool>,
+    /// The starts of today, yesterday, this week and last week, as `day_starts` answers: all 0,
+    /// so everything is today, unless a test says.
+    pub(super) day_starts: Cell<[f64; 4]>,
     /// A field of the page has the keyboard, as `show_autofill` answers.
     pub(super) field_focused: Cell<bool>,
     /// The browser the import reads and adds to, when a test gives one.
@@ -102,6 +107,10 @@ pub(super) struct Recorder {
     pub(super) shown: RefCell<Vec<u64>>,
     /// The id of the agent each agent's Space belongs to, as `space_agent` answers.
     pub(super) space_agents: RefCell<HashMap<u64, SharedString>>,
+    /// What the core makes of each arrangement it's given, On unless a test says.
+    pub(super) arranged: Cell<Option<crate::boosts::Arranged>>,
+    /// Whether the core refuses Arrange, as on a page that isn't http(s).
+    pub(super) arrange_refused: Cell<bool>,
     /// The menus it was asked to show, each item by its title and whether it's enabled.
     pub(super) menus: RefCell<Vec<Vec<(SharedString, bool)>>>,
     /// Where the last menu was asked to show, in the window.
@@ -554,6 +563,19 @@ impl Browser for Recorder {
         self.record(format!("media {tab} {action:?}"));
     }
 
+    fn show_video(&self, tab: u64, frame: Option<Bounds<Pixels>>, radius: f32, _: &mut App) {
+        match frame {
+            Some(at) => self.record(format!(
+                "show video {tab} at {} {} {} {} round {radius}",
+                f32::from(at.origin.x),
+                f32::from(at.origin.y),
+                f32::from(at.size.width),
+                f32::from(at.size.height)
+            )),
+            None => self.record(format!("show video {tab} none")),
+        }
+    }
+
     fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
         self.record(format!("volume {tab} {volume:.2}"));
     }
@@ -742,6 +764,26 @@ impl Browser for Recorder {
         id
     }
 
+    fn list_history(
+        &self,
+        profile: u64,
+        request: u64,
+        before: i64,
+        text: &str,
+        max: usize,
+        _: &mut App,
+    ) -> bool {
+        self.record(format!(
+            "list history {profile} {request} {before} {text:?} {max}"
+        ));
+        !self.history_unloaded.get()
+    }
+
+    fn remove_history(&self, profile: u64, url: &str, begin: i64, end: i64, _: &mut App) -> bool {
+        self.record(format!("remove history {profile} {url} {begin} {end}"));
+        !self.history_unloaded.get()
+    }
+
     fn act_on_download(&self, _: u64, _: DownloadAction, _: &mut App) {}
 
     fn clear_downloads(&self, private: Option<u64>, _: &mut App) {
@@ -797,8 +839,12 @@ impl Browser for Recorder {
 
     fn page_favicon(&self, _: &str, _: &mut App) {}
 
+    fn url_site(&self, url: &str) -> Option<String> {
+        crate::sort_by_site::made_up_site(url)
+    }
+
     fn day_starts(&self) -> [f64; 4] {
-        Default::default()
+        self.day_starts.get()
     }
 
     fn last_seen(&self, tab: u64) -> f64 {
@@ -1076,18 +1122,44 @@ impl Browser for Recorder {
     }
 
     fn show_boosts(&self, changes: Vec<crate::boosts::Change>, _: &mut App) {
+        use crate::boosts::Shows;
         for change in changes {
-            self.record(format!(
-                "boost {} {}: {}",
-                change.profile,
-                change.site,
-                change.css.trim_end()
-            ));
+            let (profile, site) = (change.profile, change.site);
+            match change.shows {
+                Shows::Css(css) => {
+                    self.record(format!("boost {profile} {site}: {}", css.trim_end()))
+                }
+                Shows::Arrangement(bytes) => {
+                    let state = self.set_arrangement(profile, &site, &bytes);
+                    if !bytes.is_empty() {
+                        crate::boosts::with(|boosts| boosts.set_arranged(profile, &site, state));
+                    }
+                }
+            }
         }
     }
 
     fn zap(&self, tab: u64, on: bool, _: &mut App) {
         self.record(format!("zap {tab} {on}"))
+    }
+
+    fn arrange(&self, tab: u64, look: Option<&crate::boosts::arrange::Look>, _: &mut App) -> bool {
+        self.record(format!("arrange {tab} {}", look.is_some()));
+        look.is_some() && !self.arrange_refused.get()
+    }
+
+    fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> crate::boosts::Arranged {
+        let changes = crate::boosts::arrange::read(bytes).map_or(0, |changes| changes.len());
+        self.record(format!("arrangement {profile} {site}: {changes} changes"));
+        self.arranged.get().unwrap_or(crate::boosts::Arranged::On)
+    }
+
+    fn keep_arrangement(&self, profile: u64, site: &str, bytes: &str) -> bool {
+        let changes = crate::boosts::arrange::read(bytes).map_or(0, |changes| changes.len());
+        self.record(format!(
+            "keep arrangement {profile} {site}: {changes} changes"
+        ));
+        true
     }
 
     fn edit_file(&self, path: &std::path::Path, _: &mut App) {
@@ -1403,8 +1475,9 @@ impl Browser for Recorder {
     }
 
     /// The host's clipboard holds what was copied last.
-    fn pasted(&self, _: &App) -> Option<String> {
-        self.copied.borrow().last().cloned()
+    fn pasted(&self, cx: &mut App, done: crate::clipboard::Done) {
+        let text = self.copied.borrow().last().cloned();
+        cx.defer(move |cx| done(text, cx));
     }
 
     fn share_services(&self, _: &str) -> Vec<SharedString> {

@@ -13,7 +13,8 @@ namespace {
 constexpr char kFile[] = R"({"version": 1, "changes": [
   {"kind": "settle", "name": "The video", "role": "video",
    "target": {"path": "main > video", "fp": {"tag": "video", "landmark": "main"}},
-   "before": {"name": "the article", "role": "article", "target": {"path": "main > article"}}},
+   "before": {"name": "the article", "role": "article",
+              "target": {"path": "main > article", "fp": {"tag": "article", "landmark": "main"}}}},
   {"kind": "trade", "name": "Trending", "role": "aside", "target": {"fp": {"tag": "aside", "nth": 1}},
    "with": {"name": "Sign up", "role": "form", "target": {"path": "#signup"}}},
   {"kind": "float", "name": "More like this", "role": "section", "target": {"path": "#more"},
@@ -35,6 +36,9 @@ TEST(ArrangementTest, AFileOfTheSchemaIsReadWhole) {
   ASSERT_TRUE(changes);
   ASSERT_EQ(changes->size(), 3u);
   EXPECT_EQ(*(*changes)[0].GetDict().FindStringByDottedPath("before.name"), "the article");
+  // A neighbour with a fingerprint, as the page's runtime describes every element it can, is the
+  // schema at its deepest.
+  EXPECT_EQ(*(*changes)[0].GetDict().FindStringByDottedPath("before.target.fp.tag"), "article");
   EXPECT_EQ((*changes)[1].GetDict().FindIntByDottedPath("target.fp.nth"), 1);
   EXPECT_EQ((*changes)[2].GetDict().FindDoubleByDottedPath("at.y"), 96.5);
   // What the core writes, it reads back as it was.
@@ -55,7 +59,8 @@ TEST(ArrangementTest, AnythingTheSchemaDoesntNameRefusesTheFile) {
       // A settle against both neighbours, or neither.
       With(R"("before": {"name": "the article")", R"("after": {"name": "x", "role": "x",
            "target": {"path": "p"}}, "before": {"name": "the article")"),
-      With(R"("before": {"name": "the article", "role": "article", "target": {"path": "main > article"}})",
+      With(R"("before": {"name": "the article", "role": "article",
+              "target": {"path": "main > article", "fp": {"tag": "article", "landmark": "main"}}})",
            R"("width": 3)"),
       // A trade's other element in a settle's field.
       With(R"("with":)", R"("before":)"),
@@ -180,6 +185,24 @@ TEST(ArrangementTest, AMotionValueOutsideItsRangeTakesTheDefault) {
   EXPECT_EQ(Within(-1, 0.05, 1, 0.3), 0.3);
   EXPECT_EQ(Within(std::numeric_limits<double>::quiet_NaN(), 0.05, 1, 0.3), 0.3);
   EXPECT_EQ(Within(std::numeric_limits<double>::infinity(), 5, 100, 25), 25);
+}
+
+TEST(ArrangementTest, ALiftIsTheElevationsShadow) {
+  // tokens.toml's popover level: rim, outline blurred 1, and the shadow 8 down blurred 24.
+  EXPECT_EQ(Shadow({.rim = 0xffffff1f,
+                    .outline = 0x000000b3,
+                    .shadow = 0x00000059,
+                    .outline_blur = 1,
+                    .shadow_y = 8,
+                    .shadow_blur = 24}),
+            "inset 0 0 0 1px #ffffff1f, 0 0 1px #000000b3, 0 8px 24px #00000059");
+  EXPECT_EQ(Shadow({.shadow = 0x00000059, .shadow_y = 1.5, .shadow_blur = 3}),
+            "0 1.5px 3px #00000059");
+}
+
+TEST(ArrangementTest, ALiftWithNoAlphaDrawsNothing) {
+  EXPECT_EQ(Shadow({}), "");
+  EXPECT_EQ(Shadow({.rim = 0xffffff00, .outline = 0x00000000, .shadow_y = 8}), "");
 }
 
 }  // namespace

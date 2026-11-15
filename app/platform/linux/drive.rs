@@ -7,11 +7,11 @@
 //! screen of a desktop's, Xvfb's one "screen" or tools/headless.sh's Xwayland on a headless sway.
 //! Anywhere else it refuses, and its pointer and keys can't do anything.
 //!
-//! The pointer goes through XTEST alone, a click's modifiers as keys held around it. Some keys
-//! still go as X events sent to the window the server would pick, which its client handles as the
-//! device's: a held key's repeat, which the server makes only of a key held past its delay; and,
-//! until the drive moves them too, a key with Alt, which the window manager may take, and the keys
-//! while `flags` holds a modifier, whose modifiers an XKB lock holds.
+//! The pointer goes through XTEST alone, a click's modifiers as keys held around it, and so do keys,
+//! a chord's modifiers as keys pressed before it, Alt's too, which the window manager may take as
+//! it would a hand's, and `flags`' modifiers as keys held until it lets them go. Only a held key's
+//! repeat, which the server makes only of a key held past its delay, still goes as an X event sent
+//! to the window the server would pick, which its client handles as the device's.
 //!
 //! Under Wayland no client can hand another's surfaces input, so there the pointer and keys are
 //! sway's virtual devices, in tools/headless.sh's session alone (drive_wayland.rs).
@@ -368,13 +368,11 @@ thread_local! {
     static PIP_HELD: Cell<Option<HeldPip>> = const { Cell::new(None) };
     /// The window the pointer is in, which hears it leave.
     static HOVERED: Cell<Option<Target>> = const { Cell::new(None) };
-    /// The modifiers the flags command holds, in an X state, which the keys go with until it lets
-    /// them go.
+    /// The modifiers the flags command holds down through XTEST, in an X state, which the keys and
+    /// the pointer go with until it lets them go.
     static FLAGS: Cell<u16> = const { Cell::new(0) };
     /// The modifiers the last key went with.
     static KEY_FLAGS: Cell<u16> = const { Cell::new(0) };
-    /// The modifiers the X server's keyboard has locked, for `hold_modifiers`.
-    static LOCKED: Cell<u16> = const { Cell::new(0) };
     /// The modifier keys the driver holds down through XTEST.
     static XTEST_MODIFIERS: Cell<u16> = const { Cell::new(0) };
     /// The other keys the driver holds down through XTEST, whose next press is a repeat.
@@ -620,6 +618,33 @@ fn viewable(connection: &RustConnection, window: xproto::Window) -> bool {
         .ok()
         .and_then(|c| c.reply().ok())
         .is_some_and(|attributes| attributes.map_state == xproto::MapState::VIEWABLE)
+}
+
+/// The client window in top-level window `top`: the one with ICCCM's WM_STATE, which a window
+/// manager puts on each window it manages. openbox holds it in its frame, and KWin a level deeper,
+/// in a wrapper inside its frame (#2756, #2757). `top` itself when no window down to there has it,
+/// as with no window manager.
+fn client_in(connection: &RustConnection, top: xproto::Window) -> xproto::Window {
+    let Some(state) = atom("WM_STATE") else {
+        return top;
+    };
+    let managed = |window| {
+        (connection.get_property(false, window, state, xproto::AtomEnum::ANY, 0, 0))
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|property| property.type_ != x11rb::NONE)
+    };
+    let mut level = vec![top];
+    for _ in 0..3 {
+        if let Some(&client) = level.iter().find(|&&window| managed(window)) {
+            return client;
+        }
+        level = (level.into_iter())
+            .filter_map(|window| connection.query_tree(window).ok()?.reply().ok())
+            .flat_map(|tree| tree.children)
+            .collect();
+    }
+    top
 }
 
 /// Whether `window` is `ancestor` or inside it.
@@ -897,7 +922,7 @@ fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
         if XTEST_MODIFIERS.get() != 0 {
             KEY_FLAGS.set(0);
         }
-        xtest_modifiers(state & MODIFIERS)?;
+        xtest_modifiers(state & MODIFIERS | FLAGS.get())?;
     }
     hover(at)?;
     if press {
@@ -910,7 +935,7 @@ fn button(at: Target, button: u8, press: bool, state: u16) -> Option<()> {
     xtest_event(kind, button, at.root_x, at.root_y)?;
     match press {
         true => Some(()),
-        false => xtest_modifiers(0),
+        false => xtest_modifiers(FLAGS.get()),
     }
 }
 
@@ -968,7 +993,7 @@ fn await_uncovered(
 /// modifiers' keys `state` names are held with it, as a drag's ⌥ that drops a copy comes during it.
 fn motion(at: Target, state: u16) -> Option<()> {
     if state & BUTTONS != 0 {
-        xtest_modifiers(state & MODIFIERS)?;
+        xtest_modifiers(state & MODIFIERS | FLAGS.get())?;
     }
     hover(at)
 }
@@ -1328,31 +1353,26 @@ fn key_events(key: &str, mut state: u16, kinds: &[u8]) -> Option<()> {
     code_events(code, state, kinds)
 }
 
-/// Has the X server's keyboard hold Control while the driver does, after `flags` or a key with it,
-/// and Alt while `flags` does, as real keys would: the events the driver sends change none of its
-/// state, and the app's ⌃Tab walk lasts while the server says Control is held
-/// (gpui_linux::watch_control), as a menu shows ⌥'s alternates while it says Alt is.
-/// Through XTEST, the keys themselves stay down, unless `flags` holds a modifier, which the lock
-/// still does till the drive moves it: the lock first, so the modifier is never up between them.
+/// Has the X server's keyboard hold down, through XTEST, the modifier keys `flags` holds and the
+/// Control the last key went with, as a hand's would stay down: the app's ⌃Tab walk lasts while
+/// the server says Control is held (gpui_linux::watch_control), as a menu shows ⌥'s alternates
+/// while it says Alt is.
 fn hold_modifiers() -> Option<()> {
-    let control = (FLAGS.get() | KEY_FLAGS.get()) & u16::from(KeyButMask::CONTROL);
-    if FLAGS.get() == 0 {
-        xtest_modifiers(control)?;
-        return lock_modifiers(0);
-    }
-    lock_modifiers(control | (FLAGS.get() & u16::from(KeyButMask::MOD1)))?;
-    match XTEST_MODIFIERS.get() {
-        0 => Some(()),
-        _ => xtest_modifiers(0),
-    }
+    xtest_modifiers(held_modifiers())
 }
 
-/// Has the X server's keyboard lock `held`'s Control and Alt, and no others of them.
-fn lock_modifiers(held: u16) -> Option<()> {
+/// The modifiers the driver holds between its keys: `flags`', and the Control of the last key.
+fn held_modifiers() -> u16 {
+    FLAGS.get() | KEY_FLAGS.get() & u16::from(KeyButMask::CONTROL)
+}
+
+/// Unlocks the Control and Alt of the X server's keyboard, which the driver locked for `flags`
+/// before it held them through XTEST (#2721): the server keeps a lock its client leaves. Only a
+/// server a build from before then drove can have one, so this goes a release on (#2899). Only
+/// on a display XTEST may drive, as the driver leaves anyone else's keyboard alone.
+fn unlock_modifiers() -> Option<()> {
     use x11rb::protocol::xkb::{self, ConnectionExt as _};
-    if held == LOCKED.get() {
-        return Some(());
-    }
+    xtest()?;
     let x = server()?;
     let (connection, _) = &*x;
     // The server takes no other XKB request from a client before this one.
@@ -1362,7 +1382,7 @@ fn lock_modifiers(held: u16) -> Option<()> {
     (connection.xkb_latch_lock_state(
         xkb::ID::USE_CORE_KBD.into(),
         affected,
-        xproto::ModMask::from(held),
+        none,
         false,
         xkb::Group::M1,
         none,
@@ -1370,25 +1390,18 @@ fn lock_modifiers(held: u16) -> Option<()> {
         0,
     ))
     .ok()?;
-    connection.flush().ok()?;
-    LOCKED.set(held);
-    Some(())
+    connection.flush().ok()
 }
 
-/// Lets go of the Control and Alt the X server's keyboard still holds from an earlier launch's
-/// driver (hold_modifiers), and of the keys and buttons it left down through XTEST. The server
-/// keeps a lock its client leaves, and a key or button XTEST pressed, so a launch that quit or
-/// crashed after a key with ⌘ or ⌃ left the next launch on the same server reading every key
-/// typed as a shortcut, in its UI, which takes the server's locked modifiers into each key, and in
-/// pages that get keys through XTest, as xdotool's (#2511).
+/// Lets go of the keys and buttons an earlier launch's driver left down through XTEST. The server
+/// keeps a key or button XTEST pressed, so a launch that quit or crashed after a key with ⌘ or ⌃
+/// left the next launch on the same server reading every key typed as a shortcut, in its UI and
+/// in pages that get keys through XTest, as xdotool's (#2511).
 fn release_held_modifiers() {
     if crate::drive_wayland::on() {
         return;
     }
-    // Before the first command the driver holds nothing. With what the server holds unknown,
-    // lock_modifiers tells it so, whatever it had locked.
-    LOCKED.set(u16::MAX);
-    lock_modifiers(0);
+    unlock_modifiers();
     let release = || -> Option<()> {
         let x = server()?;
         let (connection, root) = &*x;
@@ -1431,20 +1444,19 @@ fn key_on_return(key: String, until: std::time::Instant, done: Box<dyn FnOnce()>
 }
 
 /// The key `code`'s events of `kinds`, with the modifiers `state`, as `key_events` does: through
-/// XTEST, with the modifier keys `state` has going down before the press, unless it's a repeat, a
-/// chord with Alt, or `flags` holds a modifier.
+/// XTEST, with the modifier keys `state` has going down before the press and those the driver
+/// holds staying down after the release, unless it's a repeat. A chord with Alt, the Mac's ⌃ or ⌥,
+/// goes as a hand's does, so a window manager's bind would take it first: check/openbox.xml leaves
+/// the chords the checks press, which tools/check-lints.py holds it to (#2721).
 fn code_events(code: u8, state: u16, kinds: &[u8]) -> Option<()> {
     // A held key's repeat, a press of a key down already, is what XTEST can't send: the server
     // makes repeats only of a key held past its delay, which is a wait on time.
     let repeat =
         kinds == [xproto::KEY_PRESS_EVENT] && XTEST_KEYS.with_borrow(|down| down.contains(&code));
-    // A chord with Alt, the Mac's ⌃ or ⌥, is slice 2's class (#2721): under Xvfb Openbox takes
-    // Ctrl+Alt with an arrow for itself, so it stays sent.
-    let alt = state & u16::from(KeyButMask::MOD1) != 0;
-    if repeat || alt || FLAGS.get() != 0 {
+    if repeat {
         return sent_code_events(code, state, kinds);
     }
-    let held = (FLAGS.get() | KEY_FLAGS.get()) & u16::from(KeyButMask::CONTROL);
+    let held = held_modifiers();
     if kinds.first() == Some(&xproto::KEY_PRESS_EVENT) {
         xtest_modifiers(state & MODIFIERS | held)?;
     }
@@ -1556,7 +1568,13 @@ fn stack() -> Option<()> {
             break;
         }
         let Some(at) = bounds(top) else { continue };
-        if !viewable(connection, top)
+        // A window for input alone draws nothing, so it's in front of nothing, such as KWin's at
+        // the screen's corner for its edge actions (#2756).
+        let input_only = (connection.get_window_attributes(top).ok())
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|a| a.class == xproto::WindowClass::INPUT_ONLY);
+        if input_only
+            || !viewable(connection, top)
             || at[0] >= over[2]
             || over[0] >= at[2]
             || at[1] >= over[3]
@@ -1569,8 +1587,7 @@ fn stack() -> Option<()> {
             continue;
         }
         // The window manager's frame holds the client, which has the title and process.
-        let mut clients = vec![top];
-        clients.extend(connection.query_tree(top).ok()?.reply().ok()?.children);
+        let clients = [client_in(connection, top), top];
         let property = |window, name: &str| {
             let reply = connection
                 .get_property(false, window, atom(name)?, xproto::AtomEnum::ANY, 0, 256)
@@ -2831,35 +2848,15 @@ fn run_command(line: &str) -> Option<()> {
             go_on(Box::new(move |done| key_on_return(key, until, done)));
             Some(())
         }
-        // Each modifier going down or up as its key does, the left one, in the state held before
-        // it, as the X server reports a key.
-        // The modifiers the last key went with are held too, as the Mac's app takes them to be
-        // until the flags change, such as ⌃ through a ⌃Tab walk.
+        // Each modifier's left key going down or up through XTEST, as a hand's, so the X server
+        // reports it in the state held before it and holds it for the keys and clicks after.
+        // The modifiers the last key went with are let go of, as a hand lets go of a chord, unless
+        // `flags` names them: the Mac's app takes them to be held until the flags change, such as
+        // ⌃ through a ⌃Tab walk.
         "flags" => {
-            let to = modifiers(words);
-            FLAGS.set(FLAGS.get() | KEY_FLAGS.take());
-            // The keys `flags` holds go sent, with the lock, till the drive moves them: the lock
-            // takes over a Control that XTEST holds, before XTEST lets it go.
-            if FLAGS.get() != 0 {
-                hold_modifiers()?;
-            }
-            let keys = [
-                (KeyButMask::CONTROL, 0xffe3),
-                (KeyButMask::MOD1, 0xffe9),
-                (KeyButMask::SHIFT, 0xffe1),
-            ];
-            for (mask, keysym) in keys {
-                let (mask, held) = (u16::from(mask), FLAGS.get());
-                let kind = match (held & mask != 0, to & mask != 0) {
-                    (false, true) => xproto::KEY_PRESS_EVENT,
-                    (true, false) => xproto::KEY_RELEASE_EVENT,
-                    _ => continue,
-                };
-                sent_code_events(keycode(keysym)?.0, held, &[kind])?;
-                FLAGS.set(held ^ mask);
-            }
-            hold_modifiers();
-            Some(())
+            KEY_FLAGS.set(0);
+            FLAGS.set(modifiers(words));
+            hold_modifiers()
         }
         // Repeats are presses like the first, so repeat changes nothing here.
         "keydown" => key_events(words.next()?, none, &[xproto::KEY_PRESS_EVENT]),
@@ -3275,14 +3272,9 @@ fn mini_player() -> Option<xproto::Window> {
                 .is_some_and(|a| a.map_state == xproto::MapState::VIEWABLE)
     };
     let tops = connection.query_tree(*root).ok()?.reply().ok()?.children;
-    // A window manager that reparents, as openbox does, holds it in a frame of its own.
-    tops.into_iter().find_map(|top| {
-        if ours(top) {
-            return Some(top);
-        }
-        let children = connection.query_tree(top).ok()?.reply().ok()?.children;
-        children.into_iter().find(|&child| ours(child))
-    })
+    (tops.into_iter())
+        .map(|top| client_in(connection, top))
+        .find(|&window| ours(window))
 }
 
 /// pip, and pip doubleclick, wheel, press, dragto and release (run_command's header).

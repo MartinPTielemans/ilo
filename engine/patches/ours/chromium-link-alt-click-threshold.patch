@@ -1,0 +1,26 @@
+With Alt held, a press on a link is a link selection, and its release skips the click once the
+selection is extended, which any move with the button down did, a pixel or none (#2717). The
+selection now waits until the pointer is past the distance Blink already starts a drag at (4 px,
+3 px on the Mac); before that the release clicks, and past it Alt-drag selects the link's text.
+
+--- a/third_party/blink/renderer/core/input/mouse_event_manager.cc
++++ b/third_party/blink/renderer/core/input/mouse_event_manager.cc
+@@ -888,6 +888,18 @@
+     }
+   }
+ 
++  // ilo: with Alt held, a press on a link is a link selection, whose release
++  // skips the click once the selection is extended. A hand that moves a pixel
++  // would lose the click, so the selection waits for the distance a drag does.
++  if (IsSelectionOverLink(event) &&
++      !frame_->GetEventHandler()
++           .GetSelectionController()
++           .HasExtendedSelection() &&
++      !DragThresholdExceeded(
++          gfx::ToFlooredPoint(event.Event().PositionInRootFrame()))) {
++    return WebInputEventResult::kNotHandled;
++  }
++
+   // |SelectionController| calls |PositionForPoint()| which requires
+   // |kPrePaintClean|.
+   if (LocalFrameView* frame_view = frame_->View()) {

@@ -393,6 +393,9 @@ go_from_bar "${site#http://}login.html"
 expect "^browser: loaded [0-9]* ${site}login.html\$" "A's login page didn't load"
 # By the page it loaded: a Today tab sync brings, such as the one B opened, says its title too.
 tab=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}login.html\$|\1|p" "$log" | tail -1)
+# Typed into once it has painted, as site.sh says: a synced tab arriving with the load slowed the
+# paint, and the click and ⌘A that came before it were dropped, so the login went in unsaved (#2911).
+expect "^browser: title $tab login\$" "A's login page didn't paint"
 send click 600 60
 [ "$active" = 1 ] || fail "A wasn't the active app, so its login page ignored the click"
 send key a cmd
@@ -455,7 +458,10 @@ while [ $(($(date +%s) - copied_at)) -lt 92 ]; do
   sleep 1
 done
 clipboard
-[ -z "$clipped" ] || fail "the clipboard still held the words 90 s after A copied them"
+# The Mac's host logs when its clear ran and what it did; none yet means it hadn't run.
+cleared=$(grep '^browser: secret clear ' "$log" | tail -1)
+[ -z "$clipped" ] ||
+  fail "the clipboard still held the words 90 s after A copied them${cleared:+ ($cleared)}"
 
 # B and C sign out without a question, as A keeps the account, and the server forgets them.
 for d in c b; do

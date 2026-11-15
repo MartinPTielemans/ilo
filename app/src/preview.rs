@@ -31,8 +31,8 @@ use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
-    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, Volume,
-    WindowButton,
+    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, Visited,
+    Volume, WindowButton,
 };
 use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
@@ -188,6 +188,49 @@ const ARCHIVE: [(&str, &str, f64); 6] = [
     ("", "https://example.org/", 12.),
 ];
 const DAY: f64 = 86_400_000.;
+
+// The profile's visited pages, History lists beside the closed tabs: how many days ago each was
+// last visited, newest first. Wikipedia is a closed tab too, so it shows once, as the closed tab,
+// and Page 0 the first made-up agent task's page, so it shows as its tab's.
+const VISITED: [(&str, &str, f64); 13] = [
+    (
+        "Rust Programming Language",
+        "https://www.rust-lang.org/",
+        0.02,
+    ),
+    ("Page 0", "https://example.com/0", 0.023),
+    ("Wikipedia", "https://www.wikipedia.org/", 0.06),
+    ("Hacker News", "https://news.ycombinator.com/", 0.08),
+    ("MDN Web Docs", "https://developer.mozilla.org/en-US/", 0.15),
+    ("OpenStreetMap", "https://www.openstreetmap.org/", 0.3),
+    (
+        "HTTP - Wikipedia",
+        "https://en.wikipedia.org/wiki/HTTP",
+        0.9,
+    ),
+    (
+        "The Rust Programming Language",
+        "https://doc.rust-lang.org/book/",
+        1.05,
+    ),
+    (
+        "Internet for people, not profit — Mozilla",
+        "https://www.mozilla.org/",
+        1.3,
+    ),
+    (
+        "Internet Archive: Digital Library",
+        "https://archive.org/",
+        2.2,
+    ),
+    (
+        "World Wide Web - Wikipedia",
+        "https://en.wikipedia.org/wiki/World_Wide_Web",
+        2.4,
+    ),
+    ("BBC Weather", "https://www.bbc.com/weather", 3.),
+    ("Welcome to Python.org", "https://www.python.org/", 7.),
+];
 
 // The downloads: one running, one paused, one held, and finished ones, newest first, with their
 // bytes so far and in all, and how many days ago they started.
@@ -427,7 +470,58 @@ impl Fake {
     }
 }
 
+/// PREVIEW_BOOST_CARD=list, nofit or changed: the Boost of the first tab's site, its CSS and an
+/// arrangement of four changes in a profile folder of its own, the last that no longer fits with
+/// nofit, and off as it changed outside ilo with changed.
+fn preview_boost_folder() -> Option<std::path::PathBuf> {
+    std::env::var_os("PREVIEW_BOOST_CARD")?;
+    let folder = std::env::temp_dir().join(format!("ilo-preview-boost-{}", std::process::id()));
+    let boosts = folder.join(browser::boosts::FOLDER);
+    std::fs::create_dir_all(&boosts).ok()?;
+    let site = browser::boosts::site_of(TABS[0].1)?;
+    let css = "#banner { display: none !important; } /* Zap */\n.promo { display: none !important; } /* Zap */\n";
+    let css = css.to_owned() + &"main { max-width: 42em; }\n".repeat(12);
+    std::fs::write(boosts.join(format!("{site}.css")), css).ok()?;
+    let arrangement = r#"{"version": 1, "changes": [
+  {"kind": "settle", "name": "", "role": "video", "before": {"name": "", "role": "article"}},
+  {"kind": "trade", "name": "Trending", "role": "aside", "with": {"name": "Get the newsletter", "role": "form"}},
+  {"kind": "float", "name": "More like this", "role": "complementary", "pin": "screen"},
+  {"kind": "settle", "name": "", "role": "banner", "after": {"name": "", "role": "contentinfo"}}
+]}
+"#;
+    let name = format!("{site}{}", browser::boosts::arrange::SUFFIX);
+    std::fs::write(boosts.join(name), arrangement).ok()?;
+    Some(folder)
+}
+
 impl Browser for Fake {
+    fn profile_folder(&self, _: u64) -> Option<std::path::PathBuf> {
+        preview_boost_folder()
+    }
+
+    fn set_arrangement(&self, _: u64, _: &str, _: &str) -> browser::boosts::Arranged {
+        match std::env::var("PREVIEW_BOOST_CARD").as_deref() {
+            Ok("changed") => browser::boosts::Arranged::Changed,
+            _ => browser::boosts::Arranged::On,
+        }
+    }
+
+    fn show_boosts(&self, changes: Vec<browser::boosts::Change>, cx: &mut App) {
+        for change in changes {
+            if let browser::boosts::Shows::Arrangement(bytes) = change.shows {
+                let state = self.set_arrangement(change.profile, &change.site, &bytes);
+                let nofit = std::env::var("PREVIEW_BOOST_CARD").as_deref() == Ok("nofit");
+                browser::boosts::with(|each| {
+                    each.set_arranged(change.profile, &change.site, state);
+                    if nofit {
+                        each.set_misfits(change.profile, &change.site, vec![3]);
+                    }
+                });
+            }
+        }
+        let _ = cx;
+    }
+
     fn select(&self, tab: u64, cx: &mut App) {
         self.later(cx, move |shell, cx| shell.set_selected(tab, cx));
     }
@@ -792,6 +886,46 @@ impl Browser for Fake {
         0
     }
 
+    // The made-up pages before `before`, those with each of the text's words.
+    fn list_history(
+        &self,
+        profile: u64,
+        request: u64,
+        before: i64,
+        text: &str,
+        max: usize,
+        cx: &mut App,
+    ) -> bool {
+        let before = match before {
+            0 => f64::INFINITY,
+            before => before as f64 / 1000.,
+        };
+        let words: Vec<String> = text.split_whitespace().map(str::to_lowercase).collect();
+        let mut pages: Vec<Visited> = (VISITED.iter())
+            .map(|&(title, url, days)| Visited {
+                url: url.into(),
+                title: title.into(),
+                visited: now() - days * DAY,
+            })
+            .filter(|page| page.visited < before)
+            .filter(|page| {
+                let (title, url) = (page.title.to_lowercase(), page.url.to_lowercase());
+                (words.iter()).all(|word| title.contains(word) || url.contains(word))
+            })
+            .collect();
+        let more = pages.len() > max;
+        pages.truncate(max);
+        self.later(cx, move |shell, cx| {
+            shell.history_listed(profile, request, pages, more, cx)
+        });
+        true
+    }
+
+    // The row goes, and nothing else keeps the made-up pages.
+    fn remove_history(&self, _: u64, _: &str, _: i64, _: i64, _: &mut App) -> bool {
+        true
+    }
+
     // Opening and showing a file do nothing here.
     fn act_on_download(&self, download: u64, action: DownloadAction, cx: &mut App) {
         let mut downloads = self.downloads.borrow_mut();
@@ -860,6 +994,10 @@ impl Browser for Fake {
 
     // The made-up pages have the globe.
     fn page_favicon(&self, _: &str, _: &mut App) {}
+
+    fn url_site(&self, url: &str) -> Option<String> {
+        browser::sort_by_site::made_up_site(url)
+    }
 
     // In UTC, with weeks from Monday.
     // Library › Agents' made-up past tasks: two today, one yesterday, one last week.
@@ -966,6 +1104,9 @@ impl Browser for Fake {
 
     // The made-up pages share nothing.
     fn share_instead(&self, _: u64, _: &mut App) {}
+
+    // The made-up pages have no video.
+    fn show_video(&self, _: u64, _: Option<Bounds<Pixels>>, _: f32, _: &mut App) {}
 
     fn set_volume(&self, tab: u64, volume: f32, cx: &mut App) {
         self.later(cx, move |shell, cx| {
@@ -1662,8 +1803,8 @@ impl Browser for Fake {
     // The preview leaves the clipboard alone, and shares nothing.
     fn copy(&self, _: &str, _: &mut App) {}
 
-    fn pasted(&self, _: &App) -> Option<String> {
-        None
+    fn pasted(&self, cx: &mut App, done: browser::clipboard::Done) {
+        cx.defer(move |cx| done(None, cx));
     }
 
     fn share_services(&self, _: &str) -> Vec<SharedString> {
@@ -1850,9 +1991,9 @@ impl command_bar::Host for PreviewBar {
         Some(format!("https://duckduckgo.com/?q={text}"))
     }
     fn page_favicon(&self, _: &str) {}
-    fn open_tab(&self, _: &str, _: bool) {}
-    fn open_window(&self, _: &str, _: &mut App) {}
-    fn navigate(&self, _: u64, _: &str) {}
+    fn open_tab(&self, _: &str, _: &str, _: bool) {}
+    fn open_window(&self, _: &str, _: &str, _: &mut App) {}
+    fn navigate(&self, _: u64, _: &str, _: &str) {}
     fn reload(&self, _: u64) {}
     fn select(&self, _: u64) {}
     fn tab_window(&self, _: u64) -> Option<u64> {
@@ -1860,7 +2001,7 @@ impl command_bar::Host for PreviewBar {
     }
     fn activate(&self, _: u64, _: u64, _: &mut App) {}
     fn split(&self, _: u64, _: u64, _: &mut App) {}
-    fn open_split(&self, _: &str, _: u64, _: &mut App) {}
+    fn open_split(&self, _: &str, _: &str, _: u64, _: &mut App) {}
     fn copy(&self, _: &str, _: &mut App) {}
     fn show(&self, _: bool, _: f32, _: f32, _: f32, _: f32, _: browser::elevation::Level) {}
     fn set_height(&self, _: f32) {}
@@ -1901,6 +2042,20 @@ impl command_bar::Host for PreviewBar {
     fn set_up_agents(&self, _: &mut App) {}
 
     fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
+
+    /// PREVIEW_BAR=places's closed tabs, one closed two hours ago and one three days ago.
+    fn archived(&self, url: &str, _: &App) -> Option<(u64, f64)> {
+        let hours = match url {
+            "https://doc.rust-lang.org/std/collections/struct.HashMap.html" => 2.,
+            "https://crates.io/" => 72.,
+            _ => return None,
+        };
+        Some((1, self.now() - hours * 3_600_000.))
+    }
+
+    fn restore_archived(&self, _: u64, _: &mut App) -> bool {
+        false
+    }
 }
 
 /// A made-up page's request for a device, as PREVIEW_CHOOSER names it.
@@ -2194,6 +2349,53 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
                 ),
             ];
             ("clear", rows)
+        }
+        // Where a result is (#2337): an open tab, a tab in the archive and a page only in the
+        // history.
+        "places" => {
+            let now = command_bar::Host::now(&PreviewBar);
+            let history = |hours: f64, row: Suggestion| Suggestion {
+                removable: true,
+                last_visit: ((now - hours * 3_600_000.) * 1000.) as i64,
+                ..row
+            };
+            let rows = vec![
+                page(
+                    "Rust Programming Language",
+                    "",
+                    "https://www.rust-lang.org/",
+                    4,
+                ),
+                search("rust"),
+                history(
+                    2.,
+                    page(
+                        "HashMap in std::collections - Rust",
+                        "doc.rust-lang.org",
+                        "https://doc.rust-lang.org/std/collections/struct.HashMap.html",
+                        0,
+                    ),
+                ),
+                history(
+                    24.,
+                    page(
+                        "The Rust Programming Language",
+                        "doc.rust-lang.org",
+                        "https://doc.rust-lang.org/book/",
+                        0,
+                    ),
+                ),
+                history(
+                    72.,
+                    page(
+                        "crates.io: Rust Package Registry",
+                        "crates.io",
+                        "https://crates.io/",
+                        0,
+                    ),
+                ),
+            ];
+            ("rust", rows)
         }
         // The bar adds Open Library… itself, whose glyph the sidebar foot's button shares.
         "library" => ("library", vec![search("library")]),
@@ -2743,8 +2945,9 @@ fn main() {
             });
             let shell_window = window.as_ref().ok().copied();
             match window {
-                // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces or
-                // =agents opens it there; =rename opens its Spaces with the first card's name in its field.
+                // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces,
+                // =history or =agents opens it there; =rename opens its Spaces with the first card's
+                // name in its field.
                 Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
                     window
                         .update(cx, |shell, window, cx| {
@@ -2752,6 +2955,7 @@ fn main() {
                                 Ok("downloads") => shell.run(Command::ViewDownloads, "preview", cx),
                                 Ok("spaces") => shell.show_spaces(cx),
                                 Ok("agents") => shell.show_agents(cx),
+                                Ok("history") => shell.show_visited(cx),
                                 Ok("rename") => {
                                     shell.show_spaces(cx);
                                     shell.preview_rename_card(window, cx);
@@ -2776,8 +2980,8 @@ fn main() {
                     cx.quit();
                 }
             }
-            // PREVIEW_BAR=tabs, sites, commands or library shows the command bar over the window, with
-            // made-up suggestions.
+            // PREVIEW_BAR=tabs, sites, commands, library or places shows the command bar over the window,
+            // with made-up suggestions.
             if let Ok(mode) = std::env::var("PREVIEW_BAR") {
                 let left = x + (width - command_bar::WIDTH as f64) / 2.;
                 let top = y as f32 + command_bar::centered_top(height as f32);
@@ -2883,6 +3087,16 @@ fn main() {
                         cx,
                     );
                 }
+            }
+            // PREVIEW_BOOST_CARD opens the Boost card of the tab shown (preview_boost_folder).
+            if let Some(shell) =
+                shell_window.filter(|_| std::env::var_os("PREVIEW_BOOST_CARD").is_some())
+            {
+                shell
+                    .update(cx, |shell, _, cx| {
+                        shell.run(Command::EditBoost, "preview", cx)
+                    })
+                    .ok();
             }
             // PREVIEW_FOOT_BAR=arrange shows the foot bar over the page's bottom centre with one
             // line, as Arrange's, =point with two, as pointing's, and =long with a question past
@@ -3260,6 +3474,15 @@ impl link_preview::Host for PreviewPeek {
         true
     }
 
+    fn open_waits(&self) -> bool {
+        // No core says when a page is on screen here.
+        false
+    }
+
+    fn close_waits(&self) -> bool {
+        false
+    }
+
     fn release(&self) {}
 
     fn hide(&self) {}
@@ -3316,6 +3539,7 @@ impl site_controls::Host for PreviewSiteControls {
     fn set_developer_mode(&self, _: u64, _: bool) {}
 
     fn set_boost(&self, _: u64, _: bool) {}
+    fn turn_on_arrangement(&self, _: u64) {}
 
     fn run(&self, _: site_controls::Run, _: u64, _: &mut App) {}
 
@@ -3403,6 +3627,11 @@ fn preview_site() -> Site {
             Ok("off") => Some(false),
             _ => None,
         },
+        // PREVIEW_ARRANGEMENT=nofit or changed: what Site Controls says of the Boost's arrangement.
+        arrangement_misfits: (std::env::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("nofit"))
+            .then(|| "1 change no longer fits".into()),
+        arrangement_off: (std::env::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("changed"))
+            .then(|| "Changed outside ilo, off".into()),
     }
 }
 
@@ -4627,6 +4856,15 @@ mod web {
     }
 
     impl command_bar::Host for Bar {
+        // The web preview's tabs aren't closed into an archive.
+        fn archived(&self, _: &str, _: &App) -> Option<(u64, f64)> {
+            None
+        }
+
+        fn restore_archived(&self, _: u64, _: &mut App) -> bool {
+            false
+        }
+
         fn suggest(&self, _: Option<&str>, text: &str, _: bool) {
             let text = text.to_string();
             let search = self.search_url(None, &text).filter(|_| !text.is_empty());
@@ -4667,7 +4905,7 @@ mod web {
         }
         fn page_favicon(&self, _: &str) {}
         // A new tab at the top of Today, shown.
-        fn open_tab(&self, url: &str, behind: bool) {
+        fn open_tab(&self, url: &str, _: &str, behind: bool) {
             let (tab, url) = (self.next_tab.get(), url.to_string());
             self.next_tab.set(tab + 1);
             self.later_shell(move |shell, cx| {
@@ -4689,10 +4927,10 @@ mod web {
             });
         }
         // The demo has the one window.
-        fn open_window(&self, url: &str, _: &mut App) {
-            self.open_tab(url, false);
+        fn open_window(&self, url: &str, typed: &str, _: &mut App) {
+            self.open_tab(url, typed, false);
         }
-        fn navigate(&self, tab: u64, url: &str) {
+        fn navigate(&self, tab: u64, url: &str, _: &str) {
             let url = url.to_string();
             self.later_shell(move |shell, cx| {
                 shell.set_title(tab, title(&url), cx);
@@ -4715,8 +4953,8 @@ mod web {
         }
         fn activate(&self, _: u64, _: u64, _: &mut App) {}
         fn split(&self, _: u64, _: u64, _: &mut App) {}
-        fn open_split(&self, url: &str, _: u64, _: &mut App) {
-            self.open_tab(url, false);
+        fn open_split(&self, url: &str, typed: &str, _: u64, _: &mut App) {
+            self.open_tab(url, typed, false);
         }
         fn copy(&self, _: &str, _: &mut App) {}
         fn show(

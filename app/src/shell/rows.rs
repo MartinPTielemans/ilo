@@ -13,9 +13,9 @@ use gpui::{
 use super::Space;
 use super::{
     BREATH, BREATH_LOW, CHOSEN, CLEAR, CLEAR_ARROW, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED,
-    CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, Curve, DIVIDER, EMOJI_SIZE,
-    FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, HOVERED, KeepName,
-    LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET,
+    CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, Curve, DIVIDER, DIVIDER_HEIGHT,
+    EMOJI_SIZE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, HOVERED,
+    KeepName, LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET,
     PINNED_CARET_GAP, PINNED_CARET_PLATE, PINNED_TURN, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
     Page, Pending, REMOVE_GLYPH, ROW_HEIGHT, ROW_PITCH, Row, SECONDARY, SEGMENT_END,
     SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP, SELECTED_UNHOVER, SLEEPING_FAVICON,
@@ -902,9 +902,12 @@ impl Shell {
         let new_tab = (self.layout().into_iter())
             .any(|(slot, top)| matches!(slot, Slot::NewTab) && (top..top + ROW_PITCH).contains(&y));
         if event.button == MouseButton::Right && tab.is_none() && !new_tab {
-            match y < NAME_HEIGHT && !self.name_row_hidden() {
-                true => self.space_menu(self.space, event.position, cx),
-                false => self.empty_space_menu(self.space, event.position, cx),
+            let divider = (self.layout().get(&Slot::Divider))
+                .is_some_and(|&top| (top..top + DIVIDER_HEIGHT).contains(&y));
+            match (divider, y < NAME_HEIGHT && !self.name_row_hidden()) {
+                (true, _) => self.divider_menu(event.position, cx),
+                (false, true) => self.space_menu(self.space, event.position, cx),
+                (false, false) => self.empty_space_menu(self.space, event.position, cx),
             }
             return true;
         }
@@ -1904,7 +1907,18 @@ impl Shell {
                     )
             })
         });
-        divider_box(&self.palette, self.hairline(), clear).top(px(self.slide(Slot::Divider)))
+        divider_box(&self.palette, self.hairline(), clear)
+            .top(px(self.slide(Slot::Divider)))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|shell, event: &MouseDownEvent, _, cx| {
+                    // Not the empty space's menu, from the page under it.
+                    cx.stop_propagation();
+                    if shell.drag.is_none() && shell.renaming.is_none() {
+                        shell.divider_menu(event.position, cx);
+                    }
+                }),
+            )
     }
 
     /// The pointer has come onto Clear or left it: it lights up, and after a moment says what it
@@ -3479,6 +3493,36 @@ mod tests {
             ["separate 3"],
             "the press on the second segment takes its tab out"
         );
+    }
+
+    /// Shift+Alt-click does what ⌥-click does, for Linux desktops whose window manager takes every
+    /// Alt-click but leaves one with Shift (#2755): another tab joins the page shown, and the page
+    /// shown splits with a copy of itself, where Shift-click alone would select.
+    #[gpui::test]
+    fn a_shift_alt_click_on_a_row_splits_as_an_option_click_does(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, Vec::new(), vec![2, 3, 4], 2);
+        let held = Modifiers {
+            alt: true,
+            shift: true,
+            ..Default::default()
+        };
+        let click = |cx: &mut VisualTestContext, tab: u64| {
+            let (x, y) = close_button(&shell, cx, tab);
+            let at = point(px(x - 100.), px(y));
+            host.take();
+            host.take_edits();
+            cx.simulate_mouse_down(at, MouseButton::Left, held);
+            cx.simulate_mouse_up(at, MouseButton::Left, held);
+            cx.run_until_parked();
+            (host.take(), host.take_edits())
+        };
+
+        let (_, edits) = click(cx, 3);
+        assert_eq!(edits, ["split 3 2 false"]);
+
+        let (calls, edits) = click(cx, 2);
+        assert!(calls.contains(&"duplicate 2".to_string()), "{calls:?}");
+        assert_eq!(edits.len(), 1, "{edits:?}");
     }
 
     /// ⌥ held over a split row's ✕ turns it to separate, as Arc's does: the glyph follows the key

@@ -41,6 +41,8 @@ use futures::StreamExt;
 use gpui::{App, AppContext, Context, Entity, Global, SharedString, Task};
 use serde_json::{Value, json};
 
+use crate::sort_by_site;
+
 pub use clients::{Client, Clients, Entry, System};
 
 /// The name the clients list the server by: the browser's, a dev build's apart.
@@ -236,6 +238,12 @@ pub trait Browser {
     fn remove_pinned(&self, tab: u64, cx: &mut App);
     /// The tabs shown with `tab`, left to right: its split view's, else `tab` alone (bc_tab_split).
     fn split(&self, tab: u64, cx: &App) -> Vec<u64>;
+    /// Moves the Today `tab`, with its split, to `index` among its Space's Today tabs, counted
+    /// without them, as the user's drag does (bc_tab_move).
+    fn move_today(&self, tab: u64, index: usize, cx: &mut App);
+    /// The site of the page at `url`, the registrable domain the link target's plate emphasizes,
+    /// or None off the web (bc_url_site): the same as the sidebar's Sort Today Tabs by Site.
+    fn url_site(&self, url: &str) -> Option<String>;
     /// Puts `tab` in a split view with `with`, at its right end, as the user's New Split View and
     /// Add to Split View do (bc_tab_split_with): false if `with`'s split has three tabs already.
     fn split_with(&self, tab: u64, with: u64, cx: &mut App) -> bool;
@@ -698,6 +706,9 @@ const LOOK_EVERY: Duration = Duration::from_millis(500);
 
 /// What an answer starts with when the core stopped waiting for its page to settle.
 const BUSY: &str = "The page was still busy after 5 s, so it may change yet.";
+/// What it starts with when only requests the page made were still open then, as a page that polls
+/// keeps one, while what it shows held still: no reason to wait for it (#2355).
+const REQUESTS: &str = "The page held still, with requests it made still open after 5 s.";
 
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
@@ -1392,6 +1403,7 @@ impl Agents {
                 self.held.insert(tab, held);
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
             }
+            "sort_tabs_by_site" if !is_task(&agent) => self.sort_by_site(&agent, reply, cx),
             "pin_tab" | "unpin_tab" | "remove_tab" if !is_task(&agent) => {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
@@ -1751,6 +1763,11 @@ impl Agents {
                 return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
             }
             WaitFor::Quiet => match answer.text.starts_with(BUSY) {
+                // What it shows held still, though a poll's request may never end.
+                false if answer.text.starts_with(REQUESTS) => {
+                    let note = REQUESTS.to_string();
+                    return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
+                }
                 false => {
                     let note = "The page settled.".to_string();
                     return Some(ToolResult::text(self.answer_with(&agent, tab, note, show)));
@@ -2965,10 +2982,15 @@ impl Agents {
             .as_array()
             .map(Vec::as_slice)
             .unwrap_or_default();
-        if tree["busy"].as_bool() == Some(true) {
+        let unsettled = match (tree["busy"].as_bool(), tree["requests"].as_bool()) {
+            (Some(true), _) => Some(BUSY),
+            (_, Some(true)) => Some(REQUESTS),
+            _ => None,
+        };
+        if let Some(unsettled) = unsettled {
             note = match note.is_empty() {
-                true => BUSY.into(),
-                false => format!("{note} {BUSY}"),
+                true => unsettled.into(),
+                false => format!("{note} {unsettled}"),
             };
         }
         // A choice answers with what the field holds once it shows the option, as the core
@@ -3020,6 +3042,51 @@ impl Agents {
             true => page,
             false => format!("{note}\n\n{page}"),
         }
+    }
+
+    /// Sort Today Tabs by Site in the agent's own Space, by the user's command's rule
+    /// (`crate::sort_by_site`): no tab outside it is ever listed, so none moves. One entry in the
+    /// activity log.
+    fn sort_by_site(
+        &mut self,
+        agent: &str,
+        reply: mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let today = (self.browser.agent_tabs(agent, cx).into_iter()).filter(|tab| !tab.pinned);
+        let mut rows: Vec<(u64, usize, Option<String>)> = Vec::new();
+        for tab in today {
+            let split = self.browser.split(tab.id, cx);
+            // A split's first tab stands for its row; a split joins no site.
+            if split.first().is_some_and(|&first| first != tab.id) {
+                continue;
+            }
+            let alone = split.len() <= 1;
+            let site = alone.then(|| self.browser.url_site(&tab.url)).flatten();
+            rows.push((tab.id, split.len().max(1), site));
+        }
+        let sites: Vec<_> = (rows.iter())
+            .map(|(row, _, site)| (*row, site.clone()))
+            .collect();
+        let order = sort_by_site::sorted(&sites);
+        let counts: Vec<_> = (rows.iter()).map(|&(row, tabs, _)| (row, tabs)).collect();
+        let moves = sort_by_site::moves(&counts, &order);
+        self.note(agent, "sort_tabs_by_site", "", "");
+        cx.notify();
+        for &(row, index) in &moves {
+            self.browser.move_today(row, index, cx);
+        }
+        let answer = match moves.is_empty() {
+            true => "Your Today tabs are together by site already.".to_string(),
+            false => format!(
+                "Sorted your Today tabs by site, each site's tabs together at its first tab's \
+                 place: {}.",
+                (order.iter().map(u64::to_string))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        _ = reply.send(ToolResult::text(answer));
     }
 
     /// Pins the agent's tab, or unpins or removes one it pinned (#1360). The core keeps every one

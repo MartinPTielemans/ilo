@@ -108,6 +108,8 @@ await '^browser: title [0-9]* body rgb(51, 51, 51)$' ||
 read -r bx by bw bh << EOF
 $(grep '^browser: safe start button 0 at ' "$log" | tail -1 | cut -d' ' -f7-)
 EOF
+# Its Windows id, read while it runs: once it has quit, Git Bash has no /proc entry for it.
+! windows || old_id=$(cat "/proc/$pid/winpid")
 # Posted: the app quits before the driver could say it's done.
 post click $((bx + bw / 2)) $((by + bh / 2))
 expect '^browser: command turn-back-on via sidebar$' "Turn Back On didn't take the click"
@@ -120,11 +122,31 @@ done
 kill -0 "$old" 2> /dev/null && fail "Turn Back On didn't quit the browser"
 wait "$old" || fail "the browser Turn Back On quit exited with status $?"
 in_log '^browser: stopping$' || fail "Turn Back On ended the browser without quitting it"
+# The browser's own process the restart started, not a helper: on Linux and Windows a helper runs
+# the same file, with --type. On Windows its id is the system's, which the old one's isn't.
+restarted() {
+  if windows; then
+    windows_procs "^$procs(?!.*--type=)" | grep -vx "$old_id" | head -1
+    return
+  fi
+  for p in $(pgrep -f "^$browser( |\$)"); do
+    [ "$p" != "$old" ] || continue
+    [ -r "/proc/$p/cmdline" ] && tr '\0' ' ' < "/proc/$p/cmdline" | grep -q -- ' --type=' && continue
+    echo "$p"
+    return
+  done
+}
+restarted_runs() {
+  if windows; then
+    windows_procs "^$procs(?!.*--type=)" | grep -qx "$relaunched"
+  else
+    kill -0 "$relaunched" 2> /dev/null
+  fi
+}
 relaunched=
 for _ in $(seq 300); do
-  relaunched=$(pgrep -n -f "^$browser" || true)
-  [ -n "$relaunched" ] && [ "$relaunched" != "$old" ] && break
-  relaunched=
+  relaunched=$(restarted)
+  [ -n "$relaunched" ] && break
   sleep 0.1
 done
 [ -n "$relaunched" ] || fail "the browser didn't come back after Turn Back On"
@@ -135,13 +157,27 @@ for _ in $(seq 300); do
 done
 [ "$(cat "$mark")" = "launching 0" ] ||
   fail "the launch Turn Back On started says \"$(cat "$mark")\", not launching 0"
-pid=$relaunched
-quit_app
+if windows; then
+  python3 -I check/app-windows.py close "$relaunched"
+else
+  # On Linux the restarted browser logs on in this launch's log. Its mark comes 40 ms into the
+  # launch, and a quit as early ended it before it could quit, leaving the mark.
+  if [ "$(uname)" = Linux ]; then
+    for _ in $(seq 300); do
+      sed -n '/^browser: stopping$/,$p' "$log" | grep -q '^browser: UI shown at ' && break
+      sleep 0.1
+    done
+    sed -n '/^browser: stopping$/,$p' "$log" | grep -q '^browser: UI shown at ' ||
+      fail "the launch Turn Back On started didn't show its UI"
+  fi
+  pid=$relaunched
+  quit_app
+fi
 for _ in $(seq 100); do
-  kill -0 "$pid" 2> /dev/null || break
+  restarted_runs || break
   sleep 0.1
 done
-kill -0 "$pid" 2> /dev/null && fail "the browser Turn Back On started didn't quit"
+restarted_runs && fail "the browser Turn Back On started didn't quit"
 [ "$(cat "$mark")" = "quit" ] || fail "the quit left the mark \"$(cat "$mark")\""
 
 # The next launch loads them all again.
@@ -151,12 +187,13 @@ loaded_all
 exec 3>&-
 quit
 
-# What the safe launch held, checked last, from its whole log: the core holds none of the command
-# line's extensions, the run's and the ad blocker, until #2631 (#2629), and these steps are
-# quarantined on the Mac (quarantine.mac) while the rest of the run is checked as before.
-grep -q 'browser: safe start holds 2 extensions$' "$held_log" ||
-  fail "the core didn't hold Check Safe Start and the ad blocker: $(grep 'safe start holds' "$held_log")"
-grep '^browser: extensions menu' "$held_log" | grep -q '[a-p]' &&
-  fail "the Extensions menu listed an extension in a safe start: $(grep '^browser: extensions menu' "$held_log" | tail -1)"
+# What the safe launch held, from its log up to its quit, as on Linux the normal launch Turn Back On
+# started logs on after it: the command line's extensions, the run's and the ad blocker, load after
+# the core's first sweep and are held as each loads (#2629).
+held=$(sed '/^browser: stopping$/q' "$held_log")
+echo "$held" | grep -q 'browser: safe start holds 2 extensions$' ||
+  fail "the core didn't hold Check Safe Start and the ad blocker: $(echo "$held" | grep 'safe start holds')"
+echo "$held" | grep '^browser: extensions menu' | grep -q '[a-p]' &&
+  fail "the Extensions menu listed an extension in a safe start: $(echo "$held" | grep '^browser: extensions menu' | tail -1)"
 echo "ok: safe start held the extension, the ad blocker and the Boost after two crashes at launch," \
   "showed its card ($out/safe-start.png), and Turn Back On restarted into a normal launch"

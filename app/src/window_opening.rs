@@ -331,6 +331,8 @@ pub(crate) fn open_window_as(
                 BrowserWindow {
                     id,
                     ui_view,
+                    #[cfg(target_os = "linux")]
+                    view: ns_view(window),
                     shell: shell.downgrade(),
                     handle: Window::window_handle(window),
                     children: Vec::new(),
@@ -646,6 +648,8 @@ pub(crate) fn finish_opening(
         platform::host_watch_active(became_active);
     }
     follow_reduce_motion(cx);
+    // After the first frame: no time shows before the Library opens.
+    update_app_later(follow_clock);
     browser::shell::follow_scroll_bars(cx);
     #[cfg(not(target_os = "linux"))]
     unsafe {

@@ -67,6 +67,7 @@ unsafe extern "C" {
         picture_width: f64,
         picture_height: f64,
         foot_top: f64,
+        right: bool,
     );
     pub fn host_screens(frames: *mut f64, count: usize) -> usize;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -86,6 +87,7 @@ unsafe extern "C" {
         ui_view: *mut c_void,
         profile_dir: *const c_char,
         width: f64,
+        right: bool,
     ) -> bool;
     #[cfg(target_os = "windows")]
     pub fn host_save_launch_pixels(
@@ -129,6 +131,8 @@ unsafe extern "C" {
     pub fn host_reduce_motion() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_watch_reduce_motion(changed: extern "C" fn());
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_twelve_hour_clock() -> bool;
     pub fn host_is_default_browser() -> bool;
     pub fn host_make_default_browser(answered: extern "C" fn());
     pub fn host_since_launch() -> f64;

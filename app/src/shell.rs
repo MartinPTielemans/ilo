@@ -35,6 +35,7 @@ mod access;
 mod agent_bar;
 mod agent_pointer;
 mod agent_question;
+mod arrange;
 mod assets;
 #[cfg(test)]
 mod autofill_tests;
@@ -49,6 +50,9 @@ mod beside;
 mod blank_tests;
 mod boost;
 mod browser;
+mod by_site;
+#[cfg(test)]
+mod by_site_tests;
 mod card_strip;
 mod cast;
 mod chooser;
@@ -185,7 +189,7 @@ pub use keys::{
     web_keystroke, written_as,
 };
 pub(crate) use library::bytes;
-pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
+pub use library::{Archived, Captured, Download, DownloadAction, DownloadState, Visited};
 use library::{MediaVideo, RECEDE_X, Section};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
@@ -1817,6 +1821,8 @@ pub struct Shell {
     /// The tab whose row's menu asked for its Boost's card, which opens once the tab shows.
     boost_pending: Option<u64>,
     zapping: Option<u64>,
+    /// The tab whose page Arrange is on (#2347), one at a time, as Zap.
+    arranging: Option<u64>,
     boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Library › Boosts' list, the window's profile's, read as it's shown.
     boost_list: Vec<crate::boosts::Boost>,
@@ -1921,6 +1927,11 @@ pub struct Shell {
 }
 
 impl Shell {
+    /// What the window's pages show until they draw their first frame, as last given to the core.
+    pub fn page_color(&self) -> Option<u32> {
+        self.page_color
+    }
+
     /// Makes the shell, the one the browser's shortcuts act on.
     pub fn new(browser: Rc<dyn Browser>, cx: &mut Context<Self>) -> Self {
         cx.set_global(ShellHandle(cx.weak_entity()));
@@ -2199,6 +2210,7 @@ impl Shell {
             boost_card: None,
             boost_pending: None,
             zapping: None,
+            arranging: None,
             boost_card_drawn: Rc::default(),
             boost_list: Vec::new(),
             battery_saver: None,
@@ -2999,6 +3011,7 @@ impl Shell {
         self.follow_dock(cx);
         self.update_menus(cx);
         self.update_title(cx);
+        self.history_space_shown(cx);
         cx.notify();
     }
 
@@ -3626,6 +3639,7 @@ impl Shell {
         // A load that finished, or a URL that changed with none under way, as a same-page one does:
         // the page differs from its picture in the window it left.
         let page_changed = !page.loading && (entry.page.loading || page.url != entry.page.url);
+        let url_changed = page.url != entry.page.url;
         let changed =
             entry.keep_page(page) | replace(&mut entry.left_pinned_host, left_pinned_host);
         if card_changed {
@@ -3648,8 +3662,10 @@ impl Shell {
         if let Some(trouble) = trouble {
             self.trouble_changed(tab, trouble, cx);
         }
-        // View › Developer names it, so only its change rebuilds the menus, not each load.
-        if tab == self.selected && self.developer_mode(tab) != developer_mode {
+        // View › Developer names it, and Tabs › Sort Today Tabs by Site is dimmed while each site's
+        // tabs are together, which a Today tab's new URL can change; not each load.
+        let developer_changed = tab == self.selected && self.developer_mode(tab) != developer_mode;
+        if developer_changed || (url_changed && self.today().contains(&tab)) {
             self.update_menus(cx);
         }
         // A task's Pages draw its pages' speakers (#1080).

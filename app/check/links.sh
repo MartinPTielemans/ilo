@@ -9,7 +9,7 @@
 # running, one opens in a Little ilo window of its own for the Space the window in front shows, and
 # loads there, as Settings › Links sends everything else there until the user picks another, and
 # the same link again brings that window back to the front, and a sign-in's page there closes it
-# once done (#2327). On Windows one sent to the Store's MSIX,
+# once done (#2327), leaving nothing to reopen (#2527). On Windows one sent to the Store's MSIX,
 # which Windows activates for it, opens the same way, once (#1427). Sent
 # instead to the Space in front, one opens as a new tab in the Space the window in front shows. With
 # a private window in front, it goes in the regular window, which comes to the front. Settings › Links
@@ -25,8 +25,9 @@
 # tab in the window, never in Little ilo. On Windows a click on a site's notification, which comes
 # as a launch too, reaches the page (#1426). On the Mac ⌘Q keeps the
 # sidebar's picture, which both the launch without a link and the one with it show; Linux has no
-# launch picture (host_show_launch_window). Reports the launch times from the process's start,
-# without a link and with one.
+# launch picture (host_show_launch_window). On Linux two launches at once on a new profile open one
+# window, the one that hands over exiting 0 with no launch window, and leave no crash report
+# (#2494). Reports the launch times from the process's start, without a link and with one.
 
 serve
 log="$out/links.log"
@@ -227,9 +228,10 @@ await "^browser: window closed $little\$" || fail "⌘W didn't close the link's 
 # A sign-in another app's link opened in Little ilo closes its window by itself once it's done
 # (#2327), on a signal that isn't the page's words: a load onto a loopback address carrying a code,
 # from another site. The provider here is localhost, another site than the callback's 127.0.0.1, as
-# a CLI's or an MCP client's login ends at its own server. The bar says it's closing, the window
-# closes 2 s on, and ⇧⌘T brings it back as any closed Little ilo window. One carrying an error
-# stays, and the same page in a tab the user opened stays.
+# a CLI's or an MCP client's login ends at its own server. The bar says it's closing and the window
+# closes 2 s on. Its address carries a single-use code, so the browser keeps nothing of it (#2527):
+# ⇧⌘T brings back the Little ilo window closed before it instead. One carrying an error stays, and
+# the same page in a tab the user opened stays.
 printf '%s' '<title>sign-in</title><script>
 addEventListener("load", () => setTimeout(() => location = "/bounce?to=" +
   encodeURIComponent("http://127.0.0.1:" + location.port + "/signed-in.html" + location.search), 100));
@@ -250,6 +252,7 @@ sign_in_link "$provider/signin.html?code=abc"
 await "^browser: loaded $tab $callback?code=abc\$" || fail "the sign-in didn't come back to its callback"
 await "^browser: little window $little sign-in done at $callback?code=abc\$" ||
   fail "the callback with a code didn't end the sign-in"
+grep -q "^browser: tab $tab page forgotten\$" "$log" || fail "the sign-in's callback page wasn't forgotten"
 await "^browser: little bar closing true\$" || fail "the sign-in's Little ilo bar didn't say it was closing"
 # The bar's words, for the PR: the window has the 2 s of its pause to be caught in.
 ../tools/window-screenshot.sh "$pid" "$out/links-sign-in-closing.png" all ||
@@ -260,10 +263,12 @@ await "^browser: window closed $little\$" || fail "the sign-in's Little ilo wind
 send window 1
 send key t cmd shift
 expect "^browser: little window [0-9]* reopened [0-9]* as [0-9]*\$" \
-  "⇧⌘T didn't bring back the sign-in's Little ilo window: $(grep '^browser: little window' "$log" | tail -1)"
+  "⇧⌘T didn't bring back the Little ilo window closed before the sign-in's: $(grep '^browser: little window' "$log" | tail -1)"
+grep '^browser: little window [0-9]* reopened ' "$log" | tail -1 | grep -q " reopened $tab as " &&
+  fail "⇧⌘T brought back the sign-in's callback page, whose code the browser keeps nowhere"
 send window "$(grep -c '^browser: window opened ' "$log")"
 send key w cmd
-expect "^browser: window closed [0-9]*\$" "⌘W didn't close the sign-in's reopened Little ilo window"
+expect "^browser: window closed [0-9]*\$" "⌘W didn't close the reopened Little ilo window"
 sign_in_link "$provider/signin.html?error=denied"
 await "^browser: loaded $tab $callback?error=denied\$" || fail "the failed sign-in didn't come back to its callback"
 # The user's ⌘W closes it, and only then: the load decided it, before the key was sent.
@@ -790,6 +795,67 @@ if [ -n "$fast" ]; then
   launch_frame=$check_launch_frame
 fi
 
+# Two launches at once on a new profile, with no ilo running (#2494): Chromium gives the profile's
+# lock to one, and the other hands its command line over and exits. Started together, both find no
+# lock where the app reads it, so only the core keeps the one that hands over from hearing
+# launching: it shows no launch window, so starts no early Vulkan thread to exit under, as #2488's
+# did, exits 0 and leaves no crash report. One pair, on a profile of its own with the daily count
+# off. Linux only, as #2488's early thread is Linux's, and not in a Flatpak, whose two launches
+# app_pid can't tell apart.
+raced=
+if [ "$(uname)" = Linux ] && [ -z "${BROWSER_FLATPAK:-}" ]; then
+  dir="$out/links-race"
+  rm -rf "$dir"
+  mkdir -p "$dir/Default"
+  count_off "$dir"
+  BROWSER_PROFILE_DIR="$dir" "$browser" > "$out/links-race-a.log" 2>&1 &
+  a=$!
+  BROWSER_PROFILE_DIR="$dir" "$browser" > "$out/links-race-b.log" 2>&1 &
+  b=$!
+  # The one that hands over goes; the other stays, with its window.
+  handed=
+  for _ in $(seq 300); do
+    if ! kill -0 "$a" 2>/dev/null; then handed=$a stays=$b gone_log=a stays_log=b; break; fi
+    if ! kill -0 "$b" 2>/dev/null; then handed=$b stays=$a gone_log=b stays_log=a; break; fi
+    sleep 0.1
+  done
+  if [ -z "$handed" ]; then
+    kill -INT "$a" "$b" 2> /dev/null || true
+    fail "of two launches at once, neither handed over in 30 s"
+  fi
+  status=0
+  wait "$handed" || status=$?
+  gone_log="$out/links-race-$gone_log.log"
+  log="$out/links-race-$stays_log.log"
+  pid=$stays
+  await '^browser: window opened [0-9]' ||
+    fail "of two launches at once, the one that stayed opened no window"
+  quit_app
+  for _ in $(seq 300); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  ! kill -0 "$pid" 2>/dev/null || fail "of two launches at once, the one that stayed didn't quit"
+  # Crashpad's handler, which writes a crash's report, goes once it has, so every process of the
+  # profile's is gone first.
+  for _ in $(seq 300); do
+    pgrep -f -- "$dir" > /dev/null || break
+    sleep 0.1
+  done
+  ! pgrep -f -- "$dir" > /dev/null || fail "a process of the two launches' profile outlived both"
+  [ "$status" = 0 ] || fail "of two launches at once, the one that handed over exited $status"
+  ! grep -q '^browser: launch window at ' "$gone_log" ||
+    fail "of two launches at once, the one that handed over heard launching too"
+  grep -q '^browser: launch window at ' "$log" ||
+    fail "of two launches at once, the one that stayed showed no launch window"
+  reports=$(find "$dir/Crashpad" -name '*.dmp' 2> /dev/null | wc -l | tr -d ' ')
+  [ "$reports" = 0 ] || fail "two launches at once left $reports crash reports"
+  raced=1
+else
+  echo "skip: two launches at once on a new profile: #2488's early thread is Linux's, and a" \
+    "Flatpak's two launches are one sandbox's."
+fi
+
 if [ "$driven" = 1 ]; then
   [ -z "$again" ] ||
     echo "ok: a launch with no link while the window is minimized brings it back and to the front."
@@ -803,5 +869,7 @@ fi
 echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png${mac:+, the launch window 3 points shorter than its picture: $out/links-launch-shorter.png}$(! windows || echo ", the launch window: $out/links-launch.png")"
 [ -z "$toasted" ] || echo "ok: a click on a site's notification, which notification_helper.exe hands" \
   "chrome.exe as a launch with the toast's id, reaches the page, in the browser running."
+[ -z "$raced" ] || echo "ok: of two launches at once on a new profile, the one that handed over" \
+  "showed no launch window, exited 0 and left no crash report."
 [ -z "$mac" ] || echo "ok: an update's notes open as a tab in the window at its first launch, with links from other apps going to Little ilo, and only then."
 echo "  Launch without a link: $plain; with one: $cold"
