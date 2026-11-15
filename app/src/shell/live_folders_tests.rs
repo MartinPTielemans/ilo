@@ -37,6 +37,7 @@ fn shown(rows: &[LiveRow]) -> Vec<String> {
             LiveRow::Heading(LiveList::Created) => "C".into(),
             LiveRow::Item { item, new: true } => format!("{}*", item.number),
             LiveRow::Item { item, new: false } => item.number.to_string(),
+            LiveRow::Tab(tab) => format!("tab {tab}"),
             LiveRow::SignIn => "sign in".into(),
         })
         .collect()
@@ -83,7 +84,7 @@ fn review_requests_come_first_each_under_its_heading() {
         now,
     );
     assert_eq!(
-        shown(&folder.rows(|_| false)),
+        shown(&folder.rows(|_| None)),
         ["R", "3", "4", "C", "7", "8"]
     );
     assert_eq!(folder.waiting(), 2);
@@ -93,10 +94,13 @@ fn review_requests_come_first_each_under_its_heading() {
 fn a_list_with_no_rows_has_no_heading() {
     let mut folder = LiveFolder::default();
     folder.answer(LiveAnswer::Items(vec![mine(7)]), Instant::now());
-    assert_eq!(shown(&folder.rows(|_| false)), ["C", "7"]);
-    // Its one item open as a tab, the tab's row stands for it.
+    assert_eq!(shown(&folder.rows(|_| None)), ["C", "7"]);
+    // Its one item open as a tab, the tab's row stands for it, in its place.
     let open = mine(7).url();
-    assert!(folder.rows(|url| url == open).is_empty());
+    assert_eq!(
+        shown(&folder.rows(|url| (url == open).then_some(30))),
+        ["C", "tab 30"]
+    );
     assert_eq!(folder.item_at(&open), Some(&mine(7)));
 }
 
@@ -109,7 +113,10 @@ fn an_item_that_leaves_the_lists_leaves_its_tab_a_plain_one() {
     // Merged or closed, it isn't in the next answer, so its tab no longer stands for it.
     folder.answer(LiveAnswer::Items(vec![mine(7)]), Instant::now());
     assert_eq!(folder.item_at(&gone), None);
-    assert_eq!(shown(&folder.rows(|url| url == gone)), ["C", "7"]);
+    assert_eq!(
+        shown(&folder.rows(|url| (url == gone).then_some(30))),
+        ["C", "7"]
+    );
 }
 
 #[test]
@@ -117,18 +124,18 @@ fn items_after_the_first_answer_are_new_until_opened() {
     let start = Instant::now();
     let mut folder = LiveFolder::default();
     folder.answer(LiveAnswer::Items(vec![review(3)]), start);
-    assert_eq!(shown(&folder.rows(|_| false)), ["R", "3"]);
+    assert_eq!(shown(&folder.rows(|_| None)), ["R", "3"]);
     folder.answer(LiveAnswer::Items(vec![review(4), review(3)]), start);
-    assert_eq!(shown(&folder.rows(|_| false)), ["R", "4*", "3"]);
+    assert_eq!(shown(&folder.rows(|_| None)), ["R", "4*", "3"]);
     // A failed refresh keeps the rows and what's new.
     folder.answer(LiveAnswer::Failed, start);
-    assert_eq!(shown(&folder.rows(|_| false)), ["R", "4*", "3"]);
+    assert_eq!(shown(&folder.rows(|_| None)), ["R", "4*", "3"]);
     folder.opened(&review(4).url());
-    assert_eq!(shown(&folder.rows(|_| false)), ["R", "4", "3"]);
+    assert_eq!(shown(&folder.rows(|_| None)), ["R", "4", "3"]);
     // One that leaves and comes back is new again.
     folder.answer(LiveAnswer::Items(vec![review(3)]), start);
     folder.answer(LiveAnswer::Items(vec![review(3), review(4)]), start);
-    assert_eq!(shown(&folder.rows(|_| false)), ["R", "3", "4*"]);
+    assert_eq!(shown(&folder.rows(|_| None)), ["R", "3", "4*"]);
 }
 
 #[test]
@@ -137,11 +144,11 @@ fn signed_out_it_has_the_sign_in_row_alone() {
     let mut folder = LiveFolder::default();
     folder.answer(LiveAnswer::Items(vec![review(3)]), now);
     folder.answer(LiveAnswer::SignedOut, now);
-    assert_eq!(shown(&folder.rows(|_| false)), ["sign in"]);
+    assert_eq!(shown(&folder.rows(|_| None)), ["sign in"]);
     assert_eq!(folder.waiting(), 0);
     // Signing in fills it, with nothing new: the lists before aren't known.
     folder.answer(LiveAnswer::Items(vec![review(3), mine(7)]), now);
-    assert_eq!(shown(&folder.rows(|_| false)), ["R", "3", "C", "7"]);
+    assert_eq!(shown(&folder.rows(|_| None)), ["R", "3", "C", "7"]);
 }
 
 #[test]

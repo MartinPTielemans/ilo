@@ -161,12 +161,26 @@ pub enum LiveEvent {
     Refresh,
 }
 
-/// A row of an open Live Folder under the tabs opened from it, which aren't among them.
+/// A row of an open Live Folder under its other tabs.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LiveRow {
     Heading(LiveList),
-    Item { item: LiveItem, new: bool },
+    Item {
+        item: LiveItem,
+        new: bool,
+    },
+    /// The tab opened from an item still listed, in the item's place: a row pressed stays put.
+    Tab(u64),
     SignIn,
+}
+
+/// How an open Live Folder's rows are drawn under its other tabs: runs of its own rows, each so
+/// tall, with the tabs opened from its listed items between them, each in its item's place. Run
+/// `i` is above `tabs[i]`, so there's one run more than tabs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LiveLayout {
+    pub runs: Vec<f32>,
+    pub tabs: Vec<u64>,
 }
 
 /// A Live Folder's lists as last fetched, and when to fetch them again.
@@ -252,21 +266,23 @@ impl LiveFolder {
             .count()
     }
 
-    /// The rows under the tabs opened from it, for which `open` says whether an item's URL is one:
-    /// each list under its heading, without its opened items, or the sign-in row. A list with no rows has no heading.
-    pub fn rows(&self, open: impl Fn(&str) -> bool) -> Vec<LiveRow> {
+    /// Its rows under its other tabs, for which `opened` gives the tab open at an item's URL: each
+    /// list under its heading, an opened item's tab in its place, or the sign-in row. A list with
+    /// no rows has no heading.
+    pub fn rows(&self, opened: impl Fn(&str) -> Option<u64>) -> Vec<LiveRow> {
         if self.signed_out {
             return vec![LiveRow::SignIn];
         }
         let mut rows = Vec::new();
         for list in LiveList::ALL {
-            let items = (self.items.iter()).filter(|item| item.list == list && !open(&item.url()));
             let at = rows.len();
-            for item in items {
-                let new = self.new.contains(&item.key());
-                rows.push(LiveRow::Item {
-                    item: item.clone(),
-                    new,
+            for item in (self.items.iter()).filter(|item| item.list == list) {
+                rows.push(match opened(&item.url()) {
+                    Some(tab) => LiveRow::Tab(tab),
+                    None => LiveRow::Item {
+                        item: item.clone(),
+                        new: self.new.contains(&item.key()),
+                    },
                 });
             }
             if rows.len() > at {
@@ -302,33 +318,42 @@ impl LiveFolder {
     }
 }
 
-/// How tall `space`'s open Live Folders' rows are, each, under the tabs opened from them, by
-/// `url`, the pinned URL of each tab in it.
+/// How `space`'s Live Folders' rows are drawn, each, by `url`, the pinned URL of each tab in it.
 pub(super) fn rooms(
     space: &Space,
     live: &HashMap<u64, LiveFolder>,
     url: impl Fn(u64) -> String,
-) -> HashMap<u64, f32> {
+) -> HashMap<u64, LiveLayout> {
     (space.folders.live.keys())
         .map(|&folder| {
             let rows = live
                 .get(&folder)
                 .map(|kept| kept.rows(|item| opened_in(space, folder, &url, item)))
                 .unwrap_or_default();
-            let room = (rows.iter())
-                .map(|row| match row {
-                    LiveRow::Heading(_) => HEADING_HEIGHT,
-                    _ => ROW_PITCH,
-                })
-                .sum();
-            (folder, room)
+            let mut layout = LiveLayout {
+                runs: vec![0.],
+                tabs: Vec::new(),
+            };
+            for row in rows {
+                match row {
+                    LiveRow::Tab(tab) => {
+                        layout.tabs.push(tab);
+                        layout.runs.push(0.);
+                    }
+                    LiveRow::Heading(_) => *layout.runs.last_mut().unwrap() += HEADING_HEIGHT,
+                    _ => *layout.runs.last_mut().unwrap() += ROW_PITCH,
+                }
+            }
+            (folder, layout)
         })
         .collect()
 }
 
-/// Whether the item at `item` is open as a tab directly in `folder`, whose row stands for it.
-fn opened_in(space: &Space, folder: u64, url: &impl Fn(u64) -> String, item: &str) -> bool {
-    (space.pinned.iter()).any(|&tab| space.folder_of(tab) == folder && url(tab) == item)
+/// The tab open at `item` directly in `folder`, whose row stands for it, if there's one with a
+/// row of its own: the first of its split, if it's in one.
+fn opened_in(space: &Space, folder: u64, url: &impl Fn(u64) -> String, item: &str) -> Option<u64> {
+    (space.pinned.iter().copied())
+        .find(|&tab| space.folder_of(tab) == folder && !space.later(tab) && url(tab) == item)
 }
 
 impl Shell {
@@ -507,8 +532,22 @@ impl Shell {
         self.ask_live(LiveEvent::Refresh, vec![folder], cx);
     }
 
-    /// Convert to Folder: the tabs opened from it stay, in a plain folder, and its lists go.
+    /// Convert to Folder: the tabs opened from it stay, in a plain folder in the order they're
+    /// drawn, and its lists go.
     pub(super) fn convert_live_folder(&mut self, folder: u64, cx: &mut Context<Self>) {
+        let space = self.shown_space();
+        let listed = space.and_then(|space| space.live_rooms.get(&folder));
+        let listed = listed.map(|layout| layout.tabs.clone()).unwrap_or_default();
+        // The core keeps them in the order they were opened, so each goes to the folder's end.
+        let end = space.map_or(0, |space| {
+            (space.pinned.iter())
+                .filter(|&&row| space.folder_of(row) == folder)
+                .count()
+        });
+        for tab in listed {
+            self.browser
+                .move_tab(tab, true, folder, end.saturating_sub(1), cx);
+        }
         self.browser.end_live_folder(folder, cx);
     }
 
@@ -580,9 +619,10 @@ impl Shell {
         self.live.get(&folder)?.age(Instant::now())
     }
 
-    /// An open Live Folder's rows under the tabs opened from it, `depth` folders in: each list
-    /// under its heading, or the sign-in row, sliding with the rows round them.
-    pub(super) fn live_block(&self, folder: u64, cx: &mut Context<Self>) -> AnyElement {
+    /// Run `run` of an open Live Folder's rows, `depth` folders in: its lists' headings and rows,
+    /// or the sign-in row, between the tabs opened from its items, sliding with the rows round
+    /// them.
+    pub(super) fn live_block(&self, folder: u64, run: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(space) = self.shown_space() else {
             return div().into_any_element();
         };
@@ -593,8 +633,12 @@ impl Shell {
         let rows = (self.live.get(&folder))
             .map(|kept| kept.rows(|item| opened_in(space, folder, &url, item)))
             .unwrap_or_default();
-        let room = space.live_rooms.get(&folder).copied().unwrap_or_default();
+        let room = (space.live_rooms.get(&folder))
+            .and_then(|layout| layout.runs.get(run).copied())
+            .unwrap_or_default();
         let inset = PLATE_INSET + depth as f32 * FOLDER_INDENT;
+        let mut runs = rows.split(|row| matches!(row, LiveRow::Tab(_)));
+        let rows = runs.nth(run).unwrap_or_default().to_vec();
         let rows = rows.into_iter().map(|row| match row {
             LiveRow::Heading(list) => div()
                 .flex_none()
@@ -609,13 +653,14 @@ impl Shell {
                 .into_any_element(),
             LiveRow::Item { item, new } => self.live_row(folder, inset, item, new, cx),
             LiveRow::SignIn => self.sign_in_row(source, inset, cx),
+            LiveRow::Tab(_) => div().into_any_element(),
         });
         div()
-            .id(("live", folder))
+            .id(SharedString::from(format!("live-{folder}-{run}")))
             .flex_none()
             .h(px(room))
             .overflow_hidden()
-            .top(px(self.slide(Slot::Live(folder))))
+            .top(px(self.slide(Slot::Live(folder, run))))
             .flex()
             .flex_col()
             .when(self.a11y, |block| {

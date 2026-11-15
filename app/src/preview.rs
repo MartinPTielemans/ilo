@@ -726,8 +726,29 @@ impl Browser for Fake {
     }
 
     // The preview's window has no host to take a drop.
-    fn open_at(&self, _: &[String], _: bool, _: u64, _: usize, _: &mut App) -> u64 {
-        0
+    // A Live Folder's row pressed: its item's tab opens in the folder and shows, as the core does.
+    fn open_at(&self, urls: &[String], _: bool, folder: u64, index: usize, cx: &mut App) -> u64 {
+        let pressed = LIVE_TABS
+            .iter()
+            .find(|(_, _, url)| urls.first().is_some_and(|each| each == url));
+        let Some(&(tab, title, url)) = pressed else {
+            return 0;
+        };
+        self.later(cx, move |shell, cx| {
+            let (mut pinned, mut folders) = (shell.pinned().to_vec(), shell.folders());
+            pinned.insert(pinned_at(&pinned, &folders, folder, index), tab);
+            folders.parents.insert(tab, folder);
+            let (today, splits) = (shell.today().to_vec(), shell.splits());
+            shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
+            shell.set_title(tab, title.into(), cx);
+            let page = Page {
+                url: url.into(),
+                ..Default::default()
+            };
+            shell.set_page(tab, page, cx);
+            shell.set_selected(tab, cx);
+        });
+        tab
     }
 
     fn open_behind(&self, _: &[String], _: bool, _: u64, _: usize, _: &mut App) {}
@@ -3415,6 +3436,13 @@ fn main() {
                     preview_hover(shell.into(), &what, cx);
                 }
             }
+            // PREVIEW_PRESS=<x>,<y> presses there in the window, as on a Live Folder's row, and
+            // takes the pointer off the sidebar after, so no row is hovered.
+            if let Ok(what) = std::env::var("PREVIEW_PRESS") {
+                if let Some(shell) = shell_window {
+                    preview_press(shell.into(), &what, cx);
+                }
+            }
             // PREVIEW_CLICK=<x>,<y> clicks there in the window, as on an archived tab's row.
             if let Ok(what) = std::env::var("PREVIEW_CLICK") {
                 if let Some(shell) = shell_window {
@@ -3531,6 +3559,55 @@ fn preview_hover(shell: gpui::AnyWindowHandle, what: &str, cx: &mut App) {
                 })
                 .ok();
         }
+    })
+    .detach();
+}
+
+fn preview_press(shell: gpui::AnyWindowHandle, what: &str, cx: &mut App) {
+    let mut parts = what.split(',').map(|part| part.trim().parse::<f32>().ok());
+    let (Some(Some(x)), Some(Some(y))) = (parts.next(), parts.next()) else {
+        return;
+    };
+    let page = f32::from(PREVIEW_AREA.get().width) - 10.;
+    cx.spawn(async move |cx| {
+        // Once the folder's rows are drawn, whose boxes the press finds.
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        let (position, modifiers) = (point(px(x), px(y)), gpui::Modifiers::default());
+        let button = gpui::MouseButton::Left;
+        let events = [
+            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                position,
+                pressed_button: None,
+                modifiers,
+            }),
+            gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                button,
+                position,
+                modifiers,
+                click_count: 1,
+                first_mouse: false,
+            }),
+            gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                button,
+                position,
+                modifiers,
+                click_count: 1,
+            }),
+            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                position: point(px(page), px(y)),
+                pressed_button: None,
+                modifiers,
+            }),
+        ];
+        shell
+            .update(cx, |_, window, cx| {
+                for event in events {
+                    window.dispatch_event(event, cx);
+                }
+            })
+            .ok();
     })
     .detach();
 }

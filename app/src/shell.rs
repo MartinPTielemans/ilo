@@ -709,9 +709,9 @@ struct Space {
     /// Tabs shown in closed folders before, which stay listed there after another tab shows,
     /// until a click on their folder closes it for good, as Arc keeps them, per window (#1405).
     peeked: Vec<u64>,
-    /// How tall each of its open Live Folders' rows are together, under the tabs opened from it,
-    /// which the rows after them make room for (#2979).
-    live_rooms: HashMap<u64, f32>,
+    /// How each of its Live Folders' rows are drawn under its other tabs, which the rows after
+    /// them make room for, and the tabs drawn in their items' places (#2979).
+    live_rooms: HashMap<u64, live_folders::LiveLayout>,
 }
 
 impl Space {
@@ -731,8 +731,32 @@ impl Space {
         let shown = self.panes(self.shown)[0];
         let folded = move |row| collapsed || self.holders(row).any(|folder| !self.is_open(folder));
         let listed = move |row| row == shown || (!collapsed && self.peeked.contains(&row));
-        (self.pinned.iter().copied())
+        (self.drawn_pinned().into_iter())
             .filter(move |&row| !self.later(row) && (listed(row) || !folded(row)))
+    }
+
+    /// Its pinned tabs in the order they're drawn: a tab opened from a Live Folder's item still
+    /// listed goes in its item's place, after the folder's other rows, in the lists' order. The
+    /// core keeps them in the order they were opened, which next and previous tab don't follow.
+    fn drawn_pinned(&self) -> Vec<u64> {
+        let mut pinned = self.pinned.clone();
+        for (&folder, layout) in &self.live_rooms {
+            if layout.tabs.is_empty() {
+                continue;
+            }
+            pinned.retain(|row| !layout.tabs.contains(row));
+            let own = |row: u64| row == folder || self.holders(row).any(|each| each == folder);
+            let Some(at) = pinned.iter().rposition(|&row| own(row)) else {
+                continue;
+            };
+            pinned.splice(at + 1..at + 1, layout.tabs.iter().copied());
+        }
+        pinned
+    }
+
+    /// Whether `tab` is drawn in a Live Folder's item's place.
+    fn listed(&self, tab: u64) -> bool {
+        (self.live_rooms.values()).any(|layout| layout.tabs.contains(&tab))
     }
 
     /// Whether `tab` is in a split after its first, which stands for the split's row.
@@ -901,18 +925,31 @@ impl Space {
         slots(head, &pinned, &self.live_blocks(&pinned), &today)
     }
 
-    /// Where each open Live Folder's rows go among `pinned`, its pinned rows listed: after the
-    /// last of the folder's own, by its index there, with the folder and the rows' height.
-    fn live_blocks(&self, pinned: &[u64]) -> Vec<(usize, u64, f32)> {
-        let mut blocks: Vec<_> = (self.live_rooms.iter())
-            .filter(|&(&folder, &room)| room > 0. && self.is_open(folder) && !self.shut(folder))
-            .filter_map(|(&folder, &room)| {
-                let own = |row: u64| row == folder || self.holders(row).any(|each| each == folder);
-                let at = pinned.iter().rposition(|&row| own(row))?;
-                Some((at, folder, room))
-            })
-            .collect();
-        blocks.sort_by_key(|&(at, folder, _)| (at, folder));
+    /// Where each open Live Folder's runs of rows go among `pinned`, its pinned rows listed: the
+    /// first after the last of the folder's other rows, each other after the tab drawn above it,
+    /// by its index there, with the folder, the run and its height.
+    fn live_blocks(&self, pinned: &[u64]) -> Vec<(usize, u64, usize, f32)> {
+        let mut blocks = Vec::new();
+        for (&folder, layout) in &self.live_rooms {
+            if !self.is_open(folder) || self.shut(folder) {
+                continue;
+            }
+            let own = |row: u64| row == folder || self.holders(row).any(|each| each == folder);
+            let other = |row: u64| own(row) && !layout.tabs.contains(&row);
+            let Some(first) = pinned.iter().rposition(|&row| other(row)) else {
+                continue;
+            };
+            for (run, &room) in layout.runs.iter().enumerate() {
+                let above = match run {
+                    0 => Some(first),
+                    _ => pinned.iter().position(|&row| row == layout.tabs[run - 1]),
+                };
+                if let Some(at) = above.filter(|_| room > 0.) {
+                    blocks.push((at, folder, run, room));
+                }
+            }
+        }
+        blocks.sort_by_key(|&(at, folder, run, _)| (at, folder, run));
         blocks
     }
 }
@@ -992,8 +1029,8 @@ enum Slot {
     Tab(u64),
     Divider,
     NewTab,
-    /// An open Live Folder's rows under the tabs opened from it (#2979).
-    Live(u64),
+    /// A run of an open Live Folder's rows, by its folder and its place among the runs (#2979).
+    Live(u64, usize),
 }
 
 /// The list on its way to a row, from `from` down its top at `start` to `to`, last set at `set`.
@@ -5147,8 +5184,8 @@ impl Shell {
             .unwrap_or_default();
         for (at, tab) in pinned.into_iter().enumerate() {
             rows.push((Some(tab), self.list_row(tab, cx)));
-            for &(_, folder, _) in blocks.iter().filter(|block| block.0 == at) {
-                rows.push((None, self.live_block(folder, cx)));
+            for &(_, folder, run, _) in blocks.iter().filter(|block| block.0 == at) {
+                rows.push((None, self.live_block(folder, run, cx)));
             }
         }
         if !today.is_empty() {
@@ -5600,14 +5637,14 @@ pub(crate) fn spring(t: f32, response: f32, damping: f32) -> Option<f32> {
 fn slots(
     head: f32,
     pinned: &[u64],
-    blocks: &[(usize, u64, f32)],
+    blocks: &[(usize, u64, usize, f32)],
     today: &[u64],
 ) -> HashMap<Slot, f32> {
     let rows = (pinned.iter().enumerate())
         .flat_map(|(at, &tab)| {
             let live = (blocks.iter())
                 .filter(move |block| block.0 == at)
-                .map(|&(_, folder, room)| (Slot::Live(folder), room));
+                .map(|&(_, folder, run, room)| (Slot::Live(folder, run), room));
             std::iter::once((Slot::Tab(tab), ROW_PITCH)).chain(live)
         })
         .chain((!today.is_empty()).then_some((Slot::Divider, DIVIDER_HEIGHT)))

@@ -48,6 +48,8 @@ impl Shell {
         let mut opened = after
             .iter()
             .filter_map(|(&slot, &top)| match slot {
+                // A tab opened from a Live Folder's row takes the row's place as it is.
+                Slot::Tab(tab) if self.shown_space().is_some_and(|space| space.listed(tab)) => None,
                 Slot::Tab(tab) if !before.contains_key(&slot) => Some((top, tab)),
                 _ => None,
             })
@@ -832,11 +834,23 @@ impl Shell {
             cx.notify();
             return;
         }
+        // A tab in its Live Folder's item's place keeps it, let go anywhere in the folder: the
+        // lists order it.
+        let kept = match to {
+            Place::List(true, gap) => {
+                let (rows, _) = self.rows();
+                let rows: Vec<u64> = rows.into_iter().filter(|&row| row != tab).collect();
+                let (folder, _) = self.pinned_place(&rows, gap, drag_depth, tab, false);
+                let space = self.shown_space();
+                space.is_some_and(|space| space.listed(tab) && space.folder_of(tab) == folder)
+            }
+            _ => false,
+        };
         let Some(drag) = self.drag.as_mut() else {
             return;
         };
         let favorite = matches!(to, Place::Favorite(_));
-        if drag.to == drag.from && (favorite || drag.depth == drag.from_depth) {
+        if kept || drag.to == drag.from && (favorite || drag.depth == drag.from_depth) {
             self.settle_drag(cx);
             self.putting_back = true;
         } else {
@@ -1262,10 +1276,12 @@ impl Shell {
                 .unwrap_or(0),
             None => 0,
         };
+        // A tab drawn in a Live Folder's item's place is after the folder's others wherever the
+        // core keeps it, so before it is the folder's end.
         let before = rows
             .get(gap)
             .copied()
-            .filter(|&row| space.folder_of(row) == folder);
+            .filter(|&row| space.folder_of(row) == folder && !space.listed(row));
         let panes = if copy {
             Vec::new()
         } else {

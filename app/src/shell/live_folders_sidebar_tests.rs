@@ -229,7 +229,7 @@ fn a_space_shown_asks_once_its_switch_is_drawn(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn its_rows_sit_under_its_tabs_and_a_press_opens_one_in_it(cx: &mut TestAppContext) {
+fn a_pressed_row_opens_its_tab_in_its_place(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
     report(&shell, cx, true, &[]);
     let items = vec![
@@ -242,13 +242,13 @@ fn its_rows_sit_under_its_tabs_and_a_press_opens_one_in_it(cx: &mut TestAppConte
     });
     draw(&shell, cx);
     let room = 2. * HEADING_HEIGHT + 3. * ROW_PITCH;
-    shell.read_with(cx, |shell, _| {
+    // Review requests' heading and #3, Created by me's heading, then #7.
+    let seven = shell.read_with(cx, |shell, _| {
         let layout = shell.layout();
-        assert_eq!(
-            layout[&Slot::Live(FOLDER)],
-            layout[&Slot::Tab(FOLDER)] + ROW_PITCH
-        );
-        assert_eq!(layout[&Slot::Divider], layout[&Slot::Live(FOLDER)] + room);
+        let live = layout[&Slot::Live(FOLDER, 0)];
+        assert_eq!(live, layout[&Slot::Tab(FOLDER)] + ROW_PITCH);
+        assert_eq!(layout[&Slot::Divider], live + room);
+        live + 2. * HEADING_HEIGHT + ROW_PITCH
     });
     host.take();
     shell.update(cx, |shell, cx| {
@@ -260,25 +260,99 @@ fn its_rows_sit_under_its_tabs_and_a_press_opens_one_in_it(cx: &mut TestAppConte
             "open https://github.com/harbor/web/pull/7 true {FOLDER} 0"
         )]
     );
-    // Opened, its tab's row stands for it, and the rows under make room no more.
+    // Opened, its tab's row is where its row was, and nothing else moves.
     host.pinned_urls.borrow_mut().insert(30, items[1].url());
     report(&shell, cx, true, &[30]);
     shell.read_with(cx, |shell, _| {
         let layout = shell.layout();
+        assert_eq!(layout[&Slot::Tab(30)], seven);
+        assert_eq!(layout[&Slot::Live(FOLDER, 1)], seven + ROW_PITCH);
         assert_eq!(
-            layout[&Slot::Live(FOLDER)],
+            layout[&Slot::Divider],
+            layout[&Slot::Live(FOLDER, 0)] + room
+        );
+        assert_eq!(shell.live_item_of(30), Some(items[1].clone()));
+    });
+    // Its item gone from the lists, it's a tab like the folder's others, over the headings.
+    let without = vec![items[0].clone(), items[2].clone()];
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(FOLDER, LiveAnswer::Items(without), cx)
+    });
+    draw(&shell, cx);
+    shell.read_with(cx, |shell, _| {
+        let layout = shell.layout();
+        assert_eq!(
+            layout[&Slot::Tab(30)],
+            layout[&Slot::Tab(FOLDER)] + ROW_PITCH
+        );
+        assert_eq!(
+            layout[&Slot::Live(FOLDER, 0)],
             layout[&Slot::Tab(30)] + ROW_PITCH
         );
-        let room = 2. * HEADING_HEIGHT + 2. * ROW_PITCH;
-        assert_eq!(layout[&Slot::Divider], layout[&Slot::Live(FOLDER)] + room);
-        assert_eq!(shell.live_item_of(30), Some(items[1].clone()));
+        assert_eq!(shell.live_item_of(30), None);
     });
     // Closed, it has no rows, and its row ends with the review requests waiting.
     report(&shell, cx, false, &[30]);
     shell.read_with(cx, |shell, _| {
-        assert!(!shell.layout().contains_key(&Slot::Live(FOLDER)));
+        assert!(!shell.layout().contains_key(&Slot::Live(FOLDER, 0)));
         assert_eq!(shell.live_waiting(FOLDER), 1);
     });
+}
+
+/// The folder holding tab 30 at #7, 31 at a page of its own and 32 at #3, in the order they were
+/// opened, and its lists' answer.
+fn three_tabs(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder) {
+    let items = vec![
+        item(LiveList::ReviewRequests, 3),
+        item(LiveList::Created, 7),
+    ];
+    let mut urls = host.pinned_urls.borrow_mut();
+    urls.insert(30, items[1].url());
+    urls.insert(31, "https://example.com/".into());
+    urls.insert(32, items[0].url());
+    drop(urls);
+    report(shell, cx, true, &[30, 31, 32]);
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(FOLDER, LiveAnswer::Items(items), cx)
+    });
+    draw(shell, cx);
+}
+
+#[gpui::test]
+fn next_and_previous_tab_go_down_the_rows_as_drawn(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    three_tabs(&shell, cx, &host);
+    shell.read_with(cx, |shell, _| {
+        // The page's own tab, then #3's under Review requests, then #7's under Created by me.
+        assert_eq!(shell.sidebar_rows(), [1, 31, 32, 30, 3]);
+        let layout = shell.layout();
+        let tops: Vec<f32> = [31, 32, 30]
+            .iter()
+            .map(|tab| layout[&Slot::Tab(*tab)])
+            .collect();
+        assert!(tops.windows(2).all(|pair| pair[0] < pair[1]));
+    });
+}
+
+#[gpui::test]
+fn a_tab_in_its_items_place_stays_in_the_folder_and_leaves_it_as_a_tab(cx: &mut TestAppContext) {
+    use crate::shell::drag::detents::{X, drag_to, press};
+    let (shell, cx, host) = window(cx);
+    three_tabs(&shell, cx, &host);
+    host.take_edits();
+    // Dragged up among the folder's rows, it goes back to its item's place.
+    let y = press(&shell, cx, 30);
+    drag_to(&shell, cx, X, y - 2. * ROW_PITCH);
+    shell.update(cx, |shell, cx| shell.drop_row(cx));
+    assert_eq!(host.moves.get(), 0);
+    // Out of the folder, up by pinned tab 1, it's an ordinary pinned tab.
+    let top = shell.read_with(cx, |shell, _| super::super::drag::detents::row_y(shell, 1));
+    let y = press(&shell, cx, 30);
+    drag_to(&shell, cx, X, y + 4.);
+    drag_to(&shell, cx, X, top + ROW_PITCH / 2.);
+    shell.update(cx, |shell, cx| shell.drop_row(cx));
+    assert_eq!(host.moves.get(), 1);
+    assert_eq!(host.take_edits(), ["move 30 true 0 0"]);
 }
 
 #[gpui::test]
@@ -290,6 +364,18 @@ fn convert_to_folder_ends_its_lists_and_keeps_its_tabs(cx: &mut TestAppContext) 
     });
     cx.update(|_, cx| host.choose("Convert to Folder", cx));
     assert_eq!(host.take_edits(), [format!("end live folder {FOLDER}")]);
+    // Tabs in their items' places stay in the order they were drawn in.
+    three_tabs(&shell, cx, &host);
+    host.take_edits();
+    shell.update(cx, |shell, cx| shell.convert_live_folder(FOLDER, cx));
+    assert_eq!(
+        host.take_edits(),
+        [
+            format!("move 32 true {FOLDER} 2"),
+            format!("move 30 true {FOLDER} 2"),
+            format!("end live folder {FOLDER}"),
+        ]
+    );
     // The core reports a plain folder: its lists are forgotten.
     shell.update(cx, |shell, cx| {
         let mut folders = Folders::default();
