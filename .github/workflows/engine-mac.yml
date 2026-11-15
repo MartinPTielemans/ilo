@@ -223,17 +223,13 @@ jobs:
             "$(git config -f engine/pins.ini chromium.version)" "$STAGE" "$GITHUB_RUN_ID" "$finished" \
             >engine/.deps/tree.txt
 
-      # The engine and its dSYMs, packed as tools/mac-engine-publish.sh packs them, for the publish
-      # job.
+      # The engine, packed as tools/mac-engine-publish.sh packs it, for the publish job.
       - if: steps.stage.outputs.finished == 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/engine"
-          out=engine/.deps/src/out/Release
           archive=$RUNNER_TEMP/engine/Chromium-mac-arm64.tar.xz
-          tar -cJf "$archive" --no-mac-metadata --options xz:threads=0 -C "$out" Chromium.app
+          tar -cJf "$archive" --no-mac-metadata --options xz:threads=0 -C engine/.deps/src/out/Release Chromium.app
           shasum -a 256 "$archive" | cut -d' ' -f1 >"$archive.sha256"
-          tools/mac-dsyms.sh "$out" "$out/Chromium.app/Contents/Frameworks/Chromium Framework.framework/Chromium Framework" \
-            "$RUNNER_TEMP/engine"
       - if: steps.stage.outputs.finished == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -275,6 +271,24 @@ jobs:
           retention-days: ${{ steps.stage.outputs.finished == 'true' && 90 || 1 }}
           compression-level: 0
           overwrite: true
+
+      # The engine's dSYMs, for the publish job, after the tree is kept: their pack can fail where
+      # the engine's can't (no dSYM, another build's UUID, over 2 GiB), and a failure then costs
+      # the dSYMs and not a finished build's tree. The run still ends red, so the engine isn't
+      # published without them; one dispatched with this run's tree packs them again. The Mac's tar
+      # runs xz on one thread: 267 MiB from 1.7 GB took 9 min 49 s on the MacBook (#2951).
+      - if: steps.stage.outputs.finished == 'true'
+        run: |
+          out=engine/.deps/src/out/Release
+          tools/mac-dsyms.sh "$out" "$out/Chromium.app/Contents/Frameworks/Chromium Framework.framework/Chromium Framework" \
+            "$RUNNER_TEMP/dsyms"
+      - if: steps.stage.outputs.finished == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-mac-dsyms
+          path: ${{ runner.temp }}/dsyms
+          retention-days: 7
+          compression-level: 0
 
   build-2:
     needs: build-1
@@ -359,6 +373,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: engine-mac
+          path: ${{ runner.temp }}/engine
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-mac-dsyms
           path: ${{ runner.temp }}/engine
       - name: Publish
         env:
