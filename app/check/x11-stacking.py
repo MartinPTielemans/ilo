@@ -1,9 +1,11 @@
 """Whether the overlays ilo's process $2 shows are under another app's window $1 in the X window
 manager's stacking (_NET_CLIENT_LIST_STACKING, bottom first), as the manager keeps an overlay that
 stays while ilo isn't active (#2790). An overlay is a dialog-type window of ilo's, transient for
-another of its windows. One that doesn't overlap $1 is beside it, not over it, as when a tiling
-manager such as i3 tiles $1 beside ilo's window and floats the overlay over ilo's tile. Each one in the stacking must also be viewable with a shape that isn't empty,
-as one the manager mapped with no place yet, its shape kept back, would be under $1 and never seen.
+another of its windows. Where $1 overlaps none of ilo's other windows, the manager put it beside
+them, as i3 tiles it beside ilo's window and floats the overlay over ilo's tile, so the overlays are
+beside $1, not over it, whatever the stacking. Each one in the stacking must also be viewable with
+a shape that isn't empty, as one the manager mapped with no place yet, its shape kept back, would be
+under $1 and never seen.
 Prints the order and exits 0 when each one shown is below $1; otherwise says why and exits 1.
 Usage: python3 -I check/x11-stacking.py <window> <pid>"""
 import ctypes
@@ -126,8 +128,10 @@ for i in overlays:
         sys.exit(f"ilo's overlay {order[i]['window']} is in the manager's stacking but not seen: it's "
                  f"{what}, bottom first: {json.dumps(order)}")
 cover = box(other)
+beside = cover is not None and not any(
+    overlap(box(window), cover) for window, o in zip(stacking, order) if o["is"] == "ilo")
 for i in overlays:
-    if i > stacking.index(other) and cover and not overlap(box(stacking[i]), cover):
+    if i > stacking.index(other) and beside:
         order[i]["beside"] = True
 said = json.dumps(order)
 above = [order[i]["window"] for i in overlays

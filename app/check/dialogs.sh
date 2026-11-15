@@ -114,11 +114,14 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
     sleep 0.1
   done
   [ -n "$under" ] || fail "the alert isn't under another app's window raised over ilo's: $stacking"
+  # The manager's stacking, bottom first, for whoever reads the run.
+  printf '%s\n' "$stacking" > "$out/alert-raised-over-stacking.json"
   exec 7>&-
   wait "$other_app" 2> /dev/null || true
   send window 1
   answer return accept alerted
   # A tiling manager, as i3, tiles the other app's window beside ilo's, so the alert is beside it.
+  # Elsewhere the other app's window overlaps ilo's.
   case $stacking in
     *'"beside"'*) raised_over="beside the other app's window a tiling manager put beside" ;;
     *) raised_over="under another app's window raised over" ;;
