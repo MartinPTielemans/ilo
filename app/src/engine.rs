@@ -553,7 +553,7 @@ impl Browser for Engine {
         let Ok(url) = CString::new(url) else {
             return false;
         };
-        unsafe { bc::bc_profile_remove_history(profile, url.as_ptr(), begin, end) }
+        unsafe { bc::bc_window_remove_history(self.window, profile, url.as_ptr(), begin, end) != 0 }
     }
 
     fn page_favicon(&self, url: &str, _: &mut App) {
