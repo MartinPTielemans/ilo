@@ -276,6 +276,15 @@ Arc 1.170.0's menu bar, with the items the browser has so far. An item runs the 
 
 Arc's layout: the URL field and back, forward and reload live in the sidebar, and the card has no toolbar (decision 6). Dia's card toolbar, its top tab strip and the toolbar that hides on scroll are not ours.
 
+**Sidebar position** (ours, the owner's ask of 2026-11-10, #2375). Settings › Tabs & Sidebar › The sidebar starts with Sidebar position, Left (the default) or Right, and the command bar lists the one move that does something, Move Sidebar to the Right or Move Sidebar to the Left. It's this device's, not synced, applies to every window at once with no relaunch, and agents get no tool for it. On the right the window is the left's mirror: what this spec places from the left edge it places from the right, and what opens toward the page opens to the sidebar's left (the theme picker and its arrow, hover cards, the folder preview, the sidebar's tooltips). What isn't a plain mirror:
+
+- The window's buttons stay at the window's outer top corner: from the right edge, the buttons 13 in, the sidebar button with its glyph flipped, then back, forward and reload in their usual order, 15 from the page. The Mac's lights take their mirrored places, close at the corner; Windows' keep minimize, maximize, close, with close at the corner and Snap's hit test on maximize.
+- The hidden sidebar reveals from the right edge, at the same thresholds.
+- The Library takes the sidebar's side with its columns swapped, so the buttons stay at the edge. A swipe right on the first Space still opens it, as Spaces still read left to right: the pages move right with the fingers and the Library comes in from the page's side.
+- The extension side panel sits between the page and the sidebar, its resize edge still between it and the page.
+- Split view's panes keep their order, ⌥↩ still opens on the right, and Peek stays centred on the card.
+- The launch picture is of the column at the window's right and shows there; one taken on the other side isn't shown (Window › Several windows).
+
 **Header and URL field**
 
 | Item | Value | Source |
