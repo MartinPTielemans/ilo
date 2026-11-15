@@ -444,13 +444,19 @@ switch "down alt cmd" "$c"
 # ⌃Tab goes back through the tabs in the order they were shown, c, a and b by now (#2954). A quick
 # one switches once, on its press, and shows nothing; the tab it showed counts as shown last.
 send click $page_point
-lists=$(grep -c '^browser: tab switcher lists ' "$log" || true)
+tapped_from=$(wc -l < "$log")
 send key tab ctrl
+tapped=$step
 send flags
-expect "^browser: selected $a in " "a quick ⌃Tab didn't show $a, the tab shown before $c"
-expect '^browser: command recent-tab via page$' "⌃Tab with the page focused didn't reach the UI"
-[ "$(grep -c '^browser: tab switcher lists ' "$log" || true)" = "$lists" ] ||
-  fail "a quick ⌃Tab, ⌃ let go right after Tab, showed the switcher, which waits for ⌃ held past [tab-switcher.motion] delay"
+let_go=$(wc -l < "$log")
+expect "^browser: selected $a in " "a quick ⌃Tab didn't show $a, the tab shown before $c" "$tapped"
+expect '^browser: command recent-tab via page$' "⌃Tab with the page focused didn't reach the UI" "$tapped"
+# Windows' driver sends its next command later than [tab-switcher.motion] delay, so there the tap
+# is held long enough to show the switcher before ⌃ goes up, and letting go on the tab shown
+# switches no more. One shown after ⌃ went up is a failure, read at the next step's.
+sed -n "/^browser: drive $tapped: /,/^browser: drive $((tapped + 1)): /p" "$log" |
+  grep -q '^browser: tab switcher lists ' &&
+  echo "skip: a quick ⌃Tab showing nothing, as the driver let go of ⌃ after the switcher's delay"
 # The switcher's rows: ⌘T's place and width, its rows 50 tall inside a 6 inset, row $1's middle.
 switcher_row() {
   echo "$((765 / 2)) $((6 + 50 * $1 + 25))"
@@ -475,6 +481,10 @@ expect "^browser: selected $c in " "⌃Tab didn't show $c, the tab shown before 
 expect "^browser: tab switcher lists $a $c $b selected $c\$" \
   "⌃Tab held didn't list $a, $c and $b with $c selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
 expect '^browser: tab switcher shown$' "the switcher's window didn't show"
+[ "$(tail -n +"$let_go" "$log" | grep -c '^browser: tab switcher lists ')" = 1 ] ||
+  fail "a quick ⌃Tab showed the switcher after ⌃ went up"
+[ "$(switches_since "$tapped_from")" = 2 ] ||
+  fail "a quick ⌃Tab and a held one switched $(switches_since "$tapped_from") times, not once each"
 ../tools/window-screenshot.sh "$pid" "$out/switcher-light.png" all || fail "no window to capture"
 send key tab ctrl
 expect "^browser: tab switcher selected $b\$" "⌃Tab with the switcher shown didn't select $b"
@@ -516,11 +526,15 @@ else
 fi
 send menu "$(cased 'Appearance › Automatic')"
 # A second ⌃Tab before the delay shows it at once, and the page stays.
+# Where the driver's commands come further apart than the delay, the first shows it, and the
+# second moves its selection.
 from=$(wc -l < "$log")
 send key tab ctrl
+pressed=$step
 send key tab ctrl
-expect "^browser: tab switcher lists $b $a $c selected $c\$" \
-  "a second ⌃Tab didn't show the switcher with $c selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
+expect "^browser: tab switcher .*selected $c\$" \
+  "a second ⌃Tab didn't show the switcher with $c selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)" "$pressed"
+expect "^browser: tab switcher lists $b $a $c selected " "a second ⌃Tab didn't list $b, $a and $c" "$pressed"
 send flags
 expect "^browser: selected $c in " "letting go of ⌃ on $c didn't show it"
 [ "$(switches_since "$from")" = 2 ] ||

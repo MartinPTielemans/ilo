@@ -247,8 +247,9 @@ EOF
     'tab switcher')
       send click $page_point
       send key tab ctrl
+      pressed=$step
       send key tab ctrl
-      expect '^browser: tab switcher shown$' "$2: ⌃Tab twice with ⌃ held didn't show the tab switcher"
+      expect '^browser: tab switcher shown$' "$2: ⌃Tab twice with ⌃ held didn't show the tab switcher" "$pressed"
       ;;
     offer)
       send click $today_row
