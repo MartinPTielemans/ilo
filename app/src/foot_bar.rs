@@ -213,7 +213,7 @@ fn origin(place: &Place, content: Size<Pixels>) -> Point<Pixels> {
 
 struct Shown {
     window: u64,
-    bar: Bar,
+    bar: Rc<Bar>,
     layout: Layout,
     /// Whether it has drawn on screen, which the log says once, for the checks.
     drawn: bool,
@@ -229,12 +229,13 @@ pub struct FootBar {
     /// The palette of a browser window, by its id, for the main button's accent.
     look: Box<dyn Fn(u64, &App) -> Palette>,
     shown: Option<Shown>,
-    /// The bar shown before, drawn until the window has left its size: the host sizes the window
-    /// after the update that asked, so a frame before then would cut the new bar at the old size,
-    /// which the Mac then stretches to the new one (#2991).
-    previous: Option<Shown>,
-    /// Whether the last frame drew `previous`, for a click on it.
-    drew_previous: bool,
+    /// The bars shown before `shown` since one last drew, oldest first, that one included. The host
+    /// sizes the window after the update that asked, so until the window has the new bar's size the
+    /// latest of these that fits it draws instead: the new bar drawn at the old size was cut, and
+    /// the Mac stretched it to the new one (#2991).
+    earlier: Vec<Shown>,
+    /// The bar the last frame drew, which a click presses.
+    on_screen: Option<Rc<Bar>>,
 }
 
 struct FootBarWindow(WindowHandle<FootBar>);
@@ -282,8 +283,8 @@ pub fn open_at(
             host,
             look: Box::new(look),
             shown: None,
-            previous: None,
-            drew_previous: false,
+            earlier: Vec::new(),
+            on_screen: None,
         })
     });
     match window {
@@ -316,11 +317,16 @@ pub fn show(window: u64, page: Bounds<Pixels>, content: Size<Pixels>, bar: Bar, 
         let place = place(page, content, layout.size);
         let origin = origin(&place, content);
         let placed = Rc::new(RefCell::new(vec![None; bar.buttons.len()]));
-        let was = foot_bar.shown.take();
-        foot_bar.previous = was.filter(|was| was.drawn && was.window == window);
+        if let Some(was) = foot_bar.shown.take() {
+            if was.drawn {
+                foot_bar.earlier.clear();
+            }
+            foot_bar.earlier.push(was);
+        }
+        foot_bar.earlier.retain(|was| was.window == window);
         foot_bar.shown = Some(Shown {
             window,
-            bar,
+            bar: Rc::new(bar),
             layout,
             drawn: false,
             origin,
@@ -337,7 +343,8 @@ pub fn hide(cx: &mut App) {
         return;
     };
     let _ = handle.update(cx, |foot_bar, _, cx| {
-        foot_bar.previous = None;
+        foot_bar.earlier.clear();
+        foot_bar.on_screen = None;
         if foot_bar.shown.take().is_some() {
             foot_bar.host.hide();
             cx.notify();
@@ -358,11 +365,7 @@ pub fn shown_over(cx: &App) -> Option<u64> {
 
 impl FootBar {
     fn press(&mut self, index: usize, cx: &mut Context<Self>) {
-        let drawn = match self.drew_previous {
-            true => self.previous.as_ref(),
-            false => self.shown.as_ref(),
-        };
-        let Some(button) = drawn.and_then(|shown| shown.bar.buttons.get(index)) else {
+        let Some(button) = (self.on_screen.as_ref()).and_then(|bar| bar.buttons.get(index)) else {
             return;
         };
         if !button.enabled {
@@ -379,24 +382,24 @@ impl Render for FootBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div().size_full().font_family(crate::face::UI);
         let viewport = window.viewport_size();
-        let at = |shown: &Shown| {
+        let fits = |shown: &Shown| {
             let size = shown.layout.size;
             (f32::from(viewport.width) - f32::from(size.width)).abs() < 1.
                 && (f32::from(viewport.height) - f32::from(size.height)).abs() < 1.
         };
-        // The window still at the bar before's size, and not yet the new one's: the bar before.
-        let previous = match (&self.shown, &self.previous) {
-            (Some(shown), Some(previous)) => !at(shown) && at(previous),
-            _ => false,
+        let earlier = match &self.shown {
+            Some(shown) if !fits(shown) => self.earlier.iter().rposition(fits),
+            _ => None,
         };
-        if !previous {
-            self.previous = None;
+        match earlier {
+            Some(index) => _ = self.earlier.drain(..index),
+            None => self.earlier.clear(),
         }
-        self.drew_previous = previous;
-        let shown = match previous {
-            true => self.previous.as_mut(),
-            false => self.shown.as_mut(),
+        let shown = match earlier {
+            Some(_) => self.earlier.first_mut(),
+            None => self.shown.as_mut(),
         };
+        self.on_screen = shown.as_ref().map(|shown| shown.bar.clone());
         let Some(shown) = shown else {
             return root;
         };
@@ -404,7 +407,7 @@ impl Render for FootBar {
         // shows it, so the lines come with the first frame that's seen. check.sh reads them: the
         // second says the bar's size and the window's, which a frame drawn before the host sized
         // the window shows apart.
-        if !shown.drawn && !previous {
+        if !shown.drawn {
             match window.is_visible() {
                 true => {
                     log!("browser: foot bar drawn over {}", shown.window);
