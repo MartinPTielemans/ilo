@@ -31,11 +31,13 @@ done
 serve
 # Four things on the page: one at its top edge, one at its bottom edge, one at its right edge, and
 # Outer, a tenth of the page in, around Inner, so a resize moves them, and a text field under Outer.
+# The page is twice its view tall, to scroll, with no scroll bar to take the page's width.
 # The title says the look it's shown in, the page's size, whether Inner shows, the last key the page
 # saw, the field's text, the engine it's in, and where a press landed.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
-body { margin: 0; font: 16px sans-serif; background: rgb(243, 245, 246) }
+html { scrollbar-width: none }
+body { margin: 0; min-height: 200vh; font: 16px sans-serif; background: rgb(243, 245, 246) }
 section { position: absolute; background: rgb(217, 226, 230) }
 #top { left: 30%; top: 0; width: 260px; height: 70px }
 #bottom { left: 30%; bottom: 0; width: 260px; height: 70px }
@@ -300,6 +302,63 @@ near $(($6 - ${11})) $((vw2 / 10 + 30)) ||
 ../tools/window-screenshot.sh "$pid" "$out/mini-bar-mode-resized.png" || fail "no window to capture"
 pinned="$pinned $out/mini-bar-mode-resized.png"
 
+# On X11, after the resize the bar follows Inner as the page scrolls a notch and rests, and while
+# another app's window is raised over ilo's the window manager stacks the bar under it with ilo's
+# window, at the place the UI asked, where KWin and Openbox kept an override-redirect one over every
+# window (#2790). The page then scrolls back, for the steps after.
+stacked=
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+  inner_bar=$placed
+  set -- $placed
+  was_x=$6 was_y=$7
+  n=$(wc -l < "$log")
+  send scroll $(page_at $((vw2 / 2)) $((vh2 / 2))) 1 1
+  for _ in $(seq 50); do
+    bar_after "$n" "the scroll" "a notch of the wheel over the page"
+    set -- $placed
+    [ "$7" != "$was_y" ] && break
+    sleep 0.1
+  done
+  [ "$7" -lt "$was_y" ] && [ "$6" = "$was_x" ] ||
+    fail "after a notch down the bar is over a thing at $6 $7, not Inner moved up from $was_x $was_y"
+  if [ $(($2 + $4)) -le "$7" ]; then
+    bar_is over "Inner, after the scroll"
+  else
+    bar_is under "Inner, after the scroll"
+  fi
+  ../tools/window-screenshot.sh "$pid" "$out/mini-bar-mode-scrolled.png" || fail "no window to capture"
+  pinned="$pinned $out/mini-bar-mode-scrolled.png"
+  set -- $placed
+  bar_at="$(($1 + $3 / 2)) $(($2 + $4 / 2))"
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other_app=$!
+  exec 7> "$out/other-in"
+  for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+  cover=$(head -1 "$out/other-window.log")
+  xdotool windowactivate --sync "$cover" 2> /dev/null ||
+    fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+  # The manager restacks as it activates, so its list is read until it settles, a second at most.
+  for _ in $(seq 10); do
+    stacking=$(python3 -I check/x11-stacking.py "$cover" "$pid" $bar_at 2>&1) && stacked=1 && break
+    sleep 0.1
+  done
+  [ -n "$stacked" ] ||
+    fail "the mini bar isn't under another app's window raised over ilo's, at $bar_at: $stacking"
+  # The manager's stacking, bottom first, for whoever reads the run.
+  printf '%s\n' "$stacking" > "$out/mini-bar-raised-over-stacking.json"
+  exec 7>&-
+  wait "$other_app" 2> /dev/null || true
+  send window 1
+  case $stacking in
+    *'"beside"'*) stacked="beside another app's window a tiling manager put beside" ;;
+    *) stacked="under another app's window raised over ilo's" ;;
+  esac
+  send scroll $(page_at $((vw2 / 2)) $((vh2 / 2))) -1 1
+  bar_back "the scroll back up"
+fi
+
 # The foot bar's Undo and Reset with the page focused, which a press on the bar leaves it.
 send click $(page_at $((vw2 / 10 + 190)) 250)
 foot_bar_steps "with the page focused" : "$look"
@@ -460,6 +519,8 @@ echo "ok: in the mode the bar sat over things at the page's top, bottom and righ
   "middle, inside the page, and followed Inner after a resize; ↑, ↓, the bar's Hide, ⌘Z and escape" \
   "worked with the page focused and with the UI, in $look and $other, and so did the foot bar's" \
   "Undo, Reset and Done. Windows:$pinned"
+[ -z "$stacked" ] || echo "ok: on X11 the mini bar followed Inner through a scroll after the" \
+  "resize, and stayed with ilo's window, $stacked, where the UI put it."
 [ -z "$composing" ] || echo "ok: Japanese input in a field on the page kept ↓ and escape while it" \
   "composed with Arrange on, and the mode had escape again once it committed."
 [ -z "$safari" ] || echo "ok: over Safari's engine's page the Boost's card offered no Arrange, and" \
