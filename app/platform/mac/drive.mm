@@ -125,11 +125,6 @@
 //   savecancel                            ends the save panel the app began as its Cancel does,
 //                                         once it has, logging "browser: save panel cancelled",
 //                                         or "browser: no save panel" if none begins within 5 s
-//   pip                                   logs the frame of Chrome's Picture in Picture window, a
-//                                         floating call's or the Mini Player's, as "browser: pip
-//                                         at <x> <y> <width> <height>" in place's terms, or
-//                                         "browser: pip none". The driver doesn't move or size it:
-//                                         the window server does that with the real pointer
 //   front                                 logs which of the app's windows other apps take for
 //                                         the one in front, as "browser: front <first>, main
 //                                         <window>, key <window>, ax focused <window>, ax main
@@ -219,6 +214,8 @@
 //                                         <height>" in place's terms as it is and each time it
 //                                         moves or resizes, then "browser: pip gone", or
 //                                         "browser: pip none" without one
+//   pip move <x> <y>                      moves the pointer to (x, y) from its top-left, as move
+//                                         does in the browser window
 //   pip press, pip dragto, pip release <x> <y>
 //                                         as press, dragto and release, in the Mini Player, at
 //                                         points from its top-left corner as it was at the press
@@ -665,6 +662,29 @@ NSWindow* WindowAt(NSWindow* browser, double x, double y) {
     }
   }
   return browser;
+}
+
+// Moves the pointer to (x, y) from |target|'s top-left, without a button down. It goes to the view
+// under the pointer and to the tracking areas holding it, as a real move does, which is how GPUI's
+// view, under the page's, hears the pointer over the page. It's also posted, for the app's event
+// monitors.
+void MoveIn(NSWindow* target, double x, double y) {
+  NSEvent* move = [NSEvent mouseEventWithType:NSEventTypeMouseMoved
+                                     location:NSMakePoint(x, NSHeight(target.frame) - y)
+                                modifierFlags:0
+                                    timestamp:NSProcessInfo.processInfo.systemUptime
+                                 windowNumber:target.windowNumber
+                                      context:nil
+                                  eventNumber:0
+                                   clickCount:0
+                                     pressure:0];
+  NSView* content = target.contentView;
+  NSView* hit =
+      [content hitTest:[content.superview convertPoint:move.locationInWindow fromView:nil]];
+  Pointed(target, move.locationInWindow);
+  [hit mouseMoved:move];
+  TrackMove(content, move, hit);
+  [NSApp postEvent:move atStart:NO];
 }
 
 void Click(NSWindow* window, double x, double y, int count, NSEventModifierFlags flags = 0) {
@@ -1275,18 +1295,6 @@ NSString* Describe(id element) {
                                     window.accessibilityRole];
 }
 
-// Chrome's Picture in Picture window: one of the app's on screen, over the normal level, that is
-// Chrome's own, not a browser window, and no other window's child, as the command bar and Peek are.
-NSWindow* PictureInPicture() {
-  for (NSWindow* window in NSApp.orderedWindows) {
-    if (window.visible && !window.parentWindow && window.level > NSNormalWindowLevel &&
-        [NSStringFromClass(window.class) hasPrefix:@"NativeWidgetMac"]) {
-      return window;
-    }
-  }
-  return nil;
-}
-
 // The app's first window on screen at the normal level, front to back, as another app finds it.
 id FirstNormalWindow() {
   NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
@@ -1441,6 +1449,11 @@ bool Run(const std::string& line, void (^done)(void)) {
     double x, y;
     if (!(words >> x >> y)) {
       return false;
+    }
+    if (step == "move") {
+      MoveIn(pip, x, y);
+      done();
+      return true;
     }
     if (step == "press" || step == "drag") {
       g_pip_held_at = NSMakePoint(NSMinX(pip.frame), NSMaxY(pip.frame));
@@ -1768,25 +1781,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     NSWindow* target = WindowAt(window, x, y);
     Convert(window, target, &x, &y);
-    NSEvent* move = [NSEvent mouseEventWithType:NSEventTypeMouseMoved
-                                       location:NSMakePoint(x, NSHeight(target.frame) - y)
-                                  modifierFlags:0
-                                      timestamp:NSProcessInfo.processInfo.systemUptime
-                                   windowNumber:target.windowNumber
-                                        context:nil
-                                    eventNumber:0
-                                     clickCount:0
-                                       pressure:0];
-    // It goes to the view under the pointer and to the tracking areas holding it, as a real move
-    // does, which is how GPUI's view, under the page's, hears the pointer over the page. It's also
-    // posted, for the app's event monitors.
-    NSView* content = target.contentView;
-    NSView* hit = [content hitTest:[content.superview convertPoint:move.locationInWindow
-                                                          fromView:nil]];
-    Pointed(target, move.locationInWindow);
-    [hit mouseMoved:move];
-    TrackMove(content, move, hit);
-    [NSApp postEvent:move atStart:NO];
+    MoveIn(target, x, y);
     done();
     return true;
   }
@@ -1886,19 +1881,6 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
     [window setFrame:NSMakeRect(x, top - y - height, width, height) display:YES];
-    done();
-    return true;
-  }
-  if (action == "pip") {
-    NSWindow* pip = PictureInPicture();
-    if (!pip) {
-      fprintf(stderr, "browser: pip none\n");
-    } else {
-      const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
-      const NSRect frame = pip.frame;
-      fprintf(stderr, "browser: pip at %.0f %.0f %.0f %.0f\n", NSMinX(frame),
-              top - NSMaxY(frame), NSWidth(frame), NSHeight(frame));
-    }
     done();
     return true;
   }

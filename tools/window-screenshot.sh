@@ -16,10 +16,14 @@
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
 # There POINTER=1 draws the display's pointer in, where the driver's warp put it, with the cursor
 # the window under it shows.
-# Usage: tools/window-screenshot.sh <pid> <output.png> [all|screen]
+# On the Mac, with "floating", it takes only the process's window above the normal level at FRAME,
+# "<x> <y> <width> <height>" from the main display's top-left, such as Picture in Picture's, on its
+# own: the overlays over the browser window are above the normal level too.
+# Usage: tools/window-screenshot.sh <pid> <output.png> [all | screen | floating]
 set -e
-[ $# -eq 2 ] || [ $# -eq 3 ] && { [ "${3:-all}" = all ] || [ "$3" = screen ]; } ||
-  { echo "usage: $0 <pid> <output.png> [all|screen]" >&2; exit 2; }
+{ [ $# -eq 2 ] || { [ $# -eq 3 ] && { [ "$3" = all ] || [ "$3" = screen ]; }; }; } ||
+  { [ $# -eq 3 ] && [ "$3" = floating ] && [ "$(uname)" = Darwin ]; } ||
+  { echo "usage: $0 <pid> <output.png> [all | screen | floating, on the Mac]" >&2; exit 2; }
 case "$(uname)" in
   MINGW* | MSYS*)
     [ -e "/proc/$1/winpid" ] || { echo "process $1 isn't running" >&2; exit 1; }
@@ -360,7 +364,7 @@ if ours:
   [ -z "$area" ] || exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim ${POINTER:+-c} -g "$area" "$2"
   exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim ${POINTER:+-c} "$2"
 fi
-PID="$1" OUT="$2" ALL="${3:-}" swift - <<'SWIFT'
+PID="$1" OUT="$2" ALL="${3:-}" FRAME="${FRAME:-}" swift - <<'SWIFT'
 import Foundation
 import ImageIO
 import ScreenCaptureKit
@@ -370,6 +374,7 @@ let pid = Int32(ProcessInfo.processInfo.environment["PID"]!)!
 let out = URL(fileURLWithPath: ProcessInfo.processInfo.environment["OUT"]!)
 let all = ProcessInfo.processInfo.environment["ALL"] == "all"
 let screen = ProcessInfo.processInfo.environment["ALL"] == "screen"
+let floating = ProcessInfo.processInfo.environment["ALL"] == "floating"
 
 func fail(_ message: String) -> Never {
   FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -378,6 +383,33 @@ func fail(_ message: String) -> Never {
 
 let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
 let windows = content.windows.filter { $0.owningApplication?.processID == pid }
+func write(_ image: CGImage) -> Never {
+  guard let file = CGImageDestinationCreateWithURL(out as CFURL, UTType.png.identifier as CFString, 1, nil)
+  else { fail("can't write \(out.path)") }
+  CGImageDestinationAddImage(file, image, nil)
+  guard CGImageDestinationFinalize(file) else { fail("can't write \(out.path)") }
+  exit(0)
+}
+if floating {
+  let at = (ProcessInfo.processInfo.environment["FRAME"] ?? "").split(separator: " ")
+    .compactMap { Double($0) }
+  guard at.count == 4 else { fail("FRAME isn't <x> <y> <width> <height>") }
+  let wanted = CGRect(x: at[0], y: at[1], width: at[2], height: at[3])
+  let floats = windows.filter { $0.windowLayer > 0 }
+  guard let window = floats.first(where: { $0.frame.integral == wanted.integral })
+  else { fail("process \(pid) has no floating window at \(wanted), only at \(floats.map { $0.frame })") }
+  guard let display = content.displays.first(where: { $0.frame.intersects(window.frame) })
+  else { fail("no display shows the floating window") }
+  // A display's filter, as below: one for the window alone asserts in a script, which has no
+  // window server session of its own.
+  let filter = SCContentFilter(display: display, including: [window])
+  let config = SCStreamConfiguration()
+  config.sourceRect = window.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+  config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
+  config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
+  config.showsCursor = false
+  write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
+}
 // The largest normal window; a process can also own invisible helper windows.
 guard let main = windows.filter({ $0.windowLayer == 0 })
   .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
@@ -395,10 +427,5 @@ config.sourceRect = frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.m
 config.width = Int(frame.width * CGFloat(filter.pointPixelScale))
 config.height = Int(frame.height * CGFloat(filter.pointPixelScale))
 config.showsCursor = false
-let image: CGImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-
-guard let file = CGImageDestinationCreateWithURL(out as CFURL, UTType.png.identifier as CFString, 1, nil)
-else { fail("can't write \(out.path)") }
-CGImageDestinationAddImage(file, image, nil)
-guard CGImageDestinationFinalize(file) else { fail("can't write \(out.path)") }
+write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
 SWIFT
