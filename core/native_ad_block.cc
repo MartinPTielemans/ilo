@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/debug/stack_trace.h"
 #include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
@@ -901,6 +902,8 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
   // filters let it load, the app lists it and gives it the keyboard as any tab it shows.
   void Hold(content::WebContents* opener) {
     hold.Hold();
+    LOG(ERROR) << "[DEBUG-2806] hold " << web_contents() << " holding " << hold.holding()
+               << " opener " << opener;
     if (hold.holding()) {
       no_input_.emplace(web_contents()->IgnoreInputEvents(std::nullopt));
     }
@@ -910,15 +913,18 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
     }
   }
   void OpenerGone() {
+    LOG(ERROR) << "[DEBUG-2806] opener gone " << web_contents();
     hold.OpenerGone();
     Settled();
   }
   void Asking() { hold.Asking(); }
   void Decided(bool closes) {
+    LOG(ERROR) << "[DEBUG-2806] decided " << web_contents() << " closes " << closes;
     hold.Decided(closes);
     Settled();
   }
   void Ended() {
+    LOG(ERROR) << "[DEBUG-2806] ended " << web_contents();
     hold.Ended();
     Settled();
   }
@@ -930,6 +936,14 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
     }
   }
   void PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) override { Ended(); }
+  void OnWebContentsFocused(content::RenderWidgetHost*) override {
+    LOG(ERROR) << "[DEBUG-2806] held page focused " << web_contents() << " holding "
+               << hold.holding() << "\n"
+               << base::debug::StackTrace();
+  }
+  void OnWebContentsLostFocus(content::RenderWidgetHost*) override {
+    LOG(ERROR) << "[DEBUG-2806] held page lost focus " << web_contents();
+  }
 
   PopupHold hold;
 
@@ -939,6 +953,7 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
     if (hold.holding()) {
       return;
     }
+    LOG(ERROR) << "[DEBUG-2806] settled " << web_contents() << " input back";
     no_input_.reset();
     Observe(nullptr);
     if (opener_) {
@@ -1202,6 +1217,7 @@ class PageThrottle : public content::NavigationThrottle {
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(
                          [](base::WeakPtr<content::WebContents> tab) {
+                           LOG(ERROR) << "[DEBUG-2806] posted close runs " << tab.get();
                            if (tab) {
                              tab->Close();
                            }
@@ -1284,6 +1300,8 @@ void HoldPopup(content::WebContents* popup,
       .filtering = NativeAdBlock() && g_on.load(std::memory_order_relaxed) &&
                    !AdBlockingOffAt(profile, from) && !AdBlockingOffAt(profile, url),
   };
+  LOG(ERROR) << "[DEBUG-2806] popup " << popup << " from " << opener
+             << " holds " << HoldsPopup(open) << " in_front " << in_front;
   if (HoldsPopup(open)) {
     PopupHeldFor(popup).Hold(opener);
   }

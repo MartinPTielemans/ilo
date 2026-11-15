@@ -180,8 +180,9 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
     dialog_keys::PageViewFocused(gained_focus);
     const bool take =
         gained_focus && GetFocus() != hwnd_ && GetActiveWindow() == GetAncestor(hwnd_, GA_ROOT);
-    VLOG(1) << "pane " << hwnd_ << " focuses " << Describe(gained_focus)
-            << (take ? ", taking the keyboard" : "");
+    LOG(ERROR) << "[DEBUG-2806] pane " << hwnd_ << " focuses " << Describe(gained_focus)
+               << (take ? ", taking the keyboard" : "") << " keyboard in " << GetFocus() << " "
+               << ClassOf(GetFocus());
     if (!take) {
       return;
     }
@@ -883,6 +884,7 @@ class WindowViews : public views::WidgetObserver,
         presses::Wait();
       }
     } else if (message == WM_ACTIVATE) {
+      LOG(ERROR) << "[DEBUG-2806] window " << hwnd << " activated " << LOWORD(w_param);
       // By a press (WA_CLICKACTIVE), on the UI or a pane, or by the keyboard or the taskbar.
       HWND pressed = presses::Pressed(hwnd);
       pressed_ = LOWORD(w_param) == WA_CLICKACTIVE ? ChildHolding(pressed) : nullptr;
@@ -891,6 +893,7 @@ class WindowViews : public views::WidgetObserver,
       }
     } else if (message == WM_SETFOCUS) {
       HWND from = reinterpret_cast<HWND>(w_param);
+      LOG(ERROR) << "[DEBUG-2806] window " << hwnd << " takes the keyboard from " << from;
       HWND had = std::exchange(had_keyboard_, nullptr);
       HWND pressed = std::exchange(pressed_, nullptr);
       if (had && from != hwnd && !(from && IsChild(hwnd, from)) && IsChild(hwnd, had) &&
