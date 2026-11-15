@@ -213,7 +213,7 @@ fn origin(place: &Place, content: Size<Pixels>) -> Point<Pixels> {
 
 struct Shown {
     window: u64,
-    bar: Bar,
+    bar: Rc<Bar>,
     layout: Layout,
     /// Whether it has drawn on screen, which the log says once, for the checks.
     drawn: bool,
@@ -229,6 +229,13 @@ pub struct FootBar {
     /// The palette of a browser window, by its id, for the main button's accent.
     look: Box<dyn Fn(u64, &App) -> Palette>,
     shown: Option<Shown>,
+    /// The bars shown before `shown` since one last drew, oldest first, that one included. The host
+    /// sizes the window after the update that asked, so until the window has the new bar's size the
+    /// latest of these that fits it draws instead: the new bar drawn at the old size was cut, and
+    /// the Mac stretched it to the new one (#2991).
+    earlier: Vec<Shown>,
+    /// The bar the last frame drew, which a click presses.
+    on_screen: Option<Rc<Bar>>,
 }
 
 struct FootBarWindow(WindowHandle<FootBar>);
@@ -276,6 +283,8 @@ pub fn open_at(
             host,
             look: Box::new(look),
             shown: None,
+            earlier: Vec::new(),
+            on_screen: None,
         })
     });
     match window {
@@ -308,9 +317,16 @@ pub fn show(window: u64, page: Bounds<Pixels>, content: Size<Pixels>, bar: Bar, 
         let place = place(page, content, layout.size);
         let origin = origin(&place, content);
         let placed = Rc::new(RefCell::new(vec![None; bar.buttons.len()]));
+        if let Some(was) = foot_bar.shown.take() {
+            if was.drawn {
+                foot_bar.earlier.clear();
+            }
+            foot_bar.earlier.push(was);
+        }
+        foot_bar.earlier.retain(|was| was.window == window);
         foot_bar.shown = Some(Shown {
             window,
-            bar,
+            bar: Rc::new(bar),
             layout,
             drawn: false,
             origin,
@@ -327,6 +343,8 @@ pub fn hide(cx: &mut App) {
         return;
     };
     let _ = handle.update(cx, |foot_bar, _, cx| {
+        foot_bar.earlier.clear();
+        foot_bar.on_screen = None;
         if foot_bar.shown.take().is_some() {
             foot_bar.host.hide();
             cx.notify();
@@ -347,8 +365,7 @@ pub fn shown_over(cx: &App) -> Option<u64> {
 
 impl FootBar {
     fn press(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(button) = (self.shown.as_ref()).and_then(|shown| shown.bar.buttons.get(index))
-        else {
+        let Some(button) = (self.on_screen.as_ref()).and_then(|bar| bar.buttons.get(index)) else {
             return;
         };
         if !button.enabled {
@@ -364,14 +381,44 @@ impl FootBar {
 impl Render for FootBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div().size_full().font_family(crate::face::UI);
-        let Some(shown) = &mut self.shown else {
+        let viewport = window.viewport_size();
+        let fits = |shown: &Shown| {
+            let size = shown.layout.size;
+            (f32::from(viewport.width) - f32::from(size.width)).abs() < 1.
+                && (f32::from(viewport.height) - f32::from(size.height)).abs() < 1.
+        };
+        let earlier = match &self.shown {
+            Some(shown) if !fits(shown) => self.earlier.iter().rposition(fits),
+            _ => None,
+        };
+        match earlier {
+            Some(index) => _ = self.earlier.drain(..index),
+            None => self.earlier.clear(),
+        }
+        let shown = match earlier {
+            Some(_) => self.earlier.first_mut(),
+            None => self.shown.as_mut(),
+        };
+        self.on_screen = shown.as_ref().map(|shown| shown.bar.clone());
+        let Some(shown) = shown else {
             return root;
         };
         // GPUI draws a window only once the system reports it visible, some frames after the host
-        // shows it, so the line comes with the first frame that's seen. check.sh reads it.
+        // shows it, so the lines come with the first frame that's seen. check.sh reads them: the
+        // second says the bar's size and the window's, which a frame drawn before the host sized
+        // the window shows apart.
         if !shown.drawn {
             match window.is_visible() {
-                true => log!("browser: foot bar drawn over {}", shown.window),
+                true => {
+                    log!("browser: foot bar drawn over {}", shown.window);
+                    log!(
+                        "browser: foot bar drew {}x{} in {}x{}",
+                        f32::from(shown.layout.size.width).round(),
+                        f32::from(shown.layout.size.height).round(),
+                        f32::from(viewport.width).round(),
+                        f32::from(viewport.height).round(),
+                    );
+                }
                 false => window.request_animation_frame(),
             }
             shown.drawn = window.is_visible();
