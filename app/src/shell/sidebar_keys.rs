@@ -570,6 +570,32 @@ mod tests {
         assert!(host.take().contains(&"close 10".to_owned()));
     }
 
+    /// ⌘W that comes while the App is in the update that opens a tab in front, as a nested event
+    /// pump delivers it, waits for that update and closes the tab it opened, the one in front by
+    /// then, once (#2672).
+    #[gpui::test]
+    fn close_tab_that_comes_as_a_tab_opens_closes_that_tab(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        let mut platform = cx.test_window(gpui::VisualContext::window_handle(cx));
+        let keystroke = gpui::Keystroke::parse("cmd-w").unwrap();
+        shell.update(cx, |shell, cx| {
+            let today = vec![20, 21, 22];
+            shell.set_tabs(1, vec![10, 11], today, Vec::new(), Folders::default(), cx);
+            shell.set_selected(22, cx);
+            platform.simulate_input(gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            }));
+            platform.simulate_input(gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
+        });
+        cx.run_until_parked();
+        let closed: Vec<_> = (host.take().into_iter())
+            .filter(|call| call.starts_with("close "))
+            .collect();
+        assert_eq!(closed, ["close 22"]);
+    }
+
     /// Shift-F10 and the menu key open the ringed row's menu under it, as a right-click does.
     #[gpui::test]
     fn the_menu_key_opens_the_ringed_rows_menu(cx: &mut TestAppContext) {

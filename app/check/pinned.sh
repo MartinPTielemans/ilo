@@ -75,7 +75,10 @@ switch "3 cmd" "$b"
 # it, as Arc's does. Today's top row is under the pinned rows, the divider and "+ New Tab".
 today_top="100 $((90 + 44 + 41 * 2 + 15 + 41 + 20))"
 clicks=$(detents)
-send drag $(pinned_row 1) 100 150
+# Let go over the first row's bottom quarter, still nearer the gap before it, not its middle, where
+# a rest of SPLIT_REST before a late release, as Windows' real pointer can make, would join that
+# tab in a split view. Over its top quarter the tile the favorites would make room for is nearer.
+send drag $(pinned_row 1) 100 169
 expect "^browser: dragged $a to pinned 0\$" "a drag of the second pinned tab up didn't move it"
 # It passed one row, so the trackpad clicked once, and letting go added none.
 passed=$(($(detents) - clicks))
@@ -470,6 +473,24 @@ if [ "$active" != 1 ]; then
   echo "skip: the restored pinned tab's way back. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
+# Where the window opened under the pointer the quit left on the favicon, it drew that hover with no
+# move, and the driver's real click in the page jumped the pointer away with none either: off every
+# row first, or the move back to the favicon changes no hover and draws no line (#2831). Where it
+# opened under no row, as on the hosted Mac, whose pointer the driver doesn't move, it drew no hover
+# and there's none to clear.
+send move $sidebar_point
+drawn_hover() {
+  grep '^browser: hover \(tab\|new\|none\) ' "$log" | tail -1
+}
+off_rows() {
+  case "$(drawn_hover)" in '' | 'browser: hover none '*) return 0 ;; esac
+  return 1
+}
+for _ in $(seq 100); do
+  off_rows && break
+  sleep 0.1
+done
+off_rows || fail "the pointer off every row left a row hovered: $(drawn_hover)"
 # Unloaded, its row has the remove button in its −'s place.
 send move $(pinned_favicon 0)
 expect "^browser: hover tab $c close remove favicon $c\$" \
@@ -715,6 +736,17 @@ expect "^browser: selected $c in " "the tab chosen in the folder's preview didn'
 recorded
 # The folder staying closed logs no new outline, so the last one is the folder's state.
 [ "$(outline)" = "$f-[$c]" ] || fail "showing a tab from the preview opened the folder: $(outline)"
+# A click on its row chooses that tab as ↩ does. The pointer leaves the row and rests on it again.
+send move $page_point
+send move $(pinned_row 0)
+expect "^browser: folder preview shown $f at " "resting on the closed folder again didn't preview it"
+read -r px py pw _ << EOF
+$(grep "^browser: folder preview shown $f at " "$log" | tail -1 | cut -d' ' -f7-)
+EOF
+# The first row's middle: under the search (48), its line (1) and the padding (4), half its fill.
+send click $((px + pw / 2)) $((py + 75))
+expect "^browser: folder preview chose $c\$" "a click on the folder preview's row didn't choose its tab"
+expect '^browser: folder preview hidden$' "a click on the folder preview's row left it up"
 send move $page_point
 switch "9 cmd" "$a"
 quit_by_key

@@ -169,13 +169,9 @@ send key n cmd shift
 expect '^browser: private window opened [0-9]' "⇧⌘N didn't open a private window"
 new_window_bar
 send window 2
-if [ "$(uname)" = Linux ]; then
-  echo "skip: the windows' order before the quit: on X11 a new window opens behind the one in front (#712)."
-else
-  send order
-  expect '^browser: order window 2 window 4 window 1, key window 2$' \
-    "before the quit, the windows weren't the second, the private one and the first, front to back"
-fi
+send order
+expect '^browser: order window 2 window 4 window 1, key window 2$' \
+  "before the quit, the windows weren't the second, the private one and the first, front to back"
 quit_by_key
 exited
 

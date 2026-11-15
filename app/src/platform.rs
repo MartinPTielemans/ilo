@@ -422,6 +422,7 @@ unsafe extern "C" {
     );
     pub fn host_show_link_target(ui_view: *mut c_void, left: f64, top: f64, fade: f64);
     pub fn host_hide_link_target(fade: f64);
+    pub fn host_mouse_down() -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_keep_keychain_key() -> bool;
     #[cfg(not(target_os = "linux"))]

@@ -2402,8 +2402,11 @@ void AgentPage::FindChoice(int slot,
     return;
   }
   std::string selector = ChoiceSelector(kChoiceKinds[kind], id);
+  // Made before the call, whose reply takes the selector: Windows' compilers evaluate a call's
+  // arguments right to left, so the reply's would take it first and leave the query empty.
+  base::DictValue query = base::DictValue().Set("nodeId", scope).Set("selector", selector);
   Send(
-      "DOM.querySelectorAll", base::DictValue().Set("nodeId", scope).Set("selector", selector),
+      "DOM.querySelectorAll", std::move(query),
       base::BindOnce(
           [](base::WeakPtr<AgentPage> page, int slot, int scope, std::optional<std::string> id,
              size_t kind, std::string selector, ChoiceThen then, const base::DictValue* result) {

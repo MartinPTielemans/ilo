@@ -357,6 +357,8 @@ if [ "$(uname)" = Darwin ]; then
   in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
   send clickkey $at
   expect '^browser: haptics off$' "a click on the haptics switch didn't turn them off"
+else
+  echo "skip: the haptics switch: Settings draws it on the Mac alone."
 fi
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -581,6 +583,10 @@ await "^browser: selected $y\$" ||
   fail "the relaunch didn't show the favorite split focused on its right page: $(grep '^browser: selected' "$log" | tail -1)"
 await "^browser: loaded $y " || fail "the favorite split's right page didn't load"
 ../tools/window-screenshot.sh "$pid" "$out/favorite-split-restored.png" || fail "no window to capture"
+# On Windows the relaunch finds the runner's console in front, which the driver's moves, unlike its
+# presses and keys, don't bring the app in front of: the user's click on its taskbar button does.
+! windows || python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" > /dev/null ||
+  fail "the relaunched app's window couldn't take the foreground"
 send move $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
@@ -768,6 +774,8 @@ if [ "$(uname)" = Darwin ]; then
   in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
   send clickkey $at
   expect '^browser: haptics on$' "Settings didn't keep the haptics off across the quit"
+else
+  echo "skip: the haptics switch kept across the quit: Settings draws it on the Mac alone."
 fi
 # The driver's done for a click that closes its window can be lost with the window, as it always
 # was in a VM, so the click isn't waited for; Settings going is.
