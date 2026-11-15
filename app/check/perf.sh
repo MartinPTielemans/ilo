@@ -52,7 +52,8 @@ serve
 # (#2385), so the display stays on.
 ! windows || powercfg -change -monitor-timeout-ac 0 || echo "perf: the display's timeout stays"
 # #2324's spike: every launch has the memory on, as a profile whose user said yes has it, so each row
-# is what it costs; spike/memory-2324-2 runs the same app with it off.
+# is what it costs. Before the session, its four arms (on, off, nosnapshot, noopen) take turns in
+# launches and new tabs of their own, each row of theirs read against Chrome's in the same run.
 memory=on
 export BROWSER_MEMORY=$memory
 perf_dir="$out/perf"
@@ -353,6 +354,92 @@ perf_row launch-restore "Launch, restored page painted${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/restore") ms" "Ardia 360 ms, Helium 355 ms, Chrome 438 ms"
 perf_row launch-held "Launch, the page held for uBlock Origin${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
+
+# #2324's spike, four arms on one engine in one run, so the runner's spread drops out: the memory
+# on, off, on reading no page's text (nosnapshot), and on with its file never opened (noopen). Each
+# arm has a copy of the profile the launches above left, and they take turns, each round in another
+# order: 3 links each to the page painted, and 3 sessions each of p1 then 6 new tabs from ⌘T's bar,
+# ↩ to their page painted. A session's p1 stays 12 s, the same in every arm, past the memory's
+# 10 s keep of a page loaded and still, and the arm's own line says it did what it says.
+arms="on off nosnapshot noopen"
+for arm in $arms; do
+  rm -rf "$perf_dir/arm-$arm-profile"
+  cp -R "$profile_dir" "$perf_dir/arm-$arm-profile"
+  : > "$perf_dir/arm-link-$arm"
+  : > "$perf_dir/arm-newtab-$arm"
+done
+# The line an arm's launch logs once the memory has done what the arm says, or none for off.
+arm_line() {
+  case $1 in
+    on) echo 'browser: memory kept a page in ' ;;
+    nosnapshot) echo 'browser: memory read no page text, as BROWSER_MEMORY says$' ;;
+    noopen) echo 'browser: memory left closed, as BROWSER_MEMORY says$' ;;
+  esac
+}
+arm_session() {
+  log="$perf_dir/arm-$1-$2.log"
+  step=0
+  rm -f "$perf_dir/arm-$1-profile/Spaces.json" "$perf_dir/arm-$1-profile/launch-frame"
+  # shellcheck disable=SC2086 # the flags, a word each
+  BROWSER_MEMORY=$1 BROWSER_DRIVE=1 BROWSER_URL="$page?p1" \
+    BROWSER_PROFILE_DIR="$perf_dir/arm-$1-profile" "$browser" $engine_switch \
+    < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await "^browser: title [0-9]* p1 fcp " || fail "arm $1's p1 didn't paint"
+  paint_at=$(($(perf_painted p1) / 1000))
+  send click $page_point
+  if [ "$active" = 1 ]; then
+    perf_until $((paint_at + 12))
+    line=$(arm_line "$1")
+    if [ -n "$line" ]; then
+      await "$line" || fail "arm $1 didn't log what its memory did: $line"
+    elif grep -q '^browser: memory open$' "$log"; then
+      fail "arm off opened the memory"
+    fi
+    for n in 2 3 4 5 6 7; do
+      send key t cmd
+      expect '^browser: command bar shown$' "⌘T didn't open the command bar in arm $1"
+      send type "$page?a$2$1$n"
+      perf_stamp
+      typed=$stamp
+      send key return
+      expect_late "^browser: title [0-9]* a$2$1$n fcp " "a$2$1$n didn't paint in its new tab"
+      echo $(($(perf_painted "a$2$1$n" "$step") - typed)) >> "$perf_dir/arm-newtab-$1"
+    done
+  else
+    echo "skip: arm $1's new tabs in round $2. Browser wasn't the active app."
+  fi
+  exec 3>&-
+  quit
+}
+for round in 1 2 3; do
+  case $round in
+    1) order="on off nosnapshot noopen" ;;
+    2) order="off noopen on nosnapshot" ;;
+    3) order="nosnapshot on noopen off" ;;
+  esac
+  for arm in $order; do
+    whole=$profile_dir
+    profile_dir="$perf_dir/arm-$arm-profile"
+    rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+    BROWSER_MEMORY=$arm
+    perf_launch "$page?l$round$arm" "l$round$arm" "arm-link-$arm-$round"
+    BROWSER_MEMORY=$memory
+    profile_dir=$whole
+    echo "$painted" >> "$perf_dir/arm-link-$arm"
+  done
+  for arm in $order; do
+    arm_session "$arm" "$round"
+  done
+done
+for arm in $arms; do
+  perf_row "arm-link-$arm" "#2324 arm $arm: launch, link to page painted" \
+    "$(perf_stats '%.0f' < "$perf_dir/arm-link-$arm") ms" "off's, against Chrome's below"
+  [ ! -s "$perf_dir/arm-newtab-$arm" ] ||
+    perf_row "arm-newtab-$arm" "#2324 arm $arm: new tab, ↩ in ⌘T's bar to page painted" \
+      "$(perf_stats '%.0f' < "$perf_dir/arm-newtab-$arm") ms" "off's, against Chrome's below"
+done
 
 log="$perf_dir/session.log"
 step=0

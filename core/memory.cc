@@ -69,8 +69,13 @@ namespace {
 constexpr char kMemoryPref[] = "browser_core.memory";
 constexpr base::FilePath::CharType kFile[] = FILE_PATH_LITERAL("Memory");
 // A spike's switch, so a check run measures the hot paths with the memory on: BROWSER_MEMORY=on
-// turns it on in every profile without asking.
+// turns it on in every profile without asking. Two more turn it on with one part left out, so one
+// engine tells what costs what: nosnapshot reads no page's text, and noopen never opens the file.
 constexpr char kOnForChecks[] = "BROWSER_MEMORY";
+
+std::string ForChecks() {
+  return base::Environment::Create()->GetVar(kOnForChecks).value_or("");
+}
 
 // A page is kept once it has been loaded and still this long, as it's being read...
 constexpr base::TimeDelta kMemoryIdle = base::Seconds(10);
@@ -479,6 +484,11 @@ class MemoryTab : public content::WebContentsObserver,
       memory->KeepOut(site, *why, true);
       return;
     }
+    // check/perf.sh waits for this line in its nosnapshot arm.
+    if (ForChecks() == "nosnapshot") {
+      LOG(ERROR) << "browser: memory read no page text, as BROWSER_MEMORY says";
+      return;
+    }
     contents->RequestAXTreeSnapshot(
         base::BindOnce(&MemoryTab::Snapshotted, weak_factory_.GetWeakPtr(), url, site),
         ui::kAXModeWebContentsOnly, kMaxNodes, kSnapshotTimeout,
@@ -518,9 +528,14 @@ void SetUpMemory(Profile* profile) {
   if (!profile || profile->IsOffTheRecord() || profile->GetUserData(Memory::kKey)) {
     return;
   }
-  std::unique_ptr<base::Environment> environment = base::Environment::Create();
-  if (environment->GetVar(kOnForChecks) == "on") {
+  std::string checks = ForChecks();
+  if (checks == "on" || checks == "nosnapshot" || checks == "noopen") {
     profile->GetPrefs()->SetInteger(kMemoryPref, BC_MEMORY_ON);
+  }
+  // check/perf.sh waits for this line in its noopen arm.
+  if (checks == "noopen") {
+    LOG(ERROR) << "browser: memory left closed, as BROWSER_MEMORY says";
+    return;
   }
   profile->SetUserData(Memory::kKey, std::make_unique<Memory>(profile));
 }
