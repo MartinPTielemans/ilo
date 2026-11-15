@@ -892,8 +892,18 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
         content::WebContentsObserver(contents) {}
 
   // Holds the tab, as its tab strip gets it, until the answer, and watches |opener| till then.
+  // Its page takes no input till then, the keyboard among it. Content focuses a page it opens for
+  // a link with a target or window.open() (WebContentsImpl::CreateNewWindow, chrome::Navigate),
+  // and on Windows that took the keyboard from the page that opened it, for a tab never listed or
+  // shown: keys went nowhere the user could see, and on after the filters closed it (#2806). The
+  // Mac's and Linux's runs show the opener keeping the keyboard as the pop-up opens, so this
+  // changes nothing there. A page ignoring input is one WebContentsViewAura won't focus. Once the
+  // filters let it load, the app lists it and gives it the keyboard as any tab it shows.
   void Hold(content::WebContents* opener) {
     hold.Hold();
+    if (hold.holding()) {
+      no_input_.emplace(web_contents()->IgnoreInputEvents(std::nullopt));
+    }
     if (hold.holding() && opener) {
       opener_ = std::make_unique<GoneWatch>(
           opener, base::BindOnce(&PopupHeld::OpenerGone, base::Unretained(this)));
@@ -929,6 +939,7 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
     if (hold.holding()) {
       return;
     }
+    no_input_.reset();
     Observe(nullptr);
     if (opener_) {
       // Deleted after, as this may be inside its call.
@@ -939,6 +950,7 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
 
   friend class content::WebContentsUserData<PopupHeld>;
   std::unique_ptr<GoneWatch> opener_;
+  std::optional<content::WebContents::ScopedIgnoreInputEvents> no_input_;
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
