@@ -1266,6 +1266,9 @@ w=$(grep "^browser: loaded [0-9]* ${site}switch.html\$" "$log" | tail -1 | cut -
 send click $page_point
 await "^browser: title $w playing sound\$" || true
 echo "probe: titles before the switch: $(grep "^browser: title $w " "$log" | cut -d' ' -f4- | tr '\n' '|')"
+# Allowed for its site, as Chrome floats a video on a switch only from a site with engagement or that.
+floats Allow
+await "^browser: title $w playing sound\$" || true
 placed_before=$(grep -c 'browser: mini player placed at ' "$log")
 echo "probe: today $(today), pinned $(pinned)"
 shown "$v"
