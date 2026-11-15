@@ -1085,7 +1085,20 @@ impl Browser for Engine {
     }
 
     fn arrange_do(&self, tab: u64, ask: browser::boosts::arrange::Ask, _: &mut App) {
-        log!("browser: arrange {tab} {ask:?}: no core call yet");
+        use browser::boosts::arrange::Ask;
+        let action = match ask {
+            Ask::Outer => bc::BC_ARRANGE_DO_OUTER,
+            Ask::Inner => bc::BC_ARRANGE_DO_INNER,
+            Ask::Undo => bc::BC_ARRANGE_DO_UNDO,
+            Ask::Hide => bc::BC_ARRANGE_DO_HIDE,
+            Ask::PutBack => bc::BC_ARRANGE_DO_PUT_BACK,
+            Ask::StaysOnScreen => bc::BC_ARRANGE_DO_STAYS_ON_SCREEN,
+            Ask::ScrollsWithPage => bc::BC_ARRANGE_DO_SCROLLS_WITH_PAGE,
+            Ask::Reset => bc::BC_ARRANGE_DO_RESET,
+        };
+        // check.sh reads this line.
+        log!("browser: arrange {tab} {ask:?}");
+        unsafe { bc::bc_tab_arrange_do(tab, action as std::os::raw::c_int) };
     }
 
     fn show_mini_bar(

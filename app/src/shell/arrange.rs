@@ -175,11 +175,14 @@ impl Shell {
             return;
         }
         if ask == Ask::Reset {
-            // Reset takes back the core's changes, not Zap's hides, and its save is no step.
+            // Reset takes back the core's changes, not Zap's hides, and its save is no step. With
+            // nothing to take back the core saves nothing, so there's no save to wait for.
             self.arrange_mode
                 .history
                 .retain(|step| *step == Undoable::Hide);
-            self.arrange_mode.quiet += 1;
+            if self.arrange_mode.state.can_reset {
+                self.arrange_mode.quiet += 1;
+            }
         }
         self.browser.arrange_do(tab, ask, cx);
     }
@@ -191,8 +194,12 @@ impl Shell {
             return false;
         }
         match self.arrange_mode.history.pop() {
+            // The core saves what its Undo leaves, which is no step of the user's; with none of
+            // its changes left to take back it saves nothing.
             Some(Undoable::Core) => {
-                self.arrange_mode.quiet += 1;
+                if self.arrange_mode.state.can_undo {
+                    self.arrange_mode.quiet += 1;
+                }
                 self.browser.arrange_do(tab, Ask::Undo, cx);
             }
             Some(Undoable::Hide) => self.undo_zap(cx),

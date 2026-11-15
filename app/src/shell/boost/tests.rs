@@ -863,6 +863,7 @@ fn undo_takes_back_the_modes_steps_last_first(cx: &mut TestAppContext) {
         shell.arrange_saved(10, "example.com", ARRANGED, cx);
         shell.boost_zapped(10, Some("#promo"), cx);
         shell.arrange_saved(10, "example.com", ARRANGED, cx);
+        core_has_steps(shell, cx);
     });
     host.take();
     cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
@@ -898,6 +899,36 @@ fn undo_takes_back_the_modes_steps_last_first(cx: &mut TestAppContext) {
     assert_eq!(arrange_calls(&host), Vec::<String>::new());
 }
 
+/// The core says it has changes of the site's that its Undo and Reset take back, as it does after
+/// a save.
+fn core_has_steps(shell: &mut Shell, cx: &mut gpui::Context<Shell>) {
+    let state = crate::boosts::arrange::State {
+        can_undo: true,
+        can_reset: true,
+        ..shell.arrange_shown().cloned().unwrap_or_default()
+    };
+    shell.arrange_state(10, state, cx);
+}
+
+/// An Undo or a Reset with none of the core's changes to take back saves nothing, so the user's
+/// next change, which the core saves, is a step ⌘Z takes back.
+#[gpui::test]
+fn a_step_after_nothing_to_take_back_is_kept(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    arranging(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.ask_arrange(10, crate::boosts::arrange::Ask::Reset, cx);
+        shell.arrange_saved(10, "example.com", ARRANGED, cx);
+    });
+    host.take();
+    assert!(shell.update(cx, |shell, cx| shell.run_arrange_key(10, "cmd-z", cx)));
+    assert_eq!(
+        arrange_calls(&host),
+        ["arrange 10 Undo"],
+        "the change after a Reset with nothing to take back wasn't a step"
+    );
+}
+
 /// Reset takes back the core's changes, so ⌘Z after it has only the Hides left.
 #[gpui::test]
 fn reset_leaves_undo_the_hides(cx: &mut TestAppContext) {
@@ -906,6 +937,7 @@ fn reset_leaves_undo_the_hides(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         shell.arrange_saved(10, "example.com", ARRANGED, cx);
         shell.boost_zapped(10, Some("#promo"), cx);
+        core_has_steps(shell, cx);
         shell.ask_arrange(10, crate::boosts::arrange::Ask::Reset, cx);
     });
     let calls = arrange_calls(&host);
