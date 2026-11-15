@@ -204,6 +204,11 @@ if engine_has ../core/popup_hold.cc ../core/native_ad_block.cc; then
     fail "the core didn't say how long the link's tab took and how long it was held: $(grep "^browser: \(tab\|pop-up\) $link_tab " "$log" | head -4 | tr '\n' ' ')"
   touch "$out/site/held.go"
   expect "^browser: title $link_tab held\$" "the link's pop-up the filters let through didn't load"
+  # Its page has the keyboard: the hold kept content from focusing it (#2806), so the app's focus,
+  # as it shows the tab, is the one it takes.
+  send key x
+  expect "^browser: title $link_tab held has x\$" \
+    "a key after the link's pop-up the filters let through loaded didn't reach its page: the keyboard is in $key, on $focus"
 
   # window.open() to an address they let through, timed the same way. Its page comes at once now.
   go_from_bar "${site#http://}opener-open.html"
