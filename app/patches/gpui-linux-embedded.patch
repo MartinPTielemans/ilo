@@ -4963,7 +4963,7 @@ index f9b9727330..e1e2214d9d 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..8e5c891351 100644
+index e21f019c64..95a7c1d65b 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -5959,7 +5959,7 @@ index e21f019c64..8e5c891351 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,6 +2755,1532 @@ impl X11ClientState {
+@@ -2087,6 +2755,1535 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
@@ -6286,11 +6286,14 @@ index e21f019c64..8e5c891351 100644
 +
 +    /// Drops the timer that would end the managed overlay `window`'s wait for its place.
 +    fn unbound_place(&self, window: xproto::Window) {
-+        let timers: Vec<_> = PLACE_BOUNDS.with_borrow_mut(|all| {
++        // A window dropped as the thread ends, as GPUI's app is at exit, may outlive the table.
++        let timers: Vec<_> = (PLACE_BOUNDS.try_with(|all| {
++            let mut all = all.borrow_mut();
 +            let timers = all.iter().filter(|&&(each, _)| each == window).map(|e| e.1).collect();
 +            all.retain(|&(each, _)| each != window);
 +            timers
-+        });
++        }))
++        .unwrap_or_default();
 +        for timer in timers {
 +            self.loop_handle.remove(timer);
 +        }
@@ -7492,7 +7495,7 @@ index e21f019c64..8e5c891351 100644
      fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
          if let Some(cursor) = self.cursor_cache.get(&style) {
              return *cursor;
-@@ -2197,7 +4391,7 @@ impl X11ClientState {
+@@ -2197,7 +4394,7 @@ impl X11ClientState {
              .get(&hidden_window)
              .copied()
              .unwrap_or(CursorStyle::Arrow);
@@ -7501,20 +7504,21 @@ index e21f019c64..8e5c891351 100644
              log::warn!(
                  "X11: no cursor icon available to restore {:?} after hide; cursor may stay invisible",
                  style
-@@ -2219,6 +4413,27 @@ impl X11ClientState {
+@@ -2219,6 +4416,28 @@ impl X11ClientState {
      }
  }
  
-+/// Drops what's kept of the overlay `window`, shown or between its shows, as its window goes.
++/// Drops what's kept of the overlay `window`, shown or between its shows, as its window goes:
++/// nothing once the thread is ending, as GPUI's app drops its windows at exit, after the tables.
 +fn forget_overlay(window: xproto::Window) {
-+    OVER.with_borrow_mut(|all| all.retain(|&(each, ..)| each != window));
-+    AWAY.with_borrow_mut(|all| all.retain(|each| each.view != window));
-+    PLACED.with_borrow_mut(|all| all.retain(|&(each, ..)| each != window));
-+    ASKED_SIZES.with_borrow_mut(|all| all.retain(|&(each, ..)| each != window));
-+    UNPLACED.with_borrow_mut(|all| all.retain(|(each, _)| *each != window));
-+    CLIENTS.with_borrow_mut(|all| all.retain(|&(each, _)| each != window));
++    let _ = OVER.try_with(|all| all.borrow_mut().retain(|&(each, ..)| each != window));
++    let _ = AWAY.try_with(|all| all.borrow_mut().retain(|each| each.view != window));
++    let _ = PLACED.try_with(|all| all.borrow_mut().retain(|&(each, ..)| each != window));
++    let _ = ASKED_SIZES.try_with(|all| all.borrow_mut().retain(|&(each, ..)| each != window));
++    let _ = UNPLACED.try_with(|all| all.borrow_mut().retain(|(each, _)| *each != window));
++    let _ = CLIENTS.try_with(|all| all.borrow_mut().retain(|&(each, _)| each != window));
 +    for each in [&FOCUS_ON_MAP, &ASKED_AGAIN, &CHECK_ON_MAP, &RESTATE] {
-+        each.with_borrow_mut(|all| all.retain(|&each| each != window));
++        let _ = each.try_with(|all| all.borrow_mut().retain(|&each| each != window));
 +    }
 +}
 +
@@ -7529,7 +7533,7 @@ index e21f019c64..8e5c891351 100644
  // Adapted from:
  // https://docs.rs/winit/0.29.11/src/winit/platform_impl/linux/x11/monitor.rs.html#103-111
  pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
-@@ -2232,6 +4447,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+@@ -2232,6 +4451,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
      Duration::from_micros(micros)
  }
  
@@ -7570,7 +7574,7 @@ index e21f019c64..8e5c891351 100644
  /// Applies a mapped/obscured change to the refresh loop and reports the
  /// resulting visibility to the window. Consumes the client borrow because the
  /// visibility callback re-enters GPUI.
-@@ -2246,10 +4495,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +4499,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -7625,7 +7629,7 @@ index e21f019c64..8e5c891351 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +4566,77 @@ fn detect_compositor_gpu(
+@@ -2273,73 +4570,77 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -7766,7 +7770,7 @@ index e21f019c64..8e5c891351 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +4762,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +4766,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -7787,7 +7791,7 @@ index e21f019c64..8e5c891351 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +4809,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +4813,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -7796,7 +7800,7 @@ index e21f019c64..8e5c891351 100644
                          },
                      ))
                  }
-@@ -2539,10 +4852,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +4856,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -7810,7 +7814,7 @@ index e21f019c64..8e5c891351 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +4870,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +4874,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -7827,7 +7831,7 @@ index e21f019c64..8e5c891351 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +4885,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +4889,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -7863,7 +7867,7 @@ index e21f019c64..8e5c891351 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +4964,11 @@ fn get_scale_factor(
+@@ -2620,6 +4968,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -7875,7 +7879,7 @@ index e21f019c64..8e5c891351 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +5247,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +5251,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
@@ -8006,7 +8010,7 @@ index e21f019c64..8e5c891351 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +5686,101 @@ mod tests {
+@@ -3213,3 +5690,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }
