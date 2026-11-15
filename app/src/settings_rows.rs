@@ -690,14 +690,45 @@ fn chevron(up: bool, color: gpui::Hsla) -> gpui::Svg {
         .text_color(color)
 }
 
-/// What an agent's request shows opened under its title (#2326): "To" and its whole address,
-/// then "Sent", or "Not sent" if it was refused, a line a field, cut at the edge until `all`, when
-/// a long value wraps whole. Past eight lines the eighth is "Show all", which calls `show_all`.
-/// Its caller places it under the row's title, at the title's start.
+/// A line in the detail's grey under an opened row's lines, saying what it leaves out and why.
+pub fn sent_aside(text: &'static str, detail: gpui::Hsla) -> gpui::Div {
+    div()
+        .text_size(px(SMALL))
+        .line_height(px(DETAIL_LINE))
+        .text_color(detail)
+        .child(text)
+}
+
+/// What an opened log row sent, as one line of the log check.sh reads: each line "name: value",
+/// joined by " · ", with a value's line breaks as "⏎", which a page's text has (#2462).
+pub fn sent_said(sent: &[Sent]) -> String {
+    let lines = sent.iter().map(|line| {
+        let value = line.value.replace("\r\n", "⏎").replace(['\n', '\r'], "⏎");
+        match line.name.is_empty() {
+            true => value,
+            false => format!("{}: {value}", line.name),
+        }
+    });
+    lines.collect::<Vec<_>>().join(" · ")
+}
+
+/// The label of an opened log row's address: "Page" for what Point sent, "To" for a request.
+pub fn address_label(action: &str) -> &'static str {
+    match action {
+        "pointed" => "Page",
+        _ => "To",
+    }
+}
+
+/// What an agent's request shows opened under its title (#2326): `to`, "To" for a request and
+/// "Page" for what Point sent (#2352), and its whole address, then "Sent", or "Not sent" if it was
+/// refused, a line a field, cut at the edge until `all`, when a long value wraps whole. Past eight
+/// lines the eighth is "Show all", which calls `show_all`. Its caller places it under the row's
+/// title, at the title's start.
 #[allow(clippy::too_many_arguments)]
 pub fn sent_part(
     id: impl Into<gpui::ElementId>,
-    url: &str,
+    (to, url): (&'static str, &str),
     sent: &[Sent],
     refused: bool,
     all: bool,
@@ -726,7 +757,7 @@ pub fn sent_part(
         true => line,
         false => line.truncate(),
     };
-    let to = cut(small(url.to_string().into()).min_w_0().text_color(ink));
+    let address = cut(small(url.to_string().into()).min_w_0().text_color(ink));
     let (shown, more) = sent_shown(sent.len(), all);
     let mut lines: Vec<gpui::AnyElement> = (sent.iter().take(shown))
         .map(|line| {
@@ -781,7 +812,7 @@ pub fn sent_part(
         .flex()
         .flex_col()
         .gap(px(SENT_GAP))
-        .child(labelled("To", vec![to.into_any_element()]))
+        .child(labelled(to, vec![address.into_any_element()]))
         .when(!lines.is_empty(), |part| part.child(labelled(label, lines)))
 }
 
@@ -798,6 +829,27 @@ mod tests {
         assert_eq!(sent_shown(9, false), (7, true));
         assert_eq!(sent_shown(200, false), (7, true));
         assert_eq!(sent_shown(200, true), (200, false));
+    }
+
+    /// What was sent is one line of the log, a page's text with its line breaks too, as check.sh
+    /// reads the line alone (#2462's check read the text's first line and missed the rest).
+    #[test]
+    fn what_was_sent_is_said_on_one_line() {
+        let line = |depth, name: &str, value: &str| Sent {
+            depth,
+            name: name.into(),
+            value: value.into(),
+        };
+        let sent = [
+            line(0, "1", ""),
+            line(1, "text", "Sign in\nForgot your password?\r\nDone"),
+            line(1, "", "alone"),
+            line(1, "value", "Not sent"),
+        ];
+        assert_eq!(
+            sent_said(&sent),
+            "1:  · text: Sign in⏎Forgot your password?⏎Done · alone · value: Not sent"
+        );
     }
 
     /// A button, a switch and a pop-up, named as Settings names them while VoiceOver asks.

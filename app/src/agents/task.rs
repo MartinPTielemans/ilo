@@ -88,7 +88,7 @@ pub enum Who {
 }
 
 impl Message {
-    fn new(who: Who, text: impl Into<SharedString>) -> Self {
+    pub(super) fn new(who: Who, text: impl Into<SharedString>) -> Self {
         Self {
             who,
             text: text.into(),
@@ -279,7 +279,7 @@ pub struct Task {
     process: Option<Process>,
     /// The ask's call, which waits for the user's answer, with the number it takes among the
     /// agent's prompts, which show in the order they came.
-    asking: Option<(u64, mpsc::Sender<ToolResult>)>,
+    pub(super) asking: Option<(u64, mpsc::Sender<ToolResult>)>,
     /// While it's thinking, what ends the turn if its CLI never answers (NO_ANSWER). It goes as
     /// the CLI answers, so nothing waits once the agent is under way.
     pub(super) waiting: Option<gpui::Task<()>>,
@@ -369,6 +369,8 @@ pub struct Card {
     pub retry: bool,
     /// The command that fixes a failure.
     pub command: Option<&'static str>,
+    /// The task's ask to point, whose chips are Not Now and Point until the user points.
+    pub point: Option<super::TaskPoint>,
 }
 
 impl Card {
@@ -718,12 +720,18 @@ impl Agents {
             .task(agent)
             .and_then(|task| task.asking.as_ref())
             .map(|(id, _)| *id);
-        confirmations.chain(handoffs).chain(ask).min()
+        (confirmations.chain(handoffs).chain(ask))
+            .chain(self.point_ids(agent))
+            .min()
     }
 
-    /// Whether the task's ask is the prompt its agent shows.
+    /// Whether the task's ask, or its ask to point, is the prompt its agent shows.
     fn ask_shown(&self, task: &Task) -> bool {
-        (task.asking.as_ref()).is_some_and(|(id, _)| self.first_prompt(&task.agent) == Some(*id))
+        let first = self.first_prompt(&task.agent);
+        (task.asking.as_ref()).is_some_and(|(id, _)| first == Some(*id))
+            || self
+                .task_point(&task.agent)
+                .is_some_and(|point| first == Some(point.id))
     }
 
     /// Done's tabs to open, with their sites, those still in the task's Space.
@@ -818,6 +826,7 @@ impl Agents {
                 State::Failed { command, .. } => command,
                 _ => None,
             },
+            point: self.task_point(&task.agent).filter(|_| asks),
         }
     }
 
@@ -1675,7 +1684,7 @@ impl Agents {
             session.tabs.push(tab);
         }
         // An ask is done once asked: the wait for the answer is the user's.
-        let ended = (did.tool == "ask").then_some(at);
+        let ended = matches!(did.tool.as_str(), "ask" | "point").then_some(at);
         let after = task.messages.len();
         task.trace.push(Traced {
             call,
@@ -2130,7 +2139,7 @@ impl Agents {
                     (true, true, None) => String::new(),
                 };
             }
-            "list_tabs" | "ask" => {
+            "list_tabs" | "ask" | "point" => {
                 (did.site, did.tab, did.page) = (String::new(), None, String::new())
             }
             _ => {}
@@ -2686,7 +2695,7 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
         };
         let did = &step.did;
         let groups = (did.tab.is_some() || did.tool == "open_tab")
-            && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
+            && !matches!(did.tool.as_str(), "thought" | "ask" | "point" | "list_tabs");
         let like = |line: &Together| {
             matches!(line, Together::Steps(steps)
                 if steps[0].1.did.tool == did.tool && steps[0].1.did.target == did.target)
