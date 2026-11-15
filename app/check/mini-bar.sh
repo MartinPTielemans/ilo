@@ -8,7 +8,9 @@
 # and the bar sits over each (under the top one), inside the page; after a resize moves the thing,
 # the bar follows it as the pointer comes back over the page. With the page holding the keyboard and
 # then the UI, ↑ and ↓ select the box around and inside, the bar's Hide hides the thing, ⌘Z brings
-# it back, and escape is Done, which takes the bar away.
+# it back, and escape is Done, which takes the bar away. The foot bar (#2970) says the mode's last
+# step: after Inner floats it offers Undo and Reset, and each, pressed with the page focused and
+# then the UI, has the core take the float back; its Done ends the mode with either focus.
 
 page='data:text/html;charset=utf-8,<title>ready</title>
 <body style="margin:0;height:100vh;background:linear-gradient(%23d9e2e6,%23f3f5f6)">'
@@ -192,6 +194,57 @@ hide() {
   page_says ' inner hidden ' "the mini bar's Hide didn't hide Inner"
 }
 
+# The foot bar's lines since the last step, for a failure's message.
+foot_lines() { since | grep '^browser: \(arrange [0-9]* \)\?foot bar' | tail -6; }
+# Carries Inner with the free key held to the page's middle, where it floats over the page and the
+# foot bar offers Undo and Reset, for $1.
+float_inner() {
+  set -- "$1" $(page_at $((vw2 / 10 + 190)) 250) $(page_at $((vw2 / 2)) $((vh2 / 2 + 60)))
+  send press $2 $3 cmd
+  send dragto $2 $(($3 + 6)) cmd
+  expect "^browser: arrange $tab Carrying " "$1: a press on Inner and 6 pt didn't lift it"
+  send dragto $4 $5 cmd
+  expect "^browser: arrange $tab Preview Floats" "$1: a rest with the free key held didn't show a float"
+  send release $4 $5 cmd
+  expect "^browser: arrange $tab Selected Floats selected" "$1: letting go with the free key held didn't float Inner"
+  expect "^browser: arrange $tab foot bar: Inner .* | Undo on, Reset on\$" \
+    "$1: the foot bar didn't say Inner floats and offer Undo and Reset. Its lines: $(foot_lines)"
+  expect '^browser: foot bar drawn over [0-9]*$' "$1: the foot bar didn't draw"
+}
+# Clicks the foot bar's button $1 (arrange-undo, arrange-reset or arrange-done) in its middle, where
+# it last drew in the window, for $2.
+press_foot_bar() {
+  set -- "$1" "$2" $(grep "^browser: foot bar $1 at " "$log" | tail -1 | cut -d' ' -f6-)
+  [ -n "${6:-}" ] || fail "$2: the foot bar never drew its $1. Its lines: $(foot_lines)"
+  send move $(($3 + $5 / 2)) $(($4 + $6 / 2))
+  send click $(($3 + $5 / 2)) $(($4 + $6 / 2))
+  expect "^browser: foot bar $1 pressed\$" "$2: a click on the foot bar's $1 at $3 $4 ${5}x$6 didn't press it"
+}
+# Undo, then Reset, on the foot bar, each after a float of Inner and then $2, which leaves the
+# keyboard where $1 says: each has the core take the float back, and the bar goes back to its line
+# and Done. The float is captured with the bar, in the look $3.
+foot_bar_steps() {
+  float_inner "the float before the foot bar's Undo $1"
+  ../tools/window-screenshot.sh "$pid" "$out/mini-bar-foot-$3.png" || fail "no window to capture"
+  pinned="$pinned $out/mini-bar-foot-$3.png"
+  $2
+  press_foot_bar arrange-undo "Undo $1"
+  expect "^browser: arrange $tab foot bar: [^|]*\$" "Undo $1 left the foot bar offering it. Its lines: $(foot_lines)"
+  float_inner "the float before the foot bar's Reset $1"
+  $2
+  press_foot_bar arrange-reset "Reset $1"
+  expect "browser: tab $tab arrange saved 0 changes\$" "Reset $1 didn't have the core take the float back"
+  expect "^browser: arrange $tab foot bar: [^|]*\$" "Reset $1 left the foot bar offering it. Its lines: $(foot_lines)"
+}
+# The page keeps the keyboard through a press on the foot bar, which never takes it: ↑ is the mode's
+# from the page.
+page_keeps_keys() {
+  send key up
+  expect 'browser: \[keys\] .* before the page: arrange$' "↑ after a press on the foot bar didn't go through the page"
+}
+# The UI has the keyboard from a click on the sidebar.
+ui_keys() { send click $sidebar_point; }
+
 look=$(said | cut -d' ' -f2)
 arrange "the Space's look"
 read -r vw vh << EOF
@@ -246,11 +299,17 @@ near $(($6 - ${11})) $((vw2 / 10 + 30)) ||
 ../tools/window-screenshot.sh "$pid" "$out/mini-bar-mode-resized.png" || fail "no window to capture"
 pinned="$pinned $out/mini-bar-mode-resized.png"
 
+# The foot bar's Undo and Reset with the page focused, which a press on the bar leaves it.
+send click $(page_at $((vw2 / 10 + 190)) 250)
+foot_bar_steps "with the page focused" : "$look"
+page_keeps_keys
+
 # Escape with the page focused is Done, and the bar goes.
 send click $(page_at $((vw2 / 10 + 190)) 250)
 send key escape
 expect 'browser: \[keys\] .* before the page: zap or arrange$' "escape with the page focused went to the page"
 expect "browser: tab $tab arrange off\$" "escape with the page focused didn't end Arrange"
+expect '^browser: arrange foot bar none$' "the foot bar stayed after escape ended Arrange"
 
 # The same with the UI holding the keyboard, from a click on the sidebar, in the other look. The
 # keys reach the shell's bindings, never the page. The sidebar has the keyboard before the Space's
@@ -286,6 +345,22 @@ send key z cmd
 page_says ' inner shown ' "⌘Z with the UI focused didn't bring back the Inner that Hide hid"
 send key escape
 expect "browser: tab $tab arrange off\$" "escape with the UI focused didn't end Arrange"
+# The foot bar's Undo and Reset with the UI focused, then its Done, which ends the mode.
+arrange "the foot bar with the UI focused"
+send click $(page_at $((vw2 / 10 + 190)) 250)
+expect "^browser: arrange $tab Selected .* Inner\$" "a click on Inner didn't select it for the foot bar"
+foot_bar_steps "with the UI focused" ui_keys "$other"
+ui_keys
+press_foot_bar arrange-done "Done with the UI focused"
+expect "browser: tab $tab arrange off\$" "the foot bar's Done with the UI focused didn't end Arrange"
+expect '^browser: arrange foot bar none$' "the foot bar stayed after its Done"
+# Done with the page focused, after a click on Inner, ends it too.
+arrange "Done with the page focused"
+send click $(page_at $((vw2 / 10 + 190)) 250)
+expect "^browser: arrange $tab Selected .* Inner\$" "a click on Inner didn't select it for the foot bar's Done"
+press_foot_bar arrange-done "Done with the page focused"
+expect "browser: tab $tab arrange off\$" "the foot bar's Done with the page focused didn't end Arrange"
+expect '^browser: arrange foot bar none$' "the foot bar stayed after its Done"
 grep -q 'before the page: \(zap or \)\?arrange$' "$log" || fail "no key went through the page in the run"
 
 # On the Mac, Japanese input in a field on the page while Arrange is on: the composition takes ↓
@@ -382,7 +457,8 @@ echo "ok: the mini bar showed and drew over a thing selected, with Hide and Put 
   "either way. Windows:$shots"
 echo "ok: in the mode the bar sat over things at the page's top, bottom and right edges and in its" \
   "middle, inside the page, and followed Inner after a resize; ↑, ↓, the bar's Hide, ⌘Z and escape" \
-  "worked with the page focused and with the UI, in $look and $other. Windows:$pinned"
+  "worked with the page focused and with the UI, in $look and $other, and so did the foot bar's" \
+  "Undo, Reset and Done. Windows:$pinned"
 [ -z "$composing" ] || echo "ok: Japanese input in a field on the page kept ↓ and escape while it" \
   "composed with Arrange on, and the mode had escape again once it committed."
 [ -z "$safari" ] || echo "ok: over Safari's engine's page the Boost's card offered no Arrange, and" \
