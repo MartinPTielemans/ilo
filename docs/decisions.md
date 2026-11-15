@@ -126,13 +126,13 @@ WebRTC gathers only on the default route's public interface (`default_public_int
 
 Revisit if the engine builds with mDNS again, or a full-tunnel VPN is found leaking its real address under `default_public_interface_only`.
 
-## 11. A daily usage count: anonymous, on, with a switch
+## 11. A daily usage count: anonymous, off until turned on
 
-Once a UTC day a copy sends one count, unless Settings › Privacy › Send a Daily Usage Count is off (owner, 2026-11-06, #1977). It's how we know how many use ilo: crash reports count only copies that crash and opt in.
+Once a UTC day a copy sends one count, once its user turns it on, in onboarding or Settings › Privacy (owner, 2026-11-15, #2978). It's how we know how many use ilo. Copies on the old default (#1977) stop at the update, unasked.
 
-- **Sent:** version, channel, OS and major version, chip, and the flags daily, first run, first this ISO week and first this month.
-- **Never sent:** an ID, cookie, time of day, or anything about pages, tabs, Spaces, profiles, agents, accounts or settings. The copy keeps only its last count's date; the server keeps each day's totals, never the address or user agent.
-- **How:** about 30 s after launch or on returning on a new day, with no timer after; through the core and Chromium's network stack, without credentials, to the one endpoint the build names (`app/branding/daily-count`, prod only), never a general fetch. A build naming none sends nothing.
+- **Sent:** version, channel, OS and major version, chip, and the flags daily, first since turned on, and first this ISO week and month.
+- **Never sent:** an ID, cookie, time of day, or anything about browsing, profiles, agents, accounts or settings. The copy keeps only its yes and last count's date; the server keeps each day's totals, never the address or user agent.
+- **How:** about 30 s after launch, on returning on a new day, or when turned on, with no timer after; through Chromium's network stack, without credentials, to the one endpoint the build names (`app/branding/daily-count`, prod only). A build naming none sends nothing.
 
 Revisit if the totals stop telling releases apart without telling copies apart.
 
