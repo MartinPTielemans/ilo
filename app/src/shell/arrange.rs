@@ -25,8 +25,7 @@ impl Shell {
     /// The card's Arrange: the mode on the page shown, in place of the card and of Zap.
     pub(super) fn start_arrange(&mut self, cx: &mut Context<Self>) {
         let tab = self.field_tab();
-        if !self.browser.arranges() || self.shown_boost(cx).is_none() || self.arranging == Some(tab)
-        {
+        if self.shown_boost(cx).is_none() || self.arranging == Some(tab) {
             return;
         }
         self.close_boost_card(cx);

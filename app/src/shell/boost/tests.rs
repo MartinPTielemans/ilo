@@ -727,27 +727,49 @@ fn arrange_is_on_only_where_the_core_says(cx: &mut TestAppContext) {
     assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
 }
 
-/// Before the core has Arrange, the card doesn't offer it: Customize… has its line alone, and
-/// nothing reaches the core.
+/// The card's two lines of buttons are one grid: across the card, a press on either line lands in
+/// the same column, Edit CSS… over Customize… and Zap over Arrange, or in the gap between on both.
 #[gpui::test]
-fn the_card_offers_arrange_only_once_the_core_has_it(cx: &mut TestAppContext) {
+fn the_cards_buttons_share_their_columns(cx: &mut TestAppContext) {
     let (shell, host, _folder, cx) = window(cx);
     cx.update(|_, cx| crate::boost_editor::open(Rc::new(Unseen), cx))
         .expect("no window for the editor");
-    host.no_arrange.set(true);
-    shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
-    host.take();
-    press(&shell, 0.75, LAST, cx);
-    assert_eq!(arrange_calls(&host), Vec::<String>::new());
-    assert_eq!(
-        cx.update(|_, cx| crate::boost_editor::open_for(cx))
-            .as_deref(),
-        Some("example.com"),
-        "the right of the card's last line isn't Customize…"
+    // The card as it opens, each press taking it away or changing it.
+    let card_again = |cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.stop_zap(cx);
+            shell.arrange_ended(10, cx);
+            shell.close_boost_card(cx);
+            shell.run(Command::NewBoost, "ui", cx);
+        });
+        host.take();
+    };
+    let mut lines = [String::new(), String::new()];
+    for at in (380..=620).step_by(5).map(|each| each as f32 / 1000.) {
+        card_again(cx);
+        press(&shell, at, OVER_LAST, cx);
+        lines[0].push(match arrange_calls(&host).last().map(String::as_str) {
+            Some(edit) if edit.starts_with("edit ") => 'l',
+            Some("zap 10 true") => 'r',
+            _ => '-',
+        });
+        card_again(cx);
+        press(&shell, at, LAST, cx);
+        let arranged = arrange_calls(&host)
+            .iter()
+            .any(|call| call == "arrange 10 true");
+        lines[1].push(match (arranged, card(&shell, cx).is_none()) {
+            (true, _) => 'r',
+            (false, true) => 'l',
+            _ => '-',
+        });
+    }
+    let [over, under] = lines;
+    assert!(
+        over.contains('l') && over.contains('r'),
+        "the presses missed a button: {over}"
     );
-    shell.update(cx, |shell, cx| shell.start_arrange(cx));
-    assert_eq!(arrange_calls(&host), Vec::<String>::new());
-    assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
+    assert_eq!(over, under, "the lines' columns split at different places");
 }
 
 /// Neither a private window nor an agent's Space offers Arrange, and what the core says of one
