@@ -260,6 +260,9 @@ else
   send state
   [ "$key" = BrowserCoreNSWindow ] ||
     fail "the browser window didn't get the keyboard back from the popup: it's in $key"
+  # Opened by a click on its action, the popup had the keyboard from the UI, which has it back.
+  [ -z "${WAYLAND_DISPLAY:-}" ] || [ "$focus" = AccessKitSubclassOfGPUIView ] ||
+    fail "the UI didn't get the keyboard back from the popup it opened: focus is on $focus"
 fi
 # The Extensions menu runs a pinned one too, its popup hanging from its action.
 send menu "Check Popup"
