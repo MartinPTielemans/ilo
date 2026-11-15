@@ -26,9 +26,11 @@ on:
         default: false
       runner:
         description: >-
-          The hosted runner, such as windows-2025, whose desktop is Windows 11's, which rounds a
-          window's corners where windows-2022's doesn't (#2988); empty for windows-2022
-        default: ''
+          The hosted runner: windows-2025's desktop is Windows 11's, which rounds a window's corners
+          where windows-2022's doesn't (#2988). A choice, so a typo can't send a check elsewhere
+        type: choice
+        options: [windows-2022, windows-2025]
+        default: windows-2022
       trace:
         description: >-
           The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
