@@ -745,12 +745,8 @@ give_way() {
   ../tools/window-screenshot.sh "$pid" "$out/little-gave-way-$2.png" all || fail "no window to capture"
   uncover
 }
-if [ "${BROWSER_XVFB:-}" = kwin ]; then
-  echo "skip: Little ilo giving way to another app's window, under KWin: the driver's stack never lists the stand-in (#2756)."
-else
-  give_way ⌘W w
-  give_way escape escape
-fi
+give_way ⌘W w
+give_way escape escape
 
 exec 3>&-
 quit

@@ -480,25 +480,56 @@ send menubar Window
 expect "^browser: menu bar Window: .*, Open Library…$maybe, View Downloads…" \
   "Window has no Open Library… and View Downloads…"
 # Help has Arc's help, the shortcuts and Report a Problem…, and Troubleshooting's Copy Build Info
-# copies this copy's version, the system's and the chip, read from the computer.
+# copies this copy's version, the system's and the chip, read from the computer, and off the Mac
+# how this copy is installed: built from source, here, and on Linux the session GPUI connects to.
+send menubar Help
+expect "^browser: menu bar Help: Welcome to [^,]*, Help Center$maybe, What's New$maybe, Essential Keyboard Shortcuts$maybe, Report a Problem…$maybe, \(Restore Earlier Sidebar.*, \)\?Troubleshooting › Copy Build Info$maybe, Troubleshooting › Open Task Manager" \
+  "Help lacks Help Center, What's New, the shortcuts, Report a Problem… or Troubleshooting"
+help_menu=
 if [ "$(uname)" = Darwin ]; then
-  send menubar Help
-  expect "^browser: menu bar Help: Welcome to [^,]*, Help Center$maybe, What's New$maybe, Essential Keyboard Shortcuts$maybe, Report a Problem…$maybe, \(Restore Earlier Sidebar.*, \)\?Troubleshooting › Copy Build Info$maybe, Troubleshooting › Open Task Manager" \
-    "Help lacks Help Center, What's New, the shortcuts, Report a Problem… or Troubleshooting"
   post openmenu Help
   expect '^browser: menu tracked Welcome to ' "the Help menu didn't open"
   ../tools/window-screenshot.sh "$pid" "$out/help-menu.png" || fail "no window to capture"
   post dismiss
-  send menu "Troubleshooting › Copy Build Info"
-  expect '^browser: command copy-build-info via ui$' "Copy Build Info didn't run"
-  info=$(grep -A3 '^browser: copied [^ ]* [0-9][0-9.]*' "$log" | tail -4)
-  echo "$info" | grep -q '^macOS [0-9][0-9]*\.[0-9]' || fail "Copy Build Info has no macOS version: $info"
-  echo "$info" | grep -q '^Apple ' || fail "Copy Build Info has no chip: $info"
-  echo "ok: Help lists Help Center, What's New, the shortcuts, Report a Problem… and" \
-    "Troubleshooting, $out/help-menu.png. Copy Build Info copied: $(echo "$info" | sed 's/^browser: copied //' | tr '\n' ';')"
+  help_menu=", $out/help-menu.png"
 else
-  echo "skip: Help's items and Troubleshooting › Copy Build Info: what it reads, the macOS version and the Apple chip, is the Mac's, and off the Mac it isn't checked yet."
+  echo "skip: the Help menu open on screen: off the Mac there's no menu bar to open it from."
 fi
+send menu "Troubleshooting › Copy Build Info"
+expect '^browser: command copy-build-info via ui$' "Copy Build Info didn't run"
+expect '^browser: copied [^ ]* [0-9][0-9.]*' "Copy Build Info didn't copy the version"
+# The text copied, logged after the line that starts it, up to the app's next line.
+info=$(since | sed -n '/^browser: copied [^ ]* [0-9][0-9.]*/,$p' | sed '1s/^browser: copied //' |
+  awk 'NR > 1 && /^(browser|\[)/ { exit } { print }')
+# A line of it that's $1 exactly.
+copied_line() {
+  echo "$info" | grep -qxF -- "$1" || fail "Copy Build Info has no line \"$1\": $info"
+}
+if [ "$(uname)" = Darwin ]; then
+  echo "$info" | grep -q '^macOS [0-9][0-9]*\.[0-9]' ||
+    fail "Copy Build Info has no macOS version: $info"
+  echo "$info" | grep -q '^Apple ' || fail "Copy Build Info has no chip: $info"
+elif windows; then
+  # Its edition and build as the registry has them: a runner's is Windows Server's.
+  version='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+  build=$(powershell -NoProfile -Command "(Get-ItemProperty '$version').CurrentBuildNumber" |
+    tr -d '\r ')
+  echo "$info" | grep -q "^Windows .* (build $build)\$" ||
+    fail "Copy Build Info has no Windows version with build $build: $info"
+  processor='HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0'
+  copied_line "$(powershell -NoProfile -Command "(Get-ItemProperty '$processor').ProcessorNameString" |
+    tr -d '\r' | sed 's/^ *//; s/ *$//')"
+  copied_line "built from source"
+else
+  copied_line "$(. /etc/os-release && echo "$PRETTY_NAME")"
+  copied_line "$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//; s/ *$//')"
+  session=X11
+  [ -z "${WAYLAND_DISPLAY:-}" ] || session=Wayland
+  echo "$info" | grep -q "^built from source, $session\(, .*\)\{0,1\}\$" ||
+    fail "Copy Build Info doesn't say it's built from source, under $session: $info"
+fi
+echo "ok: Help lists Help Center, What's New, the shortcuts, Report a Problem… and" \
+  "Troubleshooting$help_menu. Copy Build Info copied: $(echo "$info" | tr '\n' ';')"
 # Archive Tabs Below shows the tab right-clicked first, so none below it loads on the way out.
 post rightclick $(row 1)
 expect "^browser: menu shown $(cased "Copy Link$share, Change Icon…, Rename…, Mute (disabled), New Boost…, Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › New Space…, Archive Tab, Archive Tabs Below")\$" "a right-click on the top Today row didn't show Arc's tab menu"
@@ -1540,13 +1571,22 @@ notes_suggested ||
   fail "the command bar didn't suggest the page Peek showed from history, as it does a tab's: $suggested"
 # The dialog takes the keyboard a moment after its page loads, which a key sent before then misses:
 # the run waits for its Cancel to have it, as cdp.py sees it.
+# A DevTools client that has gone answers nothing, and a line to its pipe ends the run unsaid.
 focused() {
+  if ! kill -0 "$helper" 2>/dev/null; then
+    echo "no DevTools client, as it exited: $(tail -1 "$cdp_log")"
+    return
+  fi
   asked=$(grep -c '^cdp: focus ' "$cdp_log" || true)
   echo "focus chrome://settings/" >&5
   for _ in $(seq 50); do
     [ "$(grep -c '^cdp: focus ' "$cdp_log" || true)" -gt "$asked" ] && break
     sleep 0.1
   done
+  if [ "$(grep -c '^cdp: focus ' "$cdp_log" || true)" -le "$asked" ]; then
+    echo "no answer from the DevTools client in 5 s: $(tail -1 "$cdp_log")"
+    return
+  fi
   grep '^cdp: focus ' "$cdp_log" | tail -1 | cut -d' ' -f3-
 }
 open_clear_browsing_data() {
@@ -1560,7 +1600,8 @@ open_clear_browsing_data() {
   if [ "$(focused)" != Cancel ]; then
     # Which window has the keyboard, and whether ilo is the active app, for the VM's failure (#2396).
     send front
-    fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused); active $active, $(grep '^browser: front ' "$log" | tail -1)"
+    # And whether its page drew, as a page that hasn't drawn may not have opened its dialog (#2888).
+    fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused); active $active, $(grep '^browser: front ' "$log" | tail -1), $(grep '^browser: switch let the page it left go ' "$log" | tail -1)"
   fi
 }
 # Cancel closes the dialog, deleting nothing, and the browser stays up: from Chromium 157 it tells
