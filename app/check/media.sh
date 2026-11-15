@@ -13,8 +13,9 @@
 # paused. View › Cast… and the page menu's Cast… open the tab's Cast card, and × closes it; on the
 # Mac the run answers macOS's question for the local network that looking for devices brings, and
 # any it asks as the call starts. A video's page menu floats it in Picture in Picture, the Mini
-# Player, 10 in from the top right of the screen, which a scroll or a drag moves, ⌘ or Ctrl with a
-# scroll sizes, and a double-click puts back in its tab, shown. The next shows where it was left,
+# Player, 10 in from the top right of the screen, with Dia's corners and rim, and its scrim under the
+# pointer, on the Mac in mini-player-rest.png and mini-player-hover.png. A scroll or a drag moves
+# it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab, shown. The next shows where it was left,
 # after a relaunch too, and coming back to its tab's window from another window, or from another
 # app with a menu open, puts it back in the tab.
 # A page asks to share the screen only from a click or a key: asked with neither, its promise is
@@ -854,6 +855,41 @@ if engine_has ../core/mini_player.cc ../engine/patches/ours/chromium-core-mini-p
   *" close 12,12 28x28 back "*",12 29x28") ;;
   *) fail "the Mini Player's buttons weren't Dia's: $look" ;;
   esac
+fi
+
+# On the Mac, the Mini Player at rest and under the pointer, captured on their own (#2822): at rest
+# its corners and rim over the video, and under the pointer its scrim and buttons. Off its
+# controls, where the drag below presses, the video's colours keep a lightness of 40 %, so the sum
+# of the colour's brightest and darkest channels is about 204 at rest and 133 under the scrim's
+# black at 0.35.
+if [ "$(uname)" = Darwin ]; then
+  send pip
+  at=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: pip at ' | cut -d' ' -f4-)
+  [ -n "$at" ] ||
+    fail "the driver found no Mini Player for the floating video: $(grep '^browser: pip ' "$log" | tail -1)"
+  read -r px py pw ph <<EOF
+$at
+EOF
+  lightness() {
+    pixel "$1" 0.125 0.5 | awk '{ max = $1; min = $1
+      for (i = 2; i <= 3; i++) { if ($i > max) max = $i; if ($i < min) min = $i }
+      print max + min }'
+  }
+  FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/mini-player-rest.png" floating ||
+    fail "no Mini Player to capture"
+  rest=$(lightness "$out/mini-player-rest.png")
+  [ "$rest" -ge 170 ] ||
+    fail "the Mini Player at rest was dark over its video, at $rest where the video is about 204"
+  # Captured until the scrim, which fades in over 200 ms from the pointer's move, has come.
+  send pip move $((pw / 8)) $((ph / 2))
+  for _ in $(seq 20); do
+    FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/mini-player-hover.png" floating ||
+      fail "no Mini Player to capture"
+    hovered=$(lightness "$out/mini-player-hover.png")
+    [ "$hovered" -lt 170 ] && break
+  done
+  [ "$hovered" -lt 170 ] ||
+    fail "the pointer on the Mini Player didn't bring its scrim: it stayed at $hovered, where the video is about 204 and under the scrim about 133"
 fi
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
