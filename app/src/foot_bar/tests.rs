@@ -280,3 +280,56 @@ fn a_bar_that_grows_draws_once_its_window_has_grown(cx: &mut TestAppContext) {
     click_last(cx, &host, window);
     assert_eq!(*ran.borrow(), ["before", "after"]);
 }
+
+/// Words that change twice before a frame, as Windows' log had them in Arrange: the window at the
+/// size of the bar between draws that one, not the newest cut to it.
+#[gpui::test]
+fn a_bar_replaced_before_it_drew_draws_when_its_window_fits_it(cx: &mut TestAppContext) {
+    let (host, window) = open_bar(cx);
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let saying = |words: &str, name: &'static str| {
+        let mut bar = arrange();
+        bar.words = words.to_owned().into();
+        let ran = ran.clone();
+        bar.buttons.last_mut().unwrap().run = Rc::new(move |_| ran.borrow_mut().push(name));
+        bar
+    };
+    show_bar(
+        cx,
+        &host,
+        window,
+        saying("Inner scrolls with the page, over it", "first"),
+    );
+    let page = Bounds::new(point(px(250.), px(40.)), size(px(1000.), px(700.)));
+    let (between, last) = (
+        saying("Let go where it goes", "between"),
+        saying("Go", "last"),
+    );
+    cx.update(|cx| {
+        show(7, page, size(px(1260.), px(750.)), between, cx);
+        show(7, page, size(px(1260.), px(750.)), last, cx);
+    });
+    cx.run_until_parked();
+    let places = host.1.borrow().clone();
+    let [first, between, last] = places[places.len() - 3..] else {
+        unreachable!()
+    };
+    assert!(first.size.width > between.size.width && between.size.width > last.size.width);
+    let done = |place: Place| {
+        point(
+            place.size.width - px(RIGHT.max(TALL_RIGHT) + 4.),
+            place.size.height / 2.,
+        )
+    };
+    let mut press = |place: Place| {
+        let mut window = VisualTestContext::from_window(window.into(), cx);
+        window.simulate_resize(place.size);
+        window.run_until_parked();
+        window.simulate_click(done(place), Modifiers::none());
+        window.run_until_parked();
+    };
+    press(first);
+    press(between);
+    press(last);
+    assert_eq!(*ran.borrow(), ["first", "between", "last"]);
+}
