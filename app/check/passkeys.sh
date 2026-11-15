@@ -190,6 +190,8 @@ requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
       done
       none_since "^browser: title $tab failed " "$from" ||
         fail "the keys over Chrome's passkey dialog reached the page, failing its request"
+    elif [ "$(uname)" != Darwin ]; then
+      echo "skip: ⌘T and escape over Chrome's passkey dialog: a click on the dialog's edge gives it the keyboard first, and only the Mac's run finds where the dialog is."
     fi
     # Where the dialog can't be seen, escape goes again until it's up and closes it: the page does
     # nothing with one.

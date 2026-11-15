@@ -189,6 +189,8 @@ if [ "$(uname)" = Darwin ]; then
   expect '^browser: made theme picker key$' "the theme picker wasn't made key as its shrink started"
   expect '^browser: theme picker hidden, its browser window takes the keyboard$' \
     "the theme picker, made key as it shrank, kept the keyboard"
+else
+  echo "skip: the theme picker made key as it shrinks away: AppKit making a shrinking panel key is the Mac's (#2594)."
 fi
 send state
 in_browser AccessKitSubclassOfGPUIView "after the theme picker, in the new Space's form"
@@ -469,19 +471,14 @@ expect "^browser: space $first in " "a wheel's tick across the sidebar didn't sh
 expect_tabs "$a" "$a" "after a wheel's tick showed the first Space"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 # A mouse's side buttons over the sidebar show the next Space and the previous, as Arc's (#688).
-# Windows' driver can't press them yet (drive.cc).
-if windows; then
-  echo "skip: side buttons over the sidebar: the Windows driver can't press them yet."
-else
-  send sideclick $swipe_point forward
-  expect '^browser: command select-space via mouse$' "the forward side button over the sidebar didn't page"
-  expect "^browser: space $second in " "the forward side button over the sidebar didn't show the second Space"
-  send sideclick $swipe_point back
-  expect '^browser: command select-space via mouse$' "the back side button over the sidebar didn't page"
-  expect "^browser: space $first in " "the back side button over the sidebar didn't show the first Space"
-  expect_tabs "$a" "$a" "after the back side button showed the first Space"
-  expect "^browser: settled space $first\$" "the first Space's page didn't settle after the side buttons"
-fi
+send sideclick $swipe_point forward
+expect '^browser: command select-space via mouse$' "the forward side button over the sidebar didn't page"
+expect "^browser: space $second in " "the forward side button over the sidebar didn't show the second Space"
+send sideclick $swipe_point back
+expect '^browser: command select-space via mouse$' "the back side button over the sidebar didn't page"
+expect "^browser: space $first in " "the back side button over the sidebar didn't show the first Space"
+expect_tabs "$a" "$a" "after the back side button showed the first Space"
+expect "^browser: settled space $first\$" "the first Space's page didn't settle after the side buttons"
 # Past the first Space is the Library. Held partway it shows beside the page, and let go short of
 # halfway it goes back. A flick brings it out and one the other way puts it back, and so do a
 # wheel's ticks.
@@ -1245,6 +1242,8 @@ if [ "$(uname)" = Darwin ]; then
   shadow=$(grep '^browser: theme picker shadow off by' "$log" | tail -1)
   [ "$shadow" = "browser: theme picker shadow off by 0 0 0 0" ] ||
     fail "the theme picker's shadow isn't round it: ${shadow#browser: theme picker }"
+else
+  echo "skip: the theme picker's shadow round it: only the Mac's host draws its own."
 fi
 # Between the swatches and the wave there's nothing: a drag from there changes nothing.
 themes=$(grep -c "^browser: themed space $first " "$log" || true)

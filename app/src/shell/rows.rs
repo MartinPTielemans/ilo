@@ -3165,11 +3165,10 @@ mod tests {
     }
 
     /// What a window holds while its callback is out (the Mac's, when a nested event pump delivers
-    /// input inside another event) or the App is in an update: presses and releases, and the
-    /// pointer's input behind them, in the order it came; never a key, which is answered at once,
-    /// nor a lone move, which the next one replaces.
+    /// input inside another event) or the App is in an update: presses, releases and keys, and
+    /// what comes behind them; never a lone move, which the next one replaces.
     #[test]
-    fn held_input_keeps_a_press_and_what_follows_it_in_order() {
+    fn held_input_waits_for_a_press_or_a_key_and_what_follows_it() {
         let at = point(px(10.), px(10.));
         let key = gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
             keystroke: gpui::Keystroke::parse("a").unwrap(),
@@ -3178,22 +3177,14 @@ mod tests {
         });
         let mut held = gpui::HeldInput::default();
         assert!(held.hold(moved(at, None)).is_some());
-        assert!(held.hold(key.clone()).is_some());
         assert!(held.is_empty());
+        assert!(held.hold(key).is_none());
+        assert!(held.hold(moved(at, None)).is_none());
+        let mut held = gpui::HeldInput::default();
         assert!(held.hold(pressed(at)).is_none());
         assert!(held.hold(moved(at, Some(MouseButton::Left))).is_none());
-        assert!(held.hold(key).is_some());
         assert!(held.hold(released(at)).is_none());
-        let order: Vec<_> = std::iter::from_fn(|| held.next())
-            .map(|event| match event {
-                gpui::PlatformInput::MouseDown(_) => "down",
-                gpui::PlatformInput::MouseMove(_) => "move",
-                gpui::PlatformInput::MouseUp(_) => "up",
-                _ => "other",
-            })
-            .collect();
-        assert_eq!(order, ["down", "move", "up"]);
-        assert!(held.is_empty());
+        assert!(!held.is_empty());
     }
 
     /// A press that becomes a drag has shown its tab, and still drags it: let go two rows up, the
@@ -3488,6 +3479,36 @@ mod tests {
             ["separate 3"],
             "the press on the second segment takes its tab out"
         );
+    }
+
+    /// Shift+Alt-click does what ⌥-click does, for Linux desktops whose window manager takes every
+    /// Alt-click but leaves one with Shift (#2755): another tab joins the page shown, and the page
+    /// shown splits with a copy of itself, where Shift-click alone would select.
+    #[gpui::test]
+    fn a_shift_alt_click_on_a_row_splits_as_an_option_click_does(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, Vec::new(), vec![2, 3, 4], 2);
+        let held = Modifiers {
+            alt: true,
+            shift: true,
+            ..Default::default()
+        };
+        let click = |cx: &mut VisualTestContext, tab: u64| {
+            let (x, y) = close_button(&shell, cx, tab);
+            let at = point(px(x - 100.), px(y));
+            host.take();
+            host.take_edits();
+            cx.simulate_mouse_down(at, MouseButton::Left, held);
+            cx.simulate_mouse_up(at, MouseButton::Left, held);
+            cx.run_until_parked();
+            (host.take(), host.take_edits())
+        };
+
+        let (_, edits) = click(cx, 3);
+        assert_eq!(edits, ["split 3 2 false"]);
+
+        let (calls, edits) = click(cx, 2);
+        assert!(calls.contains(&"duplicate 2".to_string()), "{calls:?}");
+        assert_eq!(edits.len(), 1, "{edits:?}");
     }
 
     /// ⌥ held over a split row's ✕ turns it to separate, as Arc's does: the glyph follows the key

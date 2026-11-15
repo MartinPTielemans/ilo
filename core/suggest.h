@@ -14,6 +14,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "base/time/time.h"
+#include "browser_core/history_removal.h"
 #include "browser_core/public/browser_core.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
@@ -56,12 +58,15 @@ class Suggestions : public AutocompleteController::Observer, public ProfileObser
   // Takes out again what Restore put back for |removal|, as the removal did. Whether it could.
   bool RemoveAgain(bc_id removal);
 
-  // What a removal took out of the profile's history, as it was. Defined where it's used.
-  struct Removed;
+  // Deletes the profile's visits to |url| from |begin| to |end| at once, as the Library's History
+  // removes a day's row, and lists the suggestions again. Returns the removal's id, for Restore, as
+  // Remove's, or 0 if it can't (bc_window_remove_history).
+  bc_id RemoveVisits(const GURL& url, base::Time begin, base::Time end);
 
  private:
   // A removal: the suggestion's URL, what Chrome's deletion took out, the pages and a search's
-  // keyword and term, that as it was, and where it is.
+  // keyword and term, and the span of their visits it took, or all of them while |end| is null,
+  // that as it was, and where it is.
   struct Removal {
     // kTakingThenBack is a removal put back while it was still being taken out.
     enum class State { kTaking, kTakingThenBack, kOut, kBack };
@@ -74,13 +79,19 @@ class Suggestions : public AutocompleteController::Observer, public ProfileObser
     GURL url;
     std::vector<GURL> pages;
     std::vector<std::pair<TemplateURLID, std::u16string>> searches;
-    scoped_refptr<Removed> removed;
+    base::Time begin;
+    base::Time end;
+    scoped_refptr<RemovedHistory> removed;
     State state = State::kTaking;
   };
 
   // The removals Restore can put back: the window's last ten, as many as Clear keeps.
   static constexpr size_t kKept = 10;
 
+  // An id for a removal, counted across windows.
+  static bc_id NextRemoval();
+  // Keeps |removal| as |id|, and lets go of the oldest past kKept.
+  void Hold(bc_id id, Removal removal);
   // Removal |id|'s deletion, Chrome's for |match|, once what it takes out has been read.
   void TakeOut(bc_id id, const AutocompleteMatch& match);
   // Lists the suggestions for the text last asked again, run once the history service has done a

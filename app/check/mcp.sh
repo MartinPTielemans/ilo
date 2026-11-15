@@ -2074,21 +2074,39 @@ if [ "$driven" = 1 ]; then
   sessions=$(grep -c '^browser: session session-[0-9]* of agent mcp-client as check$' "$log" || true)
   # Quiet until it needs you (#1080): with ilo in the background, the handoff posts one
   # notification. On Linux another app's window takes the keyboard, the run's server takes the
-  # notification and clicks it, and on Windows another app has the foreground and the toast is
+  # notification and clicks it, and on X11 the window is marked urgent, which Wayland lets no
+  # client do to Chromium's surface. On Windows another app has the foreground and the toast is
   # posted, which no run can click. The Mac's runner can't answer its leave for notifications, so
   # there ilo stays active, and the need only counts on the Dock's badge.
   background=
-  if [ "$(uname)" = Linux ] && [ -n "$notes" ] && [ -z "${BROWSER_WAYLAND:-}" ]; then
+  if [ "$(uname)" = Linux ] && [ -n "$notes" ] &&
+    { [ -z "${BROWSER_WAYLAND:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }; then
     rm -f "$out/other-in"
     mkfifo "$out/other-in"
-    python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
-    other=$!
-    exec 7> "$out/other-in"
-    for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
-    other_window=$(head -1 "$out/other-window.log")
-    xdotool windowactivate --sync "$other_window" 2> /dev/null ||
-      fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
-    # The driver reads the keyboard's window from the X server, as the app does.
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+      # check/drag's window, as lib.sh's other_app_click opens, which writes to it on fd 4, the
+      # bridge's here. sway gives it the keyboard.
+      cargo build -q --release --manifest-path check/drag/Cargo.toml --target-dir target ||
+        fail "check/drag didn't build"
+      target/release/drag 1280x800 window < "$out/other-in" > "$out/other-window.log" 2>&1 &
+      other=$!
+      exec 7> "$out/other-in"
+      for _ in $(seq 100); do grep -q '^drag: ready$' "$out/other-window.log" && break; sleep 0.1; done
+      grep -q '^drag: ready$' "$out/other-window.log" ||
+        fail "check/drag's window didn't show: $(cat "$out/other-window.log")"
+      swaymsg '[app_id=ilo-drag] focus' > /dev/null ||
+        fail "sway didn't give check/drag's window the keyboard"
+    else
+      python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+      other=$!
+      exec 7> "$out/other-in"
+      for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+      other_window=$(head -1 "$out/other-window.log")
+      xdotool windowactivate --sync "$other_window" 2> /dev/null ||
+        fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+    fi
+    # The driver reads the keyboard's window from the X server, as the app does, and under Wayland
+    # the app's own.
     send state
     [ "$active" = 0 ] || fail "another app's window left ilo active"
     background=linux
@@ -2121,8 +2139,10 @@ if [ "$driven" = 1 ]; then
   await_more '^browser: needs you 1$' "$ones" || fail "the waiting card didn't count as a need"
   case $background in
     linux)
-      await_more '^browser: window [0-9]* urgent on$' "$urgents" ||
-        fail "the waiting card didn't mark the window urgent"
+      if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        await_more '^browser: window [0-9]* urgent on$' "$urgents" ||
+          fail "the waiting card didn't mark the window urgent"
+      fi
       await_log "^browser: needs you notified [0-9]* $needing\$" "the need in the background posted nothing"
       need=$(sed -n "s/^browser: needs you notified \([0-9]*\) $needing\$/\1/p" "$log" | tail -1)
       await_log "^browser: needs you posted $need\$" \
@@ -2166,11 +2186,13 @@ if [ "$driven" = 1 ]; then
       await_log "^browser: needs you $needing while active\$" "the need with ilo active wasn't held back"
       if [ "$(uname)" = Darwin ]; then
         await_more '^browser: dock badge 1$' "$badges" || fail "the Dock's badge didn't count the need"
+      else
+        echo "skip: the need with ilo in the background, and its count on a badge: here no other app's window takes the keyboard from ilo, or no notification server takes the notification, which X11's and Wayland's runs have, and Linux has no badge every desktop reads."
       fi
       ;;
   esac
   case $background in
-    linux) needs_said=", a handoff while another app's window has the keyboard marks the window urgent and posts one notification, \"check needs you\" over its step with no sound, whose click opens its card, and none while ilo is active" ;;
+    linux) needs_said=", a handoff while another app's window has the keyboard $([ -n "${WAYLAND_DISPLAY:-}" ] || echo "marks the window urgent and ")posts one notification, \"check needs you\" over its step with no sound, whose click opens its card, and none while ilo is active" ;;
     windows) needs_said=", a handoff with another app in front counts on the taskbar button and asks for one toast, and none while ilo is active" ;;
     *) needs_said=", a handoff with ilo active counts on the Dock's badge and posts nothing" ;;
   esac
@@ -2205,7 +2227,8 @@ STOP
     return 1
   }
   last_is '^browser: needs you [0-9]*$' "browser: needs you 0" || fail "the count stayed once no task waited"
-  if [ "$background" = linux ]; then
+  # Wayland has no urgency to take back (needs_you.rs).
+  if [ "$background" = linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     window_urgent=$(grep '^browser: window [0-9]* urgent ' "$log" | tail -1 | cut -d' ' -f3)
     last_is '^browser: window [0-9]* urgent ' "browser: window $window_urgent urgent off" ||
       fail "the window stayed urgent once no task waited"
@@ -2254,11 +2277,12 @@ quit
 
 # A tab's id names it alone across launches (#1449): relaunched, a call with the user's tab's id
 # from before is refused as one from before ilo restarted, as the tab it comes back as has another.
-# The switch the run turned off goes back on.
+# The switch the run turned off goes back on. The launch waits 2 s for an answer and 3 s for a
+# handoff in place of the spec's 5 and 15 minutes, which the time limits' step below reaches.
 printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
-log="$out/mcp-relaunch.log"
+log="$out/mcp-waits.log"
 step=0
-BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+BROWSER_DRIVE=1 "$browser" --agent-waits=2,3 < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: restored in ' || fail "the relaunch didn't restore the Spaces"
@@ -2271,6 +2295,32 @@ mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 stale=$(call read_page "{\"tab\":$user_tab}")
 [ "$stale" = "error: ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now." ] ||
   fail "a call with a tab's id from before the relaunch answered: $stale"
+# The time limits (#2184): a change the user leaves unanswered is refused once its wait ends, and a
+# handoff not handed back answers the agent's call, the tab staying the user's.
+opened=$(call open_tab "{\"url\":\"localhost:$port/frames.html\"}")
+waits_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+[ -n "$waits_tab" ] || fail "open_tab answered: $opened"
+request request "{\"tab\":$waits_tab,\"requests\":[{\"method\":\"POST\",\"path\":\"/api/items\",\"body\":{\"title\":\"Late\"}}]}" >&4
+await_log '^browser: agent mcp-client asks [0-9]*: make a change on localhost$' "the change didn't ask first"
+q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+await_log "^browser: agent mcp-client asked $q with no answer\$" \
+  "a change left unanswered wasn't refused once its 2 s wait ended"
+refused=$(next_answer) || fail "the browser didn't answer the change left unanswered"
+refused=$(printf '%s\n' "$refused" | answered "the change left unanswered")
+case "$refused" in
+  "error: The user didn't answer in 5 minutes"*) ;;
+  *) fail "the change left unanswered answered: $refused" ;;
+esac
+grep -q '"title":"Late"' "$out/site.log" && fail "the change left unanswered went to the site"
+request hand_off "{\"tab\":$waits_tab,\"reason\":\"Sign in later\"}" >&4
+await_log "^browser: agent mcp-client hands off $waits_tab: Sign in later\$" \
+  "hand_off didn't hand the tab to the user"
+handed=$(next_answer) || fail "the browser didn't answer the handoff once its 3 s wait ended"
+handed=$(printf '%s\n' "$handed" | answered hand_off)
+case "$handed" in
+  "error: The user hasn't handed tab $waits_tab back in 15 minutes."*) ;;
+  *) fail "the handoff not handed back answered: $handed" ;;
+esac
 exec 4>&- 5<&-
 quit
 forget_login

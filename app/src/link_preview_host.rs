@@ -35,6 +35,17 @@ impl link_preview::Host for LinkPreviewHost {
         unsafe { platform::host_link_preview_drew(left, top, width, height, radius, opacity) };
     }
 
+    fn page_color(&self, window: u64, cx: &App) -> Option<gpui::Rgba> {
+        let shell = WINDOWS.with_borrow(|windows| {
+            windows
+                .iter()
+                .find(|each| each.id == window)
+                .map(|each| each.shell.clone())
+        })?;
+        let color = shell.read_with(cx, |shell, _| shell.page_color()).ok()??;
+        Some(gpui::rgb(color))
+    }
+
     fn page_under(&self) -> bool {
         // No window of the app's holds a page on Linux (link_preview_window.rs) or Windows
         // (platform/windows/host.cc).
