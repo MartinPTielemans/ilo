@@ -155,12 +155,16 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
                      public ui::HWNDMessageFilter,
                      public views::WidgetObserver {
  public:
-  // |took_keyboard| runs each time the slot's HWND takes the keyboard.
-  PaneKeyboard(views::Widget* widget, base::RepeatingClosure took_keyboard)
+  // |took_keyboard| runs each time the slot's HWND takes the keyboard, and |pressed| as a press on
+  // it is about to activate its window.
+  PaneKeyboard(views::Widget* widget,
+               base::RepeatingClosure took_keyboard,
+               base::RepeatingClosure pressed)
       : widget_(widget),
         hwnd_(views::HWNDForWidget(widget)),
         client_(aura::client::GetFocusClient(widget->GetNativeView())),
-        took_keyboard_(std::move(took_keyboard)) {
+        took_keyboard_(std::move(took_keyboard)),
+        pressed_(std::move(pressed)) {
     if (client_) {
       client_->AddObserver(this);
     }
@@ -208,7 +212,9 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   // ui::HWNDMessageFilter:
   bool FilterMessage(HWND, UINT message, WPARAM w_param, LPARAM, LRESULT*) override {
     ui::InputMethod* input_method = widget_->GetInputMethod();
-    if (message == WM_SETFOCUS) {
+    if (message == WM_MOUSEACTIVATE) {
+      pressed_.Run();
+    } else if (message == WM_SETFOCUS) {
       took_keyboard_.Run();
       if (input_method) {
         input_method->OnFocus();
@@ -278,6 +284,7 @@ class PaneKeyboard : public aura::client::FocusChangeObserver,
   HWND hwnd_;
   raw_ptr<aura::client::FocusClient> client_;
   base::RepeatingClosure took_keyboard_;
+  base::RepeatingClosure pressed_;
   bool taking_ = false;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
   base::WeakPtrFactory<PaneKeyboard> weak_factory_{this};
@@ -491,8 +498,11 @@ class WindowViews : public views::WidgetObserver,
       views::NativeWidgetAura::RegisterNativeWidgetForWindow(
           widget_->native_widget_private(), slot.widget->GetNativeView()->GetRootWindow());
       slot.keyboard = std::make_unique<PaneKeyboard>(
-          slot.widget.get(), base::BindRepeating(&WindowViews::PaneTookKeyboard,
-                                                 base::Unretained(this), slot.widget.get()));
+          slot.widget.get(),
+          base::BindRepeating(&WindowViews::PaneTookKeyboard, base::Unretained(this),
+                              slot.widget.get()),
+          base::BindRepeating(&WindowViews::PanePressed, base::Unretained(this),
+                              slot.widget.get()));
     }
     return slot.widget.get();
   }
@@ -506,12 +516,11 @@ class WindowViews : public views::WidgetObserver,
   // pane is a host of its own, whose window the dialog doesn't belong to (#2855).
   void PaneTookKeyboard(views::Widget* holder) {
     set_ui_holds_for_page(false);
-    // Only for a press on the page. A click on the UI activates the browser window, which gives
-    // the pane the keyboard for a moment too, and the dialog taking it then took it from the UI.
-    POINT pointer;
-    RECT pane;
-    if (!GetCursorPos(&pointer) || !GetWindowRect(views::HWNDForWidget(holder), &pane) ||
-        !PtInRect(&pane, pointer)) {
+    // Not as a press elsewhere, on the UI or another pane, activates the window: the window gives
+    // the pane the keyboard back for a moment first (FilterMessage), and the dialog taking it then
+    // took it from the UI the user pressed. Coming back by the keyboard or the taskbar, the pane
+    // keeps it, so the dialog takes it, wherever the pointer is.
+    if (giving_back_for_press_elsewhere_) {
       return;
     }
     for (Window* window : Window::All()) {
@@ -522,6 +531,14 @@ class WindowViews : public views::WidgetObserver,
       if (shown && holder->GetNativeView()->Contains(shown->GetNativeView())) {
         dialog_keys::PageFocused(shown);
       }
+    }
+  }
+
+  // A press on |holder|'s pane is about to activate the window (WM_MOUSEACTIVATE), which Windows
+  // sends the window under the press, before WM_ACTIVATE.
+  void PanePressed(views::Widget* holder) {
+    if (GetActiveWindow() != window()) {
+      pressed_ = views::HWNDForWidget(holder);
     }
   }
 
@@ -819,11 +836,19 @@ class WindowViews : public views::WidgetObserver,
       alt_taps::Deactivated(hwnd);
       HWND focus = GetFocus();
       had_keyboard_ = focus && IsChild(hwnd, focus) ? focus : nullptr;
+      pressed_ = nullptr;
+    } else if (message == WM_ACTIVATE) {
+      // By a press, which went to a pane if PanePressed heard it, else to the UI.
+      click_activated_ = LOWORD(w_param) == WA_CLICKACTIVE;
     } else if (message == WM_SETFOCUS) {
       HWND from = reinterpret_cast<HWND>(w_param);
       HWND had = std::exchange(had_keyboard_, nullptr);
+      const bool clicked = std::exchange(click_activated_, false);
+      HWND pressed = std::exchange(pressed_, nullptr);
       if (had && from != hwnd && !(from && IsChild(hwnd, from)) && IsChild(hwnd, had) &&
           IsWindowVisible(had)) {
+        base::AutoReset<bool> elsewhere(&giving_back_for_press_elsewhere_,
+                                        clicked && pressed != had);
         SetFocus(had);
       }
     } else if (message == WM_SIZE) {
@@ -885,6 +910,12 @@ class WindowViews : public views::WidgetObserver,
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
   bool ui_holds_for_page_ = false;
   HWND had_keyboard_ = nullptr;
+  // The pane a press activating the window went to, and whether a press activated it, from
+  // WM_MOUSEACTIVATE and WM_ACTIVATE until the window takes the keyboard.
+  HWND pressed_ = nullptr;
+  bool click_activated_ = false;
+  // While the window gives the keyboard back to a pane that had it, for a press elsewhere.
+  bool giving_back_for_press_elsewhere_ = false;
   // The DPI the last WM_DPICHANGED carried, 0 before one comes (Scale).
   UINT dpi_ = 0;
   bool minimized_ = false;

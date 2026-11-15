@@ -383,6 +383,48 @@ if [ "$major" -ge 157 ]; then
     "⌘T after a click on the sidebar, then the page beside Chrome's warning before http, didn't open the command bar: $(since "$clicked" | grep -e '^browser: drive' -e '^browser: command ' | tr '\n' ' ')"
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened beside the warning"
+  # Coming back from another app, as by its taskbar button, with the pointer over the sidebar: no
+  # press activates the window, so the warning, which had the keyboard, has it again wherever the
+  # pointer is. On Windows the pane takes it back first, and the warning only after it (#2910).
+  if windows; then
+    send click $((warning_x + warning_width / 2)) $((warning_y + warning_height + 40))
+    clicked=$step
+    for _ in $(seq 50); do
+      [ "$key" = NativeWidgetMacNSWindow ] && break
+      sleep 0.1
+      send state
+    done
+    [ "$key" = NativeWidgetMacNSWindow ] ||
+      fail "a click on the page beside Chrome's warning before http left the keyboard in $key, on $focus, not in the warning: $(since "$clicked" | grep '^browser: drive' | tail -3 | tr '\n' ' ')"
+    rm -f "$out/cover-front"
+    python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" away \
+      "$(cygpath -w "$out/cover-front")" > "$out/other-window.log" 2>&1 &
+    other=$!
+    for _ in $(seq 100); do
+      grep -q '^cover ' "$out/other-window.log" || ! kill -0 "$other" 2> /dev/null && break
+      sleep 0.1
+    done
+    grep -q '^cover .*, foreground away$' "$out/other-window.log" ||
+      fail "another app's window didn't open and take the foreground from $kept's warning before http: $(cat "$out/other-window.log")"
+    send move $sidebar_point
+    touch "$out/cover-front"
+    wait "$other" ||
+      fail "another app's window didn't give ilo's back the foreground: $(cat "$out/other-window.log")"
+    back=$step
+    for _ in $(seq 50); do
+      send state
+      [ "$active" = 1 ] && [ "$key" = NativeWidgetMacNSWindow ] && break
+      sleep 0.1
+    done
+    [ "$active" = 1 ] && [ "$key" = NativeWidgetMacNSWindow ] ||
+      fail "coming back from another app with the pointer over the sidebar left the keyboard in $key, on $focus (active $active), not in $kept's warning before http: $(since "$back" | grep '^browser: drive' | tail -3 | tr '\n' ' ')"
+    send key t cmd
+    expect '^browser: command bar shown$' \
+      "⌘T after coming back from another app with the pointer over the sidebar, beside Chrome's warning before http, didn't open the command bar"
+    send key escape
+    expect '^browser: command bar hidden$' \
+      "escape didn't close the command bar ⌘T opened after coming back from another app"
+  fi
 fi
 exec 3>&-
 quit
