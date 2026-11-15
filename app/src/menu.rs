@@ -181,6 +181,50 @@ pub enum Closed {
     Otherwise,
 }
 
+/// How a menu closed, with `Otherwise`'s ways told apart, for the line the log has of it (#2873).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Closing {
+    Chose(usize),
+    PressedAt(Point<Pixels>),
+    Left,
+    Escape,
+    Shortcut,
+    ScrolledOutside,
+    ReleasedOutside,
+    Replaced,
+}
+
+impl Closing {
+    fn closed(self) -> Closed {
+        match self {
+            Closing::Chose(item) => Closed::Chose(item),
+            Closing::PressedAt(at) => Closed::PressedAt(at),
+            Closing::Left => Closed::Left,
+            _ => Closed::Otherwise,
+        }
+    }
+
+    /// The log's line for the menu opened at `at`, in the browser window's content, closing so:
+    /// where it opened says which menu, and the line names no item, so nothing of a page or a tab.
+    fn line(self, at: Point<Pixels>) -> String {
+        let how = match self {
+            Closing::Chose(_) => "picked",
+            Closing::PressedAt(_) => "pressed outside",
+            Closing::Left => "left",
+            Closing::Escape => "escape",
+            Closing::Shortcut => "shortcut",
+            Closing::ScrolledOutside => "scrolled outside",
+            Closing::ReleasedOutside => "released outside",
+            Closing::Replaced => "another menu",
+        };
+        format!(
+            "browser: menu at {} {} closed by {how}",
+            f32::from(at.x),
+            f32::from(at.y)
+        )
+    }
+}
+
 impl Closed {
     /// The item chosen, if one was.
     pub fn chosen(self) -> Option<usize> {
@@ -461,7 +505,8 @@ pub(crate) enum Key {
 pub(crate) enum Outcome {
     Stay,
     Pick(usize),
-    Close,
+    Escape,
+    ReleasedOutside,
 }
 
 /// An open level and the item highlighted in it.
@@ -734,7 +779,7 @@ impl Tracking {
             Hit::Row(_, item) if self.selectable(item) && self.layout.level_of(item).is_none() => {
                 Outcome::Pick(item)
             }
-            Hit::Outside if opening.is_some() => Outcome::Close,
+            Hit::Outside if opening.is_some() => Outcome::ReleasedOutside,
             _ => Outcome::Stay,
         }
     }
@@ -825,7 +870,7 @@ impl Tracking {
             }
             Key::Escape => {
                 if self.open.len() == 1 {
-                    return Outcome::Close;
+                    return Outcome::Escape;
                 }
                 self.open.pop();
             }
@@ -977,6 +1022,8 @@ pub(crate) fn key_of(event: &KeyDownEvent) -> Option<Key> {
 /// The menu while it shows.
 struct Shown {
     tracking: Tracking,
+    /// Where it opened, in the browser window's content.
+    at: Point<Pixels>,
     look: Look,
     /// Where its window's top left is in the browser window's content.
     origin: Point<Pixels>,
@@ -1128,7 +1175,7 @@ pub fn show(request: Request, cx: &mut App) {
         let Some(request) = request.take() else {
             return;
         };
-        menu.close(Closed::Otherwise, cx);
+        menu.close(Closing::Replaced, cx);
         let system = window.text_system().clone();
         let width_of = |text: &str| {
             let text = SharedString::from(text.to_string());
@@ -1143,6 +1190,7 @@ pub fn show(request: Request, cx: &mut App) {
         let origin = menu.fixed.unwrap_or(frame.origin);
         let shown = Shown {
             tracking: Tracking::new(request.items, layout, request.at),
+            at: request.at,
             look: request.look,
             origin,
             chosen: Some(request.chosen),
@@ -1203,7 +1251,7 @@ pub fn pointer(event: Pointer, at: Point<Pixels>, cx: &mut App) -> bool {
 /// The user left the menu without choosing: another window or app, or the browser window
 /// resizing, moving or going full screen.
 pub fn dismissed(cx: &mut App) {
-    update(cx, |menu, _, cx| menu.close(Closed::Left, cx));
+    update(cx, |menu, _, cx| menu.close(Closing::Left, cx));
 }
 
 /// Chooses the enabled item titled `title`, as the driver does. Returns whether there was one.
@@ -1216,7 +1264,7 @@ pub fn choose(title: &str, cx: &mut App) -> bool {
             .and_then(|shown| shown.tracking.find(title));
         if let Some(item) = found {
             chosen = true;
-            menu.close(Closed::Chose(item), cx);
+            menu.close(Closing::Chose(item), cx);
         }
     });
     chosen
@@ -1269,11 +1317,11 @@ pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
 
 impl ContextMenu {
     /// Closes the menu, if it shows, and says how once the update is over.
-    fn close(&mut self, closed: Closed, cx: &mut Context<Self>) {
+    fn close(&mut self, closing: Closing, cx: &mut Context<Self>) {
         let Some(mut shown) = self.shown.take() else {
             return;
         };
-        let closed = match closed {
+        let closed = match closing.closed() {
             Closed::Chose(item) => Closed::Chose(as_held(&shown.tracking.entries, item, shown.alt)),
             closed => closed,
         };
@@ -1287,6 +1335,7 @@ impl ContextMenu {
             }
             _ => log!("browser: menu closed"),
         }
+        log!("{}", closing.line(shown.at));
         if let Some(answer) = shown.chosen.take() {
             cx.defer(move |cx| answer(closed, cx));
         }
@@ -1296,8 +1345,9 @@ impl ContextMenu {
     fn outcome(&mut self, outcome: Outcome, cx: &mut Context<Self>) {
         match outcome {
             Outcome::Stay => cx.notify(),
-            Outcome::Pick(item) => self.close(Closed::Chose(item), cx),
-            Outcome::Close => self.close(Closed::Otherwise, cx),
+            Outcome::Pick(item) => self.close(Closing::Chose(item), cx),
+            Outcome::Escape => self.close(Closing::Escape, cx),
+            Outcome::ReleasedOutside => self.close(Closing::ReleasedOutside, cx),
         }
     }
 
@@ -1327,7 +1377,7 @@ impl ContextMenu {
                 }
                 // A click outside closes the menu and goes no further; a right-click goes on, to
                 // open the menu of what it's on.
-                self.close(Closed::PressedAt(at), cx);
+                self.close(Closing::PressedAt(at), cx);
                 event == Pointer::Pressed
             }
             Pointer::Released => {
@@ -1339,7 +1389,7 @@ impl ContextMenu {
                 if tracking.hit(at) != Hit::Outside {
                     return true;
                 }
-                self.close(Closed::Otherwise, cx);
+                self.close(Closing::ScrolledOutside, cx);
                 false
             }
         }
@@ -1375,7 +1425,7 @@ impl ContextMenu {
         let modifiers = event.keystroke.modifiers;
         // A shortcut closes the menu, as the menu shows them but doesn't run them.
         if modifiers.platform || modifiers.control {
-            return self.close(Closed::Otherwise, cx);
+            return self.close(Closing::Shortcut, cx);
         }
         if let Some(key) = key_of(event) {
             let outcome = shown.tracking.key(key, Instant::now());
