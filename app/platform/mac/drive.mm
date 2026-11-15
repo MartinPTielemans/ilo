@@ -130,6 +130,9 @@
 //                                         at <x> <y> <width> <height>" in place's terms, or
 //                                         "browser: pip none". The driver doesn't move or size it:
 //                                         the window server does that with the real pointer
+//   pip move <x> <y>                      moves the pointer to (x, y) from that window's top-left,
+//                                         as move does in the browser window, or logs "browser:
+//                                         pip none"
 //   front                                 logs which of the app's windows other apps take for
 //                                         the one in front, as "browser: front <first>, main
 //                                         <window>, key <window>, ax focused <window>, ax main
@@ -612,6 +615,29 @@ NSWindow* WindowAt(NSWindow* browser, double x, double y) {
     }
   }
   return browser;
+}
+
+// Moves the pointer to (x, y) from |target|'s top-left, without a button down. It goes to the view
+// under the pointer and to the tracking areas holding it, as a real move does, which is how GPUI's
+// view, under the page's, hears the pointer over the page. It's also posted, for the app's event
+// monitors.
+void MoveIn(NSWindow* target, double x, double y) {
+  NSEvent* move = [NSEvent mouseEventWithType:NSEventTypeMouseMoved
+                                     location:NSMakePoint(x, NSHeight(target.frame) - y)
+                                modifierFlags:0
+                                    timestamp:NSProcessInfo.processInfo.systemUptime
+                                 windowNumber:target.windowNumber
+                                      context:nil
+                                  eventNumber:0
+                                   clickCount:0
+                                     pressure:0];
+  NSView* content = target.contentView;
+  NSView* hit =
+      [content hitTest:[content.superview convertPoint:move.locationInWindow fromView:nil]];
+  Pointed(target, move.locationInWindow);
+  [hit mouseMoved:move];
+  TrackMove(content, move, hit);
+  [NSApp postEvent:move atStart:NO];
 }
 
 void Click(NSWindow* window, double x, double y, int count, NSEventModifierFlags flags = 0) {
@@ -1640,25 +1666,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     NSWindow* target = WindowAt(window, x, y);
     Convert(window, target, &x, &y);
-    NSEvent* move = [NSEvent mouseEventWithType:NSEventTypeMouseMoved
-                                       location:NSMakePoint(x, NSHeight(target.frame) - y)
-                                  modifierFlags:0
-                                      timestamp:NSProcessInfo.processInfo.systemUptime
-                                   windowNumber:target.windowNumber
-                                        context:nil
-                                    eventNumber:0
-                                     clickCount:0
-                                       pressure:0];
-    // It goes to the view under the pointer and to the tracking areas holding it, as a real move
-    // does, which is how GPUI's view, under the page's, hears the pointer over the page. It's also
-    // posted, for the app's event monitors.
-    NSView* content = target.contentView;
-    NSView* hit = [content hitTest:[content.superview convertPoint:move.locationInWindow
-                                                          fromView:nil]];
-    Pointed(target, move.locationInWindow);
-    [hit mouseMoved:move];
-    TrackMove(content, move, hit);
-    [NSApp postEvent:move atStart:NO];
+    MoveIn(target, x, y);
     done();
     return true;
   }
@@ -1763,6 +1771,20 @@ bool Run(const std::string& line, void (^done)(void)) {
   }
   if (action == "pip") {
     NSWindow* pip = PictureInPicture();
+    std::string what;
+    if (words >> what) {
+      double x, y;
+      if (what != "move" || !(words >> x >> y)) {
+        return false;
+      }
+      if (pip) {
+        MoveIn(pip, x, y);
+      } else {
+        fprintf(stderr, "browser: pip none\n");
+      }
+      done();
+      return true;
+    }
     if (!pip) {
       fprintf(stderr, "browser: pip none\n");
     } else {

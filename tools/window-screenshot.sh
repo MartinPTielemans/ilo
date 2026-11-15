@@ -14,10 +14,13 @@
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
 # There POINTER=1 draws the display's pointer in, where the driver's warp put it, with the cursor
 # the window under it shows.
-# Usage: tools/window-screenshot.sh <pid> <output.png> [all]
+# On the Mac, with "floating", it takes only the process's largest window above the normal level,
+# such as Picture in Picture's, on its own, its corners see-through.
+# Usage: tools/window-screenshot.sh <pid> <output.png> [all | floating]
 set -e
-[ $# -eq 2 ] || [ $# -eq 3 ] && [ "${3:-all}" = all ] ||
-  { echo "usage: $0 <pid> <output.png> [all]" >&2; exit 2; }
+{ [ $# -eq 2 ] || [ $# -eq 3 ] && [ "${3:-all}" = all ]; } ||
+  { [ $# -eq 3 ] && [ "$3" = floating ] && [ "$(uname)" = Darwin ]; } ||
+  { echo "usage: $0 <pid> <output.png> [all | floating, on the Mac]" >&2; exit 2; }
 case "$(uname)" in
   MINGW* | MSYS*)
     [ -e "/proc/$1/winpid" ] || { echo "process $1 isn't running" >&2; exit 1; }
@@ -367,6 +370,7 @@ import UniformTypeIdentifiers
 let pid = Int32(ProcessInfo.processInfo.environment["PID"]!)!
 let out = URL(fileURLWithPath: ProcessInfo.processInfo.environment["OUT"]!)
 let all = ProcessInfo.processInfo.environment["ALL"] == "all"
+let floating = ProcessInfo.processInfo.environment["ALL"] == "floating"
 
 func fail(_ message: String) -> Never {
   FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -375,6 +379,24 @@ func fail(_ message: String) -> Never {
 
 let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
 let windows = content.windows.filter { $0.owningApplication?.processID == pid }
+func write(_ image: CGImage) -> Never {
+  guard let file = CGImageDestinationCreateWithURL(out as CFURL, UTType.png.identifier as CFString, 1, nil)
+  else { fail("can't write \(out.path)") }
+  CGImageDestinationAddImage(file, image, nil)
+  guard CGImageDestinationFinalize(file) else { fail("can't write \(out.path)") }
+  exit(0)
+}
+if floating {
+  guard let window = windows.filter({ $0.windowLayer > 0 })
+    .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
+  else { fail("process \(pid) has no floating window on screen") }
+  let filter = SCContentFilter(desktopIndependentWindow: window)
+  let config = SCStreamConfiguration()
+  config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
+  config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
+  config.showsCursor = false
+  write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
+}
 // The largest normal window; a process can also own invisible helper windows.
 guard let main = windows.filter({ $0.windowLayer == 0 })
   .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
@@ -392,10 +414,5 @@ config.sourceRect = frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.m
 config.width = Int(frame.width * CGFloat(filter.pointPixelScale))
 config.height = Int(frame.height * CGFloat(filter.pointPixelScale))
 config.showsCursor = false
-let image: CGImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-
-guard let file = CGImageDestinationCreateWithURL(out as CFURL, UTType.png.identifier as CFString, 1, nil)
-else { fail("can't write \(out.path)") }
-CGImageDestinationAddImage(file, image, nil)
-guard CGImageDestinationFinalize(file) else { fail("can't write \(out.path)") }
+write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
 SWIFT
