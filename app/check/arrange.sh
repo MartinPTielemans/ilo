@@ -1,10 +1,14 @@
 # check.sh runs this at 656.
 # Arrange (#2347) on a fixture page of the run's own: from the Boost card's Arrange, a click picks a
-# thing and a press, 4 pt and a rest carries it; let go at an edge it settles there, on another's
-# middle the two trade, where it doesn't fit nothing changes, and with ⌘ it floats, which the mini
-# bar's pin turns between staying on screen and scrolling with the page. The mini bar's Hide is
-# Zap's rule and ⌘Z takes it back, its Put back takes a change back, and ⌘Z with the page focused
-# takes back the last change. Each change is saved in the site's .arrange.json as it happens.
+# thing and a press, 4 pt and a rest carries it; let go at an edge it settles there, which the mini
+# bar's Put back takes back; on another's middle the two trade, and a click then picks each thing
+# where it's drawn; where it doesn't fit nothing changes, and with ⌘ it floats, which the mini
+# bar's pin turns between staying on screen and scrolling with the page. ⌘Z with the page focused
+# takes back the last change, the mini bar's Hide is Zap's rule, which ⌘Z takes back, and its Put
+# back on a traded thing takes the trade back. The mini bar goes with Hide and with the mode. Each
+# change is saved in the site's .arrange.json as it happens. Last, a settle then a trade of the
+# thing it's kept by, known under #2975: the run asserts the order the core gives and reports what
+# a press on Wide picks, rather than failing on it.
 # Reloaded, the page shows the arrangement, and the run measures whether its first frame already
 # did, in arrange-first-frame.txt, and says which in its summary rather than failing: a flash there
 # is what would bring a renderer hook at document start (#2347's slice 2 plan). Edited outside ilo,
@@ -227,16 +231,37 @@ shows 'b,a,c,w side s,n hidden - float -' "the settle didn't move the thing unde
 kept 1 "the settle wasn't saved"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-settled.png" || fail "no window to capture"
 
-# Trade: the third let go on the first's middle, and the two trade places. The settle is kept by
-# the thing it was let go beside, Gamma, so Alpha goes with Gamma, ahead of it, which moves a thing
-# the user didn't touch (#2975): this line changes with its fix.
+# Put back, the mini bar's last button on a thing with a change, takes that change back: Alpha,
+# settled, goes back to its own place.
+send click $(slot 1)
+expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Alpha\$" \
+  "a click didn't select Alpha, settled under Beta"
+press_mini_bar last "put back"
+expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put back"
+shows "$own" "Put back didn't take the settle back"
+kept 0 "Put back didn't take the change back"
+
+# Trade: the third let go on the first's middle, and the two trade places.
 carry $(slot 2) $(slot 0)
 expect "^browser: arrange $tab Preview Trades " "a rest on a thing's middle didn't show a trade"
 send release $(slot 0)
 expect "^browser: arrange $tab Selected Trades selected " "letting go on a thing's middle didn't trade"
-expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade"
-shows 'a,c,b,w side s,n hidden - float -' "the trade didn't swap the two, Alpha ahead of Gamma (#2975)"
-kept 2 "the trade wasn't saved"
+expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the trade"
+shows 'c,b,a,w side s,n hidden - float -' "the trade didn't swap the two"
+kept 1 "the trade wasn't saved"
+../tools/window-screenshot.sh "$pid" "$out/arrange-traded.png" || fail "no window to capture"
+
+# After a trade a click picks the thing drawn where it lands, by name, the two traded too. If one
+# doesn't, Arrange presses the wrong thing after a trade the user made, which is more than #2975.
+picks() {
+  send click $(slot $1)
+  expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section $2\$" \
+    "after a trade, a click on the column's thing $1 down didn't select $2 drawn there"
+}
+picks 3 Wide
+picks 2 Alpha
+picks 1 Beta
+picks 0 Gamma
 
 # A fit refusal: the wide section at the side's edge, where it doesn't fit, and nothing changes.
 carry $(slot 3) $(side_edge)
@@ -244,8 +269,8 @@ expect "^browser: arrange $tab Preview Refused " "a rest where the thing doesn't
 ../tools/window-screenshot.sh "$pid" "$out/arrange-refused.png" || fail "no window to capture"
 send release $(side_edge)
 expect "^browser: arrange $tab Selected " "letting go where the thing doesn't fit left no selection"
-shows 'a,c,b,w side s,n hidden - float -' "the refused drop changed the page"
-[ "$(changes)" = 2 ] || fail "the refused drop was saved: $(changes) changes"
+shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
+[ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
 
 # A float: the note carried with ⌘ held stays where it's let go, over the page, and the mini bar's
 # pin, its first button, turns it between staying on screen and scrolling with the page.
@@ -253,8 +278,8 @@ carry $(side_slot 1) $(page_at 300 760) cmd
 expect "^browser: arrange $tab Preview Floats " "a rest with ⌘ held didn't show a float"
 send release $(page_at 300 760) cmd
 expect "^browser: arrange $tab Selected Floats selected " "letting go with ⌘ held didn't float"
-expect "browser: tab $tab arrange saved 3 changes\$" "the core didn't save the float"
-kept 3 "the float wasn't saved"
+expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the float"
+kept 2 "the float wasn't saved"
 for _ in $(seq 100); do
   case "$(said)" in *" float n:"*) break ;; esac
   sleep 0.1
@@ -267,26 +292,15 @@ case "$pinned" in
 esac
 ../tools/window-screenshot.sh "$pid" "$out/arrange-floats.png" || fail "no window to capture"
 press_mini_bar first pin
-shows "a,c,b,w side s hidden - float n:$unpinned" "the pin didn't turn the float"
+shows "c,b,a,w side s hidden - float n:$unpinned" "the pin didn't turn the float"
 press_mini_bar first pin
-shows "a,c,b,w side s hidden - float n:$pinned" "the pin didn't turn the float back"
+shows "c,b,a,w side s hidden - float n:$pinned" "the pin didn't turn the float back"
 
 # ⌘Z with the page focused takes back the last change, the float.
 send key z cmd
-expect "browser: tab $tab arrange saved 2 changes\$" "⌘Z with the page focused didn't reach the mode"
-shows 'a,c,b,w side s,n hidden - float -' "⌘Z didn't take back the float"
-kept 2 "⌘Z's step back wasn't saved"
-
-# Put back, the mini bar's last button on a thing with a change, takes that change back: on Gamma,
-# one of the two traded, the trade, so Beta and Gamma are in their own places again, with Alpha
-# still settled ahead of Gamma.
-send click $(slot 1)
-expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Gamma\$" \
-  "a click didn't select Gamma, which the trade moved"
-press_mini_bar last "put back"
-expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save Put back"
-shows 'b,a,c,w side s,n hidden - float -' "Put back on Gamma didn't take the trade back"
-kept 1 "Put back didn't take the change back"
+expect "browser: tab $tab arrange saved 1 changes\$" "⌘Z with the page focused didn't reach the mode"
+shows 'c,b,a,w side s,n hidden - float -' "⌘Z didn't take back the float"
+kept 1 "⌘Z's step back wasn't saved"
 
 # Hide, the mini bar's first button on a thing with no change, is Zap's rule, which ⌘Z takes back.
 send click $(slot 3)
@@ -308,8 +322,17 @@ done
 case "$(said)" in *" hidden - "*) ;; *) fail "⌘Z didn't take back the Hide: $(said)" ;; esac
 grep -q '/\* Zap \*/$' "$css" && fail "⌘Z left Zap's rule in the Boost: $(cat "$css")"
 
-# Escape is Done, and the mini bar goes with the mode.
+# Put back on Gamma, one of the two traded, takes the trade back, both places.
 send click $(slot 0)
+expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Gamma\$" \
+  "a click didn't select Gamma, which the trade moved"
+press_mini_bar last "put back"
+expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put back"
+shows "$own" "Put back on Gamma didn't take the trade back"
+kept 0 "Put back didn't take the trade back"
+
+# Escape is Done, and the mini bar goes with the mode.
+send click $(slot 1)
 expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Beta\$" \
   "a click didn't select Beta"
 expect '^browser: mini bar at ' "the UI placed no mini bar over Beta"
@@ -317,6 +340,41 @@ send key escape
 expect "^browser: arrange $tab off\$" "escape didn't end the mode"
 expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
 mini_bar_went "escape ended the mode"
+
+# Known under #2975, last, as the run reports and doesn't fail on it: a settle is kept by the thing
+# it was let go beside, Gamma, so a trade of Gamma with Beta takes Alpha along, ahead of Gamma, and
+# then a press where Wide is drawn hasn't picked Wide (43728216309, 43729257766). The order is
+# asserted as the core gives it today; this changes with #2975's fix.
+start_arranging
+carry $(slot 0) $(slot_edge 1)
+expect "^browser: arrange $tab Preview Settles " "a rest at an edge didn't show a settle"
+send release $(slot_edge 1)
+expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle"
+shows 'b,a,c,w side s,n hidden - float -' "the settle didn't move the thing under the second"
+carry $(slot 2) $(slot 0)
+expect "^browser: arrange $tab Preview Trades " "a rest on a thing's middle didn't show a trade"
+send release $(slot 0)
+expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade"
+shows 'a,c,b,w side s,n hidden - float -' \
+  "the trade of the settle's Gamma didn't leave Alpha ahead of Gamma, as #2975 has it today"
+kept 2 "the settle and the trade weren't saved"
+../tools/window-screenshot.sh "$pid" "$out/arrange-2975.png" || fail "no window to capture"
+send press $(slot 3)
+for _ in $(seq 50); do
+  pointed=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep "^browser: arrange $tab Pointing " |
+    tail -1 | cut -d' ' -f6-)
+  [ -n "$pointed" ] && break
+  sleep 0.1
+done
+send release $(slot 3)
+case "$pointed" in
+  "section Wide") wide="a press on Wide picked Wide" ;;
+  "" | -) wide="a press where Wide is drawn picked nothing" ;;
+  *) wide="a press where Wide is drawn picked $pointed" ;;
+esac
+send key escape
+expect "^browser: arrange $tab off\$" "escape didn't end the mode"
+expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
 kept_column=$(said | sed 's/^col \([^ ]*\) .*/\1/')
 
 # Reloaded, the page places the arrangement as it loads. The run measures, and says, whether the
@@ -409,12 +467,16 @@ expect '^browser: private session ended ' "⇧⌘W didn't close the private wind
 exec 3>&-
 quit
 echo "ok: from the Boost card's Arrange, a click picked a thing with the page taking none, and a" \
-  "carry settled it at an edge, traded it on a thing's middle, was refused where it didn't fit," \
-  "and with ⌘ floated it, whose pin turned it to scroll with the page and back. ⌘Z took the float" \
-  "back, Put back the trade, and Hide was Zap's rule, which ⌘Z took back. $went" \
-  "Each change was saved in $host.arrange.json. Reloaded, the page placed the arrangement, and $first_frame." \
+  "carry settled it at an edge, which Put back took back, traded two on a thing's middle, after" \
+  "which a click picked each thing where it was drawn, was refused where it didn't fit, and with" \
+  "⌘ floated one, whose pin turned it to scroll with the page and back. ⌘Z took the float back," \
+  "Hide was Zap's rule, which ⌘Z took back, and Put back on a traded thing took the trade back." \
+  "$went Each change was saved in $host.arrange.json. Known under #2975: a trade of the thing" \
+  "a settle is kept by left a,c,b,w, and $wide. Reloaded, the page placed the arrangement, and" \
+  "$first_frame." \
   "Edited outside ilo it stayed off, and Site Controls' Turn On kept it. A private window's page" \
   "was arranged, with no Boost offered." \
   "Windows: $out/arrange-on.png, $out/arrange-picked.png, $out/arrange-settled.png," \
-  "$out/arrange-refused.png, $out/arrange-floats.png, $out/arrange-changed.png," \
+  "$out/arrange-traded.png, $out/arrange-refused.png, $out/arrange-floats.png," \
+  "$out/arrange-2975.png, $out/arrange-changed.png," \
   "$out/arrange-private.png"
