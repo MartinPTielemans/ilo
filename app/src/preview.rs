@@ -3456,26 +3456,32 @@ impl browser::tooltip::Host for PreviewTooltip {
     fn hide(&self) {}
 }
 
-/// Moves the pointer to `what`, an x and a y in the shell's window, once its rows are drawn.
+/// Moves the pointer to `what`, an x and a y in the shell's window, once its rows are drawn, and
+/// once the tooltip's window that the first move opened is on screen, off onto the page and back:
+/// its coming ends the tooltip it came for, as the pointer leaving on X11 and the row's hover read
+/// again on Windows, and only coming onto the row again asks for it.
 fn preview_hover(shell: gpui::AnyWindowHandle, what: &str, cx: &mut App) {
     let mut parts = what.split(',').map(|part| part.trim().parse::<f32>().ok());
     let (Some(Some(x)), Some(Some(y))) = (parts.next(), parts.next()) else {
         return;
     };
+    let page = f32::from(PREVIEW_AREA.get().width) - 10.;
     cx.spawn(async move |cx| {
-        cx.background_executor()
-            .timer(Duration::from_millis(500))
-            .await;
-        let moved = gpui::MouseMoveEvent {
-            position: point(px(x), px(y)),
-            pressed_button: None,
-            modifiers: gpui::Modifiers::default(),
-        };
-        shell
-            .update(cx, |_, window, cx| {
-                window.dispatch_event(gpui::PlatformInput::MouseMove(moved), cx)
-            })
-            .ok();
+        for (wait, x) in [(500, x), (300, page), (100, x)] {
+            cx.background_executor()
+                .timer(Duration::from_millis(wait))
+                .await;
+            let moved = gpui::MouseMoveEvent {
+                position: point(px(x), px(y)),
+                pressed_button: None,
+                modifiers: gpui::Modifiers::default(),
+            };
+            shell
+                .update(cx, |_, window, cx| {
+                    window.dispatch_event(gpui::PlatformInput::MouseMove(moved), cx)
+                })
+                .ok();
+        }
     })
     .detach();
 }
