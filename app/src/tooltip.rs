@@ -362,8 +362,7 @@ pub fn open_at(
                 px(WINDOW_HEIGHT + 2. * WINDOW_MARGIN),
             ),
         ))),
-        // The preview's has none, so Windows draws it no frame, as the icon picker's.
-        titlebar: (!show).then_some(TitlebarOptions {
+        titlebar: Some(TitlebarOptions {
             title: None,
             appears_transparent: true,
             traffic_light_position: None,
