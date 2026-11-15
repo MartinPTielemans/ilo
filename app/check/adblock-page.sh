@@ -26,12 +26,14 @@ fi
 serve
 printf '%s' '<title>the blocked page</title>' > "$out/site/blocked.html"
 # A page that's all a link to a pop-up, which a click anywhere on it opens in a new tab. Its title
-# says when it has drawn, as Blink drops a press before a page's first frame, and when it has the
-# press.
+# says when it has drawn, as Blink drops a press before a page's first frame, when it has the
+# press, when it loses the keyboard and each key it gets.
 printf '%s' '<title>the opener</title>
 <a id=link href="popup.html" target="_blank" style="position:fixed;inset:0">a pop-up</a>
 <script>
 link.onmousedown = () => document.title = "the opener pressed";
+onblur = () => document.title = "the opener blurred";
+onkeydown = event => document.title = "the opener has " + event.key;
 requestAnimationFrame(() => requestAnimationFrame(() => document.title = "the opener ready"));
 </script>' > "$out/site/opener.html"
 printf '%s' '<title>the pop-up</title>' > "$out/site/popup.html"
@@ -147,6 +149,7 @@ expect "^browser: title $tab the opener ready\$" "the opener page didn't draw"
 # activation the page sends it on the press, on another pipe (#2510). So the release waits for the
 # page to have the press, as a hand's comes some 100 ms after it.
 send press $page_point
+pressed=$step
 expect "^browser: title $tab the opener pressed\$" "the opener page didn't take the press on its link"
 send release $page_point
 expect "^browser: ad block closed a pop-up at ${site}popup.html\$" \
@@ -161,6 +164,14 @@ for _ in $(seq 30); do
 done
 [ "$(today)" = "$tab" ] || fail "the pop-up's tab stayed: Today is \"$(today)\""
 grep -q '/popup\.html' "$out/site.log" && fail "the pop-up's page reached the server"
+# The page that opened it keeps the keyboard throughout, through the hold too, which at some 5 ms
+# is too short to type into: no other view took it, or the page would have blurred, and a key
+# after the tab closed reaches it. On Windows the held page took it as content focused it (#2806).
+since "$pressed" | grep -q "^browser: title $tab the opener blurred\$" &&
+  fail "the page that opened the pop-up the filter closed lost the keyboard: $(since "$pressed" | grep -e '^browser: drive' -e "^browser: title $tab " | tr '\n' ' ')"
+send key x
+expect "^browser: title $tab the opener has x\$" \
+  "a key after the pop-up filter closed the link's tab didn't reach the page that opened it: the keyboard is in $key, on $focus"
 # Opens a pop-up from tab $1's page, titled $2, once it has drawn, with a press it has had and its
 # release, as the opener above.
 open_from() {
