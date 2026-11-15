@@ -180,8 +180,9 @@ pub use favorites::FavoritesScope;
 use fly_in::Flight;
 pub use history::HistoryPage;
 pub use keys::{
-    Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, page_keystroke, rebindable,
-    recorded, reserved, shortcut_found, user_keys, view_binding, web_keystroke, written_as,
+    Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, page_key_answer,
+    page_keystroke, rebindable, recorded, reserved, shortcut_found, user_keys, view_binding,
+    web_keystroke, written_as,
 };
 pub(crate) use library::bytes;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
@@ -1337,9 +1338,9 @@ pub struct Shell {
     held_row: Option<HeldRow>,
     /// The header button the pointer pressed, for its shrinking and growing back.
     held_nav: Option<HeldNav>,
-    /// GPUI's clock, which the list's motion is timed by (`since`): the real one in the app, and
-    /// in a test one only the test moves, so a slide holds on a slow runner until the test moves
-    /// it on, as the Space's settle does (#2265, #2630).
+    /// GPUI's clock, which the list's and the Library's motion are timed by (`since`): the real one
+    /// in the app, and in a test one only the test moves, so a slide holds on a slow runner until
+    /// the test moves it on, as the Space's settle does (#2265, #2630).
     clock: BackgroundExecutor,
     /// Rows on their way to their place: how far from it each started, and when.
     slides: HashMap<Slot, (f32, Instant, Curve)>,
@@ -1920,6 +1921,11 @@ pub struct Shell {
 }
 
 impl Shell {
+    /// What the window's pages show until they draw their first frame, as last given to the core.
+    pub fn page_color(&self) -> Option<u32> {
+        self.page_color
+    }
+
     /// Makes the shell, the one the browser's shortcuts act on.
     pub fn new(browser: Rc<dyn Browser>, cx: &mut Context<Self>) -> Self {
         cx.set_global(ShellHandle(cx.weak_entity()));
@@ -2875,7 +2881,7 @@ impl Shell {
         }
         // The Spaces section springs to its width as cards come and go, as on a section's change.
         if self.library.is_some() && self.library_width() != width {
-            self.library_resize = Some((width, crate::motion::start(cx)));
+            self.library_resize = Some((width, crate::motion::start_at(self.clock.now(), cx)));
         }
         if self.show_favorites() {
             self.log_favorites();

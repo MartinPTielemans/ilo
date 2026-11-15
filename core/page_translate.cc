@@ -95,8 +95,14 @@ PageTranslate::PageTranslate(content::WebContents* contents, bc_id tab)
     : content::WebContentsObserver(contents),
       content::WebContentsUserData<PageTranslate>(*contents),
       tab_(tab) {
-  // Chrome's tab helpers make the client as the tab is made.
-  if (auto* client = ChromeTranslateClient::FromWebContents(contents)) {
+  ObserveDriver();
+}
+
+void PageTranslate::ObserveDriver() {
+  if (driver_observation_.IsObserving()) {
+    return;
+  }
+  if (auto* client = ChromeTranslateClient::FromWebContents(web_contents())) {
     driver_observation_.Observe(client->GetTranslateDriver());
   }
 }

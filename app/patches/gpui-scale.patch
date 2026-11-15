@@ -45,6 +45,23 @@ index a46c580fc1..453c70002e 100644
  getrandom = { version = "0.3.4", features = ["wasm_js"] }
  uuid = { workspace = true, features = ["js"] }
  
+diff --git a/crates/gpui/src/app/async_context.rs b/crates/gpui/src/app/async_context.rs
+index 7190dff709..d8d98d7440 100644
+--- a/crates/gpui/src/app/async_context.rs
++++ b/crates/gpui/src/app/async_context.rs
+@@ -179,6 +179,12 @@ impl AsyncApp {
+         lock.update(f)
+     }
+ 
++    /// Whether the App is in an update, where [`Self::update`] would panic: as when a callback
++    /// from the platform or an embedder comes from an event loop nested in one.
++    pub fn is_updating(&self) -> bool {
++        (self.app.upgrade()).is_some_and(|app| app.try_borrow_mut().is_err())
++    }
++
+     /// Arrange for the given callback to be invoked whenever the given entity emits an event of a given type.
+     /// The callback is provided a handle to the emitting entity and a reference to the emitted event.
+     pub fn subscribe<T, Event>(
 diff --git a/crates/gpui/src/app/test_context.rs b/crates/gpui/src/app/test_context.rs
 index 54b72a63ec..98a3325d1c 100644
 --- a/crates/gpui/src/app/test_context.rs
@@ -758,7 +775,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..7d90f34982 100644
+index c559412e56..af067cbfec 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
@@ -806,7 +823,7 @@ index c559412e56..7d90f34982 100644
 +/// Whether the App is in an update, as it is when Windows sends a window's move and size, or its
 +/// activation's modifiers, from inside the update that moves or activates it.
 +pub(crate) fn app_busy(cx: &crate::AsyncApp) -> bool {
-+    (cx.app.upgrade()).is_some_and(|app| app.try_borrow_mut().is_err())
++    cx.is_updating()
 +}
 +
 +/// Says, for ilo's checks (check.sh), that a window's `kind` input or update was lost, as the App

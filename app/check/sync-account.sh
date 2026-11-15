@@ -7,12 +7,13 @@
 # that DevTools' WebAuthn domain gives the window's page (check/cdp.py): untouched, the key leaves
 # Chrome's dialog up over the window, where escape closes it and fails the page's request (#1295),
 # and touched, it adds the passkey. The account's first device makes the recovery words, which
-# Done hides, and sync turns on. On the Mac, Copy puts the words on the run's own pasteboard, the
-# driver's, which holds them no longer 90 s later (#641); Linux's copy is sync-devices', and
-# Windows' is unrun. Then what the server keeps: each item it holds of a type Chromium encrypts is
-# ciphertext alone, nameless or named "encrypted", the Spaces among them, and the device is named
-# by its label, such as "ilo on Linux", not its owner's name, and the Sync tab, shown again, says
-# when it last synced. No request in Chromium's net log of the whole run goes to Google's servers.
+# Done hides, and sync turns on. Copy puts the words on the clipboard, which holds them no longer
+# 90 s later (#641): on the Mac the driver's own pasteboard, elsewhere the session's or Windows'
+# (ilo-server.sh's clipboard). Then what the server keeps: each item it holds of a type Chromium
+# encrypts is ciphertext alone, nameless or named "encrypted", the Spaces among them, and the
+# device is named by its label, such as "ilo on Linux", not its owner's name, and the Sync tab,
+# shown again, says when it last synced. No request in Chromium's net log of the whole run goes to
+# Google's servers.
 # Sign Out, as the account's only device, asks first, and the server forgets the device. Signed
 # out, the passkey signs in again, on a key in the next window that holds it, and on Linux Delete
 # Account, asked first, leaves the server nothing of the account and the browser signed out. The domain is the check's alone. Agents never get DevTools: it runs any
@@ -124,6 +125,8 @@ if [ "$(uname)" = Darwin ]; then
   done
   [ "$keyed" = "$sign_in_key" ] && [ "$focus" = RenderWidgetHostViewCocoa ] ||
     fail "with Chrome's passkey dialog gone, the keyboard is in $keyed on $focus, not the page's"
+else
+  echo "skip: the keyboard back in the sign-in window's page once Chrome's passkey dialog is gone: it's read from AppKit's key window, and off the Mac it isn't checked yet."
 fi
 # Touched, the key adds the passkey. The page blurred Add a Passkey as it went disabled, so the
 # next tab is from it, to Not Now, and shift-tab comes back to it.
@@ -146,17 +149,16 @@ settings_keyboard
 on='^browser: account On None$'
 at=$(drawn_after "sync done" "$on") || fail "Settings › Sync didn't show the recovery words with Done"
 ../tools/window-screenshot.sh "$(app_pid)" "$out/sync-words.png" || fail "no window to capture"
-if [ "$(uname)" = Darwin ]; then
-  send clickkey $(drawn_after "sync copy" "$on")
-  copied_at=$(date +%s)
-  words='^browser: pasteboard text \([^ ][^ ]* \)\{23\}[^ ][^ ]*$'
-  for _ in $(seq 30); do
-    send pasteboard
-    logged "$words" && break
-    sleep 0.1
-  done
-  expect "$words" "Copy didn't put the 24 recovery words on the run's pasteboard"
-fi
+send clickkey $(drawn_after "sync copy" "$on")
+copied_at=$(date +%s)
+words='^\([^ ][^ ]* \)\{23\}[^ ][^ ]*$'
+for _ in $(seq 30); do
+  clipboard
+  echo "$clipped" | grep -q "$words" && break
+  sleep 0.1
+done
+echo "$clipped" | grep -q "$words" ||
+  fail "Copy didn't put the 24 recovery words on the clipboard"
 send clickkey $(drawn_after "sync done" "$on")
 await 'browser: sync service active$' ||
   fail "sync's service didn't become active: $(grep 'browser: sync service ' "$log" | tail -1)"
@@ -283,17 +285,16 @@ expect '^browser: sync activity synced None$' \
   "shown again after the Spaces reached the server, Sync didn't say it had synced"
 ../tools/window-screenshot.sh "$pid" "$out/sync-status.png" || fail "no window to capture"
 
-# The words leave the pasteboard 90 s after the copy, which the pasteboard's own change shows.
-if [ "$(uname)" = Darwin ]; then
-  while [ $(($(date +%s) - copied_at)) -le 100 ]; do
-    send pasteboard
-    logged '^browser: pasteboard text $' && break
-    sleep 1
-  done
-  expect '^browser: pasteboard text $' "the words were on the pasteboard still 100 s after the copy"
-  kept=$(($(date +%s) - copied_at))
-  [ "$kept" -ge 89 ] || fail "the words left the pasteboard $kept s after the copy, not 90 s"
-fi
+# The words leave the clipboard 90 s after the copy.
+while [ $(($(date +%s) - copied_at)) -le 100 ]; do
+  clipboard
+  echo "$clipped" | grep -q "$words" || break
+  sleep 1
+done
+! echo "$clipped" | grep -q "$words" ||
+  fail "the words were on the clipboard still 100 s after the copy"
+kept=$(($(date +%s) - copied_at))
+[ "$kept" -ge 89 ] || fail "the words left the clipboard $kept s after the copy, not 90 s"
 
 # Sign Out, as the account's only device, asks first, where return signs out: in Settings' dialog
 # on Linux, and elsewhere in the system's alert, with Sign Out its default button. The alert has
@@ -378,10 +379,18 @@ exec 3>&- 5>&-
 quit
 # The runs after start signed out.
 rm -f "$profile_dir/Account"
+# The sign-in window has an off-the-record profile of its own, where uBlock Origin's page never
+# starts, so a page held for it there waits out the whole hold, 10 s a page (#2619). Once signing
+# in starts the window's pages are the run's only http(s) ones, as its own tab's is a data: page.
+held=$(sed -n '/^browser: account SigningIn /,$p' "$log" | grep -A1 '^browser: ad blocking held a page' |
+  grep -v '^--$' || true)
+[ -z "$held" ] ||
+  fail "the sign-in window's pages were held for an ad blocker that never gets ready in its" \
+    "profile: $(printf '%s\n' "$held" | tr '\n' ' ')"
 [ -s "$netlog" ] || fail "Chromium wrote no net log"
 urls=$(grep -o '"url":"[a-z]*://[^"]*"' "$netlog" | cut -d'"' -f4 | sort -u)
-# Google's servers, but the security components' updates, which a run as long as the Mac's, with
-# the words' 90 s on the clipboard, reaches.
+# Google's servers, but the security components' updates, which a run this long, with the words'
+# 90 s on the clipboard, reaches.
 google=$(printf '%s\n' "$urls" | google_asked)
 [ -z "$google" ] ||
   fail "the browser asked Google's servers: $(printf "%s\n" "$google" | tr "\n" " ")"

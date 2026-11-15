@@ -24,13 +24,26 @@ namespace browser_core {
 
 // The profile the core started with, Chrome's last used, which Spaces saved without one are in.
 Profile* StartProfile();
-// |dir|'s profile if it's loaded, else the one the core started with. Null before Chrome made it.
+// |dir|'s profile if it's loaded, else the one the core started with. Null before Chrome made it,
+// and null for one the core is waiting for (ExpectProfiles), which the start profile mustn't stand
+// in for.
 Profile* ProfileFor(const std::string& dir);
+// Has the core wait for each profile in |dirs| that isn't loaded yet: the launch shows the window
+// before the profiles of the Spaces it doesn't show have loaded, and their tabs wait for them.
+// As each loads, whoever loads it, |arrived| runs with its directory and it, or null if it didn't.
+void ExpectProfiles(const std::set<std::string>& dirs,
+                    base::RepeatingCallback<void(const std::string&, Profile*)> arrived);
+// Whether the core is waiting for |dir|'s profile.
+bool ProfileExpected(const std::string& dir);
+// |dir| while the core waits for its profile, else the directory of the profile ProfileFor gives:
+// the profile a Space saved in |dir| comes back in.
+std::string HomeFor(const std::string& dir);
 // The directory of |profile|.
 std::string DirOf(Profile* profile);
 // The directory of the profile |contents| is in.
 std::string DirOf(content::WebContents* contents);
-// Loads each profile in |dirs| that exists and keeps it loaded, then runs |done|.
+// Loads each profile in |dirs| that exists and keeps it loaded, then runs |done|. Once quitting,
+// one that loads isn't kept.
 void LoadProfiles(const std::set<std::string>& dirs, base::OnceClosure done);
 // Keeps |profile| loaded while the core runs, with its search engine and downloads seen to. Once.
 void UseProfile(Profile* profile);

@@ -235,6 +235,11 @@ fn log_key(key: *const bc::bc_key, when: &str, route: &str) {
 
 /// Whether ilo keeps `key` from the page that has it, and where it went.
 fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static str) {
+    // Read at each of the page's keys, whichever way it goes, so the next knows the one before.
+    #[cfg(target_os = "linux")]
+    let repeated_here = held_escape::page_key_repeated(&keystroke(unsafe { &*key }));
+    #[cfg(not(target_os = "linux"))]
+    let repeated_here = false;
     #[cfg(target_os = "linux")]
     if held_escape::keeps_from_page(unsafe { &*key }) {
         return (true, "held escape");
@@ -278,7 +283,7 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     let shortcut = cx.as_ref().and_then(|cx| {
         cx.try_read_global(|keys: &shell::UserKeys, _| keys.command_for(&keystroke, false))
     });
-    let repeat = unsafe { platform::host_key_repeated() };
+    let repeat = repeated_here || unsafe { platform::host_key_repeated() };
     let now = Instant::now();
     // Esc in full screen, pressed twice or held, leaves even when the page keeps it (Arc's).
     if keystroke == "escape"
@@ -287,6 +292,8 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
         })
         .unwrap_or(false)
     {
+        // ilo took this Esc, so the next is a first press again, not a second to the page's.
+        SECOND_PRESS.with_borrow_mut(|second| second.declined(&keystroke));
         return (true, "escape in full screen");
     }
     let shortcut = shortcut.flatten().is_some();
@@ -461,9 +468,16 @@ unsafe extern "C" fn started(_: *mut c_void) {
             true => {
                 // A click in the UI takes the keyboard there, to keep, as Wayland's does: moving
                 // X's input focus into GPUI's window tells the core nothing while it's there,
-                // as after ⌘W, where the UI holds the keys for the page shown next (#1209).
-                fn pressed(ui_view: *mut c_void) {
-                    if let Some(window) = window_in(ui_view) {
+                // as after ⌘W, where the UI holds the keys for the page shown next (#1209), nor
+                // while an overlay has the keyboard, where a window manager activating the window
+                // can put it back up to the window's own after GPUI moved it (#2789). GPUI names
+                // its own window, inside the one the core holds.
+                fn pressed(view: *mut c_void) {
+                    let window = WINDOWS.with(|windows| {
+                        let windows = windows.try_borrow().ok()?;
+                        windows.iter().find(|w| w.view == view).map(|w| w.id)
+                    });
+                    if let Some(window) = window {
                         unsafe { bc::bc_window_ui_takes_keyboard(window) };
                     }
                 }
@@ -477,6 +491,8 @@ unsafe extern "C" fn started(_: *mut c_void) {
             false => {
                 gpui_linux::embed_wayland(display, keyboard);
                 gpui_linux::watch_embedder_swipes(system::swiped);
+                browser::clipboard::read_through(system::read_through_core);
+                browser::clipboard::held_through(gpui_linux::held_clipboard_text);
             }
         }
         WAYLAND.set(!display.is_null());
@@ -681,11 +697,16 @@ unsafe extern "C" fn agent_request_done(
 
 unsafe extern "C" fn launching(_: *mut c_void) {
     safe_start_host::launching();
+    ad_block_host::launching();
     // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
     // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
     #[cfg(target_os = "linux")]
     if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
         gpui_wgpu::WgpuContext::make_instance_early();
+    }
+    #[cfg(target_os = "windows")]
+    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+        gpui_windows::make_early();
     }
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
@@ -879,10 +900,16 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // On the Mac, child processes start from Apéritif helpers, as Chrome's field trial has
         // them: those link the framework at launch, so the kernel binds its constant data clean
         // and shared, where the other helpers load it late and dyld dirties 11.7 MiB of it in each.
+        // On Windows a tab's dialog from Chromium's TabDialogManager, such as 157's warning before
+        // http, takes a window of its own, as the core has the older ones take
+        // (PageDialogsInOwnWindow): drawn in the browser window's, it would be under the pages'
+        // windows, out of sight, and a click on it would reach the page (#2651).
         format!(
             "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval{}",
             if cfg!(target_os = "macos") {
                 ",AperitifHelpers"
+            } else if cfg!(target_os = "windows") {
+                ",TabModalUsesDesktopWidget"
             } else {
                 ""
             }
@@ -940,8 +967,13 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     // Whether this launch holds the extensions, which the app decides from its own mark and says
     // at every launch, so a restart that gives the browser its switches again decides afresh.
     args.push(safe_start_host::prepare());
+    // Which ad blocker this launch runs, from the user's choice in Settings, decided afresh at
+    // every launch as safe start's is.
+    let ad_blocker = ad_block_host::prepare(&given, &profile);
+    args.extend(ad_blocker.switches());
     let given = given.into_iter().filter(|arg| {
         !arg.starts_with(browser::safe_start::SWITCH)
+            && ad_blocker.passes(arg)
             && (!cfg!(feature = "prod")
                 || !(arg.starts_with(TEST_HOST) || arg.starts_with(CRASH_TEST)))
     });
@@ -1070,6 +1102,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         app_new_window: Some(app_new_window),
         ad_block_use: Some(ad_block_host::ad_block_use),
         ad_block_request: Some(ad_block_host::ad_block_request),
+        ad_block_response: Some(ad_block_host::ad_block_response),
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
         tab_shown_in: Some(tab_shown_in),

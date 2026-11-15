@@ -8,6 +8,9 @@ use super::*;
 pub(crate) struct BrowserWindow {
     pub(crate) id: bc::bc_id,
     pub(crate) ui_view: *mut c_void,
+    /// GPUI's own X11 window, which it makes inside `ui_view` and names a press in.
+    #[cfg(target_os = "linux")]
+    pub(crate) view: *mut c_void,
     pub(crate) shell: WeakEntity<Shell>,
     pub(crate) handle: AnyWindowHandle,
     /// Its own overlays' windows, such as the find bar's, which close with it.

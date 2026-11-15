@@ -1,9 +1,13 @@
 use std::rc::Rc;
 
-use gpui::{Entity, TestAppContext, VisualTestContext};
+use gpui::{Entity, FontWeight, TestAppContext, VisualTestContext, WindowTextSystem};
 
+use super::{EXTENSIONS, TURN_BACK_ON};
 use crate::shell::{Folders, Shell, recorder::Recorder};
+use crate::tokens::shell::task::CHIP_X;
 use crate::tokens::shell::{FOOTER_HEIGHT, SIDEBAR_MIN, UPDATE_BANNER_GAP};
+use crate::tokens::text;
+use crate::tooltip::text_width;
 use crate::updates::Stage;
 
 /// A window with one Space and two tabs, drawn, on a host whose answer to whether this launch is a
@@ -91,6 +95,37 @@ fn a_narrower_sidebar_wraps_its_words_and_grows_the_card(cx: &mut TestAppContext
         narrow > wide,
         "{narrow} at the narrowest, {wide} at the default"
     );
+}
+
+/// At the narrowest sidebar neither chip's label is cut: each chip is drawn as wide as its whole
+/// label and its padding.
+#[gpui::test]
+fn at_the_narrowest_sidebar_neither_chip_is_cut(cx: &mut TestAppContext) {
+    let (shell, cx, host) = shell(cx);
+    safe(&shell, cx, &host);
+    shell.update(cx, |shell, cx| {
+        shell.sidebar_width = SIDEBAR_MIN;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| {
+        let system = WindowTextSystem::new(cx.text_system().clone());
+        for (label, drawn) in [
+            (TURN_BACK_ON, &shell.safe_start_button_drawn),
+            (EXTENSIONS, &shell.safe_start_manage_drawn),
+        ] {
+            let drawn = drawn
+                .get()
+                .unwrap_or_else(|| panic!("{label} wasn't drawn"));
+            let whole = text_width(&label.into(), text::SMALL, FontWeight::MEDIUM, &system);
+            let width = f32::from(drawn.size.width);
+            assert!(
+                width + 0.5 >= whole + 2. * CHIP_X,
+                "{label} is {width} wide at the narrowest, its label {whole} and padding {}",
+                2. * CHIP_X
+            );
+        }
+    });
 }
 
 /// Turn Back On restarts, which brings the windows back in a normal launch.
