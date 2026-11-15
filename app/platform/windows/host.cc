@@ -392,7 +392,10 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
       }
       break;
     case WM_MOUSEACTIVATE:
-      if (floating->mouse_through) {
+      // GPUI answers MA_ACTIVATE, which a window that never takes the keyboard overrides: a click
+      // on the foot bar's Undo left ↑ with the bar rather than the page (#2970).
+      if (floating->mouse_through ||
+          (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE)) {
         return MA_NOACTIVATE;
       }
       break;

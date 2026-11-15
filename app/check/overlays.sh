@@ -413,7 +413,9 @@ walk "a menu opened by a real click" menu
 events="a menu opened by a real click"
 
 # The display adapter restarting, as a driver update does, which took GPUI's device away (#2536).
-# pnputil needs an administrator, as CI's runner is.
+# pnputil needs an administrator, as CI's runner is. The foot bar is shown through it, as it was for
+# the whole run before Arrange showed it: with nothing shown no redraw is seen (#2983).
+open 'foot bar' "before the display adapter restarting"
 restarted=$(powershell.exe -NoProfile -Command \
   'Get-PnpDevice -Class Display -Status OK | ForEach-Object { pnputil /restart-device $_.InstanceId }' \
   2>&1 || true)
@@ -422,10 +424,15 @@ case "$restarted" in
     send overlays
     expect '^browser: gpui redrew its windows on a new device$' \
       "the windows drew nothing after the display adapter restarted"
+    close 'foot bar' "the display adapter restarting"
+    lives_say 'foot bar' hidden "the display adapter restarting"
     walk "the display adapter restarting" adapter
     events="$events, the display adapter restarting"
     ;;
-  *) echo "skip: overlays after the display adapter restarting, as pnputil couldn't: $restarted" ;;
+  *)
+    close 'foot bar' "the display adapter not restarting"
+    echo "skip: overlays after the display adapter restarting, as pnputil couldn't: $restarted"
+    ;;
 esac
 
 # The browser window at 125%, each hidden overlay told 150% first, as one made hidden on a display
