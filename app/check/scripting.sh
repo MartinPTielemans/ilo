@@ -24,7 +24,7 @@ else
     for db in "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
       "/Library/Application Support/com.apple.TCC/TCC.db"; do
       echo "$db:"
-      sqlite3 "$db" "select client, indirect_object_identifier, auth_value from access
+      sqlite3 -cmd '.timeout 30000' "$db" "select client, indirect_object_identifier, auth_value from access
         where service = 'kTCCServiceAppleEvents'" 2>&1 || true
     done
   } > "$out/scripting-tcc.txt"
@@ -33,7 +33,8 @@ else
     cat > "$out/scripting-grant.py" << 'EOF'
 import sqlite3, sys
 db, target = sys.argv[1:]
-tcc = sqlite3.connect(db)
+# tccd may hold the database, so it waits for its lock (#2966).
+tcc = sqlite3.connect(db, timeout=30)
 names = [column[1] for column in tcc.execute("pragma table_info(access)")]
 rows = tcc.execute("select * from access where service = 'kTCCServiceAppleEvents'"
                    " and indirect_object_identifier = 'com.apple.systemevents'").fetchall()
