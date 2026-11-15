@@ -4963,7 +4963,7 @@ index f9b9727330..e1e2214d9d 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..b7dd418ae6 100644
+index e21f019c64..23267746c9 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -7428,10 +7428,10 @@ index e21f019c64..b7dd418ae6 100644
              log::warn!(
                  "X11: no cursor icon available to restore {:?} after hide; cursor may stay invisible",
                  style
-@@ -2221,6 +4349,13 @@ impl X11ClientState {
+@@ -2219,6 +4347,13 @@ impl X11ClientState {
+     }
+ }
  
- // Adapted from:
- // https://docs.rs/winit/0.29.11/src/winit/platform_impl/linux/x11/monitor.rs.html#103-111
 +/// Whether the manager sized the managed overlay `window`, which is to be `asked` now, as `got`:
 +/// none of the sizes it asked for since it was last seen, so it refused the place too.
 +fn managed_overlay_refused(window: xproto::Window, asked: (u32, u32), got: (u32, u32)) -> bool {
@@ -7439,9 +7439,9 @@ index e21f019c64..b7dd418ae6 100644
 +        && !ASKED_SIZES.with_borrow(|all| all.contains(&(window, got.0, got.1)))
 +}
 +
+ // Adapted from:
+ // https://docs.rs/winit/0.29.11/src/winit/platform_impl/linux/x11/monitor.rs.html#103-111
  pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
-     if mode.dot_clock == 0 || mode.htotal == 0 || mode.vtotal == 0 {
-         return Duration::from_millis(16);
 @@ -2232,6 +4367,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
      Duration::from_micros(micros)
  }
