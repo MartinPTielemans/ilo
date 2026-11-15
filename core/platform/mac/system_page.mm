@@ -47,7 +47,7 @@ namespace {
 constexpr char kWebKitPath[] = "/System/Library/Frameworks/WebKit.framework/WebKit";
 void* g_webkit = nullptr;
 
-// Loads WebKit, once. Only the calls below that need it do, each saying why.
+// Loads WebKit, once, and sets it up. Only the calls below that need it do, each saying why.
 bool LoadWebKit(const char* why) {
   if (!g_webkit) {
     // Whether something else mapped it first, such as a system framework of Chromium's.
@@ -56,6 +56,12 @@ bool LoadWebKit(const char* why) {
     // check.sh reads this line.
     fprintf(stderr, "browser: system engine loaded for %s%s\n", why,
             mapped ? ", already mapped" : "");
+    // WebKit sets itself up, its main run loop with it, as it makes its first object. Listing and
+    // deleting stores make none, and their replies through that run loop crashed on its null
+    // before any page had made one (WebsiteDataStoreCocoa.mm), so its smallest object comes first.
+    if (g_webkit) {
+      (void)[[NSClassFromString(@"WKWebpagePreferences") alloc] init];
+    }
   }
   return g_webkit != nullptr;
 }
