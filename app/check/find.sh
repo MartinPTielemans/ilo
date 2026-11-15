@@ -149,12 +149,19 @@ else
   send key backspace
   expect_find "$first" "open [1-3] of 3 apple" "the find didn't find the text again"
 
-  # A click on the page takes the keyboard and leaves the bar open, and ⌘G from the page goes on.
+  # A click on the page after those on the bar's arrows takes the keyboard and leaves the bar open.
+  # What's typed then goes to the page, as does the ⌘G after it, which goes on from the page with
+  # the bar's text as it was: under Openbox the arrows' clicks once left the keys in the bar (#2684).
   send click $page_point
   in_browser RenderWidgetHostViewCocoa "after a click on the page under the find bar"
+  send type x
   send key g cmd
-  expect '^browser: command find-next via page$' "⌘G with the page focused didn't reach the UI"
-  expect_find "$first" "open [1-3] of 3 apple" "⌘G with the page focused didn't find"
+  expect '^browser: command find-next via page$' \
+    "⌘G typed after x with the page focused didn't reach the UI from the page"
+  expect_find "$first" "open [1-3] of 3 apple" \
+    "⌘G with the page focused didn't find the bar's text as it was"
+  grep -q '^browser: find bar drew "applex"' "$log" &&
+    fail "x typed with the page focused went to the find bar"
   grep -q '^browser: find bar hidden$' "$log" && fail "a click on the page closed the find bar"
 
   # ⌘F gives the open bar the keyboard. Japanese input composes in it, and it finds once committed.
