@@ -32,8 +32,8 @@ cd "$(dirname "$0")/.." || build "no checkout to read."
 repo=$(git config -f engine/prebuilt.ini prebuilt.repository) || build "no engine/prebuilt.ini."
 tags=$(git ls-remote --tags "$repo.git" "refs/tags/engine-$platform-*") ||
   build "couldn't list $repo's engine-$platform releases."
-# The nearest one in this history whose core is this commit's wins, or with none, the nearest, as in
-# fetch.sh (#2913).
+# The nearest one in this history whose core is this commit's wins, or with none, the nearest,
+# comparing only the nearest and the engines off its history, as in fetch.sh (#2913).
 built=
 while read -r _ ref; do
   case $ref in "" | *"^{}") continue ;; esac
@@ -42,10 +42,15 @@ while read -r _ ref; do
   git merge-base --is-ancestor "$tagged" HEAD 2>/dev/null || continue
   built+="$(git rev-list --count "$tagged..HEAD") $tagged"$'\n'
 done <<<"$tags"
+nearest=
 commit=
 while read -r _ tagged; do
   [ -n "$tagged" ] || continue
-  [ -n "$commit" ] || commit=$tagged
+  if [ -z "$nearest" ]; then
+    nearest=$tagged commit=$tagged
+  elif git merge-base --is-ancestor "$tagged" "$nearest"; then
+    continue
+  fi
   if tools/core-same.sh "$tagged" HEAD core engine/series engine/patches ':(exclude)*.md' 2>/dev/null; then
     commit=$tagged
     break
