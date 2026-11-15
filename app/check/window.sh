@@ -1573,24 +1573,26 @@ expect "^browser: title $keeps kept 2\$" "the page didn't get the first of two E
 expect '^browser: escape twice leaves full screen$' "a second Esc at once didn't leave full screen"
 expect '^browser: window left full screen$' "Esc twice didn't take the window out of full screen"
 none_since "^browser: title $keeps kept 3\$" || fail "the second Esc that left full screen reached the page too"
-# Held: the Mac's driver sends the keyboard's repeat, which says it's held; off the Mac a held key's
-# repeats come as presses, so a held Esc leaves there as one pressed twice.
-if [ "$(uname)" = Darwin ]; then
+# Held: the driver sends the keyboard's repeat, which says it's held, on the Mac and on Windows; on
+# Linux the host can't tell a held key's repeats from presses, so a held Esc leaves as one pressed
+# twice.
+if [ "$(uname)" = Darwin ] || windows; then
   send click $page_point
   send fullscreen
   expect '^browser: window entered full screen$' "the window didn't go full screen again"
   # The shell hears of full screen after the window does, and its note says it has: an Esc before
   # that is no press it counts, so the repeat after it isn't one held.
-  expect '^browser: toast shown To exit full screen' "the window full screen again didn't say how to leave"
+  expect "^browser: toast shown $note" "the window full screen again didn't say how to leave"
   send keydown escape
   expect "^browser: title $keeps kept [0-9]*\$" "the page didn't get the held Esc's press"
   sleep 0.7 # Esc held past the key repeat's delay
   send keydown escape repeat
   expect '^browser: escape held leaves full screen$' "Esc held 700 ms didn't leave full screen"
-  send keyup escape
+  # Off the Mac the window leaves as the repeat comes, before the key's let go.
   expect '^browser: window left full screen$' "Esc held didn't take the window out of full screen"
+  send keyup escape
 else
-  echo "skip: Esc held in full screen, as off the Mac the host can't tell a held key's repeats from presses, which leave as twice."
+  echo "skip: Esc held in full screen, as Linux's host can't tell a held key's repeats from presses, which leave as twice."
 fi
 
 # With two windows, only the key window's hidden sidebar comes out at its edge, as Arc 1.171's: a
