@@ -14,8 +14,9 @@ use std::time::Duration;
 use web_time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, Context, Entity, KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba,
-    SharedString, Subscription, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
+    AnyElement, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
+    KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba, SharedString, Subscription, Window,
+    canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
 use super::{
@@ -26,7 +27,7 @@ use super::{
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
-use crate::settings_rows::{SLIDE, group, switch};
+use crate::settings_rows::{SLIDE, group, stop_switch};
 use crate::theme::Theme;
 use crate::theme_picker::SWATCHES;
 use crate::tokens::palette::{INK, PAPER};
@@ -333,6 +334,8 @@ pub(super) struct Onboarding {
     os: Os,
     /// The opt-in switch last turned, and when, for its knob's slide.
     switched: Option<(OptIn, Instant)>,
+    /// ⇥ put the keyboard on the opt-ins' switches, which it leaves with them (onboarding_layer).
+    on_switches: bool,
     /// Where the opt-ins' rows and switches are drawn (opt_in_frame).
     frames: Frames,
     /// Where the step's button is drawn, once the step has settled (button_frame).
@@ -412,6 +415,7 @@ impl Shell {
             picked: None,
             os: self.browser.os(),
             switched: None,
+            on_switches: false,
             frames: Frames::default(),
             button: Rc::default(),
             since: Instant::now(),
@@ -779,6 +783,18 @@ impl Shell {
                 }
             }
             (Step::Import, _) => {}
+            // ⇥ and ⇧⇥ go along the opt-ins' switches, the window's only stops; Space turns the one
+            // the keyboard is on, as Settings' does, and ↩ stays Continue (#2985).
+            (Step::OptIns, "tab") => {
+                if let Some(onboarding) = self.onboarding.as_mut() {
+                    onboarding.on_switches = true;
+                }
+                if key.modifiers.shift {
+                    window.focus_prev(cx)
+                } else {
+                    window.focus_next(cx)
+                }
+            }
             (_, "enter") if !key.modifiers.modified() => {
                 self.onboarding_continue("return", window, cx)
             }
@@ -794,6 +810,12 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let onboarding = self.onboarding.as_mut()?;
+        // The switches go with their step, and a keyboard left on one would leave the shell's own
+        // keys, ⌘T among them, with nowhere to go off the Mac, so it goes back to the shell.
+        let left = onboarding.step != Step::OptIns || onboarding.ending.is_some();
+        if left && std::mem::take(&mut onboarding.on_switches) {
+            window.focus(&self.focus_handle, cx);
+        }
         // A page shown covers it, so it has ended.
         let ended = onboarding
             .ending
@@ -1168,7 +1190,21 @@ impl Shell {
                 .relative()
                 .flex_none()
                 .ml(px(PADDING))
-                .child(switch(&look, on, slid, look.accent))
+                .child(
+                    stop_switch(&look, "switch", name, on, slid, look.accent, self.a11y)
+                        // A press is its row's click; here only Space, as ↩ is the step's Continue.
+                        .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                            if matches!(
+                                event,
+                                ClickEvent::Keyboard(KeyboardClickEvent {
+                                    button: KeyboardButton::Space,
+                                    ..
+                                })
+                            ) {
+                                shell.onboarding_switch(opt_in, cx);
+                            }
+                        })),
+                )
                 .child(opt_in_frame(frames.clone(), opt_in, "switch", settled));
             let row = div()
                 .id(opt_in.name())
