@@ -1897,15 +1897,17 @@ void Tab::WebContentsDestroyed() {
   infobar_observation_.Reset();
   media_observer_.reset();
   audible_subscription_ = {};
-  system_page_.reset();
   // Unloaded, it stays without its page.
   if (unloading_) {
+    system_page_.reset();
     Observe(nullptr);
     return;
   }
   // Closed, as at a quit or with its window. Its page is still there, so the session kept as the
-  // first tab closes saves this one from it too.
+  // first tab closes saves this one from it too, and so is its Safari's-engine page, whose address
+  // is the one saved: Chromium's history ends at the page that handed the tab to it (#2886).
   ReportClosed();
+  system_page_.reset();
   // Its sessionStorage stays on disk for the next launch with the session, which ReportClosed has
   // kept for the quit or the last window as the first tab closed, as Chrome's session keeps its
   // tabs'. Closed by the user, it goes.
