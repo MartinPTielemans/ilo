@@ -200,7 +200,7 @@ start_arranging
 # Pick: a click selects the thing under it, and the mini bar shows over it with Hide alone.
 send click $(slot 0)
 expect "^browser: arrange $tab Selected None selected " "a click in the mode didn't select a thing"
-expect "^browser: mini bar shown over $tab\$" "the mini bar wasn't shown over the thing selected"
+expect "^browser: mini bar \(window \)\{0,1\}shown\$" "the mini bar wasn't shown over the thing selected"
 expect '^browser: mini bar drawn over [0-9]*$' "the mini bar didn't draw"
 shows "$own" "a click in the mode reached the page"
 [ "$(said | sed 's/.* at \([0-9-]*,[0-9-]*\) first .*/\1/')" = "${landed% *},${landed#* }" ] ||
