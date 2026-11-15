@@ -34,6 +34,11 @@ takes a command a line on its standard input:
                   why one mightn't be, as "nothing, visible|hidden, focused|unfocused, dialogs
                   open N": whether the page is shown, whether it has the window's keyboard, and
                   its open dialogs, shadow trees included
+  focus-within PREFIX ID
+                  logs "cdp: focus-within ID yes|no|none": whether what has the keyboard in the
+                  page opened last at an address starting with PREFIX is the element with the id
+                  ID or in it, through its shadow hosts, or none for no such page: a WebUI page's
+                  control, as chrome://extensions' Allow in Incognito switch, is in a row by id
   video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|-", or "cdp: video
                   none" for no such page or no video in it: how far the first video in the page
                   opened last at an address starting with PREFIX has played, whether it's paused,
@@ -440,6 +445,27 @@ def focus(prefix):
     return value or "none"
 
 
+# Whether the element with the id given, or one in it, has the keyboard, through shadow hosts.
+FOCUSED_WITHIN = """((id) => {
+  let focused = document.activeElement;
+  while (focused && focused.shadowRoot && focused.shadowRoot.activeElement) {
+    focused = focused.shadowRoot.activeElement;
+  }
+  for (let node = focused; node; node = node.parentNode || node.host) {
+    if (node.id === id) return "yes";
+  }
+  return "no";
+})"""
+
+
+def focus_within(prefix, element):
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {
+        "expression": "%s(%s)" % (FOCUSED_WITHIN, json.dumps(element)),
+        "returnByValue": True}, on).get("result", {}).get("value")
+    return value or "none"
+
+
 # The page's first video: how far it has played, whether it's paused, whether its player shows an
 # ad, and whether Chrome refused to start it, as YouTube's says with classes on the player round
 # it. Refused, the player has asked to play, as playing-mode says, and has the data to, but the
@@ -590,6 +616,8 @@ for line in sys.stdin:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:
         log("focus " + focus(words[1]))
+    elif words[:1] == ["focus-within"] and len(words) == 3:
+        log("focus-within %s %s" % (words[2], focus_within(words[1], words[2])))
     elif words == ["content"]:
         log("content " + content())
     elif words[:1] == ["video"] and len(words) == 2:

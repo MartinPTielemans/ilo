@@ -3481,6 +3481,36 @@ mod tests {
         );
     }
 
+    /// Shift+Alt-click does what ⌥-click does, for Linux desktops whose window manager takes every
+    /// Alt-click but leaves one with Shift (#2755): another tab joins the page shown, and the page
+    /// shown splits with a copy of itself, where Shift-click alone would select.
+    #[gpui::test]
+    fn a_shift_alt_click_on_a_row_splits_as_an_option_click_does(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, Vec::new(), vec![2, 3, 4], 2);
+        let held = Modifiers {
+            alt: true,
+            shift: true,
+            ..Default::default()
+        };
+        let click = |cx: &mut VisualTestContext, tab: u64| {
+            let (x, y) = close_button(&shell, cx, tab);
+            let at = point(px(x - 100.), px(y));
+            host.take();
+            host.take_edits();
+            cx.simulate_mouse_down(at, MouseButton::Left, held);
+            cx.simulate_mouse_up(at, MouseButton::Left, held);
+            cx.run_until_parked();
+            (host.take(), host.take_edits())
+        };
+
+        let (_, edits) = click(cx, 3);
+        assert_eq!(edits, ["split 3 2 false"]);
+
+        let (calls, edits) = click(cx, 2);
+        assert!(calls.contains(&"duplicate 2".to_string()), "{calls:?}");
+        assert_eq!(edits.len(), 1, "{edits:?}");
+    }
+
     /// ⌥ held over a split row's ✕ turns it to separate, as Arc's does: the glyph follows the key
     /// as the pointer moves or GPUI hears it, a click with ⌥ takes every tab out of the split from
     /// the right and closes none, and without ⌥ the ✕ closes them. A tab's own ✕ never turns.
