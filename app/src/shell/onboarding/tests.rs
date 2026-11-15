@@ -752,6 +752,31 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
     }
 }
 
+/// The keyboard left on a switch goes back to the window as the flow ends, so the shell's own keys,
+/// ⌘T among them, still reach their commands once the switches are gone.
+#[gpui::test]
+fn the_window_keeps_its_keys_after_a_switch_had_the_keyboard(cx: &mut TestAppContext) {
+    use crate::shell::commands::Run;
+    let ran: Rc<std::cell::RefCell<Vec<Command>>> = Rc::default();
+    let runs = ran.clone();
+    cx.update(|cx| {
+        cx.bind_keys(crate::shell::keys::key_bindings(cx));
+        cx.on_action(move |run: &Run, _| runs.borrow_mut().push(run.0));
+    });
+    let (shell, cx, _) = at_three_switches(cx);
+    cx.simulate_keystrokes("tab");
+    cx.simulate_keystrokes("escape");
+    later(&shell, cx, END_FADE);
+    assert_eq!(step(&shell, cx), None);
+    ran.borrow_mut().clear();
+    cx.simulate_keystrokes("cmd-t");
+    assert_eq!(
+        *ran.borrow(),
+        [Command::NewTab],
+        "⌘T after the flow, with a switch the last to have the keyboard"
+    );
+}
+
 /// A build that names no server for the count doesn't offer it.
 #[gpui::test]
 fn a_build_without_a_count_server_doesnt_offer_it(cx: &mut TestAppContext) {

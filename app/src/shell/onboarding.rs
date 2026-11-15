@@ -334,6 +334,8 @@ pub(super) struct Onboarding {
     os: Os,
     /// The opt-in switch last turned, and when, for its knob's slide.
     switched: Option<(OptIn, Instant)>,
+    /// ⇥ put the keyboard on the opt-ins' switches, which it leaves with them (onboarding_layer).
+    on_switches: bool,
     /// Where the opt-ins' rows and switches are drawn (opt_in_frame).
     frames: Frames,
     /// Where the step's button is drawn, once the step has settled (button_frame).
@@ -413,6 +415,7 @@ impl Shell {
             picked: None,
             os: self.browser.os(),
             switched: None,
+            on_switches: false,
             frames: Frames::default(),
             button: Rc::default(),
             since: Instant::now(),
@@ -782,8 +785,16 @@ impl Shell {
             (Step::Import, _) => {}
             // ⇥ and ⇧⇥ go along the opt-ins' switches, the window's only stops; Space turns the one
             // the keyboard is on, as Settings' does, and ↩ stays Continue (#2985).
-            (Step::OptIns, "tab") if key.modifiers.shift => window.focus_prev(cx),
-            (Step::OptIns, "tab") => window.focus_next(cx),
+            (Step::OptIns, "tab") => {
+                if let Some(onboarding) = self.onboarding.as_mut() {
+                    onboarding.on_switches = true;
+                }
+                if key.modifiers.shift {
+                    window.focus_prev(cx)
+                } else {
+                    window.focus_next(cx)
+                }
+            }
             (_, "enter") if !key.modifiers.modified() => {
                 self.onboarding_continue("return", window, cx)
             }
@@ -799,6 +810,12 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let onboarding = self.onboarding.as_mut()?;
+        // The switches go with their step, and a keyboard left on one would leave the shell's own
+        // keys, ⌘T among them, with nowhere to go off the Mac, so it goes back to the shell.
+        let left = onboarding.step != Step::OptIns || onboarding.ending.is_some();
+        if left && std::mem::take(&mut onboarding.on_switches) {
+            window.focus(&self.focus_handle, cx);
+        }
         // A page shown covers it, so it has ended.
         let ended = onboarding
             .ending
