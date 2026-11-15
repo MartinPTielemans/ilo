@@ -316,6 +316,8 @@ constexpr char16_t kScript[] =
         }
       }
     }
+    // |el|'s box where it comes to rest, while the page moves to show or make a change.
+    const atRest = (el) => (motion.size ? still(() => rect(el)) : rect(el));
     const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
     // A box in the document's coordinates, so a scroll a change makes isn't taken for motion.
     function spot(el) {
@@ -421,7 +423,8 @@ constexpr char16_t kScript[] =
       try { el.showPopover(); lifted.add(el); } catch { el.removeAttribute('popover'); return; }
       if (s && !s.heard) {
         s.heard = true;
-        el.addEventListener('toggle', (e) => { if (lifted.has(el) && e.newState === 'closed') later(); });
+        // A pass that hides and lifts it again fires closed then open, so only a close that holds asks.
+        el.addEventListener('toggle', (e) => { if (lifted.has(el) && e.newState === 'closed' && !el.matches(':popover-open')) later(); });
       }
       // The marks stay over whatever was lifted after them.
       if (mode) raise();
@@ -801,7 +804,7 @@ constexpr char16_t kScript[] =
       // one: a line outside its box, and its label 4 px over the box at the line's left, or inside
       // the box's top where the viewport's top cuts it.
       // While the page moves to show or make a drop, each mark is where its element comes to rest.
-      const at = (e) => (motion.size ? still(() => rect(e)) : rect(e));
+      const at = atRest;
       const el = carry ? (mode.previewing ? carry.el : null) : mode.selected || mode.pointed;
       box(m.outline, el && grown(at(el), m.w));
       if (el) {
@@ -983,8 +986,10 @@ constexpr char16_t kScript[] =
         out.on_screen = c.kind === 'float' && c.pin === 'screen';
         if (s.covered) out.refused = WHY.COVERED;
       }
+      // Where it comes to rest, as its mark is: the answer to a drop comes while it's still landing,
+      // and the page can't answer again when the landing ends (#3008).
       if (!scrollingNow) {
-        const r = rect(el);
+        const r = atRest(el);
         out.box = { x: r.left, y: r.top, width: r.width, height: r.height };
       }
       return out;
