@@ -121,6 +121,28 @@ jobs:
 
       - run: ./setup.sh
       - run: cargo test --release --lib
+      # GPUI's Linux code has tests of its own, which the patch adds to and the app's don't reach: those
+      # drive the app's views on a host that records what they ask (#2995). The crate is in zed's
+      # workspace, not the app's, so they run there, on the toolchain the app builds with rather than
+      # the one zed pins. Their build isn't cached and takes about 5 minutes, so it runs only when the
+      # branch changes that code, or the app's Linux host beside it.
+      - id: gpui-linux
+        name: Does this change GPUI's Linux code?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.sha || 'main' }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE...$HEAD" --jq '.files[].filename')
+          if grep -qE '^app/(patches/gpui-linux-embedded\.patch$|platform/linux/)' <<< "$files"; then
+            echo "changed=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: GPUI's Linux tests
+        if: steps.gpui-linux.outputs.changed
+        working-directory: app/.deps/zed
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: cargo test --release --locked -p gpui_linux --lib --target-dir "$RUNNER_TEMP/gpui-linux"
       # libBrowser.so, the browser on Linux (linux/Cargo.toml): main.rs and platform/linux, which
       # neither the tests nor the preview compile. It names none of the engine's symbols until chrome
       # loads it, so a check needs no engine, and finds what wouldn't compile, such as a call to a
