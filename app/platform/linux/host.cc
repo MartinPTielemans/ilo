@@ -110,8 +110,8 @@ void (*g_key_window_changed)(void* ui_view);
 void (*g_became_active)(void);
 void (*g_resigning_active)(void);
 
-// The browser windows that have the keyboard, of those whose whole window GPUI hears of: the app is
-// active while one does.
+// The browser windows that have the keyboard, of those whose whole window GPUI hears of, and
+// Settings under Wayland: the app is active while one does.
 std::set<void*>& ActiveWindows() {
   static auto* active = new std::set<void*>;
   return *active;

@@ -1006,11 +1006,12 @@ step=$((step + 1))
 passed=$step
 echo "move 3 306" >&3
 send move 400 300
-if [ "$(uname)" = Linux ]; then
-  # On Linux the shell hears neither the pointer over the page nor, under X11, its leaving for the
-  # page, so the pass brings the sidebar out once its wait is up, which may be before the pointer
-  # is back at the edge: the line is looked for from the pass on.
-  echo "skip: the pointer passing the window's edge, whose leaving for the page Linux's shell doesn't hear."
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  # Under X11 the shell hears neither the pointer over the page nor its leaving for the page, so
+  # the pass brings the sidebar out once its wait is up, which may be before the pointer is back at
+  # the edge: the line is looked for from the pass on. Under Wayland the page is a surface of its
+  # own, whose entering is the leave of the shell's.
+  echo "skip: the pointer passing the window's edge, whose leaving for the page X11's shell doesn't hear."
   reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out" "$passed"
 else
   reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out"
@@ -1573,10 +1574,10 @@ expect "^browser: title $keeps kept 2\$" "the page didn't get the first of two E
 expect '^browser: escape twice leaves full screen$' "a second Esc at once didn't leave full screen"
 expect '^browser: window left full screen$' "Esc twice didn't take the window out of full screen"
 none_since "^browser: title $keeps kept 3\$" || fail "the second Esc that left full screen reached the page too"
-# Held: the Mac's driver sends the keyboard's repeat, which says it's held, and under Wayland the
-# client's own repeat, which GPUI makes too (held_escape.rs). Under X11 the host can't tell a held
-# key's repeats from presses, so a held Esc leaves there as one pressed twice.
-if [ "$(uname)" = Darwin ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+# Held: the driver sends the keyboard's repeat, which says it's held, on the Mac and on Windows,
+# and under Wayland GPUI makes the client's own repeat too (held_escape.rs). Under X11 the host
+# can't tell a held key's repeats from presses, so a held Esc leaves there as one pressed twice.
+if [ "$(uname)" = Darwin ] || windows || [ -n "${WAYLAND_DISPLAY:-}" ]; then
   send click $page_point
   send fullscreen
   expect '^browser: window entered full screen$' "the window didn't go full screen again"
@@ -1594,7 +1595,7 @@ if [ "$(uname)" = Darwin ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
   expect '^browser: window left full screen$' "Esc held didn't take the window out of full screen" "$held"
   send keyup escape
 else
-  echo "skip: Esc held in full screen, as under X11 and on Windows the host can't tell a held key's repeats from presses, which leave as twice."
+  echo "skip: Esc held in full screen, as X11's host can't tell a held key's repeats from presses, which leave as twice."
 fi
 
 # With two windows, only the key window's hidden sidebar comes out at its edge, as Arc 1.171's: a

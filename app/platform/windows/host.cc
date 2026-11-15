@@ -1681,12 +1681,19 @@ void HoldKeys(HWND window) {
 // browser window the keyboard, and the repeats would go on to the page there, taking it out of its
 // full screen or closing its own dialog (#385). Once the key is let go, the next press goes
 // wherever the keyboard is. Floating windows are owned, not children, so each is its own root.
+// The same hook notes whether the key going down last is the key repeating as it's held, which a
+// page's key reaches the core with while it's dispatched (host_key_repeated): the message's
+// previous-state bit, which Windows sets on each repeat.
 HHOOK g_escape_hook = nullptr;
 HWND g_escape_pressed_in = nullptr;
+bool g_key_repeated = false;
 
 LRESULT CALLBACK HeldEscape(int code, WPARAM wparam, LPARAM lparam) {
   if (code == HC_ACTION && wparam == PM_REMOVE) {
     MSG* msg = reinterpret_cast<MSG*>(lparam);
+    if (msg->message == WM_KEYDOWN || msg->message == WM_SYSKEYDOWN) {
+      g_key_repeated = msg->lParam & (1 << 30);
+    }
     if (msg->wParam == VK_ESCAPE) {
       const HWND root = msg->hwnd ? GetAncestor(msg->hwnd, GA_ROOT) : nullptr;
       const bool repeat = msg->lParam & (1 << 30);
@@ -5496,7 +5503,7 @@ void host_forget_secret(void) {
 }
 
 bool host_key_repeated(void) {
-  return false;
+  return g_key_repeated;
 }
 
 size_t host_paste(char* text, size_t capacity) {

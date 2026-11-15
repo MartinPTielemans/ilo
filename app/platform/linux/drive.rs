@@ -622,6 +622,33 @@ fn viewable(connection: &RustConnection, window: xproto::Window) -> bool {
         .is_some_and(|attributes| attributes.map_state == xproto::MapState::VIEWABLE)
 }
 
+/// The client window in top-level window `top`: the one with ICCCM's WM_STATE, which a window
+/// manager puts on each window it manages. openbox holds it in its frame, and KWin a level deeper,
+/// in a wrapper inside its frame (#2756, #2757). `top` itself when no window down to there has it,
+/// as with no window manager.
+fn client_in(connection: &RustConnection, top: xproto::Window) -> xproto::Window {
+    let Some(state) = atom("WM_STATE") else {
+        return top;
+    };
+    let managed = |window| {
+        (connection.get_property(false, window, state, xproto::AtomEnum::ANY, 0, 0))
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|property| property.type_ != x11rb::NONE)
+    };
+    let mut level = vec![top];
+    for _ in 0..3 {
+        if let Some(&client) = level.iter().find(|&&window| managed(window)) {
+            return client;
+        }
+        level = (level.into_iter())
+            .filter_map(|window| connection.query_tree(window).ok()?.reply().ok())
+            .flat_map(|tree| tree.children)
+            .collect();
+    }
+    top
+}
+
 /// Whether `window` is `ancestor` or inside it.
 fn within(
     connection: &RustConnection,
@@ -1556,7 +1583,13 @@ fn stack() -> Option<()> {
             break;
         }
         let Some(at) = bounds(top) else { continue };
-        if !viewable(connection, top)
+        // A window for input alone draws nothing, so it's in front of nothing, such as KWin's at
+        // the screen's corner for its edge actions (#2756).
+        let input_only = (connection.get_window_attributes(top).ok())
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|a| a.class == xproto::WindowClass::INPUT_ONLY);
+        if input_only
+            || !viewable(connection, top)
             || at[0] >= over[2]
             || over[0] >= at[2]
             || at[1] >= over[3]
@@ -1569,8 +1602,7 @@ fn stack() -> Option<()> {
             continue;
         }
         // The window manager's frame holds the client, which has the title and process.
-        let mut clients = vec![top];
-        clients.extend(connection.query_tree(top).ok()?.reply().ok()?.children);
+        let clients = [client_in(connection, top), top];
         let property = |window, name: &str| {
             let reply = connection
                 .get_property(false, window, atom(name)?, xproto::AtomEnum::ANY, 0, 256)
@@ -3275,14 +3307,9 @@ fn mini_player() -> Option<xproto::Window> {
                 .is_some_and(|a| a.map_state == xproto::MapState::VIEWABLE)
     };
     let tops = connection.query_tree(*root).ok()?.reply().ok()?.children;
-    // A window manager that reparents, as openbox does, holds it in a frame of its own.
-    tops.into_iter().find_map(|top| {
-        if ours(top) {
-            return Some(top);
-        }
-        let children = connection.query_tree(top).ok()?.reply().ok()?.children;
-        children.into_iter().find(|&child| ours(child))
-    })
+    (tops.into_iter())
+        .map(|top| client_in(connection, top))
+        .find(|&window| ours(window))
 }
 
 /// pip, and pip doubleclick, wheel, press, dragto and release (run_command's header).
