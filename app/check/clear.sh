@@ -638,13 +638,16 @@ expect '^browser: library shown$' "Open Library… didn't open the Library"
 # restored has loaded since, so its page can be newer than every closed tab and History's first
 # row: the closed tab is the first row the pointer finds closed.
 archived=$(grep '^browser: archive [0-9]* tabs$' "$log" | tail -1 | cut -d' ' -f3)
+# The Library can open under the pointer, already on the first row, where a move to it says
+# nothing: the pointer starts on Today's heading, on no row.
+send move 300 71
 closed_y=
 rows=
 for y in 111 167 223 279 335 391 447 503 559 615 671 727; do
   send move 300 $y
   expect '^browser: history pointed \(closed\|visited\) [0-9][0-9]*$' \
     "the pointer on History's row at y $y didn't point at it"
-  pointed=$(since | grep -m1 '^browser: history pointed ' | cut -d' ' -f4)
+  pointed=$(since | grep -m1 '^browser: history pointed \(closed\|visited\) ' | cut -d' ' -f4)
   rows="$rows $pointed"
   if [ "$pointed" = closed ]; then
     closed_y=$y
