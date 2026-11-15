@@ -310,6 +310,36 @@ else
   send key escape
 fi
 expect '^browser: extension popup none$' "Check Popup's popup in Little ilo didn't close"
+# #2919 leave-and-return probe
+little_n=$(grep -c '^browser: window opened ' "$log")
+popup_line() { grep '^browser: extension popup ' "$log" | tail -1; }
+send window 1
+send click $first_place
+expect "^browser: extension popup $popup\$" "probe: Check Popup's popup didn't show from the UI"
+send state
+echo "probe: popup open from the UI: key $key, focus $focus"
+send window "$little_n"
+send state
+echo "probe: window $little_n took the keyboard: key $key, focus $focus; $(popup_line)"
+send window 1
+send state
+echo "probe: back in window 1: key $key, focus $focus; $(popup_line)"
+if [ "$(popup_line)" != "browser: extension popup none" ]; then
+  [ "$key" != BrowserCoreNSWindow ] ||
+    fail "probe: the popup is still open after the return but the browser window has the keyboard"
+  send key escape
+  expect '^browser: extension popup none$' "probe: escape after the return didn't close the popup"
+  send state
+  echo "probe: after escape: key $key, focus $focus"
+fi
+[ "$key" = BrowserCoreNSWindow ] ||
+  fail "probe: the browser window didn't have the keyboard after the return: it's in $key"
+# The UI acts on its keys, so it isn't left lending the keyboard to a bubble that's gone.
+send key l cmd
+expect '^browser: command bar shown$' "probe: ⌘L after the return didn't open the command bar"
+send key escape
+expect '^browser: command bar hidden$' "probe: escape didn't close the command bar"
+send window "$little_n"
 send key w cmd
 expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window"
 send window 1
