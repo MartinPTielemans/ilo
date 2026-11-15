@@ -83,7 +83,13 @@ pub(crate) fn restart_browser(cx: &mut App) {
 // Nothing of a private window is kept.
 pub(crate) extern "C" fn launch_picture_on_resigning() {
     // Later: AppKit can say so from inside an update of ours, such as one that hides the app.
-    update_app_later(save_launch_picture);
+    update_app_later(|cx| {
+        // Not as the quit's own closing windows resign the app: the window is hidden by then, and
+        // the host deletes the picture the Quit took before finding it can't take one (#3021).
+        if !shell::quit_gone_ahead() {
+            save_launch_picture(cx);
+        }
+    });
 }
 
 // The |width| points at the left of the frame |window| last drew, or at its right with the sidebar
