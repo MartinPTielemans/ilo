@@ -239,8 +239,12 @@ turn_count on
 [ ! -e "$yes_file" ] || fail "the switch turned on kept a yes while the step showed"
 grep -q '^browser: daily count switch ' "$log" && fail "the switch turned on set the count at once"
 leave_onboarding return
-expect '^browser: onboarding daily-count set on$' "Continue with the switch on didn't set the count"
-expect '^browser: daily count switch on$' "Continue with the switch on didn't reach the count"
+# Both come as Return leaves the step, before the onboarding's end, so before the Esc that closed
+# the command bar after it.
+grep -q '^browser: onboarding daily-count set on$' "$log" ||
+  fail "Continue with the switch on didn't set the count"
+grep -q '^browser: daily count switch on$' "$log" ||
+  fail "Continue with the switch on didn't reach the count"
 await '^browser: daily count sending first true weekly true monthly true$' ||
   fail "Continue with the switch on didn't send a count flagged first, weekly and monthly"
 await '^browser: daily count sent$' || fail "the endpoint didn't take the count after Continue"
