@@ -2164,7 +2164,7 @@ impl Agents {
         let own = self.browser.space_tab_ids(space, cx);
         match tabs.iter().find(|tab| !own.contains(tab)) {
             Some(tab) => Err(format!(
-                "Tab {tab} isn't one of yours: give the ids of tabs in your Space, from list_tabs."
+                "Tab {tab} isn't one of yours: give the ids of your own tabs, from list_tabs."
             )),
             None => Ok(tabs),
         }
@@ -2344,7 +2344,7 @@ const RETRY: &str = "Go on from where you stopped.";
 pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
     match page {
         Some(page) => format!(
-            "{asked}\n\n(I'm on “{}”, {}. Open it in your Space if you need it.)",
+            "{asked}\n\n(I'm on “{}”, {}. Open it in a tab of your own if you need it.)",
             page.title, page.url
         ),
         None => asked.to_string(),
