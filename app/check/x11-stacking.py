@@ -1,8 +1,9 @@
 """Whether the overlays ilo's process $2 shows are under another app's window $1 in the X window
 manager's stacking (_NET_CLIENT_LIST_STACKING, bottom first), as the manager keeps an overlay that
 stays while ilo isn't active (#2790). An overlay is a dialog-type window of ilo's, transient for
-another of its windows. Prints the order and exits 0 when each one shown is below $1; otherwise
-says why and exits 1.
+another of its windows. Each one in the stacking must also be viewable with a shape that isn't empty,
+as one the manager mapped with no place yet, its shape kept back, would be under $1 and never seen.
+Prints the order and exits 0 when each one shown is below $1; otherwise says why and exits 1.
 Usage: python3 -I check/x11-stacking.py <window> <pid>"""
 import ctypes
 import json
@@ -20,6 +21,23 @@ x11.XGetWindowProperty.argtypes = [vp, ul, ul, ctypes.c_long, ctypes.c_long, ci,
                                    ctypes.POINTER(ul), ctypes.POINTER(ci), ctypes.POINTER(ul),
                                    ctypes.POINTER(ul), ctypes.POINTER(vp)]
 x11.XFree.argtypes = [vp]
+
+
+class XWindowAttributes(ctypes.Structure):
+    _fields_ = [("x", ci), ("y", ci), ("width", ci), ("height", ci), ("border_width", ci),
+                ("depth", ci), ("visual", vp), ("root", ul), ("c_class", ci), ("bit_gravity", ci),
+                ("win_gravity", ci), ("backing_store", ci), ("backing_planes", ul),
+                ("backing_pixel", ul), ("save_under", ci), ("colormap", ul),
+                ("map_installed", ci), ("map_state", ci), ("all_event_masks", ctypes.c_long),
+                ("your_event_mask", ctypes.c_long), ("do_not_propagate_mask", ctypes.c_long),
+                ("override_redirect", ci), ("screen", vp)]
+
+
+x11.XGetWindowAttributes.argtypes = [vp, ul, ctypes.POINTER(XWindowAttributes)]
+xext = ctypes.CDLL("libXext.so.6")
+# XRectangle: x, y as shorts, width, height as unsigned shorts.
+xext.XShapeGetRectangles.restype = vp
+xext.XShapeGetRectangles.argtypes = [vp, ul, ci, ctypes.POINTER(ci), ctypes.POINTER(ci)]
 x11.XSetErrorHandler.argtypes = [vp]
 # A window going while it's read raises BadWindow, which would end the process.
 handler = ctypes.CFUNCTYPE(ci, vp, vp)(lambda d, e: 0)
@@ -29,6 +47,23 @@ display = x11.XOpenDisplay(None)
 if not display:
     sys.exit("no X display")
 root = x11.XDefaultRootWindow(display)
+
+
+def seen(window):
+    """Whether `window` is viewable with a bounding shape that isn't empty, and what it is."""
+    attributes = XWindowAttributes()
+    if not x11.XGetWindowAttributes(display, window, ctypes.byref(attributes)):
+        return False, "gone"
+    if attributes.map_state != 2:
+        return False, ["unmapped", "unviewable"][attributes.map_state]
+    count, ordering = ci(), ci()
+    rectangles = xext.XShapeGetRectangles(display, window, 0, ctypes.byref(count),
+                                          ctypes.byref(ordering))
+    if rectangles:
+        x11.XFree(rectangles)
+    if count.value == 0:
+        return False, "viewable with an empty shape"
+    return True, f"viewable, {count.value} rectangles"
 
 
 def atom(name):
@@ -64,6 +99,13 @@ overlays = [i for i, o in enumerate(order) if o["is"] == "overlay"]
 if not overlays:
     sys.exit("no overlay of ilo's is in the manager's stacking, as an override-redirect window "
              f"isn't, bottom first: {said}")
+for i in overlays:
+    ok, what = seen(stacking[i])
+    order[i]["seen"] = what
+    if not ok:
+        sys.exit(f"ilo's overlay {order[i]['window']} is in the manager's stacking but not seen: it's "
+                 f"{what}, bottom first: {json.dumps(order)}")
+said = json.dumps(order)
 above = [order[i]["window"] for i in overlays if i > stacking.index(other)]
 if above:
     sys.exit(f"ilo's overlay {', '.join(above)} is over the other app's window {hex(other)} in the "
