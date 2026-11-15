@@ -7,8 +7,8 @@
 # takes back the last change, the mini bar's Hide is Zap's rule, which ⌘Z takes back, and its Put
 # back on a traded thing takes the trade back. The mini bar goes with Hide and with the mode. Each
 # change is saved in the site's .arrange.json as it happens. Last, a settle then a trade of the
-# thing it's kept by, known under #2975: the run asserts the order the core gives and reports what
-# a press on Wide picks, rather than failing on it.
+# thing it's kept by: the run asserts the order the core gives, known under #2975, and reports what
+# a press on Wide picks, known under #2981, rather than failing on it.
 # Reloaded, the page shows the arrangement, and the run measures whether its first frame already
 # did, in arrange-first-frame.txt, and says which in its summary rather than failing: a flash there
 # is what would bring a renderer hook at document start (#2347's slice 2 plan). Edited outside ilo,
@@ -264,13 +264,35 @@ picks 1 Beta
 picks 0 Gamma
 
 # A fit refusal: the wide section at the side's edge, where it doesn't fit, and nothing changes.
+# Known under #3003: the edge, the gap between Side and Note, is the side's middle, and the core
+# trades Wide with the side itself, kept as it's let go. The run asserts that as the core gives it
+# today, reports it, and takes it back with ⌘Z, as it takes the float back below, so the steps
+# after it start from the page before it. Once the core refuses there, the run says so.
 carry $(slot 3) $(side_edge)
-expect "^browser: arrange $tab Preview Refused " "a rest where the thing doesn't fit didn't refuse it"
+expect "^browser: arrange $tab Preview " "a rest at the side's edge showed no drop"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-refused.png" || fail "no window to capture"
+preview=$(grep "^browser: arrange $tab Preview " "$log" | tail -1 | cut -d' ' -f4)
 send release $(side_edge)
 expect "^browser: arrange $tab Selected " "letting go where the thing doesn't fit left no selection"
-shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
-[ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
+case "$preview" in
+  Refused)
+    shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
+    [ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
+    refusal="the rest where Wide doesn't fit refused it, so #3003's known row is a line to remove"
+    ;;
+  Trades)
+    expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade with the side"
+    shows 'c,b,a,s,n side c,b,a,s,n hidden - float w:absolute' \
+      "the trade of Wide with the side didn't put the side in the column, as #3003 has it today"
+    kept 2 "the trade with the side wasn't saved"
+    send key z cmd
+    expect "browser: tab $tab arrange saved 1 changes\$" "⌘Z didn't reach the mode"
+    shows 'c,b,a,w side s,n hidden - float -' "⌘Z didn't take back the trade with the side"
+    kept 1 "⌘Z's step back wasn't saved"
+    refusal="a rest where Wide doesn't fit traded it with the side, which ⌘Z took back"
+    ;;
+  *) fail "a rest where the thing doesn't fit didn't refuse it: $preview" ;;
+esac
 
 # A float: the note carried with ⌘ held stays where it's let go, over the page, and the mini bar's
 # pin, its first button, turns it between staying on screen and scrolling with the page.
@@ -341,10 +363,12 @@ expect "^browser: arrange $tab off\$" "escape didn't end the mode"
 expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
 mini_bar_went "escape ended the mode"
 
-# Known under #2975, last, as the run reports and doesn't fail on it: a settle is kept by the thing
-# it was let go beside, Gamma, so a trade of Gamma with Beta takes Alpha along, ahead of Gamma, and
-# then a press where Wide is drawn hasn't picked Wide (43728216309, 43729257766). The order is
-# asserted as the core gives it today; this changes with #2975's fix.
+# Known under #2975 and #2981, last, as the run reports and doesn't fail on them. #2975: a settle is
+# kept by the thing it was let go beside, Gamma, so a trade of Gamma with Beta takes Alpha along,
+# ahead of Gamma; the order is asserted as the core gives it today, and changes with #2975's fix.
+# #2981: the settle and the trade both style Gamma and undo each other's styles on each layout pass,
+# so a press where Wide is drawn hasn't picked Wide (43728216309, 43729257766); the run reports what
+# it picks.
 start_arranging
 carry $(slot 0) $(slot_edge 1)
 expect "^browser: arrange $tab Preview Settles " "a rest at an edge didn't show a settle"
@@ -468,11 +492,13 @@ exec 3>&-
 quit
 echo "ok: from the Boost card's Arrange, a click picked a thing with the page taking none, and a" \
   "carry settled it at an edge, which Put back took back, traded two on a thing's middle, after" \
-  "which a click picked each thing where it was drawn, was refused where it didn't fit, and with" \
+  "which a click picked each thing where it was drawn, was carried where it didn't fit, and with" \
   "⌘ floated one, whose pin turned it to scroll with the page and back. ⌘Z took the float back," \
   "Hide was Zap's rule, which ⌘Z took back, and Put back on a traded thing took the trade back." \
   "$went Each change was saved in $host.arrange.json. Known under #2975: a trade of the thing" \
-  "a settle is kept by left a,c,b,w, and $wide. Reloaded, the page placed the arrangement, and" \
+  "a settle is kept by left a,c,b,w. Known under #2981: after it, $wide. Known under #3003:" \
+  "$refusal. Reloaded, the page" \
+  "placed the arrangement, and" \
   "$first_frame." \
   "Edited outside ilo it stayed off, and Site Controls' Turn On kept it. A private window's page" \
   "was arranged, with no Boost offered." \
