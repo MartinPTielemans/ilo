@@ -1285,7 +1285,11 @@ impl ContextMenu {
             Closed::Chose(item) => {
                 log!("browser: menu chose {}", shown.tracking.entries[item].title)
             }
-            _ => log!("browser: menu closed"),
+            _ => {
+                // Probe for #2873, not for merge.
+                log!("browser: probe menu closing {closed:?}");
+                log!("browser: menu closed")
+            }
         }
         if let Some(answer) = shown.chosen.take() {
             cx.defer(move |cx| answer(closed, cx));

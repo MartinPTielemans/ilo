@@ -166,6 +166,8 @@ pub(crate) fn resized(ui_view: *mut c_void) {
         && over == ui_view
         && gpui_linux::embedder_size(ui_view).unwrap_or_default() != content
     {
+        // Probe for #2873, not for merge.
+        browser::log!("browser: probe menu's window resized");
         forget_window(ui_view);
     }
 }
@@ -195,6 +197,8 @@ pub(crate) fn dismiss() -> bool {
 
 /// The user left the menu. GPUI says so once its events are dispatched, outside any update.
 fn left_menu(_: *mut c_void) {
+    // Probe for #2873, not for merge.
+    browser::log!("browser: probe menu left");
     if SHOWN.get().is_some()
         && let Some(menu) = MENU.get()
     {

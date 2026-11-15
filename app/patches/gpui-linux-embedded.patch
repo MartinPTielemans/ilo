@@ -5013,7 +5013,7 @@ index f9b9727330..e1e2214d9d 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..b816e2654c 100644
+index e21f019c64..e5ec15b8c8 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -5649,11 +5649,21 @@ index e21f019c64..b816e2654c 100644
              Event::PropertyNotify(event) => {
                  let window = self.get_window(event.window)?;
                  window
-@@ -1069,6 +1528,24 @@ impl X11Client {
+@@ -1069,6 +1528,34 @@ impl X11Client {
                  self.enable_ime();
              }
              Event::FocusOut(event) => {
 +                crate::linux::overlay::alt_interrupted();
++                // Probe for #2873, not for merge.
++                if crate::linux::overlay::is_shown(event.event as usize) {
++                    let xcb = self.0.borrow().xcb_connection.clone();
++                    let focus = (xcb.get_input_focus().ok()).and_then(|c| c.reply().ok()).map(|r| r.focus);
++                    eprintln!(
++                        "browser: probe overlay {} focus out {:?} {:?}, focus now {:?}, to_show {}",
++                        event.event, event.mode, event.detail, focus,
++                        crate::linux::overlay::to_show(event.event as usize)
++                    );
++                }
 +                // The keyboard leaving an overlay of the embedder's, as a window manager's grab
 +                // doesn't.
 +                if !matches!(
@@ -5674,7 +5684,7 @@ index e21f019c64..b816e2654c 100644
                  let window = self.get_window(event.event)?;
                  window.set_active(false);
                  let mut state = self.0.borrow_mut();
-@@ -1117,6 +1594,12 @@ impl X11Client {
+@@ -1117,6 +1604,12 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xkb(&state.xkb);
                  let capslock = capslock_from_xkb(&state.xkb);
@@ -5687,7 +5697,7 @@ index e21f019c64..b816e2654c 100644
                  if state.last_modifiers_changed_event == modifiers
                      && state.last_capslock_changed_event == capslock
                  {
-@@ -1156,7 +1639,17 @@ impl X11Client {
+@@ -1156,7 +1649,17 @@ impl X11Client {
                      let mut keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
                      let keysym = key_event_state.key_get_one_sym(code);
  
@@ -5705,7 +5715,7 @@ index e21f019c64..b816e2654c 100644
                          return Some(());
                      }
  
-@@ -1200,6 +1693,7 @@ impl X11Client {
+@@ -1200,6 +1703,7 @@ impl X11Client {
                      keystroke
                  };
                  drop(state);
@@ -5713,7 +5723,7 @@ index e21f019c64..b816e2654c 100644
                  window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
                      keystroke,
                      is_held: false,
-@@ -1220,6 +1714,9 @@ impl X11Client {
+@@ -1220,6 +1724,9 @@ impl X11Client {
                      let keysym = key_event_state.key_get_one_sym(code);
  
                      if keysym.is_modifier_key() {
@@ -5723,7 +5733,7 @@ index e21f019c64..b816e2654c 100644
                          return Some(());
                      }
  
-@@ -1230,7 +1727,24 @@ impl X11Client {
+@@ -1230,7 +1737,24 @@ impl X11Client {
              }
              Event::XinputButtonPress(event) => {
                  let window = self.get_window(event.event)?;
@@ -5748,7 +5758,7 @@ index e21f019c64..b816e2654c 100644
  
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
-@@ -1307,7 +1821,12 @@ impl X11Client {
+@@ -1307,7 +1831,12 @@ impl X11Client {
                      }
                  }
              }
@@ -5762,7 +5772,7 @@ index e21f019c64..b816e2654c 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  let modifiers = modifiers_from_xinput_info(event.mods);
-@@ -1332,7 +1851,26 @@ impl X11Client {
+@@ -1332,7 +1861,26 @@ impl X11Client {
                      None => {}
                  }
              }
@@ -5790,7 +5800,7 @@ index e21f019c64..b816e2654c 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  state.restore_cursor_after_hide();
-@@ -1384,12 +1922,8 @@ impl X11Client {
+@@ -1384,12 +1932,8 @@ impl X11Client {
                  if let Some(pointer) = state.pointer_device_states.get_mut(&event.sourceid) {
                      let scroll_delta = get_scroll_delta_and_update_state(pointer, &event);
                      drop(state);
@@ -5805,7 +5815,7 @@ index e21f019c64..b816e2654c 100644
                      }
                  }
              }
-@@ -1400,7 +1934,21 @@ impl X11Client {
+@@ -1400,7 +1944,21 @@ impl X11Client {
                  state.mouse_focused_window = Some(event.event);
                  state.restore_cursor_after_hide();
              }
@@ -5828,7 +5838,7 @@ index e21f019c64..b816e2654c 100644
                  let mut state = self.0.borrow_mut();
  
                  // Set last scroll values to `None` so that a large delta isn't created if scrolling is done outside the window (the valuator is global)
-@@ -1413,9 +1961,15 @@ impl X11Client {
+@@ -1413,9 +1971,15 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
@@ -5844,7 +5854,7 @@ index e21f019c64..b816e2654c 100644
                  window.handle_input(PlatformInput::MouseExited(gpui::MouseExitEvent {
                      pressed_button,
                      position,
-@@ -1523,6 +2077,35 @@ impl X11Client {
+@@ -1523,6 +2087,35 @@ impl X11Client {
          };
      }
  
@@ -5880,7 +5890,7 @@ index e21f019c64..b816e2654c 100644
      fn xim_handle_event(&self, event: Event) -> Option<()> {
          match event {
              Event::KeyPress(event) | Event::KeyRelease(event) => {
-@@ -1781,7 +2364,7 @@ impl X11Client {
+@@ -1781,7 +2374,7 @@ impl X11Client {
              return;
          }
  
@@ -5889,7 +5899,7 @@ index e21f019c64..b816e2654c 100644
              return;
          };
  
-@@ -1842,8 +2425,9 @@ impl X11Client {
+@@ -1842,8 +2435,9 @@ impl X11Client {
          let mut state = self.0.borrow_mut();
          state
              .clipboard
@@ -5900,7 +5910,7 @@ index e21f019c64..b816e2654c 100644
                  clipboard::ClipboardKind::Clipboard,
                  clipboard::WaitConfig::None,
              )
-@@ -1888,6 +2472,11 @@ impl X11Client {
+@@ -1888,6 +2482,11 @@ impl X11Client {
          })
      }
  
@@ -5912,7 +5922,7 @@ index e21f019c64..b816e2654c 100644
      pub(crate) fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
          let state = self.0.borrow();
          let root = state.xcb_connection.setup().roots[state.x_root_index].root;
-@@ -2052,6 +2641,9 @@ impl X11ClientState {
+@@ -2052,6 +2651,9 @@ impl X11ClientState {
          x_window: xproto::Window,
          refresh_rate: Duration,
      ) -> RegistrationToken {
@@ -5922,7 +5932,7 @@ index e21f019c64..b816e2654c 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,6 +2679,745 @@ impl X11ClientState {
+@@ -2087,6 +2689,745 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
@@ -6668,7 +6678,7 @@ index e21f019c64..b816e2654c 100644
      fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
          if let Some(cursor) = self.cursor_cache.get(&style) {
              return *cursor;
-@@ -2197,7 +3528,7 @@ impl X11ClientState {
+@@ -2197,7 +3538,7 @@ impl X11ClientState {
              .get(&hidden_window)
              .copied()
              .unwrap_or(CursorStyle::Arrow);
@@ -6677,7 +6687,7 @@ index e21f019c64..b816e2654c 100644
              log::warn!(
                  "X11: no cursor icon available to restore {:?} after hide; cursor may stay invisible",
                  style
-@@ -2232,6 +3563,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+@@ -2232,6 +3573,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
      Duration::from_micros(micros)
  }
  
@@ -6718,7 +6728,7 @@ index e21f019c64..b816e2654c 100644
  /// Applies a mapped/obscured change to the refresh loop and reports the
  /// resulting visibility to the window. Consumes the client borrow because the
  /// visibility callback re-enters GPUI.
-@@ -2246,10 +3611,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +3621,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -6773,7 +6783,7 @@ index e21f019c64..b816e2654c 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +3682,77 @@ fn detect_compositor_gpu(
+@@ -2273,73 +3692,77 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -6914,7 +6924,7 @@ index e21f019c64..b816e2654c 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +3878,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +3888,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -6935,7 +6945,7 @@ index e21f019c64..b816e2654c 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +3925,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +3935,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -6944,7 +6954,7 @@ index e21f019c64..b816e2654c 100644
                          },
                      ))
                  }
-@@ -2539,10 +3968,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +3978,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -6958,7 +6968,7 @@ index e21f019c64..b816e2654c 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +3986,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +3996,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -6975,7 +6985,7 @@ index e21f019c64..b816e2654c 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +4001,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +4011,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -7011,7 +7021,7 @@ index e21f019c64..b816e2654c 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +4080,11 @@ fn get_scale_factor(
+@@ -2620,6 +4090,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -7023,7 +7033,7 @@ index e21f019c64..b816e2654c 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +4363,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +4373,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
@@ -7154,7 +7164,7 @@ index e21f019c64..b816e2654c 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +4802,101 @@ mod tests {
+@@ -3213,3 +4812,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }

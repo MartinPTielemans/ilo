@@ -282,6 +282,21 @@ expect '^browser: command bar drew "/ "$' "leaving the commands-only list didn't
 send key escape
 expect '^browser: command bar hidden$' "Esc didn't close the command bar"
 
+# Probe for #2873, not for merge: the command bar closed, then the row's menu, as above, 30 times.
+for probe in $(seq 30); do
+  send key t cmd
+  expect '^browser: command bar shown$' "probe $probe: ⌘T didn't open the command bar"
+  send key escape
+  expect '^browser: command bar hidden$' "probe $probe: Esc didn't close the command bar"
+  post rightclick $(row 0)
+  expect "^browser: menu shown $(cased 'Copy Link, ')" "probe $probe: no menu"
+  expect '^browser: menu window at ' "probe $probe: the menu didn't take the keyboard"
+  send key down
+  expect "^browser: menu highlights $(cased 'Copy Link') at " "probe $probe: ↓ didn't highlight the menu's first item"
+  send key escape
+  expect '^browser: menu closed$' "probe $probe: escape didn't close the menu"
+done
+
 # ilo's menu as #324 has it. The keys walk it past the line and the dimmed Mute, and typing selects
 # by a title's start.
 post rightclick $(row 0)
