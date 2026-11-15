@@ -342,28 +342,48 @@ expect "^browser: arrange $tab Selected Floats selected " "letting go with ⌘ h
 landed_bar $(page_at 300 760) "the mini bar wasn't first placed over the float where it was let go"
 expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the float"
 kept 2 "the float wasn't saved"
-for _ in $(seq 100); do
-  case "$(said)" in *" float n:"*) break ;; esac
-  sleep 0.1
-done
-pinned=$(said | sed -n 's/.* float n:\([a-z]*\) at .*/\1/p')
-case "$pinned" in
-  fixed) unpinned=absolute ;;
-  absolute) unpinned=fixed ;;
-  *) fail "the float isn't over the page: $(said)" ;;
-esac
+# The float's pin is the core's, as the foot bar's line for it says, and the page then draws it
+# so. The page's title is sampled every 100 ms, and while carried the thing is drawn fixed, so the
+# title just after the drop can still be the carry's.
+# Sets $pin to the position the foot bar's last line since the drive step gives the float, the
+# words it said in $words, and the press that turns it in $turn, else fails with $1.
+pin_said() {
+  expect "^browser: arrange $tab foot bar: Note \(stays on screen\|scrolls with the page\)" "$1"
+  case "$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep "^browser: arrange $tab foot bar: Note " |
+    tail -1)" in
+    *"stays on screen"*) pin=fixed words="stays on screen" turn=ScrollsWithPage ;;
+    *) pin=absolute words="scrolls with the page" turn=StaysOnScreen ;;
+  esac
+}
+pin_said "the foot bar didn't say how the float is pinned"
+pinned=$pin pinned_words=$words
+shows "c,b,a,w side s hidden - float n:$pinned" "the page doesn't draw the float as the core pins it"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-floats.png" || fail "no window to capture"
-press_mini_bar first pin
-shows "c,b,a,w side s hidden - float n:$unpinned" "the pin didn't turn the float"
-press_mini_bar first pin
-shows "c,b,a,w side s hidden - float n:$pinned" "the pin didn't turn the float back"
+# The pin pressed: the UI asks the core to turn it, the core's answer comes, then the page.
+turn_pin() {
+  local ask=$turn
+  press_mini_bar first pin
+  expect "^browser: arrange $tab $ask\$" "$1: the UI didn't ask the core for $ask"
+  case $ask in
+    StaysOnScreen) pin=fixed words="stays on screen" turn=ScrollsWithPage ;;
+    *) pin=absolute words="scrolls with the page" turn=StaysOnScreen ;;
+  esac
+  expect "^browser: arrange $tab foot bar: Note $words" "$1: the core didn't answer $ask"
+  shows "c,b,a,w side s hidden - float n:$pin" "$1"
+}
+turn_pin "the pin didn't turn the float"
+unpinned=$pin unpinned_words=$words
+turn_pin "the pin didn't turn the float back"
+[ "$pin" = "$pinned" ] || fail "the pin turned twice didn't come back to $pinned"
 
 # ⌘Z with the page focused takes back one step at a time: each pin, then the float.
 send key z cmd
 expect "browser: tab $tab arrange saved 2 changes\$" "⌘Z with the page focused didn't reach the mode"
+expect "^browser: arrange $tab foot bar: Note $unpinned_words" "⌘Z didn't take back the second pin in the core"
 shows "c,b,a,w side s hidden - float n:$unpinned" "⌘Z didn't take back the second pin"
 send key z cmd
 expect "browser: tab $tab arrange saved 2 changes\$" "the second ⌘Z didn't reach the mode"
+expect "^browser: arrange $tab foot bar: Note $pinned_words" "⌘Z didn't take back the first pin in the core"
 shows "c,b,a,w side s hidden - float n:$pinned" "⌘Z didn't take back the first pin"
 send key z cmd
 expect "browser: tab $tab arrange saved 1 changes\$" "the third ⌘Z didn't reach the mode"
