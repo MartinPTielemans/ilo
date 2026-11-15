@@ -103,7 +103,7 @@ const frame = time => {
   time - first > 600 ? call() : done || requestAnimationFrame(frame);
 };
 requestAnimationFrame(frame);
-onkeydown = e => e.key === "t" && chrome.tabs.create({url: "opened.html"});
+addEventListener("keydown", e => { if (e.key === "t") chrome.tabs.create({url: "opened.html"}); });
 EOF2
 echo '<title>opened</title>A tab the popup opened' > "$extensions/popup/opened.html"
 cat > "$extensions/third/manifest.json" << 'EOF'
