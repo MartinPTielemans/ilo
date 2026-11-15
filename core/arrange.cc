@@ -569,9 +569,10 @@ constexpr char16_t kScript[] =
           const a = entryOf(el);
           if (!a || !a.list || a.list.reversed || !a.geo || !b.geo ||
             roomless(slotOf(el, [ref]).axis) || roomless(slotOf(ref, [el]).axis)) { refuse(s); continue; }
-          const la = a.list, lb = b.list;
-          la.items[la.items.indexOf(a)] = b;
-          lb.items[lb.items.indexOf(b)] = a;
+          // Both places before either is written: in one list the first write would hide the second.
+          const la = a.list, lb = b.list, ia = la.items.indexOf(a), ib = lb.items.indexOf(b);
+          la.items[ia] = b;
+          lb.items[ib] = a;
           [a.list, b.list, a.geo, b.geo] = [lb, la, b.geo, a.geo];
           for (const e of [a, b]) Object.assign(e, { moved: true, by: s, kind: 'trade' });
         }
