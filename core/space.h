@@ -156,6 +156,10 @@ class Space {
   int FolderLive(bc_id folder) const;
   // The Space's Live Folder filled from |source|, else 0: a Space has one of each.
   bc_id LiveFolderOf(int source) const;
+  // Whether a folder filled from |source| can be one here: the user's own Space, not an agent's or
+  // a window's own, a source the core knows, and none of it here already. One made, set or moved
+  // here that can't comes as a plain folder.
+  bool TakesLiveFolder(int source) const;
   // Whether the pinned tabs and folders show, which collapsing them hides.
   bool pinned_open() const { return pinned_open_; }
 
@@ -216,19 +220,18 @@ class Space {
   void RenameFolder(bc_id folder, std::string name);
   void SetFolderIcon(bc_id folder, std::string icon);
   // Fills |folder| from |source|, a BC_LIVE_ source, or with 0 makes it a plain folder, the tabs in
-  // it staying. Does nothing to make one live in an agent's Space or a window's own, from a source
-  // the core doesn't know, or from one the Space has a folder of already.
+  // it staying. Does nothing to make one live where TakesLiveFolder says no.
   void SetFolderLive(bc_id folder, int source);
   void SetOpen(bc_id folder, bool open);
   void SetPinnedOpen(bool open);
   // Deletes |folder|, leaving what was in it where it was, in the folder that held it.
   void DeleteFolder(bc_id folder);
   // Takes |folder| from |from|, with what's in it in its order, to the bottom of the pinned tabs:
-  // the folders with their names, icons and whether they're open, and live unless this Space has a
-  // Live Folder of that source already, each tab with its pinned URL and
-  // its split. |copies| maps each of |from|'s tabs that goes to another profile to the new one
-  // standing in for it here. Each is a new node here, as a tab moved to another Space is. Does
-  // nothing for a folder |from| hasn't, or into a window's own Space.
+  // the folders with their names, icons and whether they're open, and live where TakesLiveFolder
+  // says yes, else plain, each tab with its pinned URL and its split. |copies| maps each of
+  // |from|'s tabs that goes to another profile to the new one standing in for it here. Each is a
+  // new node here, as a tab moved to another Space is. Does nothing for a folder |from| hasn't, or
+  // into a window's own Space.
   void TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& copies);
 
   // Puts |tab| in a split view with |with|, at its left end if |left|, else its right end, making

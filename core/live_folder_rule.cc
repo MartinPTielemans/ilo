@@ -60,14 +60,12 @@ std::optional<Item> Row(const base::Value& value, List list) {
             .repo = *owner + "/" + *name,
             .number = static_cast<uint32_t>(*number),
             .title = PlainTitle(*title)};
-  if (row->FindBool("merged").value_or(false)) {
-    item.state = State::kMerged;
-  } else if (*state == "closed") {
-    item.state = State::kClosed;
-  } else if (*state != "open") {
+  // The site gives a draft's state as "draft", and an open one's reviewable_state as "draft" too.
+  const std::string* reviewable = row->FindString("reviewable_state");
+  if (row->FindBool("merged").value_or(false) || (*state != "open" && *state != "draft")) {
     return std::nullopt;
-  } else if (const std::string* reviewable = row->FindString("reviewable_state");
-             reviewable && *reviewable == "draft") {
+  }
+  if (*state == "draft" || (reviewable && *reviewable == "draft")) {
     item.state = State::kDraft;
   }
   return item;

@@ -153,13 +153,14 @@ std::unique_ptr<network::SimpleURLLoader> Ask(live_folder::List list) {
   request->url = live_folder::ListUrl(list);
   request->method = net::HttpRequestHeaders::kGetMethod;
   request->headers.SetHeader(net::HttpRequestHeaders::kAccept, "application/json");
-  // As the user's own visit to the site: its cookies, the site as the first party, never a
-  // redirect, and never a copy the cache kept from before.
+  // As the user's own visit to the site: its cookies, the site as the first party, and never a
+  // redirect. The HTTP cache is neither read nor written, so no answer, and none of its rows,
+  // stays on disk.
   request->credentials_mode = network::mojom::CredentialsMode::kInclude;
   request->mode = network::mojom::RequestMode::kSameOrigin;
   request->redirect_mode = network::mojom::RedirectMode::kError;
   request->destination = network::mojom::RequestDestination::kEmpty;
-  request->load_flags = net::LOAD_BYPASS_CACHE;
+  request->load_flags = net::LOAD_DISABLE_CACHE;
   request->request_initiator = site;
   request->site_for_cookies = net::SiteForCookies::FromOrigin(site);
   request->trusted_params = network::ResourceRequest::TrustedParams();

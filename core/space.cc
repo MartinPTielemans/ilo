@@ -298,6 +298,11 @@ int Space::FolderLive(bc_id folder) const {
   return it == folders_.end() ? 0 : it->second.live;
 }
 
+bool Space::TakesLiveFolder(int source) const {
+  // The user's account's lists, which are neither an agent's nor a private window's to have.
+  return !agent() && !own() && source == BC_LIVE_PULL_REQUESTS && !LiveFolderOf(source);
+}
+
 bc_id Space::LiveFolderOf(int source) const {
   if (!source) {
     return 0;
@@ -531,8 +536,7 @@ void Space::SetFolderLive(bc_id folder, int source) {
   if (it == folders_.end() || it->second.live == source) {
     return;
   }
-  // The user's account's lists, which are neither an agent's nor a private window's to have.
-  if (source && (agent() || own() || source != BC_LIVE_PULL_REQUESTS || LiveFolderOf(source))) {
+  if (source && !TakesLiveFolder(source)) {
     return;
   }
   it->second.live = source;
@@ -589,8 +593,8 @@ void Space::TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& 
     from.folder_of_.erase(row);
     if (auto entry = from.folders_.extract(row)) {
       Folder& moved = entry.mapped();
-      // One of a source this Space has already comes as a plain folder.
-      if (moved.live && LiveFolderOf(moved.live)) {
+      // One this Space can't have, as an agent's Space can't, comes as a plain folder.
+      if (moved.live && !TakesLiveFolder(moved.live)) {
         moved.live = 0;
       }
       folders_[row] = std::move(moved);

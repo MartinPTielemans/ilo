@@ -228,6 +228,20 @@ TEST_F(SpaceTest, ASpaceHasOneLiveFolderOfASourceAndOnlyTheUsersHaveAny) {
   EXPECT_EQ(home_->LiveFolderOf(BC_LIVE_PULL_REQUESTS), homes);
   EXPECT_EQ(work_->LiveFolderOf(BC_LIVE_PULL_REQUESTS), 0u);
 
+  // A Live Folder taken into an agent's Space comes plain there, as one made there would be.
+  Space* agents_space = Space::Create("Codex", 0, Space::Agent{.id = "codex", .name = "Codex"});
+  agents_space->TakeFolder(*home_, homes, {});
+  EXPECT_TRUE(agents_space->IsFolder(homes));
+  EXPECT_EQ(agents_space->FolderLive(homes), 0);
+  EXPECT_FALSE(agents_space->TakesLiveFolder(BC_LIVE_PULL_REQUESTS));
+  EXPECT_EQ(home_->LiveFolderOf(BC_LIVE_PULL_REQUESTS), 0u);
+  EXPECT_TRUE(home_->TakesLiveFolder(BC_LIVE_PULL_REQUESTS));
+  home_->TakeFolder(*agents_space, homes, {});
+  // Back in a user's Space it stays plain: what was live went with the move into the agent's.
+  EXPECT_EQ(home_->FolderLive(homes), 0);
+  Space::Delete(agents_space->id());
+  home_->SetFolderLive(homes, BC_LIVE_PULL_REQUESTS);
+
   // Ended, it's a plain folder with what's in it.
   home_->SetFolderLive(homes, 0);
   EXPECT_EQ(home_->LiveFolderOf(BC_LIVE_PULL_REQUESTS), 0u);

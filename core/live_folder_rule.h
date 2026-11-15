@@ -34,8 +34,9 @@ inline constexpr size_t kMaxDepth = 9;
 
 // The lists, as the header's BC_LIVE_REVIEW_REQUESTS and BC_LIVE_CREATED number them.
 enum class List { kReviewRequests = 0, kCreated = 1 };
-// A row's state, as the header's BC_LIVE_OPEN and the rest number them.
-enum class State { kOpen = 0, kDraft = 1, kMerged = 2, kClosed = 3 };
+// A row's state, as the header's BC_LIVE_OPEN and BC_LIVE_DRAFT number them. The lists ask for open
+// pull requests alone, so a merged or closed one leaves them rather than coming with its state.
+enum class State { kOpen = 0, kDraft = 1 };
 
 struct Item {
   List list = List::kReviewRequests;
@@ -61,7 +62,7 @@ GURL ListUrl(List list);
 
 // The rows of the site's answer for |list|, or nullopt for an answer that isn't the site's search:
 // not JSON, too big or too deep, or without whether anyone is signed in. A row missing a part, or
-// with a repository or number that can't be one, is left out.
+// with a repository or number that can't be one, or that isn't open, is left out.
 std::optional<Answer> Parse(std::string_view body, List list);
 
 // |title| as plain text: the site's highlight markup taken out, its character references read,

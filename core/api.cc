@@ -1178,8 +1178,7 @@ void bc_folder_delete(bc_id folder) {
 bc_id bc_folder_live_create(bc_id id, int source, const char* name) {
   browser_core::Space* space = browser_core::Space::FromId(id);
   // Refused here, not only left out of the app's menu: the lists are the user's account's.
-  if (!space || space->agent() || space->own() || source != BC_LIVE_PULL_REQUESTS ||
-      space->LiveFolderOf(source)) {
+  if (!space || !space->TakesLiveFolder(source)) {
     return 0;
   }
   const bc_id folder = space->AddFolder(name ? name : "", 0, SIZE_MAX);

@@ -563,11 +563,9 @@ typedef struct bc_agent_response {
 #define BC_LIVE_REVIEW_REQUESTS 0
 #define BC_LIVE_CREATED 1
 
-// A pull request's state.
+// A pull request's state. The lists are of open ones, so one merged or closed leaves them.
 #define BC_LIVE_OPEN 0
 #define BC_LIVE_DRAFT 1
-#define BC_LIVE_MERGED 2
-#define BC_LIVE_CLOSED 3
 
 // A row of a Live Folder's answer. The strings are UTF-8 and last only for the call.
 typedef struct bc_live_item {
@@ -578,7 +576,7 @@ typedef struct bc_live_item {
   uint32_t number;
   // Its title, plain text: no markup, which the core takes out.
   const char* title;
-  // A BC_LIVE_OPEN, BC_LIVE_DRAFT, BC_LIVE_MERGED or BC_LIVE_CLOSED.
+  // A BC_LIVE_OPEN or BC_LIVE_DRAFT.
   int state;
 } bc_live_item;
 
@@ -2087,7 +2085,8 @@ BC_EXPORT void bc_folder_delete(bc_id folder);
 BC_EXPORT bc_id bc_folder_live_create(bc_id space, int source, const char* name);
 
 // What fills the folder, a BC_LIVE_ source, or 0 for a plain folder or none. A duplicate is plain,
-// and so is a Live Folder moved to a Space that has one of its source already.
+// and so is a Live Folder moved to a Space bc_folder_live_create would make none in: an agent's,
+// or one that has a Live Folder of its source already.
 BC_EXPORT int bc_folder_live(bc_id folder);
 
 // Makes the Live Folder a plain one, the tabs opened from it staying in it. A fetch under way

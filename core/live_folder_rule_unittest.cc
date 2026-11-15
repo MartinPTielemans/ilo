@@ -41,11 +41,15 @@ TEST(LiveFolderRule, AsksTheSiteItselfForEachList) {
 TEST(LiveFolderRule, ReadsRowsWithTheirStates) {
   const std::optional<Answer> answer =
       Parse(Search("true", base::StrCat({Row("7", "Fix the cache"), ",",
-                                         Row("8", "Draft", "harbor", "open", "draft"), ",",
-                                         Row("9", "Gone", "harbor", "closed", "ready", "true")})),
+                                         // As the site writes a draft (2026-11-15).
+                                         Row("8", "Draft", "harbor", "draft", "draft"), ",",
+                                         Row("9", "Older draft", "harbor", "open", "draft"), ",",
+                                         Row("10", "Merged", "harbor", "closed", "ready", "true"),
+                                         ",", Row("11", "Closed", "harbor", "closed")})),
             List::kCreated);
   ASSERT_TRUE(answer);
   EXPECT_TRUE(answer->signed_in);
+  // A merged or closed one isn't open, so it's left out.
   ASSERT_EQ(answer->items.size(), 3u);
   EXPECT_EQ(answer->items[0], (Item{.list = List::kCreated,
                                     .repo = "harbor/web",
@@ -53,7 +57,7 @@ TEST(LiveFolderRule, ReadsRowsWithTheirStates) {
                                     .title = "Fix the cache",
                                     .state = State::kOpen}));
   EXPECT_EQ(answer->items[1].state, State::kDraft);
-  EXPECT_EQ(answer->items[2].state, State::kMerged);
+  EXPECT_EQ(answer->items[2].state, State::kDraft);
 }
 
 TEST(LiveFolderRule, SignedOutHasNoRows) {
