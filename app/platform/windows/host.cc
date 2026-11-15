@@ -561,13 +561,17 @@ HWND InsertAfter(HWND hwnd) {
   if (root == hwnd) {
     return HWND_TOP;
   }
-  // ilo's menu stays in front of the rest over its window, as the Mac's is at the pop-up level: the
-  // reveal's panel, shown again as its width settles, came over the menu opened from it (#2989).
-  if (hwnd != g_menu.hwnd && g_menu.hwnd && IsWindowVisible(g_menu.hwnd) &&
-      TopOwner(g_menu.hwnd) == root) {
-    return g_menu.hwnd;
-  }
+  // Over the highest of them, not only over the browser window: another app's window can be between
+  // the two, as the taskbar was under the reveal's panel a click had brought to the front, and the
+  // menu opened from the panel went under it, its left cut off (#2989).
+  HWND highest = root;
   for (HWND above = GetWindow(root, GW_HWNDPREV); above; above = GetWindow(above, GW_HWNDPREV)) {
+    if (above != hwnd && IsWindowVisible(above) && TopOwner(above) == root) {
+      highest = above;
+    }
+  }
+  for (HWND above = GetWindow(highest, GW_HWNDPREV); above;
+       above = GetWindow(above, GW_HWNDPREV)) {
     if (IsWindowVisible(above) && TopOwner(above) != root) {
       // A non-topmost window can't go between topmost ones; under them all is the top of the rest.
       return (GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) ? HWND_TOP : above;
