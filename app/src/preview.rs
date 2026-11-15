@@ -1943,10 +1943,20 @@ impl Browser for Fake {
     // The toast is a window over the page, which the preview has neither of.
     fn hang_note(&self, _: u64, _: bool, _: &mut App) {}
 
-    // The tooltip's window is the app's, over the page, which the preview has neither of.
-    fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
+    // The tooltip's window is the app's, over the page, which the preview has neither of, but with
+    // PREVIEW_HOVER the preview opens it on its own, for its look.
+    fn tooltip(
+        &self,
+        tip: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>,
+        cx: &mut App,
+    ) {
+        match tip {
+            Some((tip, anchor)) => browser::tooltip::hover(0, tip, anchor, cx),
+            None => browser::tooltip::dismiss(cx),
+        }
+    }
 
-    // So is the hover card's, and there's no engine to picture a page.
+    // The hover card's window is the app's too, and there's no engine to picture a page.
     fn hover_card(&self, _: browser::hover_card::Hover, _: &mut App) {}
 
     // And the folder preview's.
@@ -3333,6 +3343,14 @@ fn main() {
                     preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Right, cx);
                 }
             }
+            // PREVIEW_HOVER=<x>,<y> rests the pointer there in the window, as on a folder's row, and
+            // shows the tooltip that brings in a window of its own, which sway places, not the host.
+            if let Ok(what) = std::env::var("PREVIEW_HOVER") {
+                if let Some(shell) = shell_window {
+                    browser::tooltip::open_at(Rc::new(PreviewTooltip), true, cx);
+                    preview_hover(shell.into(), &what, cx);
+                }
+            }
             // PREVIEW_CLICK=<x>,<y> clicks there in the window, as on an archived tab's row.
             if let Ok(what) = std::env::var("PREVIEW_CLICK") {
                 if let Some(shell) = shell_window {
@@ -3411,6 +3429,38 @@ fn preview_menu(
             })
             .ok();
         press_keys(window, keys, cx).await;
+    })
+    .detach();
+}
+
+struct PreviewTooltip;
+
+impl browser::tooltip::Host for PreviewTooltip {
+    fn show(&self, _: browser::tooltip::Over, _: f32, _: f32) {}
+
+    fn hide(&self) {}
+}
+
+/// Moves the pointer to `what`, an x and a y in the shell's window, once its rows are drawn.
+fn preview_hover(shell: gpui::AnyWindowHandle, what: &str, cx: &mut App) {
+    let mut parts = what.split(',').map(|part| part.trim().parse::<f32>().ok());
+    let (Some(Some(x)), Some(Some(y))) = (parts.next(), parts.next()) else {
+        return;
+    };
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        let moved = gpui::MouseMoveEvent {
+            position: point(px(x), px(y)),
+            pressed_button: None,
+            modifiers: gpui::Modifiers::default(),
+        };
+        shell
+            .update(cx, |_, window, cx| {
+                window.dispatch_event(gpui::PlatformInput::MouseMove(moved), cx)
+            })
+            .ok();
     })
     .detach();
 }

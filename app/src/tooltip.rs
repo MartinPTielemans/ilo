@@ -343,6 +343,11 @@ impl Global for TooltipWindow {}
 /// Opens the tooltip's window, hidden, for `host` to show over the browser window, ahead of time
 /// as the toast's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
+    open_at(host, false, cx)
+}
+
+/// Opens it, and on screen if `show`, as the preview does to show it alone.
+pub fn open_at(host: Rc<dyn Host>, show: bool, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
@@ -357,7 +362,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
             traffic_light_position: None,
         }),
         kind: WindowKind::Floating,
-        show: false,
+        show,
         focus: false,
         is_movable: false,
         is_resizable: false,

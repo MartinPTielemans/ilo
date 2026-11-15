@@ -16,10 +16,10 @@
 # Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default naming
 # its model, light and dark (#2455), and the safe-start card at the sidebar's foot, light and dark,
 # and in the narrowest sidebar with ad blocking off (#2345), and a Live Folder of made-up pull
-# requests, open light and dark, closed with its count, signed out, and after a failed refresh
-# (#2979). The preview's Linux host places no
-# window, so sway puts Site Controls and the icon picker in the middle rather than where the Mac's
-# host would.
+# requests, open light and dark, closed with its count, signed out, after a failed refresh and
+# with its tooltip then, the Space's menu with Live Folders open, the folder's menu, and in the
+# narrowest sidebar (#2979). The preview's Linux host places no window, so sway puts Site
+# Controls, the icon picker and the tooltip in the middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -64,6 +64,10 @@ screens=(
   "live-folder-closed|live folder 9000 answered|PREVIEW_LIVE_FOLDER=closed"
   "live-folder-signed-out|live folder 9000 answered|PREVIEW_LIVE_FOLDER=signed-out"
   "live-folder-failed|live folder 9000 answered failed|PREVIEW_LIVE_FOLDER=failed"
+  "live-folder-tooltip|tooltip drawn|PREVIEW_LIVE_FOLDER=failed PREVIEW_HOVER=90,386"
+  "live-folder-space-menu|menu submenu Live Folders shown|PREVIEW_LIVE_FOLDER=open PREVIEW_MENU=40,221,l,right"
+  "live-folder-menu|menu shown|PREVIEW_LIVE_FOLDER=open PREVIEW_MENU=90,386"
+  "live-folder-narrow|live folder 9000 answered|PREVIEW_LIVE_FOLDER=open PREVIEW_SIDEBAR=164"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
