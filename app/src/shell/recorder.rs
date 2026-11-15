@@ -114,6 +114,8 @@ pub(super) struct Recorder {
     /// The tab Arrange's mini bar shows for and what its press runs, while it shows.
     #[allow(clippy::type_complexity)]
     pub(super) mini_bar: RefCell<Option<(u64, crate::mini_bar::OnPress)>>,
+    /// Arrange's foot bar while it shows, so a test presses its buttons.
+    pub(super) foot_bar: RefCell<Option<crate::foot_bar::Bar>>,
     /// The menus it was asked to show, each item by its title and whether it's enabled.
     pub(super) menus: RefCell<Vec<Vec<(SharedString, bool)>>>,
     /// Where the last menu was asked to show, in the window.
@@ -1174,6 +1176,20 @@ impl Browser for Recorder {
             labels.join(", ")
         ));
         self.mini_bar.replace(Some((shown.tab, on_press)));
+    }
+
+    fn show_foot_bar(
+        &self,
+        bar: Option<(Bounds<Pixels>, Size<Pixels>, crate::foot_bar::Bar)>,
+        _: &mut App,
+    ) {
+        let Some((_, _, bar)) = bar else {
+            self.foot_bar.replace(None);
+            return self.record("foot bar none".into());
+        };
+        let buttons: Vec<_> = bar.buttons.iter().map(|button| &*button.label).collect();
+        self.record(format!("foot bar {}: {}", bar.words, buttons.join(", ")));
+        self.foot_bar.replace(Some(bar));
     }
 
     fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> crate::boosts::Arranged {

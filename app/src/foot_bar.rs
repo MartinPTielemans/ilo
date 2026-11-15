@@ -9,12 +9,13 @@
 //! There's one, which shows over one browser window at a time, as the toast does: a mode shows it
 //! over its own window when that window comes in front.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    App, Bounds, Context, FontWeight, Global, Hsla, Pixels, Role, SharedString, Size,
+    App, Bounds, Context, FontWeight, Global, Hsla, Pixels, Point, Role, SharedString, Size,
     TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, div, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowOptions, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::elevation::Level;
@@ -200,12 +201,27 @@ fn place(page: Bounds<Pixels>, content: Size<Pixels>, size: Size<Pixels>) -> Pla
     }
 }
 
+/// The top left of a bar at `place` in a window's content `content` big: centred between its
+/// insets, `bottom` over the content's bottom edge, as each host puts it.
+fn origin(place: &Place, content: Size<Pixels>) -> Point<Pixels> {
+    let between = f32::from(content.width) - place.left - place.right;
+    point(
+        px(place.left + (between - f32::from(place.size.width)) / 2.),
+        px(f32::from(content.height) - place.bottom - f32::from(place.size.height)),
+    )
+}
+
 struct Shown {
     window: u64,
     bar: Bar,
     layout: Layout,
     /// Whether it has drawn on screen, which the log says once, for the checks.
     drawn: bool,
+    /// The bar's top left in its browser window's content, where the host centres it.
+    origin: Point<Pixels>,
+    /// Where each button last drew in that content, which the log says as it changes, for the
+    /// checks to click.
+    placed: Rc<RefCell<Vec<Option<Bounds<Pixels>>>>>,
 }
 
 pub struct FootBar {
@@ -290,11 +306,15 @@ pub fn show(window: u64, page: Bounds<Pixels>, content: Size<Pixels>, bar: Bar, 
         let room = f32::from(page.size.width) - BOTTOM * 2.;
         let layout = layout(&bar, room, &measure);
         let place = place(page, content, layout.size);
+        let origin = origin(&place, content);
+        let placed = Rc::new(RefCell::new(vec![None; bar.buttons.len()]));
         foot_bar.shown = Some(Shown {
             window,
             bar,
             layout,
             drawn: false,
+            origin,
+            placed,
         });
         foot_bar.host.show(window, place);
         cx.notify();
@@ -417,8 +437,32 @@ impl Render for FootBar {
                 false => rgba(QUIET).into(),
             };
             let enabled = button.enabled;
+            let (name, origin, placed) = (button.name, shown.origin, shown.placed.clone());
+            let listener = canvas(
+                move |bounds, _, _| {
+                    let at = Bounds::new(bounds.origin + origin, bounds.size);
+                    let mut placed = placed.borrow_mut();
+                    if placed.get(index).is_some_and(|was| *was != Some(at)) {
+                        placed[index] = Some(at);
+                        // check.sh reads this line, to click the button.
+                        log!(
+                            "browser: foot bar {name} at {} {} {} {}",
+                            f32::from(at.origin.x).round(),
+                            f32::from(at.origin.y).round(),
+                            f32::from(at.size.width).round(),
+                            f32::from(at.size.height).round(),
+                        );
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full();
             div()
                 .id(("foot-bar-button", index))
+                .relative()
                 .h(px(BUTTON_HEIGHT))
                 .px(px(BUTTON_PAD))
                 .flex()
@@ -445,6 +489,7 @@ impl Render for FootBar {
                         })
                 })
                 .on_click(cx.listener(move |bar, _, _, cx| bar.press(index, cx)))
+                .child(listener)
                 .child(button.label.clone())
                 .children(button.key.map(|key| {
                     div()
