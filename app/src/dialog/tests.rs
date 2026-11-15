@@ -230,6 +230,7 @@ fn asking_to_quit(cx: &mut TestAppContext) -> Asking {
             fields: Vec::new(),
             check: None,
             on_return: Return::Action,
+            code: None,
         };
         pose(
             None,
@@ -285,6 +286,7 @@ fn add_extension(action: &str, host: &Rc<Recorder>, cx: &mut App) {
         fields: Vec::new(),
         check: None,
         on_return: Return::Action,
+        code: None,
     };
     let host = host.clone();
     let answered = Box::new(move |yes, _: &mut App| {
@@ -386,6 +388,7 @@ fn asking_about_downloads(cx: &mut TestAppContext) -> Asking {
             fields: Vec::new(),
             check: None,
             on_return: Return::Cancel,
+            code: None,
         };
         let answered = Box::new(move |quit, _: &mut App| {
             answers
@@ -546,6 +549,7 @@ fn page_question(fields: Vec<Field>, check: Option<&'static str>) -> Question {
         fields,
         check: check.map(Into::into),
         on_return: Return::Action,
+        code: None,
     }
 }
 

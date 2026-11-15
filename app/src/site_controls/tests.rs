@@ -171,6 +171,7 @@ fn site() -> Site {
         logins: vec![],
         devices: Vec::new(),
         boostable: false,
+        boost_script: None,
         boost: None,
         arrangement_misfits: None,
         arrangement_off: None,

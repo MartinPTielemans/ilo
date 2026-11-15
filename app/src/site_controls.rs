@@ -224,6 +224,8 @@ pub struct Site {
     /// Turn On. Each none where there's nothing to say.
     pub arrangement_misfits: Option<SharedString>,
     pub arrangement_off: Option<SharedString>,
+    /// The Boost's script, where it has one (#2297). While it's off, the Boost's switch says why.
+    pub boost_script: Option<crate::boosts::Script>,
 }
 
 /// A turned-on extension, as its action is for the tab's page.
@@ -747,10 +749,22 @@ impl Switch {
     }
 
     /// Its words on a strip, which say its state, as a lone tint can't, and for the Boost's while
-    /// on, how many of its arrangement's changes no longer fit (#2347).
+    /// on, why its script is off (#2297) and how many of its arrangement's changes no longer fit
+    /// (#2347): its CSS still shows, so only those are off.
     fn words(self, site: &Site) -> SharedString {
-        if let (Switch::Boost(true), Some(misfits)) = (self, &site.arrangement_misfits) {
-            return format!("Boost on · {misfits}").into();
+        if let Switch::Boost(true) = self {
+            let script = (site.boost_script).and_then(|script| script.off_reason());
+            let misfits = site
+                .arrangement_misfits
+                .as_ref()
+                .map(|misfits| misfits.as_ref());
+            if script.is_some() || misfits.is_some() {
+                let said: Vec<&str> = [Some("Boost on"), script, misfits]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                return said.join(" · ").into();
+            }
         }
         let words = match self {
             Switch::DeveloperMode => "Developer Mode on",
