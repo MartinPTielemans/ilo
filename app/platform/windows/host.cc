@@ -561,6 +561,12 @@ HWND InsertAfter(HWND hwnd) {
   if (root == hwnd) {
     return HWND_TOP;
   }
+  // ilo's menu stays in front of the rest over its window, as the Mac's is at the pop-up level: the
+  // reveal's panel, shown again as its width settles, came over the menu opened from it (#2989).
+  if (hwnd != g_menu.hwnd && g_menu.hwnd && IsWindowVisible(g_menu.hwnd) &&
+      TopOwner(g_menu.hwnd) == root) {
+    return g_menu.hwnd;
+  }
   for (HWND above = GetWindow(root, GW_HWNDPREV); above; above = GetWindow(above, GW_HWNDPREV)) {
     if (IsWindowVisible(above) && TopOwner(above) != root) {
       // A non-topmost window can't go between topmost ones; under them all is the top of the rest.
