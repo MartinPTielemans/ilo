@@ -506,6 +506,14 @@ class WindowViews : public views::WidgetObserver,
   // pane is a host of its own, whose window the dialog doesn't belong to (#2855).
   void PaneTookKeyboard(views::Widget* holder) {
     set_ui_holds_for_page(false);
+    // Only for a press on the page. A click on the UI activates the browser window, which gives
+    // the pane the keyboard for a moment too, and the dialog taking it then took it from the UI.
+    POINT pointer;
+    RECT pane;
+    if (!GetCursorPos(&pointer) || !GetWindowRect(views::HWNDForWidget(holder), &pane) ||
+        !PtInRect(&pane, pointer)) {
+      return;
+    }
     for (Window* window : Window::All()) {
       if (window->widget() != widget_) {
         continue;
