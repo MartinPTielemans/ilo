@@ -105,3 +105,63 @@ fn a_shadow_fades_out_inside_the_margin_of_the_window_that_draws_it() {
         assert!(left >= popover.sides, "{name}: {left} left, {popover:?}");
     }
 }
+
+#[test]
+fn a_panels_margin_holds_its_whole_shadow_in_whole_points_where_it_draws_it() {
+    for level in LEVELS {
+        let (reach, margin) = (level.reach(), level.margin_if(true));
+        for (name, room, needed) in [
+            ("above", margin.above, reach.above),
+            ("below", margin.below, reach.below),
+            ("sides", margin.sides, reach.sides),
+        ] {
+            assert!(
+                room >= needed && room == room.round(),
+                "{level:?} {name}: {room} for {needed}"
+            );
+        }
+        // Where the host draws the shadow, under the panel, the window is the panel's size.
+        assert_eq!(
+            level.margin_if(false).around(gpui::size(px(10.), px(20.))),
+            gpui::size(px(10.), px(20.))
+        );
+    }
+}
+
+/// On Windows a panel draws its shadow in its own window, round it, and the host shows that window
+/// the margin past where the panel goes (host_set_shadow_margin), so the panel has to fill the
+/// window inside the margin exactly, or it lands off where it was asked and its shadow is cut
+/// (#2988). Elsewhere it fills the window.
+#[gpui::test]
+fn a_panel_that_draws_its_own_shadow_fills_its_window_inside_the_margin(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gpui::{Bounds, Context, Render, Window, canvas};
+    use std::{cell::Cell, rc::Rc};
+
+    struct Panel(Rc<Cell<Option<Bounds<Pixels>>>>, bool);
+    impl Render for Panel {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let seen = self.0.clone();
+            let inside = canvas(move |bounds, _, _| seen.set(Some(bounds)), |_, _, _, _| {});
+            div().size_full().child(Level::Modal.in_window_if(
+                self.1,
+                div().size_full().rounded(px(20.)).child(inside.size_full()),
+            ))
+        }
+    }
+    for in_window in [true, false] {
+        let seen = Rc::new(Cell::new(None));
+        let (_, cx) = cx.add_window_view(|_, _| Panel(seen.clone(), in_window));
+        cx.run_until_parked();
+        let window = cx.update(|window, _| window.viewport_size());
+        let margin = Level::Modal.margin_if(in_window);
+        let panel = seen.get().expect("the panel wasn't laid out");
+        assert_eq!(
+            panel.origin,
+            point(px(margin.sides), px(margin.above)),
+            "{in_window}"
+        );
+        assert_eq!(margin.around(panel.size), window, "{in_window}");
+    }
+}

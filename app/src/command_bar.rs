@@ -736,7 +736,10 @@ impl CommandBarWindow {
 /// Opens the command bar's window, hidden, for `host` to show over the browser window. Opening it
 /// ahead of time keeps window setup off the path from the shortcut to the bar on screen.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<CommandBar>> {
-    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(HEIGHT)));
+    let window = Level::Modal
+        .panel_margin()
+        .around(size(px(WIDTH), px(HEIGHT)));
+    let bounds = Bounds::new(point(px(0.), px(0.)), window);
     open_at(host, bounds, false, cx)
 }
 
@@ -3400,135 +3403,141 @@ impl Render for CommandBar {
             .size_full()
             .font_family(crate::face::UI)
             .child(
-                div()
-                    .key_context("CommandBar")
-                    .on_action(cx.listener(Self::go))
-                    .on_action(cx.listener(Self::go_beside))
-                    .on_action(cx.listener(Self::go_behind))
-                    .on_action(cx.listener(Self::go_dot_com))
-                    .on_action(cx.listener(Self::go_window))
-                    .on_action(cx.listener(Self::go_dot_com_window))
-                    .on_action(cx.listener(Self::search))
-                    .on_action(cx.listener(Self::paste_and_go))
-                    .on_action(cx.listener(Self::paste_and_search))
-                    .on_action(cx.listener(Self::remove))
-                    .on_action(cx.listener(Self::dismiss))
-                    .on_action(cx.listener(Self::shortcut))
-                    .on_action(cx.listener(Self::enter_site_or_next))
-                    .on_action(cx.listener(Self::leave_site_or_previous))
-                    .capture_action(
-                        cx.listener(|bar, _: &text_input::Undo, _, cx| bar.step_removal(false, cx)),
-                    )
-                    .capture_action(
-                        cx.listener(|bar, _: &text_input::Redo, _, cx| bar.step_removal(true, cx)),
-                    )
-                    .capture_action(cx.listener(|bar, _: &text_input::Backspace, window, cx| {
-                        bar.leave_at_start(window, cx)
-                    }))
-                    .capture_action(cx.listener(
-                        |bar, _: &text_input::DeleteToStart, window, cx| {
-                            bar.leave_at_start(window, cx)
-                        },
-                    ))
-                    .capture_action(cx.listener(
-                        |bar, _: &text_input::DeleteWordBack, window, cx| {
-                            bar.leave_at_start(window, cx)
-                        },
-                    ))
-                    .on_action(
-                        cx.listener(|bar, _: &Next, window, cx| bar.select_next(true, window, cx)),
-                    )
-                    .on_action(cx.listener(|bar, _: &Previous, window, cx| {
-                        bar.select_next(false, window, cx)
-                    }))
-                    .on_action(cx.listener(|bar, _: &First, window, cx| bar.select(0, window, cx)))
-                    .on_action(cx.listener(|bar, _: &Last, window, cx| {
-                        bar.select(bar.rows.len().saturating_sub(1), window, cx)
-                    }))
-                    .relative()
-                    .size_full()
-                    .overflow_hidden()
-                    .rounded(px(radius))
-                    .bg(palette.overlay)
-                    .text_color(palette.ink)
-                    // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_size(px(text::BODY))
-                    .child(
-                        div()
-                            .h(px(input_height))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .pl(px(icon_x))
-                            .pr(px(HINT_END))
-                            .gap(px(text_x - icon_x - icon))
-                            .text_size(px(text_size))
-                            .line_height(px(23.))
-                            .child(self.input_icon(cx))
-                            .when_some(self.mode_name(), |line, name| {
-                                let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
-                                let favicon = page.map(|(url, _)| {
-                                    self.favicon(url, CHIP_FAVICON, palette.ink.into())
-                                });
-                                // A site search with a colour of its own is in it.
-                                let colored =
-                                    self.site.as_ref().is_some_and(|site| site.color.is_some());
-                                let (fill, label) = match colored {
-                                    true => self.accent(&palette),
-                                    false => (palette.plate(CHIP), palette.ink.into()),
-                                };
-                                line.child(
-                                    div()
-                                        .flex_none()
-                                        .max_w(px(CHIP_MAX))
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(5.))
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .rounded(px(CHIP_RADIUS))
-                                        .bg(fill)
-                                        .text_color(label)
-                                        .text_size(px(text::BODY))
-                                        .children(favicon)
-                                        .child(div().min_w_0().truncate().child(name)),
-                                )
-                            })
-                            .child(div().flex_1().min_w_0().child(self.input.clone()))
-                            .children(self.site_hint(cx)),
-                    )
-                    .when(!rows.is_empty() && !self.over_field, |bar| {
-                        bar.child(
-                            div()
-                                .h(px(hairline))
-                                .mx(px(LINE_INSET))
-                                .flex_none()
-                                .bg(palette.faint(LINE_COLOR)),
+                Level::Modal.in_window(
+                    div()
+                        .key_context("CommandBar")
+                        .on_action(cx.listener(Self::go))
+                        .on_action(cx.listener(Self::go_beside))
+                        .on_action(cx.listener(Self::go_behind))
+                        .on_action(cx.listener(Self::go_dot_com))
+                        .on_action(cx.listener(Self::go_window))
+                        .on_action(cx.listener(Self::go_dot_com_window))
+                        .on_action(cx.listener(Self::search))
+                        .on_action(cx.listener(Self::paste_and_go))
+                        .on_action(cx.listener(Self::paste_and_search))
+                        .on_action(cx.listener(Self::remove))
+                        .on_action(cx.listener(Self::dismiss))
+                        .on_action(cx.listener(Self::shortcut))
+                        .on_action(cx.listener(Self::enter_site_or_next))
+                        .on_action(cx.listener(Self::leave_site_or_previous))
+                        .capture_action(cx.listener(|bar, _: &text_input::Undo, _, cx| {
+                            bar.step_removal(false, cx)
+                        }))
+                        .capture_action(cx.listener(|bar, _: &text_input::Redo, _, cx| {
+                            bar.step_removal(true, cx)
+                        }))
+                        .capture_action(cx.listener(
+                            |bar, _: &text_input::Backspace, window, cx| {
+                                bar.leave_at_start(window, cx)
+                            },
+                        ))
+                        .capture_action(cx.listener(
+                            |bar, _: &text_input::DeleteToStart, window, cx| {
+                                bar.leave_at_start(window, cx)
+                            },
+                        ))
+                        .capture_action(cx.listener(
+                            |bar, _: &text_input::DeleteWordBack, window, cx| {
+                                bar.leave_at_start(window, cx)
+                            },
+                        ))
+                        .on_action(cx.listener(|bar, _: &Next, window, cx| {
+                            bar.select_next(true, window, cx)
+                        }))
+                        .on_action(cx.listener(|bar, _: &Previous, window, cx| {
+                            bar.select_next(false, window, cx)
+                        }))
+                        .on_action(
+                            cx.listener(|bar, _: &First, window, cx| bar.select(0, window, cx)),
                         )
-                    })
-                    .when(!rows.is_empty(), |bar| {
-                        bar.child(
+                        .on_action(cx.listener(|bar, _: &Last, window, cx| {
+                            bar.select(bar.rows.len().saturating_sub(1), window, cx)
+                        }))
+                        .relative()
+                        .size_full()
+                        .overflow_hidden()
+                        .rounded(px(radius))
+                        .bg(palette.overlay)
+                        .text_color(palette.ink)
+                        // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_size(px(text::BODY))
+                        .child(
                             div()
-                                .id("suggestions")
-                                .when(self.a11y, |list| {
-                                    list.role(Role::ListBox).aria_label("Suggestions")
-                                })
-                                .mt(px(list_top))
-                                .mx(px(LIST_X))
-                                .h(px(shown * ROW_HEIGHT))
+                                .h(px(input_height))
                                 .flex_none()
                                 .flex()
-                                .flex_col()
-                                .overflow_y_scroll()
-                                .track_scroll(&self.scroll)
-                                .children(rows),
+                                .items_center()
+                                .pl(px(icon_x))
+                                .pr(px(HINT_END))
+                                .gap(px(text_x - icon_x - icon))
+                                .text_size(px(text_size))
+                                .line_height(px(23.))
+                                .child(self.input_icon(cx))
+                                .when_some(self.mode_name(), |line, name| {
+                                    let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
+                                    let favicon = page.map(|(url, _)| {
+                                        self.favicon(url, CHIP_FAVICON, palette.ink.into())
+                                    });
+                                    // A site search with a colour of its own is in it.
+                                    let colored =
+                                        self.site.as_ref().is_some_and(|site| site.color.is_some());
+                                    let (fill, label) = match colored {
+                                        true => self.accent(&palette),
+                                        false => (palette.plate(CHIP), palette.ink.into()),
+                                    };
+                                    line.child(
+                                        div()
+                                            .flex_none()
+                                            .max_w(px(CHIP_MAX))
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(5.))
+                                            .px(px(6.))
+                                            .py(px(2.))
+                                            .rounded(px(CHIP_RADIUS))
+                                            .bg(fill)
+                                            .text_color(label)
+                                            .text_size(px(text::BODY))
+                                            .children(favicon)
+                                            .child(div().min_w_0().truncate().child(name)),
+                                    )
+                                })
+                                .child(div().flex_1().min_w_0().child(self.input.clone()))
+                                .children(self.site_hint(cx)),
                         )
-                    })
-                    .children(self.a11y.then(|| self.announcer()))
-                    // The modal level's rim in the palette's ink; its outline and shadow are the
-                    // host's, round the window.
-                    .child(edge(0., 1., Level::Modal.rim_in(&palette))),
+                        .when(!rows.is_empty() && !self.over_field, |bar| {
+                            bar.child(
+                                div()
+                                    .h(px(hairline))
+                                    .mx(px(LINE_INSET))
+                                    .flex_none()
+                                    .bg(palette.faint(LINE_COLOR)),
+                            )
+                        })
+                        .when(!rows.is_empty(), |bar| {
+                            bar.child(
+                                div()
+                                    .id("suggestions")
+                                    .when(self.a11y, |list| {
+                                        list.role(Role::ListBox).aria_label("Suggestions")
+                                    })
+                                    .mt(px(list_top))
+                                    .mx(px(LIST_X))
+                                    .h(px(shown * ROW_HEIGHT))
+                                    .flex_none()
+                                    .flex()
+                                    .flex_col()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.scroll)
+                                    .children(rows),
+                            )
+                        })
+                        .children(self.a11y.then(|| self.announcer()))
+                        // The modal level's rim in the palette's ink; its outline and shadow are the
+                        // host's, round the window, or on Windows round it in the window.
+                        .child(edge(0., 1., Level::Modal.rim_in(&palette))),
+                ),
             )
     }
 }

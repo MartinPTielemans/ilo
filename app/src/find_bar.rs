@@ -147,7 +147,9 @@ pub fn open(
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
-            size(px(WIDTH), px(HEIGHT)),
+            Level::Popover
+                .panel_margin()
+                .around(size(px(WIDTH), px(HEIGHT))),
         ))),
         titlebar: Some(TitlebarOptions {
             title: None,
@@ -188,6 +190,7 @@ pub fn open(
             if let Ok(view) = window.update(cx, |_, window, _| crate::ns_view(window)) {
                 let (right, top) = (f64::from(RIGHT), f64::from(TOP));
                 unsafe { platform::host_add_find_bar(ui_view, view, right, top) };
+                crate::window_opening::make_room(view, Level::Popover);
                 cx.global_mut::<FindBars>().0.insert(browser, window);
             }
             Some(window.into())
@@ -614,48 +617,52 @@ impl Render for FindBar {
             .size_full()
             .font_family(browser::face::UI)
             .child(
-                div()
-                    .key_context("FindBar")
-                    // A key ends a button's tooltip, as a click does.
-                    .capture_key_down(cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
-                    .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_next(true, cx)))
-                    .on_action(cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_next(false, cx)))
-                    .on_action(cx.listener(Self::select_all))
-                    .on_action(cx.listener(Self::close))
-                    .size_full()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .px(px(INSET))
-                    .rounded(px(RADIUS))
-                    .bg(rgb(FILL))
-                    .text_color(rgb(TEXT))
-                    .text_size(px(text::BODY))
-                    .line_height(px(18.))
-                    .child(search)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .ml(px(FIELD_GAP))
-                            .overflow_hidden()
-                            .child(self.input.clone()),
-                    )
-                    .child(status)
-                    .when(!not_found, |bar| bar.child(previous).child(next))
-                    .child(divider)
-                    .child(close)
-                    // The popover level's rim, its own layer so the border doesn't move the bar's
-                    // parts. Its shadow is the window's, which the host's find bar still takes from
-                    // the system.
-                    .child(
-                        div()
-                            .absolute()
-                            .size_full()
-                            .rounded(px(RADIUS))
-                            .border(px(0.5))
-                            .border_color(Level::Popover.rim()),
-                    ),
+                Level::Popover.in_window(
+                    div()
+                        .key_context("FindBar")
+                        // A key ends a button's tooltip, as a click does.
+                        .capture_key_down(cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
+                        .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_next(true, cx)))
+                        .on_action(
+                            cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_next(false, cx)),
+                        )
+                        .on_action(cx.listener(Self::select_all))
+                        .on_action(cx.listener(Self::close))
+                        .size_full()
+                        .relative()
+                        .flex()
+                        .items_center()
+                        .px(px(INSET))
+                        .rounded(px(RADIUS))
+                        .bg(rgb(FILL))
+                        .text_color(rgb(TEXT))
+                        .text_size(px(text::BODY))
+                        .line_height(px(18.))
+                        .child(search)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .ml(px(FIELD_GAP))
+                                .overflow_hidden()
+                                .child(self.input.clone()),
+                        )
+                        .child(status)
+                        .when(!not_found, |bar| bar.child(previous).child(next))
+                        .child(divider)
+                        .child(close)
+                        // The popover level's rim, its own layer so the border doesn't move the bar's
+                        // parts. Its shadow is the window's, which the Mac's host takes from the
+                        // system, or on Windows the bar's own, round it in the window.
+                        .child(
+                            div()
+                                .absolute()
+                                .size_full()
+                                .rounded(px(RADIUS))
+                                .border(px(0.5))
+                                .border_color(Level::Popover.rim()),
+                        ),
+                ),
             )
     }
 }
