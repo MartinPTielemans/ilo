@@ -7,7 +7,7 @@
 # major's is never built on. Without a kept tree it starts cold, from engine/setup.sh. A major keeps
 # one tree, the newest: the prune job deletes the older ones once a build has kept its own.
 # The stages run Chromium's build scripts and hold no secret. The publish job alone holds
-# ENGINE_RELEASE_TOKEN: it checks the packed engine's checksum, then releases it as
+# ENGINE_RELEASE_TOKEN: it checks the packed engine's checksum and its dSYMs', then releases both as
 # engine-mac-<commit> in ilo-engine, as tools/mac-engine-publish.sh does from the MacBook. The first
 # engine uploaded for a commit is its engine, whichever of the two built it: neither replaces one a
 # check may already have run.
@@ -223,13 +223,17 @@ jobs:
             "$(git config -f engine/pins.ini chromium.version)" "$STAGE" "$GITHUB_RUN_ID" "$finished" \
             >engine/.deps/tree.txt
 
-      # The engine, packed as tools/mac-engine-publish.sh packs it, for the publish job.
+      # The engine and its dSYMs, packed as tools/mac-engine-publish.sh packs them, for the publish
+      # job.
       - if: steps.stage.outputs.finished == 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/engine"
+          out=engine/.deps/src/out/Release
           archive=$RUNNER_TEMP/engine/Chromium-mac-arm64.tar.xz
-          tar -cJf "$archive" --no-mac-metadata --options xz:threads=0 -C engine/.deps/src/out/Release Chromium.app
+          tar -cJf "$archive" --no-mac-metadata --options xz:threads=0 -C "$out" Chromium.app
           shasum -a 256 "$archive" | cut -d' ' -f1 >"$archive.sha256"
+          tools/mac-dsyms.sh "$out" "$out/Chromium.app/Contents/Frameworks/Chromium Framework.framework/Chromium Framework" \
+            "$RUNNER_TEMP/engine"
       - if: steps.stage.outputs.finished == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -361,7 +365,9 @@ jobs:
           GH_TOKEN: ${{ secrets.ENGINE_RELEASE_TOKEN }}
         run: |
           cd "$RUNNER_TEMP/engine"
-          echo "$(cat Chromium-mac-arm64.tar.xz.sha256)  Chromium-mac-arm64.tar.xz" | sha256sum -c
+          for asset in Chromium-mac-arm64.tar.xz Chromium-mac-arm64-dSYMs.tar.xz; do
+            echo "$(cat "$asset.sha256")  $asset" | sha256sum -c
+          done
           cd "$GITHUB_WORKSPACE"
           repo=$(git config -f engine/prebuilt.ini prebuilt.repository)
           repo=${repo#https://github.com/}
@@ -384,7 +390,8 @@ jobs:
               --notes "The Mac engine (Chromium $version, Apple silicon) built from $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA, which holds its source."
           gh release upload "$tag" -R "$repo" \
             "$RUNNER_TEMP/engine/Chromium-mac-arm64.tar.xz#Chromium-mac-arm64.tar.xz, from Engine on macOS run $GITHUB_RUN_ID" \
-            "$RUNNER_TEMP/engine/Chromium-mac-arm64.tar.xz.sha256"
+            "$RUNNER_TEMP/engine/Chromium-mac-arm64.tar.xz.sha256" \
+            "$RUNNER_TEMP/engine/Chromium-mac-arm64-dSYMs.tar.xz" "$RUNNER_TEMP/engine/Chromium-mac-arm64-dSYMs.tar.xz.sha256"
 
   # One kept tree of a major, the newest, so nightly builds don't hold 8 GB each for 90 days. Only
   # once this run kept its finished tree, and only trees of pins.ini's major, from other runs. The

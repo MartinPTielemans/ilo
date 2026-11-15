@@ -158,7 +158,11 @@ so a build whose profile is elsewhere, as a dev build's is, does none of that.
   `tools/symbols.sh`, through `sentry-cli debug-files upload`, to the same project.
   The Mac's are the Release engine's dSYMs and the app's executable; that engine builds with
   ungoogled-chromium-macos's `symbol_level=1` and `blink_symbol_level=0`, so frames have functions
-  and lines outside Blink, and Blink's only their library. Linux and Windows build with their
+  and lines outside Blink, and Blink's only their library. The framework and helpers ship
+  stripped, so the dSYMs are the only names they have: an engine's release carries them beside it
+  (`tools/mac-dsyms.sh`, which checks they're the packed framework's build), `fetch.sh symbols`
+  unpacks them beside `Chromium.app`, and `mac-engine-publish.sh symbols` adds them to a release
+  published without them, from the Mac's own build of it. Linux and Windows build with their
   ungoogled-chromium's `symbol_level=0`, so frames have functions and no lines: on Linux from the
   symbol tables of `chrome` and `libBrowser.so`, which the Flatpak keeps, and on Windows from PDBs,
   the engine's in its release beside it (`windows/cross/package.sh`, `fetch.sh symbols`) and
