@@ -101,37 +101,47 @@ const STEPS: [Step; 7] = [
 /// The opt-ins the first launch offers, each Settings' own switch.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum OptIn {
+    /// Off until the user turns it on, and set only as they leave the step, so nothing is sent
+    /// while it shows (#2978).
+    DailyCount,
     CrashReports,
     Agents,
 }
 
 impl OptIn {
-    const ALL: [OptIn; 2] = [OptIn::CrashReports, OptIn::Agents];
+    const ALL: [OptIn; 3] = [OptIn::DailyCount, OptIn::CrashReports, OptIn::Agents];
 
     /// What check.sh calls it.
     fn name(self) -> &'static str {
         match self {
+            OptIn::DailyCount => "daily-count",
             OptIn::CrashReports => "crash-reports",
             OptIn::Agents => "agents",
         }
     }
 
     /// Its switch's name and its one sentence: the name Settings' row has, as it's that switch.
-    fn words(self) -> (&'static str, &'static str) {
+    fn words(self) -> (&'static str, SharedString) {
         match self {
+            OptIn::DailyCount => (
+                "Send a daily usage count",
+                crate::daily_count::words(env!("APP_NAME")).into(),
+            ),
             OptIn::CrashReports => (
                 "Send crash reports",
                 concat!(
                     "When ",
                     env!("APP_NAME"),
                     " crashes, it sends a report of what went wrong, so it can be fixed."
-                ),
+                )
+                .into(),
             ),
             // Settings' own line while it's off.
             OptIn::Agents => (
                 "Let agents use the browser",
                 "They work in tabs of their own, which you can watch, and never see your \
-                 passwords, cookies or autofill.",
+                 passwords, cookies or autofill."
+                    .into(),
             ),
         }
     }
@@ -345,6 +355,9 @@ pub(super) struct Onboarding {
     hold: Option<gpui::Task<()>>,
     /// The account step's view, while the step is offered.
     account: Option<Signing>,
+    /// The daily usage count's switch as turned at the opt-ins step, None while untouched: it's
+    /// set as the step is left (onboarding_next), so turned on and off again it sends nothing.
+    count: Option<bool>,
 }
 
 impl Shell {
@@ -414,6 +427,7 @@ impl Shell {
             keyboard: false,
             hold: None,
             account,
+            count: None,
         });
         cx.notify();
     }
@@ -500,6 +514,11 @@ impl Shell {
         };
         let step = onboarding.step;
         log!("browser: onboarding left {} via {how}", step.name());
+        // The count's switch is set as its step is left, whichever way: nothing is sent while the
+        // step shows, and turned on and off again it's as it was (#2978).
+        let count = (step == Step::OptIns)
+            .then(|| onboarding.count.take())
+            .flatten();
         if !favorites {
             onboarding
                 .steps
@@ -522,7 +541,30 @@ impl Shell {
             }
             None => onboarding.ending = Some(Instant::now()),
         }
+        if let Some(on) = count.filter(|&on| self.browser.daily_count(cx) != Some(on)) {
+            // check.sh reads this line; the first count, with first set, goes from here.
+            log!(
+                "browser: onboarding daily-count set {}",
+                if on { "on" } else { "off" }
+            );
+            self.browser.set_daily_count(on, cx);
+        }
         cx.notify();
+    }
+
+    /// Turns the daily count's switch on at the opt-ins step, for the preview's captures.
+    pub fn onboarding_count_on(&mut self, cx: &mut Context<Self>) {
+        self.onboarding_switch(OptIn::DailyCount, cx);
+    }
+
+    /// Goes on through the flow to the step check.sh calls `name`, for the preview's captures.
+    pub fn onboarding_to(&mut self, name: &str, cx: &mut Context<Self>) {
+        while let Some(onboarding) = self.onboarding.as_ref()
+            && onboarding.ending.is_none()
+            && onboarding.step.name() != name
+        {
+            self.onboarding_next("preview", cx);
+        }
     }
 
     /// The step's button: what it offers, then on, as Skip goes.
@@ -640,6 +682,15 @@ impl Shell {
     /// The opt-ins offered, each with whether it's on.
     pub(super) fn opt_ins(&self, cx: &gpui::App) -> Vec<(OptIn, bool)> {
         let on = |opt_in| match opt_in {
+            OptIn::DailyCount => {
+                let kept = self.browser.daily_count(cx)?;
+                Some(
+                    self.onboarding
+                        .as_ref()
+                        .and_then(|o| o.count)
+                        .unwrap_or(kept),
+                )
+            }
             OptIn::CrashReports => self.browser.crash_reports(cx),
             OptIn::Agents => self.browser.agents(cx),
         };
@@ -663,11 +714,15 @@ impl Shell {
         // After this update, as turning agents off ends their ask, which reads every Shell (#2459).
         let browser = self.browser.clone();
         cx.defer(move |cx| match opt_in {
+            OptIn::DailyCount => {}
             OptIn::CrashReports => browser.set_crash_reports(!on, cx),
             OptIn::Agents => browser.set_agents(!on, cx),
         });
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.switched = Some((opt_in, Instant::now()));
+            if opt_in == OptIn::DailyCount {
+                onboarding.count = Some(!on);
+            }
         }
         cx.notify();
     }

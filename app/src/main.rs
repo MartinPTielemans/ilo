@@ -985,7 +985,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     }
     // Where the daily usage count goes, which only the prod build names, unless the process was
     // given it, as a check is. The user's sync server doesn't change it.
-    if let Some(switch) = daily_count_host::prepare(&given, &profile) {
+    if let Some(switch) = daily_count_host::prepare(&given) {
         args.push(switch);
     }
     // The sync server the account signs in to until the user names another, a default service URL
