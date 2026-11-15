@@ -21,11 +21,6 @@ bool ListHistory(Profile* profile,
                  const char* text,
                  size_t max);
 
-// Deletes |profile|'s visits to |url| from |begin| to |end|, microseconds since 1970, as Chrome's
-// history page removes a row (bc_profile_remove_history). False as ListHistory, or for a URL that
-// isn't valid or a span that's empty.
-bool RemoveHistory(Profile* profile, const char* url, int64_t begin, int64_t end);
-
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_HISTORY_LIST_H_

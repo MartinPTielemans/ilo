@@ -15,6 +15,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
+#include "browser_core/arrangement.h"
 #include "browser_core/public/browser_core.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_observer.h"
@@ -65,6 +66,10 @@ class Arrange : public content::WebContentsObserver,
   static int Set(bc_id profile, std::string_view site, std::optional<std::string_view> bytes);
   // bc_profile_turn_on_arrangement.
   static bool TurnOn(bc_id profile, std::string_view site, std::string_view bytes);
+
+  // bc_arrange_set_lift: how every tab's lifted elements stand off the page from their next
+  // placing or Arrange on.
+  static void SetLift(const arrangement::Lift& lift);
 
   // bc_tab_arrange: whether it's on after.
   bool Start(const Look& look);
