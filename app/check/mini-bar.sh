@@ -356,9 +356,13 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   in_browser WKWebView "after a click on Safari's engine's page"
   for each in "up ArrowUp" "down ArrowDown" "z,cmd z" "escape Escape"; do
     chord=${each% *} seen=${each#* }
+    n=$(wc -l < "$log")
     send key ${chord%,*} $(echo "$chord" | grep -o 'cmd$')
-    expect 'browser: \[keys\] .* before the page: page$' "${chord%,*} in Safari's engine's page didn't go to the page"
     page_says " key $seen " "Safari's engine's page didn't see ${chord%,*}"
+    # Safari's engine's page asks the app only about what AppKit offers as a key equivalent, which
+    # escape isn't, so escape has no line; one that went anywhere but the page is a miss.
+    sed -n "$((n + 1)),\$p" "$log" | grep 'before the page: ' | grep -qv 'before the page: page$' &&
+      fail "${chord%,*} in Safari's engine's page went elsewhere: $(sed -n "$((n + 1)),\$p" "$log" | grep 'before the page' | tail -2)"
   done
   send click $sidebar_point
   n=$(wc -l < "$log")
