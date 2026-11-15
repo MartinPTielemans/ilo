@@ -243,3 +243,40 @@ fn its_user_hides_it_and_it_never_takes_the_keyboard(cx: &mut TestAppContext) {
     assert_eq!(host.0.take(), ["show 7", "hide"], "hidden once");
     assert_eq!(cx.update(|cx| shown_over(cx)), None);
 }
+
+#[gpui::test]
+fn a_bar_that_grows_draws_once_its_window_has_grown(cx: &mut TestAppContext) {
+    let (host, window) = open_bar(cx);
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let saying = |words: &str, name: &'static str| {
+        let mut bar = arrange();
+        bar.words = words.to_owned().into();
+        let ran = ran.clone();
+        bar.buttons.last_mut().unwrap().run = Rc::new(move |_| ran.borrow_mut().push(name));
+        bar
+    };
+    show_bar(cx, &host, window, saying("Short", "before"));
+    let page = Bounds::new(point(px(250.), px(40.)), size(px(1000.), px(700.)));
+    let wider = saying("Inner scrolls with the page, over it", "after");
+    // The host sizes the window after the update that asked: until it has, the bar drawn, and the
+    // one a click presses, is the one before, not the new one cut at the old size (#2991).
+    cx.update(|cx| show(7, page, size(px(1260.), px(750.)), wider, cx));
+    cx.run_until_parked();
+    let places = host.1.borrow().clone();
+    let (before, after) = (places[places.len() - 2], places[places.len() - 1]);
+    assert!(after.size.width > before.size.width);
+    let done = |place: Place| {
+        point(
+            place.size.width - px(RIGHT.max(TALL_RIGHT) + 4.),
+            place.size.height / 2.,
+        )
+    };
+    VisualTestContext::from_window(window.into(), cx)
+        .simulate_click(done(before), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(*ran.borrow(), ["before"]);
+    VisualTestContext::from_window(window.into(), cx).simulate_resize(after.size);
+    cx.run_until_parked();
+    click_last(cx, &host, window);
+    assert_eq!(*ran.borrow(), ["before", "after"]);
+}

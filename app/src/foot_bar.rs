@@ -229,6 +229,12 @@ pub struct FootBar {
     /// The palette of a browser window, by its id, for the main button's accent.
     look: Box<dyn Fn(u64, &App) -> Palette>,
     shown: Option<Shown>,
+    /// The bar shown before, drawn until the window has left its size: the host sizes the window
+    /// after the update that asked, so a frame before then would cut the new bar at the old size,
+    /// which the Mac then stretches to the new one (#2991).
+    previous: Option<Shown>,
+    /// Whether the last frame drew `previous`, for a click on it.
+    drew_previous: bool,
 }
 
 struct FootBarWindow(WindowHandle<FootBar>);
@@ -276,6 +282,8 @@ pub fn open_at(
             host,
             look: Box::new(look),
             shown: None,
+            previous: None,
+            drew_previous: false,
         })
     });
     match window {
@@ -308,6 +316,8 @@ pub fn show(window: u64, page: Bounds<Pixels>, content: Size<Pixels>, bar: Bar, 
         let place = place(page, content, layout.size);
         let origin = origin(&place, content);
         let placed = Rc::new(RefCell::new(vec![None; bar.buttons.len()]));
+        let was = foot_bar.shown.take();
+        foot_bar.previous = was.filter(|was| was.drawn && was.window == window);
         foot_bar.shown = Some(Shown {
             window,
             bar,
@@ -327,6 +337,7 @@ pub fn hide(cx: &mut App) {
         return;
     };
     let _ = handle.update(cx, |foot_bar, _, cx| {
+        foot_bar.previous = None;
         if foot_bar.shown.take().is_some() {
             foot_bar.host.hide();
             cx.notify();
@@ -347,8 +358,11 @@ pub fn shown_over(cx: &App) -> Option<u64> {
 
 impl FootBar {
     fn press(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(button) = (self.shown.as_ref()).and_then(|shown| shown.bar.buttons.get(index))
-        else {
+        let drawn = match self.drew_previous {
+            true => self.previous.as_ref(),
+            false => self.shown.as_ref(),
+        };
+        let Some(button) = drawn.and_then(|shown| shown.bar.buttons.get(index)) else {
             return;
         };
         if !button.enabled {
@@ -364,14 +378,44 @@ impl FootBar {
 impl Render for FootBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div().size_full().font_family(crate::face::UI);
-        let Some(shown) = &mut self.shown else {
+        let viewport = window.viewport_size();
+        let at = |shown: &Shown| {
+            let size = shown.layout.size;
+            (f32::from(viewport.width) - f32::from(size.width)).abs() < 1.
+                && (f32::from(viewport.height) - f32::from(size.height)).abs() < 1.
+        };
+        // The window still at the bar before's size, and not yet the new one's: the bar before.
+        let previous = match (&self.shown, &self.previous) {
+            (Some(shown), Some(previous)) => !at(shown) && at(previous),
+            _ => false,
+        };
+        if !previous {
+            self.previous = None;
+        }
+        self.drew_previous = previous;
+        let shown = match previous {
+            true => self.previous.as_mut(),
+            false => self.shown.as_mut(),
+        };
+        let Some(shown) = shown else {
             return root;
         };
         // GPUI draws a window only once the system reports it visible, some frames after the host
-        // shows it, so the line comes with the first frame that's seen. check.sh reads it.
-        if !shown.drawn {
+        // shows it, so the lines come with the first frame that's seen. check.sh reads them: the
+        // second says the bar's size and the window's, which a frame drawn before the host sized
+        // the window shows apart.
+        if !shown.drawn && !previous {
             match window.is_visible() {
-                true => log!("browser: foot bar drawn over {}", shown.window),
+                true => {
+                    log!("browser: foot bar drawn over {}", shown.window);
+                    log!(
+                        "browser: foot bar drew {}x{} in {}x{}",
+                        f32::from(shown.layout.size.width).round(),
+                        f32::from(shown.layout.size.height).round(),
+                        f32::from(viewport.width).round(),
+                        f32::from(viewport.height).round(),
+                    );
+                }
                 false => window.request_animation_frame(),
             }
             shown.drawn = window.is_visible();
