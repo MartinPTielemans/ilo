@@ -316,7 +316,9 @@ esac
 carry $(side_slot 1) $(page_at 300 760) cmd
 # A float shows no preview, as the thing carried is already where it lands: the core says Floats
 # from the lift on.
-carried=$(grep "^browser: arrange $tab " "$log" | tail -1 | cut -d' ' -f4-5)
+# The core's steps only: the foot bar's lines say what it shows.
+carried=$(grep -E "^browser: arrange $tab (Pointing|Carrying|Preview|Selected) " "$log" | tail -1 |
+  cut -d' ' -f4-5)
 [ "$carried" = "Carrying Floats" ] || fail "a carry with ⌘ held wasn't a float: $carried"
 send release $(page_at 300 760) cmd
 expect "^browser: arrange $tab Selected Floats selected " "letting go with ⌘ held didn't float"
