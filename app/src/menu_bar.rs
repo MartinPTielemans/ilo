@@ -268,6 +268,7 @@ pub(crate) fn menus(
                 item("Focus Sidebar", Command::FocusSidebar),
                 MenuItem::separator(),
                 item("Clear Today", Command::Clear),
+                item("Sort Today Tabs by Site", Command::SortBySite).disabled(!bar.sort_offered),
                 item("Reset all tabs in this Space", Command::ResetSpaceTabs),
             ],
         ),
