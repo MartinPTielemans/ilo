@@ -28,8 +28,9 @@ done
 
 serve
 # Four things on the page: one at its top edge, one at its bottom edge, one at its right edge, and
-# Outer, a tenth of the page in, around Inner, so a resize moves them. The title says the look it's
-# shown in, the page's size, whether Inner shows, and where a press landed.
+# Outer, a tenth of the page in, around Inner, so a resize moves them, and a text field under Outer.
+# The title says the look it's shown in, the page's size, whether Inner shows, the last key the page
+# saw, the field's text, and where a press landed.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
 body { margin: 0; font: 16px sans-serif; background: rgb(243, 245, 246) }
@@ -39,19 +40,23 @@ section { position: absolute; background: rgb(217, 226, 230) }
 #right { right: 0; top: 40%; width: 140px; height: 90px }
 #outer { left: 10%; top: 140px; width: 380px; height: 220px; padding: 30px; box-sizing: border-box }
 #inner { position: static; width: 100%; height: 100%; background: rgb(190, 205, 212) }
+#field { position: absolute; left: 10%; top: 400px; width: 160px }
 </style>
 <section id="top" aria-label="Top"></section>
 <section id="bottom" aria-label="Bottom"></section>
 <section id="right" aria-label="Right"></section>
 <section id="outer" aria-label="Outer"><section id="inner" aria-label="Inner"></section></section>
+<input id="field" aria-label="Field">
 <script>
 let at = "-";
+let key = "-";
+addEventListener("keydown", (event) => { key = event.key; }, true);
 let said;
 addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," + Math.round(event.clientY); });
 setInterval(() => {
   const shows = getComputedStyle(inner).display == "none" ? "hidden" : "shown";
   const scheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  const now = "scheme " + scheme + " view " + innerWidth + "x" + innerHeight + " inner " + shows + " at " + at;
+  const now = "scheme " + scheme + " view " + innerWidth + "x" + innerHeight + " inner " + shows + " key " + key + " field " + (field.value || "-") + " at " + at;
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/mini-bar.html"
@@ -73,7 +78,7 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 await "^browser: boost shown $host " || fail "the app didn't give the core the site's Boost"
-await '^browser: title [0-9]* scheme [a-z]* view [0-9]*x[0-9]* inner shown at -$' || fail "the fixture page didn't draw"
+await '^browser: title [0-9]* scheme [a-z]* view [0-9]*x[0-9]* inner shown key - field - at -$' || fail "the fixture page didn't draw"
 tab=$(grep '^browser: title [0-9]* scheme ' "$log" | tail -1 | cut -d' ' -f3)
 said() { grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f4-; }
 # Waits for the page to say $1, as a pattern over its title, and fails with $2.
@@ -282,10 +287,99 @@ send key escape
 expect "browser: tab $tab arrange off\$" "escape with the UI focused didn't end Arrange"
 grep -q 'before the page: \(zap or \)\?arrange$' "$log" || fail "no key went through the page in the run"
 
+# On the Mac, Japanese input in a field on the page while Arrange is on: the composition takes ↓
+# and escape, as the input method does with any key while it composes, and the mode has them again
+# once it's committed. The click on the field before the mode gives it the page's focus, which the
+# mode's own click on it keeps.
+composing=
+if [ "$(uname)" = Darwin ]; then
+  send click $(page_at $((vw2 / 10 + 80)) 412)
+  arrange "Japanese input"
+  send click $(page_at $((vw2 / 10 + 80)) 412)
+  expect "^browser: arrange $tab Selected .* Field\$" "a click on the field in Arrange didn't select it"
+  send state
+  in_browser RenderWidgetHostViewCocoa "after the click on the field in Arrange"
+  n=$(wc -l < "$log")
+  send ime on
+  send type nihongo
+  page_says ' field nihongo ' "the field didn't show the composition with Arrange on"
+  send key down
+  send key escape
+  page_says ' field - ' "escape in the composition didn't cancel it"
+  sed -n "$((n + 1)),\$p" "$log" | grep -q "before the page: \(zap or \)\?arrange\$\|^browser: arrange $tab Selected\|^browser: tab $tab arrange off\$" &&
+    fail "Arrange took a key from the composition: $(sed -n "$((n + 1)),\$p" "$log" | grep 'arrange' | tail -4)"
+  send type nihongo
+  send key space
+  page_says ' field 日本語 ' "space didn't convert the composition with Arrange on"
+  send key return
+  send ime off
+  page_says ' field 日本語 ' "return didn't commit the composition with Arrange on"
+  send key escape
+  expect 'browser: \[keys\] .* before the page: zap or arrange$' "escape after the composition went to the page"
+  expect "browser: tab $tab arrange off\$" "escape after the composition didn't end Arrange"
+  composing=1
+fi
+
 exec 3>&-
 quit
+
+# Safari's engine, on the Mac from macOS 14, shows a page the core's Arrange can't reach: the card
+# offers no Arrange there, and ↑, ↓, ⌘Z and escape are the page's with the page focused, and the
+# UI's with the UI focused, as with the mode off. The checks' streaming host (main.rs) opens the
+# page there from its first load.
+safari=
+if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
+  forget_engine_sites
+  log="$out/mini-bar-safari.log"
+  step=0
+  rm -f "$saved" "$launch_frame"
+  BROWSER_LOG=keys BROWSER_DRIVE=1 BROWSER_STREAMING_TEST_HOST="$host" BROWSER_URL="${site}mini-bar.html" \
+    "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  await '^browser: system engine [0-9]* on$' || fail "the streaming host's page didn't open in Safari's engine"
+  tab=$(sed -n 's/^browser: system engine \([0-9]*\) on$/\1/p' "$log" | head -1)
+  await "^browser: title $tab scheme [a-z]* view [0-9]*x[0-9]* inner shown key - field - at -\$" ||
+    fail "the fixture page didn't draw in Safari's engine"
+  bar_command edit-boost "Edit Boost" "edit boost"
+  expect "^browser: boost card $tab offers no Arrange in Safari's engine\$" \
+    "the Boost's card offered Arrange over Safari's engine's page"
+  expect "^browser: boost card $tab at " "Edit Boost drew no card over Safari's engine's page"
+  ../tools/window-screenshot.sh "$pid" "$out/mini-bar-safari-card.png" || fail "no window to capture"
+  send key escape
+  expect "^browser: boost card $tab closed\$" "escape didn't close the Boost's card"
+  send click $page_point
+  page_says ' at [0-9-]*,[0-9-]*$' "the click didn't reach Safari's engine's page"
+  send state
+  in_browser WKWebView "after a click on Safari's engine's page"
+  for each in "up ArrowUp" "down ArrowDown" "z,cmd z" "escape Escape"; do
+    chord=${each% *} seen=${each#* }
+    send key ${chord%,*} $(echo "$chord" | grep -o 'cmd$')
+    expect 'browser: \[keys\] .* before the page: page$' "${chord%,*} in Safari's engine's page didn't go to the page"
+    page_says " key $seen " "Safari's engine's page didn't see ${chord%,*}"
+  done
+  send click $sidebar_point
+  n=$(wc -l < "$log")
+  for chord in up down "z cmd" escape; do
+    send key $chord
+  done
+  sed -n "$((n + 1)),\$p" "$log" | grep -q 'before the page: ' &&
+    fail "a key with the UI focused went through Safari's engine's page: $(sed -n "$((n + 1)),\$p" "$log" | grep 'before the page' | tail -2)"
+  grep -q "^browser: tab $tab arrange \|^browser: arrange $tab " "$log" &&
+    fail "Arrange ran over Safari's engine's page: $(grep 'arrange' "$log" | tail -3)"
+  exec 3>&-
+  quit
+  forget_engine_sites
+  safari=1
+fi
 echo "ok: the mini bar showed and drew over a thing selected, with Hide and Put back, and the pin" \
   "either way. Windows:$shots"
 echo "ok: in the mode the bar sat over things at the page's top, bottom and right edges and in its" \
   "middle, inside the page, and followed Inner after a resize; ↑, ↓, the bar's Hide, ⌘Z and escape" \
   "worked with the page focused and with the UI, in $look and $other. Windows:$pinned"
+[ -z "$composing" ] || echo "ok: Japanese input in a field on the page kept ↓ and escape while it" \
+  "composed with Arrange on, and the mode had escape again once it committed."
+[ -z "$safari" ] || echo "ok: over Safari's engine's page the Boost's card offered no Arrange, and" \
+  "↑, ↓, ⌘Z and escape went to the page with it focused and to the UI with the UI. Windows:" \
+  "$out/mini-bar-safari-card.png"

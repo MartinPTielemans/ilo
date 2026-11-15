@@ -170,8 +170,11 @@ impl Shell {
         if self.shown_boost(cx).is_none() {
             return;
         }
-        // check.sh reads this line.
+        // check.sh reads these lines.
         log!("browser: boost card {tab} opened");
+        if self.page(tab).system_engine {
+            log!("browser: boost card {tab} offers no Arrange in Safari's engine");
+        }
         self.boost_card = Some(tab);
         cx.notify();
     }
