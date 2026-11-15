@@ -178,9 +178,24 @@ $(grep '^browser: mini bar at ' "$log" | tail -1 | cut -d' ' -f5-8)
 EOF
   [ -n "$mh" ] || fail "$1: the UI placed no mini bar"
 }
+# Fails with $3 unless the mini bar's first place since the last drive step, a drop, is over the
+# thing at ($1 $2), its box centred there: the core sends the box at rest, where the thing lands,
+# not partway through its landing (#3008).
+landed_bar() {
+  for _ in $(seq 100); do
+    first=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: mini bar at ')
+    [ -n "$first" ] && break
+    sleep 0.1
+  done
+  read -r ox oy ow oh << EOF
+$(echo "$first" | cut -d' ' -f10-13)
+EOF
+  [ -n "$oh" ] || fail "$3: the UI placed no mini bar after the drop"
+  dx=$((ox + ow / 2 - $1)) dy=$((oy + oh / 2 - $2))
+  [ ${dx#-} -le 1 ] && [ ${dy#-} -le 1 ] || fail "$3: $first"
+}
 # Waits for the mini bar placed over the thing at ($1 $2), its box centred there, else fails with
-# $3. After a drop the core can place the bar for the thing partway through landing (#3008), and
-# the click that selects the thing again moves it there.
+# $3. Each press waits for the place the click before it asked for.
 bar_over() {
   for _ in $(seq 100); do
     read -r ox oy ow oh << EOF
@@ -242,6 +257,7 @@ carry $(slot 0) $(slot_edge 1)
 expect "^browser: arrange $tab Preview Settles " "a rest at an edge didn't show a settle"
 send release $(slot_edge 1)
 expect "^browser: arrange $tab Selected Settles selected " "letting go at an edge didn't settle"
+landed_bar $(slot 1) "the mini bar wasn't first placed over Alpha where it settled"
 expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle"
 shows 'b,a,c,w side s,n hidden - float -' "the settle didn't move the thing under the second"
 kept 1 "the settle wasn't saved"
@@ -263,6 +279,7 @@ carry $(slot 2) $(slot 0)
 expect "^browser: arrange $tab Preview Trades " "a rest on a thing's middle didn't show a trade"
 send release $(slot 0)
 expect "^browser: arrange $tab Selected Trades selected " "letting go on a thing's middle didn't trade"
+landed_bar $(slot 0) "the mini bar wasn't first placed over Gamma where it traded to"
 expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the trade"
 shows 'c,b,a,w side s,n hidden - float -' "the trade didn't swap the two"
 kept 1 "the trade wasn't saved"
@@ -322,7 +339,7 @@ carried=$(grep -E "^browser: arrange $tab (Pointing|Carrying|Preview|Selected) "
 [ "$carried" = "Carrying Floats" ] || fail "a carry with ⌘ held wasn't a float: $carried"
 send release $(page_at 300 760) cmd
 expect "^browser: arrange $tab Selected Floats selected " "letting go with ⌘ held didn't float"
-expect '^browser: mini bar at ' "the UI placed no mini bar over the float"
+landed_bar $(page_at 300 760) "the mini bar wasn't first placed over the float where it was let go"
 expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the float"
 kept 2 "the float wasn't saved"
 for _ in $(seq 100); do
