@@ -50,6 +50,8 @@ thread_local! {
     static PREVIEW_ORIGIN: Cell<Point<Pixels>> = Cell::new(point(px(0.), px(0.)));
     /// Whether the dialog's window has opened, the first time the preview asks something.
     static DIALOG_OPEN: Cell<bool> = const { Cell::new(false) };
+    /// Whether the tooltip's window has opened, where the first tooltip asked for hangs.
+    static TOOLTIP_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -1944,12 +1946,23 @@ impl Browser for Fake {
     fn hang_note(&self, _: u64, _: bool, _: &mut App) {}
 
     // The tooltip's window is the app's, over the page, which the preview has neither of, but with
-    // PREVIEW_HOVER the preview opens it on its own, for its look.
+    // PREVIEW_HOVER the preview opens it on its own, for its look, where the first tooltip asked for
+    // hangs, as the preview's host can't move one.
     fn tooltip(
         &self,
         tip: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>,
         cx: &mut App,
     ) {
+        if let Some((_, anchor)) = &tip
+            && std::env::var_os("PREVIEW_HOVER").is_some()
+            && !TOOLTIP_OPEN.replace(true)
+        {
+            use browser::tooltip::{WINDOW_HEIGHT, WINDOW_WIDTH};
+            let (left, top) = browser::tooltip::place(*anchor, (WINDOW_WIDTH, WINDOW_HEIGHT));
+            let margin = browser::elevation::WINDOW_MARGIN;
+            let at = point(px(left - margin), px(top - margin));
+            browser::tooltip::open_at(Rc::new(PreviewTooltip), PREVIEW_ORIGIN.get() + at, true, cx);
+        }
         match tip {
             Some((tip, anchor)) => browser::tooltip::hover(0, tip, anchor, cx),
             None => browser::tooltip::dismiss(cx),
@@ -3347,10 +3360,9 @@ fn main() {
                 }
             }
             // PREVIEW_HOVER=<x>,<y> rests the pointer there in the window, as on a folder's row, and
-            // shows the tooltip that brings in a window of its own, which sway places, not the host.
+            // shows the tooltip that brings in a window of its own, which sway places on Wayland.
             if let Ok(what) = std::env::var("PREVIEW_HOVER") {
                 if let Some(shell) = shell_window {
-                    browser::tooltip::open_at(Rc::new(PreviewTooltip), true, cx);
                     preview_hover(shell.into(), &what, cx);
                 }
             }

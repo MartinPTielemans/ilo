@@ -9,9 +9,9 @@ use std::{rc::Rc, sync::Arc, time::Duration};
 use web_time::Instant;
 
 use gpui::{
-    App, Bounds, Context, Div, FontWeight, Global, Pixels, Rgba, SharedString, Size, Task, TextRun,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, WindowTextSystem, div, font, point, prelude::*, px, rgb, size,
+    App, Bounds, Context, Div, FontWeight, Global, Pixels, Point, Rgba, SharedString, Size, Task,
+    TextRun, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, WindowTextSystem, div, font, point, prelude::*, px, rgb, size,
 };
 
 /// How long the pointer rests on a tile, row or button, from its last move, before its tooltip
@@ -343,14 +343,20 @@ impl Global for TooltipWindow {}
 /// Opens the tooltip's window, hidden, for `host` to show over the browser window, ahead of time
 /// as the toast's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
-    open_at(host, false, cx)
+    open_at(host, point(px(0.), px(0.)), false, cx)
 }
 
-/// Opens it, and on screen if `show`, as the preview does to show it alone.
-pub fn open_at(host: Rc<dyn Host>, show: bool, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
+/// Opens it at `origin` on screen, and on screen if `show`, as the preview does to show it alone
+/// where its host can't move it.
+pub fn open_at(
+    host: Rc<dyn Host>,
+    origin: Point<Pixels>,
+    show: bool,
+    cx: &mut App,
+) -> Option<WindowHandle<Tooltip>> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-            point(px(0.), px(0.)),
+            origin,
             size(
                 px(WINDOW_WIDTH + 2. * WINDOW_MARGIN),
                 px(WINDOW_HEIGHT + 2. * WINDOW_MARGIN),
