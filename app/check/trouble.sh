@@ -358,10 +358,12 @@ expect "browser: tab $tab game running\$" "Space didn't start a run on the offli
 # at the first column with no more hops.
 network online
 ../tools/window-screenshot.sh "$pid" "$out/offline-game.png" || fail "no window to capture"
-expect "browser: tab $tab game over\$\|^browser: loaded $tab ${site}index.html\$" \
+# The Mac's grep, BSD's, reads a "$" before "\|" as a dollar sign, so a pattern with a choice keeps
+# its anchors outside it.
+expect "^\(.*browser: tab $tab game over\|browser: loaded $tab ${site}index.html\)\$" \
   "the run didn't end at the first column, and the page didn't come back"
 sed -n "/browser: tab $tab game running\$/,/browser: tab $tab game over\$/p" "$log" |
-  grep -q "^browser: page $tab trouble fine\$\|^browser: loaded $tab ${site}index.html\$" &&
+  grep -q "^browser: \(page $tab trouble fine\|loaded $tab ${site}index.html\)\$" &&
   fail "the page came back mid-run, which ended the run: the reload under way when it started didn't wait for it"
 expect "browser: tab $tab game over\$" "the run didn't end at the first column"
 expect "^browser: loaded $tab ${site}index.html\$" "the page didn't load once the run ended"
@@ -383,10 +385,10 @@ expect "browser: tab $tab game running\$" "Space didn't start a second run on th
 second_run=$(grep -n "browser: tab $tab game running\$" "$log" | tail -1 | cut -d: -f1)
 network online
 send key r cmd
-expect "^browser: loaded $tab ${site}index.html\$\|browser: tab $tab game over\$" \
+expect "^\(browser: loaded $tab ${site}index.html\|.*browser: tab $tab game over\)\$" \
   "⌘R mid-run neither loaded the page nor did the run end"
 tail -n +"$second_run" "$log" |
-  grep -m1 "^browser: loaded $tab ${site}index.html\$\|browser: tab $tab game over\$" |
+  grep -m1 "^\(browser: loaded $tab ${site}index.html\|.*browser: tab $tab game over\)\$" |
   grep -q "^browser: loaded " ||
   fail "⌘R mid-run waited for the run to end: the user's own reload was held with the auto-reload"
 exec 4>&-
