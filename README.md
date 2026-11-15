@@ -8,7 +8,7 @@ ilo is an open-source web browser. Your tabs live in a sidebar, in Spaces: each 
 
 ilo brings your tabs, bookmarks and history over from the other browsers on your computer, and your passwords from a file you export, and syncs with an ilo account, end-to-end encrypted. It saves your passwords and fills them in, and blocks ads and trackers from the first page. Protected video plays on the Mac through macOS's own engine and on Linux with Widevine; on Windows it's untested on real hardware.
 
-ilo is also the browser AI agents work in. Claude Code, Codex or any MCP client can work in your logged-in sessions, in a Space of its own, with only the permissions you give it, and it never reads your passwords or cookies. Agents are off until you turn them on.
+ilo is also the browser AI agents work in. Claude Code, Codex or any MCP client can work in your logged-in sessions, in tabs of its own you can watch, with only the permissions you give it, and it never reads your passwords or cookies. Agents are off until you turn them on.
 
 ilo is free and licensed under the GPL. It has no paid features, no license checks and no ads, and it doesn't sell your data. Services that hold your data, such as sync, can be self-hosted.
 
