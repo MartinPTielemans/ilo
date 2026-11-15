@@ -1,3 +1,4 @@
+# check.sh runs this at 350.
 # Quitting through the menu and with ⌘Q, answering Quit when the app asks first, closes the window
 # after its tabs and ends every Chromium process with status 0. So does the menu's Quit as the
 # window comes on screen, before the UI has made the dialog that asks, which once never quit

@@ -33,7 +33,7 @@ impl gpui::Global for PortraitBackground {}
 
 impl Shell {
     /// The backgrounds the card offers. The desktop's picture is offered only where the system gives
-    /// one, as the Mac does.
+    /// one, as the Mac and Windows do.
     fn portrait_backgrounds(&self) -> impl Iterator<Item = Background> + use<> {
         let desktop = self.browser.desktop_picture_offered();
         (desktop.then_some(Background::Desktop).into_iter())

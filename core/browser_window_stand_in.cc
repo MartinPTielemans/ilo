@@ -813,7 +813,6 @@ void BrowserWindowStandIn::OnWidgetShowStateChanged(views::Widget* widget) {
   if (page && controller->IsTabFullscreen() && IsFullscreen() &&
       controller->GetFullscreenState(page).target_display_id !=
           FullscreenController::GetDisplayId(*page)) {
-    // check.sh reads this line.
     fprintf(stderr, "browser: page full screen ended, its display gone\n");
     page->ExitFullscreen(/*will_cause_resize=*/true);
   }

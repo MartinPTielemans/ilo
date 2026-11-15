@@ -245,6 +245,7 @@ impl Shell {
             }
             Request::On(on) => self.set_boost_on(profile, site, on, cx),
             Request::EditCss => self.edit_boost_file(profile, site, cx),
+            Request::EditScript => self.edit_boost_script_file(profile, site, cx),
             Request::Zap => {
                 // Zap's own card says what to do and ends it.
                 self.boost_card = Some(self.field_tab());
@@ -355,6 +356,26 @@ impl Shell {
         self.edit_boost_file(profile, &site, cx);
     }
 
+    /// Edit Script…, from the editor's footer or the Library row: the site's script in the user's
+    /// editor, started if it has none. It runs only once the user turns it on in the browser
+    /// (#2297). The card has no button for it: a script is the rarest and riskiest of the tools,
+    /// so it's one step in, under Customize….
+    pub(super) fn edit_boost_script_file(
+        &mut self,
+        profile: u64,
+        site: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = boosts::with(|boosts| boosts.script_file(profile, site)) else {
+            return;
+        };
+        log!("browser: boost edit script {site}");
+        let changes = boosts::with(|boosts| boosts.reload(profile));
+        self.browser.show_boosts(changes, cx);
+        self.browser.edit_file(&path, cx);
+        cx.notify();
+    }
+
     pub(super) fn edit_boost_file(&mut self, profile: u64, site: &str, cx: &mut Context<Self>) {
         let Some(path) = boosts::with(|boosts| boosts.file(profile, site)) else {
             return;
@@ -388,11 +409,13 @@ impl Shell {
             return None;
         };
         let palette = &self.palette;
-        let quiet =
-            |id: &'static str, label: &'static str| card_button_as(palette, id, label, Look::Quiet);
+        let quiet = |id: &'static str, label: &'static str| {
+            card_button_as(palette, id, label, Look::Quiet).debug_selector(move || id.into())
+        };
         let edit = quiet("boost-edit", "Edit CSS…")
             .on_click(cx.listener(|shell, _, _, cx| shell.edit_boost_css(cx)));
         let zap = card_button_as(palette, "boost-zap", "Zap", Look::Primary)
+            .debug_selector(|| "boost-zap".into())
             .on_click(cx.listener(|shell, _, _, cx| shell.start_zap(cx)));
         let customize = quiet("boost-customize", "Customize…")
             .on_click(cx.listener(|shell, _, _, cx| shell.customize_boost(cx)));
@@ -401,16 +424,13 @@ impl Shell {
         let zaps = boost.as_ref().map_or(0, |boost| boost.summary.zaps);
         // Customize… and Arrange have a line of their own under the other two, as four don't fit
         // the card, so Zap's row stays where it is as Zap starts and Done comes up under the
-        // pointer. Arrange sits beside Customize… as Zap beside Edit CSS….
+        // pointer. Both lines are one grid of two equal columns, so the four buttons' edges line up
+        // whatever their labels' widths.
         let zapping = self.zapping == Some(tab);
-        let customize = (!zapping).then(|| {
-            div()
-                .mt(px(BUTTON_GAP))
-                .flex()
-                .gap(px(BUTTON_GAP))
-                .child(customize)
-                .child(arrange)
-        });
+        let second = (!zapping)
+            .then(|| [customize.into_any_element(), arrange.into_any_element()])
+            .into_iter()
+            .flatten();
         let arranged = (boost.as_ref())
             .and_then(|boost| boost.arrangement.as_ref())
             .filter(|_| !zapping)
@@ -429,6 +449,8 @@ impl Shell {
                         .into_iter()
                         .chain(
                             [card_button_as(palette, "boost-done", "Done", Look::Primary)
+                                // Done alone, before anything's hidden, is the line.
+                                .when(zaps == 0, |done| done.col_span_full())
                                 .on_click(cx.listener(|shell, _, _, cx| shell.stop_zap(cx)))
                                 .into_any_element()],
                         )
@@ -468,11 +490,12 @@ impl Shell {
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))
-                        .flex()
+                        .grid()
+                        .grid_cols(2)
                         .gap(px(BUTTON_GAP))
-                        .children(buttons),
+                        .children(buttons)
+                        .children(second),
                 )
-                .children(customize)
                 .child(close),
         )
     }

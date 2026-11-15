@@ -12,6 +12,7 @@ use gpui::{
     px, rgb, rgba, svg,
 };
 
+use crate::agents::request::Sent;
 use crate::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT};
 use crate::tokens::radius;
@@ -26,6 +27,7 @@ use crate::tokens::settings::{
     ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SWITCH_HEIGHT,
     SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
+use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
 use crate::tokens::shell::{KEYED, KEYED_RING};
 use crate::tokens::text::SMALL;
 
@@ -655,9 +657,148 @@ pub fn checked_row(
         .child(div().flex_1().min_w_0().truncate().child(name.into()))
 }
 
+/// How many of a request's `count` lines of what it sent an opened row shows, and whether "Show
+/// all" takes the last of its places: every one if they fit, or once the user showed them all.
+pub fn sent_shown(count: usize, all: bool) -> (usize, bool) {
+    let most = SENT_LINES as usize;
+    match all || count <= most {
+        true => (count, false),
+        false => (most - 1, true),
+    }
+}
+
+/// The chevron's place at the end of a row in a list whose rows may open: down, or up while
+/// `opened`, or empty for a row that doesn't open, so every row's time ends on one edge.
+pub fn chevron_slot(opened: Option<bool>, color: gpui::Hsla) -> gpui::Div {
+    let chevron = opened.map(|opened| chevron(opened, color));
+    div()
+        .w(px(SENT_CHEVRON))
+        .flex_none()
+        .flex()
+        .items_center()
+        .children(chevron)
+}
+
+fn chevron(up: bool, color: gpui::Hsla) -> gpui::Svg {
+    svg()
+        .path(match up {
+            true => "icons/chevron-up.svg",
+            false => "icons/chevron-down.svg",
+        })
+        .size(px(SENT_CHEVRON))
+        .flex_none()
+        .text_color(color)
+}
+
+/// What an agent's request shows opened under its title (#2326): "To" and its whole address,
+/// then "Sent", or "Not sent" if it was refused, a line a field, cut at the edge until `all`, when
+/// a long value wraps whole. Past eight lines the eighth is "Show all", which calls `show_all`.
+/// Its caller places it under the row's title, at the title's start.
+#[allow(clippy::too_many_arguments)]
+pub fn sent_part(
+    id: impl Into<gpui::ElementId>,
+    url: &str,
+    sent: &[Sent],
+    refused: bool,
+    all: bool,
+    (ink, detail): (gpui::Hsla, gpui::Hsla),
+    a11y: bool,
+    show_all: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
+) -> gpui::Div {
+    let small = |text: SharedString| {
+        div()
+            .text_size(px(SMALL))
+            .line_height(px(DETAIL_LINE))
+            .child(text)
+    };
+    let labelled = |label: &'static str, lines: Vec<gpui::AnyElement>| {
+        div()
+            .flex()
+            .child(
+                small(label.into())
+                    .w(px(SENT_LABEL))
+                    .flex_none()
+                    .text_color(detail),
+            )
+            .child(div().flex_1().min_w_0().flex().flex_col().children(lines))
+    };
+    let cut = |line: gpui::Div| match all {
+        true => line,
+        false => line.truncate(),
+    };
+    let to = cut(small(url.to_string().into()).min_w_0().text_color(ink));
+    let (shown, more) = sent_shown(sent.len(), all);
+    let mut lines: Vec<gpui::AnyElement> = (sent.iter().take(shown))
+        .map(|line| {
+            let row = div()
+                .flex()
+                .min_w_0()
+                .pl(px(SENT_INDENT * f32::from(line.depth)));
+            let row = match (line.name.is_empty(), line.value.is_empty()) {
+                // An object's name, over its fields.
+                (false, true) => row.child(small(line.name.clone().into()).text_color(detail)),
+                (true, _) => {
+                    row.child(cut(small(line.value.clone().into()).min_w_0()).text_color(ink))
+                }
+                (false, false) => {
+                    let value = match line.hidden() {
+                        true => detail,
+                        false => ink,
+                    };
+                    row.child(
+                        small(format!("{}: ", line.name).into())
+                            .flex_none()
+                            .text_color(detail),
+                    )
+                    .child(cut(small(line.value.clone().into()).min_w_0()).text_color(value))
+                }
+            };
+            row.into_any_element()
+        })
+        .collect();
+    if more {
+        let count = sent.len();
+        let name = format!("Show all {count} lines");
+        lines.push(
+            div()
+                .id(id)
+                .tab_index(0)
+                .focus_from_keys_only()
+                .focus_visible(ring(ink.into()))
+                .when(a11y, |more| named_button(more, name.clone()))
+                .flex()
+                .items_center()
+                .gap(px(SENT_GAP))
+                .text_color(detail)
+                .child(small(name.into()))
+                .child(chevron(false, detail))
+                .on_click(move |_, window, cx| show_all(window, cx))
+                .into_any_element(),
+        );
+    }
+    let label = if refused { "Not sent" } else { "Sent" };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(SENT_GAP))
+        .child(labelled("To", vec![to.into_any_element()]))
+        .when(!lines.is_empty(), |part| part.child(labelled(label, lines)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A request's opened row shows what it sent in eight lines at most, the eighth "Show all"
+    /// when there are more, and every line once the user shows them all.
+    #[test]
+    fn what_was_sent_shows_in_eight_lines_until_all() {
+        assert_eq!(sent_shown(0, false), (0, false));
+        assert_eq!(sent_shown(8, false), (8, false));
+        assert_eq!(sent_shown(9, false), (7, true));
+        assert_eq!(sent_shown(200, false), (7, true));
+        assert_eq!(sent_shown(200, true), (200, false));
+    }
 
     /// A button, a switch and a pop-up, named as Settings names them while VoiceOver asks.
     struct Named;

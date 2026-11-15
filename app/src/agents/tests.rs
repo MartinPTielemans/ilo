@@ -120,6 +120,13 @@ impl Browser for Made {
         )
     }
 
+    fn space_of(&self, tab: u64, _: &App) -> u64 {
+        let tabs = self.tabs.borrow();
+        tabs.iter()
+            .find(|each| each.0 == tab)
+            .map_or(0, |each| each.1)
+    }
+
     fn may_act(&self, agent: &str, tab: u64, action: &str, _: &mut App) -> Result<(), String> {
         self.checked.borrow_mut().push(action.into());
         if self.held.borrow().contains(&tab) {
@@ -214,6 +221,31 @@ impl Browser for Made {
             Some(split) => split.clone(),
             None => vec![tab],
         }
+    }
+
+    fn url_site(&self, url: &str) -> Option<String> {
+        crate::sort_by_site::made_up_site(url)
+    }
+
+    fn move_today(&self, tab: u64, index: usize, cx: &mut App) {
+        let panes = self.split(tab, cx);
+        let mut tabs = self.tabs.borrow_mut();
+        let Some(space) = tabs.iter().find(|each| each.0 == tab).map(|each| each.1) else {
+            return;
+        };
+        let moved: Vec<_> = (panes.iter())
+            .filter_map(|&pane| tabs.iter().find(|each| each.0 == pane).copied())
+            .collect();
+        tabs.retain(|each| !panes.contains(&each.0));
+        let pinned = self.pinned.borrow();
+        let today: Vec<usize> = (0..tabs.len())
+            .filter(|&at| tabs[at].1 == space && !pinned.contains(&tabs[at].0))
+            .collect();
+        let at = match today.get(index) {
+            Some(&at) => at,
+            None => today.last().map_or(tabs.len(), |&last| last + 1),
+        };
+        tabs.splice(at..at, moved);
     }
 
     // As the core does: three tabs at most, of one Space, the tab leaving any split it was in.
@@ -336,6 +368,8 @@ struct Configs {
     failing: Mutex<Option<String>>,
     /// The clients on the computer, besides any other MCP client.
     found: Mutex<Vec<Client>>,
+    /// What each task CLI answers when looked for; one not here isn't found.
+    looked: Mutex<Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>>,
 }
 
 impl Clients for Configs {
@@ -359,12 +393,17 @@ impl Clients for Configs {
         client == Client::Other || self.found.lock().unwrap().contains(&client)
     }
 
-    /// The tests never run a CLI of this computer's: none is found.
-    fn look_for_task_cli(&self, _: crate::agents::runner::Cli) -> crate::agents::ready::Found {
-        crate::agents::ready::Found {
-            ready: crate::agents::ready::Ready::NotFound,
-            ..Default::default()
-        }
+    /// The tests never run a CLI of this computer's: each answers as `looked` says.
+    fn look_for_task_cli(&self, cli: crate::agents::runner::Cli) -> crate::agents::ready::Found {
+        let looked = self.looked.lock().unwrap();
+        let found = looked.iter().find(|(each, _)| *each == cli);
+        found.map_or(
+            crate::agents::ready::Found {
+                ready: crate::agents::ready::Ready::NotFound,
+                ..Default::default()
+            },
+            |(_, found)| found.clone(),
+        )
     }
 }
 
@@ -1579,6 +1618,55 @@ fn an_agent_never_reaches_chromes_password_manager(cx: &mut TestAppContext) {
     assert!(browser.pages.borrow().is_empty());
 }
 
+/// Library › History lists the profile's pages, so an agent can't reach the history page Chrome
+/// keeps them in either, by a tab of its own or its tab's way, each try in the activity log with
+/// why, and it has no tool that lists or removes them (#2337).
+#[gpui::test]
+fn an_agent_never_reaches_the_history(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let tabs = browser.tabs.borrow().len();
+    let refused = ToolResult::error("Agents may open only http and https pages.");
+    for url in [
+        "chrome://history",
+        "chrome://history/?q=bank",
+        "CHROME://HISTORY",
+    ] {
+        let answer = call(
+            &agents,
+            "claude-code",
+            "open_tab",
+            json!({ "url": url }),
+            cx,
+        );
+        assert_eq!(answer.recv().unwrap(), refused, "{url}");
+        let going = json!({ "tab": 20, "url": url });
+        let answer = call(&agents, "claude-code", "navigate", going, cx);
+        assert_eq!(answer.recv().unwrap(), refused, "{url}");
+        let (action, _, why) = log(&agents, "claude-code", cx)[0].clone();
+        assert_eq!(
+            (action.as_str(), why.as_str()),
+            ("navigate", "Agents may open only http and https pages."),
+            "{url}'s refusal isn't in the activity log"
+        );
+    }
+    assert_eq!(
+        browser.tabs.borrow().len(),
+        tabs,
+        "an agent opened the history"
+    );
+    assert!(
+        browser.navigated.borrow().is_empty(),
+        "an agent went to the history"
+    );
+    for tool in ["history", "list_history", "remove_history"] {
+        let answer = call(&agents, "claude-code", tool, json!({}), cx);
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error(format!("There's no tool {tool}."))
+        );
+    }
+}
+
 /// A tab the page opens as the agent clicks, which the core puts in the agent's Space, behind, is
 /// named in the click's answer, so the agent can work in it (#1470). One another tab's page opens
 /// isn't.
@@ -1717,6 +1805,35 @@ fn a_question_left_unanswered_is_refused_after_5_minutes(cx: &mut TestAppContext
     assert_eq!(log(&agents, "claude-code", cx)[0].2, NO_ANSWER);
     let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
     assert!(grants.is_empty());
+}
+
+/// A check's `--agent-waits` shortens both waits so a run sees each end; a prod build, or a value
+/// that isn't two whole seconds, keeps the spec's.
+#[test]
+fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
+    let given = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let spec = Waits {
+        ask: ASK_WAIT,
+        handoff: HANDOFF_WAIT,
+    };
+    assert_eq!(Waits::new(&given(&[]), false), spec);
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=2,3"]), false),
+        Waits {
+            ask: Duration::from_secs(2),
+            handoff: Duration::from_secs(3),
+        }
+    );
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=2,3"]), true),
+        spec,
+        "a prod build reads no check's waits"
+    );
+    assert_eq!(Waits::new(&given(&["--agent-waits=2"]), false), spec);
+    assert_eq!(
+        Waits::new(&given(&["--agent-waits=x,3"]), false).ask,
+        ASK_WAIT
+    );
 }
 
 /// A handoff not handed back in 15 minutes answers the agent's call, so it isn't left waiting.
@@ -2114,6 +2231,62 @@ fn the_log_says_how_long_ago() {
     assert_eq!(ago(now + Duration::from_secs(5), now), "Just now");
 }
 
+/// A page whose requests were still open when the core stopped waiting, though what it showed
+/// held still, as one that polls, says that rather than that it may change yet (#2355).
+#[gpui::test]
+fn an_action_says_when_only_requests_were_still_open(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "scroll", json!({ "tab": 20 }), cx);
+    let polling = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+    ], "requests": true })
+    .to_string();
+    let scrolled = page_done(&agents, &browser, answer, polling, cx);
+    assert!(!scrolled.error);
+    assert!(
+        scrolled.text.starts_with(
+            "Scrolled down. The page held still, with requests it made still open after 5 s.\n\n\
+             Tab 20"
+        ),
+        "{}",
+        scrolled.text
+    );
+    assert!(
+        !scrolled.text.contains("may change yet"),
+        "{}",
+        scrolled.text
+    );
+}
+
+/// A wait step until "quiet" ends as soon as the page holds still with only its requests open, as
+/// a page that polls keeps one open for good (#2355).
+#[gpui::test]
+fn a_wait_step_ends_on_a_page_that_holds_still_while_it_polls(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let steps =
+        json!({ "tab": 20, "steps": [{ "action": "wait", "until": "quiet", "seconds": 10 }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    let polling = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+    ], "requests": true })
+    .to_string();
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, polling, false, cx)
+    });
+    cx.run_until_parked();
+    let ran = run.recv().unwrap();
+    assert!(
+        ran.text.starts_with(
+            "Ran 1 steps.\n1. The page held still, with requests it made still open after 5 s.\n\n\
+             Tab 20"
+        ),
+        "{}",
+        ran.text
+    );
+    assert_eq!(browser.pages.borrow().len(), 1, "it looked again");
+}
+
 /// The core answers the agents' last request of it with the shop's tree.
 fn shop_done(agents: &Entity<Agents>, browser: &Made, cx: &mut TestAppContext) {
     let request = browser.pages.borrow().last().unwrap().1;
@@ -2144,7 +2317,8 @@ fn an_action_says_when_its_page_was_still_busy(cx: &mut TestAppContext) {
 }
 
 /// A wait step until "quiet" asks the core for the page once it has settled, again while it was
-/// still busy, and once its time is up goes on with the run, as a page that polls never settles.
+/// still busy, and once its time is up goes on with the run, as a page that keeps changing never
+/// settles.
 #[gpui::test]
 fn a_wait_step_waits_for_the_page_to_settle(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
@@ -3038,6 +3212,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "pin_tab",
             "unpin_tab",
             "remove_tab",
+            "sort_tabs_by_site",
         ]
     );
 
@@ -3078,6 +3253,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("unpin_tab", tab(json!({}))),
         ("pin_tab", tab(json!({}))),
         ("remove_tab", tab(json!({}))),
+        ("sort_tabs_by_site", json!({})),
         ("split_tabs", json!({ "tabs": [20, 30] })),
         ("add_to_split", json!({ "tab": 30, "split": 20 })),
         ("list_split", tab(json!({}))),
@@ -5429,6 +5605,82 @@ mod tasks {
         );
     }
 
+    /// The Model menu as the user sees it.
+    fn model_menu(agents: &Entity<Agents>, cli: Cli, cx: &mut TestAppContext) -> String {
+        agents.read_with(cx, |agents, _| {
+            crate::menu::described(&agents.task_model_menu(cli).1)
+        })
+    }
+
+    #[gpui::test]
+    fn claudes_models_come_from_claude_and_one_it_drops_runs_on_its_default(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::agents::ready::Models;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let listing = |models: Option<Models>| Found {
+            ready: Ready::SignedIn,
+            program: Some("/usr/local/bin/claude".into()),
+            models,
+            ..Default::default()
+        };
+        let listed = Models {
+            listed: [("opus", "Opus"), ("fable", "Fable"), ("sonnet", "Sonnet")]
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .into(),
+            default: Some("Opus".into()),
+        };
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| {
+            agents.set_on(true, cx);
+            agents.set_task_model(Cli::Claude, "haiku", cx);
+        });
+        // Till Claude lists its own, ilo's names for them, Default naming none.
+        assert_eq!(
+            model_menu(&agents, Cli::Claude, cx),
+            "Default, Opus, Sonnet, Haiku (checked)"
+        );
+
+        *configs.looked.lock().unwrap() = vec![(Cli::Claude, listing(Some(listed)))];
+        agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
+        cx.run_until_parked();
+        // Its names in its order, Default saying which it is; Haiku is gone, so Default is chosen,
+        // for the run too, and comes back if Claude lists it again.
+        assert_eq!(
+            model_menu(&agents, Cli::Claude, cx),
+            "Default [Opus] (checked), Opus, Fable, Sonnet"
+        );
+        agents.read_with(cx, |agents, _| {
+            assert_eq!(agents.task_model(Cli::Claude), "");
+            assert_eq!(agents.task_model_name(Cli::Claude), None);
+        });
+
+        // Claude not answering the next time keeps the list it gave.
+        *configs.looked.lock().unwrap() = vec![(Cli::Claude, listing(None))];
+        agents.update(cx, |agents, cx| {
+            agents.look_for_task_agents(cx);
+            agents.set_task_model(Cli::Claude, "fable", cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            model_menu(&agents, Cli::Claude, cx),
+            "Default [Opus], Opus, Fable (checked), Sonnet"
+        );
+        agents.read_with(cx, |agents, _| {
+            assert_eq!(agents.task_model(Cli::Claude), "fable");
+            assert_eq!(
+                agents.task_model_name(Cli::Claude).as_deref(),
+                Some("Fable")
+            );
+        });
+
+        // An empty list: Default alone.
+        *configs.looked.lock().unwrap() = vec![(Cli::Claude, listing(Some(Models::default())))];
+        agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
+        cx.run_until_parked();
+        assert_eq!(model_menu(&agents, Cli::Claude, cx), "Default (checked)");
+    }
+
     #[gpui::test]
     fn the_default_and_models_are_saved(cx: &mut TestAppContext) {
         let folder = std::env::temp_dir().join(format!("ilo-task-settings-{}", std::process::id()));
@@ -5909,3 +6161,62 @@ mod sessions {
         assert_eq!(space(31), Some(2));
     }
 }
+
+/// An agent sorts its own Space's Today tabs by site, by the user's command's rule (#2344): its
+/// pinned tab stays where it is, its split joins no site, the user's Space isn't touched, and it's one entry
+/// in the log. Sorted already, it says so and nothing moves. A task has no such tool.
+#[gpui::test]
+fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.tabs.borrow_mut().extend([
+        (21, 2, "Wiki", "https://en.wikipedia.org/wiki/Rust"),
+        (22, 2, "Docs", "https://docs.example.com/"),
+        (23, 2, "Left", "https://news.ycombinator.com/"),
+        (24, 2, "Right", "https://example.org/"),
+        (25, 2, "More", "https://de.wikipedia.org/wiki/Arc"),
+        (26, 1, "Theirs", "https://www.example.com/b"),
+        (27, 2, "Pinned", "https://en.wikipedia.org/"),
+    ]);
+    browser.pinned.borrow_mut().insert(27);
+    browser.splits.borrow_mut().push(vec![23, 24]);
+    let sort = |cx: &mut TestAppContext| {
+        call(&agents, "claude-code", "sort_tabs_by_site", json!({}), cx)
+            .recv()
+            .unwrap()
+    };
+    let in_space = |space: u64| -> Vec<u64> {
+        (browser.tabs.borrow().iter())
+            .filter(|tab| tab.1 == space)
+            .map(|tab| tab.0)
+            .collect()
+    };
+    let users = in_space(1);
+    let answer = sort(cx);
+    assert_eq!(
+        answer,
+        ToolResult::text(
+            "Sorted your Today tabs by site, each site's tabs together at its first tab's place: \
+             20, 22, 21, 25, 23."
+        )
+    );
+    assert_eq!(in_space(2), [20, 22, 21, 25, 23, 24, 27]);
+    assert_eq!(in_space(1), users, "the user's Space stays as it was");
+    assert_eq!(
+        sort(cx),
+        ToolResult::text("Your Today tabs are together by site already.")
+    );
+    assert_eq!(in_space(2), [20, 22, 21, 25, 23, 24, 27]);
+    let logged: Vec<_> = (log(&agents, "claude-code", cx).into_iter())
+        .map(|(action, _, refused)| (action, refused))
+        .collect();
+    let sorted = ("sort_tabs_by_site".to_string(), String::new());
+    assert_eq!(logged[..2], [sorted.clone(), sorted]);
+    assert_eq!(
+        tools::describe("sort_tabs_by_site"),
+        "Sorted its tabs by site"
+    );
+    assert!(tools::names("claude-code").contains(&"sort_tabs_by_site".to_string()));
+    assert!(!tools::names("task-1").contains(&"sort_tabs_by_site".to_string()));
+}
+
+mod holds;

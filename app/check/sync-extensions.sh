@@ -1,3 +1,4 @@
+# check.sh runs this at 700, only when named.
 # What a device chooses to sync besides the Spaces (#1235), on an ilo-server of the run's own
 # (ilo-server.sh), each device a copy of the app with a profile of its own. A adds uBlock Origin
 # Lite from the Chrome Web Store, as the store run does, and picks View › Appearance › Dark, then
@@ -5,18 +6,18 @@
 # off. B recovers with A's words and takes them by itself: Dark, which its windows draw in, Little
 # ilo's setting, and the extension, which it installs from the store. B turns Settings off, and the
 # core takes it. It needs the network and Google's store, so it runs only when named:
-# ./check.sh sync-extensions. On Linux under Xvfb, on Windows, where each copy's window takes the
-# foreground from the other's as the run drives it, as sync-devices' do, and on the Mac, where each
-# copy activates itself as it starts.
+# ./check.sh sync-extensions. On Linux under Xvfb and Wayland, on Windows, where each copy's window
+# takes the foreground from the other's as the run drives it, as sync-devices' do, and on the Mac,
+# where each copy activates itself as it starts.
 
 if [ -z "${ILO_SERVER:-}" ]; then
   echo "skip: sync-extensions. It needs ILO_SERVER, an ilo-server built from its repo," \
     "to sign in to."
   return 0
 fi
-if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; then
-  echo "skip: sync-extensions. On Linux it runs under Xvfb so far," \
-    "where xdotool and xclip reach it."
+if sway_xwayland; then
+  echo "skip: sync-extensions. On Linux it runs under Xvfb and Wayland so far," \
+    "where the run reaches the clipboard and each copy's windows."
   return 0
 fi
 rm -f "$saved" "$launch_frame"
@@ -51,7 +52,7 @@ sign_in first
 await '^browser: account FirstDevice None$' ||
   fail "signing in didn't make A the account's first device"
 settings_keyboard
-send clickkey $(drawn "sync copy")
+click_in_sight "sync copy"
 words=
 for _ in $(seq 30); do
   clipboard
@@ -60,14 +61,14 @@ for _ in $(seq 30); do
   sleep 0.1
 done
 [ "$(echo "$words" | wc -w | tr -d " ")" = 24 ] || fail "Copy didn't put A's 24 words on the clipboard"
-send clickkey $(drawn "sync done")
+click_in_sight "sync done"
 await 'browser: sync service active$' || fail "A's sync didn't become active"
 await '^browser: account syncs settings true extensions true$' ||
   fail "A, signed in, didn't start syncing its settings and extensions"
 ../tools/window-screenshot.sh "$pid" "$out/sync-extensions-a.png" || fail "no window to capture"
 send clickkey $(drawn "toolbar Features")
 expect '^browser: settings tab Features$' "a click on Features didn't show A's tab"
-send clickkey $(drawn "switch little windows")
+click_in_sight "switch little windows"
 expect '^browser: little windows off$' "a click on Little ilo's switch didn't turn it off on A"
 
 start b "$PWD/$out/sync-extensions-b" 6
@@ -78,7 +79,7 @@ sign_in
 await '^browser: account NeedsSecret None$' ||
   fail "B, signed in, didn't need the account's secret"
 settings_keyboard
-send clickkey $(drawn "sync use-words")
+click_in_sight "sync use-words"
 send type $words
 send key return
 await '^browser: account On None$' || fail "B didn't turn sync on with A's words"
@@ -103,7 +104,7 @@ done
 
 # B stops syncing its settings, and the core takes the choice.
 settings_keyboard
-send clickkey $(drawn "sync switch settings")
+click_in_sight "sync switch settings"
 expect '^browser: sync settings off$' "a click on Settings' switch didn't turn it off on B"
 # Sync starts again without ilo's settings, and with the extensions.
 types=

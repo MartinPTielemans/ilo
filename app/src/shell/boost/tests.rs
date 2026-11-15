@@ -22,6 +22,10 @@ impl Folder {
     fn boost(&self, site: &str) -> Option<String> {
         std::fs::read_to_string(self.0.join("Boosts").join(format!("{site}.css"))).ok()
     }
+
+    fn script(&self, site: &str) -> Option<String> {
+        std::fs::read_to_string(self.0.join("Boosts").join(format!("{site}.js"))).ok()
+    }
 }
 
 impl Drop for Folder {
@@ -80,7 +84,7 @@ fn card(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<gpui::Bound
 }
 
 /// How far over the card's bottom the middle of its last line of buttons is, and of the line
-/// over that: Edit CSS… and Zap's, over Customize….
+/// over that: Edit CSS… and Zap's, over Customize… and Arrange.
 const LAST: f32 = 26.;
 const OVER_LAST: f32 = 62.;
 
@@ -203,6 +207,79 @@ fn edit_css_opens_the_sites_file(cx: &mut TestAppContext) {
         .boost("example.com")
         .expect("Edit CSS… started no file");
     assert!(start.starts_with("/* example.com: "), "{start}");
+}
+
+/// The card has no Edit Script…: a site with a script and no CSS shows the new Boost's card, whose
+/// Customize… opens the editor, whose footer's Edit Script… opens the script as it is (#2297).
+#[gpui::test]
+fn a_script_without_css_is_reached_through_customize(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    cx.update(|_, cx| crate::boost_editor::open(Rc::new(Unseen), cx))
+        .expect("no window for the editor");
+    let boosts = folder.0.join("Boosts");
+    std::fs::create_dir_all(&boosts).unwrap();
+    std::fs::write(boosts.join("example.com.js"), "mine();\n").unwrap();
+    shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
+    press(&shell, 0.25, LAST, cx);
+    assert_eq!(card(&shell, cx), None, "Customize… left the card open");
+    assert_eq!(
+        cx.update(|_, cx| crate::boost_editor::open_for(cx))
+            .as_deref(),
+        Some("example.com")
+    );
+    host.take();
+    shell.update(cx, |shell, cx| {
+        let request = crate::boost_editor::Request::EditScript;
+        shell.boost_requested(1, "example.com", request, cx);
+    });
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("edit example.com.js")
+    );
+    assert_eq!(folder.script("example.com").as_deref(), Some("mine();\n"));
+}
+
+/// Library › Boosts' row menu has Edit Script… under Edit CSS…, and each entry after it still does
+/// its own thing.
+#[gpui::test]
+fn the_library_row_edits_the_script(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::NewBoost, "ui", cx);
+        shell.start_zap(cx);
+        shell.boost_zapped(10, Some("#ad"), cx);
+        shell.stop_zap(cx);
+        shell.run(Command::ViewBoosts, "ui", cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    let menu = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.boost_menu("example.com".into(), point(px(40.), px(40.)), cx)
+        });
+    };
+    menu(&shell, cx);
+    let titles: Vec<String> = host
+        .menus
+        .borrow()
+        .last()
+        .unwrap()
+        .iter()
+        .map(|(title, _)| title.to_string())
+        .collect();
+    assert_eq!(&titles[..3], ["Edit CSS…", "Edit Script…", "Turn Off"]);
+    cx.update(|_, cx| host.choose("Edit Script…", cx));
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("edit example.com.js")
+    );
+    assert!(folder.script("example.com").is_some());
+
+    menu(&shell, cx);
+    cx.update(|_, cx| host.choose("Turn Off", cx));
+    cx.run_until_parked();
+    let on = crate::boosts::with(|boosts| boosts.get(1, "example.com")).map(|boost| boost.on);
+    assert_eq!(on, Some(false), "Turn Off moved and did something else");
 }
 
 /// Neither a private window nor an agent's Space makes a Boost.
@@ -361,6 +438,7 @@ struct Unseen;
 
 impl crate::boost_editor::Host for Unseen {
     fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+    fn resize(&self, _: f32, _: &[(f32, f32, f32)]) {}
     fn hide(&self) {}
 }
 
@@ -373,7 +451,7 @@ fn customize_hands_the_site_to_the_editor(cx: &mut TestAppContext) {
     cx.update(|_, cx| crate::boost_editor::open(Rc::new(Unseen), cx))
         .expect("no window for the editor");
     shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
-    press(&shell, 0.5, LAST, cx);
+    press(&shell, 0.25, LAST, cx);
     assert_eq!(card(&shell, cx), None, "Customize… left the card open");
     assert_eq!(
         cx.update(|_, cx| crate::boost_editor::open_for(cx))
@@ -647,6 +725,51 @@ fn arrange_is_on_only_where_the_core_says(cx: &mut TestAppContext) {
     press(&shell, 0.75, LAST, cx);
     assert_eq!(arrange_calls(&host), ["arrange 10 true"]);
     assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
+}
+
+/// The card's two lines of buttons are one grid: across the card, a press on either line lands in
+/// the same column, Edit CSS… over Customize… and Zap over Arrange, or in the gap between on both.
+#[gpui::test]
+fn the_cards_buttons_share_their_columns(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    cx.update(|_, cx| crate::boost_editor::open(Rc::new(Unseen), cx))
+        .expect("no window for the editor");
+    // The card as it opens, each press taking it away or changing it.
+    let card_again = |cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.stop_zap(cx);
+            shell.arrange_ended(10, cx);
+            shell.close_boost_card(cx);
+            shell.run(Command::NewBoost, "ui", cx);
+        });
+        host.take();
+    };
+    let mut lines = [String::new(), String::new()];
+    for at in (380..=620).step_by(5).map(|each| each as f32 / 1000.) {
+        card_again(cx);
+        press(&shell, at, OVER_LAST, cx);
+        lines[0].push(match arrange_calls(&host).last().map(String::as_str) {
+            Some(edit) if edit.starts_with("edit ") => 'l',
+            Some("zap 10 true") => 'r',
+            _ => '-',
+        });
+        card_again(cx);
+        press(&shell, at, LAST, cx);
+        let arranged = arrange_calls(&host)
+            .iter()
+            .any(|call| call == "arrange 10 true");
+        lines[1].push(match (arranged, card(&shell, cx).is_none()) {
+            (true, _) => 'r',
+            (false, true) => 'l',
+            _ => '-',
+        });
+    }
+    let [over, under] = lines;
+    assert!(
+        over.contains('l') && over.contains('r'),
+        "the presses missed a button: {over}"
+    );
+    assert_eq!(over, under, "the lines' columns split at different places");
 }
 
 /// Neither a private window nor an agent's Space offers Arrange, and what the core says of one

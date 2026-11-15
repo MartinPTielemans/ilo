@@ -76,13 +76,20 @@
 //                                         Settings, which a run can't do: macOS lets no background
 //                                         process make an app active, and a hidden app on a runner
 //                                         with nothing else in front stays the active one
+//   yield <pid>                           hands the app's activation to the app of process <pid>,
+//                                         another copy of the app, as the Little ilo window does
+//                                         to the app behind it, logging "browser: yielded to
+//                                         <pid>": the active app may give it away, though no
+//                                         background process can take it
 //   place <x> <y> <width> <height>        moves and resizes the window to that frame, in points
 //                                         from the main display's top-left corner
 //   screen                                logs the screen the app opens windows on, the main
 //                                         display or with BROWSER_DISPLAY=builtin the Mac's own
 //                                         (host_screens), as "browser: screen at <x> <y> <width>
 //                                         <height>" in place's terms, so a check places windows
-//                                         there and not on the main display it may be kept off
+//                                         there and not on the main display it may be kept off,
+//                                         after "browser: screen visible <x> <y> <width> <height>",
+//                                         its visible area in the same terms
 //   order                                 logs the browser windows on screen front to back and
 //                                         the key one, as "browser: order window <n> window <m>
 //                                         …, key window <n>|none", numbered as window numbers
@@ -107,7 +114,8 @@
 //                                         no key window titled <text>, windows <title> | <title>",
 //                                         the app's windows shown, the key one marked "(key)"
 //   pasteboard                            logs the text on the run's pasteboard, which stands in
-//                                         for the clipboard, as "browser: pasteboard text <text>"
+//                                         for the clipboard, as "browser: pasteboard text <text>",
+//                                         after its types, as "browser: pasteboard types <types>"
 //   savepanel <path>                      picks <path> in the save panel the app began, once it
 //                                         has, through the panel's completion handler, logging
 //                                         "browser: save panel answered", or "browser: no save
@@ -117,11 +125,6 @@
 //   savecancel                            ends the save panel the app began as its Cancel does,
 //                                         once it has, logging "browser: save panel cancelled",
 //                                         or "browser: no save panel" if none begins within 5 s
-//   pip                                   logs the frame of Chrome's Picture in Picture window, a
-//                                         floating call's or the Mini Player's, as "browser: pip
-//                                         at <x> <y> <width> <height>" in place's terms, or
-//                                         "browser: pip none". The driver doesn't move or size it:
-//                                         the window server does that with the real pointer
 //   front                                 logs which of the app's windows other apps take for
 //                                         the one in front, as "browser: front <first>, main
 //                                         <window>, key <window>, ax focused <window>, ax main
@@ -168,10 +171,15 @@
 //                                         alert shown, Chrome's too
 //   dismiss                               closes the menu a right click or openmenu showed,
 //                                         choosing none
-//   ime on|off                            the scripted input method, for keys to the UI or the
-//                                         page, Chromium's or Safari's engine's: letters add to a
-//                                         composition, space converts it to 日本語, return
-//                                         commits it and escape cancels it
+//   makekey <overlay>                     makes the window of <overlay>, such as theme picker,
+//                                         key at its next hide, as its fade out starts, as
+//                                         AppKit can, logging "browser: made <overlay> key"
+//   ime on|ko|off                         the scripted input method, for keys to the UI or the
+//                                         page, Chromium's or Safari's engine's: on, letters add
+//                                         to a composition, space converts it to 日本語, return
+//                                         commits it and escape cancels it; ko, a 2-set Korean
+//                                         keyboard, where gksrmf types 한글, and any other key
+//                                         commits and goes on
 //   window <n> [behind]                   drives the n-th browser window opened, from 1, from
 //                                         now, bringing it to the front with the keyboard as a
 //                                         click on it does, logging "browser: drive window <n>",
@@ -181,6 +189,9 @@
 //                                         <agent> and the name <name>, as agent code will once
 //                                         there is some, logging "browser: made space <space> for
 //                                         agent <agent>"
+//   agentopen <agent> <url>               the agent opens <url> in a tab of its Space, as its
+//                                         MCP tool does, logging "browser: agent <agent> opened
+//                                         <tab>"
 //   agentmayact <agent> <tab> [action]    logs whether the agent may do the action, "navigate" if none,
 //                                         to the tab, as "browser: agent <agent> may act on
 //                                         <tab>: <0|1>", and if not "browser: agent <agent>
@@ -198,6 +209,24 @@
 //                                         "browser: idle tabs checked" once it's done
 //   battery <percent> plugged|unplugged   the battery reads that from now, with
 //                                         --battery-for-testing (core/battery_saver.h)
+//   pip                                   finds a video's Picture in Picture window, the Mini
+//                                         Player, and logs "browser: pip at <x> <y> <width>
+//                                         <height>" in place's terms as it is and each time it
+//                                         moves or resizes, then "browser: pip gone", or
+//                                         "browser: pip none" without one
+//   pip move <x> <y>                      moves the pointer to (x, y) from its top-left, as move
+//                                         does in the browser window
+//   pip doubleclick <x> <y>               double-clicks it at (x, y) from its top-left
+//   pip wheel <x> <y> <notches> [cmd]     scrolls over it at (x, y) as a trackpad does, 120
+//                                         points a notch, down for content moving up, with the
+//                                         modifiers named
+//   pip press, pip dragto, pip release <x> <y>
+//                                         as press, dragto and release, in the Mini Player, at
+//                                         points from its top-left corner as it was at the press
+//   pip drag <x> <y> <dx> <dy> <ms>       presses there, moves by (dx, dy) in <ms> at 60 moves a
+//                                         second, as a hand does, and lets go a sixtieth after
+//   pip key                               makes the Mini Player key with no press, as VoiceOver
+//                                         does
 //   pair <tab> pin|confirm|passkey        a Bluetooth device <tab>'s page pairs with asks for its
 //                                         PIN, whether to pair, or whether its passkey matches, as
 //                                         bc_tab_pair_for_testing
@@ -217,6 +246,7 @@
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <map>
@@ -309,8 +339,42 @@ NSStatusBarButton* HostLittleStatusButton();
 // host.mm's: where this driver's pointer last was, which host_pointer answers.
 extern NSPoint g_driven_pointer;
 extern bool g_driven_pointer_known;
+// host.mm's, for makekey.
+bool HostMakeOverlayKey(const char* name);
 
 namespace {
+
+// The Mini Player pip last found, while it's there.
+__weak NSWindow* g_pip;
+// Its top-left corner on screen, AppKit's way up, at pip's press, while the press holds it.
+NSPoint g_pip_held_at;
+bool g_pip_held = false;
+
+// +[NSEvent mouseLocation], which Chromium's move loop moves a window by, and AppKit's own: while
+// pip holds the Mini Player, the driver's pointer, as the loop would follow a hand's.
+NSPoint (*g_mouse_location)(id, SEL);
+NSPoint MouseLocation(id self, SEL selector) {
+  return g_pip_held ? g_driven_pointer : g_mouse_location(self, selector);
+}
+
+// A video's Picture in Picture window: Chrome's own, floating over the others, as no other window
+// of the app's floats but its children, such as a prompt's bubble.
+NSWindow* MiniPlayer() {
+  for (NSWindow* window in NSApp.windows) {
+    if (window.visible && !window.parentWindow && window.level >= NSFloatingWindowLevel &&
+        [NSStringFromClass(window.class) hasPrefix:@"NativeWidgetMac"]) {
+      return window;
+    }
+  }
+  return nil;
+}
+
+void LogPip(NSWindow* window) {
+  const NSRect frame = window.frame;
+  fprintf(stderr, "browser: pip at %.0f %.0f %.0f %.0f\n", NSMinX(frame),
+          NSHeight(NSScreen.screens.firstObject.frame) - NSMaxY(frame), NSWidth(frame),
+          NSHeight(frame));
+}
 
 // A character typed with ⇧, such as + or ?, has its key's code on a US keyboard.
 const std::map<std::string, unsigned short> kKeyCodes = {
@@ -323,8 +387,8 @@ const std::map<std::string, unsigned short> kKeyCodes = {
     {"0", 29}, {"-", 27}, {"+", 27}, {"[", 33}, {"]", 30}, {"up", 126}, {"down", 125},
     {"left", 123}, {"right", 124}, {"backspace", 51}, {",", 43}, {"delete", 117},
     {"pageup", 116}, {"pagedown", 121}, {"/", 44}, {"?", 44}, {"=", 24}, {"&", 26}, {"_", 27},
-    {":", 41}, {"@", 19}, {"!", 18}, {"(", 25}, {")", 29}, {"f12", 111}, {"f10", 109},
-    {"f6", 97},
+    {":", 41}, {"@", 19}, {"!", 18}, {"(", 25}, {")", 29}, {"%", 23}, {"f12", 111},
+    {"f10", 109}, {"f6", 97},
 };
 // AppKit's characters for the arrows are NSUpArrowFunctionKey to NSRightArrowFunctionKey, and for
 // the others NSDeleteFunctionKey, NSPageUpFunctionKey, NSPageDownFunctionKey, NSF12FunctionKey,
@@ -349,6 +413,8 @@ const std::map<std::string, std::string> kCharacters = {
 
 // Marks the end of a command's events. AppKit handles events in the order they were posted.
 constexpr short kDoneSubtype = 0x5350;
+// Posted after pip's release, so the press holds the Mini Player till AppKit has the release.
+constexpr short kPipLetGoSubtype = 0x5351;
 
 // The window the backdrop command puts behind the browser window.
 NSWindow* g_backdrop;
@@ -539,6 +605,14 @@ void PostMouse(NSWindow* window,
   [NSApp postEvent:event atStart:NO];
 }
 
+// A mouse event at (x, y) from the Mini Player's top-left corner as it was at the press, which it
+// may have moved from since.
+void PostPip(NSWindow* window, NSEventType type, double x, double y) {
+  const NSPoint in = [window convertPointFromScreen:NSMakePoint(g_pip_held_at.x + x,
+                                                                g_pip_held_at.y - y)];
+  PostMouse(window, type, in.x, NSHeight(window.frame) - in.y, 1);
+}
+
 // Hands |move| to the owner of every tracking area in |view| and under it that asks for moves and
 // holds the pointer, as AppKit does with the window server's moves and not with posted ones, but
 // to |hit|, which has it.
@@ -594,6 +668,29 @@ NSWindow* WindowAt(NSWindow* browser, double x, double y) {
     }
   }
   return browser;
+}
+
+// Moves the pointer to (x, y) from |target|'s top-left, without a button down. It goes to the view
+// under the pointer and to the tracking areas holding it, as a real move does, which is how GPUI's
+// view, under the page's, hears the pointer over the page. It's also posted, for the app's event
+// monitors.
+void MoveIn(NSWindow* target, double x, double y) {
+  NSEvent* move = [NSEvent mouseEventWithType:NSEventTypeMouseMoved
+                                     location:NSMakePoint(x, NSHeight(target.frame) - y)
+                                modifierFlags:0
+                                    timestamp:NSProcessInfo.processInfo.systemUptime
+                                 windowNumber:target.windowNumber
+                                      context:nil
+                                  eventNumber:0
+                                   clickCount:0
+                                     pressure:0];
+  NSView* content = target.contentView;
+  NSView* hit =
+      [content hitTest:[content.superview convertPoint:move.locationInWindow fromView:nil]];
+  Pointed(target, move.locationInWindow);
+  [hit mouseMoved:move];
+  TrackMove(content, move, hit);
+  [NSApp postEvent:move atStart:NO];
 }
 
 void Click(NSWindow* window, double x, double y, int count, NSEventModifierFlags flags = 0) {
@@ -810,12 +907,125 @@ IMP g_handle_event;
 IMP g_interpret_key_events;
 IMP g_handle_event_by_input_method;
 
+// ime ko's 2-set (dubeolsik) Korean keyboard, as macOS's 2-Set Korean makes the calls (#2457):
+// each key rebuilds the syllable it composes, a key that can't join it commits it and starts the
+// next, and a vowel after a final consonant takes that consonant into the next syllable (핫 then
+// ㅔ gives 하 and 세). Any other key commits what's composing and goes on to the view, return
+// too, unlike Japanese input; backspace takes the last letter off. Only the plain consonants and
+// vowels, without the compound ones, which "한글" and "안녕하세요" don't need.
+bool g_korean = false;
+struct Jamo {
+  char key;
+  unichar alone;  // Its compatibility letter, for it composing alone.
+  int initial;    // As a syllable's first consonant, or -1 for a vowel.
+  int final;      // As its last, or 0.
+  int vowel;      // As its vowel, or -1 for a consonant.
+};
+constexpr Jamo kJamo[] = {
+    {'r', 0x3131, 0, 1, -1},   {'s', 0x3134, 2, 4, -1},   {'e', 0x3137, 3, 7, -1},
+    {'f', 0x3139, 5, 8, -1},   {'a', 0x3141, 6, 16, -1},  {'q', 0x3142, 7, 17, -1},
+    {'t', 0x3145, 9, 19, -1},  {'d', 0x3147, 11, 21, -1}, {'w', 0x3148, 12, 22, -1},
+    {'c', 0x314A, 14, 23, -1}, {'z', 0x314B, 15, 24, -1}, {'x', 0x314C, 16, 25, -1},
+    {'v', 0x314D, 17, 26, -1}, {'g', 0x314E, 18, 27, -1}, {'k', 0x314F, -1, 0, 0},
+    {'o', 0x3150, -1, 0, 1},   {'i', 0x3151, -1, 0, 2},   {'j', 0x3153, -1, 0, 4},
+    {'p', 0x3154, -1, 0, 5},   {'u', 0x3155, -1, 0, 6},   {'h', 0x3157, -1, 0, 8},
+    {'y', 0x315B, -1, 0, 12},  {'n', 0x315C, -1, 0, 13},  {'b', 0x3160, -1, 0, 17},
+    {'m', 0x3161, -1, 0, 18},  {'l', 0x3163, -1, 0, 20},
+};
+// The syllable composing: its first consonant, vowel and last consonant, each null if none.
+const Jamo* g_first = nullptr;
+const Jamo* g_vowel = nullptr;
+const Jamo* g_last = nullptr;
+
+NSString* Syllable(const Jamo* first, const Jamo* vowel, const Jamo* last) {
+  unichar c;
+  if (first && vowel) {
+    c = 0xAC00 + (first->initial * 21 + vowel->vowel) * 28 + (last ? last->final : 0);
+  } else if (first || vowel) {
+    c = (first ?: vowel)->alone;
+  } else {
+    return @"";
+  }
+  return [NSString stringWithCharacters:&c length:1];
+}
+
+void MarkKorean(id<NSTextInputClient> client) {
+  NSString* text = Syllable(g_first, g_vowel, g_last);
+  g_composition = text.length ? text : nil;
+  [client setMarkedText:text
+          selectedRange:NSMakeRange(text.length, 0)
+       replacementRange:NSMakeRange(NSNotFound, 0)];
+}
+
+// Commits |first|, |vowel| and |last| as a syllable, and composes nothing.
+void CommitKorean(id<NSTextInputClient> client,
+                  const Jamo* first,
+                  const Jamo* vowel,
+                  const Jamo* last) {
+  [client insertText:Syllable(first, vowel, last) replacementRange:NSMakeRange(NSNotFound, 0)];
+  g_first = g_vowel = g_last = nullptr;
+  g_composition = nil;
+}
+
+bool KoreanKey(id<NSTextInputClient> client, NSEvent* event) {
+  NSString* characters = event.characters;
+  const Jamo* jamo = nullptr;
+  for (const Jamo& each : kJamo) {
+    if (characters.length == 1 && [characters characterAtIndex:0] == each.key) {
+      jamo = &each;
+    }
+  }
+  if (!jamo) {
+    if (!g_composition) {
+      return false;
+    }
+    if (event.keyCode == 51) {  // backspace
+      if (g_last) {
+        g_last = nullptr;
+      } else if (g_first && g_vowel) {
+        g_vowel = nullptr;
+      } else {
+        g_first = g_vowel = nullptr;
+      }
+      MarkKorean(client);
+      return true;
+    }
+    CommitKorean(client, g_first, g_vowel, g_last);
+    return false;
+  }
+  if (jamo->vowel < 0) {
+    if (g_first && g_vowel && !g_last && jamo->final) {
+      g_last = jamo;
+    } else {
+      if (g_composition) {
+        CommitKorean(client, g_first, g_vowel, g_last);
+      }
+      g_first = jamo;
+    }
+  } else if (g_first && !g_vowel) {
+    g_vowel = jamo;
+  } else {
+    // The last consonant moves on to start the syllable this vowel is in.
+    const Jamo* moving = g_last;
+    if (g_composition) {
+      CommitKorean(client, g_first, g_vowel, nullptr);
+    }
+    g_first = moving;
+    g_vowel = jamo;
+  }
+  MarkKorean(client);
+  return true;
+}
+
 // Returns false for a key the input method leaves to the view.
 bool ImeKey(id<NSTextInputClient> client, NSEvent* event) {
   constexpr NSEventModifierFlags kShortcut =
       NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption;
   if (!g_ime_on || event.type != NSEventTypeKeyDown || (event.modifierFlags & kShortcut)) {
     return false;
+  }
+  if (g_korean) {
+    return KoreanKey(client, event);
   }
   NSString* characters = event.characters;
   bool letter = characters.length == 1 && [NSCharacterSet.lowercaseLetterCharacterSet
@@ -1091,18 +1301,6 @@ NSString* Describe(id element) {
                                     window.accessibilityRole];
 }
 
-// Chrome's Picture in Picture window: one of the app's on screen, over the normal level, that is
-// Chrome's own, not a browser window, and no other window's child, as the command bar and Peek are.
-NSWindow* PictureInPicture() {
-  for (NSWindow* window in NSApp.orderedWindows) {
-    if (window.visible && !window.parentWindow && window.level > NSNormalWindowLevel &&
-        [NSStringFromClass(window.class) hasPrefix:@"NativeWidgetMac"]) {
-      return window;
-    }
-  }
-  return nil;
-}
-
 // The app's first window on screen at the normal level, front to back, as another app finds it.
 id FirstNormalWindow() {
   NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
@@ -1240,6 +1438,116 @@ bool Run(const std::string& line, void (^done)(void)) {
   std::istringstream words(line);
   std::string action;
   words >> action;
+  if (action == "pip") {
+    NSWindow* pip = g_pip_held ? g_pip : MiniPlayer();
+    if (!pip) {
+      fprintf(stderr, "browser: pip none\n");
+      done();
+      return true;
+    }
+    g_pip = pip;
+    std::string step;
+    if (!(words >> step)) {
+      LogPip(pip);
+      done();
+      return true;
+    }
+    if (step == "key") {
+      [pip makeKeyWindow];
+      done();
+      return true;
+    }
+    double x, y;
+    if (!(words >> x >> y)) {
+      return false;
+    }
+    if (step == "move") {
+      MoveIn(pip, x, y);
+      done();
+      return true;
+    }
+    if (step == "doubleclick") {
+      Click(pip, x, y, 1);
+      Click(pip, x, y, 2);
+      done();
+      return true;
+    }
+    if (step == "wheel") {
+      double notches;
+      if (!(words >> notches)) {
+        return false;
+      }
+      // In points, as a trackpad's, so Chromium takes the distance as it is rather than as a
+      // mouse's lines, and the Mini Player moves with it as the content would.
+      CGEventRef event = CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitPixel, 1,
+                                                        (int32_t)(-notches * 120), 0, 0);
+      CGEventSetIntegerValueField(event, kWindowNumberField, pip.windowNumber);
+      CGEventSetWindowLocation(event, CGPointMake(x, y));
+      // AppKit's modifier flags are Quartz's bits.
+      CGEventSetFlags(event, (CGEventFlags)Modifiers(words));
+      Pointed(pip, NSMakePoint(x, NSHeight(pip.frame) - y));
+      [NSApp postEvent:[NSEvent eventWithCGEvent:event] atStart:NO];
+      CFRelease(event);
+      done();
+      return true;
+    }
+    if (step == "press" || step == "drag") {
+      g_pip_held_at = NSMakePoint(NSMinX(pip.frame), NSMaxY(pip.frame));
+      g_pip_held = true;
+      PostPip(pip, NSEventTypeLeftMouseDown, x, y);
+    }
+    if (step == "press" || step == "dragto" || step == "release") {
+      if (!g_pip_held) {
+        return false;
+      }
+      if (step != "press") {
+        PostPip(pip, step == "dragto" ? NSEventTypeLeftMouseDragged : NSEventTypeLeftMouseUp, x,
+                y);
+      }
+      // Held till AppKit has dequeued the release, so the drags before it follow the driver's
+      // pointer.
+      if (step == "release") {
+        [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                            location:NSZeroPoint
+                                       modifierFlags:0
+                                           timestamp:0
+                                        windowNumber:0
+                                             context:nil
+                                             subtype:kPipLetGoSubtype
+                                               data1:0
+                                               data2:0]
+                 atStart:NO];
+      }
+      done();
+      return true;
+    }
+    double dx, dy;
+    int ms;
+    if (step != "drag" || !(words >> dx >> dy >> ms) || ms < 0) {
+      g_pip_held = false;
+      return false;
+    }
+    // Off the main thread, so each move comes a sixtieth after the last, as the move loop runs
+    // its own.
+    const int steps = std::max(1, ms * 60 / 1000);
+    std::thread([=] {
+      for (int at = 1; at <= steps + 1; at++) {
+        usleep(1000000 / 60);
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
+          if (at <= steps) {
+            PostPip(pip, NSEventTypeLeftMouseDragged, x + dx * at / steps, y + dy * at / steps);
+            return;
+          }
+          if (!Run("pip release " + std::to_string(x + dx) + " " + std::to_string(y + dy),
+                   done)) {
+            done();
+          }
+        });
+        CFRunLoopWakeUp(CFRunLoopGetMain());
+      }
+    }).detach();
+    return true;
+  }
   if (action == "window") {
     size_t number;
     if (!(words >> number) || number == 0 || !host_browser_window(number - 1)) {
@@ -1272,6 +1580,24 @@ bool Run(const std::string& line, void (^done)(void)) {
     [NSNotificationCenter.defaultCenter
         postNotificationName:NSApplicationDidBecomeActiveNotification
                       object:NSApp];
+    done();
+    return true;
+  }
+  if (action == "yield") {
+    pid_t pid;
+    if (!(words >> pid)) {
+      return false;
+    }
+    NSRunningApplication* to = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    if (!to) {
+      return false;
+    }
+    // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
+    if (@available(macOS 14, *)) {
+      [NSApp yieldActivationToApplication:to];
+      [to activateFromApplication:NSRunningApplication.currentApplication options:0];
+    }
+    fprintf(stderr, "browser: yielded to %d\n", pid);
     done();
     return true;
   }
@@ -1491,25 +1817,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     NSWindow* target = WindowAt(window, x, y);
     Convert(window, target, &x, &y);
-    NSEvent* move = [NSEvent mouseEventWithType:NSEventTypeMouseMoved
-                                       location:NSMakePoint(x, NSHeight(target.frame) - y)
-                                  modifierFlags:0
-                                      timestamp:NSProcessInfo.processInfo.systemUptime
-                                   windowNumber:target.windowNumber
-                                        context:nil
-                                    eventNumber:0
-                                     clickCount:0
-                                       pressure:0];
-    // It goes to the view under the pointer and to the tracking areas holding it, as a real move
-    // does, which is how GPUI's view, under the page's, hears the pointer over the page. It's also
-    // posted, for the app's event monitors.
-    NSView* content = target.contentView;
-    NSView* hit = [content hitTest:[content.superview convertPoint:move.locationInWindow
-                                                          fromView:nil]];
-    Pointed(target, move.locationInWindow);
-    [hit mouseMoved:move];
-    TrackMove(content, move, hit);
-    [NSApp postEvent:move atStart:NO];
+    MoveIn(target, x, y);
     done();
     return true;
   }
@@ -1612,24 +1920,14 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
-  if (action == "pip") {
-    NSWindow* pip = PictureInPicture();
-    if (!pip) {
-      fprintf(stderr, "browser: pip none\n");
-    } else {
-      const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
-      const NSRect frame = pip.frame;
-      fprintf(stderr, "browser: pip at %.0f %.0f %.0f %.0f\n", NSMinX(frame),
-              top - NSMaxY(frame), NSWidth(frame), NSHeight(frame));
-    }
-    done();
-    return true;
-  }
   if (action == "screen") {
     double visible[4];
     if (host_screens(visible, 1) < 1) {
       return false;
     }
+    // What the app's own AppKit leaves of the screen, which a zoom fills (#2633).
+    fprintf(stderr, "browser: screen visible %.0f %.0f %.0f %.0f\n", visible[0], visible[1],
+            visible[2], visible[3]);
     // host_screens gives the screen's visible area, from the main display's top-left; the screen
     // holding its middle is the one.
     const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
@@ -1702,6 +2000,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     const bc_id space = bc_space_create_for_agent(name.c_str(), agent.c_str(), name.c_str());
     fprintf(stderr, "browser: made space %llu for agent %s\n", (unsigned long long)space,
             agent.c_str());
+    done();
+    return true;
+  }
+  if (action == "agentopen") {
+    std::string agent, url;
+    if (!(words >> agent >> url)) {
+      return false;
+    }
+    const bc_id tab = bc_agent_open_tab(agent.c_str(), url.c_str());
+    if (!tab) {
+      return false;
+    }
+    fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
     done();
     return true;
   }
@@ -1851,6 +2162,8 @@ bool Run(const std::string& line, void (^done)(void)) {
     return true;
   }
   if (action == "pasteboard") {
+    fprintf(stderr, "browser: pasteboard types %s\n",
+            [g_pasteboard.types componentsJoinedByString:@" "].UTF8String ?: "");
     fprintf(stderr, "browser: pasteboard text %s\n",
             [g_pasteboard stringForType:NSPasteboardTypeString].UTF8String ?: "");
     done();
@@ -2056,6 +2369,14 @@ bool Run(const std::string& line, void (^done)(void)) {
     dispatch_async(dispatch_get_main_queue(), done);
     return true;
   }
+  if (action == "makekey") {
+    std::string name = line.substr(std::min(line.size(), action.size() + 1));
+    if (!HostMakeOverlayKey(name.c_str())) {
+      return false;
+    }
+    done();
+    return true;
+  }
   if (action == "dismiss") {
     if (!host_menu_window_dismiss()) {
       NSMenu* menu = g_tracked;
@@ -2070,12 +2391,14 @@ bool Run(const std::string& line, void (^done)(void)) {
   if (action == "ime") {
     std::string state;
     words >> state;
-    if (state != "on" && state != "off") {
+    if (state != "on" && state != "off" && state != "ko") {
       return false;
     }
     HookIme();
-    g_ime_on = state == "on";
+    g_ime_on = state != "off";
+    g_korean = state == "ko";
     g_composition = nil;
+    g_first = g_vowel = g_last = nullptr;
     done();
     return true;
   }
@@ -2190,6 +2513,42 @@ void drive_start(void) {
     return nil;
   };
   [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskApplicationDefined handler:report_done];
+  [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskApplicationDefined
+                                        handler:^NSEvent*(NSEvent* event) {
+                                          if (event.subtype != kPipLetGoSubtype) {
+                                            return event;
+                                          }
+                                          g_pip_held = false;
+                                          return nil;
+                                        }];
+  g_mouse_location = (NSPoint(*)(id, SEL))method_setImplementation(
+      class_getClassMethod(NSEvent.class, @selector(mouseLocation)), (IMP)MouseLocation);
+  // Where the Mini Player pip found goes, and when it goes away, as Chrome hides it or closes it.
+  for (NSNotificationName name : {NSWindowDidMoveNotification, NSWindowDidResizeNotification}) {
+    [NSNotificationCenter.defaultCenter addObserverForName:name
+                                                    object:nil
+                                                     queue:nil
+                                                usingBlock:^(NSNotification* notification) {
+                                                  if (g_pip && notification.object == g_pip) {
+                                                    LogPip(g_pip);
+                                                  }
+                                                }];
+  }
+  for (NSNotificationName name :
+       {NSWindowWillCloseNotification, NSWindowDidChangeOcclusionStateNotification}) {
+    bool closing = [name isEqualToString:NSWindowWillCloseNotification];
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:name
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* notification) {
+                  if (g_pip && notification.object == g_pip && (closing || !g_pip.visible)) {
+                    g_pip = nil;
+                    g_pip_held = false;
+                    fprintf(stderr, "browser: pip gone\n");
+                  }
+                }];
+  }
   method_setImplementation(class_getInstanceMethod(NSApplication.class,
                                                    @selector(orderFrontCharacterPalette:)),
                            (IMP)OrderFrontCharacterPalette);

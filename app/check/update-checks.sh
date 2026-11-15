@@ -1,3 +1,6 @@
+# check.sh runs this at 800, only when named.
+# It builds a check copy of its own (build.sh updates), on the Mac and Windows, so it runs only
+# when named.
 # Settings › About's Check for updates automatically (#1793), on a check build (build.sh updates)
 # whose updater reads a feed the run serves, for updates signed with a key the run makes and
 # deletes after. Neither is ever the product's: the run never reads branding's feeds or the owner's

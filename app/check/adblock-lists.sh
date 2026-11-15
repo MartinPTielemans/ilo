@@ -1,3 +1,4 @@
+# check.sh runs this at 200.
 # uBlock Origin's filter lists come from the source the core gives it (kFilterListsSource in
 # core/ad_block.cc), here the check's own, through --ad-block-lists: uBlock Origin's assets.json
 # with every remote address taken out, so nothing reaches the network, and one list more, on the

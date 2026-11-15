@@ -1,3 +1,4 @@
+# check.sh runs this at 390.
 # What an agent a page has talked round still can't do (#2325): a scripted MCP client tries
 # everything the rules forbid, and pages of the run's own try to steer it. No model is in the loop:
 # the client does the worst a fully steered agent could, and the browser must refuse each try or
@@ -465,6 +466,25 @@ done
 for secret in $secrets; do
   if grep -qF "$secret" "$answers"; then missed "an answer held $(echo "$secret" | cut -c1-12)…"; fi
 done
+
+# #2685's repro, on real input: the pointer rests on Today's first row until its tab's hover card is
+# drawn, and then the agent asks. On Windows the window drew nothing after the hover card, the
+# question's card included. The last Deny left the pointer where it clicked, which is that row once
+# the question's card has gone, so it leaves the row first, and its card hides if it showed.
+if [ "$driven" = 1 ] && [ "${BROWSER_DRIVE_REAL:-}" = 1 ] && [ -z "$missing" ]; then
+  send move $page_point
+  if grep '^browser: hover card \(shown \|hidden$\)' "$log" | tail -1 | grep -q shown; then
+    expect '^browser: hover card hidden$' "the hover card the last Deny left up didn't hide off its row"
+  fi
+  send move $(row 0)
+  expect '^browser: hover card shown ' "resting on Today's first row showed no hover card"
+  # Its frame at rest, which each showing logs ("hover card drawn" is logged once a tab and picture,
+  # and tab 4's card was drawn earlier in the run). In #2685's stall the card never settled.
+  expect '^browser: hover card settled$' \
+    "the agent's own tab, asked with a tab's hover card shown: the card came on screen and never settled"
+  denied "$own_tab" "the agent's own tab, asked with a tab's hover card shown: a PUT" \
+    "[{\"method\":\"PUT\",\"path\":\"/api/rules-change-PUT\",\"body\":{}}]"
+fi
 
 exec 4>&-
 for _ in $(seq 100); do kill -0 "$bridge_pid" 2> /dev/null || break; sleep 0.1; done

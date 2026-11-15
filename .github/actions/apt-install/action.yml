@@ -2,8 +2,10 @@
 # so a warm run reads neither the mirror's index nor its packages: azure.archive.ubuntu.com stalls
 # for up to an hour on some (#1969). The key is the image's own version, which GitHub bumps about
 # weekly, so the cached .debs are exactly what apt chose on that image and install without an index.
-# A miss installs from the mirror as before, starting from the last image's .debs, and on main keeps
-# what it fetched. A self-hosted runner installs from its mirror as before, with no cache.
+# A miss installs from the mirrors, starting from the last image's .debs, and on main keeps what it
+# fetched; it puts the mirrors that answer first, kernel.org's among them, as the image's three were
+# all down for hours on 11-11 (#2425). A self-hosted runner installs from its mirror as before, with
+# no cache.
 name: Install Ubuntu packages
 description: apt-get install through a cache of the .debs, keyed on the runner image and the list.
 inputs:
@@ -68,6 +70,7 @@ runs:
         mkdir -p "$DIR/partial"
         # Once a job: a second install in the job reads the index the first fetched.
         if [ ! -e "$RUNNER_TEMP/apt-updated" ]; then
+          sh "$GITHUB_ACTION_PATH/../../scripts/apt-mirrors.sh"
           "${apt[@]}" update -q
           touch "$RUNNER_TEMP/apt-updated"
         fi

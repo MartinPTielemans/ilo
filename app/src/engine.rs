@@ -47,7 +47,8 @@ fn open_preview_in(
         let Ok(text) = CString::new(url.as_ref()) else {
             return;
         };
-        let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr()) };
+        let at = rect(link_preview::resting(page.0));
+        let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr(), at) };
         if preview == 0 {
             log!("browser: link preview over {over} not opened");
             return;
@@ -299,6 +300,11 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_media(tab, action as i32) };
     }
 
+    fn show_video(&self, tab: u64, frame: Option<Bounds<Pixels>>, radius: f32, _: &mut App) {
+        let frame = rect(frame.unwrap_or_default());
+        unsafe { bc::bc_tab_show_video(tab, self.window, frame, radius.into()) };
+    }
+
     fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
         unsafe { bc::bc_tab_set_volume(tab, volume as f64) };
     }
@@ -528,10 +534,36 @@ impl Browser for Engine {
         unsafe { bc::bc_archive_clear() }
     }
 
+    fn list_history(
+        &self,
+        profile: u64,
+        request: u64,
+        before: i64,
+        text: &str,
+        max: usize,
+        _: &mut App,
+    ) -> bool {
+        let Ok(text) = CString::new(text) else {
+            return false;
+        };
+        unsafe { bc::bc_profile_list_history(profile, request, before, text.as_ptr(), max) }
+    }
+
+    fn remove_history(&self, profile: u64, url: &str, begin: i64, end: i64, _: &mut App) -> bool {
+        let Ok(url) = CString::new(url) else {
+            return false;
+        };
+        unsafe { bc::bc_window_remove_history(self.window, profile, url.as_ptr(), begin, end) != 0 }
+    }
+
     fn page_favicon(&self, url: &str, _: &mut App) {
         if let Ok(url) = CString::new(url) {
             unsafe { bc::bc_page_favicon(url.as_ptr()) };
         }
+    }
+
+    fn url_site(&self, url: &str) -> Option<String> {
+        crate::url_site(url)
     }
 
     fn day_starts(&self) -> [f64; 4] {
@@ -975,7 +1007,7 @@ impl Browser for Engine {
             // Outside the shell's update, which the split's layout updates.
             Some(with) => {
                 let window = self.window;
-                cx.defer(move |cx| open_split(window, url, with, cx));
+                cx.defer(move |cx| open_split(window, url, "", with, cx));
             }
             None => open_tab(self.window, url),
         }
@@ -1007,19 +1039,49 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_boost_zap(tab, on) };
     }
 
-    // Arrange's calls reach the core with its slice (#2347), on the engine with its header;
-    // until then a tab has no Arrange and no arrangement is placed.
     fn arrange(
         &self,
         tab: u64,
         look: Option<&browser::boosts::arrange::Look>,
         _: &mut App,
     ) -> bool {
+        let Some(look) = look else {
+            // check.sh reads this line.
+            log!("browser: arrange {tab} off");
+            unsafe { bc::bc_tab_arrange(tab, false, std::ptr::null()) };
+            return false;
+        };
+        let words: Vec<(CString, CString)> = (browser::boosts::arrange::KINDS.iter())
+            .filter_map(|&(kind, word)| Some((CString::new(kind).ok()?, CString::new(word).ok()?)))
+            .collect();
+        let kinds: Vec<bc::bc_arrange_kind> = (words.iter())
+            .map(|(kind, word)| bc::bc_arrange_kind {
+                kind: kind.as_ptr(),
+                word: word.as_ptr(),
+            })
+            .collect();
+        let other = CString::new(browser::boosts::arrange::OTHER).unwrap_or_default();
+        let look = bc::bc_arrange_look {
+            accent: look.accent,
+            label: look.label,
+            ink: look.ink,
+            line: look.line.into(),
+            radius: look.radius.into(),
+            kinds: kinds.as_ptr(),
+            count: kinds.len(),
+            other: other.as_ptr(),
+            rest: look.rest.into(),
+            room_omega: look.room_omega.into(),
+            land_response: look.land_response.into(),
+            land_damping: look.land_damping.into(),
+        };
+        let on = unsafe { bc::bc_tab_arrange(tab, true, &look) };
+        // check.sh reads this line.
         log!(
             "browser: arrange {tab} {}",
-            if look.is_some() { "on" } else { "off" }
+            if on { "on" } else { "refused" }
         );
-        false
+        on
     }
 
     fn arrange_do(&self, tab: u64, ask: browser::boosts::arrange::Ask, _: &mut App) {
@@ -1039,9 +1101,8 @@ impl Browser for Engine {
         boosts_host::set_arrangement(profile, site, bytes)
     }
 
-    fn keep_arrangement(&self, _: u64, site: &str, _: &str) -> bool {
-        log!("browser: arrangement for {site} not kept: no core call yet");
-        false
+    fn keep_arrangement(&self, profile: u64, site: &str, bytes: &str) -> bool {
+        boosts_host::keep_arrangement(profile, site, bytes)
     }
 
     fn edit_file(&self, path: &std::path::Path, _: &mut App) {
@@ -1353,6 +1414,9 @@ impl Browser for Engine {
         unsafe {
             bc::bc_window_start_move(self.window)
         };
+        // The check's driver lets go of a drag only once the window manager has the pointer.
+        #[cfg(target_os = "linux")]
+        crate::drive::window_move_asked();
     }
 
     fn window_maximized(&self) -> bool {
@@ -1409,28 +1473,25 @@ impl Browser for Engine {
         }
     }
 
-    fn pasted(&self, cx: &App) -> Option<String> {
+    fn pasted(&self, cx: &mut App, done: browser::clipboard::Done) {
         #[cfg(target_os = "linux")]
-        return system::pasted(cx);
+        browser::clipboard::read_text(cx, done);
         #[cfg(not(target_os = "linux"))]
         {
-            _ = cx;
             // Asked for its length first, then for the text.
             let length = unsafe { platform::host_paste(std::ptr::null_mut(), 0) };
-            let mut text = vec![0u8; length.checked_add(1)?];
+            let mut text = vec![0u8; length.saturating_add(1)];
             unsafe { platform::host_paste(text.as_mut_ptr().cast(), text.len()) };
             text.truncate(length);
-            Some(String::from_utf8_lossy(&text).into_owned()).filter(|text| !text.is_empty())
+            let text =
+                Some(String::from_utf8_lossy(&text).into_owned()).filter(|text| !text.is_empty());
+            cx.defer(move |cx| done(text, cx));
         }
     }
 
-    fn can_open_in_safari(&self) -> bool {
-        true
-    }
-
-    fn open_in_safari(&self, url: &str, _: &mut App) {
+    fn open_elsewhere(&self, url: &str, _: &mut App) {
         if let Ok(url) = CString::new(url) {
-            unsafe { platform::host_open_in_safari(url.as_ptr()) };
+            unsafe { platform::host_open_elsewhere(url.as_ptr()) };
         }
     }
 
@@ -1456,6 +1517,14 @@ impl Browser for Engine {
 
     fn restart(&self, cx: &mut App) {
         restart_browser(cx);
+    }
+
+    fn safe_start(&self) -> bool {
+        crate::safe_start_host::held()
+    }
+
+    fn ad_blocking(&self) -> bool {
+        unsafe { bc::bc_ad_blocking() }
     }
 
     fn playready_needs(&self) -> shell::PlayReady {
@@ -1599,6 +1668,11 @@ impl Browser for Engine {
     }
 
     #[cfg(target_os = "macos")]
+    fn full_screen_now(&self) -> bool {
+        unsafe { platform::host_window_full_screen(self.ui_view) }
+    }
+
+    #[cfg(target_os = "macos")]
     fn on_active_space(&self) -> bool {
         unsafe { platform::host_window_on_active_space(self.ui_view) }
     }
@@ -1710,10 +1784,11 @@ impl Browser for Engine {
         place: site_controls::Place,
         window: gpui::Size<Pixels>,
         extensions: Vec<site_controls::Extension>,
+        profiles: Option<site_controls::Profiles>,
         cx: &mut App,
     ) {
         with_overlays(
-            move |cx| site_controls::show(tab, place, window, extensions, cx),
+            move |cx| site_controls::show(tab, place, window, extensions, profiles, cx),
             cx,
         );
     }
@@ -1763,8 +1838,10 @@ impl Browser for Engine {
         );
     }
 
+    /// The Mac's and Windows' hosts read the desktop's picture. Linux has no way an app in its
+    /// sandbox can, so there it's never offered (#2682).
     fn desktop_picture_offered(&self) -> bool {
-        cfg!(target_os = "macos")
+        cfg!(any(target_os = "macos", target_os = "windows"))
     }
 
     fn page_picture(&self, tab: u64, request: u64, _: &mut App) {
@@ -2083,6 +2160,8 @@ impl Browser for Engine {
                 return;
             };
             let space = little_home(space, main);
+            // The user's now, which no page closes away.
+            crate::sign_in_close::link_tab_left(tab);
             unsafe {
                 if bc::bc_window_space(main) != space {
                     bc::bc_window_show_space(main, space);

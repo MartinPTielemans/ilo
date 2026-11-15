@@ -27,12 +27,44 @@ takes a command a line on its standard input:
                   starting with PREFIX has TEXT in a text node or an attribute, shadow trees
                   included, or none for no such page, such as Chrome's password manager page, a
                   WebUI page
-  focus PREFIX    logs "cdp: focus NAME|none": the name of what has the keyboard in the page opened
-                  last at an address starting with PREFIX, through its shadow trees, its label,
-                  its text or its id, or none for no such page or nothing focused: a WebUI dialog
-                  takes the keyboard a moment after its page loads
+  focus PREFIX    logs "cdp: focus NAME|none|nothing ...": the name of what has the keyboard in
+                  the page opened last at an address starting with PREFIX, through its shadow
+                  trees, its label, its text or its id, or none for no such page: a WebUI dialog
+                  takes the keyboard a moment after its page loads. With nothing focused, it says
+                  why one mightn't be, as "nothing, visible|hidden, focused|unfocused, dialogs
+                  open N": whether the page is shown, whether it has the window's keyboard, and
+                  its open dialogs, shadow trees included
+  focus-within PREFIX SELECTOR
+                  logs "cdp: focus-within SELECTOR yes|no|none": whether what has the keyboard in
+                  the page opened last at an address starting with PREFIX matches the CSS
+                  selector SELECTOR, which has no spaces, or is in an element that does, through
+                  its shadow hosts, or none for no such page: a WebUI page's control, as
+                  chrome://extensions' Allow in Incognito switch, is in a row by id
+  has PREFIX SELECTOR
+                  logs "cdp: has SELECTOR yes|no|none": whether an element in the page opened
+                  last at an address starting with PREFIX matches SELECTOR, in its shadow trees
+                  too, or none for no such page: a WebUI page shows what Chrome did by its
+                  controls' attributes, as a disabled menu
+  video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|-", or "cdp: video
+                  none" for no such page or no video in it: how far the first video in the page
+                  opened last at an address starting with PREFIX has played, whether it's paused,
+                  whether its player shows an ad, and refused where Chrome kept it from starting,
+                  as YouTube's player says
+  content         logs "cdp: content TEXT IMAGES COVER", or "cdp: content none" for no page: the
+                  attached page's shown text, in characters, its shown pictures at least 50 px a
+                  side, and the percent of the viewport the largest element fixed in place over
+                  its middle covers, as a wall asking the user to turn their ad blocker off does,
+                  or a site's own banner
+  hidden FILE [BASE]
+                  writes to FILE, as JSON, the attached page's elements at display: none from a
+                  style sheet, as the ad blocker's hiding would be, each as the selector its tag,
+                  id and classes make, with the elements that selector takes in the page and
+                  those of them shown; and with BASE, an earlier run's FILE for the same site, its
+                  selectors none of whose elements were shown then and some are now.
+                  Logs "cdp: hidden SELECTORS ELEMENTS SHOWN missed SELECTORS ELEMENTS in MS ms"
   requests FILE   records each request the attached page and its frames make from now on, a JSON
-                  line each in FILE: "sent" with its id, address and wall time in ms, "failed"
+                  line each in FILE: "sent" with its id, address and wall time in ms, and
+                  "redirect": true where it's a redirect of the request before it, "failed"
                   with its id and Chromium's error, as net::ERR_BLOCKED_BY_CLIENT for an ad
                   blocker's, and "answered" with its id for a response from no server, network
                   cache or service worker, as the browser's own ad blocker's stand-in is, then
@@ -211,6 +243,10 @@ def record(message):
     if method == "Network.requestWillBeSent":
         line = {"event": "sent", "id": params["requestId"], "url": params["request"]["url"],
                 "at": int(params["wallTime"] * 1000)}
+        # A redirect keeps its request's id, but a new request can take an id used before: ids
+        # are a renderer's process id and a count, and the OS gives a later process the same id.
+        if "redirectResponse" in params:
+            line["redirect"] = True
     elif method == "Network.loadingFailed":
         line = {"event": "failed", "id": params["requestId"], "error": params["errorText"]}
     elif method == "Network.responseReceived":
@@ -367,17 +403,25 @@ def reveal(field_id):
     return "hidden" if "display: none" in attributes(eye).get("style", "") else "shown"
 
 
-def shows(prefix, text):
+def page_session(prefix):
+    """A session on the page opened last at an address starting with PREFIX, or None."""
     with answered:
         target = page_target(lambda url: url.startswith(prefix))
     if not target:
-        return "none"
+        return None
     if target == attached:
         sessions[target] = session
     if target not in sessions:
         sessions[target] = call("Target.attachToTarget",
                                 {"targetId": target, "flatten": True})["sessionId"]
-    root = call("DOM.getDocument", {"depth": -1, "pierce": True}, sessions[target])["root"]
+    return sessions[target]
+
+
+def shows(prefix, text):
+    on = page_session(prefix)
+    if not on:
+        return "none"
+    root = call("DOM.getDocument", {"depth": -1, "pierce": True}, on)["root"]
     found = find(root, lambda node: text in node.get("nodeValue", "")
                  or any(text in value for value in attributes(node).values()))
     return "yes" if found else "no"
@@ -389,25 +433,177 @@ FOCUSED = """(() => {
   while (focused && focused.shadowRoot && focused.shadowRoot.activeElement) {
     focused = focused.shadowRoot.activeElement;
   }
-  if (!focused || focused === document.body) return "";
+  if (!focused || focused === document.body) {
+    const open = (root) => [...root.querySelectorAll("*")].reduce(
+      (n, e) => n + (e.matches("dialog[open]") ? 1 : 0) + (e.shadowRoot ? open(e.shadowRoot) : 0), 0);
+    return "nothing, " + document.visibilityState + ", " +
+      (document.hasFocus() ? "focused" : "unfocused") + ", dialogs open " + open(document);
+  }
   const name = focused.getAttribute("aria-label") || focused.textContent || focused.id || "";
   return name.trim().replace(/\\s+/g, " ").slice(0, 60);
 })()"""
 
 
 def focus(prefix):
-    with answered:
-        target = page_target(lambda url: url.startswith(prefix))
-    if not target:
-        return "none"
-    if target == attached:
-        sessions[target] = session
-    if target not in sessions:
-        sessions[target] = call("Target.attachToTarget",
-                                {"targetId": target, "flatten": True})["sessionId"]
-    value = call("Runtime.evaluate", {"expression": FOCUSED, "returnByValue": True},
-                 sessions[target]).get("result", {}).get("value")
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {"expression": FOCUSED, "returnByValue": True},
+                        on).get("result", {}).get("value")
     return value or "none"
+
+
+# Whether an element matching the selector given, or one in it, has the keyboard, through shadow
+# hosts.
+FOCUSED_WITHIN = """((selector) => {
+  let focused = document.activeElement;
+  while (focused && focused.shadowRoot && focused.shadowRoot.activeElement) {
+    focused = focused.shadowRoot.activeElement;
+  }
+  for (let node = focused; node; node = node.parentNode || node.host) {
+    if (node.nodeType === Node.ELEMENT_NODE && node.matches(selector)) return "yes";
+  }
+  return "no";
+})"""
+
+# Whether an element matching the selector given is in the page, its shadow trees included.
+HAS = """((selector) => {
+  const roots = [document];
+  while (roots.length) {
+    const root = roots.pop();
+    if (root.querySelector(selector)) return "yes";
+    for (const element of root.querySelectorAll("*")) {
+      if (element.shadowRoot) roots.push(element.shadowRoot);
+    }
+  }
+  return "no";
+})"""
+
+
+def ask(prefix, script, selector):
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {
+        "expression": "%s(%s)" % (script, json.dumps(selector)),
+        "returnByValue": True}, on).get("result", {}).get("value")
+    return value or "none"
+
+
+# The page's first video: how far it has played, whether it's paused, whether its player shows an
+# ad, and whether Chrome refused to start it, as YouTube's says with classes on the player round
+# it. Refused, the player has asked to play, as playing-mode says, and has the data to, but the
+# video is still paused and has never started, as Chrome lets a page start a video with sound only
+# once the user has acted on it.
+VIDEO = """(() => {
+  const video = document.querySelector("video");
+  if (!video) return "";
+  const player = video.closest(".html5-video-player");
+  const ad = player && (player.classList.contains("ad-showing") ||
+                        player.classList.contains("ad-interrupting"));
+  const refused = player && player.classList.contains("playing-mode") &&
+    player.classList.contains("unstarted-mode") && video.paused &&
+    video.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA;
+  return video.currentTime.toFixed(1) + (video.paused ? " paused" : " playing") +
+         (ad ? " ad" : " no-ad") + (refused ? " refused" : " -");
+})()"""
+
+
+def video(prefix):
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {"expression": VIDEO, "returnByValue": True},
+                        on).get("result", {}).get("value")
+    return value or "none"
+
+
+# What a page shows: its text, its pictures and whether something covers it, which a page broken
+# by a blocked script, or a wall, changes.
+CONTENT = """(() => {
+  if (!document.body) return "";
+  const shown = (e) => {
+    const box = e.getBoundingClientRect();
+    return box.width >= 50 && box.height >= 50 && getComputedStyle(e).visibility !== "hidden";
+  };
+  const images = [...document.querySelectorAll("img, picture, video, canvas, svg")]
+    .filter((e) => (e.tagName !== "IMG" || e.naturalWidth > 0) && shown(e)).length;
+  let cover = 0;
+  for (let e = document.elementFromPoint(innerWidth / 2, innerHeight / 2); e; e = e.parentElement) {
+    if (getComputedStyle(e).position !== "fixed") continue;
+    const box = e.getBoundingClientRect();
+    const width = Math.min(box.right, innerWidth) - Math.max(box.left, 0);
+    const height = Math.min(box.bottom, innerHeight) - Math.max(box.top, 0);
+    cover = Math.max(cover, Math.round(100 * Math.max(width, 0) * Math.max(height, 0) /
+                                       (innerWidth * innerHeight)));
+  }
+  return document.body.innerText.length + " " + images + " " + cover;
+})()"""
+
+
+def content():
+    value = session and call("Runtime.evaluate", {"expression": CONTENT, "returnByValue": True},
+                             session).get("result", {}).get("value")
+    return value or "none"
+
+
+# The selectors, of tag, id and classes, of the elements the page has at display: none from a
+# style sheet, where an ad blocker's hiding would be: not those with neither id nor class, as
+# their selector would take in the page's every such element, nor those under one, nor those the
+# page hides itself with an inline style or the hidden attribute. Which of them the ad blocker
+# hid can't be told here: an extension's injected sheets and the browser's user ones never come
+# to DevTools, not even as rules a node matches, so a run is held to another's on the same site.
+HIDDEN_NOW = """(() => {
+  const kept = new Set(["SCRIPT", "STYLE", "TEMPLATE", "HEAD", "META", "LINK", "TITLE",
+                        "NOSCRIPT", "BR", "PARAM", "SOURCE", "TRACK"]);
+  const found = new Set();
+  for (const element of document.querySelectorAll("body *")) {
+    if (kept.has(element.tagName) || element.hidden || element.style.display === "none") continue;
+    if (!element.id && !element.classList.length) continue;
+    if (getComputedStyle(element).display !== "none") continue;
+    const parent = element.parentElement;
+    if (parent && getComputedStyle(parent).display === "none") continue;
+    found.add(element.localName + (element.id ? "#" + CSS.escape(element.id) : "") +
+              [...element.classList].map((name) => "." + CSS.escape(name)).join(""));
+    if (found.size === 2000) break;
+  }
+  return [...found];
+})()"""
+# Each selector's elements in the page and those of them shown, a box with an area.
+COUNT = """((selectors) => {
+  const counted = {};
+  for (const selector of selectors) {
+    let found;
+    try { found = document.querySelectorAll(selector); } catch (e) { continue; }
+    let shown = 0;
+    for (const element of found) {
+      const box = element.getBoundingClientRect();
+      if (box.width > 0 && box.height > 0 && getComputedStyle(element).visibility !== "hidden") shown++;
+    }
+    counted[selector] = [found.length, shown];
+  }
+  return JSON.stringify(counted);
+})"""
+
+
+def evaluate(expression):
+    return call("Runtime.evaluate", {"expression": expression, "returnByValue": True},
+                session).get("result", {}).get("value")
+
+
+def count(selectors):
+    return json.loads(evaluate("%s(%s)" % (COUNT, json.dumps(selectors))) or "{}")
+
+
+def hidden(path, base):
+    began = time.monotonic()
+    found = {"hidden": count(evaluate(HIDDEN_NOW) or [])}
+    before = json.load(open(base, encoding="utf-8"))["hidden"] if base else {}
+    # What the earlier run hid all of and this one shows some of. A selector whose elements were
+    # partly shown then, as a column's, is the page's own layout, which changes from load to load.
+    found["missed"] = {selector: shown for selector, (_, shown) in count(list(before)).items()
+                       if shown and not before[selector][1]}
+    found["ms"] = int((time.monotonic() - began) * 1000)
+    with open(path, "w", encoding="utf-8") as out:
+        json.dump(found, out)
+    return "%d %d %d missed %d %d in %d ms" % (
+        len(found["hidden"]), sum(n for n, _ in found["hidden"].values()),
+        sum(shown for _, shown in found["hidden"].values()),
+        len(found["missed"]), sum(found["missed"].values()), found["ms"])
 
 
 for line in sys.stdin:
@@ -440,6 +636,16 @@ for line in sys.stdin:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:
         log("focus " + focus(words[1]))
+    elif words[:1] == ["focus-within"] and len(words) == 3:
+        log("focus-within %s %s" % (words[2], ask(words[1], FOCUSED_WITHIN, words[2])))
+    elif words[:1] == ["has"] and len(words) == 3:
+        log("has %s %s" % (words[2], ask(words[1], HAS, words[2])))
+    elif words == ["content"]:
+        log("content " + content())
+    elif words[:1] == ["video"] and len(words) == 2:
+        log("video " + video(words[1]))
+    elif words[:1] == ["hidden"] and len(words) in (2, 3) and session:
+        log("hidden " + hidden(words[1], words[2] if len(words) == 3 else None))
     elif words[:1] == ["requests"] and len(words) == 2 and session and not recording:
         recording = open(words[1], "w", encoding="utf-8", buffering=1)
         call("Network.enable", {}, session)

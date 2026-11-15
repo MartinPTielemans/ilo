@@ -67,6 +67,7 @@ unsafe extern "C" {
         picture_width: f64,
         picture_height: f64,
         foot_top: f64,
+        right: bool,
     );
     pub fn host_screens(frames: *mut f64, count: usize) -> usize;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -86,6 +87,7 @@ unsafe extern "C" {
         ui_view: *mut c_void,
         profile_dir: *const c_char,
         width: f64,
+        right: bool,
     ) -> bool;
     #[cfg(target_os = "windows")]
     pub fn host_save_launch_pixels(
@@ -129,6 +131,8 @@ unsafe extern "C" {
     pub fn host_reduce_motion() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_watch_reduce_motion(changed: extern "C" fn());
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_twelve_hour_clock() -> bool;
     pub fn host_is_default_browser() -> bool;
     pub fn host_make_default_browser(answered: extern "C" fn());
     pub fn host_since_launch() -> f64;
@@ -207,6 +211,8 @@ unsafe extern "C" {
     pub fn host_set_window_on_top(ui_view: *mut c_void, on: bool);
     #[cfg(target_os = "macos")]
     pub fn host_enter_full_screen(ui_view: *mut c_void) -> bool;
+    #[cfg(target_os = "macos")]
+    pub fn host_window_full_screen(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_window_on_active_space(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
@@ -294,7 +300,7 @@ unsafe extern "C" {
     pub fn host_key_repeated() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_paste(text: *mut c_char, capacity: usize) -> usize;
-    pub fn host_open_in_safari(url: *const c_char);
+    pub fn host_open_elsewhere(url: *const c_char);
     pub fn host_open_full_disk_access();
     pub fn host_share(
         ui_view: *mut c_void,
@@ -396,6 +402,16 @@ unsafe extern "C" {
     pub fn host_set_toast_plate(x: f64, y: f64, width: f64, height: f64);
     pub fn host_show_toast(ui_view: *mut c_void);
     pub fn host_hide_toast();
+    pub fn host_add_foot_bar(foot_bar_view: *mut c_void);
+    pub fn host_show_foot_bar(
+        ui_view: *mut c_void,
+        left: f64,
+        right: f64,
+        bottom: f64,
+        width: f64,
+        height: f64,
+    );
+    pub fn host_hide_foot_bar();
     pub fn host_add_mini_bar(mini_bar_view: *mut c_void, margin: f64);
     pub fn host_show_mini_bar(ui_view: *mut c_void, x: f64, y: f64, width: f64, height: f64);
     pub fn host_hide_mini_bar();
@@ -413,6 +429,7 @@ unsafe extern "C" {
     );
     pub fn host_show_link_target(ui_view: *mut c_void, left: f64, top: f64, fade: f64);
     pub fn host_hide_link_target(fade: f64);
+    pub fn host_mouse_down() -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_keep_keychain_key() -> bool;
     #[cfg(not(target_os = "linux"))]

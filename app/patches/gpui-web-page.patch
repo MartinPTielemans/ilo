@@ -1,0 +1,320 @@
+diff --git a/crates/gpui_web/src/events.rs b/crates/gpui_web/src/events.rs
+index 96fb383617..58f2a59158 100644
+--- a/crates/gpui_web/src/events.rs
++++ b/crates/gpui_web/src/events.rs
+@@ -12,6 +12,16 @@ use wasm_bindgen::prelude::*;
+ use crate::ime_mirror::ImeMirror;
+ use crate::window::WebWindowInner;
+ 
++thread_local! {
++    static WHEEL_TIME_STAMP: std::cell::Cell<f64> = const { std::cell::Cell::new(0.) };
++}
++
++/// The `timeStamp` of the wheel event last dispatched, in ms on the page's clock: when the
++/// trackpad gave it, which a page busy drawing may hear well after, and with others summed in.
++pub fn wheel_time_stamp() -> f64 {
++    WHEEL_TIME_STAMP.get()
++}
++
+ pub struct WebEventListeners {
+     _handles: Vec<EventListenerHandle>,
+ }
+@@ -178,6 +188,11 @@ impl WebWindowInner {
+     }
+ 
+     fn register_viewport_changes(self: &Rc<Self>) -> Vec<EventListenerHandle> {
++        // The viewport bears only on a window-filling app's insets, and a canvas in a page would
++        // otherwise draw again on every scroll of the page around it.
++        if crate::window::draws_in_page_canvas() {
++            return Vec::new();
++        }
+         let mut targets: Vec<web_sys::EventTarget> = vec![self.browser_window.clone().into()];
+         if let Some(viewport) = self.browser_window.visual_viewport() {
+             targets.push(viewport.into());
+@@ -643,6 +658,7 @@ impl WebWindowInner {
+         self.listen_non_passive("wheel", move |event: JsValue| {
+             let event: web_sys::WheelEvent = event.unchecked_into();
+             event.prevent_default();
++            WHEEL_TIME_STAMP.set(event.time_stamp());
+ 
+             let mouse_event: &web_sys::MouseEvent = event.as_ref();
+             let position = mouse_position_in_element(mouse_event);
+diff --git a/crates/gpui_web/src/gpui_web.rs b/crates/gpui_web/src/gpui_web.rs
+index c915084325..4ae34518cd 100644
+--- a/crates/gpui_web/src/gpui_web.rs
++++ b/crates/gpui_web/src/gpui_web.rs
+@@ -41,9 +41,14 @@ pub use dispatcher::WebDispatcher;
+ #[cfg(target_family = "wasm")]
+ pub use display::WebDisplay;
+ #[cfg(target_family = "wasm")]
++pub use events::wheel_time_stamp;
++#[cfg(target_family = "wasm")]
++pub use ime_mirror::release_keyboard;
++#[cfg(target_family = "wasm")]
+ pub use gpui_wgpu::WebBackendPreference;
+ #[cfg(target_family = "wasm")]
+ pub use http_client::{FetchCredentials, FetchHttpClient};
++pub use window::draw_in;
+ #[cfg(target_family = "wasm")]
+ pub use keyboard::WebKeyboardLayout;
+ #[cfg(target_family = "wasm")]
+diff --git a/crates/gpui_web/src/ime_mirror.rs b/crates/gpui_web/src/ime_mirror.rs
+index 5cb08b5a29..dbc00ae6a2 100644
+--- a/crates/gpui_web/src/ime_mirror.rs
++++ b/crates/gpui_web/src/ime_mirror.rs
+@@ -22,6 +22,21 @@ use wasm_bindgen::JsCast;
+ 
+ use crate::window::WebWindowInner;
+ 
++thread_local! {
++    /// The input of an app drawn in a page's canvas, which the page's keys reach only through it.
++    static PAGE_INPUT: RefCell<Option<web_sys::HtmlTextAreaElement>> = const { RefCell::new(None) };
++}
++
++/// Hands the keyboard back to the page around an app drawn in its canvas, as it was before the app
++/// was clicked, so the page's own keys, such as Space to scroll, are the page's again.
++pub fn release_keyboard() {
++    PAGE_INPUT.with_borrow(|input| {
++        if let Some(input) = input.as_ref().filter(|input| ImeMirror::element_is_focused(input)) {
++            input.blur().ok();
++        }
++    });
++}
++
+ /// UTF-16 code units of document text mirrored on each side of the
+ /// selection.
+ ///
+@@ -110,7 +125,12 @@ impl ImeMirror {
+         style.set_property("font-size", "16px").ok();
+         body.append_child(&element)
+             .map_err(|e| anyhow::anyhow!("Failed to append input to body: {e:?}"))?;
+-        Self::focus_element(&element);
++        // An app drawn in a page's canvas leaves the page its keys until it's clicked.
++        if crate::window::draws_in_page_canvas() {
++            PAGE_INPUT.with_borrow_mut(|input| *input = Some(element.clone()));
++        } else {
++            Self::focus_element(&element);
++        }
+         // The element must stay focused to receive hardware-key and IME
+         // events, but on touch-first devices a focused *editable* element
+         // invites the browser to summon the virtual keyboard on the next
+@@ -197,7 +217,11 @@ impl ImeMirror {
+     }
+ 
+     pub(crate) fn is_focused(&self) -> bool {
+-        let element: &web_sys::Element = self.element.as_ref();
++        Self::element_is_focused(&self.element)
++    }
++
++    fn element_is_focused(element: &web_sys::HtmlTextAreaElement) -> bool {
++        let element: &web_sys::Element = element.as_ref();
+         web_sys::window()
+             .and_then(|window| window.document())
+             .and_then(|document| document.active_element())
+@@ -226,6 +250,11 @@ impl ImeMirror {
+     }
+ 
+     pub(crate) fn remove(&self) {
++        PAGE_INPUT.with_borrow_mut(|input| {
++            if input.as_ref() == Some(&self.element) {
++                *input = None;
++            }
++        });
+         let element: &web_sys::Element = self.element.as_ref();
+         element.remove();
+     }
+diff --git a/crates/gpui_web/src/platform.rs b/crates/gpui_web/src/platform.rs
+index 5022b77a54..a80a156714 100644
+--- a/crates/gpui_web/src/platform.rs
++++ b/crates/gpui_web/src/platform.rs
+@@ -240,7 +240,8 @@ async fn initialize_graphics(
+     match preference {
+         WebBackendPreference::Auto => {
+             let webgpu_canvas = WebWindow::prepare_canvas(browser_window)?;
+-            let webgpu_result = if wgpu::util::is_browser_webgpu_supported().await {
++            let webgpu_supported = wgpu::util::is_browser_webgpu_supported().await;
++            let webgpu_result = if webgpu_supported {
+                 WgpuContext::new_web(&webgpu_canvas, WebBackendPreference::WebGpu).await
+             } else {
+                 Err(anyhow::anyhow!(
+@@ -252,8 +253,16 @@ async fn initialize_graphics(
+                     return Ok((webgpu_canvas, context, surface));
+                 }
+                 Err(webgpu_error) => {
+-                    let canvas: &web_sys::Element = webgpu_canvas.as_ref();
+-                    canvas.remove();
++                    // The page's own canvas stays, and gives way to its copy only if WebGPU asked
++                    // it for a context.
++                    if crate::window::is_page_canvas(&webgpu_canvas) {
++                        if !webgpu_supported {
++                            crate::window::untake_page_canvas();
++                        }
++                    } else {
++                        let canvas: &web_sys::Element = webgpu_canvas.as_ref();
++                        canvas.remove();
++                    }
+                     log::warn!(
+                         "WebGPU initialization failed; falling back to WebGL2: {webgpu_error:#}"
+                     );
+diff --git a/crates/gpui_web/src/window.rs b/crates/gpui_web/src/window.rs
+index ddd9095040..8cd7e189db 100644
+--- a/crates/gpui_web/src/window.rs
++++ b/crates/gpui_web/src/window.rs
+@@ -86,6 +86,9 @@ pub(crate) struct WebWindowInner {
+     pub(crate) touch_tap_candidate: Cell<Option<(i32, Point<Pixels>)>>,
+     mql_handle: RefCell<Option<MqlHandle>>,
+     pending_physical_size: Cell<Option<(u32, u32)>>,
++    /// The surface couldn't take the canvas's new size yet, so the next frame must draw.
++    resize_deferred: Cell<bool>,
++    background: Cell<WindowBackgroundAppearance>,
+     raf_id: Cell<Option<i32>>,
+     raf_function: RefCell<Option<js_sys::Function>>,
+ }
+@@ -103,10 +106,80 @@ pub struct WebWindow {
+     _event_listeners: WebEventListeners,
+ }
+ 
++thread_local! {
++    /// The canvas the page gave `draw_in`, and whether a graphics context has taken it.
++    static PAGE_CANVAS: RefCell<Option<(web_sys::HtmlCanvasElement, bool)>> = const { RefCell::new(None) };
++}
++
++/// Draws the app's window in `canvas`, where the page put it and at the size the page gives it,
++/// rather than in a canvas of its own over the whole page. Call it before the app runs.
++pub fn draw_in(canvas: web_sys::HtmlCanvasElement) {
++    PAGE_CANVAS.with_borrow_mut(|page| *page = Some((canvas, false)));
++}
++
++/// Whether `canvas` is the page's, which stays in the page when a backend fails on it.
++pub(crate) fn is_page_canvas(canvas: &web_sys::HtmlCanvasElement) -> bool {
++    PAGE_CANVAS.with_borrow(|page| page.as_ref().is_some_and(|(page, _)| page == canvas))
++}
++
++/// Whether the page gave `draw_in` a canvas.
++pub(crate) fn draws_in_page_canvas() -> bool {
++    PAGE_CANVAS.with_borrow(Option::is_some)
++}
++
++/// Gives the page's canvas back untaken when no context was asked of it, so WebGL2 draws in the
++/// canvas the page holds, as it does wherever the browser has no WebGPU adapter.
++pub(crate) fn untake_page_canvas() {
++    PAGE_CANVAS.with_borrow_mut(|page| {
++        if let Some((_, taken)) = page {
++            *taken = false;
++        }
++    });
++}
++
++/// The page's canvas, set up for input, or None if the page gave none. A canvas WebGPU has taken
++/// can't take WebGL2, so a second ask puts a copy of it, with its id and style, in its place.
++fn page_canvas() -> anyhow::Result<Option<web_sys::HtmlCanvasElement>> {
++    let Some((canvas, taken)) = PAGE_CANVAS.with_borrow(|page| page.clone()) else {
++        return Ok(None);
++    };
++    let canvas = if taken {
++        let copy: web_sys::HtmlCanvasElement = canvas
++            .clone_node()
++            .map_err(|error| anyhow::anyhow!("Failed to copy the page's canvas: {error:?}"))?
++            .dyn_into()
++            .map_err(|error| anyhow::anyhow!("The copy is not a canvas: {error:?}"))?;
++        canvas
++            .replace_with_with_node_1(&copy)
++            .map_err(|error| anyhow::anyhow!("Failed to replace the page's canvas: {error:?}"))?;
++        copy
++    } else {
++        canvas
++    };
++    PAGE_CANVAS.with_borrow_mut(|page| *page = Some((canvas.clone(), true)));
++    canvas.set_tab_index(-1);
++    let style = canvas.style();
++    for (property, value) in [
++        ("outline", "none"),
++        ("touch-action", "none"),
++        ("-webkit-touch-callout", "none"),
++        ("user-select", "none"),
++        ("-webkit-user-select", "none"),
++    ] {
++        style.set_property(property, value).map_err(|error| {
++            anyhow::anyhow!("Failed to set canvas {property} style: {error:?}")
++        })?;
++    }
++    Ok(Some(canvas))
++}
++
+ impl WebWindow {
+     pub(crate) fn prepare_canvas(
+         browser_window: &web_sys::Window,
+     ) -> anyhow::Result<web_sys::HtmlCanvasElement> {
++        if let Some(canvas) = page_canvas()? {
++            return Ok(canvas);
++        }
+         let document = browser_window
+             .document()
+             .ok_or_else(|| anyhow::anyhow!("No `document` found on window"))?;
+@@ -226,6 +299,8 @@ impl WebWindow {
+             touch_tap_candidate: Cell::new(None),
+             mql_handle: RefCell::new(None),
+             pending_physical_size: Cell::new(None),
++            resize_deferred: Cell::new(false),
++            background: Cell::new(WindowBackgroundAppearance::Opaque),
+             raf_id: Cell::new(None),
+             raf_function: RefCell::new(None),
+         });
+@@ -455,12 +530,13 @@ impl WebWindowInner {
+             // (e.g. views invalidated during draw) schedule the next request
+             // instead of being swallowed.
+             this.raf_id.set(None);
++            let force = this.resize_deferred.take();
+             this.with_callback(
+                 |callbacks| &mut callbacks.request_frame,
+                 |callback| {
+                     callback(RequestFrameOptions {
+-                        require_presentation: false,
+-                        force_render: false,
++                        require_presentation: force,
++                        force_render: force,
+                         signal_at: None,
+                         signal_source: FrameRequestSource::NativeCallback,
+                     })
+@@ -892,7 +968,7 @@ impl PlatformWindow for WebWindow {
+     }
+ 
+     fn background_appearance(&self) -> WindowBackgroundAppearance {
+-        WindowBackgroundAppearance::Opaque
++        self.inner.background.get()
+     }
+ 
+     fn set_title(&mut self, title: &str) {
+@@ -902,7 +978,12 @@ impl PlatformWindow for WebWindow {
+         }
+     }
+ 
+-    fn set_background_appearance(&self, _background: WindowBackgroundAppearance) {}
++    // Anything but opaque lets the page show through the canvas where the app draws nothing.
++    fn set_background_appearance(&self, background: WindowBackgroundAppearance) {
++        self.inner.background.set(background);
++        let transparent = background != WindowBackgroundAppearance::Opaque;
++        self.inner.state.borrow_mut().renderer.update_transparency(transparent);
++    }
+ 
+     fn minimize(&self) {
+         log::warn!("WebWindow::minimize is not supported in the browser");
+@@ -999,11 +1080,17 @@ impl PlatformWindow for WebWindow {
+             }
+ 
+             let mut state = self.inner.state.borrow_mut();
+-            state.renderer.update_drawable_size(Size {
++            let resized = state.renderer.try_update_drawable_size(Size {
+                 width: DevicePixels(width as i32),
+                 height: DevicePixels(height as i32),
+             });
+             drop(state);
++            // WebGL is still drawing the last frame: the next frame resizes, even if nothing changed.
++            if !resized {
++                self.inner.pending_physical_size.set(Some((width, height)));
++                self.inner.resize_deferred.set(true);
++                self.inner.wake_frame_loop();
++            }
+         }
+ 
+         self.inner.state.borrow_mut().renderer.draw(scene);

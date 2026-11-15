@@ -35,21 +35,26 @@ gh() {
   fi
 }
 
-# Whether run $1 checked its commit: its job named "check" failed past its "Engine" step, or passed
-# with its "Runs" step done.
+# The jobs with the default runs: the one named "check", or Windows' "check 1/2" and "check 2/2",
+# which they're dealt across (#2618).
+defaults='[.jobs[] | select(.name == "check" or (.name | test("^check [0-9]+/[0-9]+$")))]'
+
+# Whether run $1 checked its commit: one of its default jobs failed past its "Engine" step, or each
+# passed with its "Runs" step done.
 checked() {
-  gh api "repos/$repo/actions/runs/$1/jobs" --jq 'any(.jobs[]; .name == "check" and
-    ((.conclusion == "failure" and (any(.steps[]; .name == "Engine" and .conclusion == "failure") | not))
-      or (.conclusion == "success" and any(.steps[]; .name == "Runs" and .conclusion == "success"))))'
+  gh api "repos/$repo/actions/runs/$1/jobs" --jq "$defaults"' as $jobs | ($jobs | length > 0) and
+    (any($jobs[]; .conclusion == "failure"
+        and (any(.steps[]; .name == "Engine" and .conclusion == "failure") | not))
+      or all($jobs[]; .conclusion == "success" and any(.steps[]; .name == "Runs" and .conclusion == "success")))'
 }
 
-# The runs that run $1 failed, from its check job's errors, a line each: "tabs", or "tabs@wayland" as
-# app/check/quarantine.linux names a session's.
+# The runs that run $1 failed, from its default jobs' errors, a line each: "tabs", or "tabs@wayland"
+# as app/check/quarantine.linux names a session's.
 failed_runs() {
   local job
-  job=$(gh api "repos/$repo/actions/runs/$1/jobs" --jq '.jobs[] | select(.name == "check") | .id' | head -1)
-  [ -n "$job" ] || return 0
-  gh api "repos/$repo/check-runs/$job/annotations" --jq '.[] | select(.annotation_level == "failure") | .message' |
+  for job in $(gh api "repos/$repo/actions/runs/$1/jobs" --jq "$defaults"' | .[].id'); do
+    gh api "repos/$repo/check-runs/$job/annotations" --jq '.[] | select(.annotation_level == "failure") | .message'
+  done |
     sed -n -e 's/^The \([a-z0-9-]*\) run failed on \([a-z]*\)\..*/\1@\2/p' \
       -e 's/^The \([a-z0-9-]*\) run failed\..*/\1/p' \
       -e 's/^Drops under Wayland failed\..*/drops/p' -e 's/^Input methods failed\..*/ime/p' | sort -u

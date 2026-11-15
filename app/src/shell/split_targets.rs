@@ -6,7 +6,7 @@
 //! GPUI can't draw over the page's native view, so the app draws them in a window of its own over
 //! the browser window, which the mouse goes through (`Browser::show_drop_targets`).
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{
     AnyElement, Bounds, Context, FontWeight, Hsla, PathBuilder, Pixels, Point, Window, canvas, div,

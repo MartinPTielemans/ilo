@@ -5,11 +5,8 @@
 //! shows over the browser window, as its child, and the mouse goes through it. What it asks of its
 //! window goes through `Host`.
 
-use std::{
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, Div, FontWeight, Global, Pixels, Rgba, SharedString, Size, Task, TextRun,
@@ -387,6 +384,7 @@ pub fn hover(window: u64, tip: Tip, anchor: Anchor, cx: &mut App) {
 
 /// As `hover`, with what the tooltip names in the window it's `over`, which may be an overlay's.
 pub fn hover_over(over: Over, tip: Tip, anchor: Anchor, cx: &mut App) {
+    crate::lazy_window::ready::<Tooltip>(cx);
     let Some(tooltip) = cx.try_global::<TooltipWindow>().map(|tooltip| tooltip.0) else {
         return;
     };

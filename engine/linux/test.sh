@@ -2,9 +2,10 @@
 # Builds and runs the core's unit tests, browser_core_unittests, in the tree build.sh built. On
 # Linux base's test support loads Chromium's test fonts, which its source tarball leaves out, so
 # they're fetched first, once, into the tree. Only the tests read them: package.sh packs a list of
-# files that doesn't name them.
+# files that doesn't name them. Flags after the work directory go to the tests, such as
+# --gtest_filter (.github/workflows/core-tests.yml).
 set -euo pipefail
-[ $# -eq 1 ] || { echo "usage: test.sh <work directory>" >&2 && exit 2; }
+[ $# -ge 1 ] || { echo "usage: test.sh <work directory> [test flags...]" >&2 && exit 2; }
 
 fail() {
   echo "test: $*" >&2
@@ -27,4 +28,4 @@ if [ "$(cat "$fonts/.object" 2>/dev/null)" != "$object" ]; then
 fi
 
 "$(dirname "$0")/build.sh" "$1" browser_core_unittests
-"$1/src/out/Default/browser_core_unittests"
+"$1/src/out/Default/browser_core_unittests" "${@:2}"

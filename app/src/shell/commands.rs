@@ -1,10 +1,8 @@
 //! The browser's commands: their names, their keys and where the command bar offers
 //! them, and what each does, run from a key, a menu, the command bar or the page.
 
-use std::{
-    sync::{Arc, LazyLock},
-    time::Instant,
-};
+use std::sync::{Arc, LazyLock};
+use web_time::Instant;
 
 use gpui::{
     Action, App, Bounds, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
@@ -104,6 +102,9 @@ pub enum Command {
     Exit,
     /// Closes the Today tabs of the Space shown, but the one shown.
     Clear,
+    /// Brings each site's Today tabs in the Space shown together, at its first tab's place
+    /// (`crate::sort_by_site`).
+    SortBySite,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
     Undo,
     /// Does again what Undo undid.
@@ -251,6 +252,8 @@ pub enum Command {
     /// Focuses the split view's page right of the focused one, or left of it.
     NextPane,
     PreviousPane,
+    /// Focuses the split view's page at this place from the left, as Arc's ⌃⇧1–⌃⇧4 do.
+    FocusPane(usize),
     /// Opens Chrome's history page in a new tab.
     ViewHistory,
     /// Opens Chromium's search engines page in a new tab, where the profile's site searches are
@@ -398,6 +401,15 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("ctrl-shift-}", Command::NextPane, false),
     ("ctrl-shift-[", Command::PreviousPane, false),
     ("ctrl-shift-{", Command::PreviousPane, false),
+    // A split view has at most four pages. GPUI may name the digit or what ⇧ makes of it.
+    ("ctrl-shift-1", Command::FocusPane(0), false),
+    ("ctrl-shift-!", Command::FocusPane(0), false),
+    ("ctrl-shift-2", Command::FocusPane(1), false),
+    ("ctrl-shift-@", Command::FocusPane(1), false),
+    ("ctrl-shift-3", Command::FocusPane(2), false),
+    ("ctrl-shift-#", Command::FocusPane(2), false),
+    ("ctrl-shift-4", Command::FocusPane(3), false),
+    ("ctrl-shift-$", Command::FocusPane(3), false),
     ("escape", Command::Stop, false),
     ("ctrl-1", Command::SelectSpace(0), false),
     ("ctrl-2", Command::SelectSpace(1), false),
@@ -463,6 +475,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ),
     ("Archive Tab", Command::CloseTab, &["close tab"]),
     ("Clear Today", Command::Clear, &["unpinned tabs"]),
+    (
+        "Sort Today Tabs by Site",
+        Command::SortBySite,
+        &["group tabs by site", "tidy tabs"],
+    ),
     (
         "Clear Cache and Refresh",
         Command::ClearCacheAndRefresh,
@@ -1168,6 +1185,7 @@ impl Command {
     pub fn key_name(self) -> String {
         match self {
             Command::SelectSpace(index) => format!("select-space-{}", index + 1),
+            Command::FocusPane(index) => format!("focus-pane-{}", index + 1),
             _ => self.name().to_string(),
         }
     }
@@ -1214,6 +1232,7 @@ impl Command {
             Command::ToggleFullScreen => "toggle-full-screen",
             Command::Exit => "exit",
             Command::Clear => "clear",
+            Command::SortBySite => "sort-by-site",
             Command::Undo => "undo",
             Command::Redo => "redo",
             Command::CopyUrl => "copy-url",
@@ -1291,6 +1310,7 @@ impl Command {
             Command::MovePaneRight => "move-pane-right",
             Command::NextPane => "next-pane",
             Command::PreviousPane => "previous-pane",
+            Command::FocusPane(_) => "focus-pane",
             Command::ViewHistory => "view-history",
             Command::SiteSearchSettings => "site-search-settings",
             Command::ClearBrowsingData => "clear-browsing-data",
@@ -1355,6 +1375,16 @@ pub fn window_became_key(shell: WeakEntity<Shell>) -> impl FnOnce(&mut App) + 's
             heard_key(&shell);
         }
     }
+}
+
+/// Whether a window made key since `shell` was has yet to be heard, so `shell` hearing late mustn't
+/// take the shortcuts back from it (#2648).
+pub(super) fn key_moved_on(shell: &WeakEntity<Shell>) -> bool {
+    MADE_KEY.with_borrow(|made_key| {
+        made_key
+            .as_ref()
+            .is_some_and(|made_key| made_key != shell && made_key.upgrade().is_some())
+    })
 }
 
 /// The shell made key has heard, so the ShellHandle names it.
@@ -1628,6 +1658,7 @@ impl Shell {
             Command::ToggleFullScreen => return self.browser.toggle_full_screen(cx),
             Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
+            Command::SortBySite => return self.sort_by_site(cx),
             // While Arrange is on, ⌘Z and the Edit menu's Undo take back its steps (shell/arrange.rs).
             Command::Undo if self.undo_arrange(self.field_tab(), cx) => return,
             Command::Undo => {
@@ -1712,11 +1743,11 @@ impl Shell {
             }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
-                let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
+                let url = BuildInfo::here(cx).issue_url(build_info::NEW_ISSUE);
                 return self.browser.open_page(&url, cx);
             }
             Command::CopyBuildInfo => {
-                return self.copy(&BuildInfo::here().text(), "Copied Build Info", cx);
+                return self.copy(&BuildInfo::here(cx).text(), "Copied Build Info", cx);
             }
             Command::HelpCenter => return self.browser.open_page(build_info::HELP_CENTER, cx),
             Command::WhatsNew => return self.browser.open_page(build_info::WHATS_NEW, cx),
@@ -1778,6 +1809,7 @@ impl Shell {
             }
             Command::NextPane => return self.focus_pane(true, cx),
             Command::PreviousPane => return self.focus_pane(false, cx),
+            Command::FocusPane(index) => return self.focus_pane_at(index, cx),
             Command::ToggleSidebar => return self.toggle_sidebar(cx),
             Command::Appearance(appearance) => return self.set_app_appearance(appearance, cx),
             Command::ViewLibrary => return self.set_library(!self.library_open, cx),
@@ -1983,22 +2015,34 @@ impl Shell {
     /// does. The clipboard is read only now, and text that isn't one http(s) link opens nothing,
     /// as a drop of it doesn't. No agent path: the clipboard is the user's.
     fn paste_url_as_tab(&mut self, cx: &mut Context<Self>) {
-        if let Some(urls) = self.pasted_urls(cx) {
-            self.browser.open_at(&urls, false, 0, 0, cx);
-        }
+        self.pasted_urls(cx, |shell, urls, cx| {
+            shell.browser.open_at(&urls, false, 0, 0, cx);
+        });
     }
 
-    /// The clipboard's web link, read now, as one URL to open, or None for anything else.
-    pub(super) fn pasted_urls(&self, cx: &App) -> Option<Vec<String>> {
+    /// Hands `then` the clipboard's web link, read now, as one URL to open, and nothing for
+    /// anything else.
+    pub(super) fn pasted_urls(
+        &self,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, Vec<String>, &mut Context<Self>) + 'static,
+    ) {
+        let shell = cx.entity().downgrade();
         // From the host, where Copy Link put it: a driven Mac run's pasteboard is its own.
-        let text = self.browser.pasted(cx).unwrap_or_default();
-        // Text that isn't a web link opens nothing here, not a search, as Arc's ⌥⌘V does.
-        let urls = dropped_urls([(text.trim(), false)], |_| None);
-        if urls.is_empty() {
-            // check.sh reads this line.
-            log!("browser: pasted no URL");
-        }
-        Some(urls).filter(|urls| !urls.is_empty())
+        self.browser.pasted(
+            cx,
+            Box::new(move |text, cx| {
+                let text = text.unwrap_or_default();
+                // Text that isn't a web link opens nothing here, not a search, as Arc's ⌥⌘V does.
+                let urls = dropped_urls([(text.trim(), false)], |_| None);
+                if urls.is_empty() {
+                    // check.sh reads this line.
+                    log!("browser: pasted no URL");
+                    return;
+                }
+                shell.update(cx, |shell, cx| then(shell, urls, cx)).ok();
+            }),
+        );
     }
 
     /// File › Share… and the command bar's Share…: the system's share sheet for the page shown,
@@ -2015,9 +2059,10 @@ impl Shell {
                 point(page.center().x, page.top())
             }
         };
-        let title = self.title(self.selected);
-        self.browser
-            .show_share_sheet(self.selected, &link, &title, at, cx);
+        let (tab, title) = (self.selected, self.title(self.selected));
+        // After this update, as finding the tab's window reads every Shell (#2459).
+        let browser = self.browser.clone();
+        cx.defer(move |cx| browser.show_share_sheet(tab, &link, &title, at, cx));
     }
 
     /// `tab`'s link to copy, as a Markdown link if `markdown`, and the toast to say so with.
@@ -2264,6 +2309,8 @@ impl Shell {
                     .any(|&folder| !space.is_open(folder))
             }),
             Command::Clear => !self.today().is_empty(),
+            // With every site's tabs together already, it would change nothing.
+            Command::SortBySite => self.sorted_by_site(self.space).is_some(),
             Command::FavoriteTab => {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)
@@ -3244,5 +3291,41 @@ mod tests {
             ["select 11"],
             "and still does once the shell has heard"
         );
+    }
+
+    /// A window opened in front keeps the shortcuts when the window made key before it, as one
+    /// closed, hears only after it opened, as macOS reports no key change for the window opened
+    /// in front: ⌘N right after ⇧⌘W, then ⇧⌘W, closes the new window, not the one behind (#2648).
+    #[gpui::test]
+    fn a_window_opened_in_front_keeps_the_shortcuts_from_one_made_key_before(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(bind_keys);
+        let (behind, behind_host) = shell_with_today(cx, vec![11]);
+        cx.run_until_parked();
+
+        // A window closed and left this one key, and its shell hears once the executor turns.
+        let behind_heard = window_became_key(behind.downgrade());
+        // ⌘N's window opens before that turn, and is key from when it opens, as the app makes it.
+        let (opened, opened_host) = shell_with_today(cx, vec![21]);
+        let opened_heard = window_became_key(opened.downgrade());
+        cx.update(behind_heard);
+        behind_host.take();
+        opened_host.take();
+        let closed = |host: &super::super::recorder::Recorder| {
+            host.take().iter().any(|call| call == "close window")
+        };
+
+        cx.update(|cx| cx.dispatch_action(&Run(Command::CloseWindow)));
+        assert!(closed(&opened_host), "⇧⌘W closed the window opened");
+        assert!(!closed(&behind_host), "and not the one behind");
+
+        cx.update(opened_heard);
+        cx.update(|cx| cx.dispatch_action(&Run(Command::CloseWindow)));
+        assert!(
+            closed(&opened_host),
+            "and still does once the window opened has heard"
+        );
+        assert!(!closed(&behind_host), "the one behind still isn't closed");
     }
 }

@@ -1,3 +1,4 @@
+# check.sh runs this at 310.
 # Pages that break show ilo's own state. A page that stops answering for Chrome's hang timeout gets
 # the toast's Not responding with Wait and Reload, and a mark on its row: the note goes by itself
 # once the page answers, Wait gives it longer, and Reload ends its renderer and loads it again, with

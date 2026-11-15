@@ -110,8 +110,8 @@ void (*g_key_window_changed)(void* ui_view);
 void (*g_became_active)(void);
 void (*g_resigning_active)(void);
 
-// The browser windows that have the keyboard, of those whose whole window GPUI hears of: the app is
-// active while one does.
+// The browser windows that have the keyboard, of those whose whole window GPUI hears of, and
+// Settings under Wayland: the app is active while one does.
 std::set<void*>& ActiveWindows() {
   static auto* active = new std::set<void*>;
   return *active;
@@ -266,12 +266,12 @@ void host_centered(double width, double height, double* x, double* y) {
 // core opens it instead.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width, double height,
                              bool maximized, double picture_width, double picture_height,
-                             double foot_top) {}
+                             double foot_top, bool right) {}
 
 void host_close_launch_window(void) {}
 
 // No launch window shows it (host_show_launch_window), so none is kept.
-bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width) {
+bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width, bool right) {
   return false;
 }
 
@@ -587,7 +587,7 @@ bool host_copy_secret(const char* text, uint32_t seconds) {
 // hands a secret to no clipboard manager.
 void host_forget_secret(void) {}
 
-void host_open_in_safari(const char* url) {}
+void host_open_elsewhere(const char* url) {}
 
 void host_open_full_disk_access(void) {}
 

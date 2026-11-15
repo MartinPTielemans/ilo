@@ -1,5 +1,69 @@
+diff --git a/crates/gpui/Cargo.toml b/crates/gpui/Cargo.toml
+index a46c580fc1..453c70002e 100644
+--- a/crates/gpui/Cargo.toml
++++ b/crates/gpui/Cargo.toml
+@@ -76,7 +76,6 @@ futures-concurrency = { workspace = true, optional = true }
+ gpui_macros.workspace = true
+ gpui_shared_string.workspace = true
+ http_client.workspace = true
+-image.workspace = true
+ inventory.workspace = true
+ itertools.workspace = true
+ log.workspace = true
+@@ -89,10 +88,8 @@ chrono = { workspace = true, default-features = true }
+ profiling.workspace = true
+ rand = { workspace = true, features = ["small_rng", "thread_rng"] }
+ raw-window-handle.workspace = true
+-regex = { workspace = true, default-features = true }
+ refineable.workspace = true
+ scheduler.workspace = true
+-resvg.workspace = true
+ usvg.workspace = true
+ ttf-parser = "0.25"
+ schemars = { workspace = true, features = ["derive"] }
+@@ -132,7 +129,10 @@ async-channel.workspace = true
+ async-channel = { workspace = true, features = ["std"] }
+ 
+ [target.'cfg(not(target_family = "wasm"))'.dependencies]
++image.workspace = true
+ pollster.workspace = true
++regex = { workspace = true, default-features = true }
++resvg.workspace = true
+ 
+ [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows", target_os = "ios"))'.dependencies]
+ async-tungstenite = { workspace = true, optional = true }
+@@ -141,7 +141,12 @@ dioxus-devtools-types = { version = "=0.7.10", optional = true }
+ smol = { workspace = true, optional = true }
+ subsecond = { version = "=0.7.10", optional = true }
+ 
++# The web downloads every decoder it carries, so it decodes favicons' PNG and ICO, and the GIF and
++# WebP that `img` animates, and finds emoji with one Unicode table.
+ [target.'cfg(target_family = "wasm")'.dependencies]
++image = { version = "0.25.1", default-features = false, features = ["gif", "ico", "png", "webp"] }
++regex = { version = "1.5", default-features = false, features = ["std", "unicode-bool"] }
++resvg = { version = "0.46.0", default-features = false, features = ["text"] }
+ getrandom = { version = "0.3.4", features = ["wasm_js"] }
+ uuid = { workspace = true, features = ["js"] }
+ 
+diff --git a/crates/gpui/src/app/async_context.rs b/crates/gpui/src/app/async_context.rs
+index 7190dff709..d8d98d7440 100644
+--- a/crates/gpui/src/app/async_context.rs
++++ b/crates/gpui/src/app/async_context.rs
+@@ -179,6 +179,12 @@ impl AsyncApp {
+         lock.update(f)
+     }
+ 
++    /// Whether the App is in an update, where [`Self::update`] would panic: as when a callback
++    /// from the platform or an embedder comes from an event loop nested in one.
++    pub fn is_updating(&self) -> bool {
++        (self.app.upgrade()).is_some_and(|app| app.try_borrow_mut().is_err())
++    }
++
+     /// Arrange for the given callback to be invoked whenever the given entity emits an event of a given type.
+     /// The callback is provided a handle to the emitting entity and a reference to the emitted event.
+     pub fn subscribe<T, Event>(
 diff --git a/crates/gpui/src/app/test_context.rs b/crates/gpui/src/app/test_context.rs
-index 54b72a63ec..998ebbe45a 100644
+index 54b72a63ec..98a3325d1c 100644
 --- a/crates/gpui/src/app/test_context.rs
 +++ b/crates/gpui/src/app/test_context.rs
 @@ -223,6 +223,11 @@ impl TestAppContext {
@@ -14,6 +78,15 @@ index 54b72a63ec..998ebbe45a 100644
      /// Sets the delay for subsequent idle sleep prevention acquisitions.
      pub fn set_idle_sleep_prevention_delay(&self, delay: Duration) {
          self.test_platform.set_idle_sleep_prevention_delay(delay);
+@@ -658,7 +663,7 @@ impl TestAppContext {
+     }
+ 
+     /// Returns the `TestWindow` backing the given handle.
+-    pub(crate) fn test_window(&self, window: AnyWindowHandle) -> TestWindow {
++    pub fn test_window(&self, window: AnyWindowHandle) -> TestWindow {
+         self.app
+             .borrow_mut()
+             .windows
 @@ -1009,6 +1014,30 @@ impl VisualTestContext {
          })
      }
@@ -46,7 +119,7 @@ index 54b72a63ec..998ebbe45a 100644
      pub fn simulate_resize(&self, size: Size<Pixels>) {
          self.simulate_window_resize(self.window, size)
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index 11f0b72406..ea39b6a547 100644
+index 11f0b72406..6a1e603113 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
 @@ -1565,6 +1565,13 @@ pub trait StatefulInteractiveElement: InteractiveElement {
@@ -73,7 +146,17 @@ index 11f0b72406..ea39b6a547 100644
      pub(crate) hover_style: Option<Box<StyleRefinement>>,
      pub(crate) group_hover_style: Option<GroupStyle>,
      pub(crate) active_style: Option<Box<StyleRefinement>>,
-@@ -2823,7 +2833,11 @@ impl Interactivity {
+@@ -2610,6 +2620,9 @@ impl Interactivity {
+                                         // to the first item in the whole window instead of its own.
+                                         if let Some(focus_handle) = &self.tracked_focus_handle {
+                                             window.next_frame.tab_stops.insert(focus_handle);
++                                            if focus_handle.is_focused(window) {
++                                                window.next_frame.focus_bounds = Some(bounds);
++                                            }
+                                         }
+                                         if let Some(hitbox) = hitbox {
+                                             #[cfg(debug_assertions)]
+@@ -2823,7 +2836,11 @@ impl Interactivity {
          // If this element can be focused, register a mouse down listener
          // that will automatically transfer focus when hitting the element.
          // This behavior can be suppressed by using `cx.prevent_default()`.
@@ -86,8 +169,83 @@ index 11f0b72406..ea39b6a547 100644
              let hitbox = hitbox.clone();
              window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble
+@@ -3147,6 +3164,10 @@ impl Interactivity {
+                         // so that it happens even if another event handler stops
+                         // propagation.
+                         DispatchPhase::Capture => {
++                            // A press an inner element's click stopped short of this one's isn't
++                            // this release's: another release can come before the frame that
++                            // would drop this listener, and click this element with it.
++                            captured_mouse_down = None;
+                             let mut pending_mouse_down = pending_mouse_down.borrow_mut();
+                             if pending_mouse_down.is_some() && hitbox.is_hovered(window) {
+                                 captured_mouse_down = pending_mouse_down.take();
+diff --git a/crates/gpui/src/interactive.rs b/crates/gpui/src/interactive.rs
+index cfb1410c78..1e34d82e6b 100644
+--- a/crates/gpui/src/interactive.rs
++++ b/crates/gpui/src/interactive.rs
+@@ -895,6 +895,59 @@ impl PlatformInput {
+     }
+ }
+ 
++/// Input a window can't take yet, as it comes while the App is in an update or while the window's
++/// callback is out, which a nested event pump delivers (#2658, #2672). Dropped, a press makes a
++/// click do nothing and a key a keystroke, so a press, a release or a key waits, and what comes
++/// after it waits behind it, in order, to be handed on once the window can take it. Text an input
++/// method sends without a key waits the same way, for the field it was meant for.
++#[derive(Default)]
++pub struct HeldInput(std::collections::VecDeque<Held>);
++
++/// What waits in `HeldInput`.
++pub(crate) enum Held {
++    Input(PlatformInput),
++    /// Text for the field with this focus, which goes nowhere if another field has the keys by then.
++    Text(Option<crate::FocusId>, crate::TextInput),
++}
++
++impl HeldInput {
++    /// Whether `event` waits, with something `behind` it waiting already or not: a press, a release
++    /// or a key always, other input only behind.
++    pub fn waits(event: &PlatformInput, behind: bool) -> bool {
++        match event {
++            PlatformInput::KeyDown(_)
++            | PlatformInput::KeyUp(_)
++            | PlatformInput::MouseDown(_)
++            | PlatformInput::MouseUp(_) => true,
++            _ => behind,
++        }
++    }
++
++    /// Holds `event` if it waits (`waits`); otherwise gives it back.
++    pub fn hold(&mut self, event: PlatformInput) -> Option<PlatformInput> {
++        if !Self::waits(&event, !self.0.is_empty()) {
++            return Some(event);
++        }
++        self.0.push_back(Held::Input(event));
++        None
++    }
++
++    /// Holds `text` for the field with `focus`.
++    pub(crate) fn hold_text(&mut self, focus: Option<crate::FocusId>, text: crate::TextInput) {
++        self.0.push_back(Held::Text(focus, text));
++    }
++
++    /// What came first of what's held.
++    pub(crate) fn next(&mut self) -> Option<Held> {
++        self.0.pop_front()
++    }
++
++    /// Whether anything waits.
++    pub fn is_empty(&self) -> bool {
++        self.0.is_empty()
++    }
++}
++
+ #[cfg(test)]
+ mod test {
+ 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index a875ee0f37..d7b4c87b68 100644
+index a875ee0f37..555e75dfc6 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -399,6 +399,12 @@ pub trait Platform: 'static {
@@ -103,7 +261,32 @@ index a875ee0f37..d7b4c87b68 100644
      fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
          None
      }
-@@ -1415,8 +1421,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+@@ -1271,6 +1277,24 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     }
+     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
+     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
++    /// Whether a key that comes while the App is in an update waits with the platform, as its own
++    /// event, to go the platform's whole way again once it's over (`DispatchEventResult::later`,
++    /// `hand_on_later`), rather than in GPUI's `HeldInput`. Where the platform routes a key by
++    /// whether GPUI took it, and the input method can have it before GPUI, only it can (#2672).
++    fn holds_keys(&self) -> bool {
++        false
++    }
++    /// Hands on, from outside the update, the keys the platform holds (`holds_keys`), as the update
++    /// they came in is over and what GPUI held, which came before them, is handed on. Called in an
++    /// update.
++    fn hand_on_later(&self) {}
++    /// What a key down GPUI held (`DispatchEventResult::later`) types if nothing takes it once it's
++    /// handed on, as the platform would have typed it then. Asked once for each such key, in order.
++    /// By default its character, if its modifiers are shift at most, as Wayland and X11 type one.
++    fn held_key_text(&self, keystroke: &Keystroke) -> Option<String> {
++        let typed = keystroke.modifiers.is_subset_of(&Modifiers::shift());
++        (keystroke.key_char.clone()).filter(|text| typed && !text.chars().any(char::is_control))
++    }
+     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
+     /// Registers the callback invoked when [`Self::visibility`] changes. Only
+     /// transitions are reported; the callback runs on the main thread outside
+@@ -1415,8 +1439,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
      /// Renders the given scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -119,7 +302,217 @@ index a875ee0f37..d7b4c87b68 100644
          anyhow::bail!("render_to_image not implemented for this platform")
      }
  }
-@@ -2596,7 +2607,8 @@ pub struct WindowOptions {
+@@ -1934,6 +1963,54 @@ impl<T> AtlasTextureList<T> {
+     pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> {
+         self.textures.iter_mut().flatten()
+     }
++
++    /// The size of the list's next texture, at least `min_size`, at most `max_size`: the first
++    /// 256 square and the rest 1024. Each window has its own atlas, and most of ilo's are overlays
++    /// that draw a few glyphs, which would hold a 1024 one for nothing (ilo #2317).
++    pub fn next_size(
++        &self,
++        min_size: Size<DevicePixels>,
++        max_size: Size<DevicePixels>,
++    ) -> Size<DevicePixels> {
++        let side = DevicePixels(if self.textures.iter().all(Option::is_none) {
++            256
++        } else {
++            1024
++        });
++        min_size.min(&max_size).max(&Size {
++            width: side,
++            height: side,
++        })
++    }
++}
++
++#[cfg(test)]
++mod atlas_texture_list_tests {
++    use super::*;
++
++    fn square(side: i32) -> Size<DevicePixels> {
++        Size {
++            width: DevicePixels(side),
++            height: DevicePixels(side),
++        }
++    }
++
++    #[test]
++    fn a_lists_first_texture_is_small_and_the_rest_full_size() {
++        let max = square(16384);
++        let mut list = AtlasTextureList::<()>::default();
++        assert_eq!(list.next_size(square(16), max), square(256));
++        assert_eq!(list.next_size(square(600), max), square(600));
++        assert_eq!(list.next_size(square(20000), max), max);
++
++        list.textures.push(Some(()));
++        assert_eq!(list.next_size(square(16), max), square(1024));
++
++        // A list whose textures were all freed starts small again.
++        list.textures[0] = None;
++        list.free_list.push(0);
++        assert_eq!(list.next_size(square(16), max), square(256));
++    }
+ }
+ 
+ #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+@@ -1994,11 +2071,47 @@ impl From<TileId> for etagere::AllocId {
+     }
+ }
+ 
++fn apply_text(handler: &mut dyn InputHandler, input: TextInput, window: &mut Window, cx: &mut App) {
++    match input {
++        TextInput::Replace { range, text } => handler.replace_text_in_range(range, &text, window, cx),
++        TextInput::Mark {
++            range,
++            text,
++            selected,
++        } => handler.replace_and_mark_text_in_range(range, &text, selected, window, cx),
++        TextInput::Unmark => handler.unmark_text(window, cx),
++    }
++}
++
+ #[expect(missing_docs)]
+ pub struct PlatformInputHandler {
+     cx: AsyncWindowContext,
+     handler: Box<dyn InputHandler>,
+     focus_id: Option<crate::FocusId>,
++    held: Option<std::rc::Rc<std::cell::RefCell<crate::HeldInput>>>,
++}
++
++/// What an input method does to a field's text, through `PlatformInputHandler`.
++#[derive(Clone, Debug, PartialEq)]
++pub enum TextInput {
++    /// Puts `text` in place of `range`, or of what's marked or selected.
++    Replace {
++        /// UTF-16 offsets.
++        range: Option<Range<usize>>,
++        /// The text.
++        text: String,
++    },
++    /// As `Replace`, and marks `text` as composing, with `selected` of it selected.
++    Mark {
++        /// UTF-16 offsets.
++        range: Option<Range<usize>>,
++        /// The text.
++        text: String,
++        /// UTF-16 offsets in `text`.
++        selected: Option<Range<usize>>,
++    },
++    /// Ends the composition, keeping its text.
++    Unmark,
+ }
+ 
+ #[expect(missing_docs)]
+@@ -2015,7 +2128,58 @@ impl PlatformInputHandler {
+             cx,
+             handler,
+             focus_id: None,
++            held: None,
++        }
++    }
++
++    /// Text the input method sends while the App is in an update, or while input waits behind one,
++    /// waits in `held` with that input (#2672).
++    pub(crate) fn with_held(mut self, held: std::rc::Rc<std::cell::RefCell<crate::HeldInput>>) -> Self {
++        self.held = Some(held);
++        self
++    }
++
++    /// Whether a key that comes now waits, as the App is in an update, to come again once it's
++    /// over, when the window's `PlatformWindow::hand_on_later` runs. Otherwise what's held is
++    /// handed on first, so the key can't overtake it.
++    pub fn key_waits(&mut self) -> bool {
++        let Some(held) = self.held.clone() else {
++            return false;
++        };
++        let handle = self.cx.window_handle();
++        if crate::window::app_busy(&self.cx) {
++            crate::window::hand_on_held_after_update(held, handle, &self.cx);
++            return true;
+         }
++        if !held.borrow().is_empty() {
++            crate::window::hand_on_held(&held, handle, &mut self.cx);
++        }
++        false
++    }
++
++    /// Changes the field's text as `input` says, or once the update the App is in is over and what
++    /// waits for it is handed on, as `key_waits`.
++    pub fn input_text(&mut self, input: TextInput) {
++        if let Some(held) = self.held.clone() {
++            let handle = self.cx.window_handle();
++            if crate::window::app_busy(&self.cx) {
++                held.borrow_mut().hold_text(self.focus_id, input);
++                crate::window::hand_on_held_after_update(held, handle, &self.cx);
++                return;
++            }
++            if !held.borrow().is_empty() {
++                crate::window::hand_on_held(&held, handle, &mut self.cx);
++            }
++        }
++        let handler = &mut self.handler;
++        self.cx
++            .update(|window, cx| apply_text(handler.as_mut(), input, window, cx))
++            .ok();
++    }
++
++    /// Changes the field's text as `input` says, in an update.
++    pub(crate) fn apply(&mut self, input: TextInput, window: &mut Window, cx: &mut App) {
++        apply_text(self.handler.as_mut(), input, window, cx);
+     }
+ 
+     pub(crate) fn with_focus(mut self, focus_id: crate::FocusId) -> Self {
+@@ -2068,12 +2232,10 @@ impl PlatformInputHandler {
+     }
+ 
+     pub fn replace_text_in_range(&mut self, replacement_range: Option<Range<usize>>, text: &str) {
+-        self.cx
+-            .update(|window, cx| {
+-                self.handler
+-                    .replace_text_in_range(replacement_range, text, window, cx);
+-            })
+-            .ok();
++        self.input_text(TextInput::Replace {
++            range: replacement_range,
++            text: text.to_string(),
++        });
+     }
+ 
+     pub fn replace_and_mark_text_in_range(
+@@ -2082,24 +2244,16 @@ impl PlatformInputHandler {
+         new_text: &str,
+         new_selected_range: Option<Range<usize>>,
+     ) {
+-        self.cx
+-            .update(|window, cx| {
+-                self.handler.replace_and_mark_text_in_range(
+-                    range_utf16,
+-                    new_text,
+-                    new_selected_range,
+-                    window,
+-                    cx,
+-                )
+-            })
+-            .ok();
++        self.input_text(TextInput::Mark {
++            range: range_utf16,
++            text: new_text.to_string(),
++            selected: new_selected_range,
++        });
+     }
+ 
+     #[cfg_attr(target_os = "windows", allow(dead_code))]
+     pub fn unmark_text(&mut self) {
+-        self.cx
+-            .update(|window, cx| self.handler.unmark_text(window, cx))
+-            .ok();
++        self.input_text(TextInput::Unmark);
+     }
+ 
+     pub fn paste(&mut self, item: ClipboardItem) {
+@@ -2596,7 +2750,8 @@ pub struct WindowOptions {
      /// Leave this `false` for windows that rely on AppKit's native titlebar dragging.
      pub app_owns_titlebar_drag: bool,
  
@@ -382,7 +775,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..17eb434609 100644
+index c559412e56..af067cbfec 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
@@ -394,21 +787,93 @@ index c559412e56..17eb434609 100644
      Inactive,
      /// The system is under thermal pressure.
      Thermal,
-@@ -360,6 +360,50 @@ thread_local! {
+@@ -348,6 +348,28 @@ thread_local! {
+     /// This allows multiple test Apps to have isolated arenas, preventing
+     /// cross-session corruption when the scheduler interleaves their tasks.
+     static CURRENT_ELEMENT_ARENA: Cell<Option<*const RefCell<Arena>>> = const { Cell::new(None) };
++
++    /// The arena `with_scratch_element_arena` lends elements built outside a draw.
++    static SCRATCH_ELEMENT_ARENA: Cell<Option<*const RefCell<Arena>>> = const { Cell::new(None) };
++}
++
++/// Runs `f` with the elements it builds outside a draw in an arena of its own, freed as it returns.
++/// ELEMENT_ARENA, where they'd go otherwise, is never cleared, so a view built only to be read, such
++/// as for a search index, would hold its memory for the rest of the session. Nothing `f` builds may
++/// be used after it returns: the arena's elements are dropped with it.
++pub fn with_scratch_element_arena<R>(f: impl FnOnce() -> R) -> R {
++    struct Restore(Option<*const RefCell<Arena>>);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            SCRATCH_ELEMENT_ARENA.with(|scratch| scratch.set(self.0));
++        }
++    }
++    let arena = RefCell::new(Arena::new(256 * 1024));
++    let previous = SCRATCH_ELEMENT_ARENA.with(|scratch| scratch.replace(Some(&raw const arena)));
++    let restore = Restore(previous);
++    let result = f();
++    drop(restore);
++    result
+ }
+ 
+ /// Whether a window draw is currently in progress on this thread.
+@@ -360,6 +382,93 @@ thread_local! {
  /// arrive re-entrantly while a draw is already on the stack (e.g. via nested
  /// message pumping in the Windows window procedure), instead of running a
  /// nested draw or panicking on the already-borrowed App.
 +/// Whether the App is in an update, as it is when Windows sends a window's move and size, or its
 +/// activation's modifiers, from inside the update that moves or activates it.
-+fn app_busy(cx: &crate::AsyncApp) -> bool {
-+    (cx.app.upgrade()).is_some_and(|app| app.try_borrow_mut().is_err())
++pub(crate) fn app_busy(cx: &crate::AsyncApp) -> bool {
++    cx.is_updating()
 +}
 +
-+/// Says, for ilo's checks (check.sh), that a window's `kind` update was lost, as the App was still
-+/// in an update once the update it came during was over.
++/// Says, for ilo's checks (check.sh), that a window's `kind` input or update was lost, as the App
++/// was still in an update when it came or once the update it came during was over.
 +fn dropped(kind: &str, cx: &crate::AsyncApp) {
 +    if app_busy(cx) {
 +        eprintln!("browser: gpui dropped {kind}");
++    }
++}
++
++/// Hands on what `held` holds once the update it came in is over, unless input that comes first
++/// hands it on, then what the platform holds after it (#2658, #2672).
++pub(crate) fn hand_on_held_after_update(
++    held: Rc<RefCell<crate::HeldInput>>,
++    handle: AnyWindowHandle,
++    cx: &crate::AsyncApp,
++) {
++    cx.spawn(async move |cx| {
++        // A nested event pump inside the update can run this before it's over.
++        while app_busy(cx) {
++            cx.background_executor()
++                .timer(std::time::Duration::from_millis(4))
++                .await;
++        }
++        hand_on_held(&held, handle, cx);
++        handle
++            .update(cx, |_, window, _| window.platform_window.hand_on_later())
++            .ok();
++    })
++    .detach();
++}
++
++/// Hands `handle` what `held` holds, in the order it came. It runs only once the update is over,
++/// so it fails only for a window closed meanwhile, whose input goes with it.
++pub(crate) fn hand_on_held(
++    held: &RefCell<crate::HeldInput>,
++    handle: AnyWindowHandle,
++    cx: &mut crate::AsyncApp,
++) {
++    loop {
++        // Taken off before it's handed on: input that comes as it's handled may hold more.
++        let Some(next) = held.borrow_mut().next() else {
++            return;
++        };
++        handle
++            .update(cx, |_, window, cx| match next {
++                crate::interactive::Held::Input(event) => window.dispatch_held(event, cx),
++                crate::interactive::Held::Text(focus, text) => window.input_held_text(focus, text, cx),
++            })
++            .ok();
 +    }
 +}
 +
@@ -445,7 +910,7 @@ index c559412e56..17eb434609 100644
  fn draw_in_progress() -> bool {
      CURRENT_ELEMENT_ARENA.with(|current| current.get().is_some())
  }
-@@ -737,6 +781,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
+@@ -737,6 +846,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
  /// Emitted by implementers of [`ManagedView`] to indicate the view should be dismissed, such as when a view is presented as a modal.
  pub struct DismissEvent;
  
@@ -465,7 +930,41 @@ index c559412e56..17eb434609 100644
  type FrameCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
  
  pub(crate) type AnyMouseListener =
-@@ -1247,6 +1304,10 @@ pub struct Window {
+@@ -1065,6 +1187,8 @@ pub(crate) struct Frame {
+     #[cfg(any(feature = "inspector", debug_assertions))]
+     pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
+     pub(crate) tab_stops: TabStopMap,
++    /// Where the element with the keyboard was painted, once it has been this frame.
++    pub(crate) focus_bounds: Option<Bounds<Pixels>>,
+ }
+ 
+ #[derive(Clone, Default)]
+@@ -1124,6 +1248,7 @@ impl Frame {
+             #[cfg(any(feature = "inspector", debug_assertions))]
+             inspector_hitboxes: FxHashMap::default(),
+             tab_stops: TabStopMap::default(),
++            focus_bounds: None,
+         }
+     }
+ 
+@@ -1140,6 +1265,7 @@ impl Frame {
+         self.window_control_hitboxes.clear();
+         self.deferred_draws.clear();
+         self.tab_stops.clear();
++        self.focus_bounds = None;
+         self.focus = None;
+ 
+         #[cfg(any(test, feature = "test-support"))]
+@@ -1223,6 +1349,8 @@ enum InputModality {
+ /// Holds the state for a specific window.
+ pub struct Window {
+     pub(crate) handle: AnyWindowHandle,
++    /// Input that came while the App was in an update, waiting for it to end (#2658, #2672).
++    held_input: Rc<RefCell<crate::HeldInput>>,
+     pub(crate) invalidator: WindowInvalidator,
+     pub(crate) removed: bool,
+     pub(crate) platform_window: Box<dyn PlatformWindow>,
+@@ -1247,6 +1375,10 @@ pub struct Window {
      pub(crate) rendered_entity_stack: Vec<EntityId>,
      pub(crate) element_offset_stack: Vec<Point<Pixels>>,
      pub(crate) element_opacity: f32,
@@ -476,7 +975,7 @@ index c559412e56..17eb434609 100644
      pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
      pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
      /// The [`TextInputConfiguration`] most recently forwarded to the platform
-@@ -1664,6 +1725,7 @@ impl Window {
+@@ -1664,6 +1796,7 @@ impl Window {
          let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
          let input_rate_tracker = Rc::new(RefCell::new(InputRateTracker::default()));
          let last_frame_time = Rc::new(Cell::new(None));
@@ -484,7 +983,7 @@ index c559412e56..17eb434609 100644
  
          platform_window
              .request_decorations(window_decorations.unwrap_or(WindowDecorations::Server));
-@@ -1770,9 +1832,12 @@ impl Window {
+@@ -1770,9 +1903,12 @@ impl Window {
              }
          }));
          platform_window.on_request_frame(Box::new({
@@ -497,7 +996,22 @@ index c559412e56..17eb434609 100644
              let needs_present = needs_present.clone();
              let next_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
-@@ -1824,13 +1889,20 @@ impl Window {
+@@ -1805,9 +1941,14 @@ impl Window {
+                 // but calling it would hit the App borrow panic above, and this
+                 // branch is unreachable there in practice: only Windows pumps
+                 // platform events (and thus requests frames) mid-draw.
++                //
++                // The draw on the stack may be another window's, and Windows
++                // validates this one once the request returns, so wake the frame
++                // source: a dirty window doesn't wake it again when it's notified.
+                 if draw_in_progress() {
+                     log::debug!("deferring re-entrant window draw request");
+                     deferred_force_render |= request_frame_options.force_render;
++                    invalidator.wake_platform();
+                     #[cfg(feature = "profiler")]
+                     profiler::journal::record_reentrant_frame_skipped(window_id, Instant::now());
+                     return;
+@@ -1824,13 +1965,20 @@ impl Window {
  
                  // Throttle frame rate based on conditions:
                  // - Thermal pressure (Serious/Critical): cap to ~60fps
@@ -520,7 +1034,40 @@ index c559412e56..17eb434609 100644
                      inactive_frame_interval.map(|interval| (interval, FrameRateLimit::Inactive))
                  } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
                      Some((Duration::from_micros(16667), FrameRateLimit::Thermal))
-@@ -1964,21 +2036,16 @@ impl Window {
+@@ -1875,15 +2023,23 @@ impl Window {
+                 }
+                 last_frame_time.set(Some(now));
+ 
+-                let pending_next_frame_callbacks = next_frame_callbacks.take();
+-                if !pending_next_frame_callbacks.is_empty() {
+-                    handle
+-                        .update(&mut cx, |_, window, cx| {
+-                            for callback in pending_next_frame_callbacks {
+-                                callback(window, cx);
+-                            }
+-                        })
+-                        .log_err();
++                let mut pending_next_frame_callbacks = Some(next_frame_callbacks.take());
++                if pending_next_frame_callbacks.as_ref().is_some_and(|c| !c.is_empty()) {
++                    let ran = handle.update(&mut cx, |_, window, cx| {
++                        for callback in pending_next_frame_callbacks.take().into_iter().flatten() {
++                            callback(window, cx);
++                        }
++                    });
++                    // Requested while the App is in an update, as Windows does from a nested
++                    // message pump: they wait for the next frame, ahead of any queued since,
++                    // and the wake below asks for it. Dropped, they'd strand what they drive.
++                    if ran.is_err()
++                        && let Some(mut callbacks) = pending_next_frame_callbacks
++                    {
++                        let mut queued = next_frame_callbacks.borrow_mut();
++                        callbacks.append(&mut queued);
++                        *queued = callbacks;
++                    }
+                 }
+ 
+                 // Keep presenting if input was recently arriving at a high rate (>= 60fps).
+@@ -1964,21 +2120,16 @@ impl Window {
                      .log_err();
              }
          }));
@@ -547,17 +1094,59 @@ index c559412e56..17eb434609 100644
          }));
          platform_window.on_display_changed(Box::new({
              let cx = cx.to_async();
-@@ -2053,10 +2120,31 @@ impl Window {
+@@ -2050,13 +2201,73 @@ impl Window {
+                     .log_err();
+             }
+         }));
++        // Input that comes while the App is in an update waits for it to end (`HeldInput`).
++        let held_input: Rc<RefCell<crate::HeldInput>> = Rc::default();
          platform_window.on_input({
              let mut cx = cx.to_async();
++            let held = held_input.clone();
++            let holds_keys = platform_window.holds_keys();
++            // A key GPUI can't take now goes later: the platform keeps it if it holds keys, and
++            // otherwise GPUI does (`PlatformWindow::holds_keys`, `held_key_text`).
++            let later = DispatchEventResult {
++                later: true,
++                ..Default::default()
++            };
              Box::new(move |event| {
 -                handle
 -                    .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
 -                    .log_err()
 -                    .unwrap_or(DispatchEventResult::default())
++                // What waited goes first, so nothing overtakes it.
++                if !held.borrow().is_empty() && !app_busy(&cx) {
++                    hand_on_held(&held, handle, &mut cx);
++                }
++                let key = matches!(event, PlatformInput::KeyDown(_) | PlatformInput::KeyUp(_));
++                let event = if held.borrow().is_empty() {
++                    event
++                } else if key && holds_keys {
++                    // Behind input held for the update: the task that hands it on calls
++                    // `hand_on_later` after it.
++                    return later.clone();
++                } else {
++                    // Still the update the held input came in: behind it.
++                    let Some(event) = held.borrow_mut().hold(event) else {
++                        return if key { later.clone() } else { Default::default() };
++                    };
++                    event
++                };
 +                let modifiers = matches!(event, PlatformInput::ModifiersChanged(_));
++                let waits = crate::HeldInput::waits(&event, false) && !(key && holds_keys);
++                let kept = waits.then(|| event.clone());
 +                match handle.update(&mut cx, |_, window, cx| window.dispatch_event(event, cx)) {
 +                    Ok(result) => result,
++                    Err(_) if key && holds_keys && app_busy(&cx) => {
++                        hand_on_held_after_update(held.clone(), handle, &cx);
++                        later.clone()
++                    }
++                    Err(_) if kept.is_some() && app_busy(&cx) => {
++                        held.borrow_mut().hold(kept.unwrap());
++                        hand_on_held_after_update(held.clone(), handle, &cx);
++                        if key { later.clone() } else { Default::default() }
++                    }
 +                    Err(_) => {
 +                        // A window activated inside an update tells its modifiers then: once it's
 +                        // over, the ones held by then, as a key may have gone up meanwhile.
@@ -583,7 +1172,15 @@ index c559412e56..17eb434609 100644
              })
          });
          platform_window.on_hit_test_window_control({
-@@ -2156,6 +2244,9 @@ impl Window {
+@@ -2135,6 +2346,7 @@ impl Window {
+ 
+         Ok(Window {
+             handle,
++            held_input,
+             invalidator,
+             removed: false,
+             platform_window,
+@@ -2156,6 +2368,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -593,7 +1190,19 @@ index c559412e56..17eb434609 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -2884,7 +2975,14 @@ impl Window {
+@@ -2233,6 +2448,11 @@ impl Window {
+ pub struct DispatchEventResult {
+     pub propagate: bool,
+     pub default_prevented: bool,
++    /// The key came while the App was in an update and goes once it's over, so it isn't taken now.
++    /// A platform that holds keys keeps it, to go its whole way again then, and tells AppKit or the
++    /// like it was taken meanwhile (`PlatformWindow::holds_keys`). Otherwise GPUI keeps it, and
++    /// asks the platform what it types then (`PlatformWindow::held_key_text`).
++    pub later: bool,
+ }
+ 
+ /// Indicates which region of the window is visible. Content falling outside of this mask will not be
+@@ -2884,7 +3104,14 @@ impl Window {
      /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -609,7 +1218,7 @@ index c559412e56..17eb434609 100644
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3636,6 +3734,14 @@ impl Window {
+@@ -3636,6 +3863,14 @@ impl Window {
          profiling::finish_frame!();
      }
  
@@ -624,7 +1233,7 @@ index c559412e56..17eb434609 100644
      /// Presents the most recently drawn frame if it hasn't been presented yet.
      #[cfg(all(test, feature = "profiler"))]
      pub fn present_if_needed(&mut self) {
-@@ -3761,7 +3867,23 @@ impl Window {
+@@ -3761,7 +3996,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -649,7 +1258,7 @@ index c559412e56..17eb434609 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4349,40 @@ impl Window {
+@@ -4227,6 +4478,40 @@ impl Window {
          result
      }
  
@@ -690,7 +1299,32 @@ index c559412e56..17eb434609 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -5578,9 +5734,8 @@ impl Window {
+@@ -4273,6 +4558,13 @@ impl Window {
+         result
+     }
+ 
++    /// Where the element that has the keyboard was painted this frame, if it has been yet: called
++    /// during paint after a scrolling element's children, it says whether one of them has the
++    /// keyboard, and where, so the element can scroll it into view.
++    pub fn painted_focus_bounds(&self) -> Option<Bounds<Pixels>> {
++        self.next_frame.focus_bounds
++    }
++
+     /// When you call this method during [`Element::prepaint`], containing elements will attempt to
+     /// scroll to cause the specified bounds to become visible. When they decide to autoscroll, they will call
+     /// [`Element::prepaint`] again with a new set of bounds. See [`crate::List`] for an example of an element
+@@ -5417,7 +5709,9 @@ impl Window {
+         if focus_handle.is_focused(self) {
+             let cx = self.to_async(cx);
+             self.next_frame.input_handlers.push(Some(
+-                PlatformInputHandler::new(cx, Box::new(input_handler)).with_focus(focus_handle.id),
++                PlatformInputHandler::new(cx, Box::new(input_handler))
++                    .with_focus(focus_handle.id)
++                    .with_held(self.held_input.clone()),
+             ));
+         }
+     }
+@@ -5578,14 +5872,45 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -702,7 +1336,52 @@ index c559412e56..17eb434609 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7252,24 @@ impl Window {
+     }
+ 
++    /// Hands on input held while the App was in an update (`HeldInput`): a key nothing takes types
++    /// its text, as the platform does with one that comes when GPUI can take it.
++    fn dispatch_held(&mut self, event: PlatformInput, cx: &mut App) {
++        let text = match &event {
++            PlatformInput::KeyDown(key) => self.platform_window.held_key_text(&key.keystroke),
++            _ => None,
++        };
++        if self.dispatch_event(event, cx).propagate
++            && let Some(text) = text
++            && let Some(mut input_handler) = self.platform_window.take_input_handler()
++        {
++            input_handler.dispatch_input(&text, self, cx);
++            self.platform_window.set_input_handler(input_handler);
++        }
++    }
++
++    /// Text an input method sent while the App was in an update, for the field with `focus`, which
++    /// goes nowhere if another has the keys now.
++    fn input_held_text(
++        &mut self,
++        focus: Option<FocusId>,
++        text: crate::TextInput,
++        cx: &mut App,
++    ) {
++        if let Some(mut input_handler) = self.platform_window.take_input_handler() {
++            if input_handler.focus_id() == focus {
++                input_handler.apply(text, self, cx);
++            }
++            self.platform_window.set_input_handler(input_handler);
++        }
++    }
++
+     /// Dispatch a given keystroke as though the user had typed it.
+     /// You can create a keystroke with Keystroke::parse("").
+     pub fn dispatch_keystroke(&mut self, keystroke: Keystroke, cx: &mut App) -> bool {
+@@ -5801,6 +6126,7 @@ impl Window {
+         DispatchEventResult {
+             propagate: cx.propagate_event,
+             default_prevented: self.default_prevented,
++            later: false,
+         }
+     }
+ 
+@@ -7097,18 +7423,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
@@ -730,7 +1409,50 @@ index c559412e56..17eb434609 100644
                          position: center,
                          modifiers: Modifiers::default(),
                          click_count: 1,
-@@ -8179,6 +8340,101 @@ mod tests {
+@@ -7908,11 +8240,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
+         let arena_cell = unsafe { &*arena_pointer };
+         callback(&mut arena_cell.borrow_mut());
+         Ok(())
++    } else if let Some(arena_pointer) = SCRATCH_ELEMENT_ARENA.try_with(Cell::get)? {
++        // SAFETY: `with_scratch_element_arena` sets it to an arena it owns, and puts back what was
++        // there before as it returns, before the arena is dropped.
++        let arena_cell = unsafe { &*arena_pointer };
++        callback(&mut arena_cell.borrow_mut());
++        Ok(())
+     } else {
+         ELEMENT_ARENA.try_with(|arena| callback(&mut arena.borrow_mut()))
+     }
+ }
+ 
++#[cfg(test)]
++mod scratch_arena_tests {
++    use super::{ELEMENT_ARENA, with_scratch_element_arena};
++    use crate::{IntoElement as _, div};
++
++    fn fallback_capacity() -> usize {
++        ELEMENT_ARENA.with(|arena| arena.borrow().capacity())
++    }
++
++    #[test]
++    fn elements_built_in_a_scratch_arena_leave_the_fallback_one_as_it_was() {
++        let before = fallback_capacity();
++        let built = with_scratch_element_arena(|| {
++            (0..5000).map(|_| div().into_any_element()).count()
++        });
++        assert_eq!(built, 5000);
++        assert_eq!(fallback_capacity(), before);
++
++        // Without it, the same elements grow the fallback arena, which nothing clears.
++        let elements: Vec<_> = (0..5000).map(|_| div().into_any_element()).collect();
++        drop(elements);
++        assert!(fallback_capacity() > before);
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use std::{
+@@ -8179,6 +8542,101 @@ mod tests {
          }
      }
  
@@ -832,6 +1554,57 @@ index c559412e56..17eb434609 100644
      /// Visibility transitions reach observers exactly once each, with the new
      /// state already stored on the window, and never wake the platform for a
      /// frame: the platform requests one itself when it resumes presenting.
+@@ -8616,6 +9074,50 @@ mod tests {
+         );
+     }
+ 
++    /// Asks another window for a frame while this one draws, as a nested message pump on Windows
++    /// delivers one, and records that window's frame-source wakes before and after.
++    struct AsksForAFrameWhileDrawing {
++        other: crate::TestWindow,
++        wakes: Rc<Cell<Option<(usize, usize)>>>,
++    }
++
++    impl Render for AsksForAFrameWhileDrawing {
++        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
++            let before = self.other.frame_wake_count();
++            self.other
++                .simulate_frame_request(RequestFrameOptions::default());
++            self.wakes
++                .set(Some((before, self.other.frame_wake_count())));
++            div()
++        }
++    }
++
++    /// A frame request deferred because another window's draw is on the stack wakes the frame
++    /// source: Windows validates the window once the request returns, and a window that's already
++    /// dirty doesn't wake it again when it's notified, so nothing would ask for its frame (#2685).
++    #[gpui::test]
++    fn test_frame_request_deferred_during_another_draw_wakes_the_frame_source(
++        cx: &mut TestAppContext,
++    ) {
++        let other = cx.add_window(|_, _| EmptyView);
++        let other = cx.test_window(other.into());
++        let wakes = Rc::new(Cell::new(None));
++        let window = cx.add_window({
++            let wakes = wakes.clone();
++            move |_, _| AsksForAFrameWhileDrawing { other, wakes }
++        });
++        window
++            .update(cx, |_, window, _| window.refresh())
++            .unwrap();
++        cx.test_window(window.into())
++            .simulate_frame_request(RequestFrameOptions::default());
++        let (before, after) = wakes.get().expect("the window didn't draw");
++        assert!(
++            after > before,
++            "a frame request deferred mid-draw must wake the frame source"
++        );
++    }
++
+     #[gpui::test]
+     fn test_window_reports_no_raw_handle_instead_of_panicking(cx: &mut TestAppContext) {
+         use raw_window_handle::{HandleError, HasDisplayHandle as _, HasWindowHandle as _};
 diff --git a/crates/gpui/src/window/a11y.rs b/crates/gpui/src/window/a11y.rs
 index 5b63821232..cb7d8413de 100644
 --- a/crates/gpui/src/window/a11y.rs

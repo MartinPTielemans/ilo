@@ -2,10 +2,8 @@
 //! it's made; and opening the pickers for a Space's or a tab's icon and a Space's theme.
 
 use crate::tokens::text;
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{App, Context, Focusable, Point, SharedString, Window, div, point, prelude::*, px};
 
@@ -255,9 +253,13 @@ impl Shell {
         let Some(brush) = self.brush_frames.borrow().get(&space).copied() else {
             return;
         };
-        let anchor = point(f32::from(brush.right()), f32::from(brush.center().y));
-        // The Library stays as it is on either side until it moves with the sidebar.
-        self.show_theme_picker(space, theme_picker::At::Row(anchor), false, cx);
+        // Toward the page, which is left of the Library on the right.
+        let end = match self.right {
+            true => brush.left(),
+            false => brush.right(),
+        };
+        let anchor = point(f32::from(end), f32::from(brush.center().y));
+        self.show_theme_picker(space, theme_picker::At::Row(anchor), self.right, cx);
         self.light_card_while_picking(space, cx);
     }
 

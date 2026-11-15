@@ -13,8 +13,9 @@ use std::{
     collections::HashMap,
     rc::Rc,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
@@ -482,9 +483,11 @@ pub fn asking(cx: &App) -> bool {
         .is_some_and(|dialog| dialog.asked.is_some())
 }
 
-/// Whether `pose` asks now: there's a dialog to ask in, and it isn't asking another question.
+/// Whether `pose` asks now: there's a dialog to ask in, or one to be made as it's first asked, and
+/// it isn't asking another question.
 pub fn can_pose(cx: &App) -> bool {
-    cx.try_global::<DialogWindow>().is_some() && !asking(cx)
+    (cx.try_global::<DialogWindow>().is_some() || crate::lazy_window::pending::<Dialog>(cx))
+        && !asking(cx)
 }
 
 /// Asks `message`, with `detail` under it, over browser `window` or the one in front, and calls
@@ -552,6 +555,7 @@ pub fn pose(
     confirmed: Box<dyn FnOnce(Vec<String>, &mut App)>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<Dialog>(cx);
     let Some(window) = cx.try_global::<DialogWindow>().map(|dialog| dialog.0) else {
         return;
     };
@@ -595,6 +599,7 @@ fn ask_granting(
     answered: Box<dyn FnOnce(bool, &mut App)>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<Dialog>(cx);
     let Some(window) = cx.try_global::<DialogWindow>().map(|dialog| dialog.0) else {
         answered(false, cx);
         return;
@@ -662,6 +667,7 @@ pub fn ask_page(
     answered: Box<dyn FnOnce(Reply, &mut App)>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<Dialog>(cx);
     let Some(window) = cx.try_global::<DialogWindow>().map(|dialog| dialog.0) else {
         return;
     };

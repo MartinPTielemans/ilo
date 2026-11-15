@@ -1,3 +1,4 @@
+# check.sh runs this at 560.
 # Every host the browser connects to on its own is one ilobrowser.com/privacy names (#684): a run
 # that launches with Chromium's net log on, idles until the security components' first check
 # (about a minute in) shows in it, opens one of its own pages and types in the command bar, so

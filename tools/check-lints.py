@@ -7,6 +7,13 @@
   out. One that stands in for a wait on the app passes on a fast machine and fails on a slow one.
 - A `none_since` straight after a `send` of input follows an `expect` that the app handled it:
   without one it can pass because the app hasn't got to the input yet.
+- A file in app/check/ that check.sh runs starts with its place among the runs, in the form
+  check.sh reads (#2562). A file without one is a helper or a script of its own, which another
+  file names as check/<file>; a run whose line is missing or misspelt would never run, unsaid.
+- A key a run presses with a modifier, outside a Windows-only block, isn't one of the keybinds in
+  app/check/openbox.xml. On X11 the driver presses keys through the X server as a hand does, so
+  Openbox, under Xvfb, would take that key before the app (#2721). Only openbox.xml is read: a
+  key that KWin or sway takes isn't caught here, and a step that loses one there is a finding.
 
 Run from anywhere in the checkout. Prints each finding and exits 1 if there are any.
 """
@@ -25,14 +32,6 @@ MARKER = re.compile(r"(//|#).*\b(reads|waits for|can wait for) this line")
 STRING = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
 # Rust's {...} and C's %s and the like.
 PLACEHOLDER = re.compile(r"\{[^{}]*\}|%[-+ #0-9.*]*(?:ll|l|z|h|j)?[a-zA-Z@]")
-# The core's stale markers, which go with its next change: a change to core/ alone builds the
-# engine on Linux and Windows. The file and the words its line's marker is over.
-CORE_LATER = {
-    ("core/browser_window_stand_in.cc", "page full screen ended, its display gone"),
-    ("core/held_keys.cc", "keys went to the page"),
-    ("core/main_delegate.cc", "terminating,"),
-    ("core/platform/mac/system_page.mm", "system page gone at"),
-}
 # The driver's commands that ask it something rather than send the app input.
 QUERIES = {"state", "layout", "screen", "order", "title", "pasteboard", "pip", "front", "stack",
            "menubar"}
@@ -134,7 +133,7 @@ def unread_markers():
         p for p, variable in read_by
         if variable or sum(bool(p.match(line)) for line in logged.values()) <= 3
     ]
-    found, later = [], set()
+    found = []
     for path, n, text in marked:
         if text is None:
             found.append((path, n, "a marker over no log line"))
@@ -144,12 +143,7 @@ def unread_markers():
             continue
         if any(matches(p, logged[path, n], readers) for p in read_by):
             continue
-        if (path, words) in CORE_LATER:
-            later.add((path, words))
-            continue
         found.append((path, n, f"no run reads this line ({words!r}): take its marker away"))
-    for path, words in sorted(CORE_LATER - later):
-        found.append((SELF, 1, f"CORE_LATER lists {path}'s {words!r}, whose marker is gone or read"))
     return found
 
 
@@ -211,8 +205,99 @@ def quiet_after_send():
     return found
 
 
+# --- Each run's place ------------------------------------------------------------------------
+
+PLACE = re.compile(r"# check\.sh runs this at [0-9]+(, only when named)?\.")
+
+
+def run_places():
+    found = []
+    others = {path: read(path) for path in tracked(*READERS)}
+    for path in tracked("app/check/*.sh"):
+        lines = read(path).splitlines()
+        said = [n for n, line in enumerate(lines) if line.startswith("# check.sh runs this")]
+        if said:
+            for n in said:
+                if n != 0 or not PLACE.fullmatch(lines[n]):
+                    found.append((path, n + 1, "a run's place is its first line, as \"# check.sh "
+                                  "runs this at 120.\" or \"# check.sh runs this at 700, only when "
+                                  "named.\", or check.sh never runs it"))
+            continue
+        name = "check/" + path.rsplit("/", 1)[1]
+        if not any(name in text for other, text in others.items() if other != path):
+            found.append((path, 1, "no first line \"# check.sh runs this at <n>.\", so check.sh "
+                          "never runs it, and no other file names " + name + " to run it"))
+    return found
+
+
+# --- Keys Openbox takes ----------------------------------------------------------------------
+
+OPENBOX = "app/check/openbox.xml"
+# A drive command's key and the Mac's modifiers after it, quoted or not, as in show_space's
+# "key 1 ctrl".
+DRIVE_KEY = re.compile(r"\b(?:key|keydown|keyonreturn)\s+([^\s\"'$;]+)((?:\s+(?:cmd|ctrl|alt|shift|again))+)")
+# The driver's key names whose X keysym is named otherwise.
+KEYSYM = {"pageup": "prior", "pagedown": "next"}
+
+
+def x11_chord(key, words):
+    """The X11 chord, as Openbox names its keys, that the Linux driver presses for drive.mm's `key`
+    with the Mac's modifiers `words`, as drive.rs's modifiers() maps them: ⌘ to Control, ⌃ and ⌥
+    to Alt, and ⌃Tab to Control+Tab."""
+    mods = set()
+    for word in words:
+        mods |= {"cmd": {"C"}, "ctrl": {"A"}, "alt": {"A"}, "shift": {"S"}}.get(word, set())
+    if key == "tab" and "ctrl" in words and "cmd" not in words:
+        mods = mods - {"A"} | {"C"} | ({"A"} if "alt" in words else set())
+    return frozenset(mods), KEYSYM.get(key, key).lower()
+
+
+def openbox_keys():
+    """openbox.xml's keybinds, each as its modifiers and its key, by its name there."""
+    binds = {}
+    for name in re.findall(r'<keybind key="([^"]+)"', read(OPENBOX)):
+        *mods, key = name.split("-")
+        binds[(frozenset(mods), key.lower())] = name
+    return binds
+
+
+def windows_only(lines):
+    """Whether each of a run's lines is inside an `if windows; then` block, to its else or fi."""
+    inside, out = None, []
+    for line, code in lines:
+        indent = len(line) - len(line.lstrip())
+        if inside is not None and indent == inside and re.match(r"\s*(else|elif|fi)\b", code):
+            inside = None
+        elif inside is None and re.fullmatch(r"\s*if windows; then\s*", code):
+            out.append(True)
+            inside = indent
+            continue
+        out.append(inside is not None)
+    return out
+
+
+def openbox_takes():
+    found, binds = [], openbox_keys()
+    for path in tracked(*RUNS):
+        lines = run_lines(path)
+        for n, ((line, code), windows) in enumerate(zip(lines, windows_only(lines))):
+            if windows or not code.strip():
+                continue
+            for key in DRIVE_KEY.finditer(re.split(r"\s#", line)[0]):
+                words = key.group(2).split()
+                bind = binds.get(x11_chord(key.group(1), words))
+                if bind:
+                    found.append((path, n + 1, f"\"key {key.group(1)} {' '.join(words)}\" is X11's "
+                                  f"{bind}, which {OPENBOX} binds, so under Xvfb Openbox takes it "
+                                  "before the app: move the bind to Super there, as its others "
+                                  "are. This reads openbox.xml alone; KWin's and sway's binds "
+                                  "aren't checked"))
+    return found
+
+
 def main():
-    found = unread_markers() + bare_sleeps() + quiet_after_send()
+    found = (unread_markers() + bare_sleeps() + quiet_after_send() + run_places() +
+             openbox_takes())
     for path, line, message in found:
         print(f"::error file={path},line={line}::{message}")
     print(f"{len(found)} found")

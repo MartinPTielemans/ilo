@@ -1,7 +1,7 @@
 //! The Library's Spaces cards once they don't fit: they scroll across under two fingers and a
 //! wheel, as Arc 1.171's do, one to one and elastic at both ends.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::Context;
 
@@ -74,9 +74,13 @@ impl Shell {
     /// Whether `x` across the window is over the Spaces cards, with the Library open where it
     /// opens and the cards with room to scroll.
     pub(super) fn over_cards(&self, x: f32) -> bool {
-        let left = self.library_column_left() + COLUMN_WIDTH;
+        let (panel, width) = (self.library_x(), self.library_width());
+        // On the right they're left of the column.
+        let (left, right) = match self.right {
+            true => (panel, panel + width - COLUMN_WIDTH),
+            false => (panel + COLUMN_WIDTH, panel + width),
+        };
         let open = self.library_open && self.library_motion.is_none();
-        let right = left - COLUMN_WIDTH + self.library_width();
         open && self.cards_room() > 0. && x >= left && x < right
     }
 

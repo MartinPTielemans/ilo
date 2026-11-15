@@ -43,6 +43,12 @@ fn rows() -> Vec<Entry> {
             Some("After 2 hours out of sight a tab frees its memory."),
         ),
         row(
+            Section::TabsAndSidebar,
+            None,
+            "Sidebar position",
+            Some("The side of the window the sidebar and the window's buttons are on."),
+        ),
+        row(
             Section::Features,
             None,
             little,
@@ -87,6 +93,18 @@ fn pip_finds_the_mini_player_by_another_name() {
     assert_eq!(names("pip"), ["Mini Player"]);
     assert_eq!(names("picture"), ["Mini Player"]);
     assert_eq!(names("link prev"), ["Peek"]);
+}
+
+/// The drawings have no words to find, so the row's other names hold its sides: either side's
+/// word finds it, as its name does (#2407).
+#[test]
+fn either_side_finds_sidebar_position() {
+    assert_eq!(names("sidebar position"), ["Sidebar position"]);
+    assert_eq!(names("right"), ["Sidebar position"]);
+    assert_eq!(
+        names("left"),
+        ["Sidebar position", "Archive windows left unused after"]
+    );
 }
 
 #[test]

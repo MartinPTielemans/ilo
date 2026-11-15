@@ -1,3 +1,4 @@
+# check.sh runs this at 110.
 # Launched again after ⌘Q, the app brings back every regular window that was open, as Arc and
 # Chrome do: each at the frame it had, in the Space it showed, stacked as they were, with the one
 # in front key. A window closed before the quit, and a private window, don't come back. With
@@ -168,13 +169,9 @@ send key n cmd shift
 expect '^browser: private window opened [0-9]' "⇧⌘N didn't open a private window"
 new_window_bar
 send window 2
-if [ "$(uname)" = Linux ]; then
-  echo "skip: the windows' order before the quit: on X11 a new window opens behind the one in front (#712)."
-else
-  send order
-  expect '^browser: order window 2 window 4 window 1, key window 2$' \
-    "before the quit, the windows weren't the second, the private one and the first, front to back"
-fi
+send order
+expect '^browser: order window 2 window 4 window 1, key window 2$' \
+  "before the quit, the windows weren't the second, the private one and the first, front to back"
 quit_by_key
 exited
 
@@ -307,6 +304,13 @@ if windows; then
 fi
 exec 3>&-
 quit
+# The first launch, quit soon after its page loaded, marked its new data folder as having no old
+# Safari's-engine stores, so no later launch lists or sweeps them (#2889). Only the Mac logs these.
+for later in "$out"/relaunch-*.log; do
+  [ "$later" = "$out/relaunch-a.log" ] && continue
+  ! grep -q "^browser: system engine loaded for listing the profiles' stores\|^browser: old system stores swept\$" "$later" ||
+    fail "$(basename "$later") swept old stores, which a data folder's first launch marks it as having none of"
+done
 
-echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized Window: $out/relaunch-two.png"
+echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized A data folder's first launch, however short, marks it as having no old Safari's-engine stores, so no later launch sweeps them. Window: $out/relaunch-two.png"
 echo "  Launch with one window: $one; with two: $two"

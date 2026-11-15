@@ -3,7 +3,8 @@
 //! system shows scroll bars always, with the rows giving up room for it (docs/ux-spec.md › Tab
 //! rows).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use gpui::{App, Context, Global, Task, Window, div, prelude::*, px};
 

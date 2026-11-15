@@ -1,8 +1,9 @@
 //! The floats of platform/host.h on Linux: the zoom HUD, the split view's drop targets, the toast,
-//! the tooltip, the link target, the hover card and Arrange's mini bar, which float over a browser
-//! window without the keyboard, as their windows do on the Mac. GPUI shows each as an overlay of
-//! that window (overlays.rs) that lets the pointer through to what's under it, but for the toast's
-//! plate while it has buttons, the hover card's and the mini bar's, for their buttons.
+//! the tooltip, the link target, the hover card, the foot bar and Arrange's mini bar, which float
+//! over a browser window without the keyboard, as their windows do on the Mac. GPUI shows each as an
+//! overlay of that window (overlays.rs) that lets the pointer through to what's under it, but for
+//! the toast's plate while it has buttons, the hover card's and the mini bar's, for their buttons,
+//! and the foot bar, all of it.
 //!
 //! The hover card's motion is the UI's (src/hover_card.rs), from its window's first frame on
 //! screen, so the host shows and hides it at once. On X11 with no compositor, which draws an
@@ -36,6 +37,7 @@ enum Kind {
     Tooltip,
     LinkTarget,
     Card,
+    FootBar,
     MiniBar,
 }
 
@@ -61,6 +63,16 @@ struct Hud {
     margin: f64,
 }
 
+/// Where the foot bar goes (host_show_foot_bar).
+#[derive(Default)]
+struct FootBar {
+    left: f64,
+    right: f64,
+    bottom: f64,
+    width: f64,
+    height: f64,
+}
+
 #[derive(Default)]
 struct Toast {
     takes: bool,
@@ -71,6 +83,7 @@ thread_local! {
     static FLOATS: RefCell<Vec<Float>> = const { RefCell::new(Vec::new()) };
     static HUD: RefCell<Hud> = RefCell::default();
     static TOAST: RefCell<Toast> = RefCell::default();
+    static FOOT_BAR: RefCell<FootBar> = RefCell::default();
     /// The tooltip's and the link target's margins, and what runs as the user leaves the tooltip's
     /// window.
     static TOOLTIP: RefCell<(f64, Option<extern "C" fn()>)> = const { RefCell::new((0., None)) };
@@ -173,6 +186,18 @@ fn bounds(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
             let margin = CARD.with_borrow(|(margin, _)| *margin);
             (left - margin, top - margin)
         }
+        // Centred between its insets, its bottom over the content's, at the size the UI gave.
+        Kind::FootBar => {
+            let bar = FOOT_BAR
+                .with_borrow(|bar| (bar.left, bar.right, bar.bottom, bar.width, bar.height));
+            let (left, right, bottom, bar_width, bar_height) = bar;
+            let x = left + (width - left - right - bar_width) / 2.;
+            let y = f64::from(content.height) - bottom - bar_height;
+            return Some(Bounds::new(
+                point(px(x as f32), px(y as f32)),
+                size(px(bar_width as f32), px(bar_height as f32)),
+            ));
+        }
         // Where the UI put the bar, at the size it gave, with the margin round it.
         Kind::MiniBar => {
             let (margin, width, height) = MINI_BAR.get();
@@ -205,8 +230,19 @@ fn show(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
         float.over = ui_view;
         float.view
     })?;
-    crate::overlays::show_over(view, ui_view, bounds, px(0.), false, left);
+    crate::overlays::show_over(view, ui_view, bounds, radius(kind, bounds), false, left);
     Some(bounds)
+}
+
+/// The float's corners, which X11 with no compositor cuts its window to: the foot bar's, one line's
+/// or two lines' by its height, and none for the others, which draw their own.
+fn radius(kind: Kind, bounds: Bounds<Pixels>) -> Pixels {
+    use browser::tokens::foot_bar::{RADIUS, TALL_HEIGHT, TALL_RADIUS};
+    match kind {
+        Kind::FootBar if f32::from(bounds.size.height) >= TALL_HEIGHT => px(TALL_RADIUS),
+        Kind::FootBar => px(RADIUS),
+        _ => px(0.),
+    }
 }
 
 /// Hides the float `kind` at once, and says whether it showed: it may have been fading out.
@@ -264,7 +300,7 @@ fn fade_in(kind: Kind, ui_view: *mut c_void, fade: f64, shown: &'static str) {
     motion::after(fade, move || {
         if find(kind, |float| float.changes) == Some(change) {
             // check.sh waits for this line, so a capture after it shows the float whole.
-            eprintln!("{shown}");
+            browser::log!("{shown}");
         }
     });
 }
@@ -332,12 +368,12 @@ fn left(view: *mut c_void) {
 /// Places the floats over `ui_view`'s window again, as its content changed size, its page moved or
 /// its find bar showed or hid.
 pub(crate) fn place(ui_view: *mut c_void) {
-    for kind in [Kind::Hud, Kind::DropTargets, Kind::Toast] {
+    for kind in [Kind::Hud, Kind::DropTargets, Kind::Toast, Kind::FootBar] {
         let shown = find(kind, |float| (float.view, float.over == ui_view));
         if let Some((view, true)) = shown
             && let Some(bounds) = bounds(kind, ui_view)
         {
-            gpui_linux::move_overlay(view, bounds, px(0.));
+            gpui_linux::move_overlay(view, bounds, radius(kind, bounds));
         }
     }
 }
@@ -351,6 +387,7 @@ pub(crate) fn forget_window(ui_view: *mut c_void) {
         Kind::Tooltip,
         Kind::LinkTarget,
         Kind::Card,
+        Kind::FootBar,
         Kind::MiniBar,
     ] {
         if find(kind, |float| {
@@ -359,6 +396,35 @@ pub(crate) fn forget_window(ui_view: *mut c_void) {
         {
             hide(kind);
         }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_add_foot_bar(foot_bar_view: *mut c_void) {
+    add(Kind::FootBar, foot_bar_view);
+    // All of it takes the pointer, for its buttons, and the keyboard stays with the browser window.
+    gpui_linux::set_overlay_pointer(foot_bar_view, None);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_show_foot_bar(
+    ui_view: *mut c_void,
+    left: f64,
+    right: f64,
+    bottom: f64,
+    width: f64,
+    height: f64,
+) {
+    FOOT_BAR.set(FootBar {
+        left,
+        right,
+        bottom,
+        width,
+        height,
+    });
+    let before = find(Kind::FootBar, |float| float.over);
+    if show(Kind::FootBar, ui_view).is_some() && before != Some(ui_view) {
+        eprintln!("browser: foot bar shown");
     }
 }
 
@@ -407,6 +473,13 @@ pub extern "C" fn host_show_mini_bar(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn host_hide_foot_bar() {
+    if hide(Kind::FootBar) {
+        eprintln!("browser: foot bar hidden");
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn host_hide_mini_bar() {
     if hide(Kind::MiniBar) {
         eprintln!("browser: mini bar hidden");
@@ -423,14 +496,14 @@ pub extern "C" fn host_add_hud(hud_view: *mut c_void, right: f64, top: f64, marg
 pub extern "C" fn host_show_hud(ui_view: *mut c_void) {
     if show(Kind::Hud, ui_view).is_some() {
         // check.sh reads this line.
-        eprintln!("browser: zoom hud shown");
+        browser::log!("browser: zoom hud shown");
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_hide_hud() {
     if hide(Kind::Hud) {
-        eprintln!("browser: zoom hud hidden");
+        browser::log!("browser: zoom hud hidden");
     }
 }
 
@@ -445,14 +518,14 @@ pub extern "C" fn host_show_drop_targets(ui_view: *mut c_void) {
         return;
     }
     if show(Kind::DropTargets, ui_view).is_some() {
-        eprintln!("browser: drop targets shown");
+        browser::log!("browser: drop targets shown");
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_hide_drop_targets() {
     if hide(Kind::DropTargets) {
-        eprintln!("browser: drop targets hidden");
+        browser::log!("browser: drop targets hidden");
     }
 }
 
@@ -527,7 +600,7 @@ pub extern "C" fn host_show_toast(ui_view: *mut c_void) {
     toast_outline(ui_view, None);
     if show(Kind::Toast, ui_view).is_some() {
         // check.sh reads this line.
-        eprintln!("browser: toast window shown");
+        browser::log!("browser: toast window shown");
     }
 }
 
@@ -580,7 +653,7 @@ pub extern "C" fn host_show_tooltip(
     });
     // check.sh reads this line: where it is, in the window it shows over, to compare with where
     // the UI asked.
-    eprintln!("browser: tooltip window at {left} {top}");
+    browser::log!("browser: tooltip window at {left} {top}");
     fade_in(
         Kind::Tooltip,
         ui_view,
@@ -631,7 +704,7 @@ pub extern "C" fn host_show_link_target(ui_view: *mut c_void, left: f64, top: f6
         (float.left, float.top) = (left, top)
     });
     // check.sh reads this line: which side it's on, out of the pointer's way.
-    eprintln!("browser: link target window at {left} {top}");
+    browser::log!("browser: link target window at {left} {top}");
     fade_in(
         Kind::LinkTarget,
         ui_view,
@@ -659,6 +732,11 @@ fn link_pointer(at: Point<Pixels>) {
 pub extern "C" fn host_hide_link_target(fade: f64) {
     gpui_linux::watch_pointer_over(std::ptr::null_mut(), None);
     fade_out(Kind::LinkTarget, fade);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_mouse_down() -> bool {
+    gpui_linux::pointer_pressed()
 }
 
 #[unsafe(no_mangle)]
@@ -699,8 +777,8 @@ pub extern "C" fn host_show_hover_card(
     }
     if show(Kind::Card, ui_view).is_some() {
         // check.sh reads these: where it is, to compare with where the UI asked, and that it shows.
-        eprintln!("browser: hover card window at {left} {top}");
-        eprintln!("browser: hover card window shown");
+        browser::log!("browser: hover card window at {left} {top}");
+        browser::log!("browser: hover card window shown");
     }
 }
 

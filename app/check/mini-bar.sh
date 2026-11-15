@@ -1,3 +1,4 @@
+# check.sh runs this at 654.
 # Arrange's mini bar, the window over the thing selected on a page (#2347), drawn by each OS's host:
 # BROWSER_MINI_BAR shows it over a made-up thing selected on the first page that loads, with Hide
 # and Put back (selected), the pin as the thing stays on screen (float), and as it scrolls with the
