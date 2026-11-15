@@ -88,7 +88,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   static Window* Showing(bc_id tab);
   // A video's Mini Player took the keyboard, so the window that let it go wasn't left for another
   // app or window. On Linux it can take it after that window asked (OnWidgetActivationChanged).
-  static void MiniPlayerTookKeyboard();
+  // Returns the window the user was in last, unless they had left it for another app or window.
+  static Window* MiniPlayerTookKeyboard();
   // The window |tab|'s page goes back to once no window shows it: of those that show a picture of
   // it in its place, as another window took it, the one the user was in last. Else null.
   static Window* Picturing(bc_id tab);
