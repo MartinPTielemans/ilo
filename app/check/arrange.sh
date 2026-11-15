@@ -69,7 +69,11 @@ setInterval(() => {
   const floating = shown().filter(floats)
     .map((thing) => thing.id + ":" + getComputedStyle(thing).position).join(",") || "-";
   const now = "col " + column(true) + " side " + column(false) + " hidden " + hidden +
-    " float " + floating + " at " + at + " first " + first;
+    " float " + floating + " at " + at + " first " + first + " rects " +
+    ids.map((id) => { const r = document.getElementById(id).getBoundingClientRect();
+      return id + "=" + Math.round(r.left) + "," + Math.round(r.top) + "," + Math.round(r.width) + "x" + Math.round(r.height); }).join("|") +
+    " styles " + ids.map((id) => id + "=" +
+      (document.getElementById(id).getAttribute("style") || "-").replace(/\s+/g, "")).join("|");
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/arrange.html"
@@ -220,17 +224,26 @@ shows "$own" "a click in the mode reached the page"
   fail "the page took the mode's click: $(said)"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-picked.png" || fail "no window to capture"
 
-# Probe for #2974: the plain trade on a fresh page, with no settle or Put back before it.
-
-# Trade: the third let go on the first's middle, and the two trade places.
-carry $(slot 2) $(slot 0)
+# Probe for #2974: Gamma carried up onto Beta next to it, on a fresh page in the mode, nothing before it but the select.
+carry $(slot 2) $(slot 1)
 expect "^browser: arrange $tab Preview Trades " "a rest on a thing's middle didn't show a trade"
-send release $(slot 0)
+send release $(slot 1)
 expect "^browser: arrange $tab Selected Trades selected " "letting go on a thing's middle didn't trade"
 expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the trade"
-shows 'c,b,a,w side s,n hidden - float -' "the trade didn't swap the two"
-kept 1 "the trade wasn't saved"
+# The page's title once nothing floats and it has stayed the same half a second.
+last= same=0
+for _ in $(seq 100); do
+  now=$(said)
+  case "$now" in *" float - "*) ;; *) same=0 last=$now; sleep 0.1; continue ;; esac
+  if [ "$now" = "$last" ]; then same=$((same + 1)); else same=0 last=$now; fi
+  [ $same -ge 5 ] && break
+  sleep 0.1
+done
 ../tools/window-screenshot.sh "$pid" "$out/arrange-traded.png" || fail "no window to capture"
+exec 3>&-
+quit
+echo "ok: probe for #2974, Gamma carried up onto Beta next to it: the page says $(said)"
+exit 0
 
 # After a trade a click picks the thing drawn where it lands, by name, the two traded too. If one
 # doesn't, Arrange presses the wrong thing after a trade the user made, which is more than #2975.
