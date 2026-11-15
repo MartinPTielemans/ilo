@@ -4963,7 +4963,7 @@ index f9b9727330..e1e2214d9d 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..71bda631cb 100644
+index e21f019c64..8bde80d172 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -5933,7 +5933,7 @@ index e21f019c64..71bda631cb 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,6 +2736,1471 @@ impl X11ClientState {
+@@ -2087,6 +2736,1469 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
@@ -6863,28 +6863,26 @@ index e21f019c64..71bda631cb 100644
 +            }
 +            // It handles the frame extents asked next once it has handled that, whether it kept
 +            // the place or not, so the overlay waits no longer than that (`ASKED_AGAIN`). One that
-+            // can't say shows where it is.
-+            match self.manager_takes()?.1 {
-+                true => {
-+                    let message = xproto::ClientMessageEvent::new(
-+                        32,
-+                        window,
-+                        self.atoms._NET_REQUEST_FRAME_EXTENTS,
-+                        [0; 5],
-+                    );
-+                    xcb.send_event(
-+                        false,
-+                        root,
-+                        xproto::EventMask::SUBSTRUCTURE_REDIRECT
-+                            | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
-+                        message,
-+                    )?;
-+                    ASKED_AGAIN.with_borrow_mut(|all| {
-+                        all.retain(|&each| each != window);
-+                        all.push(window);
-+                    });
-+                }
-+                false => self.managed_overlay_seen(window)?,
++            // can't say, as KWin and i3, stays empty until the configure that puts it in place
++            // (`managed_overlay_moved`), which both send for a changed move, so it's never drawn
++            // where it was mapped.
++            if self.manager_takes()?.1 {
++                let message = xproto::ClientMessageEvent::new(
++                    32,
++                    window,
++                    self.atoms._NET_REQUEST_FRAME_EXTENTS,
++                    [0; 5],
++                );
++                xcb.send_event(
++                    false,
++                    root,
++                    xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
++                    message,
++                )?;
++                ASKED_AGAIN.with_borrow_mut(|all| {
++                    all.retain(|&each| each != window);
++                    all.push(window);
++                });
 +            }
 +        }
 +        xcb.flush()?;
@@ -7405,7 +7403,7 @@ index e21f019c64..71bda631cb 100644
      fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
          if let Some(cursor) = self.cursor_cache.get(&style) {
              return *cursor;
-@@ -2197,7 +4311,7 @@ impl X11ClientState {
+@@ -2197,7 +4309,7 @@ impl X11ClientState {
              .get(&hidden_window)
              .copied()
              .unwrap_or(CursorStyle::Arrow);
@@ -7414,7 +7412,7 @@ index e21f019c64..71bda631cb 100644
              log::warn!(
                  "X11: no cursor icon available to restore {:?} after hide; cursor may stay invisible",
                  style
-@@ -2232,6 +4346,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+@@ -2232,6 +4344,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
      Duration::from_micros(micros)
  }
  
@@ -7455,7 +7453,7 @@ index e21f019c64..71bda631cb 100644
  /// Applies a mapped/obscured change to the refresh loop and reports the
  /// resulting visibility to the window. Consumes the client borrow because the
  /// visibility callback re-enters GPUI.
-@@ -2246,10 +4394,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +4392,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -7510,7 +7508,7 @@ index e21f019c64..71bda631cb 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +4465,77 @@ fn detect_compositor_gpu(
+@@ -2273,73 +4463,77 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -7651,7 +7649,7 @@ index e21f019c64..71bda631cb 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +4661,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +4659,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -7672,7 +7670,7 @@ index e21f019c64..71bda631cb 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +4708,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +4706,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -7681,7 +7679,7 @@ index e21f019c64..71bda631cb 100644
                          },
                      ))
                  }
-@@ -2539,10 +4751,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +4749,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -7695,7 +7693,7 @@ index e21f019c64..71bda631cb 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +4769,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +4767,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -7712,7 +7710,7 @@ index e21f019c64..71bda631cb 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +4784,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +4782,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -7748,7 +7746,7 @@ index e21f019c64..71bda631cb 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +4863,11 @@ fn get_scale_factor(
+@@ -2620,6 +4861,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -7760,7 +7758,7 @@ index e21f019c64..71bda631cb 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +5146,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +5144,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
@@ -7891,7 +7889,7 @@ index e21f019c64..71bda631cb 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +5585,101 @@ mod tests {
+@@ -3213,3 +5583,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }
