@@ -2192,7 +2192,7 @@ if [ "$driven" = 1 ]; then
       ;;
   esac
   case $background in
-    linux) needs_said=", a handoff while another app's window has the keyboard marks the window urgent and posts one notification, \"check needs you\" over its step with no sound, whose click opens its card, and none while ilo is active" ;;
+    linux) needs_said=", a handoff while another app's window has the keyboard $([ -n "${WAYLAND_DISPLAY:-}" ] || echo "marks the window urgent and ")posts one notification, \"check needs you\" over its step with no sound, whose click opens its card, and none while ilo is active" ;;
     windows) needs_said=", a handoff with another app in front counts on the taskbar button and asks for one toast, and none while ilo is active" ;;
     *) needs_said=", a handoff with ilo active counts on the Dock's badge and posts nothing" ;;
   esac
@@ -2227,7 +2227,8 @@ STOP
     return 1
   }
   last_is '^browser: needs you [0-9]*$' "browser: needs you 0" || fail "the count stayed once no task waited"
-  if [ "$background" = linux ]; then
+  # Wayland has no urgency to take back (needs_you.rs).
+  if [ "$background" = linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     window_urgent=$(grep '^browser: window [0-9]* urgent ' "$log" | tail -1 | cut -d' ' -f3)
     last_is '^browser: window [0-9]* urgent ' "browser: window $window_urgent urgent off" ||
       fail "the window stayed urgent once no task waited"
