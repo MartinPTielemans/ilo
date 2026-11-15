@@ -1618,7 +1618,7 @@ void AgentPage::Screenshot() {
                     }
                   },
                   base::Unretained(this), request));
-  Draw(std::nullopt,
+  Draw(std::nullopt, Hatched::kWithheld,
        base::BindOnce(
            [](base::WeakPtr<AgentPage> page, uint64_t request,
               base::expected<SkBitmap, std::string> picture) {
@@ -1660,6 +1660,7 @@ void AgentPage::Screenshot() {
 // static
 void AgentPage::Picture(content::WebContents& contents,
                         std::optional<gfx::Rect> area,
+                        Hatched hatched,
                         Pictured done) {
   CreateForWebContents(&contents);
   AgentPage* page = FromWebContents(&contents);
@@ -1669,31 +1670,32 @@ void AgentPage::Picture(content::WebContents& contents,
       base::BindPostTaskToCurrentDefault(std::move(done)),
       base::expected<SkBitmap, std::string>(base::unexpected(kNoPicture)));
   ++page->pictures_;
-  page->Draw(area, base::BindOnce(
-                       [](base::WeakPtr<AgentPage> page, Pictured done,
-                          base::expected<SkBitmap, std::string> picture) {
-                         if (page && --page->pictures_ == 0 && !page->acted_) {
-                           // Posted, as this may be inside DevTools' own reply.
-                           base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-                               FROM_HERE, base::BindOnce(&AgentPage::Rest, page));
-                         }
-                         std::move(done).Run(std::move(picture));
-                       },
-                       page->weak_factory_.GetWeakPtr(), std::move(done)));
+  page->Draw(area, hatched,
+             base::BindOnce(
+                 [](base::WeakPtr<AgentPage> page, Pictured done,
+                    base::expected<SkBitmap, std::string> picture) {
+                   if (page && --page->pictures_ == 0 && !page->acted_) {
+                     // Posted, as this may be inside DevTools' own reply.
+                     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+                         FROM_HERE, base::BindOnce(&AgentPage::Rest, page));
+                   }
+                   std::move(done).Run(std::move(picture));
+                 },
+                 page->weak_factory_.GetWeakPtr(), std::move(done)));
 }
 
-void AgentPage::Draw(std::optional<gfx::Rect> area, Pictured done) {
+void AgentPage::Draw(std::optional<gfx::Rect> area, Hatched hatched, Pictured done) {
   if (agent_host_) {
-    WithheldBoxes(
-        base::BindOnce(&AgentPage::Copy, weak_factory_.GetWeakPtr(), area, std::move(done)));
+    WithheldBoxes(hatched, base::BindOnce(&AgentPage::Copy, weak_factory_.GetWeakPtr(), area,
+                                          hatched, std::move(done)));
     return;
   }
   // DevTools tells of the page's frames in other processes as it attaches to each level of them,
   // and a frame not heard of yet would be hatched whole.
   Send("Target.setAutoAttach", AutoAttaching(),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, std::optional<gfx::Rect> area, Pictured done,
-              const base::DictValue* result) {
+           [](base::WeakPtr<AgentPage> page, std::optional<gfx::Rect> area, Hatched hatched,
+              Pictured done, const base::DictValue* result) {
              if (!page) {
                return;
              }
@@ -1701,9 +1703,10 @@ void AgentPage::Draw(std::optional<gfx::Rect> area, Pictured done) {
                std::move(done).Run(base::unexpected(kNoPicture));
                return;
              }
-             page->Attach(1, base::BindOnce(&AgentPage::Draw, page, area, std::move(done)));
+             page->Attach(1,
+                          base::BindOnce(&AgentPage::Draw, page, area, hatched, std::move(done)));
            },
-           weak_factory_.GetWeakPtr(), area, std::move(done)),
+           weak_factory_.GetWeakPtr(), area, hatched, std::move(done)),
        0);
 }
 
@@ -1728,6 +1731,7 @@ void AgentPage::Attach(size_t slot, base::OnceClosure then) {
 }
 
 void AgentPage::Copy(std::optional<gfx::Rect> area,
+                     Hatched hatched,
                      Pictured done,
                      std::optional<Boxes> before) {
   content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
@@ -1752,8 +1756,9 @@ void AgentPage::Copy(std::optional<gfx::Rect> area,
   view->CopyFromSurface(
       source, gfx::Size(), base::TimeDelta(),
       base::BindOnce(
-          [](base::WeakPtr<AgentPage> page, gfx::Rect source, Pictured done, Boxes before,
-             base::ScopedClosureRunner held, const content::CopyFromSurfaceResult& result) {
+          [](base::WeakPtr<AgentPage> page, gfx::Rect source, Hatched hatched, Pictured done,
+             Boxes before, base::ScopedClosureRunner held,
+             const content::CopyFromSurfaceResult& result) {
             if (!page) {
               return;
             }
@@ -1763,10 +1768,11 @@ void AgentPage::Copy(std::optional<gfx::Rect> area,
             }
             // Where the boxes are after the copy too, as the page may have moved one meanwhile,
             // as a smooth scroll does: each is painted over all the way from one box to the other.
-            page->WithheldBoxes(base::BindOnce(&AgentPage::Paint, page, source, std::move(done),
+            page->WithheldBoxes(hatched,
+                                base::BindOnce(&AgentPage::Paint, page, source, std::move(done),
                                                std::move(before), result->bitmap));
           },
-          weak_factory_.GetWeakPtr(), source, std::move(done), std::move(*before),
+          weak_factory_.GetWeakPtr(), source, hatched, std::move(done), std::move(*before),
           std::move(held)));
 }
 
@@ -1834,9 +1840,11 @@ void AgentPage::Rest() {
 AgentPage::Withholding::Withholding() = default;
 AgentPage::Withholding::~Withholding() = default;
 
-void AgentPage::WithheldBoxes(base::OnceCallback<void(std::optional<Boxes>)> then) {
+void AgentPage::WithheldBoxes(Hatched hatched,
+                              base::OnceCallback<void(std::optional<Boxes>)> then) {
   auto withholding = std::make_unique<Withholding>();
   withholding->frames = Frames();
+  withholding->hatched = hatched;
   withholding->then = std::move(then);
   // A frame below one whose fields are read that can't be read itself, as an extension's own, one
   // not live or one whose session hasn't started, is hatched whole, as the outline leaves it out.
@@ -2007,7 +2015,7 @@ void AgentPage::Withhold(std::unique_ptr<Withholding> withholding,
     // One that couldn't be read is withheld.
     facts.secret = true;
   }
-  if (!Withheld(facts)) {
+  if (!Hatches(facts, withholding->hatched)) {
     NextField(std::move(withholding), next + 1);
     return;
   }

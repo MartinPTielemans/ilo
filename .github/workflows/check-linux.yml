@@ -77,7 +77,8 @@ env:
     keychain: it checks the Mac's Keychain across a change of signing identity, in a check VM
     scripting: AppleScript is the Mac's alone
     filled: it hides the Dock and the menu bar, so it runs only in a Mac check VM
-    sidebar-right: it checks AppKit's window buttons, the Mac's alone
+    sidebar-right: it checks AppKit's window buttons and the launch picture, which Linux hasn't
+    overlays: it reads the Windows host's overlays; #2563 audits the Mac's and Linux's
 
 jobs:
   # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
@@ -303,6 +304,10 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # The image pipes a crashed process's core to systemd-coredump whatever its limit, which
+          # holds a crashed renderer more than 30 s on the runner before the browser hears it went
+          # (#2179). Written as a file instead, the runner's limit of 0 leaves none.
+          sudo sysctl -w kernel.core_pattern=core
           # The runner has no sound card, so a page's audio would fail to open ALSA's default, which
           # ALSA reports on the shared standard error in pieces, and a browser: line written between
           # them is lost to a check's wait (#2734). Its null device opens and plays to nothing.
@@ -415,6 +420,10 @@ jobs:
           OLD: 0.1.12
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # The image pipes a crashed process's core to systemd-coredump whatever its limit, which
+          # holds a crashed renderer more than 30 s on the runner before the browser hears it went
+          # (#2179). Written as a file instead, the runner's limit of 0 leaves none.
+          sudo sysctl -w kernel.core_pattern=core
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           dir=$(mktemp -d)
           gh release download "v$OLD" -R "$GITHUB_REPOSITORY" -p ilo-linux-x86_64.flatpak -D "$dir"

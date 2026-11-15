@@ -236,6 +236,11 @@ fn log_key(key: *const bc::bc_key, when: &str, route: &str) {
 
 /// Whether ilo keeps `key` from the page that has it, and where it went.
 fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static str) {
+    // Read at each of the page's keys, whichever way it goes, so the next knows the one before.
+    #[cfg(target_os = "linux")]
+    let repeated_here = held_escape::page_key_repeated(&keystroke(unsafe { &*key }));
+    #[cfg(not(target_os = "linux"))]
+    let repeated_here = false;
     #[cfg(target_os = "linux")]
     if held_escape::keeps_from_page(unsafe { &*key }) {
         return (true, "held escape");
@@ -279,7 +284,7 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     let shortcut = cx.as_ref().and_then(|cx| {
         cx.try_read_global(|keys: &shell::UserKeys, _| keys.command_for(&keystroke, false))
     });
-    let repeat = unsafe { platform::host_key_repeated() };
+    let repeat = repeated_here || unsafe { platform::host_key_repeated() };
     let now = Instant::now();
     // Esc in full screen, pressed twice or held, leaves even when the page keeps it (Arc's).
     if keystroke == "escape"
@@ -288,6 +293,8 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
         })
         .unwrap_or(false)
     {
+        // ilo took this Esc, so the next is a first press again, not a second to the page's.
+        SECOND_PRESS.with_borrow_mut(|second| second.declined(&keystroke));
         return (true, "escape in full screen");
     }
     let shortcut = shortcut.flatten().is_some();
@@ -764,11 +771,11 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken.height
         );
     }
-    // A picture of the column on the left, from before the sidebar moved right, is none of this
+    // A picture of the column on one side, from before the sidebar moved, is none of this
     // window's (settings::set_sidebar_right).
     let right = settings::sidebar_right_kept();
     let picture =
-        taken.filter(|taken| !maximized && !right && launch_picture::shows(taken, width, height));
+        taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height, right));
     let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
         (taken.width, taken.height, taken.foot_top)
     });
@@ -783,6 +790,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken_width,
             taken_height,
             foot_top,
+            right,
         )
     };
     // check.sh reads this line.
@@ -1107,6 +1115,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         app_new_window: Some(app_new_window),
         ad_block_use: Some(ad_block_host::ad_block_use),
         ad_block_request: Some(ad_block_host::ad_block_request),
+        ad_block_response: Some(ad_block_host::ad_block_response),
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
         ..Default::default()

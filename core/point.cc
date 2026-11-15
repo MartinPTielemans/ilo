@@ -665,12 +665,13 @@ void PagePoint::Texted(Picked picked, std::string text, bool withheld) {
   }
   picked.text = Cut(text, kMaxText);
   picked.withheld = withheld;
-  // The picture an agent's screenshot is, by the same function, so it withholds what a screenshot
-  // does: the box and a little around it, cut to the view.
+  // The picture an agent's screenshot is, by the same function: the box and a little around it,
+  // cut to the view. It hatches every field holding a value, as the text has none of them, where a
+  // screenshot shows a value the page's own markup has, a read-only field's or the agent's typing.
   gfx::RectF area = picked.box;
   area.Outset(kAround);
   AgentPage::Picture(
-      *web_contents(), gfx::ToEnclosingRect(area),
+      *web_contents(), gfx::ToEnclosingRect(area), AgentPage::Hatched::kEveryValue,
       base::BindOnce(&PagePoint::Drawn, weak_factory_.GetWeakPtr(), std::move(picked)));
 }
 
