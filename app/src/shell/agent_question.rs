@@ -6,8 +6,12 @@
 //! handoff asks the same way: the agent needs the user in a tab, which Show Tab shows and Hand Back
 //! gives back. So does an agent asking for a tab the user took over: Keep, or Hand Back. An agent's
 //! HTTP requests that may change something ask each time, listing the changes: Deny, or Allow.
+//! An ask to point (#2352) asks in the agent's words: Not Now, or Point, which starts pointing in
+//! the tab in front of the user, and dims, saying why on hover, where it can't.
 
 use gpui::{Context, FontWeight, div, prelude::*, px};
+
+use crate::tokens::foot_bar::DISABLED;
 
 use super::{
     Shell, TITLE,
@@ -40,6 +44,16 @@ impl Shell {
         self.agent_question.as_ref().filter(|_| !self.page_asks())
     }
 
+    /// Not Now on an ask to point: the agent hears nothing was pointed at.
+    fn point_unanswered(&mut self, cx: &mut Context<Self>) {
+        if let Some(question) = self.agent_question.take() {
+            // check.sh reads this line.
+            log!("browser: point {} not now", question.id);
+            self.browser.answer_point(question.id, None, cx);
+            cx.notify();
+        }
+    }
+
     fn answer_agent(&mut self, answer: Answer, cx: &mut Context<Self>) {
         if let Some(question) = self.agent_question.take() {
             self.browser.answer_agent(question.id, answer, cx);
@@ -55,22 +69,50 @@ impl Shell {
             return None;
         };
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
+        // Point can't start in every tab, which the user learns here, never the agent.
+        let can_point = match question.point {
+            true => self.may_point_here(&question.from),
+            false => 0,
+        };
         let buttons = buttons(question).into_iter().map(|button| {
             let row = button.look == Look::Text;
+            let dim = button.does == Does::Point && can_point != 0;
             card_button_as(&self.palette, button.id, button.label, button.look)
-                .when(row, |button| button.flex_basis(gpui::relative(1.)))
+                .when(row, |each| each.flex_basis(gpui::relative(1.)))
+                // Dimmed, it stays where it is and says why on hover.
+                .when(dim, |each| {
+                    each.opacity(DISABLED)
+                        .child(self.button_frame(button.id))
+                        .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                            let frame = shell.button_frames.borrow().get(button.id).copied();
+                            shell.point_tip(frame, *hovered, can_point, cx)
+                        }))
+                })
                 .on_click(cx.listener(move |shell, _, _, cx| match button.does {
                     Does::Answer(answer) => shell.answer_agent(answer, cx),
                     Does::Show(tab) => shell.select(tab, cx),
                     Does::HandBack(tab) => shell.browser.hand_back(tab, cx),
+                    Does::NotNow => shell.point_unanswered(cx),
+                    Does::Point => {
+                        if let Some(question) = shell.agent_question.clone() {
+                            shell.press_point(question.id, &question.from, cx);
+                        }
+                    }
                 }))
         });
         let title = match (question.handoff, question.back) {
+            _ if question.point => format!("{} asks", question.agent),
             (Some(_), true) => format!("{} asks for a tab", question.agent),
             (Some(_), false) => format!("{} needs you", question.agent),
             (None, _) => format!("{} wants to {}", question.agent, question.what),
         };
-        let close = question.handoff.is_none().then(|| {
+        // The agent's question, in its words, under who asks.
+        let asked = question.point.then(|| {
+            div()
+                .text_color(self.palette.text(TITLE))
+                .child(question.what.clone())
+        });
+        let close = (question.handoff.is_none() && !question.point).then(|| {
             card_close(&self.palette, "agent-question-close")
                 .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)))
         });
@@ -100,6 +142,7 @@ impl Shell {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(title),
                 )
+                .children(asked)
                 .children(changes)
                 .children(more)
                 .child(
@@ -131,6 +174,9 @@ pub(super) enum Does {
     Show(u64),
     /// Gives the tab back to the agent.
     HandBack(u64),
+    /// An ask to point's Not Now and Point.
+    NotNow,
+    Point,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -153,6 +199,10 @@ pub(super) fn buttons(question: &Question) -> Vec<Button> {
         does,
     };
     match question.handoff {
+        _ if question.point => vec![
+            button("agent-not-now", "Not Now", Look::Quiet, Does::NotNow),
+            button("agent-point", "Point", Look::Primary, Does::Point),
+        ],
         Some(tab) if question.back => vec![
             button(
                 "agent-keep",

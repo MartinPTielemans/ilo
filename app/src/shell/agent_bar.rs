@@ -73,12 +73,20 @@ fn same_press_as_hand_back(keystroke: &str, cx: &App) -> bool {
         && user_keys(cx).command_for(keystroke, false) == Some(Command::BackToPinnedUrl)
 }
 
-/// ⌘. for Stop while the UI has the keyboard, before it's Stop Loading. The page hands it over
-/// before it sees it (`run_agent_key`).
+/// ⌘. for Stop while the UI has the keyboard, before it's Stop Loading, and Point's esc and ⌘↩ in
+/// the browser window, not its menus' or overlays'. The page hands them over before it sees them
+/// (`run_agent_key`, `Shell::point_key`).
 pub(super) fn bind(cx: &mut App) {
-    cx.intercept_keystrokes(|event, _, cx| {
+    cx.intercept_keystrokes(|event, window, cx| {
         if crate::dialog::asking(cx) {
             return;
+        }
+        if let Some(shell) = window.root::<Shell>().flatten() {
+            let keystroke = keystroke_text(&event.keystroke);
+            if shell.update(cx, |shell, cx| shell.point_key(&keystroke, None, cx)) {
+                cx.stop_propagation();
+                return;
+            }
         }
         let Some(shell) = super::commands::key_shell(cx) else {
             return;
