@@ -1255,10 +1255,10 @@ v.play().catch(e => document.title = "autoplay refused " + e.name);
 </script>' > "$out/site/switch.html"
 send key t cmd
 expect '^browser: command bar shown$' "probe: the command bar didn't open"
-send type "${secure}switch.html"
+send type "${site}switch.html"
 send key return
-expect "^browser: loaded [0-9]* ${secure}switch.html\$" "probe: the switch page didn't load"
-w=$(grep "^browser: loaded [0-9]* ${secure}switch.html\$" "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: loaded [0-9]* ${site}switch.html\$" "probe: the switch page didn't load"
+w=$(grep "^browser: loaded [0-9]* ${site}switch.html\$" "$log" | tail -1 | cut -d' ' -f3)
 send click $page_point
 await "^browser: title $w playing sound\$" || true
 echo "probe: titles before the switch: $(grep "^browser: title $w " "$log" | cut -d' ' -f4- | tr '\n' '|')"
