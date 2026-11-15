@@ -503,6 +503,9 @@ void Adopt(Floating& floating,
   floating.dismissed = dismissed;
   ShowWindow(floating.hwnd, SW_HIDE);
   OffTaskbar(floating.hwnd);
+  // GPUI makes a pop-up window topmost, over every app's. The reveal's panel was, so a menu opened
+  // from it, at the level of the browser window's others, went under it (#2989).
+  SetWindowPos(floating.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   if (mouse_through) {
     SetWindowLongPtrW(floating.hwnd, GWL_EXSTYLE,
                       GetWindowLongPtrW(floating.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
