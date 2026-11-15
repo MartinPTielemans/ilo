@@ -251,7 +251,9 @@ read -r vw vh << EOF
 $(view)
 EOF
 pinned=
-for each in "Top $((vw * 3 / 10 + 130)) 35 under" "Bottom $((vw * 3 / 10 + 130)) $((vh - 35)) over" \
+# Bottom is clicked 7 into its top, over the foot bar, which covers the page's bottom centre from
+# foot-bar.bottom (16) up for its height (40).
+for each in "Top $((vw * 3 / 10 + 130)) 35 under" "Bottom $((vw * 3 / 10 + 130)) $((vh - 63)) over" \
   "Right $((vw - 70)) $((vh * 4 / 10 + 45)) over" "Inner $((vw / 10 + 190)) 250 over"; do
   set -- $each
   select_thing "$1" "$2" "$3"
