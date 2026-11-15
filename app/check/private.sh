@@ -267,7 +267,7 @@ allowed=${ids% *}
 not_allowed=${ids#* }
 exec 3>&-
 quit
-# Off Linux, Chrome keeps the extensions' settings in Secure Preferences, under a MAC a check can't
+# On the Mac, Chrome keeps the extensions' settings in Secure Preferences, under a MAC a check can't
 # sign, so there chrome://extensions' switch allows one in Incognito, as the user does.
 status=0
 python3 -I -c '
