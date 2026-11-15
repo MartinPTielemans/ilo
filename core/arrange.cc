@@ -243,9 +243,13 @@ constexpr char16_t kScript[] =
       set(el, 'width', px(Math.max(0, w - edge)));
     }
     const rect = (el) => el.getBoundingClientRect();
+    // How far what |el| holds runs out of its box sideways: a code block or a carousel that scrolls
+    // does where it stands.
+    const over = (el) => Math.max(0, el.scrollWidth - el.clientWidth);
     // Whether |el|, given |width|, runs out of it: its box comes out wider, by its own min-width or
-    // what it holds, or what it holds runs out of its box.
-    const overruns = (el, width) => rect(el).width > width + 1 || el.scrollWidth - el.clientWidth > 1;
+    // what it holds, or what it holds runs out of its box further than |was|, its overrun where it
+    // stood.
+    const overruns = (el, width, was) => rect(el).width > width + 1 || over(el) > was + 1;
     // Where an absolutely placed element measures from, found by putting it at 0, 0 and looking:
     // offsetParent misses the containing blocks contain, transform and filter make.
     function origin(el) {
@@ -506,13 +510,15 @@ constexpr char16_t kScript[] =
       const before = !!c.before;
       const side = before ? 'margin-top' : 'margin-bottom';
       if (s.m0 == null) s.m0 = parseFloat(getComputedStyle(ref)[before ? 'marginTop' : 'marginBottom']) || 0;
+      // Its own overrun where the site lays it out, measured while none of ours is on it.
+      if (s.over0 == null || !saved.has(el)) s.over0 = over(el);
       set(el, 'position', 'absolute');
       set(el, 'margin', '0');
       // Measured with the element out of its place and |ref|'s margin as the page has it.
       set(ref, side, px(s.m0));
       const r0 = rect(ref);
       setWidth(el, r0.width);
-      if (overruns(el, r0.width)) {
+      if (overruns(el, r0.width, s.over0)) {
         restore(el);
         restore(ref);
         s.misfit = 'fit';
@@ -553,6 +559,7 @@ constexpr char16_t kScript[] =
       restore(el);
       restore(ref);
       const skip = [el, ref];
+      const was = new Map([[el, over(el)], [ref, over(ref)]]);
       const sa = slotOf(el, skip), sb = slotOf(ref, skip);
       if (roomless(sa.axis) || roomless(sb.axis)) { s.misfit = 'room'; s.keepers = []; return; }
       sa.incoming = ref;
@@ -633,7 +640,7 @@ constexpr char16_t kScript[] =
           }
         });
       }
-      if ([sa, sb].some((sl) => overruns(sl.incoming, sl.r.width))) {
+      if ([sa, sb].some((sl) => overruns(sl.incoming, sl.r.width, was.get(sl.incoming)))) {
         restore(el);
         restore(ref);
         for (const k of keepers) restore(k);
@@ -689,7 +696,10 @@ constexpr char16_t kScript[] =
             if (carry && involves(s.c, carry.el)) continue;
             resolve(s);
             place(s);
-            for (const el of [s.el, s.ref]) {
+            // A trade gives both things a fixed width, so their places' boxes say when those
+            // change, as a narrower window makes them.
+            const places = s.c.kind === 'trade' ? [s.el && s.el.parentElement, s.ref && s.ref.parentElement] : [];
+            for (const el of [s.el, s.ref, ...places]) {
               if (el && !watched.has(el)) { watched.add(el); ro.observe(el); }
             }
           }
@@ -699,7 +709,7 @@ constexpr char16_t kScript[] =
         busy = false;
       }
     }
-    const watched = new WeakSet();
+    let watched = new WeakSet();
     const ro = new ResizeObserver(() => later());
     const mo = new MutationObserver((records) => {
       if (busy) return;
@@ -726,6 +736,8 @@ constexpr char16_t kScript[] =
       on = false;
       mo.disconnect();
       ro.disconnect();
+      // Disconnected, it watches nothing: the next start observes each again.
+      watched = new WeakSet();
       removeEventListener('resize', onResize);
       if (scrolling) { scrolling = false; removeEventListener('scroll', onScroll, { capture: true }); }
     }
@@ -838,7 +850,16 @@ constexpr char16_t kScript[] =
       }
       return best;
     }
-    const depth = (el) => { let n = 0; for (let p = el; p; p = p.parentElement) n++; return n; };
+    // Whether the block |t| under a rest is a track the carried |el| goes in rather than a thing it
+    // trades with: it's beside one of |el|'s ancestors, as #side is beside the column Wide is in
+    // (#3003); or it holds things like |el|, as a column that wraps its cards in one more box does.
+    // A card in another column is neither, however deep either column wraps its things: it holds
+    // its own words.
+    const like = (a, b) => a.localName === b.localName && a.className === b.className;
+    const trackFor = (t, el) => {
+      const p = t.parentElement;
+      return (!!p && p !== el.parentElement && p.contains(el)) || [...t.children].some((c) => like(c, el));
+    };
     // Where a drop at |x|, |y| lands, for the carried element.
     function dropAt(x, y, free) {
       const el = carry.el, f = carry.from;
@@ -854,10 +875,9 @@ constexpr char16_t kScript[] =
       if (!t || t === document.body || t === document.documentElement || t.contains(el) || el.contains(t)) {
         return { change: CHANGE.FLOATS };
       }
-      // A track above the carried thing's level, such as the gap between two of its things, is no
-      // thing to trade with: the drop is at its nearest thing's edge (#3003). One at the same level,
-      // a card say, is a thing, with its own words and gaps.
-      const near = depth(t) < depth(el) ? nearest(t, x, y) : null;
+      // A track, such as the gap between two of its things, is no thing to trade with: the drop is
+      // at its nearest thing's edge (#3003). A card is a thing, with its own words and gaps.
+      const near = trackFor(t, el) ? nearest(t, x, y) : null;
       if (near) {
         const slot = slotOf(near.ref, [el]);
         if (roomless(slot.axis)) return { change: CHANGE.REFUSED, why: WHY.DOESNT_FIT, ref: near.ref };
