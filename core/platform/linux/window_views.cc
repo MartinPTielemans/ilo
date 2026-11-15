@@ -208,6 +208,29 @@ views::Widget* MiniPlayerToTakeKeyboardFrom() {
   return floating && HasKeyboard(floating) ? floating : nullptr;
 }
 
+// Under Wayland a bubble of Chromium's over the browser window, such as an extension's popup, is a
+// subsurface of the window's surface, and the window hands it the keys Chromium hears while it's
+// active (WaylandWindow::ActivateBubble), which the window's focus client doesn't see (#2836).
+views::Widget* ActiveBubbleOver(views::Widget* widget) {
+  using Host = views::DesktopWindowTreeHostPlatform;
+  Host* browser =
+      Host::GetHostForWidget(widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget());
+  if (!browser) {
+    return nullptr;
+  }
+  for (aura::Window* window : Host::GetAllOpenWindows()) {
+    views::Widget* bubble = window ? views::Widget::GetWidgetForNativeWindow(window) : nullptr;
+    if (!bubble || bubble == widget || !bubble->IsActive() || !window->GetHost()) {
+      continue;
+    }
+    Host* host = Host::GetHostForWidget(window->GetHost()->GetAcceleratedWidget());
+    if (host && host->window_parent() == browser) {
+      return bubble;
+    }
+  }
+  return nullptr;
+}
+
 // An aura window in the browser window holding one pane's page and its docked DevTools, or the side
 // panel, with their round corners.
 struct Slot {
@@ -799,6 +822,7 @@ class WindowViews : public views::WidgetObserver,
     }
     ui_has_keyboard_ = true;
     ui_lent_ = false;
+    ui_lent_to_bubble_ = false;
     page_lent_.RemoveAll();
     if (auto* client = aura::client::GetFocusClient(content())) {
       client->ResetFocusWithinActiveWindow(content());
@@ -861,11 +885,34 @@ class WindowViews : public views::WidgetObserver,
   // and X11 it never has it (#1961, #2060). The window has it back with an xdg-activation token,
   // once each time the Mini Player shows: a click in it later gives it the keys. Posted, as the
   // compositor tells the Mini Player it has the keyboard after telling the window it lost it.
+  // A bubble of Chromium's taking the keys under Wayland deactivates the window too, and its going
+  // activates it again (UILendsToBubble).
   void OnWidgetActivationChanged(views::Widget*, bool active) override {
-    if (!active && OnWayland()) {
-      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE,
-          base::BindOnce(&WindowViews::TakeKeyboardFromMiniPlayer, weak_factory_.GetWeakPtr()));
+    if (!OnWayland()) {
+      return;
+    }
+    if (active) {
+      if (std::exchange(ui_lent_to_bubble_, false) && !ui_has_keyboard_) {
+        UITakesKeyboard();
+      }
+      return;
+    }
+    // Posted, as Chromium tells the window it's no longer active before telling the bubble it is.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WindowViews::UILendsToBubble, weak_factory_.GetWeakPtr()));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&WindowViews::TakeKeyboardFromMiniPlayer, weak_factory_.GetWeakPtr()));
+  }
+
+  // Under Wayland GPUI hears the keys Chromium hands a bubble of its own, such as an extension's
+  // popup a click on its action in the UI opened, so the UI lends it the keyboard, as a window of
+  // Chromium's in the browser window takes it on X11 (OnWindowFocused), and has it back once the
+  // bubble goes and the window is active again (#2836).
+  void UILendsToBubble() {
+    if (ui_has_keyboard_ && !widget_->IsActive() && ActiveBubbleOver(widget_)) {
+      ui_lent_to_bubble_ = true;
+      PageTakesKeyboard();
     }
   }
 
@@ -953,6 +1000,7 @@ class WindowViews : public views::WidgetObserver,
     if (gained_focus && gained_focus != content()) {
       if (InSlot(gained_focus)) {
         ui_lent_ = false;
+        ui_lent_to_bubble_ = false;
         page_lent_.RemoveAll();
       } else if (ui_has_keyboard_) {
         ui_lent_ = true;
@@ -1326,6 +1374,8 @@ class WindowViews : public views::WidgetObserver,
   // A window of Chromium's own has the keyboard the UI or a page had, and gives it back as it goes.
   bool ui_lent_ = false;
   aura::WindowTracker page_lent_;
+  // Under Wayland, a bubble of Chromium's has the keyboard the UI had (UILendsToBubble).
+  bool ui_lent_to_bubble_ = false;
   // On Wayland, the page that gave its focus to the window while an overlay has the keyboard.
   aura::WindowTracker overlay_lent_;
   // On Wayland, whether a page composing as an overlay took the keyboard keeps its focus until the
@@ -1638,6 +1688,10 @@ bool KeyboardForPage(views::Widget* widget) {
   if (views && views->ui_has_keyboard()) {
     return views->ui_holds_for_page();
   }
+  // A window of Chromium's own, such as an extension's popup.
+  if (views && OnWayland() && ActiveBubbleOver(widget)) {
+    return false;
+  }
   aura::client::FocusClient* client = aura::client::GetFocusClient(widget->GetNativeView());
   aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
   // The window itself has it as it opens, or once the view that had it went.
@@ -1734,6 +1788,9 @@ bool KeyboardInChild(views::Widget* widget) {
   if (!views || views->ui_has_keyboard()) {
     return false;
   }
+  if (OnWayland() && ActiveBubbleOver(widget)) {
+    return true;
+  }
   aura::client::FocusClient* client = aura::client::GetFocusClient(widget->GetNativeView());
   aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
   return focused && focused != widget->GetNativeView() && !views->InSlot(focused);
@@ -1762,6 +1819,10 @@ std::optional<gfx::Rect> KeyboardPageFrame(views::Widget* widget) {
 std::u16string ChildTitle(views::Widget* widget) {
   if (!KeyboardInChild(widget)) {
     return {};
+  }
+  if (views::Widget* bubble = OnWayland() ? ActiveBubbleOver(widget) : nullptr) {
+    return bubble->widget_delegate() ? bubble->widget_delegate()->GetWindowTitle()
+                                     : std::u16string();
   }
   // The focused window is the child widget's own or one in it, as a dialog's button.
   aura::client::FocusClient* client = aura::client::GetFocusClient(widget->GetNativeView());
