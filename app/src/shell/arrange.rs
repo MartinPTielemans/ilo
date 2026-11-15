@@ -100,14 +100,20 @@ impl Shell {
         }
         // check.sh reads this line.
         log!(
-            "browser: arrange {tab} {:?} {:?}{}",
+            "browser: arrange {tab} {:?} {:?}{} {} {}",
             state.step,
             state.change,
             if state.selection.is_some() {
                 " selected"
             } else {
                 ""
-            }
+            },
+            if state.element.kind.is_empty() {
+                "-"
+            } else {
+                &state.element.kind
+            },
+            state.element.name,
         );
         self.arrange_mode.state = state;
         cx.notify();

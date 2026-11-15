@@ -271,6 +271,19 @@ pub fn show(window: u64, shown: Option<(Shown, OnPress)>, cx: &mut App) {
             crate::tooltip::text_width(text, size, weight, &system)
         };
         let at = place(shown.selection, shown.page, bar_size(&shown, &measure));
+        // check.sh reads this line: the bar, the thing selected and the page, each as x, y, width
+        // and height in points from the top left of the window's content.
+        let frame = |b: Bounds<Pixels>| {
+            let [x, y, w, h] = [b.origin.x, b.origin.y, b.size.width, b.size.height]
+                .map(|v| f32::from(v).round() as i32);
+            format!("{x} {y} {w} {h}")
+        };
+        log!(
+            "browser: mini bar at {} for {} in {}",
+            frame(at),
+            frame(shown.selection),
+            frame(shown.page)
+        );
         let drawn = (bar.showing.as_ref()).is_some_and(|showing| showing.window == window);
         bar.showing = Some(Showing {
             window,
