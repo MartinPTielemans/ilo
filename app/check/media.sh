@@ -1253,6 +1253,10 @@ try {
 } catch (e) { document.title = "no handler " + e.name; }
 v.play().catch(e => document.title = "autoplay refused " + e.name);
 </script>' > "$out/site/switch.html"
+# The relaunch's video lands first: Chrome floats one video at a time.
+send click $page_point
+send key x
+expect "^browser: title $v landed\$" "probe: the relaunched video didn't land on x"
 send key t cmd
 expect '^browser: command bar shown$' "probe: the command bar didn't open"
 send type "${site}switch.html"
