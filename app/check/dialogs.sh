@@ -358,10 +358,12 @@ fi
 # Two windows side by side, the first in front with the keyboard: the pointer resting on a row of
 # the second, behind it, which still hears the pointer, shows that row's card over the second, not
 # over the first, the browser window last in front, where every overlay showed (#1432). Read from
-# the OS's windows: on Windows the card is on the stack over the second, and on the Mac a child
-# window of it. A row of the first shows its card over the first again.
+# the OS's windows: on Windows the card is on the stack over the second, on the Mac a child window
+# of it, and on X11 an overlay inside its content. A row of the first shows its card over the first
+# again. Under Wayland and on sway's Xwayland the compositor places the windows.
 two_windows=
-if windows || [ "$(uname)" = Darwin ]; then
+if windows || [ "$(uname)" = Darwin ] ||
+  { [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; }; then
   first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
@@ -369,8 +371,10 @@ if windows || [ "$(uname)" = Darwin ]; then
   new_window_bar
   # The driver numbers windows in the order they opened.
   driven_second=$(grep -c '^browser: window opened ' "$log")
-  # The Windows runner's screen is 1920 by 1080 (check-windows.yml).
+  # The Windows runner's screen is 1920 by 1080 (check-windows.yml), and Xvfb's 1280 by 800
+  # (check.sh).
   screen="0 0 1920 1080"
+  [ "$(uname)" != Linux ] || screen="0 0 1280 800"
   if [ "$(uname)" = Darwin ]; then
     send screen
     screen=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4-)
@@ -388,10 +392,18 @@ SCREEN
   expect "^browser: key window $first\$" "the first window didn't come in front of the second"
   send place $((screen_x + 20)) $((screen_y + 60)) $wide $tall
   # The driven window's children on the Mac, which the card's window becomes one of, in $children.
+  # On X11 the driver lists every overlay shown, from the driven window's content, so there it
+  # counts those inside it.
   children() {
     send layout
-    children=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: layout child' ||
-      true)
+    children=$(sed -n "/^browser: drive $step: /,\$p" "$log" | awk '
+      /^browser: layout content / { split($4, size, "[x,]"); width = size[1]; height = size[2] }
+      /^browser: layout child / {
+        split($4, at, ","); split($5, size, "x")
+        if (linux == "" || (at[1] >= 0 && at[2] >= 0 && at[1] + size[1] <= width &&
+          at[2] + size[2] <= height)) count++
+      }
+      END { print count + 0 }' linux="$([ "$(uname)" != Linux ] || echo 1)")
   }
   send window "$driven_second" behind
   windows || children
@@ -433,7 +445,7 @@ SCREEN
   expect '^browser: hover card hidden$' "leaving the first window's rows didn't hide its card"
   two_windows=1
 else
-  echo "skip: the hover card over the window behind another: Linux's driver can't drive a window behind another without bringing it forward."
+  echo "skip: the hover card over the window behind another, under Wayland or on sway's Xwayland: the compositor places the windows."
 fi
 exec 3>&-
 quit

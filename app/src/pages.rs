@@ -575,6 +575,7 @@ pub(crate) unsafe extern "C" fn window_suggestions(
             removable: suggestion.removable,
             keyword: string(suggestion.keyword),
             site: string(suggestion.site).into(),
+            last_visit: suggestion.last_visit,
             ..command_bar::Suggestion::default()
         })
         .collect();

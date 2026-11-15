@@ -181,30 +181,43 @@ fn states_after(
         let (portal, events) = Portal::open(ours).await.unwrap();
         let states = Arc::new(Mutex::new(Vec::new()));
         let (retrying, retries) = futures::channel::mpsc::unbounded();
+        let (notify, mut notified) = futures::channel::mpsc::unbounded();
         let watching = {
             let states = states.clone();
             async move {
-                let changed = |state: &State| states.lock().unwrap().push(state.clone());
+                let changed = |state: &State| {
+                    states.lock().unwrap().push(state.clone());
+                    notify.unbounded_send(()).ok();
+                };
                 watch(&portal, events, retries, WAIT, changed).await
             }
         };
         let [running, local, remote] = announced;
         let announcing = async {
             announce(&fake, running, local, remote).await;
-            // Turns for the updater's Updates and the fake's Progress, then the portal goes.
+            // Each state as it comes, until `until` of them or the updater stops, then the portal
+            // goes. The time limit only ends a test that would otherwise hang, as a loaded machine
+            // can take a second or two for the Updates and Progress.
             let mut retry = retry;
-            for _ in 0..400 {
-                let states = states.lock().unwrap().clone();
-                if states.len() >= until {
-                    break;
+            let waiting = async {
+                loop {
+                    let states = states.lock().unwrap().clone();
+                    if states.len() >= until {
+                        break;
+                    }
+                    if retry && matches!(states.last(), Some(State::Failed(_))) {
+                        retrying.unbounded_send(()).unwrap();
+                        retry = false;
+                    }
+                    if futures::StreamExt::next(&mut notified).await.is_none() {
+                        break;
+                    }
                 }
-                if retry && matches!(states.last(), Some(State::Failed(_))) {
-                    retrying.unbounded_send(()).unwrap();
-                    retry = false;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                futures_lite::future::yield_now().await;
-            }
+            };
+            futures_lite::future::or(waiting, async {
+                async_io::Timer::after(Duration::from_secs(10)).await;
+            })
+            .await;
             drop(fake);
         };
         zip(watching, announcing).await;

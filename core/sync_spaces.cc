@@ -719,7 +719,8 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       page.set_timestamp(base::Time::Now());
       saved.name = entity.name();
       saved.icon = entity.icon();
-      row = Tab::Restore(ProfileFor(space->profile()), saved);
+      // In the Space's profile, waiting for it if it's still loading.
+      row = Tab::Restore(space->profile(), saved);
       if (!row) {
         return;
       }
@@ -774,7 +775,8 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       saved.name = entity.name();
       saved.icon = entity.icon();
       saved.last_seen = seen;
-      row = Tab::Restore(ProfileFor(space->profile()), saved);
+      // In the Space's profile, waiting for it if it's still loading.
+      row = Tab::Restore(space->profile(), saved);
       if (!row) {
         return;
       }

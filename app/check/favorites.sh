@@ -583,6 +583,10 @@ await "^browser: selected $y\$" ||
   fail "the relaunch didn't show the favorite split focused on its right page: $(grep '^browser: selected' "$log" | tail -1)"
 await "^browser: loaded $y " || fail "the favorite split's right page didn't load"
 ../tools/window-screenshot.sh "$pid" "$out/favorite-split-restored.png" || fail "no window to capture"
+# On Windows the relaunch finds the runner's console in front, which the driver's moves, unlike its
+# presses and keys, don't bring the app in front of: the user's click on its taskbar button does.
+! windows || python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" > /dev/null ||
+  fail "the relaunched app's window couldn't take the foreground"
 send move $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
