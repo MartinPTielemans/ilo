@@ -50,6 +50,7 @@ folder preview
 offer
 drop targets
 reveal
+mini bar
 foot bar'
 unknown=$(printf '%s\n' "$names" | while read -r name; do
   printf '%s\n' "$order" | grep -qx "$name" || printf '%s, ' "$name"
@@ -237,6 +238,20 @@ EOF
       send click $((bx + bw / 4)) $((by + bh - 26))
       expect '^browser: boost editor drawn$' "$2: Customize… didn't open the Boost editor"
       ;;
+    # Arrange's, over the thing a click selects in the mode, which the card's Arrange starts.
+    'mini bar')
+      bar_command edit-boost "Edit Boost" "edit boost"
+      expect "^browser: boost card $a at " "$2: Edit Boost drew no card"
+      send layout
+      read -r bx by bw bh << EOF
+$(grep "^browser: boost card $a at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+      # Arrange, the right of the card's last line.
+      send click $((bx + bw * 3 / 4)) $((by + bh - 26))
+      expect "browser: tab $a arrange on\$" "$2: the card's Arrange didn't turn the mode on"
+      send click $page_point
+      expect '^browser: mini bar window shown$' "$2: a click on the page in Arrange selected nothing, so no mini bar showed over it"
+      ;;
     'folder preview')
       away
       send move $(pinned_row 1)
@@ -278,6 +293,11 @@ close() {
       'boost editor')
       send key escape
       expect "^browser: $1 hidden\$" "$2: Escape didn't close the $1"
+      ;;
+    # Escape in the page is Done, which ends the mode and takes its bar.
+    'mini bar')
+      send key escape
+      expect "browser: tab $a arrange off\$" "$2: Escape in the page didn't end Arrange, which shows the mini bar"
       ;;
     menu)
       send key escape

@@ -1659,6 +1659,8 @@ impl Shell {
             Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
             Command::SortBySite => return self.sort_by_site(cx),
+            // While Arrange is on, ⌘Z and the Edit menu's Undo take back its steps (shell/arrange.rs).
+            Command::Undo if self.undo_arrange(self.field_tab(), cx) => return,
             Command::Undo => {
                 self.undo(cx);
                 return;

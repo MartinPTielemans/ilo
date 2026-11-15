@@ -244,6 +244,7 @@ pub(crate) unsafe extern "C" fn tab_loaded(_: *mut c_void, tab: bc::bc_id, url: 
     let owned = url.to_string();
     update_app_later(move |cx| crate::sign_in_close::tab_loaded(tab, &owned, cx));
     sample_foot_bar(tab);
+    sample_mini_bar(tab);
 }
 
 /// check.sh's foot-bar run: BROWSER_FOOT_BAR=arrange, =point or =long shows the foot bar with made-up
@@ -277,6 +278,51 @@ fn sample_foot_bar(tab: bc::bc_id) {
             move |cx| {
                 browser::foot_bar::show(id, page, content, bar, cx);
                 log!("browser: foot bar shown over {id}");
+            },
+            cx,
+        );
+    });
+}
+
+/// check.sh's mini-bar run: BROWSER_MINI_BAR=selected, =float or =scrolls shows Arrange's mini bar
+/// over a made-up thing selected (`mini_bar::sample`) on the first page that loads, so the host's
+/// window for it shows on each OS before the core's mode drives it.
+fn sample_mini_bar(tab: bc::bc_id) {
+    static KIND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    thread_local!(static SHOWN: Cell<bool> = const { Cell::new(false) });
+    let Some(kind) = KIND.get_or_init(|| std::env::var("BROWSER_MINI_BAR").ok()) else {
+        return;
+    };
+    if SHOWN.replace(true) {
+        return;
+    }
+    let kind = kind.clone();
+    update_app(move |cx| {
+        let Some(window) = tab_window(tab, cx) else {
+            return;
+        };
+        let Some(shell) = window.shell.upgrade() else {
+            return;
+        };
+        let Ok(content) = window
+            .handle
+            .update(cx, |_, window, _| window.viewport_size())
+        else {
+            return;
+        };
+        let (page, palette) = (
+            shell.read(cx).page_frame(content).0,
+            shell.read(cx).palette(),
+        );
+        let Some(shown) = browser::mini_bar::sample(&kind, page, palette.accent.into()) else {
+            return;
+        };
+        let id = window.id;
+        let on_press: browser::mini_bar::OnPress = std::rc::Rc::new(|_, _, _| {});
+        with_overlays(
+            move |cx| {
+                browser::mini_bar::show(id, Some((shown, on_press)), cx);
+                log!("browser: mini bar shown over {id}");
             },
             cx,
         );

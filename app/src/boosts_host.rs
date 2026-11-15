@@ -114,6 +114,65 @@ pub(crate) unsafe extern "C" fn tab_arrange_ended(_: *mut c_void, tab: bc::bc_id
     });
 }
 
+/// Where the user is in the tab's Arrange, once a step changes and as a scroll starts and rests:
+/// for the mode's keys, ⌘Z's history and the mini bar over the thing selected.
+pub(crate) unsafe extern "C" fn tab_arrange_state(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    state: *const bc::bc_arrange_state,
+) {
+    use boosts::arrange::{Element, Outcome, Refused, State, Step};
+    let state = unsafe { &*state };
+    let text = |text: *const c_char| {
+        if text.is_null() {
+            String::new()
+        } else {
+            unsafe { CStr::from_ptr(text) }
+                .to_string_lossy()
+                .into_owned()
+        }
+    };
+    let element = |element: &bc::bc_arrange_element| Element {
+        kind: text(element.kind),
+        name: text(element.name),
+    };
+    let r = &state.box_;
+    let state = State {
+        step: match state.step as u32 {
+            bc::BC_ARRANGE_CARRYING => Step::Carrying,
+            bc::BC_ARRANGE_PREVIEW => Step::Preview,
+            bc::BC_ARRANGE_SELECTED => Step::Selected,
+            _ => Step::Pointing,
+        },
+        element: element(&state.element),
+        change: match state.change as u32 {
+            bc::BC_ARRANGE_SETTLES => Outcome::Settles,
+            bc::BC_ARRANGE_TRADES => Outcome::Trades,
+            bc::BC_ARRANGE_FLOATS => Outcome::Floats,
+            bc::BC_ARRANGE_REFUSED => Outcome::Refused,
+            _ => Outcome::None,
+        },
+        before: element(&state.before),
+        after: element(&state.after),
+        refused: match state.refused as u32 {
+            bc::BC_ARRANGE_DOESNT_FIT => Refused::DoesntFit,
+            bc::BC_ARRANGE_NOT_SHOWN => Refused::NotShown,
+            bc::BC_ARRANGE_COVERED => Refused::Covered,
+            _ => Refused::Fits,
+        },
+        on_screen: state.on_screen,
+        can_undo: state.can_undo,
+        can_reset: state.can_reset,
+        // A box 0 wide is none: nothing selected, or the page scrolling.
+        selection: (r.width > 0.).then(|| [r.x, r.y, r.width, r.height].map(|v| v as f32)),
+    };
+    update_app_later(move |cx| {
+        if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+            shell.update(cx, |shell, cx| shell.arrange_state(tab, state, cx));
+        }
+    });
+}
+
 /// The user changed the site's arrangement in the tab's Arrange: all of it, or empty after Reset.
 pub(crate) unsafe extern "C" fn tab_arrange_saved(
     _: *mut c_void,

@@ -145,6 +145,7 @@ pub mod little_launch;
 pub mod little_sites;
 pub mod logging;
 pub mod menu;
+pub mod mini_bar;
 pub mod motion;
 pub mod needs_you;
 pub mod notes;

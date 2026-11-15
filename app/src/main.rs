@@ -274,6 +274,12 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     {
         return (true, "zap or arrange");
     }
+    // Arrange's keys, ↑ ↓ ⌘Z and escape, are the mode's while it's on, not the page's.
+    if update_tab_window(tab, |shell, cx| shell.run_arrange_key(tab, &keystroke, cx))
+        .unwrap_or(false)
+    {
+        return (true, "arrange");
+    }
     if update_tab_window(tab, |shell, cx| {
         shell.run_extension_key(&keystroke, "page", cx)
     })
@@ -1077,6 +1083,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_press_released: Some(tab_press_released),
         tab_boost_zapped: Some(tab_boost_zapped),
         tab_boost_zap_ended: Some(tab_boost_zap_ended),
+        tab_arrange_state: Some(boosts_host::tab_arrange_state),
         tab_arrange_ended: Some(boosts_host::tab_arrange_ended),
         tab_arrange_saved: Some(boosts_host::tab_arrange_saved),
         tab_arrangement_fits: Some(boosts_host::tab_arrangement_fits),
