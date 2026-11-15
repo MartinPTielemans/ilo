@@ -14,8 +14,9 @@
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
 # There POINTER=1 draws the display's pointer in, where the driver's warp put it, with the cursor
 # the window under it shows.
-# On the Mac, with "floating", it takes only the process's largest window above the normal level,
-# such as Picture in Picture's, on its own.
+# On the Mac, with "floating", it takes only the process's window above the normal level at FRAME,
+# "<x> <y> <width> <height>" from the main display's top-left, such as Picture in Picture's, on its
+# own: the overlays over the browser window are above the normal level too.
 # Usage: tools/window-screenshot.sh <pid> <output.png> [all | floating]
 set -e
 { [ $# -eq 2 ] || [ $# -eq 3 ] && [ "${3:-all}" = all ]; } ||
@@ -361,7 +362,7 @@ if ours:
   [ -z "$area" ] || exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim ${POINTER:+-c} -g "$area" "$2"
   exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim ${POINTER:+-c} "$2"
 fi
-PID="$1" OUT="$2" ALL="${3:-}" swift - <<'SWIFT'
+PID="$1" OUT="$2" ALL="${3:-}" FRAME="${FRAME:-}" swift - <<'SWIFT'
 import Foundation
 import ImageIO
 import ScreenCaptureKit
@@ -387,9 +388,13 @@ func write(_ image: CGImage) -> Never {
   exit(0)
 }
 if floating {
-  guard let window = windows.filter({ $0.windowLayer > 0 })
-    .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
-  else { fail("process \(pid) has no floating window on screen") }
+  let at = (ProcessInfo.processInfo.environment["FRAME"] ?? "").split(separator: " ")
+    .compactMap { Double($0) }
+  guard at.count == 4 else { fail("FRAME isn't <x> <y> <width> <height>") }
+  let wanted = CGRect(x: at[0], y: at[1], width: at[2], height: at[3])
+  let floats = windows.filter { $0.windowLayer > 0 }
+  guard let window = floats.first(where: { $0.frame.integral == wanted.integral })
+  else { fail("process \(pid) has no floating window at \(wanted), only at \(floats.map { $0.frame })") }
   guard let display = content.displays.first(where: { $0.frame.intersects(window.frame) })
   else { fail("no display shows the floating window") }
   // A display's filter, as below: one for the window alone asserts in a script, which has no

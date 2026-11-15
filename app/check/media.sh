@@ -875,7 +875,7 @@ EOF
       for (i = 2; i <= 3; i++) { if ($i > max) max = $i; if ($i < min) min = $i }
       print max + min }'
   }
-  ../tools/window-screenshot.sh "$pid" "$out/mini-player-rest.png" floating ||
+  FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/mini-player-rest.png" floating ||
     fail "no Mini Player to capture"
   rest=$(lightness "$out/mini-player-rest.png")
   [ "$rest" -ge 170 ] ||
@@ -883,7 +883,7 @@ EOF
   # Captured until the scrim, which fades in over 200 ms from the pointer's move, has come.
   send pip move $((pw / 8)) $((ph / 2))
   for _ in $(seq 20); do
-    ../tools/window-screenshot.sh "$pid" "$out/mini-player-hover.png" floating ||
+    FRAME="$at" ../tools/window-screenshot.sh "$pid" "$out/mini-player-hover.png" floating ||
       fail "no Mini Player to capture"
     hovered=$(lightness "$out/mini-player-hover.png")
     [ "$hovered" -lt 170 ] && break
