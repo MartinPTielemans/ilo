@@ -207,14 +207,25 @@ impl Level {
     /// `panel`, a surface at this level that fills what its window holds, in the margin its shadow
     /// draws in, with that shadow, where it draws its own (`PANEL_SHADOW_IN_WINDOW`).
     pub fn in_window(self, panel: impl IntoElement + Styled) -> AnyElement {
-        self.in_window_if(PANEL_SHADOW_IN_WINDOW, panel)
+        self.in_room_of(self, panel)
     }
 
-    fn in_window_if(self, in_window: bool, panel: impl IntoElement + Styled) -> AnyElement {
+    /// As `in_window`, in the margin `room` leaves, a level whose shadow reaches as far as this
+    /// one's at least: a panel that shows at two levels keeps the larger's room in one window.
+    pub fn in_room_of(self, room: Level, panel: impl IntoElement + Styled) -> AnyElement {
+        self.in_window_if(PANEL_SHADOW_IN_WINDOW, room, panel)
+    }
+
+    fn in_window_if(
+        self,
+        in_window: bool,
+        room: Level,
+        panel: impl IntoElement + Styled,
+    ) -> AnyElement {
         if !in_window {
             return panel.into_any_element();
         }
-        let margin = self.margin_if(true);
+        let margin = room.margin_if(true);
         div()
             .size_full()
             .pt(px(margin.above))

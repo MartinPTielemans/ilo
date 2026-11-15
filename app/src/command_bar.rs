@@ -84,6 +84,10 @@ const FIELD_INPUT: f32 = ROW_HEIGHT;
 /// There it hangs from the field as the Site Controls do. The modal shadow, 24 down at a 64 blur,
 /// fell mostly below a panel only 50 tall, a grey bar under it over a light page (#1306).
 const FIELD_LEVEL: Level = Level::Popover;
+/// The level whose shadow the bar's window keeps room for round the bar where it draws its own
+/// shadow (#2988): the modal's, which reaches past the popover's, so the bar keeps one margin as it
+/// moves between the centre and the field.
+pub(crate) const ROOM: Level = Level::Modal;
 use crate::elevation::Level;
 use crate::tokens::command_bar::ARROW;
 use crate::tokens::command_bar::ARROW_TILE;
@@ -736,9 +740,7 @@ impl CommandBarWindow {
 /// Opens the command bar's window, hidden, for `host` to show over the browser window. Opening it
 /// ahead of time keeps window setup off the path from the shortcut to the bar on screen.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<CommandBar>> {
-    let window = Level::Modal
-        .panel_margin()
-        .around(size(px(WIDTH), px(HEIGHT)));
+    let window = ROOM.panel_margin().around(size(px(WIDTH), px(HEIGHT)));
     let bounds = Bounds::new(point(px(0.), px(0.)), window);
     open_at(host, bounds, false, cx)
 }
@@ -3362,9 +3364,9 @@ impl Render for CommandBar {
             .map(|(index, row)| self.row(index, row, cx).into_any_element())
             .collect();
         let shown = rows.len().min(ROWS_SHOWN) as f32;
-        let (radius, input_height, list_top) = match self.over_field {
-            true => (FIELD_RADIUS, FIELD_INPUT, 0.),
-            false => (RADIUS, HEIGHT, LIST_TOP),
+        let (radius, input_height, list_top, level) = match self.over_field {
+            true => (FIELD_RADIUS, FIELD_INPUT, 0., FIELD_LEVEL),
+            false => (RADIUS, HEIGHT, LIST_TOP, Level::Modal),
         };
         // Over the field the input's icon and text are in the rows' columns.
         let (icon_x, icon, text_x, text_size) = match self.over_field {
@@ -3403,7 +3405,8 @@ impl Render for CommandBar {
             .size_full()
             .font_family(crate::face::UI)
             .child(
-                Level::Modal.in_window(
+                level.in_room_of(
+                    ROOM,
                     div()
                         .key_context("CommandBar")
                         .on_action(cx.listener(Self::go))

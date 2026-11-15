@@ -5820,6 +5820,18 @@ const char* host_floating_name(void* hwnd) {
   return g_menu.hwnd && g_menu.hwnd == hwnd ? "menu" : nullptr;
 }
 
+// The panel in |hwnd|'s window, on the screen, for the driver's layout, which gives what the user
+// sees: false for a window with no margin round its panel (host_set_shadow_margin), all panel.
+bool host_floating_panel(void* hwnd, RECT* panel) {
+  auto it = FloatingByHwnd().find(static_cast<HWND>(hwnd));
+  if (it == FloatingByHwnd().end() || !HasMargin(*it->second)) {
+    return false;
+  }
+  *panel = PanelRect(*it->second);
+  MapWindowPoints(it->second->hwnd, HWND_DESKTOP, reinterpret_cast<POINT*>(panel), 2);
+  return true;
+}
+
 // Each window the host floats over a browser window, made so far, and the menu, by its name, its
 // window and where it is in its life (Life), for the driver's lives (#2563). Every one is made
 // through Adopt, which names it, so a new one is in the list without being added to it.

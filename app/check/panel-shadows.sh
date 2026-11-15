@@ -88,10 +88,10 @@ show_tab() {
   send click $(row $i)
   expect "^browser: selected $1\( in \|\$\)" "a click on row $i of Today didn't show its tab $1"
 }
-# Has the run's tab show $1's page $2, whose title says $3 once it's drawn.
+# Has the tab shown, the run's or $4, show $1's page $2, whose title says $3 once it's drawn.
 go_to() {
   go_from_bar "${site}$1/$2.html"
-  expect "^browser: title $m $3\$" "the $1 $2 page didn't draw"
+  expect "^browser: title ${4:-$m} $3\$" "the $1 $2 page didn't draw"
 }
 # The panel $1's line since the step $opened: "X Y W H in its window X Y W H".
 panel_line() {
@@ -260,6 +260,11 @@ for scale in $scales; do
   fi
   page_points
   for page in white dark; do
+    # ⌃Tab shows the other tab behind the tab switcher, which shows the page's colour's twin, so
+    # what's behind the switcher's margin is the colour it was before.
+    show_tab $other
+    go_to $page twin twin $other
+    show_tab $m
     go_to $page page ready
     for appearance in Light Dark; do
       light=false

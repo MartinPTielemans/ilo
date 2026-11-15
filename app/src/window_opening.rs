@@ -664,7 +664,7 @@ pub(crate) fn finish_opening(
         let radius = command_bar::RADIUS.into();
         elevate(COMMAND_BAR, Level::Modal);
         unsafe { platform::host_add_overlay(COMMAND_BAR, view, radius, command_bar_dismissed) };
-        make_room(view, Level::Modal);
+        make_room(view, command_bar::ROOM);
     }
     // The rest are made the first time one shows: a hidden overlay's window still holds what its
     // drawing needs, which a user who never opens it shouldn't pay for (#2138).
