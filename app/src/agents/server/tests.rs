@@ -186,7 +186,7 @@ fn initialize_begins_a_session() {
         result["instructions"]
             .as_str()
             .unwrap()
-            .contains("Space of your own")
+            .contains("tabs of your own")
     );
     match next(&mut handed) {
         Some(Event::Hello { agent, client }) => {

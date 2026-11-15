@@ -6,9 +6,12 @@
 # publishes the Mac's (tools/mac-engine-publish.sh), and .github/workflows/engine-linux.yml and
 # engine-windows-cross.yml the others. It exits with 2 when no engine fits this checkout, which CI
 # takes for a reason to skip, and 1 on any other failure.
-# `fetch.sh symbols` does the same for the Windows engine's PDBs, which its release has beside it,
-# for crash reports (tools/symbols.sh). `fetch.sh commit` only prints the commit that engine was
-# built from, without the header's check or a download (tools/mac-nightly.sh).
+# `fetch.sh symbols` does the same for the engine's symbols, for crash reports (tools/symbols.sh):
+# the Windows engine's PDBs, which its release has beside it, and on the Mac the engine with its
+# dSYMs unpacked beside Chromium.app, where app/build.sh looks, printing their directory. A release
+# without them exits with 2, as one without an engine does. `fetch.sh commit` only prints the
+# commit that engine was built from, without the header's check or a download
+# (tools/mac-nightly.sh).
 # Usage: fetch.sh [symbols|commit]
 set -euo pipefail
 symbols=
@@ -28,7 +31,6 @@ none() {
 
 case $(uname -sm) in
 "Darwin arm64")
-  [ -z "$symbols" ] || fail "the Mac engine's symbols are its dSYMs, beside Chromium.app."
   platform=mac asset=Chromium-mac-arm64.tar.xz app=Chromium.app
   publisher="tools/mac-engine-publish.sh on the Mac, after engine/build.sh"
   sha256sum() { shasum -a 256 "$@"; }
@@ -120,5 +122,25 @@ if [ ! -d "$dir" ]; then
   # Earlier prebuilt engines go, but not for the symbols, which go with the next engine. A built
   # app keeps its own copy.
   [ -n "$symbols" ] || find .deps/prebuilt -mindepth 1 -maxdepth 1 ! -name "$sha256" -exec rm -rf {} +
+fi
+if [ -n "$symbols" ] && [ "$platform" = mac ]; then
+  if ! [ -d "$dir/Chromium Framework.dSYM" ]; then
+    url=${url%/*}/Chromium-mac-arm64-dSYMs.tar.xz
+    sha256=$(curl -fsSL --retry 5 "$url.sha256") ||
+      none "the release engine-mac-${commit:0:12} has no dSYMs, so its framework's frames can't be named."
+    echo "fetch: downloading the prebuilt engine's dSYMs (${commit:0:12})" >&2
+    archive=$dir.dSYMs.tar.xz
+    curl -fL --retry 5 --progress-bar -o "$archive" "$url"
+    echo "$sha256  $archive" | sha256sum -c --status ||
+      { rm -f "$archive"; fail "the dSYMs' download doesn't match its sha256."; }
+    rm -rf "$dir.dSYMs"
+    mkdir "$dir.dSYMs"
+    tar -xf "$archive" -C "$dir.dSYMs"
+    rm "$archive"
+    mv "$dir.dSYMs"/*.dSYM "$dir"
+    rmdir "$dir.dSYMs"
+  fi
+  echo "$dir"
+  exit 0
 fi
 echo "$dir/$app"

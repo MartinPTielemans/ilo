@@ -9,9 +9,9 @@ use super::{TabInfo, page};
 /// What `initialize` tells the agent about the browser.
 pub const INSTRUCTIONS: &str = concat!(
     env!("APP_NAME"),
-    " is the user's own browser, signed in wherever they are. You work in a Space of your own, \
-     which shows in the user's sidebar with your name, so they can watch; your tabs never take \
-     their focus. You can only see and use the tabs in your Space, never the user's, and never \
+    " is the user's own browser, signed in wherever they are. You work in tabs of your own, \
+     which the user can watch on a card in their sidebar with your name; your tabs never take \
+     their focus. You can only see and use your own tabs, never the user's, and never \
      passwords, cookies or autofill.\n\n\
      Open a page with open_tab, then click, type, press_key and scroll by ref (like e12), using \
      the page's outline. A new page answers with its outline whole; an action on the same page \
@@ -37,8 +37,9 @@ pub const INSTRUCTIONS: &str = concat!(
 pub const TASK_INSTRUCTIONS: &str = concat!(
     "You do a task the user asked in ",
     env!("APP_NAME"),
-    ", their web browser, signed in wherever they are. You work only through its tools, in a \
-     Space of your own: open pages, read them and act in them. You have no shell, files or web \
+    ", their web browser, signed in wherever they are. You work only through its tools, in \
+     tabs of your own, which the user can watch on your task's card in their sidebar; you can \
+     only see and use your own tabs. Open pages, read them and act in them. You have no shell, files or web \
      search, so find everything with the browser.\n\n\
      First call title with a name for the task in two to four words and at most 24 characters, as \
      a tab's title reads, such as “Lisbon museum hours”.\n\n\
@@ -91,7 +92,7 @@ fn pin_tools() -> Vec<Value> {
         json!({
             "name": "pin_tab",
             "title": "Pin tab",
-            "description": "Pin a tab in your Space at the page it's at, where it stays, even closed, until you unpin or remove it.",
+            "description": "Pin one of your tabs at the page it's at, where it stays, even closed, until you unpin or remove it.",
             "inputSchema": { "type": "object", "properties": { "tab": tab } },
             "annotations": tabs,
         }),
@@ -105,7 +106,7 @@ fn pin_tools() -> Vec<Value> {
         json!({
             "name": "remove_tab",
             "title": "Remove pinned tab",
-            "description": "Remove a tab you pinned from your Space: it's unpinned and closed, and goes to the archive, where the user can still find it. Tabs the user pinned stay.",
+            "description": "Remove a tab you pinned: it's unpinned and closed, and goes to the archive, where the user can still find it. Tabs the user pinned stay.",
             "inputSchema": { "type": "object", "properties": { "tab": tab } },
             "annotations": {
                 "readOnlyHint": false,
@@ -116,7 +117,7 @@ fn pin_tools() -> Vec<Value> {
         json!({
             "name": "sort_tabs_by_site",
             "title": "Sort tabs by site",
-            "description": "Sort your Space's Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs stay where they are; a split view or a page off the web joins no site and keeps its order among the rest, so sites gathered from below it come above it. Nothing loads or closes. Answers with the new order.",
+            "description": "Sort your Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs stay where they are; a split view or a page off the web joins no site and keeps its order among the rest, so sites gathered from below it come above it. Nothing loads or closes. Answers with the new order.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": tabs,
         }),
@@ -179,7 +180,7 @@ fn task_tools() -> Vec<Value> {
                         "items": { "type": "integer" },
                         "maxItems": super::task::PAGES,
                         "description": format!(
-                            "The tabs the user must act in themselves, from your Space, in the order they'll want them, {} at most. Leave it out when there's nothing left for them to do.",
+                            "The tabs the user must act in themselves, from yours, in the order they'll want them, {} at most. Leave it out when there's nothing left for them to do.",
                             super::task::PAGES,
                         ),
                     },
@@ -217,14 +218,14 @@ fn shared() -> Value {
         {
             "name": "list_tabs",
             "title": "List tabs",
-            "description": "List the tabs in your Space, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last.",
+            "description": "List your tabs, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
         {
             "name": "open_tab",
             "title": "Open tab",
-            "description": "Open a URL, or search for words, in a new tab in your Space. Answers with the page's outline.",
+            "description": "Open a URL, or search for words, in a new tab of your own. Answers with the page's outline.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "url": { "type": "string", "description": "A URL, or words to search for." } },
@@ -235,7 +236,7 @@ fn shared() -> Value {
         {
             "name": "close_tab",
             "title": "Close tab",
-            "description": "Close a tab in your Space. A page that may have unsaved changes stays open unless discard is true.",
+            "description": "Close one of your tabs. A page that may have unsaved changes stays open unless discard is true.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -252,7 +253,7 @@ fn shared() -> Value {
         {
             "name": "split_tabs",
             "title": "Split tabs",
-            "description": "Show two or three tabs of your Space side by side in a split view, left to right in the order given, as one row in the sidebar. A tab in another split leaves it.",
+            "description": "Show two or three of your tabs side by side in a split view, left to right in the order given, as one row in the sidebar. A tab in another split leaves it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -271,7 +272,7 @@ fn shared() -> Value {
         {
             "name": "add_to_split",
             "title": "Add to split view",
-            "description": "Add a tab of your Space to a split view, at its right end. A split view holds three tabs at most.",
+            "description": "Add one of your tabs to a split view, at its right end. A split view holds three tabs at most.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -326,7 +327,7 @@ fn shared() -> Value {
         {
             "name": "read_page",
             "title": "Read page",
-            "description": "Read the text of a page in your Space, as a screen reader would.",
+            "description": "Read the text of a page in one of your tabs, as a screen reader would.",
             "inputSchema": { "type": "object", "properties": { "tab": tab } },
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
@@ -530,7 +531,7 @@ pub const MAX_WAIT: f64 = 30.0;
 /// list_tabs' answer.
 pub fn tab_list(tabs: &[TabInfo], current: Option<u64>, mine: &[u64]) -> String {
     if tabs.is_empty() {
-        return "Your Space has no tabs yet. The user can open pages in it for you.".into();
+        return "You have no tabs yet. Open one with open_tab.".into();
     }
     let lines = tabs.iter().map(|tab| {
         let mark = if Some(tab.id) == current { '*' } else { ' ' };
