@@ -1624,19 +1624,19 @@ for kind in ("sites", "listed_off"):
   store_launch '?webkit' before
   await '^browser: title [0-9]* session safari sees w back$' ||
     fail "the session page didn't keep its cookie and item in Safari's engine: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
-  # The tab leaves the page that sets them for the one that only reads them: the next launch brings
-  # the Spaces back, kept outside the profile's folder, and loads the tab shown, which would set them
-  # again in the new profile's store.
-  go_from_bar "127.0.0.1:$port/session"
-  expect "^browser: loaded [0-9]* http://127.0.0.1:$port/session\$" "the plain session page didn't load"
-  expect '^browser: title [0-9]* session safari sees w back$' \
-    "Safari's engine's plain session page didn't see what the one before stored"
   exec 3>&-
   quit
-  rm -rf "$store_dir/Default"
-  store_launch '' after
+  # The Spaces go too: kept outside the profile's folder, they'd bring back the tab at the page that
+  # sets the session, which would fill the new store before the step reads it.
+  rm -rf "$store_dir/Default" "$store_dir/Spaces.json"
+  # At a query of its own, which sets nothing, so the site's log has this launch's request alone: a
+  # new store sends it no cookie.
+  store_launch '?after' after
   await '^browser: title [0-9]* session safari sees none$' ||
     fail "a profile made where one was removed by hand saw its Safari's engine session: $(grep '^browser: title [0-9]* session' "$log" | tail -1)"
+  served "^GET safari 127.0.0.1:$port/session?after cookie none\$" \
+    "a profile made where one was removed by hand sent its Safari's engine cookies" \
+    "^GET safari 127.0.0.1:$port/session?after "
   await '^browser: system store deleted$' ||
     fail "the launch after a profile's folder was removed by hand didn't delete its store: $(grep '^browser: system store' "$log" | tail -1)"
   exec 3>&-
