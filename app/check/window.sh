@@ -1006,11 +1006,12 @@ step=$((step + 1))
 passed=$step
 echo "move 3 306" >&3
 send move 400 300
-if [ "$(uname)" = Linux ]; then
-  # On Linux the shell hears neither the pointer over the page nor, under X11, its leaving for the
-  # page, so the pass brings the sidebar out once its wait is up, which may be before the pointer
-  # is back at the edge: the line is looked for from the pass on.
-  echo "skip: the pointer passing the window's edge, whose leaving for the page Linux's shell doesn't hear."
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  # Under X11 the shell hears neither the pointer over the page nor its leaving for the page, so
+  # the pass brings the sidebar out once its wait is up, which may be before the pointer is back at
+  # the edge: the line is looked for from the pass on. Under Wayland the page is a surface of its
+  # own, whose entering is the leave of the shell's.
+  echo "skip: the pointer passing the window's edge, whose leaving for the page X11's shell doesn't hear."
   reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out" "$passed"
 else
   reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out"
