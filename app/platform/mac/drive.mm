@@ -216,6 +216,10 @@
 //                                         "browser: pip none" without one
 //   pip move <x> <y>                      moves the pointer to (x, y) from its top-left, as move
 //                                         does in the browser window
+//   pip doubleclick <x> <y>               double-clicks it at (x, y) from its top-left
+//   pip wheel <x> <y> <notches> [cmd]     scrolls over it at (x, y) as a trackpad does, 120
+//                                         points a notch, down for content moving up, with the
+//                                         modifiers named
 //   pip press, pip dragto, pip release <x> <y>
 //                                         as press, dragto and release, in the Mini Player, at
 //                                         points from its top-left corner as it was at the press
@@ -1452,6 +1456,31 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     if (step == "move") {
       MoveIn(pip, x, y);
+      done();
+      return true;
+    }
+    if (step == "doubleclick") {
+      Click(pip, x, y, 1);
+      Click(pip, x, y, 2);
+      done();
+      return true;
+    }
+    if (step == "wheel") {
+      double notches;
+      if (!(words >> notches)) {
+        return false;
+      }
+      // In points, as a trackpad's, so Chromium takes the distance as it is rather than as a
+      // mouse's lines, and the Mini Player moves with it as the content would.
+      CGEventRef event = CGEventCreateScrollWheelEvent2(nullptr, kCGScrollEventUnitPixel, 1,
+                                                        (int32_t)(-notches * 120), 0, 0);
+      CGEventSetIntegerValueField(event, kWindowNumberField, pip.windowNumber);
+      CGEventSetWindowLocation(event, CGPointMake(x, y));
+      // AppKit's modifier flags are Quartz's bits.
+      CGEventSetFlags(event, (CGEventFlags)Modifiers(words));
+      Pointed(pip, NSMakePoint(x, NSHeight(pip.frame) - y));
+      [NSApp postEvent:[NSEvent eventWithCGEvent:event] atStart:NO];
+      CFRelease(event);
       done();
       return true;
     }
