@@ -1017,59 +1017,6 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_boost_zap(tab, on) };
     }
 
-    fn arrange(
-        &self,
-        tab: u64,
-        look: Option<&browser::boosts::arrange::Look>,
-        _: &mut App,
-    ) -> bool {
-        let Some(look) = look else {
-            // check.sh reads this line.
-            log!("browser: arrange {tab} off");
-            unsafe { bc::bc_tab_arrange(tab, false, std::ptr::null()) };
-            return false;
-        };
-        let words: Vec<(CString, CString)> = (browser::boosts::arrange::KINDS.iter())
-            .filter_map(|&(kind, word)| Some((CString::new(kind).ok()?, CString::new(word).ok()?)))
-            .collect();
-        let kinds: Vec<bc::bc_arrange_kind> = (words.iter())
-            .map(|(kind, word)| bc::bc_arrange_kind {
-                kind: kind.as_ptr(),
-                word: word.as_ptr(),
-            })
-            .collect();
-        let other = CString::new(browser::boosts::arrange::OTHER).unwrap_or_default();
-        let look = bc::bc_arrange_look {
-            accent: look.accent,
-            label: look.label,
-            ink: look.ink,
-            line: look.line.into(),
-            radius: look.radius.into(),
-            kinds: kinds.as_ptr(),
-            count: kinds.len(),
-            other: other.as_ptr(),
-            rest: look.rest.into(),
-            room_omega: look.room_omega.into(),
-            land_response: look.land_response.into(),
-            land_damping: look.land_damping.into(),
-        };
-        let on = unsafe { bc::bc_tab_arrange(tab, true, &look) };
-        // check.sh reads this line.
-        log!(
-            "browser: arrange {tab} {}",
-            if on { "on" } else { "refused" }
-        );
-        on
-    }
-
-    fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> browser::boosts::Arranged {
-        boosts_host::set_arrangement(profile, site, bytes)
-    }
-
-    fn keep_arrangement(&self, profile: u64, site: &str, bytes: &str) -> bool {
-        boosts_host::keep_arrangement(profile, site, bytes)
-    }
-
     fn edit_file(&self, path: &std::path::Path, _: &mut App) {
         boosts_host::edit_file(path);
     }

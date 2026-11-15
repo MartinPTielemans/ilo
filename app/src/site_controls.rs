@@ -87,8 +87,6 @@ const DEVELOPER_MODE_NAME: &str = "Developer Mode";
 /// The site's Boost (#695), with the tile's glyph.
 const BOOST: &str = "icons/paintbrush.svg";
 const BOOST_NAME: &str = "Boost";
-const ARRANGEMENT: &str = "icons/grid-2x2.svg";
-const ARRANGEMENT_NAME: &str = "Arrangement";
 const PASSWORDS_NAME: &str = "Passwords";
 use crate::tokens::site_controls::DISABLED_OPACITY;
 use crate::tokens::site_controls::DIVIDER;
@@ -219,11 +217,6 @@ pub struct Site {
     pub boostable: bool,
     /// Whether the site's Boost is on, none where it has none.
     pub boost: Option<bool>,
-    /// The Boost's arrangement (#2347): how many of its changes no longer fit, said after the
-    /// Boost's state, and why the core keeps it off, which a row of its own says, whose click is
-    /// Turn On. Each none where there's nothing to say.
-    pub arrangement_misfits: Option<SharedString>,
-    pub arrangement_off: Option<SharedString>,
 }
 
 /// A turned-on extension, as its action is for the tab's page.
@@ -515,9 +508,6 @@ pub trait Host {
     /// Turns the site's Boost on or off there, in the tab's profile. The user's alone, as a Boost
     /// is.
     fn set_boost(&self, tab: u64, on: bool);
-    /// Turn On, for the site's arrangement the core keeps off as it changed outside ilo: the
-    /// user keeps it as it is. The user's alone, as a Boost is.
-    fn turn_on_arrangement(&self, tab: u64);
     fn run(&self, run: Run, tab: u64, cx: &mut App);
     /// Shows ilo's menu of `items` at `position` in the panel's window, and calls `chosen` once it
     /// closes, with the index of the one chosen, if any.
@@ -621,7 +611,6 @@ enum Stop {
     AdBlocking,
     DeveloperMode,
     Boost,
-    Arrangement,
     Passwords,
     /// By Chrome's ContentSettingsType.
     Permission(i32),
@@ -689,16 +678,10 @@ fn layout(site: &Site, extensions: usize, beak: bool) -> Layout {
     }
 }
 
-/// "This site"'s lines: the arrangement while the core keeps it off, Passwords, the permissions,
-/// the devices, then Reset.
+/// "This site"'s lines: Passwords, the permissions, the devices, then Reset.
 fn items(site: &Site) -> usize {
     let logins = passwords::state(&site.logins).is_some() as usize;
-    let arrangement = site.arrangement_off.is_some() as usize;
-    arrangement
-        + logins
-        + site.permissions.len()
-        + site.devices.len()
-        + site.reset.is_some() as usize
+    logins + site.permissions.len() + site.devices.len() + site.reset.is_some() as usize
 }
 
 /// A switch special to the site, under the action tiles (#2334). Ad blocking is the shield in the
@@ -746,20 +729,15 @@ impl Switch {
         }
     }
 
-    /// Its words on a strip, which say its state, as a lone tint can't, and for the Boost's while
-    /// on, how many of its arrangement's changes no longer fit (#2347).
-    fn words(self, site: &Site) -> SharedString {
-        if let (Switch::Boost(true), Some(misfits)) = (self, &site.arrangement_misfits) {
-            return format!("Boost on · {misfits}").into();
-        }
-        let words = match self {
+    /// Its words on a strip, which say its state, as a lone tint can't.
+    fn words(self) -> &'static str {
+        match self {
             Switch::DeveloperMode => "Developer Mode on",
             Switch::Engine(true) => "In Safari's engine",
             Switch::Engine(false) => "Safari's engine off",
             Switch::Boost(true) => "Boost on",
             Switch::Boost(false) => "Boost off",
-        };
-        words.into()
+        }
     }
 }
 
@@ -1583,24 +1561,6 @@ impl SiteControls {
         cx.notify();
     }
 
-    /// The arrangement's row: Turn On. The app keeps it, so the row goes at once.
-    fn turn_on_arrangement(&mut self, cx: &mut Context<Self>) {
-        let Some(open) = self.open.as_mut().filter(|open| open.closing.is_none()) else {
-            return;
-        };
-        let Some(site) = open
-            .site
-            .as_mut()
-            .filter(|site| site.arrangement_off.is_some())
-        else {
-            return;
-        };
-        log!("browser: site controls turned on the arrangement");
-        site.arrangement_off = None;
-        self.host.turn_on_arrangement(open.tab);
-        cx.notify();
-    }
-
     fn reset(&mut self, cx: &mut Context<Self>) {
         if let Some(open) = self.open.as_ref().filter(|open| open.closing.is_none()) {
             log!("browser: site controls reset");
@@ -1667,15 +1627,13 @@ impl SiteControls {
         }
         stops.push((Stop::AddExtension, extension(open.extensions.len())));
         // The lines in render's order, a managed one taking its place without a stop.
-        let arrangement = (site.arrangement_off.as_ref()).map(|_| Some(Stop::Arrangement));
         let passwords = passwords::state(&site.logins).map(|_| Some(Stop::Passwords));
         let permissions = (site.permissions.iter())
             .map(|each| (!each.choices.is_empty()).then_some(Stop::Permission(each.kind)));
         let devices = (site.devices.iter().enumerate())
             .map(|(index, each)| each.removable.then_some(Stop::Device(index)));
         let reset = site.reset.as_ref().map(|_| Some(Stop::Reset));
-        let lines = (arrangement.into_iter())
-            .chain(passwords)
+        let lines = (passwords.into_iter())
             .chain(permissions)
             .chain(devices)
             .chain(reset);
@@ -1868,7 +1826,6 @@ impl SiteControls {
                 self.toggle_developer_mode(site.developer_mode != Some(true), cx)
             }
             Stop::Boost => self.toggle_boost(site.boost != Some(true), cx),
-            Stop::Arrangement => self.turn_on_arrangement(cx),
             Stop::Passwords => self.choose_login(site.logins.clone(), under, cx),
             Stop::Permission(kind) => {
                 if let Some(permission) = site.permissions.iter().find(|each| each.kind == kind) {
@@ -2235,7 +2192,7 @@ impl SiteControls {
                 .flex_none()
                 .size(px(SWITCH_GLYPH))
                 .text_color(ink);
-            let words = |size: f32, words: SharedString| {
+            let words = |size: f32, words: &'static str| {
                 div()
                     .text_size(px(size))
                     .font_weight(gpui::FontWeight::MEDIUM)
@@ -2250,13 +2207,13 @@ impl SiteControls {
                     .gap(px(STRIP_NAME_GAP))
                     .pl(px(STRIP_LEFT))
                     .child(glyph)
-                    .child(words(NAME_SIZE, switch.words(site))),
+                    .child(words(NAME_SIZE, switch.words())),
                 _ => tile
                     .flex_col()
                     .justify_center()
                     .gap(px(SWITCH_NAME_GAP))
                     .child(glyph)
-                    .child(words(crate::tokens::text::SMALL, switch.name().into())),
+                    .child(words(crate::tokens::text::SMALL, switch.name())),
             };
             let tile = tile.when(self.a11y, |tile| match switch {
                 Switch::Engine(on) => {
@@ -2348,18 +2305,6 @@ impl SiteControls {
             lines.push(line.into_any_element());
             *y += ITEM_PITCH;
         };
-        // An arrangement that changed outside ilo, kept off, and why: a click is Turn On (#2347).
-        if let Some(off) = site.arrangement_off.clone() {
-            let id = "site-arrangement".into();
-            let name = ARRANGEMENT_NAME.into();
-            let line = Self::item(&palette, id, y, ARRANGEMENT, false, name, Some(off));
-            let line = line.when(a11y, |line| switch_named(line, ARRANGEMENT_NAME, false));
-            let line = line.on_click(cx.listener(|panel, _, _, cx| panel.turn_on_arrangement(cx)));
-            push(
-                line.children(self.ring(&Stop::Arrangement, LOCK_RADIUS, cx)),
-                &mut y,
-            );
-        }
         if let Some((state, on)) = passwords::state(&site.logins) {
             let said = said(PASSWORDS_NAME, &state);
             let id = "site-passwords".into();
