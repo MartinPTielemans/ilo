@@ -251,19 +251,6 @@ pub fn window_radius() -> f32 {
     return tokens::WINDOW_RADIUS_LINUX;
 }
 
-/// The radius a panel draws its corners at when the host gives its window Windows' own frame (the
-/// command bar, the find bar and the offer). Windows 11 rounds that window at its one size, so a
-/// rounder panel left its window's own pixels showing round its corners as a lighter sliver, and a
-/// less round one had its rim cut off at the curve (#2988). Elsewhere, and on Windows 10, which
-/// doesn't round it, the panel's own.
-pub fn framed_radius(own: f32) -> f32 {
-    #[cfg(target_os = "windows")]
-    if crate::build_info::windows_11() {
-        return crate::tokens::shell::WINDOW_RADIUS_WINDOWS;
-    }
-    own
-}
-
 /// The most pages a split view shows, as the core's Space has it.
 const MAX_PANES: usize = 3;
 use crate::tokens::shell::FOCUS_GLOW;

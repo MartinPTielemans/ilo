@@ -627,7 +627,7 @@ impl Render for FindBar {
                     .flex()
                     .items_center()
                     .px(px(INSET))
-                    .rounded(px(browser::shell::framed_radius(RADIUS)))
+                    .rounded(px(RADIUS))
                     .bg(rgb(FILL))
                     .text_color(rgb(TEXT))
                     .text_size(px(text::BODY))
@@ -652,7 +652,7 @@ impl Render for FindBar {
                         div()
                             .absolute()
                             .size_full()
-                            .rounded(px(browser::shell::framed_radius(RADIUS)))
+                            .rounded(px(RADIUS))
                             .border(px(0.5))
                             .border_color(Level::Popover.rim()),
                     ),

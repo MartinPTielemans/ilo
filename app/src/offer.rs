@@ -572,7 +572,7 @@ impl Render for OfferPrompt {
                 .p(px(INSET))
                 .flex()
                 .flex_col()
-                .rounded(px(crate::shell::framed_radius(RADIUS)))
+                .rounded(px(RADIUS))
                 .bg(fill)
                 .border_1()
                 .border_color(Level::Popover.rim_in(&palette))
