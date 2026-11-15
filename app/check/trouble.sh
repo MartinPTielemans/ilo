@@ -224,7 +224,7 @@ grep -q 'browser: tab [0-9]* game running$' "$log" && fail "Space started a game
 # next request for the page $3 the tab loads, and says so once there is one; "online" answers it
 # with the page first, as Chromium answers no change of network while a request is held.
 cat > "$out/network.py" <<'PY'
-import base64, json, os, socket, struct, sys, urllib.request
+import base64, json, os, socket, struct, sys, time, urllib.request
 
 port = open(sys.argv[1], encoding="utf-8").read().split()[0]
 targets = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list"))
@@ -273,6 +273,7 @@ events = []
 def call(method, **params):
     global calls
     calls += 1
+    asked = time.monotonic()
     body = json.dumps({"id": calls, "method": method, "params": params}).encode()
     mask = os.urandom(4)
     size = bytes([0x80 | len(body)]) if len(body) < 126 else bytes([0xFE]) + struct.pack(">H", len(body))
@@ -282,6 +283,10 @@ def call(method, **params):
         if reply.get("id") == calls:
             if "error" in reply:
                 sys.exit(f"{method}: {reply['error']}")
+            # For a failure's report: a call Chromium answered late, as it does one that waits on
+            # a held request.
+            if time.monotonic() - asked > 0.5:
+                print(f"{method} answered in {time.monotonic() - asked:.2f} s", flush=True)
             return
         if "method" in reply:
             events.append(reply)
@@ -308,6 +313,7 @@ for line in sys.stdin:
         page = base64.b64encode(urllib.request.urlopen(sys.argv[3]).read()).decode()
         call("Fetch.fulfillRequest", requestId=held, responseCode=200, body=page,
              responseHeaders=[{"name": "Content-Type", "value": "text/html"}])
+        print("given", flush=True)
         call("Fetch.disable")
         held = None
     call("Network.emulateNetworkConditions", offline=state == "offline", latency=0,
@@ -328,10 +334,13 @@ fi
 network=$!
 exec 4> "$out/network"
 # Takes the tab $1, offline or online, or holds its page's next request; $2 says what a miss means.
+# It waits for the session to say $1 back, or $3 if given.
 network() {
+  # The session's earlier answers stay in its log, so it's the next one that's waited for.
+  said=$(grep -cx "${3:-$1}" "$out/network.log" || true)
   echo "$1" >&4
   for _ in $(seq 100); do
-    grep -qx "$1" "$out/network.log" && return 0
+    [ "$(grep -cx "${3:-$1}" "$out/network.log" || true)" -gt "$said" ] && return 0
     kill -0 "$network" 2>/dev/null || fail "DevTools didn't take the tab $1: $(cat "$out/network.log")"
     sleep 0.1
   done
@@ -358,10 +367,12 @@ expect "browser: tab $tab game running\$" "Space didn't start a run on the offli
 # at the first column with no more hops.
 network online
 ../tools/window-screenshot.sh "$pid" "$out/offline-game.png" || fail "no window to capture"
-expect "browser: tab $tab game over\$\|^browser: loaded $tab ${site}index.html\$" \
+# The Mac's grep, BSD's, reads a "$" before "\|" as a dollar sign, so a pattern with a choice keeps
+# its anchors outside it.
+expect "^\(.*browser: tab $tab game over\|browser: loaded $tab ${site}index.html\)\$" \
   "the run didn't end at the first column, and the page didn't come back"
 sed -n "/browser: tab $tab game running\$/,/browser: tab $tab game over\$/p" "$log" |
-  grep -q "^browser: page $tab trouble fine\$\|^browser: loaded $tab ${site}index.html\$" &&
+  grep -q "^browser: \(page $tab trouble fine\|loaded $tab ${site}index.html\)\$" &&
   fail "the page came back mid-run, which ended the run: the reload under way when it started didn't wait for it"
 expect "browser: tab $tab game over\$" "the run didn't end at the first column"
 expect "^browser: loaded $tab ${site}index.html\$" "the page didn't load once the run ended"
@@ -381,12 +392,14 @@ send click $page_point
 send key space
 expect "browser: tab $tab game running\$" "Space didn't start a second run on the offline page"
 second_run=$(grep -n "browser: tab $tab game running\$" "$log" | tail -1 | cut -d: -f1)
-network online
+# Chromium answers the change of network once the held auto-reload goes on, after the run, so ⌘R
+# goes once the held request has its page: mid-run.
+network online "DevTools didn't give the held auto-reload its page" given
 send key r cmd
-expect "^browser: loaded $tab ${site}index.html\$\|browser: tab $tab game over\$" \
+expect "^\(browser: loaded $tab ${site}index.html\|.*browser: tab $tab game over\)\$" \
   "⌘R mid-run neither loaded the page nor did the run end"
 tail -n +"$second_run" "$log" |
-  grep -m1 "^browser: loaded $tab ${site}index.html\$\|browser: tab $tab game over\$" |
+  grep -m1 "^\(browser: loaded $tab ${site}index.html\|.*browser: tab $tab game over\)\$" |
   grep -q "^browser: loaded " ||
   fail "⌘R mid-run waited for the run to end: the user's own reload was held with the auto-reload"
 exec 4>&-
