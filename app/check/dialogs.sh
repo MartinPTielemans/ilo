@@ -86,6 +86,24 @@ answer return accept "confirm true"
 ask p Prompt prompt
 send type grace
 answer return accept "prompt grace"
+# On sway's Xwayland the prompt keeps the keys through its window's move to another workspace and
+# back, as wlroots gives the X focus to none and then to the browser window (#2894).
+if sway_xwayland; then
+  ask p Prompt prompt-workspace
+  swaymsg 'move container to workspace 2; workspace 2' > /dev/null ||
+    fail "sway didn't move the window to another workspace"
+  swaymsg 'move container to workspace 1; workspace 1' > /dev/null ||
+    fail "sway didn't move the window back"
+  for _ in $(seq 50); do
+    send onscreen
+    grep '^browser: onscreen ' "$log" | tail -1 | grep -q 'keyboard overlay$' && break
+    sleep 0.1
+  done
+  grep '^browser: onscreen ' "$log" | tail -1 | grep -q 'keyboard overlay$' ||
+    fail "the prompt didn't take the keys back in 5 s, back on its window's workspace: $(grep '^browser: onscreen ' "$log" | tail -1)"
+  send type ada
+  answer return accept "prompt ada"
+fi
 
 # Another tab takes the alert down, and its own brings it back.
 open_from_bar example.com
