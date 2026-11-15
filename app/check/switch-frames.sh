@@ -248,11 +248,21 @@ if [ -n "$held" ]; then
   send key 1 ctrl
   expect "^browser: space $first in " "⌃1 didn't show the first Space"
   let_go "⌃1"
+  # Full screen is a Space of its own. AppKit says the window has entered or left it before macOS
+  # has slid there or back, and until then its transition window is over the browser window and
+  # takes the clicks (#2248). Left before the slide in has ended, macOS slides there and back after
+  # (#889), so each step waits for its slide.
   send fullscreen
+  entered=$step
   expect '^browser: window entered full screen$' "the window didn't go full screen just after a switch"
-  left "in full screen" "$step"
+  expect '^browser: desktop space changed$' "the window's full-screen Space didn't come forward" \
+    "$entered"
+  left "in full screen" "$entered"
   send fullscreen
+  exited=$step
   expect '^browser: window left full screen$' "the window didn't leave full screen"
+  expect '^browser: desktop space changed$' "the desktop's Space didn't come back after full screen" \
+    "$exited"
   # The striped page, shown again while it's let go, and example.com's tab, closed while its page is
   # let go: the window lets it go without it.
   send click $(row 0)

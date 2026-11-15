@@ -2649,13 +2649,23 @@ void drive_start(void) {
   for (NSNotificationName name :
        {NSWindowWillEnterFullScreenNotification, NSWindowWillExitFullScreenNotification}) {
     bool entering = [name isEqualToString:NSWindowWillEnterFullScreenNotification];
-    [NSNotificationCenter.defaultCenter addObserverForName:name
-                                                    object:nil
-                                                     queue:nil
-                                                usingBlock:^(NSNotification* notification) {
-                                                  g_full_screen_window = notification.object;
-                                                  LogFullScreenStep(entering, "will", nil);
-                                                }];
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:name
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* notification) {
+                  g_full_screen_window = notification.object;
+                  LogFullScreenStep(entering, "will", nil);
+                  // Another window's, such as an overlay's, is no transition of the browser
+                  // window's.
+                  NSWindow* window = notification.object;
+                  if (window != (__bridge NSWindow*)host_browser_window(g_driven)) {
+                    fprintf(stderr,
+                            "browser: full screen %s will is %s %ld's, not the browser window's\n",
+                            entering ? "enter" : "exit", NSStringFromClass(window.class).UTF8String,
+                            (long)window.windowNumber);
+                  }
+                }];
   }
   [NSNotificationCenter.defaultCenter
       addObserverForName:NSWindowDidResizeNotification
