@@ -713,15 +713,23 @@ impl Boosts {
 
 /// Calls `changed` on a thread of its own each time a file in `folder` is written, added, renamed
 /// or deleted, until the app quits, making the folder if it isn't there. The thread waits on the
-/// system's notice, so an idle browser isn't woken (principle 1). Returns whether it watches.
+/// system's notice, so an idle browser isn't woken (principle 1). The watch is in place before
+/// this returns, so a write after it is told of. Returns whether it watches.
 pub fn watch(folder: PathBuf, changed: impl Fn() + Send + 'static) -> bool {
     if let Err(error) = std::fs::create_dir_all(&folder) {
         crate::log!("couldn't make the Boosts folder: {error}");
         return false;
     }
+    let watch = match Watch::start(&folder) {
+        Ok(watch) => watch,
+        Err(error) => {
+            crate::log!("couldn't watch the Boosts folder: {error}");
+            return false;
+        }
+    };
     let started = std::thread::Builder::new()
         .name("boosts".into())
-        .spawn(move || watch_on_thread(&folder, changed));
+        .spawn(move || watch.wait(&folder, changed));
     started.is_ok()
 }
 
@@ -746,124 +754,199 @@ pub fn watch_in(
 }
 
 #[cfg(target_os = "linux")]
-fn watch_on_thread(folder: &Path, changed: impl Fn()) {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(path) = std::ffi::CString::new(folder.as_os_str().as_bytes()) else {
-        return;
-    };
-    let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
-    if fd < 0 {
-        return;
-    }
-    let mask = libc::IN_CLOSE_WRITE | libc::IN_MOVED_TO | libc::IN_MOVED_FROM | libc::IN_DELETE;
-    if unsafe { libc::inotify_add_watch(fd, path.as_ptr(), mask) } < 0 {
-        unsafe { libc::close(fd) };
-        return;
-    }
-    let mut events = [0u8; 4096];
-    loop {
-        let read = unsafe { libc::read(fd, events.as_mut_ptr().cast(), events.len()) };
-        if read < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-            continue;
+struct Watch(i32);
+
+#[cfg(target_os = "linux")]
+impl Watch {
+    fn start(folder: &Path) -> std::io::Result<Self> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(folder.as_os_str().as_bytes())?;
+        let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
         }
-        if read <= 0 {
-            break;
+        let mask = libc::IN_CLOSE_WRITE | libc::IN_MOVED_TO | libc::IN_MOVED_FROM | libc::IN_DELETE;
+        if unsafe { libc::inotify_add_watch(fd, path.as_ptr(), mask) } < 0 {
+            let error = std::io::Error::last_os_error();
+            unsafe { libc::close(fd) };
+            return Err(error);
         }
-        changed();
+        Ok(Self(fd))
     }
-    unsafe { libc::close(fd) };
+
+    fn wait(self, _: &Path, changed: impl Fn()) {
+        let mut events = [0u8; 4096];
+        loop {
+            let read = unsafe { libc::read(self.0, events.as_mut_ptr().cast(), events.len()) };
+            if read < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {
+                continue;
+            }
+            if read <= 0 {
+                break;
+            }
+            changed();
+        }
+        unsafe { libc::close(self.0) };
+    }
 }
 
 /// kqueue tells of a change to a file it holds open, and of a folder's names, not its files'
-/// contents, so each wait holds the folder and every file in it, opened again after each change.
+/// contents. So the queue holds the folder for good, and every file in it, opened again after each
+/// change. The new files are held before the old ones close, so a write between two waits is still
+/// told of (#2997).
 #[cfg(target_os = "macos")]
-fn watch_on_thread(folder: &Path, changed: impl Fn()) {
-    use std::os::unix::ffi::OsStrExt;
-    let queue = unsafe { libc::kqueue() };
-    if queue < 0 {
-        return;
-    }
-    let open = |path: &Path| {
-        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-        let fd = unsafe { libc::open(path.as_ptr(), libc::O_EVTONLY | libc::O_CLOEXEC) };
-        (fd >= 0).then_some(fd)
-    };
-    loop {
-        let files = (std::fs::read_dir(folder).into_iter().flatten().flatten())
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|extension| extension == "css"));
-        let fds: Vec<i32> = std::iter::once(folder.to_path_buf())
-            .chain(files)
-            .filter_map(|path| open(&path))
-            .collect();
-        if fds.is_empty() {
-            break;
+struct Watch {
+    queue: i32,
+    folder: i32,
+    files: Vec<i32>,
+}
+
+#[cfg(target_os = "macos")]
+impl Watch {
+    fn start(folder: &Path) -> std::io::Result<Self> {
+        let queue = unsafe { libc::kqueue() };
+        if queue < 0 {
+            return Err(std::io::Error::last_os_error());
         }
-        let watches: Vec<libc::kevent> = (fds.iter())
-            .map(|&fd| libc::kevent {
-                ident: fd as usize,
-                filter: libc::EVFILT_VNODE,
-                flags: libc::EV_ADD | libc::EV_CLEAR,
-                fflags: libc::NOTE_WRITE
-                    | libc::NOTE_EXTEND
-                    | libc::NOTE_DELETE
-                    | libc::NOTE_RENAME
-                    | libc::NOTE_ATTRIB,
-                data: 0,
-                udata: std::ptr::null_mut(),
-            })
-            .collect();
-        let mut event: libc::kevent = unsafe { std::mem::zeroed() };
-        let got = unsafe {
-            libc::kevent(
+        match Self::hold(queue, folder) {
+            Ok(held) => Ok(Self {
                 queue,
-                watches.as_ptr(),
-                watches.len() as i32,
-                &mut event,
-                1,
-                std::ptr::null(),
-            )
+                folder: held,
+                files: Self::hold_files(queue, folder),
+            }),
+            Err(error) => {
+                unsafe { libc::close(queue) };
+                Err(error)
+            }
+        }
+    }
+
+    fn hold(queue: i32, path: &Path) -> std::io::Result<i32> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_EVTONLY | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let watch = libc::kevent {
+            ident: fd as usize,
+            filter: libc::EVFILT_VNODE,
+            flags: libc::EV_ADD | libc::EV_CLEAR,
+            fflags: libc::NOTE_WRITE
+                | libc::NOTE_EXTEND
+                | libc::NOTE_DELETE
+                | libc::NOTE_RENAME
+                | libc::NOTE_ATTRIB,
+            data: 0,
+            udata: std::ptr::null_mut(),
         };
-        // Closing a file takes its watch out of the queue.
-        for fd in fds {
+        let added =
+            unsafe { libc::kevent(queue, &watch, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+        if added < 0 {
+            let error = std::io::Error::last_os_error();
+            unsafe { libc::close(fd) };
+            return Err(error);
+        }
+        Ok(fd)
+    }
+
+    /// A file that can't be held now is held after the next change.
+    fn hold_files(queue: i32, folder: &Path) -> Vec<i32> {
+        (std::fs::read_dir(folder).into_iter().flatten().flatten())
+            .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_dir()))
+            .filter_map(|entry| Self::hold(queue, &entry.path()).ok())
+            .collect()
+    }
+
+    fn wait(mut self, folder: &Path, changed: impl Fn()) {
+        let mut event: libc::kevent = unsafe { std::mem::zeroed() };
+        loop {
+            let got = unsafe {
+                libc::kevent(
+                    self.queue,
+                    std::ptr::null(),
+                    0,
+                    &mut event,
+                    1,
+                    std::ptr::null(),
+                )
+            };
+            if got < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                crate::log!("the Boosts folder's watch stopped: {error}");
+                break;
+            }
+            if got > 0 {
+                let files = Self::hold_files(self.queue, folder);
+                // Closing a file takes its watch out of the queue.
+                for fd in std::mem::replace(&mut self.files, files) {
+                    unsafe { libc::close(fd) };
+                }
+                changed();
+            }
+        }
+        for fd in self.files.into_iter().chain([self.folder, self.queue]) {
             unsafe { libc::close(fd) };
         }
-        if got < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
-            break;
-        }
-        if got > 0 {
-            changed();
-        }
     }
-    unsafe { libc::close(queue) };
 }
 
 #[cfg(target_os = "windows")]
-fn watch_on_thread(folder: &Path, changed: impl Fn()) {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE, FindCloseChangeNotification,
-        FindFirstChangeNotificationW, FindNextChangeNotification,
-    };
-    use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
-    let path: Vec<u16> = folder.as_os_str().encode_wide().chain([0]).collect();
-    let filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE;
-    let handle = unsafe { FindFirstChangeNotificationW(path.as_ptr(), 0, filter) };
-    if handle == INVALID_HANDLE_VALUE {
-        return;
-    }
-    while unsafe { WaitForSingleObject(handle, INFINITE) } == WAIT_OBJECT_0 {
-        changed();
-        if unsafe { FindNextChangeNotification(handle) } == 0 {
-            break;
+struct Watch(windows_sys::Win32::Foundation::HANDLE);
+
+// The change handle is used by the watcher's thread alone once it starts.
+#[cfg(target_os = "windows")]
+unsafe impl Send for Watch {}
+
+#[cfg(target_os = "windows")]
+impl Watch {
+    fn start(folder: &Path) -> std::io::Result<Self> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE,
+            FindFirstChangeNotificationW,
+        };
+        let path: Vec<u16> = folder.as_os_str().encode_wide().chain([0]).collect();
+        let filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE;
+        let handle = unsafe { FindFirstChangeNotificationW(path.as_ptr(), 0, filter) };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
         }
+        Ok(Self(handle))
     }
-    unsafe { FindCloseChangeNotification(handle) };
+
+    fn wait(self, _: &Path, changed: impl Fn()) {
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FindCloseChangeNotification, FindNextChangeNotification,
+        };
+        use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
+        while unsafe { WaitForSingleObject(self.0, INFINITE) } == WAIT_OBJECT_0 {
+            changed();
+            if unsafe { FindNextChangeNotification(self.0) } == 0 {
+                break;
+            }
+        }
+        unsafe { FindCloseChangeNotification(self.0) };
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn watch_on_thread(_: &Path, _: impl Fn()) {}
+struct Watch;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+impl Watch {
+    fn start(_: &Path) -> std::io::Result<Self> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    fn wait(self, _: &Path, _: impl Fn()) {}
+}
 
 #[cfg(test)]
 mod tests;
