@@ -207,6 +207,8 @@ pub(super) struct Recorder {
     pub(super) card: RefCell<Option<crate::hover_card::Rest>>,
     /// The folder preview asked for last, whose choice a test makes.
     pub(super) folder_preview: RefCell<Option<crate::folder_preview::Rest>>,
+    /// The tab switcher shown last, whose keys and clicks a test makes.
+    pub(super) tab_switcher: RefCell<Option<crate::tab_switcher::Show>>,
     /// When a window last showed each tab, for `last_seen`, which a test sets.
     pub(super) seen: RefCell<HashMap<u64, f64>>,
     /// Where the shell last put the link target's plate, in the window.
@@ -1512,7 +1514,9 @@ impl Browser for Recorder {
         self.detents.set(self.detents.get() + 1);
     }
 
-    fn watch_control(&self, _: &mut App) {}
+    fn watch_control(&self, _: &mut App) {
+        self.record("watch control".into());
+    }
 
     fn copy(&self, text: &str, _: &mut App) {
         self.copied.borrow_mut().push(text.to_owned());
@@ -1615,6 +1619,13 @@ impl Browser for Recorder {
                 self.record(format!("tooltip {} {}", tip.text, tip.keys.concat()))
             }
             None => self.record("tooltip none".into()),
+        }
+    }
+
+    fn tab_switcher(&self, ask: crate::tab_switcher::Ask, _: &mut App) {
+        self.record(ask.label());
+        if let crate::tab_switcher::Ask::Show(show) = ask {
+            *self.tab_switcher.borrow_mut() = Some(show);
         }
     }
 

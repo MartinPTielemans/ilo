@@ -20,7 +20,7 @@ use gpui::{App, Bounds, CursorStyle, DevicePixels, Pixels, SvgSize, point, px, s
 use crate::{bc, overlays, shadows};
 
 /// The Site Controls' slot in the host's overlays, for their elevation (platform/host.h).
-const SITE_CONTROLS: std::ffi::c_int = 5;
+const SITE_CONTROLS: std::ffi::c_int = 6;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
