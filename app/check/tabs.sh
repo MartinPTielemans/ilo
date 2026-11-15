@@ -32,7 +32,8 @@
 # its way there without taking it, picks what a press-drag-release ends on and closes on a click
 # outside. A tab unseen for 2 hours lets go of its page as another is shown, unless it plays sound,
 # its page asks before it's left or a split shows it, and loads it back with its history once shown,
-# and Settings' Unload switch turns that off and on. The header's glyphs stay lit with the
+# and Settings' Unload switch turns that off and on. A key typed right after a switch reaches the
+# page shown, with the UI thread kept busy. The header's glyphs stay lit with the
 # command bar open and with the page having the keyboard, and dim behind Settings till it goes. Back right-clicked or held lists the pages
 # back, nearest first, with their favicons, a row picked goes there, and ⌘-clicked it opens the page
 # back in a tab behind. Tabs › Reset all tabs in this Space takes the loaded pinned tabs away from
@@ -1731,7 +1732,68 @@ else
   exec 3>&-
   quit
 fi
+# Waits for each busy spell the core started to end.
+await_idle() {
+  wait_begins
+  for _ in $(seq 300); do
+    [ "$(grep -c '^browser: busy after a switch for ' "$log")" = \
+      "$(grep -c '^browser: busy after a switch done$' "$log")" ] && return 0
+    kill -0 "$pid" 2>/dev/null || fail "the app exited"
+    sleep 0.1
+  done
+  fail "the UI thread stayed busy 30 s after a switch kept it 2 s"
+}
+# A key typed right after a switch reaches the page the switch showed while the UI thread's
+# default queue is busy, as a heavy page committing keeps it: the core's switch keeps that queue
+# busy 2 s after each switch, and the page takes the keyboard on that queue, where it can't be held
+# behind it as on a lower one (#2783). The engine before #2783 doesn't know the switch, and then
+# the queue isn't busy and the step says so.
+log="$out/tabs-busy.log"
+step=0
+rm -f "$saved" "$launch_frame"
+BROWSER_DRIVE=1 BROWSER_URL="${site}keys.html?left" "$browser" --busy-after-switch=2000 \
+  < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await_load
+await '^browser: title [0-9]* keys ready$' || fail "the keys page didn't draw"
+left=$(today)
+send click $page_point
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  busy="skip: a key after a switch with the UI thread busy. Browser wasn't the active app, so the page ignored the click."
+else
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type "${site}keys.html?shown"
+  send key return
+  expect "^browser: loaded [0-9]* ${site}keys.html?shown\$" "${site}keys.html?shown didn't load in a tab"
+  expect '^browser: title [0-9]* keys ready$' "the second keys page didn't draw"
+  shown=$(today)
+  shown=${shown%% *}
+  if ! grep -q '^browser: busy after a switch for ' "$log"; then
+    busy="skip: a key after a switch with the UI thread busy. The engine doesn't keep the UI thread busy after a switch (--busy-after-switch)."
+  else
+    # The switches before let the queue go first, so the busy spell q meets is ⌘2's own.
+    await_idle
+    before=$(grep -c '^browser: busy after a switch done$' "$log")
+    send key 2 cmd
+    send key q
+    [ "$(grep -c '^browser: busy after a switch done$' "$log")" = "$before" ] ||
+      fail "the UI thread was busy less long than q took to send, so the step shows nothing"
+    await "^browser: title $left key q\$" ||
+      fail "q right after ⌘2, with the UI thread busy, didn't reach the page ⌘2 showed"
+    await_idle
+    ! grep -q "^browser: title $shown key q\$" "$log" ||
+      fail "q right after ⌘2, with the UI thread busy, went to the page ⌘2 left"
+    busy="ok: a key right after a switch, with the UI thread busy 2 s, reached the page the switch showed."
+  fi
+  exec 3>&-
+  quit
+fi
 echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, a pick of View Media… lists it above View Archive…, its equal for \"view\", back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized${adapter:-}.${desktop:+ On Linux $desktop.}"
+echo "  $busy"
 [ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
   "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \

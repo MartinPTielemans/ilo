@@ -361,6 +361,12 @@ onkeydown = e => {
   }
 };
 </script>' > "$out/site/session-sign-in.html"
+# Its title says "keys ready" once it has drawn, and then each key that reaches it, "key q".
+printf '%s' '<title>loading</title><script src="painted.js"></script>
+<script>
+painted(() => document.title = "keys ready");
+onkeydown = e => document.title = "key " + e.key;
+</script>' > "$out/site/keys.html"
 # A page whose whole area is a link to /bounce, which the server redirects to another site,
 # localhost, and from there, at hop.html, back to this one's engine page, as a sign-in through an
 # identity site does, or at hop.html?away, to localhost's engine page, where it stays.

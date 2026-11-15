@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/auto_reset.h"
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -113,9 +114,30 @@ namespace browser_core {
 namespace {
 
 // Below the UI thread's default queue, where the window compositor's begin frame arrives, so a
-// switch's frame starts before the app hears of it and the page takes the keyboard (#2377).
+// switch's frame starts before the app hears of it (#2377). Only for what may wait: the queue's
+// selector always takes the highest queue with work, so default work can hold this one off for as
+// long as it keeps coming.
 scoped_refptr<base::SingleThreadTaskRunner> AfterFrame() {
   return content::GetUIThreadTaskRunner({base::TaskPriority::USER_VISIBLE});
+}
+
+// check.sh's, for tabs: how many milliseconds the UI thread's default queue stays busy after each
+// switch, as a heavy page committing or a session coming back keeps it, so a run sees a key typed
+// meanwhile reach the page the switch showed (#2783).
+constexpr char kBusyAfterSwitch[] = "busy-after-switch";
+
+// Keeps the default queue busy until |until|, 10 ms a task, each posting the next behind what
+// came meanwhile.
+void BusyUntil(base::TimeTicks until) {
+  const base::TimeTicks slice = std::min(until, base::TimeTicks::Now() + base::Milliseconds(10));
+  while (base::TimeTicks::Now() < slice) {
+  }
+  if (slice < until) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&BusyUntil, until));
+  } else {
+    fprintf(stderr, "browser: busy after a switch done\n");
+  }
 }
 
 // Whether |contents| is a tab in a Browser's tab strip. One Chrome is taking out isn't, from
@@ -2790,6 +2812,14 @@ void Window::SelectAfterClosing() {
 
 void Window::ReportSelected() {
   SessionChanged();
+  if (int busy = 0; base::StringToInt(base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+                                          kBusyAfterSwitch),
+                                      &busy) &&
+                    busy > 0) {
+    fprintf(stderr, "browser: busy after a switch for %d ms\n", busy);
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&BusyUntil, base::TimeTicks::Now() + base::Milliseconds(busy)));
+  }
   // Posted, like the Space's changes, so the app hears of its own call once it has returned.
   AfterFrame()->PostTask(
       FROM_HERE, base::BindOnce(
@@ -3334,8 +3364,10 @@ void Window::FocusPageSoon() {
   // Posted: AppKit can be part way through moving the keyboard, as when a committing page hides the
   // view that had it and Chromium makes the window key. A page view focused inside that move
   // believes it has the keyboard after AppKit has given it elsewhere (FocusSettledOnActivation).
-  AfterFrame()->PostTask(FROM_HERE,
-                         base::BindOnce(&Window::FocusPage, weak_factory_.GetWeakPtr()));
+  // On the default queue, not AfterFrame's: below it the keyboard could wait behind any default
+  // work, while keys typed meanwhile went to the page the switch left.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&Window::FocusPage, weak_factory_.GetWeakPtr()));
 }
 
 void Window::FocusPage() {
