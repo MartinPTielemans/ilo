@@ -541,6 +541,11 @@ bool Tab::AskAppAboutKey(bool (*callback)(void*, bc_id, const bc_key*),
   // A shortcut that opens a field of the app's holds the page's keys after it (bc_hold_keys).
   auto asking = held_keys::AskingAbout(tab, event);
   const bool used = callback(Host().context, tab, &key);
+  // For #2248's proof runs only: which tab's page offered the app a key, and its answer.
+  fprintf(stderr, "browser: tab %llu asked the app about key %s, modifiers %u, %s: %s\n",
+          static_cast<unsigned long long>(tab), name.c_str(), modifiers,
+          callback == Host().tab_key_unhandled ? "the page left" : "before the page",
+          used ? "used" : "not used");
   // A key the page didn't keep opens a field the keys after it are held for, or nothing does.
   if (callback == Host().tab_key_unhandled) {
     held_keys::Answered(tab, event, used);

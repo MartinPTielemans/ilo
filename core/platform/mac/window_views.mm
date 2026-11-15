@@ -84,6 +84,8 @@
 - (void)scalePages;
 - (void)letLeavingGo;
 - (void)sendGoingAway;
++ (void)watchKeys;
++ (void)logKey:(NSEvent*)event;
 @end
 
 // How long after the last let-go the pages let go leave the window. In 24 runs of the
@@ -139,7 +141,85 @@ constexpr base::TimeDelta kGoneAfter = base::Milliseconds(250);
 // out of the window as the page shown first draws left the page area with neither for a frame in
 // about one switch in 16 on a slow Mac, and one turned transparent instead never did (#2248). A
 // page left is already hidden, so it draws nothing meanwhile.
+// For #2248's proof runs only: where each key goes, and what holds the keyboard, once a switch has
+// let pages go. Not for main.
++ (void)watchKeys {
+  static id monitor;
+  if (monitor) {
+    return;
+  }
+  monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                                  handler:^NSEvent*(NSEvent* event) {
+                                                    [BrowserCoreWindowView logKey:event];
+                                                    return event;
+                                                  }];
+}
+
++ (void)logKey:(NSEvent*)event {
+  NSWindow* window = event.window ?: NSApp.keyWindow;
+  NSResponder* responder = window.firstResponder;
+  BrowserCoreWindowView* holder = nil;
+  for (NSWindow* in = window; in && !holder; in = in.parentWindow) {
+    if ([in.contentView isKindOfClass:BridgedContentView.class]) {
+      id embedded = base::apple::ObjCCastStrict<BridgedContentView>(in.contentView).embeddedView;
+      if ([embedded isKindOfClass:BrowserCoreWindowView.class]) {
+        holder = embedded;
+      }
+    }
+  }
+  NSView* top = nil;
+  const char* role = "something not a view";
+  if (!responder) {
+    role = "nothing";
+  } else if (responder == window) {
+    role = "the window";
+  } else if ([responder isKindOfClass:NSView.class]) {
+    NSView* view = base::apple::ObjCCastStrict<NSView>(responder);
+    for (NSView* up = view; up; up = up.superview) {
+      if ([up.superview isKindOfClass:BrowserCoreWindowView.class]) {
+        top = up;
+        holder = base::apple::ObjCCastStrict<BrowserCoreWindowView>(up.superview);
+        break;
+      }
+    }
+    if (!view.window) {
+      role = "a view out of the window";
+    } else if (!top) {
+      role = "a view outside the pages' view";
+    } else if (top == holder.uiView) {
+      role = "the UI";
+    } else if ([holder.going containsObject:top]) {
+      role = "a page let go";
+    } else if ([holder.leaving containsObject:top]) {
+      role = "a page leaving";
+    } else if (top == holder.sidePanel.page) {
+      role = "the side panel";
+    } else {
+      role = "a page no pane has";
+      for (BrowserCorePane* pane in holder.panes) {
+        if (pane.page == top || pane.devtools == top) {
+          role = "a page shown";
+        }
+      }
+    }
+  }
+  const NSEventModifierFlags flags = event.modifierFlags;
+  fprintf(stderr,
+          "browser: key %d%s%s%s%s to %s in %s (alpha %.2f, hidden %d), window %s, going %lu, "
+          "leaving %lu\n",
+          event.keyCode, (flags & NSEventModifierFlagControl) ? " ctrl" : "",
+          (flags & NSEventModifierFlagCommand) ? " cmd" : "",
+          (flags & NSEventModifierFlagShift) ? " shift" : "",
+          (flags & NSEventModifierFlagOption) ? " alt" : "",
+          responder ? NSStringFromClass(responder.class).UTF8String : "nil", role,
+          top ? top.alphaValue : -1.0, top ? top.isHiddenOrHasHiddenAncestor : -1,
+          window ? NSStringFromClass(window.class).UTF8String : "nil",
+          static_cast<unsigned long>(holder.going.count),
+          static_cast<unsigned long>(holder.leaving.count));
+}
+
 - (void)letLeavingGo {
+  [BrowserCoreWindowView watchKeys];
   if (!self.going) {
     self.going = [NSHashTable weakObjectsHashTable];
   }
