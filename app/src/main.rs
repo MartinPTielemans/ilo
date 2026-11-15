@@ -290,6 +290,8 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
         })
         .unwrap_or(false)
     {
+        // ilo took this Esc, so the next is a first press again, not a second to the page's.
+        SECOND_PRESS.with_borrow_mut(|second| second.declined(&keystroke));
         return (true, "escape in full screen");
     }
     let shortcut = shortcut.flatten().is_some();
