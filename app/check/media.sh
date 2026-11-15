@@ -18,7 +18,8 @@
 # it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab, shown. On the
 # Mac a throw settles it 10 in at a corner, and a slow release near a side 10 in along it. The next
 # shows where it was left, after a relaunch too, and coming back to its tab's window from another
-# window, or from another app with a menu open, puts it back in the tab.
+# window, or from another app with a menu open, puts it back in the tab. A video playing with sound
+# floats as a tab switch hides it, its Mini Player on screen within 250 ms of the switch.
 # A page asks to share the screen only from a click or a key: asked with neither, its promise is
 # refused, and nothing is shared (decision 12).
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
@@ -1219,6 +1220,52 @@ expect "^browser: title $v floating\$" "the video didn't float after a relaunch"
 expect 'browser: mini player placed at ' "the core didn't place the Mini Player after a relaunch"
 placed_where_left ||
   fail "after a relaunch the Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
+# A video playing with sound in a page asking for it floats as a tab switch hides it, and its Mini
+# Player is on screen within twice Dia's ≈ 125 ms of the switch, which the core times its first
+# frame from (#2822). Chrome floats one on a switch only from https, on a site the user plays media
+# on often or has allowed, or from a file, as here. One video floats at a time, so this one lands.
+if engine_has ../core/mini_player.cc; then
+  send click $page_point
+  send key x
+  expect "^browser: title $v landed\$" "x in the page didn't land the relaunched video"
+  printf '%s' '<title>loading</title><body style="margin:0;background:#333">
+<video id=v playsinline loop src=card.webm style="width:100vw;height:100vh"></video>
+<script>
+const audio = new AudioContext();
+const tone = audio.createOscillator();
+const gain = audio.createGain();
+gain.gain.value = 0.05;
+tone.connect(gain).connect(audio.destination);
+tone.start();
+v.onplaying = () => document.title = "playing";
+v.onenterpictureinpicture = () => document.title = "floating";
+onclick = () => { audio.resume(); v.play(); };
+navigator.mediaSession.setActionHandler("enterpictureinpicture", () => v.requestPictureInPicture());
+document.title = "ready";
+</script>' > "$out/site/switch.html"
+  # Windows' path, D:\a\…, is file:///D:/a/….
+  switch_file=$(native_path "$PWD/$out/site/switch.html" | sed 's|\\|/|g')
+  case "$switch_file" in /*) ;; *) switch_file="/$switch_file" ;; esac
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar for the switch's video"
+  send type "file://$switch_file"
+  send key return
+  expect "^browser: title [0-9]* ready\$" "the switch's video page didn't load"
+  w=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
+  send click $page_point
+  expect "^browser: title $w playing\$" "a click didn't play the switch's video"
+  shown "$v"
+  expect "^browser: title $w floating\$" "the video playing with sound didn't float as a switch hid it"
+  expect '^browser: handover mini player on screen ' \
+    "the core didn't time the Mini Player's first frame after the switch"
+  on_screen=$(grep '^browser: handover mini player on screen ' "$log" | tail -1 |
+    sed 's/.* +\([0-9.]*\) ms.*/\1/')
+  echo "the Mini Player was on screen $on_screen ms after the switch"
+  awk -v ms="$on_screen" 'BEGIN { exit !(ms <= 250) }' ||
+    fail "the Mini Player was on screen $on_screen ms after the switch, over twice Dia's 125 ms"
+else
+  echo "skip: the Mini Player's time from a switch: an engine older than its core doesn't time it (#2822)."
+fi
 exec 3>&-
 quit
 
