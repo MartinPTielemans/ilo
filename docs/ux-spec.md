@@ -204,7 +204,7 @@ Arc's other default keys (Arc 1.170.0, Settings › Shortcuts) come with their f
 Mouse (Dia and Chrome, P§ Keyboard shortcuts):
 
 - ⌘-click opens a background tab. ⇧⌘-click opens a foreground tab. ⇧-click opens the link in Peek (the owner, 2026-11-02, #1370), or with Peek off in a foreground tab, as the core opens every new window a page asks for (decision 3), where Chrome's opens a window. Middle-click opens a background tab.
-- ⌥-click opens a link in a split pane, as Arc's does. The owner's call (2026-10-30), over Chrome's download, which the link menu's Save Link As… keeps. ⌥⌘-click opens it in Little ilo (the owner's call, 2026-10-29, over Chrome's split), and in a private window in a pane, as its links stay private (Little Arc). Dia's ⌥⇧-click split isn't ours: ⌥⇧-click does what ⇧-click does.
+- ⌥-click opens a link in a split pane, as Arc's does. The owner's call (2026-10-30), over Chrome's download, which the link menu's Save Link As… keeps. ⌥⌘-click opens it in Little ilo (the owner's call, 2026-10-29, over Chrome's split), and in a private window in a pane, as its links stay private (Little Arc). Dia's ⌥⇧-click split isn't ours: ⌥⇧-click does what ⇧-click does, except on Linux. There, Shift+Alt-click does everything ⌥-click does: on a link, + New Tab, a sidebar row, a split row's ✕, and a row let go. Openbox and Xfce take every Alt-click for themselves but leave one with Shift (#2755). Shift-click still Peeks, and Settings › Shortcuts lists the click.
 - ⌘-click or middle-click on back, forward or reload opens the result in a background tab under the tab (Arc), at the page back or forward goes to, or the tab's own page for reload. It loads once it's shown, as ilo's background tabs do, where Chrome's loads at once.
 - Double-click a tab to rename it.
 
@@ -275,6 +275,15 @@ Arc 1.170.0's menu bar, with the items the browser has so far. An item runs the 
 ### Sidebar
 
 Arc's layout: the URL field and back, forward and reload live in the sidebar, and the card has no toolbar (decision 6). Dia's card toolbar, its top tab strip and the toolbar that hides on scroll are not ours.
+
+**Sidebar position** (ours, the owner's ask of 2026-11-10, #2375). Settings › Tabs & Sidebar › The sidebar starts with Sidebar position, Left (the default) or Right, and the command bar lists the one move that does something, Move Sidebar to the Right or Move Sidebar to the Left. It's this device's, not synced, applies to every window at once with no relaunch, and agents get no tool for it. On the right the window is the left's mirror: what this spec places from the left edge it places from the right, and what opens toward the page opens to the sidebar's left (the theme picker and its arrow, hover cards, the folder preview, the sidebar's tooltips). What isn't a plain mirror:
+
+- The window's buttons stay at the window's outer top corner: from the right edge, the buttons 13 in, the sidebar button with its glyph flipped, then back, forward and reload in their usual order, 15 from the page. The Mac's lights take their mirrored places, close at the corner; Windows' keep minimize, maximize, close, with close at the corner and Snap's hit test on maximize.
+- The hidden sidebar reveals from the right edge, at the same thresholds.
+- The Library takes the sidebar's side with its columns swapped, so the buttons stay at the edge. A swipe right on the first Space still opens it, as Spaces still read left to right: the pages move right with the fingers and the Library comes in from the page's side.
+- The extension side panel sits between the page and the sidebar, its resize edge still between it and the page.
+- Split view's panes keep their order, ⌥↩ still opens on the right, and Peek stays centred on the card.
+- The launch picture is of the column at the window's right and shows there; one taken on the other side isn't shown (Window › Several windows).
 
 **Header and URL field**
 
@@ -1252,7 +1261,7 @@ Arc calls its Picture in Picture the Mini Player. Its values are Dia's (Dia 1.50
 - At rest: the video only, with 6 pt circular corners, a 1 pt rim of white 0.17 inside the edge and a soft shadow. It appears ≈ 125 ms after the tab switch with no animation.
 - On hover: a black 0.35 scrim fades in over 200 ms, ease-in-out. Back-to-tab (28 × 28) and close (29 × 28) buttons sit 12 from the top and their sides, radius ≈ 6, white 0.09 (≈ 0.13 under the pointer). The origin shows in 13 pt, centred, baseline 30. Pause is two 7 × 42 capsules 10 apart. A 5 pt progress bar runs from 12 to width − 12, 9 above the bottom; the played part is white, the rest white ≈ 0.27.
 - Close fades it out in ≈ 100 ms and the video keeps playing in its tab. Back to tab fades it out in ≈ 70 ms.
-- Throw (Dia 1.53.0 bin): a release faster than 350 pt/s (or a last swipe delta over 6 pt) throws it to the screen corner within 45°. It lands 10 pt in, on a spring of 0.9 s / ζ 0.9 that starts at the throw velocity. A slow release stays where it is let go.
+- Throw (Dia 1.53.0 bin): a release faster than 350 pt/s (or a last move over 6 pt) throws it to the screen corner within 45° of the throw. It lands 10 pt in from the screen's visible frame, inside the menu bar and the Dock or taskbar, on a spring of 0.9 s / ζ 0.9 that starts at the throw velocity, on the display it's mostly on. With no corner that near, ours carries it on along the throw to the side it meets, as far in. A slow release stays where it is let go, but ours catches one within 40 pt of its place along a side, 10 pt in, and puts it there on the same spring, and near two sides in their corner (the owner's ask, #2099). A press stops the spring where it is. Linux's window manager or compositor moves it, as a title bar, and lets it go without the core hearing, so there it stays where it's let go; under Wayland no app places its own window. A call's floating page moves by its top as Chrome's, and stays where it's let go too.
 
 ### Agents UI
 

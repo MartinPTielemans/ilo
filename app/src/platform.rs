@@ -67,6 +67,7 @@ unsafe extern "C" {
         picture_width: f64,
         picture_height: f64,
         foot_top: f64,
+        right: bool,
     );
     pub fn host_screens(frames: *mut f64, count: usize) -> usize;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -86,6 +87,7 @@ unsafe extern "C" {
         ui_view: *mut c_void,
         profile_dir: *const c_char,
         width: f64,
+        right: bool,
     ) -> bool;
     #[cfg(target_os = "windows")]
     pub fn host_save_launch_pixels(

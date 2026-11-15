@@ -22,14 +22,14 @@ void host_centered(double width, double height, double* x, double* y);
 // Puts a window on screen at |x|, |y|, |width| by |height| in host_centered's terms, where the
 // first browser window will open, with the window's material and, unless |picture_width| is 0,
 // the sidebar's picture from |profile_dir| that a |picture_width| by |picture_height| window took
-// (host_save_launch_picture). Its part above |foot_top| points from the window's top shows at the
+// (host_save_launch_picture), at the window's left, or with |right| at its right. Its part above |foot_top| points from the window's top shows at the
 // window's top and the rest at its bottom, the room just above |foot_top| cropped or repeated to
 // fit (launch_picture.rs says when that draws the sidebar as the UI will). For the moment between
 // NSApp being made and the browser starting. With |maximized|, Windows' alone, it's maximized on
 // that frame's screen, as the first browser window will be (host_maximize_window), with no picture.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
                              double height, bool maximized, double picture_width,
-                             double picture_height, double foot_top);
+                             double picture_height, double foot_top, bool right);
 
 // The visible frames of the screens a window may open on, in host_centered's terms, as x, y,
 // width and height, four to a screen: the main display's first, or with BROWSER_DISPLAY=builtin
@@ -53,10 +53,10 @@ void host_close_launch_window(void);
 // the run loop starts.
 void host_watch_finished_launching(void (*finished)(void));
 
-// Keeps the first |width| points of |ui_view|'s window, its sidebar, in |profile_dir| for the next
-// launch's window, unless the window is hidden or full screen, and says whether it took it. The
-// file is written in the background.
-bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width);
+// Keeps the |width| points at the left of |ui_view|'s window, or with |right| at its right, its
+// sidebar, in |profile_dir| for the next launch's window, unless the window is hidden or full
+// screen, and says whether it took it. The file is written in the background.
+bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width, bool right);
 // Windows: the same, from the sidebar's pixels in the frame the UI last drew, |columns| by |rows|
 // top-down BGRA. A picture of the window would have Windows repaint its frame, where its theme
 // paints the caption under the UI, on screen too (#1262).

@@ -768,11 +768,11 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken.height
         );
     }
-    // A picture of the column on the left, from before the sidebar moved right, is none of this
+    // A picture of the column on one side, from before the sidebar moved, is none of this
     // window's (settings::set_sidebar_right).
     let right = settings::sidebar_right_kept();
     let picture =
-        taken.filter(|taken| !maximized && !right && launch_picture::shows(taken, width, height));
+        taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height, right));
     let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
         (taken.width, taken.height, taken.foot_top)
     });
@@ -787,6 +787,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken_width,
             taken_height,
             foot_top,
+            right,
         )
     };
     // check.sh reads this line.
@@ -1099,6 +1100,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         app_new_window: Some(app_new_window),
         ad_block_use: Some(ad_block_host::ad_block_use),
         ad_block_request: Some(ad_block_host::ad_block_request),
+        ad_block_response: Some(ad_block_host::ad_block_response),
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
         ..Default::default()
