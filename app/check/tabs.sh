@@ -455,6 +455,11 @@ expect '^browser: command recent-tab via page$' "⌃Tab with the page focused di
 switcher_row() {
   echo "$((765 / 2)) $((6 + 50 * $1 + 25))"
 }
+# Presses the switcher's key $1 with ⌃ still held: Ctrl off the Mac, where the driver's ctrl is Alt
+# but for Tab, and a key without Ctrl would let it go.
+held_key() {
+  if [ "$(uname)" = Darwin ]; then send key "$1" ctrl; else send key "$1" cmd; fi
+}
 # The number of tabs shown since the log's line $1.
 switches_since() {
   tail -n +"$(($1 + 1))" "$log" | grep -c '^browser: selected ' || true
@@ -473,9 +478,9 @@ expect '^browser: tab switcher shown$' "the switcher's window didn't show"
 ../tools/window-screenshot.sh "$pid" "$out/switcher-light.png" all || fail "no window to capture"
 send key tab ctrl
 expect "^browser: tab switcher selected $b\$" "⌃Tab with the switcher shown didn't select $b"
-send key right ctrl
+held_key right
 expect "^browser: tab switcher selected $a\$" "→ on the switcher's last row didn't wrap to $a"
-send key left ctrl
+held_key left
 expect "^browser: tab switcher selected $b\$" "← didn't go back to $b"
 send flags
 expect "^browser: selected $b in " "letting go of ⌃ on $b didn't show it"
@@ -492,11 +497,23 @@ expect "^browser: tab switcher lists $b $a $c selected $a\$" \
 ../tools/window-screenshot.sh "$pid" "$out/switcher-dark.png" all || fail "no window to capture"
 send key tab ctrl
 expect "^browser: tab switcher selected $c\$" "⌃Tab with the switcher shown didn't select $c"
-send key escape ctrl
-expect "^browser: tab switcher stays on $b\$" "Escape in the switcher didn't stay on $b"
-expect "^browser: selected $b in " "Escape in the switcher didn't go back to $b"
-expect '^browser: tab switcher hidden$' "Escape didn't close the switcher"
-send flags
+if windows; then
+  # Ctrl+Esc is the Start menu's on Windows, so it walks back to b and lets go, the same end.
+  echo "skip: Escape in the tab switcher on Windows, where Ctrl+Esc opens the Start menu"
+  held_key left
+  expect "^browser: tab switcher selected $a\$" "← didn't go back to $a"
+  held_key left
+  expect "^browser: tab switcher selected $b\$" "← didn't go back to $b"
+  send flags
+  expect "^browser: selected $b in " "letting go of ⌃ on $b didn't show it"
+  expect '^browser: tab switcher hidden$' "letting go of ⌃ didn't close the switcher"
+else
+  held_key escape
+  expect "^browser: tab switcher stays on $b\$" "Escape in the switcher didn't stay on $b"
+  expect "^browser: selected $b in " "Escape in the switcher didn't go back to $b"
+  expect '^browser: tab switcher hidden$' "Escape didn't close the switcher"
+  send flags
+fi
 send menu "$(cased 'Appearance › Automatic')"
 # A second ⌃Tab before the delay shows it at once, and the page stays.
 from=$(wc -l < "$log")
@@ -523,7 +540,7 @@ expect "^browser: tab switcher lists $a $c $b selected $b\$" \
   "⌃⇧Tab held didn't list $a, $c and $b with $b selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
 send key tab ctrl shift
 expect "^browser: tab switcher selected $c\$" "⌃⇧Tab with the switcher shown didn't select $c"
-send key left ctrl
+held_key left
 expect "^browser: tab switcher selected $a\$" "← didn't go back to $a"
 send flags
 expect "^browser: selected $a in " "letting go of ⌃ on $a didn't show it"

@@ -308,11 +308,11 @@ close() {
       away
       expect '^browser: tooltip hidden$' "$2: the pointer leaving Hide Sidebar left its tooltip"
       ;;
-    # Escape goes back to the pinned page the walk started from, and ⌃ goes up.
+    # ⌃ going up, as Ctrl+Esc is Windows' Start menu: it shows the row selected, and the walk
+    # shows the pinned page again.
     'tab switcher')
-      send key escape ctrl
-      expect '^browser: tab switcher hidden$' "$2: Escape didn't close the tab switcher"
       send flags
+      expect '^browser: tab switcher hidden$' "$2: letting go of Ctrl didn't close the tab switcher"
       ;;
     'hover card' | 'link target' | 'folder preview')
       send move $page_point
