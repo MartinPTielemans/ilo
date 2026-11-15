@@ -118,3 +118,117 @@ fn a_name_is_text_whatever_it_holds() {
         "<img src=x onerror=alert(1)> \u{202e}\u{0} ✓"
     );
 }
+
+/// The foot bar's line follows the mode's last step, in the mock's words: what to do, what the
+/// drop here would do, and what the thing's change did, naming things by the page's words or kind.
+#[test]
+fn the_foot_line_says_the_last_step() {
+    let named = |kind: &str, name: &str| Element {
+        kind: kind.into(),
+        name: name.into(),
+    };
+    let state = |step, change, before: Element, after: Element| State {
+        step,
+        change,
+        element: named("video", ""),
+        before,
+        after,
+        ..State::default()
+    };
+    let none = Element::default;
+    let (headline, photo) = (named("heading", "the headline"), named("figure", ""));
+    let free = if cfg!(target_os = "macos") {
+        "⌘"
+    } else {
+        "Ctrl"
+    };
+    let lines = [
+        (
+            State::default(),
+            "Point at what to move. ↑ ↓ pick the box around it or inside it.".to_owned(),
+        ),
+        (
+            state(
+                Step::Carrying,
+                Outcome::Settles,
+                headline.clone(),
+                photo.clone(),
+            ),
+            "Settles between the headline and the figure".into(),
+        ),
+        (
+            state(Step::Carrying, Outcome::Settles, none(), photo.clone()),
+            "Settles before the figure".into(),
+        ),
+        (
+            state(
+                Step::Carrying,
+                Outcome::Trades,
+                named("aside", "Trending"),
+                none(),
+            ),
+            "Trades places with Trending".into(),
+        ),
+        (
+            state(Step::Carrying, Outcome::Floats, none(), none()),
+            format!("{free} held: stays where you let go, over the page"),
+        ),
+        (
+            state(Step::Carrying, Outcome::None, none(), none()),
+            "Let go where it goes".into(),
+        ),
+        (
+            state(Step::Preview, Outcome::Settles, headline.clone(), none()),
+            "Shown as it would settle. Let go to keep it.".into(),
+        ),
+        (
+            State {
+                refused: Refused::NotShown,
+                ..state(Step::Carrying, Outcome::Refused, none(), none())
+            },
+            "The page doesn't show it there".into(),
+        ),
+        (
+            State {
+                refused: Refused::DoesntFit,
+                ..state(Step::Preview, Outcome::Refused, none(), none())
+            },
+            "Doesn't fit there".into(),
+        ),
+        (
+            state(
+                Step::Selected,
+                Outcome::Trades,
+                named("aside", "Trending"),
+                none(),
+            ),
+            "Traded the video with Trending".into(),
+        ),
+        (
+            state(Step::Selected, Outcome::Settles, none(), headline.clone()),
+            "Moved the video before the headline".into(),
+        ),
+        (
+            State {
+                element: named("complementary", "More like this"),
+                on_screen: true,
+                ..state(Step::Selected, Outcome::Floats, none(), none())
+            },
+            "More like this stays on screen, over the page".into(),
+        ),
+        (
+            State {
+                refused: Refused::Covered,
+                ..state(Step::Selected, Outcome::Floats, none(), none())
+            },
+            "The video scrolls with the page, over it. The page may draw over it.".into(),
+        ),
+        (
+            state(Step::Selected, Outcome::None, none(), none()),
+            "The video selected. ↑ ↓ pick the box around it or inside it.".into(),
+        ),
+    ];
+    for (state, line) in lines {
+        assert_eq!(foot_line(&state), line, "{state:?}");
+    }
+}
