@@ -15,7 +15,7 @@
 # There POINTER=1 draws the display's pointer in, where the driver's warp put it, with the cursor
 # the window under it shows.
 # On the Mac, with "floating", it takes only the process's largest window above the normal level,
-# such as Picture in Picture's, on its own, its corners see-through.
+# such as Picture in Picture's, on its own.
 # Usage: tools/window-screenshot.sh <pid> <output.png> [all | floating]
 set -e
 { [ $# -eq 2 ] || [ $# -eq 3 ] && [ "${3:-all}" = all ]; } ||
@@ -390,8 +390,13 @@ if floating {
   guard let window = windows.filter({ $0.windowLayer > 0 })
     .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
   else { fail("process \(pid) has no floating window on screen") }
-  let filter = SCContentFilter(desktopIndependentWindow: window)
+  guard let display = content.displays.first(where: { $0.frame.intersects(window.frame) })
+  else { fail("no display shows the floating window") }
+  // A display's filter, as below: one for the window alone asserts in a script, which has no
+  // window server session of its own.
+  let filter = SCContentFilter(display: display, including: [window])
   let config = SCStreamConfiguration()
+  config.sourceRect = window.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
   config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
   config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
   config.showsCursor = false
