@@ -900,14 +900,31 @@ crash_launch() {
     fail "the Extensions menu didn't list Check Crash: $(grep '^browser: extensions menu' "$log")"
   crashing_id=$(grep -m1 "^browser: extensions menu [a-p]*\$" "$log" | cut -d' ' -f4)
 }
+# Probe: what the crashed renderer waits on.
+crash_probe() {
+  {
+    echo "== crash $1"
+    echo "core_pattern $(cat /proc/sys/kernel/core_pattern) pipe_limit $(cat /proc/sys/kernel/core_pipe_limit) ulimit-c $(ulimit -c) yama $(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null)"
+    ps -eo pid,ppid,stat,wchan:32,etimes,args | grep -E 'apport|coredump|crashpad|type=renderer|type=zygote' | grep -v grep | cut -c1-260
+    r=$(grep 'Intentionally crashing' "$log" | tail -1 | sed 's/^\[\([0-9]*\):.*/\1/')
+    echo "renderer $r"
+    for p in $(pgrep -f 'type=renderer'); do
+      echo "-- $p $(grep -E '^(Name|State|Tgid|NSpid|TracerPid|SigPnd|ShdPnd|SigBlk|SigCgt)' /proc/$p/status 2>/dev/null | tr '\t\n' '  ')"
+      for t in /proc/$p/task/*; do
+        echo "   $(basename $t) $(cat $t/comm 2>/dev/null) $(grep -E '^State' $t/status 2>/dev/null | tr '\t' ' ') wchan $(cat $t/wchan 2>/dev/null) sys $(cat $t/syscall 2>/dev/null | cut -d' ' -f1)"
+      done
+    done
+  } >> "$out/crash-probe.txt" 2>&1
+}
 # The extension's page in the tab shown, and chrome://crash in it, the extension's crash $1. Fails
 # if its process ends and the core counts no crash, and returns 1 if it doesn't end in 30 s.
 crash_once() {
   go_from_bar "chrome-extension://$crashing_id/page.html"
   expect '^browser: title [0-9]* crash page$' "Check Crash's page didn't load"
   go_from_bar "chrome://crash/"
-  for _ in $(seq 300); do
+  for i in $(seq 300); do
     logged "browser: extension $crashing_id crashed, $1 times\$" && return 0
+    [ $((i % 50)) = 10 ] && crash_probe "$1 at $i"
     sleep 0.1
   done
   logged 'browser: tab [0-9]* page gone' &&
