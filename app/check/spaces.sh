@@ -1001,6 +1001,16 @@ New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$"
   expect '^browser: menu drawn ' "the Space's menu from a $how on the sidebar out didn't come on screen"
   if [ $how = press ]; then send release $reveal_edit; fi
   ../tools/window-screenshot.sh "$pid" "$out/space-edit-reveal-$how.png" || fail "no window to capture"
+  # In front of the panel, not under it with its left cut off (#2989): by Windows' order of the
+  # windows, front first, the driver's stack.
+  if windows; then
+    send stack
+    stack=$(grep '^browser: stack ' "$log" | tail -1 | cut -c16-)
+    case $stack in
+      *menu*reveal*) ;;
+      *) fail "the Space's menu from a $how on the sidebar out isn't in front of the sidebar's panel, front first: $stack" ;;
+    esac
+  fi
   none_since '^browser: menu c' || fail "the Space's menu from a $how on the sidebar out closed"
   none_since '^browser: reveal hidden$' || fail "the Space's menu from a $how sent the sidebar out away"
   send dismiss
