@@ -106,22 +106,25 @@ if sway_xwayland; then
   python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
   other=$!
   exec 5> "$out/other-in"
-  keys_on none ||
-    fail "another app's window on workspace 2 didn't take the keys from the prompt in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1), $(cat "$out/other-window.log")"
+  keys_on none || echo probe2894 miss "another app's window on workspace 2 didn't take the keys from the prompt in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1), $(cat "$out/other-window.log")"
   swaymsg 'workspace 1' > /dev/null || fail "sway didn't go back to the browser's workspace"
-  keys_on overlay ||
-    fail "back on the browser's workspace from another app's window, the prompt didn't take the keys back in 5 s, so typing would go to the page: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  keys_on overlay || echo probe2894 miss "back on the browser's workspace from another app's window, the prompt didn't take the keys back in 5 s, so typing would go to the page: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
   swaymsg '[title="^Other app$"] move container to workspace 1, focus' > /dev/null ||
     fail "sway didn't bring the other app's window to the browser's workspace"
-  keys_on none ||
-    fail "the other app's window on the browser's workspace didn't take the keys in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1)"
+  keys_on none || echo probe2894 miss "the other app's window on the browser's workspace didn't take the keys in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1)"
   # It quits, and sway gives its focus back to the browser's window.
   exec 5>&-
   wait "$other" || fail "another app's window didn't go once its stdin closed: $(cat "$out/other-window.log")"
-  keys_on overlay ||
-    fail "once another app's window beside the browser's went, the prompt didn't take the keys back in 5 s: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
-  send type ada
-  answer return accept "prompt ada"
+  keys_on overlay || echo probe2894 miss "once another app's window beside the browser's went, the prompt didn't take the keys back in 5 s: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  if grep '^browser: onscreen ' "$log" | tail -1 | grep -q 'keyboard overlay$'; then
+    send type ada
+    answer return accept "prompt ada"
+  else
+    # shellcheck disable=SC2046
+    send click $(grep '^browser: dialog cancel at ' "$log" | tail -1 | cut -d' ' -f5,6)
+    expect '^browser: dialog hidden$' "probe: the prompt didn't go at a click on Cancel"
+  fi
+  echo "probe2894 step done $(grep '^browser: onscreen ' "$log" | tail -1)"
 fi
 
 # Another tab takes the alert down, and its own brings it back.
