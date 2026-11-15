@@ -8,8 +8,9 @@
 # welcome with the command bar up and a line under it. The default browser's step shows only while
 # ilo isn't the default, and is skipped everywhere but a Linux CI VM, where its button makes ilo
 # the default for a moment, so the run never changes a desk's. The opt-ins' shows always, with
-# the agents' switch, as every build has their server, and the dark pass turns it on in its new
-# profile and sees the server start. The account's comes between the colour and the opt-ins while
+# the agents' switch, as every build has their server, and the daily count's, off, as the run
+# names an endpoint; the dark pass turns the agents' on in its new profile and sees their server
+# start. The account's comes between the colour and the opt-ins while
 # the build names a sync server (branding/sync-server), and Esc leaves it signed out: the run never
 # signs in to the hosted server, as sync-account signs in on a server of its own. Help › Welcome to
 # ilo plays it again, in the window while it shows no page and in a new window while it shows one. A
@@ -68,8 +69,10 @@ launch_new() {
   log="$out/onboarding-$1.log"
   step=0
   rm -f "$saved" "$profile_dir/Account"
+  # A count endpoint nothing listens on, so the opt-ins offer the count's switch, as the prod
+  # build's do, while the switch stays off and nothing is sent (count.sh turns it on).
   BROWSER_IMPORT_HOME="$import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=$1 \
-    "$browser" < "$out/drive" > "$log" 2>&1 &
+    "$browser" --daily-count-url=http://127.0.0.1:9/v1/daily < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await '^browser: onboarding step intro settled$' || fail "$1: the intro didn't draw"
@@ -264,14 +267,17 @@ if [ -n "$account" ]; then
 fi
 expect '^browser: onboarding step opt-ins settled$' "dark: the opt-ins step didn't come"
 capture_step dark-opt-ins
+expect '^browser: onboarding daily-count at ' \
+  "dark: the opt-ins step didn't draw the count's switch, though the run names an endpoint"
 # The agents' row takes a click on its switch, where the app says it's drawn once the step has
-# come, the second row of two with a crash collector and the only one without (#1286).
+# come, the last row of three with a crash collector, else of two (#1286).
 expect '^browser: onboarding agents at ' "dark: the opt-ins step didn't draw the agents' switch"
 send click $(grep '^browser: onboarding agents at ' "$log" | tail -1 | cut -d' ' -f5-6)
 expect '^browser: onboarding agents on$' "dark: a click on the agents' row didn't turn them on"
 expect '^browser: agents server on ' "dark: the agents' switch didn't start their server"
 send key escape
 expect '^browser: onboarding left opt-ins via escape$' "dark: Esc didn't leave the opt-ins step"
+grep -q '^browser: onboarding daily-count set ' "$log" && fail "dark: Esc set the count, left off"
 expect '^browser: onboarding done$' "dark: the flow didn't end after its last step"
 expect '^browser: command bar shown$' "dark: the command bar didn't come up after the flow"
 capture_step dark-in

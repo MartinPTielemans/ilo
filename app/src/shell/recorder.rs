@@ -97,6 +97,7 @@ pub(super) struct Recorder {
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
+    pub(super) daily_count: Cell<Option<bool>>,
     /// The user turned off ⌥ bringing the hidden sidebar out.
     pub(super) option_off: Cell<bool>,
     /// The user turned link previews off.
@@ -1885,6 +1886,15 @@ impl Browser for Recorder {
         self.read_shell(cx);
         self.agents.set(Some(on));
         self.record(format!("agents {on}"))
+    }
+
+    fn daily_count(&self, _: &App) -> Option<bool> {
+        self.daily_count.get()
+    }
+
+    fn set_daily_count(&self, on: bool, _: &mut App) {
+        self.daily_count.set(Some(on));
+        self.record(format!("daily count {on}"))
     }
 
     fn close_window(&self, _: &mut App) {

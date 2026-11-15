@@ -1960,6 +1960,14 @@ impl Browser for Engine {
         }
     }
 
+    fn daily_count(&self, _: &App) -> Option<bool> {
+        crate::daily_count_host::named().then(crate::daily_count_host::on)
+    }
+
+    fn set_daily_count(&self, on: bool, cx: &mut App) {
+        crate::daily_count_host::set_on(on, cx);
+    }
+
     fn new_window(&self, cx: &mut App) {
         let id = self.window;
         let asked = Instant::now();

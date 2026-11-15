@@ -982,6 +982,12 @@ pub trait Browser {
         None
     }
     fn set_agents(&self, _on: bool, _cx: &mut App) {}
+    /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
+    /// names no server for it.
+    fn daily_count(&self, _cx: &App) -> Option<bool> {
+        None
+    }
+    fn set_daily_count(&self, _on: bool, _cx: &mut App) {}
     /// Opens a private window in the shown Space's profile's off-the-record session, after this
     /// one's draw.
     fn new_private_window(&self, cx: &mut App);
