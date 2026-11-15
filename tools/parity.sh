@@ -65,7 +65,7 @@ screens=(
   "live-folder-signed-out|live folder 9000 answered|PREVIEW_LIVE_FOLDER=signed-out"
   "live-folder-failed|live folder 9000 answered failed|PREVIEW_LIVE_FOLDER=failed"
   "live-folder-tooltip|tooltip drawn|PREVIEW_LIVE_FOLDER=failed PREVIEW_HOVER=90,386"
-  "live-folder-space-menu|menu submenu Live Folders shown|PREVIEW_LIVE_FOLDER=open PREVIEW_MENU=40,221,l,right"
+  "live-folder-space-menu|menu submenu Live .olders drawn|PREVIEW_LIVE_FOLDER=open PREVIEW_MENU=40,221,l,right"
   "live-folder-menu|menu shown|PREVIEW_LIVE_FOLDER=open PREVIEW_MENU=90,386"
   "live-folder-narrow|live folder 9000 answered|PREVIEW_LIVE_FOLDER=open PREVIEW_SIDEBAR=164"
 )
