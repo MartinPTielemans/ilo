@@ -283,6 +283,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
 #if BUILDFLAG(IS_LINUX)
     platform::FloatPictureInPictureBubbles();
 #endif
+    system_engine::MarkNewDataFolder();
     if (Profile* profile = StartProfile()) {
       UseProfile(profile);
     }

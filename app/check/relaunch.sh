@@ -308,6 +308,13 @@ if windows; then
 fi
 exec 3>&-
 quit
+# The first launch, quit soon after its page loaded, marked its new data folder as having no old
+# Safari's-engine stores, so no later launch lists or sweeps them (#2889). Only the Mac logs these.
+for later in "$out"/relaunch-*.log; do
+  [ "$later" = "$out/relaunch-a.log" ] && continue
+  ! grep -q "^browser: system engine loaded for listing the profiles' stores\|^browser: old system stores swept\$" "$later" ||
+    fail "$(basename "$later") swept old stores, which a data folder's first launch marks it as having none of"
+done
 
-echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized Window: $out/relaunch-two.png"
+echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized A data folder's first launch, however short, marks it as having no old Safari's-engine stores, so no later launch sweeps them. Window: $out/relaunch-two.png"
 echo "  Launch with one window: $one; with two: $two"

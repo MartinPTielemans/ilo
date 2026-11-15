@@ -82,6 +82,9 @@ void DeleteStore(const base::FilePath& path, base::OnceClosure then);
 // Registers the data folder's Local State prefs: the list of stores its profiles were given, and
 // whether the stores an old version gave were swept.
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
+// Marks a data folder whose Local State this launch made as having no old stores, at once: a first
+// launch quit before startup ends would otherwise leave it to sweep a set-aside folder's (#2889).
+void MarkNewDataFolder();
 // After startup, deletes the stores given to profiles of the data folder that no profile names
 // any more, as when a profile's folder was removed by hand. The system's engine is only loaded if
 // there's one to delete, or once per folder to sweep the stores a version before #2664 gave
