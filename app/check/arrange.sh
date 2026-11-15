@@ -22,10 +22,10 @@
 
 serve
 # The page says in its title where its things are, each time that changes: the column's and the
-# side's in their order down the page, those hidden, those floating with their position, where the
-# last click before the mode landed in the page, and the column as its first frame drew it. Six
-# things: four sections in the column, 120 tall and 20 apart from 40 down, the last too wide for
-# the side, which holds two boxes, from 600 across.
+# side's in their order down the page, those hidden, those floating off both with their position,
+# where the last click before the mode landed in the page, and the column as its first frame drew
+# it. Six things: four sections in the column, 120 tall and 20 apart from 40 down, the last too
+# wide for the side, which holds two boxes, from 600 across.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
 body { margin: 0; height: 2400px; font: 16px sans-serif; background: rgb(243, 245, 246) }
@@ -48,12 +48,15 @@ section, aside { height: 120px; background: rgb(217, 226, 230) }
 const ids = ["a", "b", "c", "w", "s", "n"];
 const things = () => ids.map((id) => document.getElementById(id));
 const shown = () => things().filter((thing) => thing.getClientRects().length);
-const floats = (thing) => /fixed|absolute/.test(getComputedStyle(thing).position);
+// A thing is in the column or the side when it is drawn on its track, as a settled or traded one
+// is, though the mode takes it out of flow to draw it there; else it floats.
+const left = (each) => each.getBoundingClientRect().left;
+const on = (thing, track) => Math.abs(left(thing) - left(document.getElementById(track))) < 1;
+const floats = (thing) => !on(thing, "col") && !on(thing, "side");
 const down = (list) =>
   list.sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top)
     .map((thing) => thing.id).join(",") || "-";
-const column = (left) => down(shown().filter((thing) => !floats(thing) &&
-  (thing.getBoundingClientRect().left < 560) === left));
+const column = (main) => down(shown().filter((thing) => on(thing, main ? "col" : "side")));
 let at = "-";
 let first = "-";
 let said;
