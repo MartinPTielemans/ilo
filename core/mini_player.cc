@@ -4,14 +4,18 @@
 #include <cmath>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "base/functional/bind.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "browser_core/hooks.h"
@@ -81,6 +85,28 @@ base::WeakPtr<views::Widget> g_made;
 
 int g_shows = 0;
 
+#if BUILDFLAG(IS_MAC)
+// The window the Mini Player took the keyboard from, for the rest of the task it took it in: AppKit
+// makes the Mini Player key as a press on it comes, in the same task as the press reaches it.
+bc_id g_took_from = 0;
+// The window a press that made the Mini Player key gives the keyboard back to as it ends.
+bc_id g_give_back_to = 0;
+
+// As the Mac's own floating video, a press on the Mini Player, a drag or a click on its buttons,
+// leaves the keyboard where it was (#2896): the window that had it has it back as the press ends,
+// while the app is still active, which the Mini Player's still having it says. One made key
+// another way, by window cycling or VoiceOver, keeps it through a press, for its controls' keys.
+void GiveKeyboardBack(views::Widget* window) {
+  Window* to = Window::FromId(std::exchange(g_give_back_to, 0));
+  if (!to || !to->widget() || !window->IsActive()) {
+    return;
+  }
+  // check.sh reads this line.
+  LOG(ERROR) << "browser: mini player pressed gave the keyboard back";
+  to->widget()->Activate();
+}
+#endif
+
 // Tells the windows as the Mini Player takes the keyboard, which on Linux can come after the window
 // that let it go asked whether it had (MiniPlayerHasKeyboard).
 class KeyboardWatch : public views::WidgetObserver {
@@ -91,9 +117,17 @@ class KeyboardWatch : public views::WidgetObserver {
   }
 
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
-    if (active) {
-      Window::MiniPlayerTookKeyboard();
+    if (!active) {
+      return;
     }
+#if BUILDFLAG(IS_MAC)
+    Window* from = Window::MiniPlayerTookKeyboard();
+    g_took_from = from ? from->id() : 0;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce([] { g_took_from = 0; }));
+#else
+    Window::MiniPlayerTookKeyboard();
+#endif
   }
 
   void OnWidgetDestroying(views::Widget* widget) override { observation_.Reset(); }
@@ -394,6 +428,9 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
       break;
     case ui::EventType::kMousePressed: {
       g_pressed.reset();
+#if BUILDFLAG(IS_MAC)
+      g_give_back_to = std::exchange(g_took_from, 0);
+#endif
       const ui::MouseEvent* mouse = event->AsMouseEvent();
       if (!mouse->IsOnlyLeftMouseButton()) {
         return false;
@@ -438,6 +475,9 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
         // The loop returns as the button comes up.
         if (moved) {
           LetGo(moved.get(), watch, base::TimeTicks::Now());
+#if BUILDFLAG(IS_MAC)
+          GiveKeyboardBack(moved.get());
+#endif
         }
       }
 #endif
@@ -445,6 +485,9 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
     }
     case ui::EventType::kMouseReleased:
       g_pressed.reset();
+#if BUILDFLAG(IS_MAC)
+      GiveKeyboardBack(window);
+#endif
       return false;
     default:
       return false;

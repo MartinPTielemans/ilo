@@ -601,10 +601,15 @@ Window* Window::Showing(bc_id tab) {
 }
 
 // static
-void Window::MiniPlayerTookKeyboard() {
+Window* Window::MiniPlayerTookKeyboard() {
+  Window* from = Order().empty() ? nullptr : FromId(Order().front());
+  if (from && from->left_) {
+    from = nullptr;
+  }
   for (auto& [id, window] : Windows()) {
     window->left_ = false;
   }
+  return from;
 }
 
 // static

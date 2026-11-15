@@ -1067,6 +1067,43 @@ if [ "$(uname)" = Darwin ]; then
     ;;
   esac
 fi
+# A press on the Mini Player leaves the keyboard where it was, as the Mac's own floating video does
+# (#2896): one made key another way, as VoiceOver makes it, keeps it through a press, for its
+# controls' keys, and a click on its buttons that made it key gives the window the keyboard back,
+# so a key then reaches the page. The Mac's alone: Windows and Linux give a window the click that
+# activates it, so a click in the page after a press on the Mini Player isn't lost there.
+if [ "$(uname)" = Darwin ]; then
+  post rightclick $page_point
+  expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
+    "the video's menu had no Picture in Picture for the Mini Player's keys"
+  send choose "$(cased 'Picture in Picture')"
+  expect "^browser: title $v floating\$" "the video didn't float for the Mini Player's keys"
+  px=0 py=0 pw=0 ph=0
+  send pip
+  mini_player_at "w > 0" "the floating video had no Mini Player for its keys"
+  send pip key
+  [ "$key" != BrowserCoreNSWindow ] && [ "$key" != none ] ||
+    fail "the Mini Player didn't take the keyboard as VoiceOver gives it, which stayed in $key"
+  floating_key=$key
+  pressed=$step
+  send pip press $((pw / 8)) $((ph / 2))
+  send pip release $((pw / 8)) $((ph / 2))
+  [ "$key" = "$floating_key" ] ||
+    fail "a press on the Mini Player that had the keyboard gave it to $key"
+  logged 'browser: mini player pressed gave the keyboard back$' "$pressed" &&
+    fail "a press on the Mini Player that had the keyboard gave it back"
+  send window 1
+  [ "$key" = BrowserCoreNSWindow ] || fail "the video's window didn't take the keyboard: $key"
+  # Its play button, in its middle.
+  pressed=$step
+  send pip press $((pw / 2)) $((ph / 2))
+  send pip release $((pw / 2)) $((ph / 2))
+  expect 'browser: mini player pressed gave the keyboard back$' \
+    "a click on the Mini Player's play button didn't give the keyboard back" "$pressed"
+  send key x
+  expect "^browser: title $v landed\$" \
+    "a key after a click on the Mini Player's play button didn't reach the page"
+fi
 # The same with a menu open as the user goes to another app: the menu closes as the app's window
 # takes the keyboard, and coming back puts the Mini Player back (#1614). On X11, as in mcp.sh, a
 # window of another client's takes it from xdotool, and ilo's window takes it back as the driver

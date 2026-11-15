@@ -30,6 +30,7 @@
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -201,7 +202,24 @@ void MarkOldStoresSwept() {
   LocalState().CommitPendingWrite();
 }
 
+// Whether the user has quit. No step of a sweep starts then, and none marks the folder: a sweep
+// cut short is the next launch's to finish, which is where one the quit stopped already ends up.
+bool Quitting() {
+  return browser_shutdown::IsTryingToQuit() || browser_shutdown::HasShutdownStarted();
+}
+
+// The data folder's step for the stores a version before #2664 gave its profiles.
+OldStores OldStoresStep() {
+  PrefService& local_state = LocalState();
+  const bool created = local_state.GetInitializationStatus() ==
+                       PrefService::INITIALIZATION_STATUS_CREATED_NEW_PREF_STORE;
+  return OldStoresFor(created, local_state.GetBoolean(kOldStoresSweptPref));
+}
+
 void OldStoresDeleted(std::vector<bool> deleted) {
+  if (Quitting()) {
+    return;
+  }
   // One that failed stays unmarked, and is tried again at the next launch, never sooner.
   if (std::ranges::all_of(deleted, [](bool each) { return each; })) {
     MarkOldStoresSwept();
@@ -215,7 +233,7 @@ void DeleteOldStores(const std::vector<std::string>& listed,
                      int profiles_created,
                      OldStoresOnDisk disk) {
   ProfileManager* manager = g_browser_process->profile_manager();
-  if (!manager) {
+  if (!manager || Quitting()) {
     return;
   }
   NameLoadedStores(*manager, disk.named);
@@ -235,20 +253,13 @@ void DeleteOldStores(const std::vector<std::string>& listed,
 }
 
 // Deletes, once per data folder, the stores a version before #2664 gave profiles that are gone,
-// whose ids came from their paths (#2701). A new folder never had one, so it's only marked.
+// whose ids came from their paths (#2701). A new folder never had one, and MarkNewDataFolder has
+// marked it.
 void SweepOldStores() {
-  PrefService& local_state = LocalState();
-  const bool created = local_state.GetInitializationStatus() ==
-                       PrefService::INITIALIZATION_STATUS_CREATED_NEW_PREF_STORE;
-  switch (OldStoresFor(created, local_state.GetBoolean(kOldStoresSweptPref))) {
-    case OldStores::kNothing:
-      return;
-    case OldStores::kMark:
-      MarkOldStoresSwept();
-      return;
-    case OldStores::kSweep:
-      break;
+  if (OldStoresStep() != OldStores::kSweep) {
+    return;
   }
+  PrefService& local_state = LocalState();
   const base::FilePath folder = DataFolder();
   const int profiles_created = local_state.GetInteger(prefs::kProfilesNumCreated);
   platform::SystemPage::ListStores(base::BindOnce(
@@ -266,7 +277,7 @@ void SweepOldStores() {
 // version gave.
 void Sweep(std::set<std::string> named) {
   ProfileManager* manager = g_browser_process->profile_manager();
-  if (!manager) {
+  if (!manager || Quitting()) {
     return;
   }
   NameLoadedStores(*manager, named);
@@ -847,16 +858,25 @@ void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kOldStoresSweptPref, false);
 }
 
+void MarkNewDataFolder() {
+  // On every system, its engine there or not: a folder this version made has no old store, and the
+  // mark holds once the system has the engine.
+  if (OldStoresStep() == OldStores::kMark) {
+    MarkOldStoresSwept();
+  }
+}
+
 void SweepStores() {
   if (!Available()) {
     return;
   }
   // Best effort, behind the work launch queued, and off the UI thread for the disk, so a launch
-  // never waits for it.
+  // never waits for it. Chromium holds best-effort work until its startup ends, which can be as
+  // the user quits.
   content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
       ->PostTask(FROM_HERE, base::BindOnce([] {
                    const base::FilePath folder = DataFolder();
-                   if (folder.empty()) {
+                   if (folder.empty() || Quitting()) {
                      return;
                    }
                    base::ThreadPool::PostTaskAndReplyWithResult(

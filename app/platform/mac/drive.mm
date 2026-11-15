@@ -225,6 +225,8 @@
 //                                         points from its top-left corner as it was at the press
 //   pip drag <x> <y> <dx> <dy> <ms>       presses there, moves by (dx, dy) in <ms> at 60 moves a
 //                                         second, as a hand does, and lets go a sixtieth after
+//   pip key                               makes the Mini Player key with no press, as VoiceOver
+//                                         does
 //   pair <tab> pin|confirm|passkey        a Bluetooth device <tab>'s page pairs with asks for its
 //                                         PIN, whether to pair, or whether its passkey matches, as
 //                                         bc_tab_pair_for_testing
@@ -1447,6 +1449,11 @@ bool Run(const std::string& line, void (^done)(void)) {
     std::string step;
     if (!(words >> step)) {
       LogPip(pip);
+      done();
+      return true;
+    }
+    if (step == "key") {
+      [pip makeKeyWindow];
       done();
       return true;
     }
