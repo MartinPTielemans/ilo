@@ -30,7 +30,7 @@ serve
 # Four things on the page: one at its top edge, one at its bottom edge, one at its right edge, and
 # Outer, a tenth of the page in, around Inner, so a resize moves them, and a text field under Outer.
 # The title says the look it's shown in, the page's size, whether Inner shows, the last key the page
-# saw, the field's text, and where a press landed.
+# saw, the field's text, the engine it's in, and where a press landed.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
 body { margin: 0; font: 16px sans-serif; background: rgb(243, 245, 246) }
@@ -56,7 +56,8 @@ addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," 
 setInterval(() => {
   const shows = getComputedStyle(inner).display == "none" ? "hidden" : "shown";
   const scheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  const now = "scheme " + scheme + " view " + innerWidth + "x" + innerHeight + " inner " + shows + " key " + key + " field " + (field.value || "-") + " at " + at;
+  const now = "scheme " + scheme + " view " + innerWidth + "x" + innerHeight + " inner " + shows + " key " + key + " field " + (field.value || "-") +
+    " engine " + (/Chrome\//.test(navigator.userAgent) ? "chromium" : "safari") + " at " + at;
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/mini-bar.html"
@@ -78,7 +79,7 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 await "^browser: boost shown $host " || fail "the app didn't give the core the site's Boost"
-await '^browser: title [0-9]* scheme [a-z]* view [0-9]*x[0-9]* inner shown key - field - at -$' || fail "the fixture page didn't draw"
+await '^browser: title [0-9]* scheme [a-z]* view [0-9]*x[0-9]* inner shown key - field - engine chromium at -$' || fail "the fixture page didn't draw"
 tab=$(grep '^browser: title [0-9]* scheme ' "$log" | tail -1 | cut -d' ' -f3)
 said() { grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f4-; }
 # Waits for the page to say $1, as a pattern over its title, and fails with $2.
@@ -338,10 +339,10 @@ if [ "$(uname)" = Darwin ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 1
   pid=$!
   exec 3> "$out/drive"
   await_load
-  await '^browser: system engine [0-9]* on$' || fail "the streaming host's page didn't open in Safari's engine"
-  tab=$(sed -n 's/^browser: system engine \([0-9]*\) on$/\1/p' "$log" | head -1)
-  await "^browser: title $tab scheme [a-z]* view [0-9]*x[0-9]* inner shown key - field - at -\$" ||
-    fail "the fixture page didn't draw in Safari's engine"
+  await '^browser: title [0-9]* scheme [a-z]* view [0-9]*x[0-9]* inner shown key - field - engine [a-z]* at -$' ||
+    fail "the fixture page didn't draw with the streaming host"
+  grep -q ' engine chromium at -$' "$log" && fail "the streaming host's page opened in Chromium, not Safari's engine"
+  tab=$(grep '^browser: title [0-9]* scheme ' "$log" | tail -1 | cut -d' ' -f3)
   bar_command edit-boost "Edit Boost" "edit boost"
   expect "^browser: boost card $tab offers no Arrange in Safari's engine\$" \
     "the Boost's card offered Arrange over Safari's engine's page"
