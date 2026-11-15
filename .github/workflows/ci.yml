@@ -52,6 +52,8 @@ jobs:
             tools/core-same-test.sh
             tools/nightly-commit.sh
             tools/nightly-commit-test.sh
+            tools/engine-fetch-test.sh
+            engine/fetch.sh
             core/public/browser_core.h
           sparse-checkout-cone-mode: false
 
@@ -59,6 +61,8 @@ jobs:
       - run: tools/core-same-test.sh
       # And the night's commit, which the engines it's paired with decide (#2697).
       - run: tools/nightly-commit-test.sh
+      # And the engine a checkout takes, the batch's at its landing (#2913).
+      - run: tools/engine-fetch-test.sh
 
       - id: detect
         uses: ./.github/actions/ci-changes
