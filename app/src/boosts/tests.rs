@@ -39,7 +39,7 @@ fn change(site: &str, css: &str) -> Change {
     Change {
         profile: 1,
         site: site.into(),
-        css: css.into(),
+        shows: Shows::Css(css.into()),
     }
 }
 
@@ -73,7 +73,14 @@ fn a_site_is_its_host_without_www_on_http_pages_only() {
 fn zap_adds_a_rule_undo_takes_the_last_back_and_the_summary_counts_them() {
     let css = "/* mine */\nbody { color: red; }\n";
     let zapped = add_zap(&add_zap(css, "#ad"), "main > aside:nth-of-type(2)");
-    assert_eq!(Summary::of(&zapped), Summary { zaps: 2, lines: 1 });
+    assert_eq!(
+        Summary::of(&zapped),
+        Summary {
+            zaps: 2,
+            lines: 1,
+            arranges: 0
+        }
+    );
     assert!(
         zapped.ends_with("main > aside:nth-of-type(2) { display: none !important; } /* Zap */\n")
     );
@@ -86,12 +93,28 @@ fn zap_adds_a_rule_undo_takes_the_last_back_and_the_summary_counts_them() {
 
 #[test]
 fn a_boost_says_what_it_does() {
-    let say = |zaps, lines| Summary { zaps, lines }.describe();
-    assert_eq!(say(3, 12), "Hides 3 things and adds 12 lines of your CSS.");
-    assert_eq!(say(1, 0), "Hides 1 thing.");
-    assert_eq!(say(0, 1), "Adds 1 line of your CSS.");
+    let say = |zaps, arranges, lines| {
+        Summary {
+            zaps,
+            lines,
+            arranges,
+        }
+        .describe()
+    };
     assert_eq!(
-        say(0, 0),
+        say(3, 0, 12),
+        "Hides 3 things and adds 12 lines of your CSS."
+    );
+    assert_eq!(
+        say(2, 4, 12),
+        "Hides 2 things, arranges 4 and adds 12 lines of your CSS."
+    );
+    assert_eq!(say(1, 0, 0), "Hides 1 thing.");
+    assert_eq!(say(0, 1, 0), "Arranges 1.");
+    assert_eq!(say(0, 2, 1), "Arranges 2 and adds 1 line of your CSS.");
+    assert_eq!(say(0, 0, 1), "Adds 1 line of your CSS.");
+    assert_eq!(
+        say(0, 0, 0),
         "Empty. Zap what you don't want to see, or add your own CSS."
     );
 }
@@ -294,4 +317,151 @@ fn the_watcher_tells_of_a_write_in_the_folder() {
         }
     }
     assert!(heard, "no notice of a write in {}", boosts.display());
+}
+
+fn arranged(site: &str, bytes: &str) -> Change {
+    Change {
+        profile: 1,
+        site: site.into(),
+        shows: Shows::Arrangement(bytes.into()),
+    }
+}
+
+const TWO: &str = r#"{"version":1,"changes":[{"kind":"trade","name":"Trending","with":{"name":"the sign-up box"}},{"kind":"float","name":"More like this","pin":"page"}]}"#;
+
+/// A site's arrangement is part of its Boost: given to the core with its CSS, counted in its
+/// summary, off with its switches, and gone with it.
+#[test]
+fn an_arrangement_goes_with_its_boost() {
+    let folder = Folder::new();
+    folder.write("Boosts/example.com.css", "p {}\n");
+    folder.write("Boosts/example.com.arrange.json", TWO);
+    folder.write("Boosts/wiki.org.arrange.json", TWO);
+    let mut boosts = Boosts::default();
+    assert_eq!(
+        boosts.load(1, folder.0.clone()),
+        vec![
+            change("example.com", "p {}\n"),
+            arranged("example.com", TWO),
+            arranged("wiki.org", TWO),
+        ]
+    );
+    let boost = boosts.get(1, "example.com").unwrap();
+    assert_eq!(
+        boost.summary.describe(),
+        "Arranges 2 and adds 1 line of your CSS."
+    );
+    // An arrangement alone is a Boost.
+    let listed: Vec<String> = (boosts.list(1).iter())
+        .map(|each| each.site.to_string())
+        .collect();
+    assert_eq!(listed, ["example.com", "wiki.org"]);
+    assert_eq!(
+        boosts
+            .get(1, "wiki.org")
+            .unwrap()
+            .arrangement
+            .unwrap()
+            .state,
+        None
+    );
+
+    assert_eq!(
+        boosts.set_on(1, "wiki.org", false),
+        vec![arranged("wiki.org", "")]
+    );
+    assert_eq!(
+        boosts.set_all_off(true),
+        vec![change("example.com", ""), arranged("example.com", "")]
+    );
+    boosts.set_all_off(false);
+    assert_eq!(
+        boosts.delete(1, "example.com"),
+        vec![change("example.com", ""), arranged("example.com", "")]
+    );
+    assert_eq!(folder.read("Boosts/example.com.arrange.json"), None);
+}
+
+/// A file over a cap or off its shape is never given to the core, and is listed as one the app
+/// can't read; once fixed, it is.
+#[test]
+fn an_unreadable_arrangement_is_off_whole() {
+    let folder = Folder::new();
+    folder.write(
+        "Boosts/example.com.arrange.json",
+        r#"{"version":1,"changes":[{"kind":"resize"}]}"#,
+    );
+    folder.write(
+        "Boosts/wiki.org.arrange.json",
+        &" ".repeat(arrange::MAX_BYTES + 1),
+    );
+    let mut boosts = Boosts::default();
+    assert_eq!(boosts.load(1, folder.0.clone()), Vec::new());
+    for site in ["example.com", "wiki.org"] {
+        let boost = boosts.get(1, site).unwrap();
+        assert_eq!(boost.arrangement.unwrap().changes, None, "{site}");
+        assert_eq!(boost.summary.arranges, 0);
+        assert_eq!(boosts.arrangement(1, site), None);
+    }
+    folder.write("Boosts/example.com.arrange.json", TWO);
+    assert_eq!(boosts.reload(1), vec![arranged("example.com", TWO)]);
+}
+
+/// The core's own save is written and not given back to it; putting a change back writes the
+/// rest for the core to keep, and the last one taken back removes the file.
+#[test]
+fn putting_back_each_change_ends_the_arrangement() {
+    let folder = Folder::new();
+    let mut boosts = Boosts::default();
+    boosts.load(1, folder.0.clone());
+    boosts.set_on(1, "example.com", false);
+    assert_eq!(boosts.save_arrangement(1, "example.com", "{}"), Vec::new());
+    assert_eq!(folder.read("Boosts/example.com.arrange.json"), None);
+    // Arrange turns the Boost on, as Zap does, with nothing more to give the core.
+    assert_eq!(boosts.save_arrangement(1, "example.com", TWO), Vec::new());
+    assert_eq!(
+        folder.read("Boosts/example.com.arrange.json").as_deref(),
+        Some(TWO)
+    );
+    let boost = boosts.get(1, "example.com").unwrap();
+    assert!(boost.on);
+    assert_eq!(boost.arrangement.unwrap().state, Some(Arranged::On));
+    assert_eq!(boosts.reload(1), Vec::new());
+
+    boosts.set_misfits(1, "example.com", vec![1]);
+    let kept = boosts.without(1, "example.com", 0).unwrap();
+    assert_eq!(boosts.put_back(1, "example.com", 0, &kept), Vec::new());
+    let left: Vec<String> = arrange::read(&kept)
+        .unwrap()
+        .into_iter()
+        .map(|each| each.title())
+        .collect();
+    assert_eq!(left, ["More like this"]);
+    assert_eq!(folder.read("Boosts/example.com.arrange.json"), Some(kept));
+    assert_eq!(
+        boosts
+            .get(1, "example.com")
+            .unwrap()
+            .arrangement
+            .unwrap()
+            .misfits,
+        [0],
+        "the misfit didn't follow its change"
+    );
+
+    assert_eq!(boosts.without(1, "example.com", 0).as_deref(), Some(""));
+    assert_eq!(
+        boosts.put_back(1, "example.com", 0, ""),
+        vec![arranged("example.com", "")]
+    );
+    assert_eq!(folder.read("Boosts/example.com.arrange.json"), None);
+    assert_eq!(boosts.get(1, "example.com"), None);
+
+    // Reset's empty save takes it away, and a file the core keeps off isn't edited.
+    boosts.save_arrangement(1, "example.com", TWO);
+    assert_eq!(boosts.save_arrangement(1, "example.com", ""), Vec::new());
+    assert_eq!(folder.read("Boosts/example.com.arrange.json"), None);
+    boosts.save_arrangement(1, "example.com", TWO);
+    boosts.set_arranged(1, "example.com", Arranged::Changed);
+    assert_eq!(boosts.without(1, "example.com", 0), None);
 }

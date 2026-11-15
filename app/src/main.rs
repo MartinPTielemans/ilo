@@ -262,14 +262,14 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     {
         return (true, "agent bar");
     }
-    // Escape ends Zap on the page, which the page doesn't see (shell/boost.rs).
+    // Escape ends Zap or Arrange on the page, which the page doesn't see (shell/boost.rs).
     if keystroke == "escape"
         && update_tab_window(tab, |shell, cx| {
-            shell.zapping(tab) && shell.escape_boost(cx)
+            (shell.zapping(tab) || shell.arranging(tab)) && shell.escape_boost(cx)
         })
         .unwrap_or(false)
     {
-        return (true, "zap");
+        return (true, "zap or arrange");
     }
     if update_tab_window(tab, |shell, cx| {
         shell.run_extension_key(&keystroke, "page", cx)
@@ -402,6 +402,8 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
 }
 
 unsafe extern "C" fn started(_: *mut c_void) {
+    // Before the first page, which Arrange may lift an element of.
+    boosts_host::set_arrange_lift();
     // Chromium's message loop dispatches GPUI's messages, as its run loop does on the Mac.
     #[cfg(target_os = "windows")]
     gpui_windows::embed();
@@ -1054,6 +1056,9 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_press_released: Some(tab_press_released),
         tab_boost_zapped: Some(tab_boost_zapped),
         tab_boost_zap_ended: Some(tab_boost_zap_ended),
+        tab_arrange_ended: Some(boosts_host::tab_arrange_ended),
+        tab_arrange_saved: Some(boosts_host::tab_arrange_saved),
+        tab_arrangement_fits: Some(boosts_host::tab_arrangement_fits),
         held_keys_unclaimed: Some(held_keys_unclaimed),
         tab_media_unsupported: Some(tab_media_unsupported),
         widevine_changed: Some(widevine_changed),
