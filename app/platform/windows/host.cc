@@ -1106,7 +1106,9 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
       return 0;
     case WM_ERASEBKGND:
       return 1;
-    case WM_DESTROY:
+    // Not WM_DESTROY, which Windows Server 2025 doesn't send the holder as its window closes, so
+    // the frame went unkept: WM_NCDESTROY comes on each, with the window still its parent (#3022).
+    case WM_NCDESTROY:
       // Its window is still there: Windows destroys a window's children before the window.
       if (HWND root = GetAncestor(hwnd, GA_ROOT); root && root != hwnd && !IsIconic(root)) {
         ClosedFrame closed{.maximized = IsZoomed(root) != FALSE};
@@ -1120,7 +1122,7 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         found->second->Release();
         DropTargets().erase(found);
       }
-      return 0;
+      break;
   }
   return DefWindowProcW(hwnd, message, wparam, lparam);
 }
