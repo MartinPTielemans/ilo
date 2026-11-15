@@ -210,6 +210,33 @@ pub trait Browser {
     fn remove_archived(&self, archived: u64, cx: &mut App) -> u64;
     /// Empties the archive, and returns the removal's id, or 0 if it was empty.
     fn clear_archive(&self, cx: &mut App) -> u64;
+    /// Asks for up to `max` of `profile`'s visited pages from before `before`, in microseconds
+    /// since 1970, or from now for 0: newest first, each once a day, and those whose title or URL
+    /// has `text`'s words. The answer comes to `Shell::history_listed` with `request`. False when
+    /// none will: a private profile, or one whose history hasn't loaded yet.
+    fn list_history(
+        &self,
+        _profile: u64,
+        _request: u64,
+        _before: i64,
+        _text: &str,
+        _max: usize,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
+    /// Deletes `profile`'s visits to `url` from `begin` to `end`, in microseconds since 1970, and
+    /// says whether it could, as `list_history` can.
+    fn remove_history(
+        &self,
+        _profile: u64,
+        _url: &str,
+        _begin: i64,
+        _end: i64,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
     /// Does `action` to the download.
     fn act_on_download(&self, download: u64, action: DownloadAction, cx: &mut App);
     /// Takes the downloads that aren't running or paused off the list, keeping their files: those
@@ -243,6 +270,9 @@ pub trait Browser {
     fn drag_file(&self, path: &str, cx: &mut App) -> bool;
     /// Looks up the favicon the browser has for `url`, and calls `Shell::set_page_favicon`.
     fn page_favicon(&self, url: &str, cx: &mut App);
+    /// The site of the page at `url`, the registrable domain the link target's plate emphasizes,
+    /// or None off the web (bc_url_site). Sort Today Tabs by Site gathers tabs by it.
+    fn url_site(&self, url: &str) -> Option<String>;
     /// The starts of today, yesterday, this week and last week in the user's calendar, in
     /// milliseconds since the Unix epoch.
     fn day_starts(&self) -> [f64; 4];
@@ -407,6 +437,31 @@ pub trait Browser {
     /// Turns Zap on or off on `tab`'s page: while it's on, a click there hides what's under it,
     /// which comes back in `Shell::boost_zapped`. The user's alone.
     fn zap(&self, _tab: u64, _on: bool, _cx: &mut App) {}
+    /// Turns Arrange on `tab`'s page on, drawing its marks with `look`, or off with None (#2347):
+    /// while it's on, the user moves what's on the page, and each change comes back in
+    /// `Shell::arrange_saved`. Whether it's on: the core refuses it where a Boost isn't offered,
+    /// in an agent's Space, a private window or a page that isn't http(s). The user's alone.
+    fn arrange(
+        &self,
+        _tab: u64,
+        _look: Option<&crate::boosts::arrange::Look>,
+        _cx: &mut App,
+    ) -> bool {
+        false
+    }
+    /// Gives `site`'s pages in `profile` the arrangement read from its file, `bytes`, or takes it
+    /// away with none, from their next load and at once on those open. The core places it only
+    /// while it's what the user kept in the browser, and says what it made of it. The user's
+    /// alone, as a Boost is.
+    fn set_arrangement(&self, _profile: u64, _site: &str, _bytes: &str) -> crate::boosts::Arranged {
+        crate::boosts::Arranged::New
+    }
+    /// The user's own edit of `site`'s arrangement in the browser, Turn On or putting a change
+    /// back: the core records `bytes` as the ones the user kept, and places them. False where it
+    /// refuses them.
+    fn keep_arrangement(&self, _profile: u64, _site: &str, _bytes: &str) -> bool {
+        false
+    }
     /// Opens the file at `path` in the user's text editor.
     fn edit_file(&self, _path: &std::path::Path, _cx: &mut App) {}
     /// Shows the file at `path` in the system's file manager.

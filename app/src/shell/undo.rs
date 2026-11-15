@@ -71,6 +71,7 @@ impl What {
     pub const CHANGE_THEME: What = What::quiet("Change Theme Color");
     pub const REMOVE_THEME: What = What::quiet("Remove Theme Color");
     pub const CLEAR: What = What::quiet("Clear");
+    pub const SORT_BY_SITE: What = What::quiet("Sort by Site");
     /// Arc says it in its own words (docs/ux-spec.md › Toast), so the shell shows that toast.
     pub const DELETE_SPACE: What = What::quiet("Delete Space");
     /// The Space leaving the switcher isn't where the eye is, at the folder it became.
@@ -249,6 +250,12 @@ pub(super) enum Edit {
     },
     /// Clears the Space shown again, if it's this one.
     Clear(u64),
+    /// Puts the Today rows of `space` in the order `rows`, as Sort Today Tabs by Site left them or
+    /// found them. A row opened since keeps its place, and one closed since is left out.
+    Order {
+        space: u64,
+        rows: Vec<u64>,
+    },
     /// Brings back the Space, which `DeleteSpace` deleted.
     UndoDeleteSpace(u64),
     DeleteSpace(u64),
@@ -342,7 +349,7 @@ impl Edit {
                 ids(tabs);
                 show.iter_mut().for_each(|each| id_of(each, from, to));
             }
-            Edit::Close(tabs) => ids(tabs),
+            Edit::Close(tabs) | Edit::Order { rows: tabs, .. } => ids(tabs),
             Edit::Repin { tabs, spot } => {
                 tabs.iter_mut().for_each(|(each, _)| id_of(each, from, to));
                 if let At::Pinned { folder, .. } = &mut spot.at {
@@ -661,6 +668,10 @@ impl Edit {
                 }
                 let clear = shell.clear_now(cx)?;
                 Some(Edit::UndoClear { space, clear })
+            }
+            Edit::Order { space, rows } => {
+                let rows = shell.order_today(space, &rows, cx)?;
+                Some(Edit::Order { space, rows })
             }
             Edit::UndoDeleteSpace(space) => shell
                 .browser

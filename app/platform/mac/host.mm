@@ -1455,7 +1455,7 @@ void CaptureLaunchWindow() {
 // Never maximized, which is Windows' alone: a zoomed window's frame is the one it has.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
                              double height, bool, double picture_width, double picture_height,
-                             double foot_top) {
+                             double foot_top, bool right) {
   // The core's y runs down from the main display's top, AppKit's up from its bottom.
   const NSRect frame =
       NSMakeRect(x, NSHeight(NSScreen.screens.firstObject.frame) - y - height, width, height);
@@ -1486,14 +1486,17 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   // A picture taken on a screen of another scale is left out.
   if ([pixels isKindOfClass:NSBitmapImageRep.class] && pixels.CGImage &&
       pixels.pixelsHigh == lround(picture_height * scale)) {
-    // The sidebar's right edge, halfway down, is the material with nothing on it.
-    NSColor* edge = [pixels colorAtX:pixels.pixelsWide - 1 y:pixels.pixelsHigh / 2];
+    // The sidebar's edge toward the page, halfway down, is the material with nothing on it.
+    NSColor* edge = [pixels colorAtX:right ? 0 : pixels.pixelsWide - 1 y:pixels.pixelsHigh / 2];
     window.backgroundColor = [edge colorWithAlphaComponent:1];
     const long rows = pixels.pixelsHigh;
     const long columns = pixels.pixelsWide;
     const long foot = std::clamp(lround(foot_top * scale), 0L, rows);
     const long grows = lround(height * scale) - rows;
-    NSView* shown = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, columns / scale, height)];
+    NSView* shown = [[NSView alloc]
+        initWithFrame:NSMakeRect(right ? width - columns / scale : 0, 0, columns / scale, height)];
+    // At its edge of the window, should the browser window's view be another width.
+    shown.autoresizingMask = right ? NSViewMinXMargin : NSViewMaxXMargin;
     // Puts the picture's rows |from| to |to| |at| rows down from the window's top.
     auto place = [&](long from, long to, long at) {
       if (to <= from) {
@@ -1613,7 +1616,7 @@ void host_watch_finished_launching(void (*finished)(void)) {
               }];
 }
 
-bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width) {
+bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width, bool right) {
   NSWindow* window = ((__bridge NSView*)ui_view).window;
   const NSSize size = window.frame.size;
   NSString* path = LaunchPicturePath(profile_dir, size.width, size.height);
@@ -1641,8 +1644,10 @@ bool host_save_launch_picture(void* ui_view, const char* profile_dir, double wid
     return false;
   }
   const CGFloat scale = (CGFloat)CGImageGetWidth(whole) / size.width;
+  const CGFloat columns = round(width * scale);
   CGImageRef sidebar = CGImageCreateWithImageInRect(
-      whole, CGRectMake(0, 0, round(width * scale), CGImageGetHeight(whole)));
+      whole, CGRectMake(right ? CGImageGetWidth(whole) - columns : 0, 0, columns,
+                        CGImageGetHeight(whole)));
   CGImageRelease(whole);
   if (!sidebar) {
     return false;
@@ -1937,6 +1942,8 @@ static void WatchLittleOrderingOut(NSWindow* window) {
   }
 }
 
+static void PlaceTitlebarSide(Browser* browser);
+
 void host_show_window(void* ui_view) {
   host_show_window_behind(ui_view, nullptr);
 }
@@ -1950,6 +1957,10 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
   browser->window = window;
+  // As the sidebar's side was told before there was a window (host_set_sidebar_right).
+  if (browser->sidebar_right) {
+    PlaceTitlebarSide(browser);
+  }
   if (browser->little) {
     ToShownDesktop(browser, window);
     // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
@@ -2592,6 +2603,14 @@ void host_watch_reduce_motion(void (*changed)(void)) {
               usingBlock:^(NSNotification*) {
                 changed();
               }];
+}
+
+bool host_twelve_hour_clock(void) {
+  // "j" is the locale's preferred hour, which follows the user's 24-hour switch; "a" is AM/PM.
+  NSString* format = [NSDateFormatter dateFormatFromTemplate:@"j"
+                                                     options:0
+                                                      locale:NSLocale.autoupdatingCurrentLocale];
+  return [format containsString:@"a"];
 }
 
 bool host_is_default_browser(void) {
@@ -4887,18 +4906,14 @@ static bool AnswerTitlebarDirection(NSWindow* window) {
   return true;
 }
 
-void host_set_sidebar_right(void* ui_view, bool right) {
-  Browser* browser = BrowserWithView(ui_view);
-  if (!browser || browser->sidebar_right == right) {
-    return;
-  }
-  browser->sidebar_right = right;
+// Lays |browser|'s title bar out for the side its sidebar is on.
+static void PlaceTitlebarSide(Browser* browser) {
   NSWindow* window = browser->window;
   if (!AnswerTitlebarDirection(window)) {
     fprintf(stderr, "browser: the title bar's direction can't be answered\n");
     return;
   }
-  objc_setAssociatedObject(window, &kSidebarRight, right ? @YES : nil,
+  objc_setAssociatedObject(window, &kSidebarRight, browser->sidebar_right ? @YES : nil,
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
   // AppKit places the buttons as the window's frame view changes size, and not when its layout is
   // only marked or the style mask set again (check/titlebar-right.sh on a hosted Mac, run
@@ -4907,6 +4922,19 @@ void host_set_sidebar_right(void* ui_view, bool right) {
   const NSSize size = frame.frame.size;
   [frame setFrameSize:NSMakeSize(size.width + 1, size.height)];
   [frame setFrameSize:size];
+}
+
+void host_set_sidebar_right(void* ui_view, bool right) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || browser->sidebar_right == right) {
+    return;
+  }
+  browser->sidebar_right = right;
+  // A window the UI is made in hears its side before it's shown, and so before it's the browser's
+  // window: host_show_window lays its title bar out then.
+  if (browser->window) {
+    PlaceTitlebarSide(browser);
+  }
   if (browser->reveal_monitor) {
     PlaceReveal(browser);
   }

@@ -34,6 +34,17 @@ takes a command a line on its standard input:
                   why one mightn't be, as "nothing, visible|hidden, focused|unfocused, dialogs
                   open N": whether the page is shown, whether it has the window's keyboard, and
                   its open dialogs, shadow trees included
+  focus-within PREFIX SELECTOR
+                  logs "cdp: focus-within SELECTOR yes|no|none": whether what has the keyboard in
+                  the page opened last at an address starting with PREFIX matches the CSS
+                  selector SELECTOR, which has no spaces, or is in an element that does, through
+                  its shadow hosts, or none for no such page: a WebUI page's control, as
+                  chrome://extensions' Allow in Incognito switch, is in a row by id
+  has PREFIX SELECTOR
+                  logs "cdp: has SELECTOR yes|no|none": whether an element in the page opened
+                  last at an address starting with PREFIX matches SELECTOR, in its shadow trees
+                  too, or none for no such page: a WebUI page shows what Chrome did by its
+                  controls' attributes, as a disabled menu
   video PREFIX    logs "cdp: video SECONDS playing|paused ad|no-ad refused|-", or "cdp: video
                   none" for no such page or no video in it: how far the first video in the page
                   opened last at an address starting with PREFIX has played, whether it's paused,
@@ -440,6 +451,41 @@ def focus(prefix):
     return value or "none"
 
 
+# Whether an element matching the selector given, or one in it, has the keyboard, through shadow
+# hosts.
+FOCUSED_WITHIN = """((selector) => {
+  let focused = document.activeElement;
+  while (focused && focused.shadowRoot && focused.shadowRoot.activeElement) {
+    focused = focused.shadowRoot.activeElement;
+  }
+  for (let node = focused; node; node = node.parentNode || node.host) {
+    if (node.nodeType === Node.ELEMENT_NODE && node.matches(selector)) return "yes";
+  }
+  return "no";
+})"""
+
+# Whether an element matching the selector given is in the page, its shadow trees included.
+HAS = """((selector) => {
+  const roots = [document];
+  while (roots.length) {
+    const root = roots.pop();
+    if (root.querySelector(selector)) return "yes";
+    for (const element of root.querySelectorAll("*")) {
+      if (element.shadowRoot) roots.push(element.shadowRoot);
+    }
+  }
+  return "no";
+})"""
+
+
+def ask(prefix, script, selector):
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {
+        "expression": "%s(%s)" % (script, json.dumps(selector)),
+        "returnByValue": True}, on).get("result", {}).get("value")
+    return value or "none"
+
+
 # The page's first video: how far it has played, whether it's paused, whether its player shows an
 # ad, and whether Chrome refused to start it, as YouTube's says with classes on the player round
 # it. Refused, the player has asked to play, as playing-mode says, and has the data to, but the
@@ -590,6 +636,10 @@ for line in sys.stdin:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:
         log("focus " + focus(words[1]))
+    elif words[:1] == ["focus-within"] and len(words) == 3:
+        log("focus-within %s %s" % (words[2], ask(words[1], FOCUSED_WITHIN, words[2])))
+    elif words[:1] == ["has"] and len(words) == 3:
+        log("has %s %s" % (words[2], ask(words[1], HAS, words[2])))
     elif words == ["content"]:
         log("content " + content())
     elif words[:1] == ["video"] and len(words) == 2:

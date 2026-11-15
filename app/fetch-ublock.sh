@@ -2,8 +2,9 @@
 # Downloads the uBlock Origin ublock.ini names, checked against its hash, into .deps/ublock, adds
 # our key to its manifest so its id doesn't depend on where the app is, takes out the timers that
 # wake an idle browser and the reload as it first starts, has it say when it's ready to block, for the
-# core to hold the first pages until then, keeps its cache uncompressed, has it take Settings › Ad
-# blocking from the core (below), and prints its folder.
+# core to hold the first pages until then, keeps its cache uncompressed, leaves out the malware
+# lists' stale mirrors, has it take Settings › Ad blocking from the core (below), and prints its
+# folder.
 # Nothing in the download runs here: it's unzipped into a folder of its own and only read.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -14,7 +15,7 @@ fail() {
 }
 
 # What starts each file this changes, as GPL 3 asks of a changed file.
-changed="// Changed by ilo's app/fetch-ublock.sh: its housekeeping doesn't wake an idle browser, it doesn't reload as it first starts, it says when it's ready to block, its cache isn't compressed, and it takes ilo's Settings › Ad blocking."
+changed="// Changed by ilo's app/fetch-ublock.sh: its housekeeping doesn't wake an idle browser, it doesn't reload as it first starts, it says when it's ready to block, its cache isn't compressed, it skips the malware lists' stale mirrors, and it takes ilo's Settings › Ad blocking."
 
 # Puts $3, which may be several lines or none, in place of the line $2 of uBlock Origin's file $1,
 # and fails unless that line is there once, so a new release is read again before it ships.
@@ -42,6 +43,7 @@ if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifes
   [ "$(head -n 1 "$dir/js/tab.js")" != "$changed" ] ||
   [ "$(head -n 1 "$dir/js/start.js")" != "$changed" ] ||
   [ "$(head -n 1 "$dir/js/background.js")" != "$changed" ] ||
+  [ "$(head -n 1 "$dir/js/assets.js")" != "$changed" ] ||
   ! cmp -s ublock-settings.js "$dir/js/ilo.js"; then
   mkdir -p .deps/ublock
   rm -rf "$dir" "$dir.part" "$dir.zip"
@@ -89,6 +91,11 @@ if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifes
   # machines with little (#2069). Uncompressed it peaked at 555 MB. It reads a value cached
   # compressed as before.
   edit js/background.js '    cacheStorageCompression: true,' '    cacheStorageCompression: false,'
+  # It updates a list from one of its mirrors at random, and the malware lists' pages.dev mirrors
+  # stopped updating in October 2026: three updates in ten took a URLhaus list a month old, with a
+  # quarter of the rules, which it can't tell apart, as the lists give no Last-Modified (#2920).
+  edit js/assets.js '        const cdnURLs = entry.cdnURLs.slice();' \
+    "        const cdnURLs = entry.cdnURLs.filter(url => /^https:\/\/(malware|phishing)-filter\.pages\.dev\//.test(url) === false);"
   # Settings › Ad blocking is ilo's own (#2107): ublock-settings.js applies the lists and filters
   # the core's policy gives it under "ilo" as it starts and as they change, which its schema has to
   # name for Chrome to pass them on.

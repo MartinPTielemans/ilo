@@ -13,9 +13,10 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/path_service.h"
-#include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
+#include "browser_core/ad_block_list_check.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/chrome_paths.h"
 #include "net/http/http_response_headers.h"
@@ -40,7 +41,8 @@ constexpr net::NetworkTrafficAnnotationTag kLists =
           "added since the browser was built."
         trigger:
           "37 s after launch, or 2 s if a list is twice as old as it stays current, and then "
-          "weekly, for each list turned on in Settings › Ad blocking "
+          "with the first page that starts an hour or more after the last look, for each list "
+          "turned on in Settings › Ad blocking "
           "whose copy is older than the list says it stays current, a few days, and at once for a "
           "list the user turns on that the browser has no copy of."
         data: "None: a request for a list, with no cookie."
@@ -77,17 +79,25 @@ std::vector<NativeAdBlockList> Due(std::vector<NativeAdBlockList> lists) {
   return due;
 }
 
-// Whether |text| reads as a filter list, and not a server's page about an error.
-bool LooksLikeList(const std::string& text) {
-  const std::string_view start = base::TrimWhitespaceASCII(
-      std::string_view(text).substr(0, 1024), base::TRIM_LEADING);
-  return !start.empty() && start.front() != '<';
-}
+enum class Kept { kYes, kRefused, kNotWritten };
 
-// Keeps |text| as the list's copy, whole or not at all. Off the UI thread.
-bool Keep(const base::FilePath& file, const std::string& text) {
+// Keeps |text| as |list|'s copy, whole or not at all, if it takes the place of the last good one.
+// Off the UI thread.
+Kept Keep(const NativeAdBlockList& list, const std::string& text) {
+  std::string last_good;
+  const bool read = !list.last_good.empty() && base::ReadFileToString(list.last_good, &last_good);
+  if (!ad_block_list_check::Takes(
+          text, read ? std::optional<std::string_view>(last_good) : std::nullopt)) {
+    LOG(WARNING) << "ad block list " << list.key << ": refused a download of "
+                 << ad_block_list_check::Rules(text) << " rules, as it isn't a list or lost "
+                 << "more than half the last good copy's " << ad_block_list_check::Rules(last_good);
+    return Kept::kRefused;
+  }
+  const base::FilePath file = DownloadedAdBlockList(list.key);
   return base::CreateDirectory(file.DirName()) &&
-         base::ImportantFileWriter::WriteFileAtomically(file, text);
+                 base::ImportantFileWriter::WriteFileAtomically(file, text)
+             ? Kept::kYes
+             : Kept::kNotWritten;
 }
 
 // One pass over the lists due, which owns itself until it's done.
@@ -124,19 +134,25 @@ class Update {
     const network::mojom::URLResponseHead* head = loader_->ResponseInfo();
     const int status = head && head->headers ? head->headers->response_code() : 0;
     loader_.reset();
-    if (!body || status != 200 || !LooksLikeList(*body)) {
+    if (!body || status != 200) {
       ++address_;
       Next();
       return;
     }
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-        base::BindOnce(&Keep, DownloadedAdBlockList(due_[list_].key), std::move(*body)),
-        base::BindOnce(&Update::Kept, base::Unretained(this)));
+        base::BindOnce(&Keep, due_[list_], std::move(*body)),
+        base::BindOnce(&Update::OnKept, base::Unretained(this)));
   }
 
-  void Kept(bool kept) {
-    if (kept) {
+  void OnKept(Kept kept) {
+    // A refused download may be a mirror's broken copy, so the next address gets its turn.
+    if (kept == Kept::kRefused) {
+      ++address_;
+      Next();
+      return;
+    }
+    if (kept == Kept::kYes) {
       updated_.push_back(due_[list_].key);
     }
     ++list_;

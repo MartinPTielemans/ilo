@@ -102,12 +102,15 @@ void HidePages(views::Widget* widget);
 // over what the view draws, with corners of |corner_radius|. For a page no window shows, such as a
 // link preview's. Where the app can't hold a page in a view of its own, as on Linux, it shows over
 // the pages of |widget|'s window, the one whose Browser holds it, at |frame| in its content, and
-// the app's view over the window leaves it a hole.
+// the app's view over the window leaves it a hole. On Linux, |shown| runs once the first frame
+// with the page at |frame| is on screen, unless ShowPageIn comes again first; Windows and the Mac
+// drop it.
 void ShowPageIn(views::Widget* widget,
                 gfx::NativeView page,
                 void* view,
                 const gfx::Rect& frame,
-                double corner_radius);
+                double corner_radius,
+                base::OnceClosure shown);
 
 // Draws |page|, which ShowPageIn shows, at |scale| of its frame's size about |about|, in the
 // frame's coordinates, and at |opacity|, without laying it out again, until the next call or
