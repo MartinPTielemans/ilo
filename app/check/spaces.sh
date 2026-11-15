@@ -980,6 +980,17 @@ send move 3 306
 expect '^browser: reveal shown$' "the pointer at the window's edge didn't bring the sidebar out"
 expect '^browser: reveal window shown$' "the sidebar out didn't come on screen"
 reveal_edit="207 117"
+# ilo's menu out from the sidebar is in front of its panel, not under it with its left cut off
+# (#2989): by Windows' order of the windows, front first, the driver's stack. $1 names the menu.
+menu_over_reveal() {
+  windows || return 0
+  send stack
+  stack=$(grep '^browser: stack ' "$log" | tail -1 | cut -c16-)
+  case $stack in
+    *menu*reveal*) ;;
+    *) fail "$1 on the sidebar out isn't in front of the sidebar's panel, front first: $stack" ;;
+  esac
+}
 for how in tap press rightclick; do
   case $how in
     tap)
@@ -1001,21 +1012,38 @@ New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$"
   expect '^browser: menu drawn ' "the Space's menu from a $how on the sidebar out didn't come on screen"
   if [ $how = press ]; then send release $reveal_edit; fi
   ../tools/window-screenshot.sh "$pid" "$out/space-edit-reveal-$how.png" || fail "no window to capture"
-  # In front of the panel, not under it with its left cut off (#2989): by Windows' order of the
-  # windows, front first, the driver's stack.
-  if windows; then
-    send stack
-    stack=$(grep '^browser: stack ' "$log" | tail -1 | cut -c16-)
-    case $stack in
-      *menu*reveal*) ;;
-      *) fail "the Space's menu from a $how on the sidebar out isn't in front of the sidebar's panel, front first: $stack" ;;
-    esac
+  menu_over_reveal "the Space's menu from a $how"
+  # Its Set Profile submenu too, which the menu's own window grows to hold.
+  if [ $how = rightclick ]; then
+    send key s
+    expect "^browser: menu highlights $(cased 'Set Profile') at " "typing s didn't select Set Profile over the sidebar out"
+    send key right
+    expect "^browser: menu submenu $(cased 'Set Profile') shown at " "→ didn't open Set Profile's submenu over the sidebar out"
+    ../tools/window-screenshot.sh "$pid" "$out/space-edit-reveal-profile.png" || fail "no window to capture"
+    menu_over_reveal "the Space's Set Profile submenu"
   fi
   none_since '^browser: menu c' || fail "the Space's menu from a $how on the sidebar out closed"
   none_since '^browser: reveal hidden$' || fail "the Space's menu from a $how sent the sidebar out away"
   send dismiss
   expect '^browser: menu closed$' "the Space's menu over the sidebar out didn't close"
 done
+# A tab's row and the footer's +, the panel 5 in from the window's top left.
+set -- $(row 0)
+post rightclick $(($1 + 5)) $(($2 + 5))
+expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on a tab in the sidebar out didn't show its menu"
+expect '^browser: menu drawn ' "the tab's menu on the sidebar out didn't come on screen"
+../tools/window-screenshot.sh "$pid" "$out/tab-menu-reveal.png" || fail "no window to capture"
+menu_over_reveal "the tab's menu"
+send dismiss
+expect '^browser: menu closed$' "the tab's menu over the sidebar out didn't close"
+post click 209 $((${content#*x} - 30))
+expect "^browser: menu shown $(cased 'New Space…, New Folder…')" "the footer's + on the sidebar out didn't show its menu"
+expect '^browser: menu drawn ' "the +'s menu on the sidebar out didn't come on screen"
+../tools/window-screenshot.sh "$pid" "$out/plus-menu-reveal.png" || fail "no window to capture"
+menu_over_reveal "the footer's +'s menu"
+none_since '^browser: reveal hidden$' || fail "a menu on the sidebar out sent it away"
+send dismiss
+expect '^browser: menu closed$' "the +'s menu over the sidebar out didn't close"
 send move $page_point
 expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away after its menu"
 send key s cmd
