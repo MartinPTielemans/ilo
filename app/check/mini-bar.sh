@@ -136,6 +136,16 @@ bar_after() {
   done
   fail "$2: the UI asked for no mini bar after $3. Lines since: $(sed -n "$(($1 + 1)),\$p" "$log" | grep '^browser: \(arrange\|mini bar\)' | tail -8)"
 }
+# Waits for the bar to be back over Inner, where $inner_bar has it, after $1: the shell moves it as
+# it next draws, after the core's line.
+bar_back() {
+  for _ in $(seq 50); do
+    placed=$(grep '^browser: mini bar at ' "$log" | tail -1 | sed 's/^browser: mini bar at //')
+    [ "$placed" = "$inner_bar" ] && return 0
+    sleep 0.1
+  done
+  fail "the mini bar didn't go back over Inner ($inner_bar) after $1, but stayed at $placed. Lines: $(grep '^browser: \(arrange\|mini bar\)' "$log" | tail -6)"
+}
 # Fails unless the bar in $placed is inside the page, mini-bar.edge (8) in, and $1 of the thing:
 # over (its bottom 8 over the thing's top, its right end at the thing's, unless that would leave the
 # page), or under, for what happened, $2.
@@ -168,6 +178,9 @@ select_thing() {
 # Clicks the bar's Hide, its only button over a thing with no change, in its middle.
 hide() {
   set -- $placed
+  # The pointer onto the bar first, as the Mac's window lets the mouse through but on the bar where
+  # the pointer is, as the toast's does.
+  send move $(($1 + $3 / 2)) $(($2 + $4 / 2))
   send click $(($1 + $3 / 2)) $(($2 + $4 / 2))
   expect 'browser: tab [0-9]* arrange hid ' "the mini bar's Hide didn't hide the thing selected"
   page_says ' inner hidden ' "the mini bar's Hide didn't hide Inner"
@@ -197,7 +210,7 @@ expect "^browser: arrange $tab Selected .* Outer\$" "↑ with the page focused d
 send key down
 expect 'browser: \[keys\] .* before the page: arrange$' "↓ with the page focused went to the page"
 expect "^browser: arrange $tab Selected .* Inner\$" "↓ with the page focused didn't select Inner again"
-placed=$inner_bar
+bar_back "↓ with the page focused"
 hide
 send key z cmd
 expect 'browser: \[keys\] .* before the page: arrange$' "⌘Z with the page focused went to the page"
@@ -234,7 +247,10 @@ expect 'browser: \[keys\] .* before the page: zap or arrange$' "escape with the 
 expect "browser: tab $tab arrange off\$" "escape with the page focused didn't end Arrange"
 
 # The same with the UI holding the keyboard, from a click on the sidebar, in the other look. The
-# keys reach the shell's bindings, never the page.
+# keys reach the shell's bindings, never the page. The sidebar has the keyboard before the Space's
+# menu, as on sway the theme picker hides as it shows after a right-click with the page focused
+# (#2949).
+send click $sidebar_point
 post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, ")" "the Space's menu didn't offer its theme"
 send choose "$(cased 'Edit Theme Color…')"
@@ -258,7 +274,7 @@ expect "^browser: arrange $tab Selected .* Outer\$" "↑ with the UI focused did
 none_since 'before the page: arrange$' || fail "↑ with the UI focused went through the page"
 send key down
 expect "^browser: arrange $tab Selected .* Inner\$" "↓ with the UI focused didn't select Inner again"
-placed=$inner_bar
+bar_back "↓ with the UI focused"
 hide
 send key z cmd
 page_says ' inner shown ' "⌘Z with the UI focused didn't bring back the Inner that Hide hid"
