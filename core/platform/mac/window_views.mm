@@ -268,8 +268,9 @@ CACornerMask CornersReached(NSView* view, NSRect rect, NSSize frame) {
 // Chromium's occlusion checker passes over a window with no Chromium page in it, so a window that
 // comes back from full screen or from behind another while the page is out, or holds only a
 // Safari's-engine page, can stay marked occluded, and a page put in it then never draws or hands
-// back the keys it doesn't use. Chrome's windows always hold a page. Asked again only for a window marked occluded: the checker asks the window
-// server about every window, which takes milliseconds.
+// back the keys it doesn't use. Chrome's windows always hold a page. Asked again only for a window
+// marked occluded: the checker asks the window server about every window, which takes
+// milliseconds.
 void UpdateOcclusion(NSWindow* window) {
   if (![window respondsToSelector:@selector(isOccluded)] ||
       ![static_cast<id<BrowserCoreOccludedWindow>>(window) isOccluded]) {
