@@ -988,9 +988,16 @@ expect "^browser: title $v landed\$" "the Mini Player didn't land as its window 
 # window of another client's takes it from xdotool, and ilo's window takes it back as the driver
 # makes it active. Under Wayland, check/drag's window takes it as sway focuses it, as in links.sh,
 # and the driver's sway gives it back. On Windows, as in mcp.sh, another app's window away from
-# ilo's takes the foreground, and gives it back to ilo's as a click on its taskbar button does.
+# ilo's takes the foreground, and gives it back to ilo's as a click on its taskbar button does. On
+# the Mac, which lets no process take the activation, the app yields it to check/other-app.mm's
+# window, which yields it back.
 x11_other_app() { [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; }
-if x11_other_app || wayland || windows; then
+if x11_other_app || wayland || windows || [ "$(uname)" = Darwin ]; then
+  if [ "$(uname)" = Darwin ]; then
+    clang++ -fobjc-arc -framework Cocoa -o "$out/other-app" check/other-app.mm \
+      2> "$out/other-app-build.log" ||
+      fail "check/other-app.mm didn't build: $(cat "$out/other-app-build.log")"
+  fi
   post rightclick $page_point
   expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
     "the video's menu had no Picture in Picture the third time"
@@ -1012,6 +1019,20 @@ if x11_other_app || wayland || windows; then
       fail "another app's window didn't open and take the foreground: $(cat "$out/other-window.log")"
   elif wayland; then
     other_app_click
+  elif [ "$(uname)" = Darwin ]; then
+    rm -f "$out/other-in"
+    mkfifo "$out/other-in"
+    "$out/other-app" < "$out/other-in" > "$out/other-window.log" 2>&1 &
+    other=$!
+    exec 7> "$out/other-in"
+    for _ in $(seq 50); do grep -q '^ready ' "$out/other-window.log" && break; sleep 0.1; done
+    grep -q "^ready $other\$" "$out/other-window.log" ||
+      fail "another app's window didn't open: $(cat "$out/other-window.log")"
+    send yield "$other"
+    for _ in $(seq 50); do grep -q '^active$' "$out/other-window.log" && break; sleep 0.1; done
+    grep -q '^active$' "$out/other-window.log" ||
+      fail "another app didn't become the active one as the app yielded to it: $(cat \
+        "$out/other-window.log")"
   else
     rm -f "$out/other-in"
     mkfifo "$out/other-in"
@@ -1025,6 +1046,8 @@ if x11_other_app || wayland || windows; then
   expect '^browser: menu window hidden$' "the menu stayed open as another app took the keyboard"
   if windows; then
     touch "$out/cover-front"
+  elif [ "$(uname)" = Darwin ]; then
+    echo "back $pid" >&7
   else
     send window 1
   fi
@@ -1038,7 +1061,7 @@ if x11_other_app || wayland || windows; then
     wait "$other" 2> /dev/null || true
   fi
 else
-  echo "skip: coming back from another app with a menu open, on $(uname)$(! sway_xwayland || echo " under sway's Xwayland"): no other app's window to go to."
+  echo "skip: coming back from another app with a menu open, under sway's Xwayland: no other app's window to go to."
 fi
 # Launched again, the next shows where the last was left before the quit, as Arc's does.
 read -r lx ly lw lh <<LEFT
