@@ -5070,7 +5070,7 @@ index f9b9727330..e1e2214d9d 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..b21c2972a5 100644
+index e21f019c64..1a2be3caa9 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -6101,7 +6101,7 @@ index e21f019c64..b21c2972a5 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,92 +2783,1678 @@ impl X11ClientState {
+@@ -2087,92 +2783,1657 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
@@ -6407,20 +6407,9 @@ index e21f019c64..b21c2972a5 100644
 +            place = match crate::linux::overlay::is_managed(view as usize) {
 +                true => {
 +                    let (width, height) = (width.max(1.) as u32, height.max(1.) as u32);
-+                    let placed = (view, x as i32, y as i32, width, height);
-+                    ask = PLACED.with_borrow_mut(|all| {
-+                        let had = all.contains(&placed);
-+                        all.retain(|&(each, ..)| each != view);
-+                        all.push(placed);
-+                        !had
-+                    });
++                    ask = record_placed(view, x as i32, y as i32, width, height);
 +                    if ask {
 +                        self.managed_place_hints(view, x as i32, y as i32, width, height)?;
-+                        ASKED_SIZES.with_borrow_mut(|all| {
-+                            if !all.contains(&(view, width, height)) {
-+                                all.push((view, width, height));
-+                            }
-+                        });
 +                    }
 +                    // The window manager stacks it over the window it's transient for.
 +                    (xproto::ConfigureWindowAux::new())
@@ -7387,17 +7376,7 @@ index e21f019c64..b21c2972a5 100644
 +            top
 +        });
 +        PANEL_IN.with_borrow_mut(|all| all.retain(|&(each, _)| each != view));
-+        // The size it had stays asked: KWin maps one hidden and shown again in the same turn at the
-+        // size it had, before it takes the next, which isn't a refusal.
-+        let had = PLACED.with_borrow_mut(|all| {
-+            let at = all.iter().position(|&(each, ..)| each == view)?;
-+            let (.., width, height) = all.remove(at);
-+            Some((width, height))
-+        });
-+        ASKED_SIZES.with_borrow_mut(|all| {
-+            all.retain(|&(each, ..)| each != view);
-+            all.extend(had.map(|(width, height)| (view, width, height)));
-+        });
++        record_hidden(view);
 +        FOCUS_ON_MAP.with_borrow_mut(|all| all.retain(|&each| each != view));
 +        CHECK_ON_MAP.with_borrow_mut(|all| all.retain(|&each| each != view));
 +        RESTATE.with_borrow_mut(|all| all.retain(|&each| each != view));
@@ -7857,7 +7836,7 @@ index e21f019c64..b21c2972a5 100644
          check_reply(
              || "Failed to hide cursor",
              self.xcb_connection.change_window_attributes(
-@@ -2197,7 +4479,7 @@ impl X11ClientState {
+@@ -2197,7 +4458,7 @@ impl X11ClientState {
              .get(&hidden_window)
              .copied()
              .unwrap_or(CursorStyle::Arrow);
@@ -7866,7 +7845,7 @@ index e21f019c64..b21c2972a5 100644
              log::warn!(
                  "X11: no cursor icon available to restore {:?} after hide; cursor may stay invisible",
                  style
-@@ -2219,6 +4501,28 @@ impl X11ClientState {
+@@ -2219,6 +4480,63 @@ impl X11ClientState {
      }
  }
  
@@ -7884,6 +7863,41 @@ index e21f019c64..b21c2972a5 100644
 +    }
 +}
 +
++/// Keeps the managed overlay `view` put at `x`, `y`, `width` by `height` across the root, and says
++/// whether that's a new place, which the manager is then asked for: its size is then one asked.
++fn record_placed(view: xproto::Window, x: i32, y: i32, width: u32, height: u32) -> bool {
++    let placed = (view, x, y, width, height);
++    let ask = PLACED.with_borrow_mut(|all| {
++        let had = all.contains(&placed);
++        all.retain(|&(each, ..)| each != view);
++        all.push(placed);
++        !had
++    });
++    if ask {
++        ASKED_SIZES.with_borrow_mut(|all| {
++            if !all.contains(&(view, width, height)) {
++                all.push((view, width, height));
++            }
++        });
++    }
++    ask
++}
++
++/// Forgets the managed overlay `view`'s place as it's hidden, and the sizes it asked for, but the
++/// size it had stays asked: KWin maps one hidden and shown again in the same turn at the size it
++/// had, before it takes the next, which isn't a refusal.
++fn record_hidden(view: xproto::Window) {
++    let had = PLACED.with_borrow_mut(|all| {
++        let at = all.iter().position(|&(each, ..)| each == view)?;
++        let (.., width, height) = all.remove(at);
++        Some((width, height))
++    });
++    ASKED_SIZES.with_borrow_mut(|all| {
++        all.retain(|&(each, ..)| each != view);
++        all.extend(had.map(|(width, height)| (view, width, height)));
++    });
++}
++
 +/// Whether the manager sized the managed overlay `window`, which is to be `asked` now, as `got`:
 +/// none of the sizes it asked for since it was last seen, nor the one it had when last hidden, so
 +/// it refused the place too.
@@ -7895,7 +7909,7 @@ index e21f019c64..b21c2972a5 100644
  // Adapted from:
  // https://docs.rs/winit/0.29.11/src/winit/platform_impl/linux/x11/monitor.rs.html#103-111
  pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
-@@ -2232,6 +4536,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+@@ -2232,6 +4550,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
      Duration::from_micros(micros)
  }
  
@@ -7936,7 +7950,7 @@ index e21f019c64..b21c2972a5 100644
  /// Applies a mapped/obscured change to the refresh loop and reports the
  /// resulting visibility to the window. Consumes the client borrow because the
  /// visibility callback re-enters GPUI.
-@@ -2246,10 +4584,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +4598,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -7991,7 +8005,7 @@ index e21f019c64..b21c2972a5 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +4655,77 @@ fn detect_compositor_gpu(
+@@ -2273,73 +4669,77 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -7999,8 +8013,15 @@ index e21f019c64..b21c2972a5 100644
 -    // Method 1: Check for _NET_WM_CM_S{root}
 -    let atom_name = format!("_NET_WM_CM_S{}", root);
 -    let atom1 = get_reply(
--        || format!("Failed to intern {atom_name}"),
--        xcb_connection.intern_atom(false, atom_name.as_bytes()),
++/// Whether a compositor runs on the screen `screen`: one owns its `_NET_WM_CM_S<screen>` selection,
++/// as EWMH has a compositing manager do. A window manager that only says it's one, such as openbox
++/// under Xvfb, sets `_NET_SUPPORTING_WM_CHECK` but composites nothing, and the X server then draws
++/// a window's transparent pixels opaque.
++fn check_compositor_present(xcb_connection: &XCBConnection, screen: usize) -> bool {
++    let atom_name = format!("_NET_WM_CM_S{screen}");
++    let owner = get_reply(
+         || format!("Failed to intern {atom_name}"),
+         xcb_connection.intern_atom(false, atom_name.as_bytes()),
 -    );
 -    let method1 = match atom1.log_with_level(Level::Debug) {
 -        Some(reply) if reply.atom != x11rb::NONE => {
@@ -8038,15 +8059,8 @@ index e21f019c64..b21c2972a5 100644
 -    // Method 3: Check for _NET_SUPPORTING_WM_CHECK
 -    let atom_name = "_NET_SUPPORTING_WM_CHECK";
 -    let atom3 = get_reply(
-+/// Whether a compositor runs on the screen `screen`: one owns its `_NET_WM_CM_S<screen>` selection,
-+/// as EWMH has a compositing manager do. A window manager that only says it's one, such as openbox
-+/// under Xvfb, sets `_NET_SUPPORTING_WM_CHECK` but composites nothing, and the X server then draws
-+/// a window's transparent pixels opaque.
-+fn check_compositor_present(xcb_connection: &XCBConnection, screen: usize) -> bool {
-+    let atom_name = format!("_NET_WM_CM_S{screen}");
-+    let owner = get_reply(
-         || format!("Failed to intern {atom_name}"),
-         xcb_connection.intern_atom(false, atom_name.as_bytes()),
+-        || format!("Failed to intern {atom_name}"),
+-        xcb_connection.intern_atom(false, atom_name.as_bytes()),
 -    );
 -    let method3 = match atom3.log_with_level(Level::Debug) {
 -        Some(reply) if reply.atom != x11rb::NONE => {
@@ -8132,7 +8146,7 @@ index e21f019c64..b21c2972a5 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +4851,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +4865,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -8153,7 +8167,7 @@ index e21f019c64..b21c2972a5 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +4898,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +4912,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -8162,7 +8176,7 @@ index e21f019c64..b21c2972a5 100644
                          },
                      ))
                  }
-@@ -2539,10 +4941,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +4955,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -8176,7 +8190,7 @@ index e21f019c64..b21c2972a5 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +4959,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +4973,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -8193,7 +8207,7 @@ index e21f019c64..b21c2972a5 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +4974,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +4988,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -8229,7 +8243,7 @@ index e21f019c64..b21c2972a5 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +5053,11 @@ fn get_scale_factor(
+@@ -2620,6 +5067,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -8241,10 +8255,40 @@ index e21f019c64..b21c2972a5 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +5336,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +5350,160 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
++    /// A managed overlay mapped at the size it asked for, at one it asked for on its way there, or
++    /// at the one it had when last hidden was given its place; at a tile's, or at a size asked only
++    /// before it was last hidden, it was refused.
++    #[test]
++    fn a_managed_overlay_is_refused_only_at_a_size_it_never_asked() {
++        let view = 0x60_0001;
++        let (card, grown, next) = ((320, 180), (320, 240), (400, 240));
++        let tile = (640, 1080);
++        assert!(record_placed(view, 100, 80, card.0, card.1));
++        assert!(!managed_overlay_refused(view, card, card), "the size asked");
++        assert!(!record_placed(view, 100, 80, card.0, card.1), "the same place is asked again");
++        assert!(record_placed(view, 100, 80, grown.0, grown.1));
++        assert!(!managed_overlay_refused(view, grown, card), "a size asked earlier");
++        assert!(managed_overlay_refused(view, grown, tile), "a tile's size");
++
++        record_hidden(view);
++        assert!(record_placed(view, 100, 80, next.0, next.1));
++        assert!(
++            !managed_overlay_refused(view, next, grown),
++            "the size it had when last hidden"
++        );
++        assert!(
++            managed_overlay_refused(view, next, card),
++            "a size asked only before it was hidden"
++        );
++        assert!(managed_overlay_refused(view, next, tile), "a tile's size after a hide");
++        forget_overlay(view);
++        assert!(managed_overlay_refused(view, next, grown), "a window gone keeps nothing");
++    }
++
 +    /// Two fingers a third of the way across Xwayland's pointer, resting 300 ms, then lifting:
 +    /// each scroll's time in ms, a tick of 0.53 lines, and the lift.
 +    const RESTING: [f64; 29] = [
@@ -8372,7 +8416,7 @@ index e21f019c64..b21c2972a5 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +5775,101 @@ mod tests {
+@@ -3213,3 +5819,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }
