@@ -824,6 +824,7 @@ fn a_question_s_next_frame_asked_mid_update_still_makes_room(cx: &mut TestAppCon
         let question = Question {
             site: "signin.example".into(),
             permissions: vec!["Access other apps and services on this device".into()],
+            quiet: false,
         };
         shell.set_question(10, Some(question), cx);
     });
