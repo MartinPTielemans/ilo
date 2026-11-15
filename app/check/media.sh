@@ -1249,16 +1249,16 @@ send key x
 expect "^browser: title $v landed\$" "probe: the relaunched video didn't land on x"
 send key t cmd
 expect '^browser: command bar shown$' "probe: the command bar didn't open"
-send type "${site}switch.html"
+# Chrome floats a playing video on a switch only from https or a file, and from https only on a
+# site with high media engagement or allowed.
+switch_url="file://$PWD/$out/site/switch.html"
+send type "$switch_url"
 send key return
-expect "^browser: loaded [0-9]* ${site}switch.html\$" "probe: the switch page didn't load"
-w=$(grep "^browser: loaded [0-9]* ${site}switch.html\$" "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: loaded [0-9]* $switch_url\$" "probe: the switch page didn't load"
+w=$(grep "^browser: loaded [0-9]* $switch_url\$" "$log" | tail -1 | cut -d' ' -f3)
 send click $page_point
 await "^browser: title $w playing sound\$" || true
 echo "probe: titles before the switch: $(grep "^browser: title $w " "$log" | cut -d' ' -f4- | tr '\n' '|')"
-# Allowed for its site, as Chrome floats a video on a switch only from a site with engagement or that.
-floats Allow
-await "^browser: title $w playing sound\$" || true
 placed_before=$(grep -c 'browser: mini player placed at ' "$log")
 echo "probe: today $(today), pinned $(pinned)"
 shown "$v"
