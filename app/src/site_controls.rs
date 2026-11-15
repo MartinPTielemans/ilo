@@ -754,9 +754,15 @@ impl Switch {
     fn words(self, site: &Site) -> SharedString {
         if let Switch::Boost(true) = self {
             let script = (site.boost_script).and_then(|script| script.off_reason());
-            let misfits = site.arrangement_misfits.as_ref().map(|misfits| misfits.as_ref());
+            let misfits = site
+                .arrangement_misfits
+                .as_ref()
+                .map(|misfits| misfits.as_ref());
             if script.is_some() || misfits.is_some() {
-                let said: Vec<&str> = [Some("Boost on"), script, misfits].into_iter().flatten().collect();
+                let said: Vec<&str> = [Some("Boost on"), script, misfits]
+                    .into_iter()
+                    .flatten()
+                    .collect();
                 return said.join(" · ").into();
             }
         }
