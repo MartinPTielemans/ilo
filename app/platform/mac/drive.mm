@@ -131,6 +131,9 @@
 //                                         "browser: pip none". The driver doesn't drag it: the
 //                                         window server and Chromium's move loop follow the real
 //                                         pointer, which check/pointer.mm drags in CI
+//   pip move <x> <y>                      moves the pointer to (x, y) from that window's top-left,
+//                                         as move does in the browser window, or logs "browser:
+//                                         pip none"
 //   pip doubleclick <x> <y>               double-clicks that window at (x, y) from its top-left,
 //                                         or logs "browser: pip none"
 //   pip wheel <x> <y> <notches> [cmd]     scrolls over that window at (x, y) as a trackpad does,
@@ -618,6 +621,29 @@ NSWindow* WindowAt(NSWindow* browser, double x, double y) {
     }
   }
   return browser;
+}
+
+// Moves the pointer to (x, y) from |target|'s top-left, without a button down. It goes to the view
+// under the pointer and to the tracking areas holding it, as a real move does, which is how GPUI's
+// view, under the page's, hears the pointer over the page. It's also posted, for the app's event
+// monitors.
+void MoveIn(NSWindow* target, double x, double y) {
+  NSEvent* move = [NSEvent mouseEventWithType:NSEventTypeMouseMoved
+                                     location:NSMakePoint(x, NSHeight(target.frame) - y)
+                                modifierFlags:0
+                                    timestamp:NSProcessInfo.processInfo.systemUptime
+                                 windowNumber:target.windowNumber
+                                      context:nil
+                                  eventNumber:0
+                                   clickCount:0
+                                     pressure:0];
+  NSView* content = target.contentView;
+  NSView* hit =
+      [content hitTest:[content.superview convertPoint:move.locationInWindow fromView:nil]];
+  Pointed(target, move.locationInWindow);
+  [hit mouseMoved:move];
+  TrackMove(content, move, hit);
+  [NSApp postEvent:move atStart:NO];
 }
 
 void Click(NSWindow* window, double x, double y, int count, NSEventModifierFlags flags = 0) {
@@ -1646,25 +1672,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     NSWindow* target = WindowAt(window, x, y);
     Convert(window, target, &x, &y);
-    NSEvent* move = [NSEvent mouseEventWithType:NSEventTypeMouseMoved
-                                       location:NSMakePoint(x, NSHeight(target.frame) - y)
-                                  modifierFlags:0
-                                      timestamp:NSProcessInfo.processInfo.systemUptime
-                                   windowNumber:target.windowNumber
-                                        context:nil
-                                    eventNumber:0
-                                     clickCount:0
-                                       pressure:0];
-    // It goes to the view under the pointer and to the tracking areas holding it, as a real move
-    // does, which is how GPUI's view, under the page's, hears the pointer over the page. It's also
-    // posted, for the app's event monitors.
-    NSView* content = target.contentView;
-    NSView* hit = [content hitTest:[content.superview convertPoint:move.locationInWindow
-                                                          fromView:nil]];
-    Pointed(target, move.locationInWindow);
-    [hit mouseMoved:move];
-    TrackMove(content, move, hit);
-    [NSApp postEvent:move atStart:NO];
+    MoveIn(target, x, y);
     done();
     return true;
   }
@@ -1772,12 +1780,14 @@ bool Run(const std::string& line, void (^done)(void)) {
     std::string what;
     if (words >> what) {
       double x, y, notches = 0;
-      if ((what != "doubleclick" && what != "wheel") || !(words >> x >> y) ||
+      if ((what != "move" && what != "doubleclick" && what != "wheel") || !(words >> x >> y) ||
           (what == "wheel" && !(words >> notches))) {
         return false;
       }
       if (!pip) {
         fprintf(stderr, "browser: pip none\n");
+      } else if (what == "move") {
+        MoveIn(pip, x, y);
       } else if (what == "doubleclick") {
         Click(pip, x, y, 1);
         Click(pip, x, y, 2);
