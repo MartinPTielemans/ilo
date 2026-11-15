@@ -324,9 +324,15 @@ shows "c,b,a,w side s hidden - float n:$unpinned" "the pin didn't turn the float
 press_mini_bar first pin
 shows "c,b,a,w side s hidden - float n:$pinned" "the pin didn't turn the float back"
 
-# ⌘Z with the page focused takes back the last change, the float.
+# ⌘Z with the page focused takes back one step at a time: each pin, then the float.
 send key z cmd
-expect "browser: tab $tab arrange saved 1 changes\$" "⌘Z with the page focused didn't reach the mode"
+expect "browser: tab $tab arrange saved 2 changes\$" "⌘Z with the page focused didn't reach the mode"
+shows "c,b,a,w side s hidden - float n:$unpinned" "⌘Z didn't take back the second pin"
+send key z cmd
+expect "browser: tab $tab arrange saved 2 changes\$" "the second ⌘Z didn't reach the mode"
+shows "c,b,a,w side s hidden - float n:$pinned" "⌘Z didn't take back the first pin"
+send key z cmd
+expect "browser: tab $tab arrange saved 1 changes\$" "the third ⌘Z didn't reach the mode"
 shows 'c,b,a,w side s,n hidden - float -' "⌘Z didn't take back the float"
 kept 1 "⌘Z's step back wasn't saved"
 
