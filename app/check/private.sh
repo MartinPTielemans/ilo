@@ -298,7 +298,7 @@ if [ "$status" = 3 ]; then
     "Chrome's extensions page didn't open on Check Allowed"
   on_switch() {
     asked=$(grep -c '^cdp: focus-within ' "$cdp_log" || true)
-    echo "focus-within chrome://extensions/ allow-incognito" >&5
+    echo "focus-within chrome://extensions/ #allow-incognito" >&5
     for _ in $(seq 50); do
       [ "$(grep -c '^cdp: focus-within ' "$cdp_log" || true)" -gt "$asked" ] && break
       sleep 0.1
