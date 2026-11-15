@@ -1588,8 +1588,9 @@ if [ "$(uname)" = Darwin ] || windows; then
   sleep 0.7 # Esc held past the key repeat's delay
   send keydown escape repeat
   expect '^browser: escape held leaves full screen$' "Esc held 700 ms didn't leave full screen"
-  send keyup escape
+  # Off the Mac the window leaves as the repeat comes, before the key's let go.
   expect '^browser: window left full screen$' "Esc held didn't take the window out of full screen"
+  send keyup escape
 else
   echo "skip: Esc held in full screen, as Linux's host can't tell a held key's repeats from presses, which leave as twice."
 fi
