@@ -285,6 +285,49 @@ fn the_next_launch_loads_the_cache_and_a_changed_list_compiles_again() {
 }
 
 #[test]
+fn response_time_filters_ask_at_the_response_from_the_compiled_engine_and_the_cache() {
+    let folder = folder("responses");
+    let cache = folder.join("cache");
+    let filters = "||cdn.example^$script,header=x-ad:1\n@@||cdn.example/ok.js\n\
+                   *$script,3p,ipaddress=203.0.113.7,redirect=noopjs\n\
+                   ||cdn.example^$xhr,requestheader=cookie:x\n";
+    let setup = setup(&folder, filters);
+    let compiled = load(&setup, Some(&cache));
+    let loaded = load(&setup, Some(&cache));
+    let page = "https://news.example/";
+    for engine in [&compiled, &loaded] {
+        let url = "https://cdn.example/a.js";
+        assert_eq!(
+            check(engine, url, page, "script"),
+            Verdict::AtResponse(vec!["x-ad".into()])
+        );
+        assert!(at_response(engine, url, page, "script", "GET", "x-ad: 1\n"));
+        assert!(!at_response(
+            engine,
+            url,
+            page,
+            "script",
+            "GET",
+            "x-ad: 2\n"
+        ));
+        assert_eq!(
+            check(engine, "https://cdn.example/ok.js", page, "script"),
+            Verdict::Allow,
+            "adblock-rust's exception lets it go"
+        );
+        assert!(matches!(
+            check(engine, "http://203.0.113.7/a.js", page, "script"),
+            Verdict::Redirect(stand_in) if stand_in.starts_with("data:application/javascript;")
+        ));
+        assert_eq!(
+            check(engine, "https://cdn.example/x", page, "xmlhttprequest"),
+            Verdict::Allow,
+            "requestheader= isn't honoured"
+        );
+    }
+}
+
+#[test]
 fn a_request_waits_for_the_engine_asked_for() {
     let folder = folder("blocker");
     let blocker = Arc::new(Blocker::new());

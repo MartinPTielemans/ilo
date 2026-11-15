@@ -110,7 +110,8 @@ impl SecondPress {
         second
     }
 
-    /// The page didn't keep `keystroke`, so ilo ran its command, and the next press is a first.
+    /// ilo ran its command for `keystroke`, as the page didn't keep it or ilo took it first, so the
+    /// next press is a first.
     pub fn declined(&mut self, keystroke: &str) {
         if (self.0.as_ref()).is_some_and(|(_, first, _)| first == keystroke) {
             self.0 = None;
