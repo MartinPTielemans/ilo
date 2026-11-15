@@ -86,23 +86,36 @@ answer return accept "confirm true"
 ask p Prompt prompt
 send type grace
 answer return accept "prompt grace"
-# On sway's Xwayland the prompt keeps the keys through its window's move to another workspace and
-# back, as wlroots gives the X focus to none and then to the browser window (#2894).
+# probe2894: the X focus through a move to another workspace and back, sampled.
 if sway_xwayland; then
   ask p Prompt prompt-workspace
-  swaymsg 'move container to workspace 2; workspace 2' > /dev/null ||
-    fail "sway didn't move the window to another workspace"
-  swaymsg 'move container to workspace 1; workspace 1' > /dev/null ||
-    fail "sway didn't move the window back"
-  for _ in $(seq 50); do
-    send onscreen
-    grep '^browser: onscreen ' "$log" | tail -1 | grep -q 'keyboard overlay$' && break
-    sleep 0.1
-  done
-  grep '^browser: onscreen ' "$log" | tail -1 | grep -q 'keyboard overlay$' ||
-    fail "the prompt didn't take the keys back in 5 s, back on its window's workspace: $(grep '^browser: onscreen ' "$log" | tail -1)"
+  sample() { for _ in $(seq "$2"); do send onscreen; sleep 0.1; done; echo "probe2894 $1 $(grep '^browser: onscreen ' "$log" | tail -"$2" | sed 's/.*keyboard //' | uniq -c | tr -s ' \n' ' ')"; }
+  sample open 5
+  swaymsg 'move container to workspace 2' > /dev/null
+  sample moved 20
+  swaymsg 'workspace 2' > /dev/null
+  sample there 20
+  swaymsg 'move container to workspace 1' > /dev/null
+  sample moved-back 20
+  swaymsg 'workspace 1' > /dev/null
+  sample back 40
+  swaymsg -t get_tree | python3 -I -c 'import json,sys
+t = json.load(sys.stdin)
+def walk(n, d=0):
+    if n.get("type") in ("con", "floating_con", "workspace"):
+        print("probe2894 tree", d, n.get("type"), n.get("name"), n.get("focused"), n.get("rect", {}).get("width"), n.get("rect", {}).get("height"))
+    for c in n.get("nodes", []) + n.get("floating_nodes", []):
+        walk(c, d + 1)
+walk(t)'
   send type ada
-  answer return accept "prompt ada"
+  sample typed 5
+  send key return
+  sample answered 5
+  grep "^browser: title $page prompt" "$log" | tail -2 | sed 's/^/probe2894 /'
+  exec 3>&-
+  quit
+  echo "probe2894 done"
+  exit 0
 fi
 
 # Another tab takes the alert down, and its own brings it back.
