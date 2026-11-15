@@ -91,13 +91,12 @@ impl LiveList {
     }
 }
 
-/// A pull request's state, which its row's glyph shows.
+/// A pull request's state, which its row's glyph shows. The lists are of open ones, so one merged
+/// or closed leaves them, and a tab opened from its row is then a tab like any other (#3009).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PullState {
     Open,
     Draft,
-    Merged,
-    Closed,
 }
 
 impl PullState {
@@ -105,14 +104,7 @@ impl PullState {
         match self {
             PullState::Open => "icons/git-pull-request.svg",
             PullState::Draft => "icons/git-pull-request-draft.svg",
-            PullState::Merged => "icons/git-merge.svg",
-            PullState::Closed => "icons/git-pull-request-closed.svg",
         }
-    }
-
-    /// Whether it's still waiting on someone, so it's listed whether its tab is open or not.
-    pub fn open(self) -> bool {
-        matches!(self, PullState::Open | PullState::Draft)
     }
 }
 
@@ -256,21 +248,19 @@ impl LiveFolder {
     /// How many review requests wait, which a closed folder's row ends with.
     pub fn waiting(&self) -> usize {
         (self.items.iter())
-            .filter(|item| item.list == LiveList::ReviewRequests && item.state.open())
+            .filter(|item| item.list == LiveList::ReviewRequests)
             .count()
     }
 
     /// The rows under the tabs opened from it, for which `open` says whether an item's URL is one:
-    /// each list under its heading, without its opened items and those no longer open, or the
-    /// sign-in row. A list with no rows has no heading.
+    /// each list under its heading, without its opened items, or the sign-in row. A list with no rows has no heading.
     pub fn rows(&self, open: impl Fn(&str) -> bool) -> Vec<LiveRow> {
         if self.signed_out {
             return vec![LiveRow::SignIn];
         }
         let mut rows = Vec::new();
         for list in LiveList::ALL {
-            let items = (self.items.iter())
-                .filter(|item| item.list == list && item.state.open() && !open(&item.url()));
+            let items = (self.items.iter()).filter(|item| item.list == list && !open(&item.url()));
             let at = rows.len();
             for item in items {
                 let new = self.new.contains(&item.key());
@@ -539,7 +529,8 @@ impl Shell {
     }
 
     /// The item a tab opened from a Live Folder stands for: the tab directly in one, at an item's
-    /// URL. Its row shows the item's glyph, title and place, gone from the lists or not.
+    /// URL. Its row shows the item's glyph, title and place while the lists have it; once it has
+    /// left them, merged or closed, the tab is a tab like any other, its page's title and icon.
     pub(super) fn live_item_of(&self, tab: u64) -> Option<LiveItem> {
         let space = self
             .spaces

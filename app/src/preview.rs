@@ -298,17 +298,11 @@ const PAUSED: DownloadState = DownloadState::Paused;
 const DONE: DownloadState = DownloadState::Done;
 
 /// What the preview's Live Folder fetches, as PREVIEW_LIVE_FOLDER asks: made-up pull requests,
-/// the mock's (#2979), or with `signed-out` that answer. With `failed`, the next fetch fails, and
-/// with `states`, #57 has merged.
+/// the mock's (#2979), or with `signed-out` that answer. With `failed`, the next fetch fails.
 fn live_stand_in() -> LiveAnswer {
-    let mode = std::env::var("PREVIEW_LIVE_FOLDER").unwrap_or_default();
-    if mode == "signed-out" {
+    if std::env::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("signed-out") {
         return LiveAnswer::SignedOut;
     }
-    let ferry = match mode.as_str() {
-        "states" => PullState::Merged,
-        _ => PullState::Open,
-    };
     let item = |list, repo: &str, number, title: &str, state| LiveItem {
         list,
         repo: repo.to_string().into(),
@@ -352,13 +346,13 @@ fn live_stand_in() -> LiveAnswer {
             "harbor/timetables",
             57,
             "Parse the ferry timetable's winter page",
-            ferry,
+            Open,
         ),
     ])
 }
 
 /// The tabs PREVIEW_LIVE_FOLDER=states opens in the Live Folder, at their items' URLs: #2961,
-/// selected, and #57, merged since.
+/// selected, and #57, merged since, so it has left the lists and its tab is a plain one.
 const LIVE_TABS: [(u64, &str, &str); 2] = [
     (
         9001,
@@ -800,12 +794,14 @@ impl Browser for Fake {
                 shell.set_live_answer_at(folder, answer, then, cx);
                 shell.set_live_answer(folder, LiveAnswer::Failed, cx);
             }
-            // The answer before had no #412, so it's new.
+            // The answer before had no #412, so it's new, and #57 has merged since, so this one
+            // has left it out.
             ("states", LiveAnswer::Items(items)) => {
                 let before = items.iter().filter(|item| item.number != 412);
                 let before = LiveAnswer::Items(before.cloned().collect());
+                let now = items.into_iter().filter(|item| item.number != 57);
                 shell.set_live_answer(folder, before, cx);
-                shell.set_live_answer(folder, LiveAnswer::Items(items), cx);
+                shell.set_live_answer(folder, LiveAnswer::Items(now.collect()), cx);
             }
             (_, answer) => shell.set_live_answer(folder, answer, cx),
         });

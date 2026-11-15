@@ -101,21 +101,15 @@ fn a_list_with_no_rows_has_no_heading() {
 }
 
 #[test]
-fn a_gone_item_stays_only_while_its_tab_is_open() {
+fn an_item_that_leaves_the_lists_leaves_its_tab_a_plain_one() {
     let mut folder = LiveFolder::default();
-    let merged = item(LiveList::Created, "harbor/web", 9, PullState::Merged);
-    folder.answer(
-        LiveAnswer::Items(vec![mine(7), merged.clone()]),
-        Instant::now(),
-    );
-    // Not open, it has no row.
-    assert_eq!(shown(&folder.rows(|_| false)), ["C", "7"]);
-    // Open, its tab's row shows it merged.
-    assert_eq!(
-        folder.item_at(&merged.url()).map(|item| item.state),
-        Some(PullState::Merged)
-    );
-    assert_eq!(folder.waiting(), 0);
+    folder.answer(LiveAnswer::Items(vec![mine(7), mine(9)]), Instant::now());
+    let gone = mine(9).url();
+    assert_eq!(folder.item_at(&gone), Some(&mine(9)));
+    // Merged or closed, it isn't in the next answer, so its tab no longer stands for it.
+    folder.answer(LiveAnswer::Items(vec![mine(7)]), Instant::now());
+    assert_eq!(folder.item_at(&gone), None);
+    assert_eq!(shown(&folder.rows(|url| url == gone)), ["C", "7"]);
 }
 
 #[test]
