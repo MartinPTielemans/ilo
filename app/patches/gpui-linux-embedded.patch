@@ -4963,7 +4963,7 @@ index f9b9727330..e1e2214d9d 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..23267746c9 100644
+index e21f019c64..05196c8888 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -5015,8 +5015,8 @@ index e21f019c64..23267746c9 100644
 +    static UNPLACED: RefCell<Vec<(xproto::Window, Vec<xproto::Rectangle>)>> =
 +        const { RefCell::new(Vec::new()) };
 +    /// The sizes each managed overlay asked for while it waited for its place (`UNPLACED`), as it
-+    /// may be resized on its way there: a manager that sizes it as none of them, nor as it is now,
-+    /// refused it the place (`managed_overlay_refused`).
++    /// may be resized on its way there, and the size it had when last hidden: a manager that sizes
++    /// it as none of them, nor as it is now, refused it the place (`managed_overlay_refused`).
 +    static ASKED_SIZES: RefCell<Vec<(xproto::Window, u32, u32)>> =
 +        const { RefCell::new(Vec::new()) };
 +    /// The managed overlays shown and not yet mapped since, whose place is checked as they map.
@@ -5938,7 +5938,7 @@ index e21f019c64..23267746c9 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,6 +2741,1480 @@ impl X11ClientState {
+@@ -2087,6 +2741,1489 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
@@ -7045,13 +7045,22 @@ index e21f019c64..23267746c9 100644
 +            all.retain(|&(each, ..)| each != view);
 +            top
 +        });
-+        PLACED.with_borrow_mut(|all| all.retain(|&(each, ..)| each != view));
++        // The size it had stays asked: KWin maps one hidden and shown again in the same turn at the
++        // size it had, before it takes the next, which isn't a refusal.
++        let had = PLACED.with_borrow_mut(|all| {
++            let at = all.iter().position(|&(each, ..)| each == view)?;
++            let (.., width, height) = all.remove(at);
++            Some((width, height))
++        });
++        ASKED_SIZES.with_borrow_mut(|all| {
++            all.retain(|&(each, ..)| each != view);
++            all.extend(had.map(|(width, height)| (view, width, height)));
++        });
 +        FOCUS_ON_MAP.with_borrow_mut(|all| all.retain(|&each| each != view));
 +        CHECK_ON_MAP.with_borrow_mut(|all| all.retain(|&each| each != view));
 +        RESTATE.with_borrow_mut(|all| all.retain(|&each| each != view));
 +        ASKED_AGAIN.with_borrow_mut(|all| all.retain(|&each| each != view));
 +        UNPLACED.with_borrow_mut(|all| all.retain(|(each, _)| *each != view));
-+        ASKED_SIZES.with_borrow_mut(|all| all.retain(|&(each, ..)| each != view));
 +        let client = CLIENTS.with_borrow_mut(|all| {
 +            let at = all.iter().position(|&(each, _)| each == view)?;
 +            Some(all.remove(at).1)
@@ -7419,7 +7428,7 @@ index e21f019c64..23267746c9 100644
      fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
          if let Some(cursor) = self.cursor_cache.get(&style) {
              return *cursor;
-@@ -2197,7 +4325,7 @@ impl X11ClientState {
+@@ -2197,7 +4334,7 @@ impl X11ClientState {
              .get(&hidden_window)
              .copied()
              .unwrap_or(CursorStyle::Arrow);
@@ -7428,12 +7437,13 @@ index e21f019c64..23267746c9 100644
              log::warn!(
                  "X11: no cursor icon available to restore {:?} after hide; cursor may stay invisible",
                  style
-@@ -2219,6 +4347,13 @@ impl X11ClientState {
+@@ -2219,6 +4356,14 @@ impl X11ClientState {
      }
  }
  
 +/// Whether the manager sized the managed overlay `window`, which is to be `asked` now, as `got`:
-+/// none of the sizes it asked for since it was last seen, so it refused the place too.
++/// none of the sizes it asked for since it was last seen, nor the one it had when last hidden, so
++/// it refused the place too.
 +fn managed_overlay_refused(window: xproto::Window, asked: (u32, u32), got: (u32, u32)) -> bool {
 +    got != asked
 +        && !ASKED_SIZES.with_borrow(|all| all.contains(&(window, got.0, got.1)))
@@ -7442,7 +7452,7 @@ index e21f019c64..23267746c9 100644
  // Adapted from:
  // https://docs.rs/winit/0.29.11/src/winit/platform_impl/linux/x11/monitor.rs.html#103-111
  pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
-@@ -2232,6 +4367,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+@@ -2232,6 +4377,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
      Duration::from_micros(micros)
  }
  
@@ -7483,7 +7493,7 @@ index e21f019c64..23267746c9 100644
  /// Applies a mapped/obscured change to the refresh loop and reports the
  /// resulting visibility to the window. Consumes the client borrow because the
  /// visibility callback re-enters GPUI.
-@@ -2246,10 +4415,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +4425,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -7538,7 +7548,7 @@ index e21f019c64..23267746c9 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +4486,77 @@ fn detect_compositor_gpu(
+@@ -2273,73 +4496,77 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -7679,7 +7689,7 @@ index e21f019c64..23267746c9 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +4682,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +4692,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -7700,7 +7710,7 @@ index e21f019c64..23267746c9 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +4729,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +4739,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -7709,7 +7719,7 @@ index e21f019c64..23267746c9 100644
                          },
                      ))
                  }
-@@ -2539,10 +4772,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +4782,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -7723,7 +7733,7 @@ index e21f019c64..23267746c9 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +4790,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +4800,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -7740,7 +7750,7 @@ index e21f019c64..23267746c9 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +4805,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +4815,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -7776,7 +7786,7 @@ index e21f019c64..23267746c9 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +4884,11 @@ fn get_scale_factor(
+@@ -2620,6 +4894,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -7788,7 +7798,7 @@ index e21f019c64..23267746c9 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +5167,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +5177,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
@@ -7919,7 +7929,7 @@ index e21f019c64..23267746c9 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +5606,101 @@ mod tests {
+@@ -3213,3 +5616,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }
