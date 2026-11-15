@@ -1234,11 +1234,11 @@ void WatchForeground() {
   (void)hook;
 }
 
-Floating g_overlays[5];
+Floating g_overlays[6];
 // What check.sh calls each overlay, as the Mac's and Linux's hosts do.
 const char* const kOverlayNames[std::size(g_overlays)] = {"command bar", "icon picker",
                                                          "theme picker", "folder preview",
-                                                         "boost editor"};
+                                                         "boost editor", "tab switcher"};
 int const kFolderPreview = 3;
 // Hides overlay |index| if it's shown, on screen or not, saying so, and whether it was, as the
 // Mac's host does: its show waits for the UI's next frame, and Windows hides it with its minimized
@@ -3645,9 +3645,10 @@ void host_forget_window(void* ui_view) {
 void host_add_overlay(int overlay, void* overlay_view, double, void (*dismissed)(void)) {
   Adopt(g_overlays[overlay], overlay_view, kOverlayNames[overlay], false, dismissed);
   g_overlays[overlay].overlay = overlay;
-  // The command bar is a rounded rectangle, as Windows' frame is. The pickers and the folder
-  // preview have a beak, whose shape a rectangle's corners and shadow would show round.
-  if (overlay == 0) {
+  // The command bar and the tab switcher are rounded rectangles, as Windows' frame is. The pickers
+  // and the folder preview have a beak, whose shape a rectangle's corners and shadow would show
+  // round.
+  if (overlay == HOST_COMMAND_BAR || overlay == HOST_TAB_SWITCHER) {
     SystemFrame(g_overlays[overlay].hwnd);
   }
 }

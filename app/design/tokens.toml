@@ -2456,6 +2456,21 @@ descent = 0.211
 cap = 0.705
 line = 20.0
 
+[tab-switcher]
+# ⌃Tab held shows the Space's recent tabs (#2954). Arc's was never recorded, so it's ours: ⌘T's
+# panel in ⌘T's place, at its width, radius and modal elevation, with its rows (command-bar), and
+# no field. The list sits the rows' own inset (command-bar list-x) inside the panel on every side.
+# This many rows show; past them the list scrolls the least that shows the selected row whole, and
+# a cut edge fades over command-bar field-fade.
+rows = 8
+
+[tab-switcher.motion]
+# Seconds from ⌃Tab's press, with ⌃ still held, before the switcher shows (ours, #2954). A quick
+# ⌃Tab lets go of ⌃ within a keystroke's hold, around 0.1 s, so it never shows; past this the hold
+# is deliberate. A second ⌃Tab before then shows it at once. It shows in one frame and goes in one,
+# as ⌘T's panel does.
+delay = 0.16
+
 [text]
 # The chrome's four type sizes, in its face (src/face.rs). A surface's own size token holds one of
 # them, and only the extension badge's 8.5, a pictogram inside its pill, stands outside. Rows share

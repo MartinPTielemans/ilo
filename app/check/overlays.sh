@@ -21,15 +21,15 @@ if [ -z "${CI:-}" ]; then
   exit 0
 fi
 
-# The names from the host's code: the five in kOverlayNames, each window it adopts, and the menu,
+# The names from the host's code: the six in kOverlayNames, each window it adopts, and the menu,
 # one a line.
 names=$({
   sed -n '/^const char\* const kOverlayNames/,/};/p' platform/windows/host.cc | grep -o '"[^"]*"'
   grep -o 'Adopt([^,]*, [^,]*, "[^"]*"' platform/windows/host.cc | grep -o '"[^"]*"'
   grep -o 'each(context, "[^"]*"' platform/windows/host.cc | grep -o '"[^"]*"'
 } | tr -d '"' | awk '!seen[$0]++')
-[ "$(printf '%s\n' "$names" | grep -c .)" -ge 20 ] ||
-  fail "the host's code gave fewer than the 20 names it had (#2563): $(printf '%s\n' "$names" | tr '\n' ',')"
+[ "$(printf '%s\n' "$names" | grep -c .)" -ge 21 ] ||
+  fail "the host's code gave fewer than the 21 names it had (#2563, #2954): $(printf '%s\n' "$names" | tr '\n' ',')"
 # The order the run walks them in. Each but the foot bar is opened and closed by open and close below.
 order='command bar
 find bar
@@ -47,6 +47,7 @@ dialog
 link preview
 boost editor
 folder preview
+tab switcher
 offer
 drop targets
 reveal
@@ -242,6 +243,13 @@ EOF
       send move $(pinned_row 1)
       expect "^browser: folder preview shown $f at " "$2: resting on the closed folder didn't preview it"
       ;;
+    # ⌃Tab twice, ⌃ held, shows it at once.
+    'tab switcher')
+      send click $page_point
+      send key tab ctrl
+      send key tab ctrl
+      expect '^browser: tab switcher shown$' "$2: ⌃Tab twice with ⌃ held didn't show the tab switcher"
+      ;;
     offer)
       send click $today_row
       expect "^browser: selected $l in " "$2: a click on the login tab didn't show it"
@@ -299,6 +307,12 @@ close() {
     tooltip)
       away
       expect '^browser: tooltip hidden$' "$2: the pointer leaving Hide Sidebar left its tooltip"
+      ;;
+    # Escape goes back to the pinned page the walk started from, and ⌃ goes up.
+    'tab switcher')
+      send key escape ctrl
+      expect '^browser: tab switcher hidden$' "$2: Escape didn't close the tab switcher"
+      send flags
       ;;
     'hover card' | 'link target' | 'folder preview')
       send move $page_point

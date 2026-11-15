@@ -126,6 +126,9 @@ mod window_move_tests;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
 mod picture;
 mod recent_downloads;
+mod recent_tabs;
+#[cfg(test)]
+mod recent_tabs_tests;
 #[cfg(test)]
 mod recorder;
 mod return_mark;
@@ -1312,6 +1315,8 @@ pub struct Shell {
     /// ⌃ is held after a ⌃Tab, which showed this tab. The tabs a walk shows don't count as shown
     /// until ⌃ goes up, and then its last one does, though a click may have shown another since.
     walked: Option<u64>,
+    /// That walk, and its switcher (recent_tabs).
+    held: Option<recent_tabs::Held>,
     hovered: Option<Row>,
     /// The pinned row the pointer is on, whose − or middle press just unloaded it. Its remove
     /// button waits until the pointer has left the row or pressed it, so a second click meant for
@@ -1963,6 +1968,7 @@ impl Shell {
             agents_at: HashMap::new(),
             recent: Vec::new(),
             walked: None,
+            held: None,
             selected: 0,
             hovered: None,
             remove_held: None,
@@ -3481,15 +3487,6 @@ impl Shell {
             self.recent.retain(|&other| other != tab);
             self.recent.insert(0, tab);
         }
-    }
-
-    /// ⌃ went up, which ends a ⌃Tab walk on the tab it shows. A click ends it too, and the core
-    /// may report the tab the click showed before this runs, so the walk's tab counts first.
-    pub fn control_released(&mut self, cx: &mut Context<Self>) {
-        if let Some(walked) = self.walked.take().filter(|tab| self.tabs.contains_key(tab)) {
-            self.shown(walked, cx);
-        }
-        self.shown(self.selected, cx);
     }
 
     // The core reports a tab's title, favicon and state whenever Chromium touches them, often with

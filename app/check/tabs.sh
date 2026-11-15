@@ -9,10 +9,11 @@
 # filters, and ↩ switches to the one left. ⌘T or ⌘L closes the open bar again, ⌘L's field holds the
 # whole address, and ↩ on it as it opened reloads the page. Tab in the empty field, or "/ ", lists
 # only the commands, which typing filters, until Esc or ⌫ at the start leaves, and "2. tab" goes to
-# the second sidebar item. ⌘1–⌘9, ⌥⌘↓, ⌥⌘↑ and clicks on rows show tabs. ⌃Tab, with the page or
-# the UI focused, shows the tab shown before, and with ⌃ held goes on back through the tabs in the
-# order they were shown, and ⌃⇧Tab the other way,
-# until ⌃ goes up or a click. A tab a page opens goes under it and closing it goes back there, and
+# the second sidebar item. ⌘1–⌘9, ⌥⌘↓, ⌥⌘↑ and clicks on rows show tabs. A quick ⌃Tab, with the
+# page or the UI focused, shows the tab shown before and nothing else; held, it shows the switcher
+# of the tabs in the order they were shown, where ⌃Tab, ⇧ and the arrows move the selection, letting
+# go of ⌃ or a press on a row shows it, and Escape goes back to the tab the walk started from
+# (switcher-light.png, switcher-dark.png); ⌃⇧Tab starts the other way. A tab a page opens goes under it and closing it goes back there, and
 # ⌘W otherwise shows the tab below, or above at the bottom. Tabs opened behind close to their
 # sibling, then their opener; after a switch to an unrelated tab, a tab opened in front closes to
 # the tab below; and a pinned tab's newest tab opened in front closes back to it, past an older one.
@@ -440,17 +441,92 @@ switch "up alt cmd" "$b"
 switch "down alt cmd" "$a"
 # Next wraps around, as in Chrome.
 switch "down alt cmd" "$c"
-# ⌃Tab goes back through the tabs in the order they were shown, c, a and b by now, as far as ⌃
-# stays down. Then the tab it showed counts as shown last.
+# ⌃Tab goes back through the tabs in the order they were shown, c, a and b by now (#2954). A quick
+# one switches once, on its press, and shows nothing; the tab it showed counts as shown last.
 send click $page_point
-switch "tab ctrl" "$a"
+lists=$(grep -c '^browser: tab switcher lists ' "$log" || true)
+send key tab ctrl
+send flags
+expect "^browser: selected $a in " "a quick ⌃Tab didn't show $a, the tab shown before $c"
 expect '^browser: command recent-tab via page$' "⌃Tab with the page focused didn't reach the UI"
-switch "tab ctrl" "$b"
+[ "$(grep -c '^browser: tab switcher lists ' "$log" || true)" = "$lists" ] ||
+  fail "a quick ⌃Tab, ⌃ let go right after Tab, showed the switcher, which waits for ⌃ held past [tab-switcher.motion] delay"
+# The switcher's rows: ⌘T's place and width, its rows 50 tall inside a 6 inset, row $1's middle.
+switcher_row() {
+  echo "$((765 / 2)) $((6 + 50 * $1 + 25))"
+}
+# The number of tabs shown since the log's line $1.
+switches_since() {
+  tail -n +"$(($1 + 1))" "$log" | grep -c '^browser: selected ' || true
+}
+# Held, it shows the Space's tabs, most recently shown first, with the one ⌃Tab showed selected,
+# and the page stays: ⌃Tab and the arrows move the selection, wrapping, and letting go of ⌃ shows
+# its row, one more switch.
+send menu "$(cased 'Appearance › Light')"
+expect '^browser: appearance light$' "View › Appearance › Light didn't change the appearance"
+from=$(wc -l < "$log")
+send key tab ctrl
+expect "^browser: selected $c in " "⌃Tab didn't show $c, the tab shown before $a"
+expect "^browser: tab switcher lists $a $c $b selected $c\$" \
+  "⌃Tab held didn't list $a, $c and $b with $c selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
+expect '^browser: tab switcher shown$' "the switcher's window didn't show"
+../tools/window-screenshot.sh "$pid" "$out/switcher-light.png" all || fail "no window to capture"
+send key tab ctrl
+expect "^browser: tab switcher selected $b\$" "⌃Tab with the switcher shown didn't select $b"
+send key right ctrl
+expect "^browser: tab switcher selected $a\$" "→ on the switcher's last row didn't wrap to $a"
+send key left ctrl
+expect "^browser: tab switcher selected $b\$" "← didn't go back to $b"
 send flags
-switch "tab ctrl" "$c"
+expect "^browser: selected $b in " "letting go of ⌃ on $b didn't show it"
+expect '^browser: tab switcher hidden$' "letting go of ⌃ didn't close the switcher"
+[ "$(switches_since "$from")" = 2 ] ||
+  fail "a held ⌃Tab walk switched $(switches_since "$from") times, not twice: on the press and as ⌃ went up"
+# Escape goes back to the tab the walk started from, b.
+send menu "$(cased 'Appearance › Dark')"
+expect '^browser: appearance dark$' "View › Appearance › Dark didn't change the appearance"
+send key tab ctrl
+expect "^browser: selected $a in " "⌃Tab didn't show $a, the tab shown before $b"
+expect "^browser: tab switcher lists $b $a $c selected $a\$" \
+  "⌃Tab held didn't list $b, $a and $c with $a selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/switcher-dark.png" all || fail "no window to capture"
+send key tab ctrl
+expect "^browser: tab switcher selected $c\$" "⌃Tab with the switcher shown didn't select $c"
+send key escape ctrl
+expect "^browser: tab switcher stays on $b\$" "Escape in the switcher didn't stay on $b"
+expect "^browser: selected $b in " "Escape in the switcher didn't go back to $b"
+expect '^browser: tab switcher hidden$' "Escape didn't close the switcher"
 send flags
-switch "tab ctrl shift" "$a"
+send menu "$(cased 'Appearance › Automatic')"
+# A second ⌃Tab before the delay shows it at once, and the page stays.
+from=$(wc -l < "$log")
+send key tab ctrl
+send key tab ctrl
+expect "^browser: tab switcher lists $b $a $c selected $c\$" \
+  "a second ⌃Tab didn't show the switcher with $c selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
 send flags
+expect "^browser: selected $c in " "letting go of ⌃ on $c didn't show it"
+[ "$(switches_since "$from")" = 2 ] ||
+  fail "⌃Tab twice switched $(switches_since "$from") times, not twice: on the first press and as ⌃ went up"
+# A press on a row shows its tab, a.
+send key tab ctrl
+expect "^browser: tab switcher lists $c $b $a selected $b\$" \
+  "⌃Tab held didn't list $c, $b and $a with $b selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
+send clickkey $(switcher_row 2)
+expect "^browser: tab switcher chose $a\$" "a press on the switcher's third row didn't choose $a"
+expect "^browser: selected $a in " "a press on the switcher's row didn't show $a"
+send flags
+# ⌃⇧Tab starts from the tab shown longest ago, and goes back.
+send key tab ctrl shift
+expect "^browser: selected $b in " "⌃⇧Tab didn't show $b, the tab shown longest ago"
+expect "^browser: tab switcher lists $a $c $b selected $b\$" \
+  "⌃⇧Tab held didn't list $a, $c and $b with $b selected: $(grep '^browser: tab switcher lists ' "$log" | tail -1)"
+send key tab ctrl shift
+expect "^browser: tab switcher selected $c\$" "⌃⇧Tab with the switcher shown didn't select $c"
+send key left ctrl
+expect "^browser: tab switcher selected $a\$" "← didn't go back to $a"
+send flags
+expect "^browser: selected $a in " "letting go of ⌃ on $a didn't show it"
 send click $sidebar_point
 switch "tab ctrl" "$c"
 expect '^browser: command recent-tab via ui$' "⌃Tab with the UI focused didn't reach the UI"
