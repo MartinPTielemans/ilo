@@ -26,7 +26,7 @@ use crate::{
     theme_picker::At,
 };
 
-actions!(boost, [Escape]);
+actions!(boost, [Escape, ArrangeOuter, ArrangeInner]);
 
 /// Escape while the UI has the keyboard ends Zap, or else closes the card, and otherwise falls
 /// through, as the DRM note's does.
@@ -35,7 +35,13 @@ pub(super) fn escape_binding() -> KeyBinding {
 }
 
 pub(super) fn bind(cx: &mut gpui::App) {
-    cx.bind_keys([escape_binding()]);
+    // ↑ and ↓ with the UI holding the keyboard pick the box around or inside while Arrange is on,
+    // as they do with the page focused (run_arrange_key); a field's or the sidebar's own win.
+    cx.bind_keys([
+        escape_binding(),
+        KeyBinding::new("up", ArrangeOuter, Some(KEY_CONTEXT)),
+        KeyBinding::new("down", ArrangeInner, Some(KEY_CONTEXT)),
+    ]);
     cx.on_action(|_: &Escape, cx| {
         let shell = super::commands::key_shell(cx);
         let done =
@@ -44,6 +50,22 @@ pub(super) fn bind(cx: &mut gpui::App) {
             cx.propagate();
         }
     });
+    cx.on_action(|_: &ArrangeOuter, cx| arrange_key("up", cx));
+    cx.on_action(|_: &ArrangeInner, cx| arrange_key("down", cx));
+}
+
+fn arrange_key(keystroke: &str, cx: &mut gpui::App) {
+    let shell = super::commands::key_shell(cx);
+    let done = shell.and_then(|shell| {
+        shell
+            .update(cx, |shell, cx| {
+                shell.run_arrange_key(shell.field_tab(), keystroke, cx)
+            })
+            .ok()
+    });
+    if !done.unwrap_or(false) {
+        cx.propagate();
+    }
 }
 
 impl Shell {
@@ -148,8 +170,11 @@ impl Shell {
         if self.shown_boost(cx).is_none() {
             return;
         }
-        // check.sh reads this line.
+        // check.sh reads these lines.
         log!("browser: boost card {tab} opened");
+        if self.page(tab).system_engine {
+            log!("browser: boost card {tab} offers no Arrange in Safari's engine");
+        }
         self.boost_card = Some(tab);
         cx.notify();
     }
@@ -303,6 +328,9 @@ impl Shell {
         };
         let changes = boosts::with(|boosts| boosts.zap(profile, &site, selector));
         self.browser.show_boosts(changes, cx);
+        if self.arranging == Some(tab) {
+            self.arrange_mode.kept(super::arrange::Undoable::Hide);
+        }
         cx.notify();
     }
 
@@ -314,7 +342,7 @@ impl Shell {
         }
     }
 
-    fn undo_zap(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn undo_zap(&mut self, cx: &mut Context<Self>) {
         let Some((profile, site, _)) = self.shown_boost(cx) else {
             return;
         };
@@ -402,8 +430,14 @@ impl Shell {
         // pointer. Both lines are one grid of two equal columns, so the four buttons' edges line up
         // whatever their labels' widths.
         let zapping = self.zapping == Some(tab);
+        // Safari's engine shows a page Arrange can't reach, so Customize… has the line alone there,
+        // as Done does.
+        let safari = self.page(tab).system_engine;
         let second = (!zapping)
-            .then(|| [customize.into_any_element(), arrange.into_any_element()])
+            .then(|| match safari {
+                true => vec![customize.col_span_full().into_any_element()],
+                false => vec![customize.into_any_element(), arrange.into_any_element()],
+            })
             .into_iter()
             .flatten();
         let arranged = (boost.as_ref())

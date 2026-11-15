@@ -1,10 +1,10 @@
 #!/bin/bash
 # Publishes the Release engine engine/build.sh built as the Mac's prebuilt engine: packs its
-# Chromium.app into Chromium-mac-arm64.tar.xz and its dSYMs into Chromium-mac-arm64-dSYMs.tar.xz
-# (tools/mac-dsyms.sh) and uploads them, each with its SHA-256, as the release
-# engine-mac-<commit> of the repository engine/prebuilt.ini names, named for the commit of ilo's
-# (app/branding/repository) it was built from, as engine-linux.yml publishes Linux's.
-# engine/fetch.sh on a Mac takes the one nearest a checkout's history. Runs on the Mac after
+# Chromium.app into Chromium-mac-arm64.tar.xz, and once local_dsyms below allows, its dSYMs into
+# Chromium-mac-arm64-dSYMs.tar.xz (tools/mac-dsyms.sh), and uploads them, each with its SHA-256,
+# as the release engine-mac-<commit> of the repository engine/prebuilt.ini names, named for the
+# commit of ilo's (app/branding/repository) it was built from, as engine-linux.yml publishes
+# Linux's. engine/fetch.sh on a Mac takes the one nearest a checkout's history. Runs on the Mac after
 # engine/build.sh, as tools/mac-nightly.sh does. The first engine uploaded for a commit stays,
 # whether this script or Engine on macOS (.github/workflows/engine-mac.yml) built it, since a check
 # may already have run on it: a second build of the commit is never uploaded. It reads nothing of
@@ -16,6 +16,10 @@
 set -euo pipefail
 symbols=
 [ "${1:-}" != symbols ] || symbols=1
+# A dSYM built here holds this Mac's build directory, the account's name in it, as each unit's
+# compilation directory, and the release is public. So none is published from here until the owner
+# says yes, when this becomes home-ok, which tools/mac-dsyms.sh takes for that yes (#2951).
+local_dsyms=
 root=$(cd "$(dirname "$0")/.." && pwd)
 engine=$root/engine
 out=$engine/.deps/src/out/Release
@@ -53,6 +57,8 @@ published() {
 there=$(published)
 
 if [ -n "$symbols" ]; then
+  [ -n "$local_dsyms" ] ||
+    fail "a dSYM built here holds this Mac's build directory, and $repo is public: publishing one waits on the owner's yes (#2951)."
   [ -n "$there" ] || fail "$tag has no engine to add dSYMs to."
   there=$(published Chromium-mac-arm64-dSYMs.tar.xz)
   [ -z "$there" ] || { echo "mac-engine-publish: $tag already has its dSYMs, $there."; exit 0; }
@@ -64,7 +70,7 @@ if [ -n "$symbols" ]; then
     { rm -rf "$shipped"; fail "couldn't take the framework out of $tag's engine."; }
   status=0
   "$root/tools/mac-dsyms.sh" "$out" "$(echo "$shipped"/Chromium.app/Contents/Frameworks/*/Versions/*/Chromium\ Framework)" \
-    "$engine/.deps/publish" || status=$?
+    "$engine/.deps/publish" "$local_dsyms" || status=$?
   rm -rf "$shipped"
   [ "$status" = 0 ] || fail "the dSYMs in $out aren't the build $tag published, so none are uploaded."
   archive=$engine/.deps/publish/Chromium-mac-arm64-dSYMs.tar.xz
@@ -83,8 +89,12 @@ archive=$engine/.deps/publish/Chromium-mac-arm64.tar.xz
 # Without the Mac's metadata, which tar would otherwise add as ._ files.
 tar -cJf "$archive" --no-mac-metadata --options xz:threads=0 -C "$out" Chromium.app
 shasum -a 256 "$archive" | cut -d' ' -f1 >"$archive.sha256"
-"$root/tools/mac-dsyms.sh" "$out" "$out/$framework" "$engine/.deps/publish"
+set -- "$archive#Chromium-mac-arm64.tar.xz, from tools/mac-engine-publish.sh" "$archive.sha256"
 dsyms=$engine/.deps/publish/Chromium-mac-arm64-dSYMs.tar.xz
+if [ -n "$local_dsyms" ]; then
+  "$root/tools/mac-dsyms.sh" "$out" "$out/$framework" "$engine/.deps/publish" "$local_dsyms"
+  set -- "$@" "$dsyms#Chromium-mac-arm64-dSYMs.tar.xz, from tools/mac-engine-publish.sh" "$dsyms.sha256"
+fi
 # Never GitHub's Latest, which releases/latest/download/<name> links mean as a release of its
 # repository's own (#804). The tag is on that repository's main, which hasn't this commit: the
 # name carries it.
@@ -94,11 +104,10 @@ gh release view "$tag" -R "$repo" >/dev/null 2>&1 ||
 # Engine on macOS may have uploaded one while this built.
 there=$(published)
 if [ -n "$there" ]; then
-  rm "$archive" "$archive.sha256" "$dsyms" "$dsyms.sha256"
+  rm -f "$archive" "$archive.sha256" "$dsyms" "$dsyms.sha256"
   echo "mac-engine-publish: $tag already has its engine, $there, so this build isn't uploaded."
   exit 0
 fi
-gh release upload "$tag" -R "$repo" "$archive#Chromium-mac-arm64.tar.xz, from tools/mac-engine-publish.sh" "$archive.sha256" \
-  "$dsyms#Chromium-mac-arm64-dSYMs.tar.xz, from tools/mac-engine-publish.sh" "$dsyms.sha256"
-rm "$archive" "$archive.sha256" "$dsyms" "$dsyms.sha256"
+gh release upload "$tag" -R "$repo" "$@"
+rm -f "$archive" "$archive.sha256" "$dsyms" "$dsyms.sha256"
 echo "mac-engine-publish: released $tag."
