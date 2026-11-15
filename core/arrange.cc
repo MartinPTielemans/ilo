@@ -421,7 +421,8 @@ constexpr char16_t kScript[] =
       try { el.showPopover(); lifted.add(el); } catch { el.removeAttribute('popover'); return; }
       if (s && !s.heard) {
         s.heard = true;
-        el.addEventListener('toggle', (e) => { if (lifted.has(el) && e.newState === 'closed') later(); });
+        // A pass that hides and lifts it again fires closed then open, so only a close that holds asks.
+        el.addEventListener('toggle', (e) => { if (lifted.has(el) && e.newState === 'closed' && !el.matches(':popover-open')) later(); });
       }
       // The marks stay over whatever was lifted after them.
       if (mode) raise();
