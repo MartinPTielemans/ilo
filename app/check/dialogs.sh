@@ -86,6 +86,11 @@ answer return accept "confirm true"
 ask p Prompt prompt
 send type grace
 answer return accept "prompt grace"
+# Asked again once answered, the prompt is drawn again: on X11 a managed one shown again has to
+# come out of its wait for its place (#2800).
+ask p Prompt prompt-again
+send type ada
+answer return accept "prompt ada"
 
 # On X11, another app's window raised over ilo's while the page's alert shows: the window manager
 # stacks the alert under that window with ilo's, where KWin drew an override-redirect one over every
