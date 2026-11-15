@@ -407,6 +407,11 @@ pub trait Browser {
     /// Turns Zap on or off on `tab`'s page: while it's on, a click there hides what's under it,
     /// which comes back in `Shell::boost_zapped`. The user's alone.
     fn zap(&self, _tab: u64, _on: bool, _cx: &mut App) {}
+    /// Whether the core has Arrange at all: none has until its slice (#2347) is on the engine, and
+    /// the Boost card offers Arrange only once it has.
+    fn arranges(&self) -> bool {
+        false
+    }
     /// Turns Arrange on `tab`'s page on, drawing its marks with `look`, or off with None (#2347):
     /// while it's on, the user moves what's on the page, and each change comes back in
     /// `Shell::arrange_saved`. Whether it's on: the core refuses it where a Boost isn't offered,

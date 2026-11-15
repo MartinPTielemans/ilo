@@ -397,7 +397,8 @@ impl Shell {
         let zaps = boost.as_ref().map_or(0, |boost| boost.summary.zaps);
         // Customize… and Arrange have a line of their own under the other two, as four don't fit
         // the card, so Zap's row stays where it is as Zap starts and Done comes up under the
-        // pointer. Arrange sits beside Customize… as Zap beside Edit CSS….
+        // pointer. Arrange sits beside Customize… as Zap beside Edit CSS…, once the core has it.
+        let arrange = self.browser.arranges().then_some(arrange);
         let zapping = self.zapping == Some(tab);
         let customize = (!zapping).then(|| {
             div()
@@ -405,7 +406,7 @@ impl Shell {
                 .flex()
                 .gap(px(BUTTON_GAP))
                 .child(customize)
-                .child(arrange)
+                .children(arrange)
         });
         let arranged = (boost.as_ref())
             .and_then(|boost| boost.arrangement.as_ref())

@@ -84,7 +84,7 @@ fn card(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<gpui::Bound
 }
 
 /// How far over the card's bottom the middle of its last line of buttons is, and of the line
-/// over that: Edit CSS… and Zap's, over Customize….
+/// over that: Edit CSS… and Zap's, over Customize… and Arrange.
 const LAST: f32 = 26.;
 const OVER_LAST: f32 = 62.;
 
@@ -220,7 +220,7 @@ fn a_script_without_css_is_reached_through_customize(cx: &mut TestAppContext) {
     std::fs::create_dir_all(&boosts).unwrap();
     std::fs::write(boosts.join("example.com.js"), "mine();\n").unwrap();
     shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
-    press(&shell, 0.5, LAST, cx);
+    press(&shell, 0.25, LAST, cx);
     assert_eq!(card(&shell, cx), None, "Customize… left the card open");
     assert_eq!(
         cx.update(|_, cx| crate::boost_editor::open_for(cx))
@@ -451,7 +451,7 @@ fn customize_hands_the_site_to_the_editor(cx: &mut TestAppContext) {
     cx.update(|_, cx| crate::boost_editor::open(Rc::new(Unseen), cx))
         .expect("no window for the editor");
     shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
-    press(&shell, 0.5, LAST, cx);
+    press(&shell, 0.25, LAST, cx);
     assert_eq!(card(&shell, cx), None, "Customize… left the card open");
     assert_eq!(
         cx.update(|_, cx| crate::boost_editor::open_for(cx))
@@ -724,6 +724,29 @@ fn arrange_is_on_only_where_the_core_says(cx: &mut TestAppContext) {
     host.arrange_refused.set(true);
     press(&shell, 0.75, LAST, cx);
     assert_eq!(arrange_calls(&host), ["arrange 10 true"]);
+    assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
+}
+
+/// Before the core has Arrange, the card doesn't offer it: Customize… has its line alone, and
+/// nothing reaches the core.
+#[gpui::test]
+fn the_card_offers_arrange_only_once_the_core_has_it(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    cx.update(|_, cx| crate::boost_editor::open(Rc::new(Unseen), cx))
+        .expect("no window for the editor");
+    host.no_arrange.set(true);
+    shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
+    host.take();
+    press(&shell, 0.75, LAST, cx);
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+    assert_eq!(
+        cx.update(|_, cx| crate::boost_editor::open_for(cx))
+            .as_deref(),
+        Some("example.com"),
+        "the right of the card's last line isn't Customize…"
+    );
+    shell.update(cx, |shell, cx| shell.start_arrange(cx));
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
     assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
 }
 

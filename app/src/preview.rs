@@ -452,6 +452,11 @@ fn preview_boost_folder() -> Option<std::path::PathBuf> {
 }
 
 impl Browser for Fake {
+    // The card as it is once the core has Arrange.
+    fn arranges(&self) -> bool {
+        true
+    }
+
     fn profile_folder(&self, _: u64) -> Option<std::path::PathBuf> {
         preview_boost_folder()
     }

@@ -106,6 +106,8 @@ pub(super) struct Recorder {
     pub(super) arranged: Cell<Option<crate::boosts::Arranged>>,
     /// Whether the core refuses Arrange, as on a page that isn't http(s).
     pub(super) arrange_refused: Cell<bool>,
+    /// Whether the core has no Arrange at all, as before its slice is on the engine.
+    pub(super) no_arrange: Cell<bool>,
     /// The menus it was asked to show, each item by its title and whether it's enabled.
     pub(super) menus: RefCell<Vec<Vec<(SharedString, bool)>>>,
     /// Where the last menu was asked to show, in the window.
@@ -1112,6 +1114,10 @@ impl Browser for Recorder {
 
     fn zap(&self, tab: u64, on: bool, _: &mut App) {
         self.record(format!("zap {tab} {on}"))
+    }
+
+    fn arranges(&self) -> bool {
+        !self.no_arrange.get()
     }
 
     fn arrange(&self, tab: u64, look: Option<&crate::boosts::arrange::Look>, _: &mut App) -> bool {
