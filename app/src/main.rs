@@ -911,7 +911,14 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // own hover card takes its own picture (core/capture.cc, #2377). And Settings' user
         // journeys, metrics nobody receives, tell Chrome's BrowserView of a change such as Make
         // default in the search engines page, CHECKing it's there: ilo's windows have none (#2907).
-        "--disable-features=MacAppCodeSignClone,TabHoverCardImages,SettingsGlowupJourneys".into(),
+        // Chrome's toasts too, such as Link copied after a page menu's Copy Link Address: one
+        // anchors to the BrowserView, and with none Chrome CHECKs and ends the browser (#2950).
+        concat!(
+            "--disable-features=MacAppCodeSignClone,TabHoverCardImages,SettingsGlowupJourneys,",
+            "LinkCopiedToast,ImageCopiedToast,VideoFrameCopiedToast,LinkToHighlightCopiedToast,",
+            "ReadingListToast,TranslateToast"
+        )
+        .into(),
         // An idle browser shouldn't wake: Chrome's stack sampling feeds metrics nobody receives,
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
