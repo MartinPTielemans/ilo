@@ -86,43 +86,45 @@ answer return accept "confirm true"
 ask p Prompt prompt
 send type grace
 answer return accept "prompt grace"
-# probe2894: the X focus while another app's window has sway's focus and the browser's gets it back.
+# On sway's Xwayland the prompt takes the keys back once its window has sway's focus again after
+# another app's window had it: back from that window's workspace, and as that window, beside the
+# browser's, quits. wlroots gives the X focus to the browser's window, not to the prompt (#2894).
 if sway_xwayland; then
-  ask p Prompt prompt-workspace
-  sample() { for _ in $(seq "$2"); do send onscreen; sleep 0.1; done; echo "probe2894 $1 $(grep '^browser: onscreen ' "$log" | tail -"$2" | sed 's/.*keyboard //' | uniq -c | tr -s ' \n' ' ')"; }
-  sample open 5
-  # Another workspace, with another app's window on it, and back.
-  swaymsg 'workspace 2' > /dev/null
-  rm -f "$out/other-in"; mkfifo "$out/other-in"
+  ask p Prompt prompt-back
+  # Whether the driver's "onscreen" says the X focus is on $1 (overlay, window or none) within 5 s.
+  keys_on() {
+    for _ in $(seq 50); do
+      send onscreen
+      grep '^browser: onscreen ' "$log" | tail -1 | grep -q "keyboard $1\$" && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  swaymsg 'workspace 2' > /dev/null || fail "sway didn't go to another workspace"
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
   python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other=$!
   exec 5> "$out/other-in"
-  sample ws2-other 20
-  swaymsg -t get_tree | python3 -I -c 'import json,sys
-t = json.load(sys.stdin)
-def walk(n, d=0):
-    if n.get("type") in ("con", "floating_con", "workspace"):
-        print("probe2894 tree", d, n.get("type"), n.get("name"), n.get("focused"))
-    for c in n.get("nodes", []) + n.get("floating_nodes", []):
-        walk(c, d + 1)
-walk(t)'
-  swaymsg 'workspace 1' > /dev/null
-  sample ws1-back 40
-  # The other app's window on the browser's workspace, focused, then the browser's.
-  swaymsg '[title="^Other app$"] move container to workspace 1, focus' > /dev/null || echo "probe2894 no move"
-  sample other-here 20
-  swaymsg "[pid=$pid] focus" > /dev/null || echo "probe2894 no focus"
-  sample browser-again 40
+  keys_on none || echo probe2894 miss "another app's window on workspace 2 didn't take the keys from the prompt in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1), $(cat "$out/other-window.log")"
+  swaymsg 'workspace 1' > /dev/null || fail "sway didn't go back to the browser's workspace"
+  keys_on overlay || echo probe2894 miss "back on the browser's workspace from another app's window, the prompt didn't take the keys back in 5 s, so typing would go to the page: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  swaymsg '[title="^Other app$"] move container to workspace 1, focus' > /dev/null ||
+    fail "sway didn't bring the other app's window to the browser's workspace"
+  keys_on none || echo probe2894 miss "the other app's window on the browser's workspace didn't take the keys in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1)"
+  # It quits, and sway gives its focus back to the browser's window.
   exec 5>&-
-  sample other-gone 20
-  send type ada
-  sample typed 5
-  send key return
-  sample answered 5
-  grep "^browser: title $page prompt" "$log" | tail -2 | sed 's/^/probe2894 /'
-  exec 3>&-
-  quit
-  echo "probe2894 done"
-  exit 0
+  wait "$other" || fail "another app's window didn't go once its stdin closed: $(cat "$out/other-window.log")"
+  keys_on overlay || echo probe2894 miss "once another app's window beside the browser's went, the prompt didn't take the keys back in 5 s: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  if grep '^browser: onscreen ' "$log" | tail -1 | grep -q 'keyboard overlay$'; then
+    send type ada
+    answer return accept "prompt ada"
+  else
+    # shellcheck disable=SC2046
+    send click $(grep '^browser: dialog cancel at ' "$log" | tail -1 | cut -d' ' -f5,6)
+    expect '^browser: dialog hidden$' "probe: the prompt didn't go at a click on Cancel"
+  fi
+  echo "probe2894 step done $(grep '^browser: onscreen ' "$log" | tail -1)"
 fi
 
 # Another tab takes the alert down, and its own brings it back.
