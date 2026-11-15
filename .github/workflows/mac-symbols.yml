@@ -1,0 +1,139 @@
+# Names the Mac crash reports of a version already shipped (#2951). It uploads its engine's dSYMs
+# and binaries, which engine/fetch.sh symbols takes from the engine's release, to the collector, as
+# a release's Mac job does with its own build. The collector names the reports that arrive after
+# them: it doesn't process again the ones it already has.
+# An engine released without dSYMs gets them first from the Engine on macOS run whose kept tree
+# built it (tree). They're checked against the released framework's UUID and added to the release,
+# as tools/mac-engine-publish.sh symbols does from a Mac's own build. Engine on macOS keeps one
+# tree a Chromium major, so the next build of that major deletes the tree this would need.
+# By hand only.
+name: Mac symbols
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version whose reports to name, such as 0.1.16
+        required: true
+      engine:
+        description: >-
+          Its engine's release, such as engine-mac-8a407c5159d1, which fetch.sh must pick at the
+          version's tag
+        required: true
+      tree:
+        description: >-
+          The Engine on macOS run whose kept tree built that engine, to add its dSYMs to the release
+          first; empty when the release has them
+        default: ''
+
+permissions:
+  contents: read
+
+# GitHub's bash with pipefail, so a failed curl or zstd in a pipe fails its step, not only the tar
+# at its end. Without a shell named, a step runs bash -e alone.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The dSYMs, from the tree, into the engine's release. Only the last step holds
+  # ENGINE_RELEASE_TOKEN.
+  add:
+    if: inputs.tree != ''
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # The kept tree, from another run.
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: tree
+        name: Find the tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TREE: ${{ inputs.tree }}
+        run: |
+          name=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TREE/artifacts" --paginate --jq \
+            '.artifacts[] | select((.expired | not) and (.name | startswith("engine-mac-tree-"))) | .name' | tail -1)
+          [ -n "$name" ] || { echo "::error::Run $TREE has no kept tree: it has expired, or the run kept none."; exit 1; }
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.tree.outputs.name }}
+          path: ${{ runner.temp }}/tree
+          run-id: ${{ inputs.tree }}
+          github-token: ${{ github.token }}
+      # Only the dSYMs come out of the tree, and the released engine's Chromium.app goes beside
+      # them, so mac-dsyms.sh checks them against the framework that shipped.
+      - name: Pack
+        env:
+          ENGINE: ${{ inputs.engine }}
+        run: |
+          repo=$(git config -f engine/prebuilt.ini prebuilt.repository)
+          repo=${repo#https://github.com/}
+          out=$RUNNER_TEMP/out
+          mkdir -p "$out"
+          zstd -dc "$RUNNER_TEMP/tree/tree.tar.zst" |
+            tar -xf - -C "$out" --strip-components 4 '.deps/src/out/Release/*.dSYM'
+          rm -rf "$RUNNER_TEMP/tree"
+          curl -fsSL --retry 5 "https://github.com/$repo/releases/download/$ENGINE/Chromium-mac-arm64.tar.xz" |
+            tar -xJf - -C "$out"
+          tools/mac-dsyms.sh "$out" "$out/Chromium.app/Contents/Frameworks/Chromium Framework.framework/Chromium Framework" \
+            "$RUNNER_TEMP/dsyms"
+      - name: Add to the release
+        env:
+          GH_TOKEN: ${{ secrets.ENGINE_RELEASE_TOKEN }}
+          ENGINE: ${{ inputs.engine }}
+          TREE: ${{ inputs.tree }}
+        run: |
+          repo=$(git config -f engine/prebuilt.ini prebuilt.repository)
+          repo=${repo#https://github.com/}
+          asset=Chromium-mac-arm64-dSYMs.tar.xz
+          there=$(gh api "repos/$repo/releases/tags/$ENGINE" --jq ".assets[] | select(.name == \"$asset\") | .created_at")
+          if [ -n "$there" ]; then
+            echo "::notice::$ENGINE already has its dSYMs, uploaded $there, so these aren't." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh release upload "$ENGINE" -R "$repo" \
+            "$RUNNER_TEMP/dsyms/$asset#$asset, from Engine on macOS run $TREE's tree" "$RUNNER_TEMP/dsyms/$asset.sha256"
+
+  # The version's engine, as fetch.sh picks it at the version's tag, with this ref's fetch.sh, which
+  # knows the Mac's dSYMs, and its symbols to the collector, with the token release.yml uses.
+  upload:
+    needs: add
+    if: ${{ !cancelled() && (needs.add.result == 'success' || needs.add.result == 'skipped') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: this
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: shipped
+      - name: Crash reports' symbols
+        env:
+          VERSION: ${{ inputs.version }}
+          ENGINE: ${{ inputs.engine }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_URL: ${{ vars.SENTRY_URL }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          [ -n "$SENTRY_AUTH_TOKEN" ] || { echo "::error::No SENTRY_AUTH_TOKEN, so there's no collector to send them to."; exit 1; }
+          cp this/engine/fetch.sh shipped/engine/fetch.sh
+          commit=$(shipped/engine/fetch.sh commit)
+          [ "engine-mac-${commit:0:12}" = "$ENGINE" ] ||
+            { echo "::error::v$VERSION's engine is engine-mac-${commit:0:12}, not $ENGINE."; exit 1; }
+          # The dSYMs, and the engine's binaries beside them, whose unwind tables the collector
+          # walks a stack with.
+          dir=$(shipped/engine/fetch.sh symbols)
+          this/tools/symbols.sh "$dir"
+          echo "Uploaded $ENGINE's symbols for v$VERSION." | tee -a "$GITHUB_STEP_SUMMARY"
