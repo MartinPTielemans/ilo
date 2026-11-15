@@ -281,6 +281,8 @@ expect '^browser: agents server on ' "dark: the agents' switch didn't start thei
 send key tab
 send key space
 expect '^browser: onboarding daily-count on$' "dark: ⇥ then Space didn't turn the count's switch on"
+# Captured once the knob has slid all the way on.
+expect '^browser: onboarding daily-count slid$' "dark: the count's switch didn't finish its slide on"
 capture_step dark-opt-ins-keys
 send key tab
 send key tab shift

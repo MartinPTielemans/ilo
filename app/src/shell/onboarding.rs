@@ -334,6 +334,8 @@ pub(super) struct Onboarding {
     os: Os,
     /// The opt-in switch last turned, and when, for its knob's slide.
     switched: Option<(OptIn, Instant)>,
+    /// That switch's knob has slid all the way, which check.sh hears once.
+    slid: bool,
     /// ⇥ put the keyboard on the opt-ins' switches, which it leaves with them (onboarding_layer).
     on_switches: bool,
     /// Where the opt-ins' rows and switches are drawn (opt_in_frame).
@@ -415,6 +417,7 @@ impl Shell {
             picked: None,
             os: self.browser.os(),
             switched: None,
+            slid: false,
             on_switches: false,
             frames: Frames::default(),
             button: Rc::default(),
@@ -724,6 +727,7 @@ impl Shell {
         });
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.switched = Some((opt_in, Instant::now()));
+            onboarding.slid = false;
             if opt_in == OptIn::DailyCount {
                 onboarding.count = Some(!on);
             }
@@ -874,6 +878,13 @@ impl Shell {
         let sliding = onboarding
             .switched
             .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < SLIDE);
+        // check.sh captures a turned switch on this line, with its knob at the end of its slide.
+        if let Some((opt_in, _)) = onboarding.switched
+            && !sliding
+            && !std::mem::replace(&mut onboarding.slid, true)
+        {
+            log!("browser: onboarding {} slid", opt_in.name());
+        }
         if !came || onboarding.leaving.is_some() || ending.is_some() || sliding {
             window.request_animation_frame();
         } else if step == Step::Intro && onboarding.hold.is_none() {
