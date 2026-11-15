@@ -1221,24 +1221,14 @@ placed_where_left ||
   fail "after a relaunch the Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 # Probe for #2822: does a video playing with sound float on a tab switch, and through which path?
 printf '%s' '<title>loading</title><body style="margin:0;background:#333">
-<video id=v autoplay playsinline style="width:100vw;height:100vh"></video>
+<video id=v autoplay playsinline loop src=card.webm style="width:100vw;height:100vh"></video>
 <script>
-const canvas = Object.assign(document.createElement("canvas"), {width: 320, height: 180});
-const paint = canvas.getContext("2d");
-const frame = time => {
-  paint.fillStyle = `hsl(${time / 20 % 360} 50% 40%)`;
-  paint.fillRect(0, 0, 320, 180);
-  requestAnimationFrame(frame);
-};
-requestAnimationFrame(frame);
 const audio = new AudioContext();
 const tone = audio.createOscillator();
 const gain = audio.createGain();
 gain.gain.value = 0.05;
-const sink = audio.createMediaStreamDestination();
-tone.connect(gain).connect(sink);
+tone.connect(gain).connect(audio.destination);
 tone.start();
-v.srcObject = new MediaStream([...canvas.captureStream().getVideoTracks(), ...sink.stream.getAudioTracks()]);
 v.muted = false;
 v.onplaying = () => document.title = "playing " + (v.muted ? "muted" : "sound");
 v.onpause = () => document.title = "paused";
@@ -1275,7 +1265,7 @@ shown "$v"
 await "^browser: title $w floating\$" || true
 echo "probe: titles after the switch: $(grep "^browser: title $w " "$log" | cut -d' ' -f4- | tr '\n' '|')"
 echo "probe: mini player placed lines $placed_before before, $(grep -c 'browser: mini player placed at ' "$log") after"
-grep -E "mini player|picture|auto" "$log" | tail -8 | sed 's/^/probe log: /'
+grep -E "mini player|picture|auto|audible|sound" "$log" | tail -12 | sed 's/^/probe log: /'
 exec 3>&-
 quit
 
