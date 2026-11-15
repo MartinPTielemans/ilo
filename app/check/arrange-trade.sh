@@ -5,6 +5,9 @@
 # so the room each leaves isn't the other's size. Carried up and carried down, with one thing between
 # them, with two, and next to each other, and across the two columns. After each, ⌘Z with the page focused takes the trade back
 # and a click on the page's empty part ends the selection, so each starts from the page as it was.
+# Then an arranged page at rest asks for nothing (#2981): each of the three files whose trade
+# restored a thing a settle lifted, a frame a pass, turned on from the Site Controls, shown and
+# behind another tab.
 
 serve
 # The title says, for each column, the things drawn in it from the top, each by its number, or by
@@ -20,7 +23,9 @@ body { margin: 0; height: 100vh; font: 16px sans-serif; background: rgb(243, 245
 section { height: 80px; background: rgb(217, 226, 230) }
 #b1 { height: 50px }
 #b3 { height: 140px }
+a { position: absolute; left: 20px; width: 60px; height: 30px }
 </style>
+<a href="arrange-idle.html?m2" style="top: 470px">m2</a><a href="arrange-idle.html?m4" style="top: 510px">m4</a><a href="arrange-idle.html?m12" style="top: 550px">m12</a>
 <div class="col" id="a">
 <section aria-label="A1"></section><section aria-label="A2"></section><section aria-label="A3"></section><section aria-label="A4"></section>
 </div>
@@ -166,7 +171,136 @@ trade B2 B3 '^a 1,2,3,4 packed b 1,3,2,4 packed '
 trade A2 B3 '^a 1,B3,3,4 packed b 1,2,A2,4 packed '
 trade B1 A3 '^a 1,2,B1,4 packed b A3,2,3,4 packed '
 
+send key escape
+expect "browser: tab $tab arrange off\$" "escape in the page didn't end Arrange"
+
+# An arranged page at rest asks for nothing (#2981). Arrange's script runs in a world of its own,
+# so the page can't count the frames it asks for, but each one runs a pass, and a pass that hides a
+# thing and lifts it again fires its toggle events and rewrites its style, which the page sees on
+# its own things. The page counts those from two frames after its things are lifted, over 250 ms,
+# the probe's window (43759327155), before the hold's passes at 1.5 s; again 2.5 s after the lift,
+# once they've run; while another tab covers it; and from two frames after it shows again, past
+# the pass its own title asks for. Each is an absence measured over a stated time, as the idle
+# checks' are: the loop it looks for fired two toggles a frame.
+printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
+<style>
+body { margin: 0; height: 100vh; font: 16px sans-serif; background: rgb(243, 245, 246) }
+#col { position: absolute; left: 20px; top: 20px; width: 260px; display: flex; flex-direction: column; gap: 20px }
+#col > section { height: 80px; background: rgb(217, 226, 230) }
+#row { position: absolute; left: 320px; top: 20px; display: flex; gap: 10px }
+#row > span { display: block; height: 40px; background: rgb(217, 226, 230) }
+a { position: absolute; left: 20px; width: 60px; height: 30px }
+</style>
+<div id="col"><section id="a" aria-label="Alpha"></section><section id="b" aria-label="Beta"></section><section id="c" aria-label="Gamma"></section><section id="w" aria-label="Wide"></section></div>
+<div id="row"><span id="r1" style="width: 60px"></span><span id="r2" style="width: 100px"></span><span id="r3" style="width: 140px"></span><span id="r4" style="width: 80px"></span></div>
+<a href="arrange-idle.html?m2" style="top: 470px">m2</a><a href="arrange-idle.html?m4" style="top: 510px">m4</a><a href="arrange-idle.html?m12" style="top: 550px">m12</a>
+<script>
+const file = location.search.slice(1);
+const things = [...document.querySelectorAll("#col > section, #row > span")];
+let seen = 0;
+document.addEventListener("toggle", (e) => { if (things.includes(e.target)) seen++; }, true);
+new MutationObserver((records) => { for (const r of records) if (things.includes(r.target)) seen++; })
+  .observe(document.body, { subtree: true, attributes: true, attributeFilter: ["style", "popover"] });
+const lifted = new Promise((done) => {
+  const now = () => things.some((t) => t.hasAttribute("popover")) && (done(performance.now()), true);
+  if (now()) return;
+  const o = new MutationObserver(() => now() && o.disconnect());
+  o.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["popover"] });
+});
+const frames = (n) => new Promise((done) => { const f = () => (--n <= 0 ? done() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+// Until the page is shown, or hidden.
+const until = (hidden) => new Promise((done) => {
+  const f = () => { if (document.hidden === hidden) { document.removeEventListener("visibilitychange", f); done(); } };
+  document.addEventListener("visibilitychange", f);
+  f();
+});
+// What the page saw of a pass over |ms|, and how long that took, as a timer behind a tab runs late.
+const count = async (ms) => { const n = seen, t = performance.now(); await wait(ms); return [seen - n, Math.round(performance.now() - t)]; };
+// Where the things are drawn, from the top and from the left, so a file that placed nothing shows.
+const order = () => {
+  const by = (k) => (x, y) => x.getBoundingClientRect()[k] - y.getBoundingClientRect()[k];
+  return things.slice(0, 4).sort(by("top")).map((t) => t.id).join("") + " " + things.slice(4).sort(by("left")).map((t) => t.id).join("");
+};
+(async () => {
+  const at = await lifted;
+  await frames(2);
+  const [first] = await count(250);
+  await wait(Math.max(0, at + 2500 - performance.now()));
+  const [late] = await count(250);
+  let said = "idle " + file + " " + order() + " shown " + first + " late " + late;
+  document.title = said;
+  await until(true);
+  const [hidden, ms] = await count(250);
+  document.title = said += " hidden " + hidden + " in " + ms + " ms";
+  await until(false);
+  await frames(2);
+  const [again] = await count(250);
+  document.title = said + " again " + again;
+})();
+</script>' > "$out/site/arrange-idle.html"
+
+arranged="$boosts/$host.arrange.json"
+keyed() { grep '^browser: site controls keyed ' "$log" | tail -1 | cut -d' ' -f5-; }
+# Writes file $1, the changes $2, outside ilo; turns it on from the Site Controls; opens its page;
+# and has the page count what it sees while it's idle, shown and behind example.org's tab.
+idle() {
+  printf '{"version":1,"changes":[%s]}' "$2" > "$arranged"
+  expect "^browser: arrangement for $host ([0-9]* bytes) \(New\|Changed\)\$" \
+    "$1: the app didn't read the file written outside ilo as one kept off"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+  send type site controls
+  expect '^browser: command bar commands "site controls": Site Controls$' \
+    "the command bar didn't find Site Controls"
+  send key return
+  expect '^browser: site controls settled$' "the Site Controls didn't open"
+  for _ in $(seq 30); do
+    send key tab
+    expect '^browser: site controls keyed ' "Tab didn't move the Site Controls' ring"
+    [ "$(keyed)" = Arrangement ] && break
+  done
+  [ "$(keyed)" = Arrangement ] || fail "$1: Tab didn't reach the arrangement's Turn On: the ring is on $(keyed)"
+  send key return
+  expect "^browser: arrangement for $host ([0-9]* bytes) kept true\$" "$1: Turn On didn't keep the file"
+  send key escape
+  expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
+  send click $(page_at 50 $3)
+  await "^browser: title $tab idle $1 .* late [0-9]*\$" "$1: the page didn't say what it saw while idle: it says $(said)"
+  case "$(said)" in
+    "idle $1 abcw r1r2r3r4 "*) fail "$1: the file placed nothing: the page says $(said)" ;;
+  esac
+  page=$tab
+  open_from_bar example.org
+  over=$tab
+  tab=$page
+  await "^browser: title $tab idle $1 .* hidden [0-9]* in [0-9]* ms\$" \
+    "$1: the page didn't say what it saw behind example.org's tab: it says $(said)"
+  tab=$over
+  send key w cmd
+  tab=$page
+  expect "^browser: selected $tab\( in .*\)*\$" "$1: ⌘W on example.org's tab didn't show the page again"
+  await "^browser: title $tab idle $1 .* again [0-9]*\$" "$1: the page didn't say what it saw shown again: it says $(said)"
+  case "$(said)" in
+    *" shown 0 late 0 hidden 0 in "*" again 0") ;;
+    *) fail "$1: the arranged page didn't rest: it saw passes while nothing changed: $(said)" ;;
+  esac
+  rested="$rested $1 ($(said | cut -d' ' -f3-4)),"
+}
+# A thing of the idle page by its id, and a trade and a settle of them, as Arrange's file has them.
+thing() { printf '"name":"%s","role":"region","target":{"path":"#%s"}' "$1" "$1"; }
+trade_of() { printf '{"kind":"trade",%s,"with":{%s}}' "$(thing $1)" "$(thing $2)"; }
+settle_of() { printf '{"kind":"settle",%s,"%s":{%s}}' "$(thing $1)" "$2" "$(thing $3)"; }
+rested=
+# The three of probe 3's twenty-one files that looped (43759327155, 43761139000): a trade, and a
+# settle beside one of the two it traded. Each page is opened from a link at the page's left, at
+# the height given.
+idle m2 "$(trade_of c b),$(settle_of a before c)" 485
+idle m4 "$(settle_of a after b),$(trade_of c b),$(settle_of w after c)" 525
+idle m12 "$(trade_of r1 r3),$(settle_of r2 after r1)" 565
+
 exec 3>&-
 quit
 echo "ok: Arrange's trade put each of the two at the other's place, at the column's gap, with the" \
-  "rest where they were:${traded%,}."
+  "rest where they were:${traded%,}. An arranged page whose trade restores a thing a settle lifted" \
+  "saw no pass while nothing changed, shown, behind another tab and shown again:${rested%,}."
