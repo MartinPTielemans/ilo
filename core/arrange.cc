@@ -243,6 +243,9 @@ constexpr char16_t kScript[] =
       set(el, 'width', px(Math.max(0, w - edge)));
     }
     const rect = (el) => el.getBoundingClientRect();
+    // Whether |el|, given |width|, runs out of it: its box comes out wider, by its own min-width or
+    // what it holds, or what it holds runs out of its box.
+    const overruns = (el, width) => rect(el).width > width + 1 || el.scrollWidth - el.clientWidth > 1;
     // Where an absolutely placed element measures from, found by putting it at 0, 0 and looking:
     // offsetParent misses the containing blocks contain, transform and filter make.
     function origin(el) {
@@ -509,6 +512,12 @@ constexpr char16_t kScript[] =
       set(ref, side, px(s.m0));
       const r0 = rect(ref);
       setWidth(el, r0.width);
+      if (overruns(el, r0.width)) {
+        restore(el);
+        restore(ref);
+        s.misfit = 'fit';
+        return;
+      }
       set(el, 'z-index', '1');
       const h = rect(el).height;
       let y;
@@ -624,8 +633,7 @@ constexpr char16_t kScript[] =
           }
         });
       }
-      const over = (m) => Math.max(0, m.scrollWidth - m.clientWidth);
-      if (over(el) > 1 || over(ref) > 1) {
+      if ([sa, sb].some((sl) => overruns(sl.incoming, sl.r.width))) {
         restore(el);
         restore(ref);
         for (const k of keepers) restore(k);
@@ -813,6 +821,24 @@ constexpr char16_t kScript[] =
     }
     const shown = (el) => el.getClientRects().length > 0 && (!el.checkVisibility || el.checkVisibility({ visibilityProperty: true }));
 
+    // The thing in |t|'s track nearest |x|, |y| along it, and whether the drop is before it; null if
+    // |t| lays out no things in a line.
+    function nearest(t, x, y) {
+      const things = [...t.children].filter((k) => k !== mode.marks.host && shown(k) &&
+        !/absolute|fixed/.test(getComputedStyle(k).position) && !lifted.has(k));
+      if (!things.length) return null;
+      const axis = slotOf(things[0], []).axis;
+      if (axis !== 'column' && axis !== 'row') return null;
+      const row = axis === 'row', at = row ? x : y;
+      let best = null;
+      for (const k of things) {
+        const r = rect(k), start = row ? r.left : r.top, end = row ? r.right : r.bottom;
+        const d = at < start ? start - at : at > end ? at - end : 0;
+        if (!best || d < best.d) best = { ref: k, before: at < (start + end) / 2, d };
+      }
+      return best;
+    }
+    const depth = (el) => { let n = 0; for (let p = el; p; p = p.parentElement) n++; return n; };
     // Where a drop at |x|, |y| lands, for the carried element.
     function dropAt(x, y, free) {
       const el = carry.el, f = carry.from;
@@ -827,6 +853,16 @@ constexpr char16_t kScript[] =
       }
       if (!t || t === document.body || t === document.documentElement || t.contains(el) || el.contains(t)) {
         return { change: CHANGE.FLOATS };
+      }
+      // A track above the carried thing's level, such as the gap between two of its things, is no
+      // thing to trade with: the drop is at its nearest thing's edge (#3003). One at the same level,
+      // a card say, is a thing, with its own words and gaps.
+      const near = depth(t) < depth(el) ? nearest(t, x, y) : null;
+      if (near) {
+        const slot = slotOf(near.ref, [el]);
+        if (roomless(slot.axis)) return { change: CHANGE.REFUSED, why: WHY.DOESNT_FIT, ref: near.ref };
+        return { change: CHANGE.SETTLES, before: near.before, ref: near.ref, axis: slot.axis,
+          prev: near.before ? slot.prev : near.ref, next: near.before ? near.ref : slot.next };
       }
       const slot = slotOf(t, [el]);
       const row = slot.axis === 'row', r = rect(t);
