@@ -3363,6 +3363,7 @@ impl Render for CommandBar {
             true => (FIELD_RADIUS, FIELD_INPUT, 0.),
             false => (RADIUS, HEIGHT, LIST_TOP),
         };
+        let radius = shell::framed_radius(radius);
         // Over the field the input's icon and text are in the rows' columns.
         let (icon_x, icon, text_x, text_size) = match self.over_field {
             true => {

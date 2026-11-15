@@ -9,8 +9,8 @@
 # for want of a server loads again by itself, through Chromium's auto-reload, once the server is
 # there. Offline, the page offers ilo's game, which Space starts and a click doesn't, at
 # chrome://dino too, with ⌘L still the browser's over a run; and a page whose network comes back
-# mid-run loads once the run ends. On Windows, the command bar over the dark page has the page round
-# its corners, with no lighter sliver of its window (#2988).
+# mid-run loads once the run ends. On Windows, the command bar's corners are the radius Windows rounds
+# its window at, which leaves no lighter sliver round them (#2988).
 
 serve
 # Typing w in it keeps its renderer busy for 20 s, past Chrome's 15 s hang timeout, then the title
@@ -105,13 +105,16 @@ none_since "page $tab trouble crashed" || fail "a page Reload ended showed the c
 # A second tab, from the command bar. The first is behind it.
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-# Round its corners is the dark page, not a lighter sliver of the bar's own window (#2988): where
-# Windows rounds the window, it rounds it less than the bar is round.
+# The bar's corner is Windows 11's, which rounds its window at that size whatever the bar draws: a
+# rounder bar left a lighter sliver of its window round its corners (#2988). Measured along each
+# corner's diagonal, from the bar's edges to its first pixel, where the page shows up to its curve.
 if windows; then
   ../tools/window-screenshot.sh "$pid" "$out/command-bar-dark.png" || fail "no window to capture"
   pixel "$out/command-bar-dark.png" 0 0 > /dev/null
-  corners=$(python3 -I - "$out/pixel.bmp" "${content%x*}" "$(sed -n '/^\[command-bar\]/,/^\[/s/^radius = \([0-9.]*\).*/\1/p' design/tokens.toml)" << 'PY'
-import struct, sys
+  corners=$(python3 -I - "$out/pixel.bmp" "${content%x*}" \
+    "$(sed -n '/^\[command-bar\]/,/^\[/s/^radius = \([0-9.]*\).*/\1/p' design/tokens.toml)" \
+    "$(sed -n 's/^window-radius-windows = \([0-9.]*\).*/\1/p' design/tokens.toml)" << 'PY'
+import struct, sys, winreg
 data = open(sys.argv[1], "rb").read()
 offset, = struct.unpack_from("<I", data, 10)
 width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
@@ -120,46 +123,45 @@ stride = (bits * width + 31) // 32 * 4
 def at(x, y):
     i = offset + (y if height < 0 else rows - 1 - y) * stride + x * bits // 8
     return data[i + 2], data[i + 1], data[i]
+key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+build = int(winreg.QueryValueEx(key, "CurrentBuildNumber")[0])
+# Windows 10's frame doesn't round, so there the bar keeps its own.
+radius = float(sys.argv[4] if build >= 22000 else sys.argv[3])
 # The page's colour, under the window's bottom right, away from the sidebar and the bar.
 page = at(width * 9 // 10, rows * 9 // 10)
-light = lambda c: max(c) > max(page) + 60
-# The bar: the rows with a run of light pixels over a third of the width, between the page's.
+near = lambda c: all(abs(c[i] - page[i]) <= 12 for i in range(3))
+# The bar: rows with a run over a third of the width that isn't the page, with the page either side.
 spans = []
 for y in range(rows):
     run = 0
-    for x in range(width):
-        if light(at(x, y)):
+    for x in range(width + 1):
+        if x < width and not near(at(x, y)):
             run += 1
-        else:
-            if run > width // 3 and x - run > 0 and not light(at(x - run - 1, y)):
-                spans.append((x - run, x - 1, y))
-            run = 0
+            continue
+        if run > width // 3 and x < width and x - run > 0:
+            spans.append((x - run, x - 1, y))
+        run = 0
 if not spans:
-    print("none: no bar over the page, which is", page)
+    print("no bar over the page, which is", page)
     sys.exit()
 left, right = min(s[0] for s in spans), max(s[1] for s in spans)
 top, bottom = min(s[2] for s in spans), max(s[2] for s in spans)
 scale = round(width / int(sys.argv[2]) * 4) / 4
-radius = float(sys.argv[3]) * scale
-lighter = []
+# A circle's corner is 1 - 1/sqrt(2) of its radius in from both edges on the diagonal.
+want = radius * scale * (1 - 0.5 ** 0.5)
+found = []
 for cx, cy, sx, sy in ((left, top, 1, 1), (right, top, -1, 1), (left, bottom, 1, -1),
                        (right, bottom, -1, -1)):
-    ox, oy = cx + sx * radius, cy + sy * radius
-    for dy in range(int(radius)):
-        for dx in range(int(radius)):
-            x, y = cx + sx * dx, cy + sy * dy
-            # Outside the bar's round corner, past its edge's anti-aliasing.
-            if ((x - ox) ** 2 + (y - oy) ** 2) ** 0.5 > radius + 2:
-                c = at(x, y)
-                if any(c[i] > page[i] + 24 for i in range(3)):
-                    lighter.append((x, y, c))
-print(f"bar {left},{top} to {right},{bottom} at {scale}x, page {page}:", len(lighter),
-      "lighter", " ".join(f"{x},{y}={c}" for x, y, c in lighter[:6]))
+    found.append(next(i for i in range(width) if not near(at(cx + sx * i, cy + sy * i))))
+fits = all(abs(i - want) <= 1.5 for i in found)
+print(f"bar {left},{top} to {right},{bottom} at {scale}x over page {page}, Windows build {build}:",
+      f"corners {found} in on the diagonal, {want:.1f} for a radius of {radius:g},",
+      "fit" if fits else "don't fit")
 PY
 )
   case $corners in
-    *" 0 lighter"*) ;;
-    *) fail "round the command bar's corners over a dark page, $out/command-bar-dark.png has pixels lighter than the page, where the page should show: $corners" ;;
+    *", fit") ;;
+    *) fail "the command bar's corners aren't the radius Windows rounds its window at, in $out/command-bar-dark.png: $corners" ;;
   esac
 fi
 send insert "${site}index.html"

@@ -1117,7 +1117,8 @@ card-radius = 6.0
 # Mac's is macOS 26's continuous corner on a window with no toolbar, measured in window captures
 # on GitHub's macos-26 runner (16.75) and the owner's Mac (16); the core rounds the page on a
 # circle until it takes the window's curve. Windows 11's is 8 points across, unless the window is
-# maximized or full screen.
+# maximized or full screen; a panel it frames, as the command bar, the find bar and the offer, takes
+# it in place of its own radius (#2988).
 # Linux's compositors don't tell a window how they round it, so it's taken as square.
 window-radius-mac = 16.0
 window-radius-windows = 8.0
