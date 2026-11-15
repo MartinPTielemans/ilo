@@ -62,6 +62,17 @@ pub(crate) fn run_page_shortcut(tab: bc::bc_id, key: *const bc::bc_key, reserved
 thread_local! {
     /// The shortcut a page got first last, which a second press runs ilo's of if the page kept it.
     pub(crate) static SECOND_PRESS: RefCell<shell::SecondPress> = RefCell::default();
+    /// The page's key the app is answering, which GPUI reads after the answer under Wayland.
+    #[cfg(target_os = "linux")]
+    static ANSWERING: RefCell<Option<gpui::Keystroke>> = const { RefCell::new(None) };
+}
+
+/// Holds the keys typed from now for the overlay about to take the keyboard, which under Wayland
+/// has it only once it has drawn: the tab switcher, shown by a timer or by a key, not a field's
+/// shortcut. Those after the page's key being answered, if one is, as GPUI reads that key next.
+#[cfg(target_os = "linux")]
+pub(crate) fn hold_keys_for_overlay() {
+    ANSWERING.with_borrow(|key| gpui_linux::hold_keys(key.as_ref()));
 }
 
 pub(crate) unsafe extern "C" fn tab_key_before_page(
@@ -75,7 +86,11 @@ pub(crate) unsafe extern "C" fn tab_key_before_page(
     }
     let cx = CX.with_borrow(Clone::clone);
     shell::page_key_answer(cx.as_ref(), || {
+        #[cfg(target_os = "linux")]
+        ANSWERING.set(Some(held_keystroke(unsafe { &*key })));
         let (kept, route) = key_before_page(tab, key);
+        #[cfg(target_os = "linux")]
+        ANSWERING.set(None);
         log_key(key, "before the page", route);
         // Under Wayland GPUI reads this press next, and with the UI given the keyboard by the
         // answer, as when ⌘W closed the tab that had it, it would run the shortcut again (#2442).
