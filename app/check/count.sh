@@ -72,6 +72,7 @@ launch_count() {
   local onboarding=${3:-}
   if [ -n "$2" ]; then
     set -- "--daily-count-url=$2"
+    own_count_logs="$own_count_logs $log"
   else
     set --
   fi
@@ -128,6 +129,11 @@ turn_count() {
 leave_onboarding() {
   send key "$1"
   expect '^browser: onboarding done$' "$1 at the opt-ins step didn't end the onboarding"
+  # The flow ends in the command bar, whose window holds the keyboard, so on the Mac Settings would
+  # open behind the browser's window with a click meant for it landing in the sidebar.
+  expect '^browser: command bar shown$' "the onboarding didn't end with the command bar"
+  send key escape
+  expect '^browser: command bar hidden$' "Esc didn't close the command bar the onboarding ended with"
 }
 # Shows Settings › Privacy, captured to $out/$1.
 privacy() {
