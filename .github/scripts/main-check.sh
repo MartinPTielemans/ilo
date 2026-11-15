@@ -36,8 +36,10 @@ gh() {
 }
 
 # The jobs with the default runs: the one named "check", or Windows' "check 1/2" and "check 2/2",
-# which they're dealt across (#2618).
-defaults='[.jobs[] | select(.name == "check" or (.name | test("^check [0-9]+/[0-9]+$")))]'
+# which they're dealt across (#2618). CHECK_ON names the runner a run beside the gate's says it
+# ran on, such as " on windows-2025" (check-windows.yml, #3011), so its runs and the gate's are
+# each other's to skip for, never one for the other.
+defaults='[.jobs[] | select(.name == "check'"${CHECK_ON:-}"'" or (.name | test("^check [0-9]+/[0-9]+'"${CHECK_ON:-}"'$")))]'
 
 # Whether run $1 checked its commit: one of its default jobs failed past its "Engine" step, or each
 # passed with its "Runs" step done.

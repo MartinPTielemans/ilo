@@ -12,6 +12,10 @@ on:
   # 04:23 UTC, after the Windows engine's nightly build at 02:00 (engine-windows-cross.yml).
   schedule:
     - cron: '23 4 * * *'
+    # 07:23 UTC, on windows-2025 beside the gate on windows-2022, until the suite moves there
+    # (#3011). It gates nothing: its jobs are named apart, so main-check.sh counts them only for
+    # its own nights, a red of theirs leaves the run passed, and it opens no issue on main.
+    - cron: '23 7 * * *'
   workflow_dispatch:
     inputs:
       runs:
@@ -65,6 +69,7 @@ jobs:
       - id: seen
         env:
           GH_TOKEN: ${{ github.token }}
+          CHECK_ON: ${{ (github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') && ' on windows-2025' || '' }}
         run: .github/scripts/main-check.sh seen
 
   # Whether an engine fits, alone, so that a commit none fits shows its check as skipped, not as
@@ -109,7 +114,7 @@ jobs:
     needs: engine
     if: ${{ needs.engine.outputs.found == 'true' }}
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
-    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, inputs.runs == 'all' && 3 || 2) || '' }}
+    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, inputs.runs == 'all' && 3 || 2) || '' }}${{ (github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') && ' on windows-2025' || '' }}
     # runs=all takes longer than the job's 120 minutes, so it's dealt across three jobs, each with
     # its share of the runs (.github/scripts/runs.sh, #2271). Since 11-12 the default runs take longer
     # too, so they're dealt across two (#2618). Any other list is one job's.
@@ -117,7 +122,9 @@ jobs:
       fail-fast: false
       matrix:
         shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || inputs.runs == '' && '[1, 2]' || '[0]') }}
-    runs-on: ${{ inputs.runner || 'windows-2022' }}
+    runs-on: ${{ github.event.schedule == '23 7 * * *' && 'windows-2025' || inputs.runner || 'windows-2022' }}
+    # The 2025 night's red stays in its jobs, not the run's conclusion (#3011).
+    continue-on-error: ${{ github.event.schedule == '23 7 * * *' }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -565,6 +572,7 @@ jobs:
   # missing from the summary can't read as passed (#2271).
   complete:
     needs: [engine, check]
+    continue-on-error: ${{ github.event.schedule == '23 7 * * *' }}
     if: ${{ !cancelled() && needs.engine.outputs.found == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -599,7 +607,7 @@ jobs:
   # An engine that fails to fetch fails the run too.
   report:
     needs: [gate, engine, check]
-    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' }}
+    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && !(github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
