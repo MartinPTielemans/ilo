@@ -42,6 +42,7 @@
 #include "browser_core/public/browser_core.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
+#include "browser_core/window.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -52,6 +53,7 @@
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
@@ -894,6 +896,9 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
   // Holds the tab, as its tab strip gets it, until the answer, and watches |opener| till then.
   void Hold(content::WebContents* opener) {
     hold.Hold();
+    if (opener) {
+      opener_page_ = opener->GetWeakPtr();
+    }
     if (hold.holding() && opener) {
       opener_ = std::make_unique<GoneWatch>(
           opener, base::BindOnce(&PopupHeld::OpenerGone, base::Unretained(this)));
@@ -923,6 +928,10 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
 
   PopupHold hold;
 
+  // The page that opened it, which takes the keyboard back if the filters close it while it has
+  // it.
+  base::WeakPtr<content::WebContents> opener_page() const { return opener_page_; }
+
  private:
   // Once nothing is held, nothing more is watched.
   void Settled() {
@@ -939,6 +948,7 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
 
   friend class content::WebContentsUserData<PopupHeld>;
   std::unique_ptr<GoneWatch> opener_;
+  base::WeakPtr<content::WebContents> opener_page_;
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
@@ -1178,7 +1188,9 @@ class PageThrottle : public content::NavigationThrottle {
       return;
     }
     content::WebContents* contents = navigation_handle()->GetWebContents();
+    base::WeakPtr<content::WebContents> opener;
     if (PopupHeld* held = PopupHeld::FromWebContents(contents)) {
+      opener = held->opener_page();
       held->Decided(decision == Decision::kClose);
     }
     if (decision == Decision::kLoad) {
@@ -1186,15 +1198,25 @@ class PageThrottle : public content::NavigationThrottle {
       return;
     }
     if (decision == Decision::kClose) {
-      // After the navigation goes, which closing the tab now would take with it mid-call.
+      // After the navigation goes, which closing the tab now would take with it mid-call. On
+      // Windows a held pop-up's page takes the keyboard as Chrome makes it, and the app, never
+      // told of the tab, has no tab to move it from: the page that opened it takes it back.
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(
-                         [](base::WeakPtr<content::WebContents> tab) {
-                           if (tab) {
-                             tab->Close();
-                           }
-                         },
-                         contents->GetWeakPtr()));
+          FROM_HERE,
+          base::BindOnce(
+              [](base::WeakPtr<content::WebContents> tab,
+                 base::WeakPtr<content::WebContents> opener) {
+                if (!tab) {
+                  return;
+                }
+                content::RenderWidgetHostView* view = tab->GetRenderWidgetHostView();
+                const bool had_keyboard = view && view->HasFocus();
+                tab->Close();
+                if (had_keyboard && opener && Window::Showing(Tab::IdOf(opener.get()))) {
+                  Tab::FocusPage(opener.get());
+                }
+              },
+              contents->GetWeakPtr(), opener));
       CancelDeferredNavigation(CANCEL_AND_IGNORE);
       return;
     }
