@@ -916,6 +916,14 @@ class WindowViews : public views::WidgetObserver,
     }
   }
 
+  bool EndLoans() {
+    const bool lent = ui_lent_ || ui_lent_to_bubble_ || !page_lent_.windows().empty();
+    ui_lent_ = false;
+    ui_lent_to_bubble_ = false;
+    page_lent_.RemoveAll();
+    return lent;
+  }
+
   void TakeKeyboardFromMiniPlayer() {
     static base::NoDestructor<base::WeakPtr<views::Widget>> taken_from;
     // Chrome shows a video's Mini Player again for the next float, the same window.
@@ -1714,6 +1722,11 @@ void ReleaseKeyboard(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->PageTakesKeyboard();
   }
+}
+
+bool EndKeyboardLoans(views::Widget* widget) {
+  WindowViews* views = ViewsOf(widget);
+  return views && views->EndLoans();
 }
 
 bool OverlayHasKeyboard(views::Widget* widget) {
