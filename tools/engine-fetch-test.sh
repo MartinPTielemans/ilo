@@ -2,9 +2,10 @@
 # Proves which engine engine/fetch.sh takes (#2913): one built at the commit, one built a commit
 # behind on the same core, and at a batch's landing, the batch's engine over one built on main since
 # the batch branched, which is nearer by commit count but lacks the batch's core. A branch whose
-# core no engine has still gets the nearest. Each builds its history in a scratch repository, whose
-# engines are tags in a bare one beside it, and changes nothing here. CI's Changes job runs it on
-# every push.
+# core no engine has still gets the nearest, and an engine the nearest was built over isn't
+# compared, so a core branch doesn't compare every engine since the first. Each builds its history
+# in a scratch repository, whose engines are tags in a bare one beside it, and changes nothing here.
+# CI's Changes job runs it on every push.
 # Usage: tools/engine-fetch-test.sh
 set -uo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -102,6 +103,16 @@ commit c1 app.txt app
 engine "$c1"
 commit c2 core/a.cc 'int a = 2;'
 expect "$c1" "a branch whose core no engine has, which takes the nearest"
+
+# The core goes back to c0's, whose engine the nearest, c1's, was built over: it isn't compared,
+# though it has the core, as only a revert brings an older engine's core back.
+history
+commit c0
+engine "$c0"
+commit c1 core/a.cc 'int a = 2;'
+engine "$c1"
+commit c2 core/a.cc 'int a = 1;'
+expect "$c1" "an engine the nearest was built over, which isn't compared"
 
 [ "$failed" = 0 ] && echo "engine-fetch-test: fetch.sh takes the engine with the core, and else the nearest."
 exit "$failed"
