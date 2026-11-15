@@ -3,13 +3,14 @@
 # takes the carried thing's, each at the gap the page had, with nothing else moved. On two flex
 # columns with a 20 px gap: one of four things of one height, and one of four of different heights,
 # so the room each leaves isn't the other's size. Carried up and carried down, with one thing between
-# them, with two, and next to each other. After each, ⌘Z with the page focused takes the trade back
+# them, with two, and next to each other, and across the two columns. After each, ⌘Z with the page focused takes the trade back
 # and a click on the page's empty part ends the selection, so each starts from the page as it was.
 
 serve
-# The title says, for each column, its things in the order they're drawn from the top, and "packed"
-# when the first is at the column's top and each other 20 px under the one before, within a point,
-# or else each one's distance from the one before, and where a press landed, once nothing moves.
+# The title says, for each column, the things drawn in it from the top, each by its number, or by
+# its whole name when it came from the other column, and "packed" when the first is at the column's
+# top and each other 20 px under the one before, within a point, or else each one's distance from
+# the one before, and where a press landed, once nothing moves.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
 body { margin: 0; height: 100vh; font: 16px sans-serif; background: rgb(243, 245, 246) }
@@ -30,7 +31,11 @@ section { height: 80px; background: rgb(217, 226, 230) }
 let at = "-";
 addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," + Math.round(event.clientY); });
 function column(col) {
-  const things = [...col.children].sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top);
+  const c = col.getBoundingClientRect();
+  const things = [...document.querySelectorAll("section")].filter((t) => {
+    const r = t.getBoundingClientRect();
+    return r.left + r.width / 2 > c.left && r.left + r.width / 2 < c.right;
+  }).sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top);
   let edge = col.getBoundingClientRect().top - 20;
   const gaps = things.map((t) => {
     const r = t.getBoundingClientRect();
@@ -38,7 +43,7 @@ function column(col) {
     edge = r.bottom;
     return gap;
   });
-  const order = things.map((t) => t.getAttribute("aria-label").slice(1)).join(",");
+  const order = things.map((t) => t.getAttribute("aria-label").slice(t.parentNode === col ? 1 : 0)).join(",");
   return order + " " + (gaps.every((g) => Math.abs(g - 20) <= 1) ? "packed" : gaps.join(","));
 }
 let said;
@@ -156,6 +161,10 @@ trade B3 B1 '^a 1,2,3,4 packed b 3,2,1,4 packed '
 trade B1 B3 '^a 1,2,3,4 packed b 3,2,1,4 packed '
 trade B3 B2 '^a 1,2,3,4 packed b 1,3,2,4 packed '
 trade B2 B3 '^a 1,2,3,4 packed b 1,3,2,4 packed '
+# Across the two columns, side by side, each thing taking the other's place in the other column:
+# one with things before and after it, and one first in its column.
+trade A2 B3 '^a 1,B3,3,4 packed b 1,2,A2,4 packed '
+trade B1 A3 '^a 1,2,B1,4 packed b A3,2,3,4 packed '
 
 exec 3>&-
 quit
