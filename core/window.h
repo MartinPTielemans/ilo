@@ -88,7 +88,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   static Window* Showing(bc_id tab);
   // A video's Mini Player took the keyboard, so the window that let it go wasn't left for another
   // app or window. On Linux it can take it after that window asked (OnWidgetActivationChanged).
-  static void MiniPlayerTookKeyboard();
+  // Returns the window the user was in last, unless they had left it for another app or window.
+  static Window* MiniPlayerTookKeyboard();
   // The window |tab|'s page goes back to once no window shows it: of those that show a picture of
   // it in its place, as another window took it, the one the user was in last. Else null.
   static Window* Picturing(bc_id tab);
@@ -334,6 +335,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // bc_window_undo_remove_suggestion and bc_window_redo_remove_suggestion.
   bool UndoRemoveSuggestion(bc_id removal);
   bool RedoRemoveSuggestion(bc_id removal);
+  // Deletes |profile|'s visits to |url| in the span, among the window's removals, which are then
+  // for |profile|. See bc_window_remove_history.
+  bc_id RemoveHistory(Profile* profile, const GURL& url, base::Time begin, base::Time end);
   // Lets go of what each window built on |profile|, which is about to go.
   static void LetProfileGo(Profile* profile);
 

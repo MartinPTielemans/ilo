@@ -18,7 +18,7 @@
 # page's top 40%, which put their name in the title once painted, post as the login does, and put
 # "filled" in the title while Chrome fills that field, and "unfocused" once the page's focus leaves
 # its fields for nothing, which comes after autofill hears of it, as both go the frame's way to the
-# browser in turn.
+# browser in turn. /headed is a script with the headers its query names.
 mkdir "$out/site"
 # A page that a run types into once its title says so sets that title with painted(): Chromium
 # drops a key that comes before a page it loaded first shows, for up to half a second while it
@@ -442,6 +442,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Location", urllib.parse.parse_qs(query)["to"][0])
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+        # A script that adds its n to the list ran of the page, with the other parts of its query as
+        # headers; with to, a 302 to that address instead.
+        if path == "/headed":
+            fields = urllib.parse.parse_qs(query)
+            body = b"" if "to" in fields else ("ran.push(%r);" % fields.get("n", ["?"])[0]).encode()
+            self.send_response(302 if "to" in fields else 200)
+            for name, values in fields.items():
+                if name not in ("n", "to"):
+                    self.send_header(name, values[0])
+            if "to" in fields:
+                self.send_header("Location", fields["to"][0])
+            self.send_header("Content-Type", "text/javascript")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if path == "/session":
             body = open(sys.argv[1] + "/session.html", "rb").read()
