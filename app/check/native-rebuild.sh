@@ -6,7 +6,7 @@
 # whole run, and says each fetch that took over 40 ms. 6 times a rule goes in My filters, each
 # compiling the engine anew; after each a new tab is opened from ⌘T's bar at once, by turns from
 # http and from a file, whose navigation the engine is never asked about. Then 6 launches by turns
-# with the engine's cache and without, as the launch after a list update has none.
+# with the engine's cache and without, with none, the engine kept, and one kept by another version.
 serve
 nr_dir="$out/native-rebuild"
 nr_profile_was=$profile_dir
@@ -122,14 +122,27 @@ echo "probe (#2513): new tabs, return at, after rule, kind, return to first pain
 cat "$nr_dir/actions"
 echo "probe (#2513): the first page's fetches over 40 ms, fetch, started at, ms:"
 sed -n 's/^browser: title [0-9]* p1 slow //p' "$log"
-# Launches by turns with the engine's cache and without, to the first page painted.
+# Launches by turns with no engine kept (as a new profile's), the engine kept, and one kept by
+# another version (stale: its name's last part zeroed, as an update or a list's new copy names
+# another), to the first page painted.
 : > "$nr_dir/launches"
-for l in 1 2 3 4 5 6; do
+: > "$nr_dir/launches-files"
+for l in 1 2 3 4 5 6 7 8 9; do
   way=cached
-  if [ $((l % 2)) = 1 ]; then
-    way=uncached
-    rm -f "$profile_dir/Ad Blocking"/engine-*.dat
-  fi
+  case $((l % 3)) in
+    1)
+      way=none
+      rm -f "$profile_dir/Ad Blocking"/engine-*.dat
+      ;;
+    0)
+      way=stale
+      for f in "$profile_dir/Ad Blocking"/engine-*.dat; do
+        [ -f "$f" ] || continue
+        mv "$f" "$(echo "$f" | sed 's/[0-9a-f]\{16\}\.dat$/0000000000000000.dat/')"
+      done
+      ls "$profile_dir/Ad Blocking" >> "$nr_dir/launches-files"
+      ;;
+  esac
   log="$nr_dir/launch-$l.log"
   step=0
   rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
@@ -139,12 +152,16 @@ for l in 1 2 3 4 5 6; do
   pid=$!
   await "^browser: title [0-9]* l$l fcp " || fail "launch $l's page didn't paint"
   fcp=$(sed -n "s/^browser: title [0-9]* l$l fcp //p" "$log" | tail -1)
-  nr_engine=$(grep '^browser: ad block engine \(compiled\|loaded\) in ' "$log" | head -1 |
-    sed 's/^browser: ad block engine //')
+  nr_engine=$(grep '^browser: ad block engine \(compiled\|loaded\) in ' "$log" |
+    sed 's/^browser: ad block engine //' | tr '\n' ';')
   echo "$l $way $((fcp - t0)) $nr_engine" >> "$nr_dir/launches"
   quit
+  # What a quit at once after the page left kept, the compile perhaps unfinished.
+  [ "$way" != stale ] || ls "$profile_dir/Ad Blocking" >> "$nr_dir/launches-files"
 done
 echo "probe (#2513): launches, way, launch to first paint ms, engine:"
 cat "$nr_dir/launches"
+echo "probe (#2513): the stale launches' Ad Blocking folder, before and after:"
+cat "$nr_dir/launches-files"
 profile_dir=$nr_profile_was
 echo "ok: probe (#2513) ran; its rows are above and in $nr_dir"
