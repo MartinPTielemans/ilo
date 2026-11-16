@@ -147,11 +147,21 @@ sed -n "/^browser: drive $held: /,\$p" "$log" | grep -q '^browser: title [0-9]* 
   fail "a held escape's repeats went on to the page after it closed the command bar"
 send key f cmd
 expect '^browser: title [0-9]* page saw cmd-f$' "⌘F with the page focused didn't reach the page"
+# One ⌘N opens one window: since step $1, which $2 names, new-window ran once. Under Wayland GPUI
+# holds the keys after a ⌘F the page kept, for a find bar, and the ⌘N the app answered would run
+# again in the new window's command bar, which takes them (#3135). Read once escape has closed
+# that bar, which comes after the keys held.
+one_window_since() {
+  ran=$(since "$1" | grep -c '^browser: command new-window via ')
+  [ "$ran" = 1 ] || fail "$2 ran new-window $ran times"
+}
 # ⌘N from the page opens a window with no page and its command bar, which escape closes, leaving
-# its UI the keyboard, and ⇧⌘W there closes it.
+# its UI the keyboard, and ⇧⌘W there closes it. ⌘F's hold is on as it comes.
 page_shortcut n new-window
+pressed=$step
 expect '^browser: window opened [0-9]' "⌘N with the page focused didn't open a window"
 new_window_bar
+one_window_since $pressed "⌘N with the page focused, after ⌘F"
 send state
 in_browser AccessKitSubclassOfGPUIView "in the window ⌘N opened"
 send key w cmd shift
@@ -162,8 +172,10 @@ send window 1
 send click $page_point
 in_browser RenderWidgetHostViewCocoa "before ⌘N opened a window for ⌘W"
 page_shortcut n new-window
+pressed=$step
 expect '^browser: window opened [0-9]' "⌘N with the page focused didn't open a window"
 new_window_bar
+one_window_since $pressed "⌘N with the page focused"
 send key w cmd
 expect '^browser: command close-tab via ui$' "⌘W with the UI focused didn't reach the UI"
 expect '^browser: window closed [0-9]' "⌘W in a window with no page didn't close it"
@@ -190,11 +202,13 @@ expect '^browser: title [0-9]* value abcd$' "the page got keys meant for the UI:
 tab=$(today)
 send click $sidebar_point
 send key n cmd
+pressed=$step
 expect '^browser: command new-window via ui$' "⌘N with the UI focused didn't reach the UI"
 expect '^browser: window opened [0-9]' "⌘N with the UI focused didn't open a window"
 first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 new_window_bar
+one_window_since $pressed "⌘N with the UI focused"
 # The driver counts windows in the order they opened, closed ones too.
 send window "$(grep -c '^browser: window opened ' "$log")"
 send click $(row 0)
@@ -259,7 +273,8 @@ fi
 # The driver's scripted input method stands in for Japanese input, which is system-wide. On Windows
 # it's Microsoft's Japanese IME itself, where the runner has it (check-windows.yml installs it for
 # this run): the driver's ime ja sends the keys through Windows' input queue, and "nihongo"
-# composes にほんご, as a user's typing does.
+# composes にほんご, as a user's typing does. Under Wayland the driver is sway's input method, so
+# what it composes goes to the page's field as an fcitx5's would; on X11 it can't reach a page.
 composed=日本語
 ime="ime on" preedit=nihongo preedit_marked=0,7
 japanese=
@@ -268,8 +283,8 @@ if windows; then
     2> /dev/null | grep -qi 03B5835F-F03C-411B-9CE2-AA23E1171E36 && japanese=1
   [ -z "$japanese" ] || { ime="ime ja"; preedit=にほんご; preedit_marked=0,4; }
 fi
-if [ "$(uname)" = Linux ]; then
-  echo "skip: composing in a page: the Linux driver types plain keys there; check/ime.sh covers it with a real input method."
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: composing in a page: on X11 the Linux driver types plain keys there; check/ime.sh covers it with a real input method."
   composed=
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing in a page: the runner has no Japanese IME, and the Windows driver's own input method composes in the UI's fields alone."
@@ -324,8 +339,8 @@ for shortcut in t l; do
   expect '^browser: command bar hidden$' "escape didn't close the command bar"
   in_browser RenderWidgetHostViewCocoa "after the command bar closed"
 done
-if [ "$(uname)" = Linux ]; then
-  echo "skip: composing right after ⌘L: the Linux driver types plain keys in a page."
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: composing right after ⌘L: on X11 the Linux driver types plain keys in a page."
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
 elif windows; then

@@ -672,7 +672,8 @@ windowed_again() {
   done
   [ "$active" = 1 ] ||
     fail "Browser wasn't the active app again after the page's display went away $1, so its window isn't key"
-  ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"
+  capture "$out/$2.png" sidebar_back
+  [ -z "$redraw" ] || echo "window: under Wayland the windowed frame reached the capture after the page's display went away $1, $redraw"
   sidebar_back "$out/$2.png" ||
     fail "after the page's display went away $1 the sidebar is $sidebar_now, not $sidebar: the page still covers it"
   send key f
@@ -684,7 +685,8 @@ windowed_again() {
   expect '^browser: window left full screen$' "the window didn't leave full screen with the page after its display went away $1"
   check_layout "after the page's full screen after its display went away $1"
   check_buttons "after the page's full screen after its display went away $1"
-  ../tools/window-screenshot.sh "$pid" "$out/$2-again.png" || fail "no window to capture"
+  capture "$out/$2-again.png" sidebar_back
+  [ -z "$redraw" ] || echo "window: under Wayland the windowed frame reached the capture after the page's next full screen, its display gone $1, $redraw"
   sidebar_back "$out/$2-again.png" ||
     fail "after the page's next full screen the sidebar is $sidebar_now, not $sidebar: the page still covers it"
 }

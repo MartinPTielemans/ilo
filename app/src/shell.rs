@@ -35,6 +35,8 @@ mod access;
 mod agent_bar;
 mod agent_pointer;
 mod agent_question;
+#[cfg(test)]
+mod app_menu_tests;
 mod arrange;
 mod assets;
 #[cfg(test)]
@@ -662,6 +664,15 @@ fn replace<T: PartialEq>(kept: &mut T, value: T) -> bool {
         *kept = value;
     }
     changed
+}
+
+/// Whether `tab` is a favorite or in one of the Spaces, so not closed.
+fn open_in(spaces: &[Space], task_spaces: &[Space], favorites: &[u64], tab: u64) -> bool {
+    favorites.contains(&tab)
+        || spaces
+            .iter()
+            .chain(task_spaces)
+            .any(|space| space.pinned.contains(&tab) || space.today.contains(&tab))
 }
 
 /// A Space as the core reports it: its id, name, colour (0xRRGGBB), profile, icon, the name of the
@@ -1430,6 +1441,10 @@ pub struct Shell {
     /// •••, and whether the menu up is the one it opened, which keeps them while it's up.
     name_hovered: bool,
     name_menu: bool,
+    /// Whether the footer has the menu control, off the Mac, where there's no menu bar to hold
+    /// ilo's menu (#3148), and whether the menu up is the one it opened, which keeps it pressed.
+    menu_control: bool,
+    app_menu: bool,
     /// The Space and whether its pinned rows were collapsed when last drawn, and when they last
     /// changed there, for the chevron's turn.
     pinned_seen: Option<(u64, bool)>,
@@ -1487,6 +1502,9 @@ pub struct Shell {
     /// The window shows another Space, whose tab the core says next, for the command bar to follow
     /// once it has.
     bar_follows: bool,
+    /// ⌘L, from where it came, pressed after the tab shown closed and before the core said which
+    /// shows next, which the bar then opens on (#2953).
+    edit_url_waits: Option<String>,
     drag: Option<Drag>,
     /// A tab's row dragged out of the window, as the system drags it, until it's let go.
     window_drag: Option<drag::WindowDrag>,
@@ -2027,6 +2045,8 @@ impl Shell {
             caret_drawn: Rc::default(),
             name_hovered: false,
             name_menu: false,
+            menu_control: OFF_THE_MAC,
+            app_menu: false,
             pinned_seen: None,
             pinned_turn: None,
             split_folds: HashMap::new(),
@@ -2053,6 +2073,7 @@ impl Shell {
             in_hint: false,
             press_closed_bar: false,
             bar_follows: false,
+            edit_url_waits: None,
             drag: None,
             window_drag: None,
             dragged: false,
@@ -3245,18 +3266,16 @@ impl Shell {
         log!("browser: favorite splits {}", splits.join(" "));
     }
 
+    fn tab_open(&self, tab: u64) -> bool {
+        open_in(&self.spaces, &self.task_spaces, &self.all_favorites, tab)
+    }
+
     /// What the shell knew of a closed tab goes with it. The core reports a tab in its new place
     /// before it leaves the old, so one moving between a Space and the favorites stays.
     fn forget_closed(&mut self, cx: &mut App) {
         let (spaces, favorites) = (&self.spaces, &self.all_favorites);
         let task_spaces = &self.task_spaces;
-        let open = |tab: &u64| {
-            favorites.contains(tab)
-                || spaces
-                    .iter()
-                    .chain(task_spaces)
-                    .any(|space| space.pinned.contains(tab) || space.today.contains(tab))
-        };
+        let open = |tab: &u64| open_in(spaces, task_spaces, favorites, *tab);
         // A closed tab's hover card picture goes with it.
         let closed: Vec<u64> = self.tabs.keys().copied().filter(|tab| !open(tab)).collect();
         for tab in closed {
@@ -3386,6 +3405,9 @@ impl Shell {
         }
         if self.split_pending.take() == Some(tab) {
             self.add_pane(cx);
+        }
+        if let Some(from) = self.edit_url_waits.take() {
+            self.edit_url(&from, cx);
         }
         self.update_title(cx);
         self.update_menus(cx);
@@ -4892,6 +4914,7 @@ impl Shell {
             .children(self.download_bin(cx))
             .children(self.archive_flights())
             .children((!self.one_space()).then(|| self.plus_button(cx)))
+            .children(self.menu_control.then(|| self.menu_button(cx)))
             .children(self.switcher(cx))
             .child(self.press_listener())
             .children(self.paging_frame(started))

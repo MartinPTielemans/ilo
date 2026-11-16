@@ -1111,11 +1111,18 @@ second=$(grep -c '^browser: window opened ' "$log")
 opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: window $opened main true\$" "the window ⌘N opened didn't become the main one"
 send window 1
+back=$step
 expect 'browser: mini player back in its tab$' \
   "coming back to the video's window didn't put the Mini Player back in its tab"
 expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
 # The new window's command bar closes as the video's window takes the keyboard, which stays there:
-# the Mac's host gave it back to the bar's window (#2179).
+# the Mac's host gave it back to the bar's window (#2179). On X11 the bar is a window over all of
+# the app's, so one left open stays over the video's, and it took the keyboard back as another of
+# the app's windows took it (#3082).
+if [ "$(uname)" = Linux ] && ! wayland; then
+  expect '^browser: command bar hidden$' \
+    "the new window's command bar didn't close as the video's window took the keyboard" "$back"
+fi
 if [ "$(uname)" = Darwin ]; then
   first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
   keys=$(grep '^browser: key window [0-9]*$' "$log" | tail -2 | tr '\n' ' ')
