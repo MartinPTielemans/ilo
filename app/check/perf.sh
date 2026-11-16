@@ -465,6 +465,15 @@ perf_session() {
   perf_row settled-cpu-20 "Idle CPU, 20 tabs, settled" "$cpu" "Ardia 0.31 %"
   perf_row settled-wakeups-20 "Idle wakeups, 20 tabs, settled" "$wakeups /s" "Ardia 11.82 /s"
 
+  # Proof only (#2377): 3 rounds of 16 switches, the app's frame split by GPUI's phases.
+  for round in 1 2 3; do
+    sleep 2
+    perf_switches "split-$round"
+    echo "perf: proof only: split $round: switch $(perf_stats '%.1f' < "$perf_dir/split-$round")"
+  done
+  cp "$log" "$perf_dir/proof-session.log"
+  echo "ok: proof only (#2377): the app frame split is in $perf_dir/proof-session.log"
+  return 0
   perf_switches switch
   perf_row switch "Tab switch, key to page shown" "$(perf_stats '%.0f' < "$perf_dir/switch") ms" \
     "Ardia 14 ms, Chrome 8 ms (gate: 16 ms)"
