@@ -1,5 +1,6 @@
 #include "browser_core/live_folder_rule.h"
 
+#include <algorithm>
 #include <string_view>
 #include <tuple>
 #include <utility>
@@ -147,10 +148,14 @@ void SharedFetches::Ended(const Key& key, std::vector<std::optional<Answer>> ans
   }
   Shared& shared = it->second;
   shared.under_way = false;
-  shared.last = Kept{.answers = std::move(answers), .answered = base::Time::Now()};
+  const Kept kept{.answers = std::move(answers), .answered = base::Time::Now()};
+  // Signed out isn't kept: once the user signs in, as its row asks, the next ask goes to the site.
+  // A failure is, so the floor still guards a site that's down.
+  const bool signed_out = std::ranges::any_of(
+      kept.answers,
+      [](const std::optional<Answer>& answer) { return answer && !answer->signed_in; });
+  shared.last = signed_out ? std::nullopt : std::optional<Kept>(kept);
   shared.ended = base::TimeTicks::Now();
-  // Copied, as one answered may ask again, which then finds this kept.
-  const Kept kept = *shared.last;
   std::vector<Done> waiting = std::move(shared.waiting);
   shared.waiting.clear();
   for (Done& done : waiting) {

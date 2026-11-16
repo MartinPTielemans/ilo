@@ -101,7 +101,8 @@ class SharedFetches {
   // runs now, asking the site, and its fetch ends with Ended.
   void Ask(const Key& key, bool refresh, base::OnceClosure start, Done done);
 
-  // |key|'s fetch ended with |answers|: keeps them, and answers each who waited on it.
+  // |key|'s fetch ended with |answers|: answers each who waited on it, and keeps them for kFloor,
+  // but not a signed-out one, so an ask after the user signs in goes to the site.
   void Ended(const Key& key, std::vector<std::optional<Answer>> answers);
 
  private:
