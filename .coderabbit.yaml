@@ -17,6 +17,9 @@ reviews:
     drafts: true
     # Core changes merge into a batch branch before main, so a PR into one is read too.
     base_branches: ["^engine-build/batch-"]
+    # Every lane pushes as one account, and the bot allows about one review an hour per account,
+    # so the whole fleet shares it: a push to a labelled PR mustn't spend it on a re-review.
+    auto_incremental_review: false
 
   # Nothing of the bot's own goes into a PR: authorship here is human only and every commit is
   # signed off, so it writes no description, title, label, reviewer or commit.
