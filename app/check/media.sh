@@ -1026,6 +1026,47 @@ else
   ! windows || moved="x >= px - 200 && x <= px - 190"
   ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
   mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
+  if windows; then
+    # With the window's contents off while dragging, Windows moves only an outline, and the window
+    # once, at the release. The core hears the outline's moves instead, which is right only where
+    # Windows lands the window where the outline last was, so the core logs both (#3062). A dragto
+    # waits until the move loop takes the pointer's move off its queue, and the loop moves the
+    # outline before it takes anything else, so the rest starts with the outline there.
+    drag_full_windows 0
+    send pip press $((pw / 8)) $((ph / 2))
+    expect 'browser: mini player pressed at ' \
+      "a press off its controls didn't reach the Mini Player with the window's contents off"
+    send pip dragto $((pw / 8 - 10)) $((ph / 2))
+    expect 'browser: mini player moving from ' \
+      "a drag with the window's contents off didn't start moving the Mini Player"
+    send pip dragto $((pw / 8 - 200)) $((ph / 2))
+    # The same rest as with the contents shown.
+    sleep 0.2
+    send pip release $((pw / 8 - 200)) $((ph / 2))
+    drag_full_windows "${drag_full:-1}"
+    expect 'browser: outline move ended at ' \
+      "the core heard no outline move with the window's contents off"
+    # <x>,<y> (<x>,<y> DIPs), the window at <x>,<y> (<x>,<y> DIPs): pixels, then DIPs.
+    ended=$(grep 'browser: outline move ended at ' "$log" | tail -1 | tr -d '\r')
+    read -r outline outline_dips landed landed_dips <<ENDED
+$(echo "$ended" | sed -n 's/.*outline move ended at \([-0-9]*,[-0-9]*\) (\([-0-9]*,[-0-9]*\) DIPs), the window at \([-0-9]*,[-0-9]*\) (\([-0-9]*,[-0-9]*\) DIPs)$/\1 \2 \3 \4/p')
+ENDED
+    [ -n "$landed_dips" ] || fail "the core's outline line didn't read as expected: $ended"
+    [ "$landed" = "$outline" ] ||
+      fail "Windows landed the window at $landed, not where its last WM_MOVING put the outline, $outline"
+    [ "$landed_dips" = "$outline_dips" ] ||
+      fail "the window landed at $landed_dips DIPs, not the outline's $outline_dips, at the same pixels"
+    expect 'browser: mini player let go at ' \
+      "the Mini Player wasn't let go with the window's contents off"
+    let_go=$(grep 'browser: mini player let go at ' "$log" | tail -1 | tr -d '\r' |
+      sed 's/.*browser: //')
+    case $let_go in
+    *", staying") ;;
+    *) fail "the Mini Player let go after a rest with the window's contents off was thrown: $let_go" ;;
+    esac
+    mini_player_at "x >= px - 200 && x <= px - 190 && y == py && w == pw && h == ph" \
+      "a drag with the window's contents off didn't move the Mini Player"
+  fi
 fi
 send pip wheel $((pw / 2)) $((ph / 3)) -2 cmd
 mini_player_at "w > pw * 1.15 && h > ph * 1.15 && $grown" \
