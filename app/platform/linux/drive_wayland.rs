@@ -181,8 +181,10 @@ pub(crate) fn probe_mark(what: &str) {
 
 /// Probe: Ctrl+L through the virtual keyboard, then the input method's activations as sway sends
 /// them, polled each ms, logged in ms from the key, until one comes or 2 s pass.
-fn probe_gap() -> Option<()> {
-    input_method()?;
+fn probe_gap(plain: bool) -> Option<()> {
+    if !plain {
+        input_method()?;
+    }
     PROBE_EVENTS.with_borrow_mut(Vec::clear);
     let began = Instant::now();
     PROBE_AT.set(Some(began));
@@ -1565,7 +1567,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
         "keyup" => (|| key_events(words.next()?, 0, &[false]))(),
         "type" => rest.chars().try_for_each(|c| key(&c.to_string(), 0)),
         "insert" => insert(rest),
-        "probegap" => probe_gap(),
+        "probegap" => probe_gap(rest == "plain"),
         "resize" | "place" => (|| {
             let numbers: Vec<f64> = words.map(|w| w.parse().ok()).collect::<Option<_>>()?;
             match numbers[..] {

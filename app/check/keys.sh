@@ -213,6 +213,17 @@ ran_once close-window "one ⇧⌘W with the page focused"
 send window 1
 send click $page_point
 in_browser RenderWidgetHostViewCocoa "after the window ⌘N opened closed"
+# Probe (#3154): five goes of Ctrl+L with no input method bound yet, timing the page's hand-back.
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  for _ in 1 2 3 4 5; do
+    send probegap plain
+    expect '^browser: command bar shown$' "probegap's Ctrl+L didn't open the command bar"
+    send key escape
+    expect '^browser: command bar hidden$' "escape didn't close the command bar"
+    in_browser RenderWidgetHostViewCocoa "after the command bar closed"
+  done
+  grep '^browser: probe \(gap\|mark\)' "$log" | sed 's/^/probe plain: /'
+fi
 grep -q '^browser: title [0-9]* page saw cmd-[twnW]$' "$log" && fail "the page saw a reserved shortcut"
 grep -q '^browser: title [0-9]* page saw cmd-l$' "$log" || fail "⌘L with the page focused didn't reach the page first"
 grep -q '^browser: command find via page$' "$log" && fail "the page kept ⌘F, but the UI ran it too"
