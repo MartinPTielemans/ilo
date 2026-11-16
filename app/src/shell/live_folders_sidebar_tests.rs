@@ -267,18 +267,19 @@ fn a_space_shown_asks_once_its_switch_is_drawn(cx: &mut TestAppContext) {
         );
         let _ = cx;
     });
-    // Its slide drawn to its end, the fetch waits for the frame after.
+    // Its slide drawn to its end, the fetch follows that frame, once, without one of its own.
     cx.executor().advance_clock(Duration::from_secs(2));
     draw(&shell, cx);
     draw(&shell, cx);
-    assert!(fetches(&host).is_empty());
-    cx.update(|window, cx| window.simulate_next_frame(cx));
     assert_eq!(
         fetches(&host),
         [format!(
             "fetch live folder {FOLDER} PullRequests refresh false"
         )]
     );
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    draw(&shell, cx);
+    assert!(fetches(&host).is_empty());
 }
 
 #[gpui::test]
@@ -606,25 +607,60 @@ fn another_profile_for_the_space_drops_the_old_accounts_rows_and_asks(cx: &mut T
             "fetch live folder {FOLDER} PullRequests refresh false"
         )]
     );
-    // The new account's fetch failing keeps none of the old one's rows.
+    // The core dropped that ask behind the old account's fetch, which it answers failed: the
+    // folder asks once more.
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(FOLDER, LiveAnswer::Failed, just_now(), cx)
+    });
+    assert_eq!(
+        fetches(&host),
+        [format!(
+            "fetch live folder {FOLDER} PullRequests refresh false"
+        )]
+    );
+    // The new account's fetch failing too keeps none of the old one's rows, and asks no more.
     shell.update(cx, |shell, cx| {
         shell.set_live_answer(FOLDER, LiveAnswer::Failed, just_now(), cx)
     });
     assert_eq!(shell.read_with(cx, |shell, _| rows(shell)), 0);
+    assert!(fetches(&host).is_empty());
+}
+
+#[gpui::test]
+fn an_answer_older_than_the_rows_shown_is_dropped(cx: &mut TestAppContext) {
+    let (shell, cx, _host) = window(cx);
+    report(&shell, cx, true, &[]);
+    let answered = just_now();
+    shell.update(cx, |shell, cx| {
+        let items = vec![item(LiveList::Created, 7), item(LiveList::Created, 8)];
+        shell.set_live_answer(FOLDER, LiveAnswer::Items(items), answered, cx);
+        let older = vec![item(LiveList::Created, 7)];
+        shell.set_live_answer(FOLDER, LiveAnswer::Items(older), answered - 1000, cx);
+    });
+    let rows = shell.read_with(cx, |shell, _| shell.live[&FOLDER].rows(|_| None).len());
+    assert_eq!(rows, 3);
 }
 
 #[gpui::test]
 fn a_live_folder_made_in_a_space_with_no_tabs_asks(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
+    // The core reports a Space made after the window's first report with no tabs: its first
+    // report of tabs is when something is made in it, here the Live Folder.
     shell.update(cx, |shell, cx| {
-        shell.set_tabs(
+        let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+        let other = (2, "Other".into(), None, 1, "".into(), "".into(), "".into());
+        let new = (4, "New".into(), None, 1, "".into(), "".into(), "".into());
+        let agent = (
+            9,
+            "Agent".into(),
+            None,
             1,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Folders::default(),
-            cx,
-        )
+            "".into(),
+            "claude".into(),
+            "".into(),
+        );
+        shell.set_spaces(vec![space, other, new, agent], cx);
+        shell.set_space(4, cx);
     });
     draw(&shell, cx);
     host.take();
@@ -634,7 +670,7 @@ fn a_live_folder_made_in_a_space_with_no_tabs_asks(cx: &mut TestAppContext) {
             .folders
             .insert(FOLDER, ("Pull Requests".into(), true));
         folders.live.insert(FOLDER, LiveSource::PullRequests);
-        shell.set_tabs(1, vec![FOLDER], Vec::new(), Vec::new(), folders, cx);
+        shell.set_tabs(4, vec![FOLDER], Vec::new(), Vec::new(), folders, cx);
     });
     draw(&shell, cx);
     assert_eq!(
@@ -647,13 +683,16 @@ fn a_live_folder_made_in_a_space_with_no_tabs_asks(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn a_live_folder_brought_back_with_its_space_doesnt_ask_as_made(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window(cx);
-    // Space 2's first report, as at launch, has the folder already.
+    // The window's first report, as at launch: Space 4's folder is already there.
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
         let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
-        let other = (2, "Other".into(), None, 1, "".into(), "".into(), "".into());
         let more = (4, "More".into(), None, 1, "".into(), "".into(), "".into());
-        shell.set_spaces(vec![space, other, more], cx);
+        shell.set_spaces(vec![space, more], cx);
+        shell.set_space(1, cx);
+        shell.set_tabs(1, vec![1], Vec::new(), Vec::new(), Folders::default(), cx);
         let mut folders = Folders::default();
         folders.folders.insert(40, ("Pull Requests".into(), false));
         folders.live.insert(40, LiveSource::PullRequests);

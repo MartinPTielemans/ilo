@@ -1573,6 +1573,9 @@ pub struct Shell {
     settle: Option<Settle>,
     /// Each Live Folder's lists as the core last answered them (#2979).
     live: HashMap<u64, live_folders::LiveFolder>,
+    /// Live Folders whose Space was given another profile: the core drops an ask while one is
+    /// waiting and fails that one, so a failure next asks once more.
+    live_reask: HashSet<u64>,
     /// A Space was shown, and its Live Folders ask for their lists once its switch's frames are
     /// drawn, so the fetch never holds the switch.
     live_after_switch: bool,
@@ -2138,6 +2141,7 @@ impl Shell {
             swipe: None,
             settle: None,
             live: HashMap::new(),
+            live_reask: HashSet::new(),
             live_after_switch: false,
             swiped: false,
             wheel: None,
@@ -2895,6 +2899,11 @@ impl Shell {
             .map(|&(id, ..)| id)
             .filter(|&id| listed.insert(id))
             .collect();
+        // A Space new after the window's first report is made empty, and the core reports no tabs
+        // for it until something is in it: what it reports first was made, not brought back.
+        if filled {
+            self.spaces_filled.extend(made.iter().copied());
+        }
         let mut old = std::mem::take(&mut self.spaces);
         let mut reprofiled = Vec::new();
         self.spaces = spaces
@@ -3195,8 +3204,11 @@ impl Shell {
         for folder in toggled {
             entry.drop_peeks(folder);
         }
-        entry.live_rooms =
-            live_folders::rooms(entry, &self.live, |tab| self.browser.pinned_url(tab));
+        // A Space with no Live Folder, the usual one, builds no rows for them.
+        if !entry.folders.live.is_empty() || !entry.live_rooms.is_empty() {
+            entry.live_rooms =
+                live_folders::rooms(entry, &self.live, |tab| self.browser.pinned_url(tab));
+        }
         if space == self.space {
             let eliding = (eliding, dotted(entry));
             (self.swaps).folders_changed(&before_folders, &entry.folders, eliding, Instant::now());
@@ -3255,7 +3267,8 @@ impl Shell {
         }
         let filled = !self.spaces_filled.insert(space);
         self.live_folders_changed(space, &before_folders, filled, cx);
-        self.update_live_rooms(cx);
+        // Its rows were built and moved above; only the lists of folders gone are let go here.
+        self.forget_live();
         // Pinning or unpinning the tab shown renames Tabs › Pin Tab.
         self.update_menus(cx);
         cx.notify();
@@ -4370,11 +4383,14 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
-        // A Space shown asks for its Live Folders' lists only once its switch is drawn, so the
-        // fetch never holds a frame of it.
+        // A Space shown with a Live Folder asks for their lists once its switch is drawn, so the
+        // fetch never holds a frame of it. Deferred, as the window's ask is: a next-frame callback
+        // asks for a frame of its own (#3004).
         if self.live_after_switch && self.settle.is_none() {
             self.live_after_switch = false;
-            cx.on_next_frame(window, |shell, _, cx| shell.live_space_shown(cx));
+            if self.shows_live() {
+                cx.defer_in(window, |shell, _, cx| shell.live_space_shown(cx));
+            }
         }
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()

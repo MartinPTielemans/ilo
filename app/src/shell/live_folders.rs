@@ -397,6 +397,11 @@ impl Shell {
             && (self.spaces.iter()).any(|each| each.id == space && each.agent.is_empty())
     }
 
+    /// Whether the Space shown has a Live Folder, which only then asks as it's shown.
+    pub(super) fn shows_live(&self) -> bool {
+        (self.shown_space()).is_some_and(|space| !space.folders.live.is_empty())
+    }
+
     /// The Live Folders of the Space shown.
     fn shown_live(&self) -> Vec<u64> {
         let live = self
@@ -457,11 +462,24 @@ impl Shell {
         answered: i64,
         cx: &mut Context<Self>,
     ) {
+        let failed = answer == LiveAnswer::Failed;
+        // A fetch waiting as the profile changed answers failed, never the old account's rows,
+        // and the ask the change made was dropped while it waited: that one goes again.
+        if self.live_reask.remove(&folder) && failed {
+            self.ask_live(LiveEvent::Profile, vec![folder], cx);
+            return;
+        }
         let kept = self.live.get(&folder);
         if kept.is_some_and(|kept| kept.holds(&answer, answered)) {
             return;
         }
-        let failed = answer == LiveAnswer::Failed;
+        // Rows older than those shown, as an ask that waited behind a Refresh gets, aren't news.
+        let older = kept
+            .and_then(|kept| kept.answered)
+            .is_some_and(|shown| answered < shown);
+        if !failed && older {
+            return;
+        }
         self.set_live_answer_at(folder, answer, answered_at(answered), cx);
         if let Some(kept) = self.live.get_mut(&folder).filter(|_| !failed) {
             kept.answered = Some(answered);
@@ -480,6 +498,7 @@ impl Shell {
         }
         for folder in &folders {
             self.live.remove(folder);
+            self.live_reask.insert(*folder);
         }
         self.update_live_rooms(cx);
         self.ask_live(LiveEvent::Profile, folders, cx);
@@ -516,15 +535,22 @@ impl Shell {
         for space in &mut self.spaces {
             space.live_rooms = rooms(space, &self.live, |tab| browser.pinned_url(tab));
         }
-        let spaces = &self.spaces;
-        (self.live).retain(|folder, _| {
-            spaces
-                .iter()
-                .any(|space| space.folders.live.contains_key(folder))
-        });
+        self.forget_live();
         if before != self.layout() {
             self.move_rows(before, super::Curve::Slide, cx);
         }
+    }
+
+    /// Lets go of the lists of folders that are gone or no longer live.
+    pub(super) fn forget_live(&mut self) {
+        if self.live.is_empty() && self.live_reask.is_empty() {
+            return;
+        }
+        let spaces = &self.spaces;
+        let live =
+            |folder: &u64| (spaces.iter()).any(|space| space.folders.live.contains_key(folder));
+        self.live.retain(|folder, _| live(folder));
+        self.live_reask.retain(live);
     }
 
     /// Takes the core's report of `space`'s folders after `was`: a Live Folder made since asks
