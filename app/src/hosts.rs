@@ -750,6 +750,14 @@ impl link_target::Host for LinkTargetHost {
     fn pressed(&self) -> bool {
         unsafe { platform::host_mouse_down() }
     }
+
+    fn card_picture(&self, card: u64, url: &str, page: &str) -> bool {
+        crate::link_cards::picture(card, url, page)
+    }
+
+    fn card_cancel(&self, card: u64) {
+        crate::link_cards::cancel(card)
+    }
 }
 
 /// The pointer moved, at (`x`, `y`) in the window the link target shows over, while it shows.
