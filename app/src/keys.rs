@@ -177,6 +177,8 @@ pub(crate) unsafe extern "C" fn tab_key_unhandled(
     tab: bc::bc_id,
     key: *const bc::bc_key,
 ) -> bool {
+    #[cfg(target_os = "linux")]
+    crate::drive_wayland::probe_mark("key unhandled by page");
     if browser::agents::pressing_key() {
         return false;
     }
