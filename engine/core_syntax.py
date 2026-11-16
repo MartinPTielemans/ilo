@@ -1,10 +1,19 @@
-"""The core's Mac compile, checked in minutes on a hosted Mac before a Mac engine build (#2668).
+"""The core's compile, checked in minutes on a hosted runner before an engine build: the Mac's
+(#2668), and the Windows engine's pack for its own check (#3105).
 
 pack <src> <out.tar.zst>: run in the Mac engine build's tree once it's built. It packs what a
   compile of //browser_core reads besides the core and the macOS SDK. That's every header in the
   tree and the build's gen/, not only the ones the engine's core includes, so a branch's new include
   is there too. Then Chromium's libc++ and clang, and the core's compile variables from its .ninja
   files: about 200 MB, against the tree's 8 GB.
+pack <src> <out.tar.zst> <out dir> <toolchain dir>: the same for the Windows engine's cross build,
+  less clang, which a check takes as Chromium's Windows package at the build's revision. Nothing of
+  Microsoft's goes in: no file from the toolchain dir, whose compiler and SDK Microsoft's licence
+  keeps on the owner's machine (engine/README.md, Windows), nor the Microsoft sources
+  ungoogled-chromium-windows downloads into the tree. The pack is public, and the build machine's
+  paths in the core's build files are rewritten: the tree's as ../.., where a compile runs, and the
+  toolchain's as a path that holds nothing. A packed file that still names the machine's home,
+  account or engine directory stops it.
 check <pack dir> <checkout> [<engine dir>]: runs clang -fsyntax-only on each core file the engine
   compiled, as the branch has it, with the build's own flags, against the runner's SDK. The engine
   dir is the engine/ the packed engine was built from: its series and patches. Given it, the pack's
@@ -12,12 +21,15 @@ check <pack dir> <checkout> [<engine dir>]: runs clang -fsyntax-only on each cor
   change that needs a new engine patch is checked with it (#2747).
 """
 import concurrent.futures
+import getpass
+import io
 import os
 import re
 import shlex
 import subprocess
 import sys
 import tarfile
+import time
 
 HEADER = re.compile(r"\.(h|hh|hpp|inc|def|ipp)$")
 CLANG = "third_party/llvm-build/Release+Asserts"
@@ -34,8 +46,21 @@ FLAG_FILES = ["build/config/warning_suppression.txt"]
 # The build's outputs other than gen/, and LLVM's own sources. The core, a link to the checkout's,
 # isn't walked.
 SKIP = {"out", "third_party/llvm-build", "third_party/llvm", ".git"}
-# The core's files when the engine was built, so a check can tell the ones a branch adds.
-CORE_FILES = OUT + "/core-files.txt"
+# Microsoft's sources in the Windows tree, which ungoogled-chromium-windows downloads (prepare.sh).
+MICROSOFT = {
+    "third_party/microsoft_dxheaders",
+    "third_party/microsoft_webauthn",
+    "third_party/microsoft_multimedia_redirection",
+}
+# What a Windows check reads from Chromium's tree besides headers: clang's revision, whose Windows
+# package it compiles with, and the SDK the build was made with, which it names beside the runner's.
+WINDOWS_FILES = ["tools/clang/scripts/update.py", "build/vs_toolchain.py"]
+# The core's files when the engine was built, in the build's out dir, so a check can tell the ones
+# a branch adds.
+CORE_FILES = "core-files.txt"
+# Where the Windows pack's build files say Microsoft's toolchain was. Nothing is there, and a
+# check's compiler takes the runner's own from Visual Studio's environment.
+NO_TOOLCHAIN = "/windows-toolchain"
 # What an engine patch changes that the build turns into headers in gen/, which the pack holds only
 # as the engine generated them.
 GENERATES = re.compile(r"\.(mojom|proto|pdl|idl|json5|gni?)$|(^|/)BUILD\.gn$")
@@ -48,37 +73,115 @@ def files_under(src, top, keep=lambda name: True, skip=()):
         yield from (os.path.normpath(os.path.join(rel, f)) for f in files if keep(f))
 
 
-def pack(src, archive):
+def pack(src, archive, out=OUT, toolchain=None):
+    windows = toolchain is not None
     is_header = HEADER.search
-    names = list(files_under(src, ".", is_header, SKIP))
-    names += files_under(src, OUT + "/gen", is_header)
+    names = list(files_under(src, ".", is_header, (SKIP | MICROSOFT) if windows else SKIP))
+    names += files_under(src, out + "/gen", is_header)
     for d in WHOLE:
-        names += files_under(src, d)
+        # Chromium's Windows package of clang brings its own headers.
+        if not (windows and d.startswith(CLANG)):
+            names += files_under(src, d)
     names += FLAG_FILES
-    # clang++, the link to clang, and the link's binary, clang-<major>.
-    clang_bin = os.path.join(CLANG, "bin")
-    names += [
-        os.path.join(clang_bin, f)
-        for f in os.listdir(os.path.join(src, clang_bin))
-        if re.fullmatch(r"clang(\+\+|-\d+)?", f)
-    ]
-    names += files_under(src, OUT + "/obj/browser_core", lambda f: f.endswith(".ninja"))
-    names.append(OUT + "/args.gn")
+    if windows:
+        names += WINDOWS_FILES
+    else:
+        # clang++, the link to clang, and the link's binary, clang-<major>.
+        clang_bin = os.path.join(CLANG, "bin")
+        names += [
+            os.path.join(clang_bin, f)
+            for f in os.listdir(os.path.join(src, clang_bin))
+            if re.fullmatch(r"clang(\+\+|-\d+)?", f)
+        ]
+    names += files_under(src, out + "/obj/browser_core", lambda f: f.endswith(".ninja"))
+    names.append(out + "/args.gn")
     # Under src, as files_under takes it: src joined again found nothing when src was relative, as
-    # the engine's build gives it, so every core file read as one a branch adds (#2782).
-    with open(os.path.join(src, CORE_FILES), "w") as f:
-        f.writelines(
-            os.path.relpath(p, "browser_core") + "\n" for p in files_under(src, "browser_core")
-        )
-    names.append(CORE_FILES)
+    # the engine's build gives it, so every core file read as one a branch adds (#2782). An empty
+    # list would do that again, so it stops the pack.
+    core_files = [os.path.relpath(p, "browser_core") for p in files_under(src, "browser_core")]
+    if not core_files:
+        sys.exit("No core files in the tree's browser_core.")
+    written = {os.path.join(out, CORE_FILES): "".join(p + "\n" for p in core_files).encode()}
+    if windows:
+        names = in_tree(src, toolchain, names)
+        written.update(scrubbed(src, out, toolchain, names))
+    names = sorted(set(names) - set(written))
     zstd = subprocess.Popen(["zstd", "-10", "-T0", "-q", "-o", archive], stdin=subprocess.PIPE)
     with tarfile.open(fileobj=zstd.stdin, mode="w|") as t:
-        for name in sorted(set(names)):
+        for name in names:
             t.add(os.path.join(src, name), arcname="src/" + name, recursive=False)
+        for name, data in sorted(written.items()):
+            info = tarfile.TarInfo("src/" + name)
+            info.size, info.mtime, info.mode = len(data), int(time.time()), 0o644
+            t.addfile(info, io.BytesIO(data))
     zstd.stdin.close()
     if zstd.wait():
         sys.exit("zstd failed")
-    print(f"Packed {len(set(names))} files in {os.path.getsize(archive) / 1e6:.0f} MB.")
+    print(f"Packed {len(names) + len(written)} files in {os.path.getsize(archive) / 1e6:.0f} MB.")
+
+
+def in_tree(src, toolchain, names):
+    """|names| less those whose real path is outside the tree, such as in Microsoft's toolchain:
+    those aren't Chromium's to pack. A compile that needs one fails the check, as missing."""
+    root, kept = os.path.realpath(src), os.path.realpath(toolchain)
+    inside = [
+        name
+        for name in names
+        for real in [os.path.realpath(os.path.join(src, name))]
+        if real.startswith(root + os.sep) and not real.startswith(kept + os.sep)
+    ]
+    if len(inside) < len(names):
+        print(f"Left out {len(names) - len(inside)} files that lead out of the tree.")
+    return inside
+
+
+def scrubbed(src, out, toolchain, names):
+    """The Windows pack's build files with the build machine's paths rewritten, by name. Stops the
+    pack where one still names the machine after the rewrite. Its message names a packed file only,
+    as the job's log is public."""
+    root = os.path.realpath(src)
+    kept = os.path.realpath(toolchain)
+    # Longest first, so the tree's path goes before a path that holds it.
+    rewrites = sorted(
+        {
+            os.path.abspath(toolchain): NO_TOOLCHAIN,
+            kept: NO_TOOLCHAIN,
+            os.path.abspath(src): "../..",
+            root: "../..",
+        }.items(),
+        key=lambda kv: -len(kv[0]),
+    )
+    # A home of / would be in every file, and names nothing.
+    machine = [
+        m.encode()
+        for m in [
+            os.path.expanduser("~"),
+            os.path.dirname(os.path.dirname(root)),
+            "/" + getpass.getuser() + "/",
+        ]
+        if m.strip("/")
+    ]
+    # The core's build files, and any header the build generated that names the tree.
+    rewritten = [n for n in names if n == os.path.join(out, "args.gn") or n.endswith(".ninja")]
+    rewritten += [n for n in names if n.startswith(out + "/gen/")]
+    written, named = {}, []
+    for name in rewritten:
+        data = open(os.path.join(src, name), "rb").read()
+        new = data
+        for path, to in rewrites:
+            new = new.replace(path.encode(), to.encode())
+        if new != data or not name.startswith(out + "/gen/"):
+            written[name] = new
+        if new != data:
+            print(f"Rewrote the build machine's paths in {name}.")
+        if any(m in new for m in machine):
+            named.append(name)
+    if named:
+        sys.exit(
+            f"{len(named)} packed files name the build machine's home, account or engine "
+            f"directory, such as {named[0]}."
+        )
+    return written
 
 
 def compiles(out_dir):
@@ -250,7 +353,7 @@ def check(pack_dir, checkout, built=None):
     # A file the branch adds is checked with the core's flags if it's the Mac's or portable: a .mm,
     # or a .cc outside platform/, where the core keeps each OS's own. One in platform/ may be
     # another OS's, which Core on Linux and Windows compile.
-    before = set(open(os.path.join(src, CORE_FILES)).read().splitlines())
+    before = set(open(os.path.join(out_dir, CORE_FILES)).read().splitlines())
     added = [
         f
         for f in sorted(files_under(core, ".", lambda f: f.endswith((".mm", ".cc"))))
@@ -304,8 +407,8 @@ def summary(text):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 4 and sys.argv[1] == "pack":
-        pack(sys.argv[2], sys.argv[3])
+    if len(sys.argv) in (4, 6) and sys.argv[1] == "pack":
+        pack(*sys.argv[2:])
     elif len(sys.argv) in (4, 5) and sys.argv[1] == "check":
         sys.exit(check(*sys.argv[2:]))
     else:
