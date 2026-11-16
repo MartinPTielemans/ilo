@@ -294,10 +294,11 @@ EOF
 }
 # drag_full_windows <0 or 1>: Windows' "Show window contents while dragging", for this user.
 drag_full_windows() {
-  local user32='[DllImport(\"user32.dll\")] public static extern bool SystemParametersInfo(uint action, uint value, System.IntPtr unused, uint save);'
+  local user32='[DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint action, uint value, System.IntPtr unused, uint save);'
   powershell -NoProfile -Command "Add-Type -Name Desktop -Namespace Check -MemberDefinition '$user32';
-    exit !([Check.Desktop]::SystemParametersInfo(0x25, $1, [System.IntPtr]::Zero, 3))" ||
-    fail "Windows didn't set Show window contents while dragging to $1"
+    if ([Check.Desktop]::SystemParametersInfo(0x25, $1, [System.IntPtr]::Zero, 3)) { exit 0 };
+    exit 1" > "$out/drag-full-windows.log" 2>&1 ||
+    fail "Windows didn't set Show window contents while dragging to $1: $(cat "$out/drag-full-windows.log")"
 }
 # pip_driven: whether the driver presses and drags in a Picture in Picture window, which it does
 # through X11 or sway's tree. Windows' and the Mac's leave the drag to the desktop's pointer.
