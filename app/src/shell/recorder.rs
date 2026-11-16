@@ -97,6 +97,7 @@ pub(super) struct Recorder {
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
+    pub(super) daily_count: Cell<Option<bool>>,
     /// The user turned off ⌥ bringing the hidden sidebar out.
     pub(super) option_off: Cell<bool>,
     /// The user turned link previews off.
@@ -111,6 +112,11 @@ pub(super) struct Recorder {
     pub(super) arranged: Cell<Option<crate::boosts::Arranged>>,
     /// Whether the core refuses Arrange, as on a page that isn't http(s).
     pub(super) arrange_refused: Cell<bool>,
+    /// The tab Arrange's mini bar shows for and what its press runs, while it shows.
+    #[allow(clippy::type_complexity)]
+    pub(super) mini_bar: RefCell<Option<(u64, crate::mini_bar::OnPress)>>,
+    /// Arrange's foot bar while it shows, so a test presses its buttons.
+    pub(super) foot_bar: RefCell<Option<crate::foot_bar::Bar>>,
     /// The menus it was asked to show, each item by its title and whether it's enabled.
     pub(super) menus: RefCell<Vec<Vec<(SharedString, bool)>>>,
     /// Where the last menu was asked to show, in the window.
@@ -201,6 +207,8 @@ pub(super) struct Recorder {
     pub(super) card: RefCell<Option<crate::hover_card::Rest>>,
     /// The folder preview asked for last, whose choice a test makes.
     pub(super) folder_preview: RefCell<Option<crate::folder_preview::Rest>>,
+    /// The tab switcher shown last, whose keys and clicks a test makes.
+    pub(super) tab_switcher: RefCell<Option<crate::tab_switcher::Show>>,
     /// When a window last showed each tab, for `last_seen`, which a test sets.
     pub(super) seen: RefCell<HashMap<u64, f64>>,
     /// Where the shell last put the link target's plate, in the window.
@@ -1148,6 +1156,45 @@ impl Browser for Recorder {
         look.is_some() && !self.arrange_refused.get()
     }
 
+    fn arrange_do(&self, tab: u64, ask: crate::boosts::arrange::Ask, _: &mut App) {
+        self.record(format!("arrange {tab} {ask:?}"))
+    }
+
+    fn show_mini_bar(
+        &self,
+        shown: Option<(crate::mini_bar::Shown, crate::mini_bar::OnPress)>,
+        _: &mut App,
+    ) {
+        let Some((shown, on_press)) = shown else {
+            self.mini_bar.replace(None);
+            return self.record("mini bar none".into());
+        };
+        let labels = crate::mini_bar::buttons(&shown).into_iter();
+        let labels: Vec<_> = labels.map(|(_, _, label)| label).collect();
+        let at = shown.selection.origin;
+        let (x, y) = (f32::from(at.x), f32::from(at.y));
+        self.record(format!(
+            "mini bar {} at {x},{y}: {}",
+            shown.tab,
+            labels.join(", ")
+        ));
+        self.mini_bar.replace(Some((shown.tab, on_press)));
+    }
+
+    fn show_foot_bar(
+        &self,
+        bar: Option<(Bounds<Pixels>, Size<Pixels>, crate::foot_bar::Bar)>,
+        _: &mut App,
+    ) {
+        let Some((_, _, bar)) = bar else {
+            self.foot_bar.replace(None);
+            return self.record("foot bar none".into());
+        };
+        let buttons: Vec<_> = bar.buttons.iter().map(|button| &*button.label).collect();
+        self.record(format!("foot bar {}: {}", bar.words, buttons.join(", ")));
+        self.foot_bar.replace(Some(bar));
+    }
+
     fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> crate::boosts::Arranged {
         let changes = crate::boosts::arrange::read(bytes).map_or(0, |changes| changes.len());
         self.record(format!("arrangement {profile} {site}: {changes} changes"));
@@ -1467,7 +1514,9 @@ impl Browser for Recorder {
         self.detents.set(self.detents.get() + 1);
     }
 
-    fn watch_control(&self, _: &mut App) {}
+    fn watch_control(&self, _: &mut App) {
+        self.record("watch control".into());
+    }
 
     fn copy(&self, text: &str, _: &mut App) {
         self.copied.borrow_mut().push(text.to_owned());
@@ -1570,6 +1619,13 @@ impl Browser for Recorder {
                 self.record(format!("tooltip {} {}", tip.text, tip.keys.concat()))
             }
             None => self.record("tooltip none".into()),
+        }
+    }
+
+    fn tab_switcher(&self, ask: crate::tab_switcher::Ask, _: &mut App) {
+        self.record(ask.label());
+        if let crate::tab_switcher::Ask::Show(show) = ask {
+            *self.tab_switcher.borrow_mut() = Some(show);
         }
     }
 
@@ -1857,6 +1913,15 @@ impl Browser for Recorder {
         self.read_shell(cx);
         self.agents.set(Some(on));
         self.record(format!("agents {on}"))
+    }
+
+    fn daily_count(&self, _: &App) -> Option<bool> {
+        self.daily_count.get()
+    }
+
+    fn set_daily_count(&self, on: bool, _: &mut App) {
+        self.daily_count.set(Some(on));
+        self.record(format!("daily count {on}"))
     }
 
     fn close_window(&self, _: &mut App) {

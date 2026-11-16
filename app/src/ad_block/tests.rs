@@ -364,6 +364,117 @@ fn a_request_waits_for_the_engine_asked_for() {
     );
 }
 
+/// The engine `blocker` answers with once it isn't `than`, within 10 s.
+fn other_engine(blocker: &Blocker, than: &Arc<Engine>) -> Arc<Engine> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let engine = blocker.engine().unwrap();
+        if !Arc::ptr_eq(&engine, than) || Instant::now() > deadline {
+            return engine;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_launch_answers_with_the_last_engine_only_for_the_same_lists_and_filters() {
+    let folder = folder("last");
+    let cache = folder.join("cache");
+    let page = "https://news.example/";
+    let chosen = setup(&folder, "||mine.example^");
+    let list = folder.join("assets/ublock/filters.txt");
+    // The engine the last launch compiled, then the list updated.
+    load(&chosen, Some(&cache));
+    fs::write(&list, "||ads.example^\n||new.example^\n").unwrap();
+    // The same choices: the last engine answers from the first request, the current one held
+    // from compiling, then it comes in.
+    let blocker = Arc::new(Blocker::new());
+    let held = blocker.current.lock().unwrap();
+    blocker.use_setup(chosen.clone(), Some(cache.clone()));
+    let last = blocker.engine().expect("the last engine, at once");
+    assert_eq!(
+        check(&last, "https://new.example/x.js", page, "script"),
+        Verdict::Allow,
+        "the list's last copy"
+    );
+    assert_eq!(
+        check(&last, "https://mine.example/x", page, "image"),
+        Verdict::Block
+    );
+    drop(held);
+    let current = other_engine(&blocker, &last);
+    assert_eq!(
+        check(&current, "https://new.example/x.js", page, "script"),
+        Verdict::Block,
+        "the list's new copy"
+    );
+    // A list switched off, or My filters changed: the launch waits for its own engine, as the
+    // last one's would block what the user let through. Held, the current one would never come
+    // in after a last one.
+    let mut list_off = chosen.clone();
+    list_off.lists.retain(|list| !list.ends_with("hosts.txt"));
+    let cases = [
+        (list_off, "https://hosted.example/x", "a list switched off"),
+        (
+            setup(&folder, ""),
+            "https://mine.example/x",
+            "My filters changed",
+        ),
+    ];
+    for (changed, let_through, why) in cases {
+        load(&chosen, Some(&cache));
+        fs::write(&list, "||ads.example^\n||newer.example^\n").unwrap();
+        let blocker = Arc::new(Blocker::new());
+        let _held = blocker.current.lock().unwrap();
+        blocker.use_setup(changed, Some(cache.clone()));
+        let engine = blocker.engine().expect("its own engine, compiled");
+        assert_eq!(
+            check(&engine, let_through, page, "image"),
+            Verdict::Allow,
+            "{why}"
+        );
+        assert_eq!(
+            check(&engine, "https://newer.example/x.js", page, "script"),
+            Verdict::Block,
+            "{why}: the list's new copy"
+        );
+    }
+}
+
+/// A kept engine in another layout, such as one laid out under the COMPILED before this one's, is
+/// never read as the last for the same lists: only a list's new copy is bridged, and the launch
+/// waits for its own engine, which then takes the folder's place alone.
+#[test]
+fn a_launch_never_answers_with_an_engine_kept_in_another_layout() {
+    let folder = folder("layout");
+    let cache = folder.join("cache");
+    let page = "https://news.example/";
+    let chosen = setup(&folder, "||mine.example^");
+    let list = folder.join("assets/ublock/filters.txt");
+    load(&chosen, Some(&cache));
+    // Named as the build before this one's COMPILED kept it.
+    let name = cache_name(&chosen);
+    let (_, copies) = name.rsplit_once('-').unwrap();
+    let old = format!("engine-{:016x}-{copies}", kind(&chosen, COMPILED - 1));
+    fs::rename(cache.join(&name), cache.join(old)).unwrap();
+    fs::write(&list, "||ads.example^\n||new.example^\n").unwrap();
+    let blocker = Arc::new(Blocker::new());
+    let _held = blocker.current.lock().unwrap();
+    blocker.use_setup(chosen.clone(), Some(cache.clone()));
+    let engine = blocker.engine().expect("its own engine, compiled");
+    assert_eq!(
+        check(&engine, "https://new.example/x.js", page, "script"),
+        Verdict::Block,
+        "the list's new copy"
+    );
+    let names: Vec<_> = fs::read_dir(&cache)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, [cache_name(&chosen)]);
+}
+
 #[test]
 fn a_page_hides_its_own_and_generic_selectors_and_runs_its_scriptlets() {
     let folder = folder("page");

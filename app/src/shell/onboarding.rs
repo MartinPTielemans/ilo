@@ -14,8 +14,9 @@ use std::time::Duration;
 use web_time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, Context, Entity, KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba,
-    SharedString, Subscription, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
+    AnyElement, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
+    KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba, SharedString, Subscription, Window,
+    canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
 use super::{
@@ -26,7 +27,7 @@ use super::{
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
-use crate::settings_rows::{SLIDE, group, switch};
+use crate::settings_rows::{SLIDE, group, stop_switch};
 use crate::theme::Theme;
 use crate::theme_picker::SWATCHES;
 use crate::tokens::palette::{INK, PAPER};
@@ -101,37 +102,47 @@ const STEPS: [Step; 7] = [
 /// The opt-ins the first launch offers, each Settings' own switch.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum OptIn {
+    /// Off until the user turns it on, and set only as they leave the step, so nothing is sent
+    /// while it shows (#2978).
+    DailyCount,
     CrashReports,
     Agents,
 }
 
 impl OptIn {
-    const ALL: [OptIn; 2] = [OptIn::CrashReports, OptIn::Agents];
+    const ALL: [OptIn; 3] = [OptIn::DailyCount, OptIn::CrashReports, OptIn::Agents];
 
     /// What check.sh calls it.
     fn name(self) -> &'static str {
         match self {
+            OptIn::DailyCount => "daily-count",
             OptIn::CrashReports => "crash-reports",
             OptIn::Agents => "agents",
         }
     }
 
     /// Its switch's name and its one sentence: the name Settings' row has, as it's that switch.
-    fn words(self) -> (&'static str, &'static str) {
+    fn words(self) -> (&'static str, SharedString) {
         match self {
+            OptIn::DailyCount => (
+                "Send a daily usage count",
+                crate::daily_count::words(env!("APP_NAME")).into(),
+            ),
             OptIn::CrashReports => (
                 "Send crash reports",
                 concat!(
                     "When ",
                     env!("APP_NAME"),
                     " crashes, it sends a report of what went wrong, so it can be fixed."
-                ),
+                )
+                .into(),
             ),
             // Settings' own line while it's off.
             OptIn::Agents => (
                 "Let agents use the browser",
-                "They work in a Space of their own, which you can watch, and never see your \
-                 passwords, cookies or autofill.",
+                "They work in tabs of their own, which you can watch, and never see your \
+                 passwords, cookies or autofill."
+                    .into(),
             ),
         }
     }
@@ -323,6 +334,10 @@ pub(super) struct Onboarding {
     os: Os,
     /// The opt-in switch last turned, and when, for its knob's slide.
     switched: Option<(OptIn, Instant)>,
+    /// That switch's knob has slid all the way, which check.sh hears once.
+    slid: bool,
+    /// ⇥ put the keyboard on the opt-ins' switches, which it leaves with them (onboarding_layer).
+    on_switches: bool,
     /// Where the opt-ins' rows and switches are drawn (opt_in_frame).
     frames: Frames,
     /// Where the step's button is drawn, once the step has settled (button_frame).
@@ -345,6 +360,9 @@ pub(super) struct Onboarding {
     hold: Option<gpui::Task<()>>,
     /// The account step's view, while the step is offered.
     account: Option<Signing>,
+    /// The daily usage count's switch as turned at the opt-ins step, None while untouched: it's
+    /// set as the step is left (onboarding_next), so turned on and off again it sends nothing.
+    count: Option<bool>,
 }
 
 impl Shell {
@@ -399,6 +417,8 @@ impl Shell {
             picked: None,
             os: self.browser.os(),
             switched: None,
+            slid: false,
+            on_switches: false,
             frames: Frames::default(),
             button: Rc::default(),
             since: Instant::now(),
@@ -414,6 +434,7 @@ impl Shell {
             keyboard: false,
             hold: None,
             account,
+            count: None,
         });
         cx.notify();
     }
@@ -500,6 +521,11 @@ impl Shell {
         };
         let step = onboarding.step;
         log!("browser: onboarding left {} via {how}", step.name());
+        // The count's switch is set as its step is left, whichever way: nothing is sent while the
+        // step shows, and turned on and off again it's as it was (#2978).
+        let count = (step == Step::OptIns)
+            .then(|| onboarding.count.take())
+            .flatten();
         if !favorites {
             onboarding
                 .steps
@@ -522,7 +548,30 @@ impl Shell {
             }
             None => onboarding.ending = Some(Instant::now()),
         }
+        if let Some(on) = count.filter(|&on| self.browser.daily_count(cx) != Some(on)) {
+            // check.sh reads this line; the first count, with first set, goes from here.
+            log!(
+                "browser: onboarding daily-count set {}",
+                if on { "on" } else { "off" }
+            );
+            self.browser.set_daily_count(on, cx);
+        }
         cx.notify();
+    }
+
+    /// Turns the daily count's switch on at the opt-ins step, for the preview's captures.
+    pub fn onboarding_count_on(&mut self, cx: &mut Context<Self>) {
+        self.onboarding_switch(OptIn::DailyCount, cx);
+    }
+
+    /// Goes on through the flow to the step check.sh calls `name`, for the preview's captures.
+    pub fn onboarding_to(&mut self, name: &str, cx: &mut Context<Self>) {
+        while let Some(onboarding) = self.onboarding.as_ref()
+            && onboarding.ending.is_none()
+            && onboarding.step.name() != name
+        {
+            self.onboarding_next("preview", cx);
+        }
     }
 
     /// The step's button: what it offers, then on, as Skip goes.
@@ -640,6 +689,15 @@ impl Shell {
     /// The opt-ins offered, each with whether it's on.
     pub(super) fn opt_ins(&self, cx: &gpui::App) -> Vec<(OptIn, bool)> {
         let on = |opt_in| match opt_in {
+            OptIn::DailyCount => {
+                let kept = self.browser.daily_count(cx)?;
+                Some(
+                    self.onboarding
+                        .as_ref()
+                        .and_then(|o| o.count)
+                        .unwrap_or(kept),
+                )
+            }
             OptIn::CrashReports => self.browser.crash_reports(cx),
             OptIn::Agents => self.browser.agents(cx),
         };
@@ -663,11 +721,16 @@ impl Shell {
         // After this update, as turning agents off ends their ask, which reads every Shell (#2459).
         let browser = self.browser.clone();
         cx.defer(move |cx| match opt_in {
+            OptIn::DailyCount => {}
             OptIn::CrashReports => browser.set_crash_reports(!on, cx),
             OptIn::Agents => browser.set_agents(!on, cx),
         });
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.switched = Some((opt_in, Instant::now()));
+            onboarding.slid = false;
+            if opt_in == OptIn::DailyCount {
+                onboarding.count = Some(!on);
+            }
         }
         cx.notify();
     }
@@ -724,6 +787,18 @@ impl Shell {
                 }
             }
             (Step::Import, _) => {}
+            // ⇥ and ⇧⇥ go along the opt-ins' switches, the window's only stops; Space turns the one
+            // the keyboard is on, as Settings' does, and ↩ stays Continue (#2985).
+            (Step::OptIns, "tab") => {
+                if let Some(onboarding) = self.onboarding.as_mut() {
+                    onboarding.on_switches = true;
+                }
+                if key.modifiers.shift {
+                    window.focus_prev(cx)
+                } else {
+                    window.focus_next(cx)
+                }
+            }
             (_, "enter") if !key.modifiers.modified() => {
                 self.onboarding_continue("return", window, cx)
             }
@@ -739,6 +814,12 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let onboarding = self.onboarding.as_mut()?;
+        // The switches go with their step, and a keyboard left on one would leave the shell's own
+        // keys, ⌘T among them, with nowhere to go off the Mac, so it goes back to the shell.
+        let left = onboarding.step != Step::OptIns || onboarding.ending.is_some();
+        if left && std::mem::take(&mut onboarding.on_switches) {
+            window.focus(&self.focus_handle, cx);
+        }
         // A page shown covers it, so it has ended.
         let ended = onboarding
             .ending
@@ -797,6 +878,13 @@ impl Shell {
         let sliding = onboarding
             .switched
             .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < SLIDE);
+        // check.sh captures a turned switch on this line, with its knob at the end of its slide.
+        if let Some((opt_in, _)) = onboarding.switched
+            && !sliding
+            && !std::mem::replace(&mut onboarding.slid, true)
+        {
+            log!("browser: onboarding {} slid", opt_in.name());
+        }
         if !came || onboarding.leaving.is_some() || ending.is_some() || sliding {
             window.request_animation_frame();
         } else if step == Step::Intro && onboarding.hold.is_none() {
@@ -1113,7 +1201,21 @@ impl Shell {
                 .relative()
                 .flex_none()
                 .ml(px(PADDING))
-                .child(switch(&look, on, slid, look.accent))
+                .child(
+                    stop_switch(&look, "switch", name, on, slid, look.accent, self.a11y)
+                        // A press is its row's click; here only Space, as ↩ is the step's Continue.
+                        .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                            if matches!(
+                                event,
+                                ClickEvent::Keyboard(KeyboardClickEvent {
+                                    button: KeyboardButton::Space,
+                                    ..
+                                })
+                            ) {
+                                shell.onboarding_switch(opt_in, cx);
+                            }
+                        })),
+                )
                 .child(opt_in_frame(frames.clone(), opt_in, "switch", settled));
             let row = div()
                 .id(opt_in.name())

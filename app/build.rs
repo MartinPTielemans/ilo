@@ -51,6 +51,27 @@ fn main() {
         sync_server.unwrap_or_default().trim()
     );
     println!("cargo:rerun-if-changed={}", root.join("branding").display());
+    // adblock-rust's version, as the lockfile has it: the ad block engine kept between launches is
+    // its serialisation, which another version may lay out otherwise (src/ad_block.rs).
+    let lock = root.join("Cargo.lock");
+    let lock_text = std::fs::read_to_string(&lock).expect("no Cargo.lock");
+    // By lines, as a checkout may end them either way.
+    let adblock = lock_text
+        .split("[[package]]")
+        .find(|package| {
+            package
+                .lines()
+                .any(|line| line.trim() == "name = \"adblock\"")
+        })
+        .and_then(|package| {
+            package
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("version = \""))
+        })
+        .and_then(|version| version.strip_suffix('"'))
+        .expect("no adblock in Cargo.lock");
+    println!("cargo:rustc-env=ADBLOCK_VERSION={adblock}");
+    println!("cargo:rerun-if-changed={}", lock.display());
     println!("cargo:rerun-if-changed=platform");
     println!("cargo:rerun-if-changed={}", header.display());
 

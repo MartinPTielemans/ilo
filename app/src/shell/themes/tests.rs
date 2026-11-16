@@ -458,3 +458,28 @@ fn the_diagonal_is_drawn_where_it_is_taken_for_what_covers_it() {
         }
     }
 }
+
+/// The preview's ground lies under the window's tint: with it the tint is opaque, its white over
+/// black, as the app's light sidebar reads on Windows (#3033). Without it, the tint is the tint
+/// alone, over the window's material.
+#[gpui::test]
+fn a_ground_under_the_tint_makes_the_window_opaque(cx: &mut TestAppContext) {
+    let (shell, cx) = shell(None, None, cx);
+    shell.update(cx, |shell, cx| {
+        shell.force_tone(Some(Tone::Light));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    shell.update(cx, |shell, _| {
+        let tint = shell.palette.tint;
+        assert!(tint.a < 1., "the light tint is see-through: {tint:?}");
+        assert_eq!(shell.window_tint(), tint);
+        shell.set_ground(gpui::black().into());
+        let ground = shell.window_tint();
+        assert_eq!(ground.a, 1.);
+        assert!(
+            (ground.r - tint.r * tint.a).abs() < 1e-4,
+            "{ground:?} over {tint:?}"
+        );
+    });
+}

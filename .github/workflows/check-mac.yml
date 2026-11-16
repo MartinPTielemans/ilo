@@ -296,12 +296,23 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
           now=$(date +%s)
+          # Runs the SQL $2 on the database $1, leaving its output in $said. tccd may hold the
+          # database as the job starts, and sqlite3 gives up at the first lock unless told to wait
+          # for it, which failed the job before any run (#2966).
+          tcc() {
+            said=$(sudo sqlite3 -cmd '.timeout 30000' "$1" "$2" 2>&1) && return 0
+            case $said in
+            *locked*) echo "::error::$1 stayed locked for 30 s, so the grants couldn't be written: $said" ;;
+            *) echo "::error::sqlite3 failed on $1: $said" ;;
+            esac
+            exit 1
+          }
           grant() { # <database> <service> <client path>
-            sudo sqlite3 "$1" "INSERT OR REPLACE INTO access (service, client, client_type,
+            tcc "$1" "INSERT OR REPLACE INTO access (service, client, client_type,
               auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
               VALUES ('$2', '$3', 1, 2, 4, 1, 'UNUSED', 0, $now)"
-            [ "$(sudo sqlite3 "$1" "SELECT auth_value FROM access WHERE service = '$2' AND client = '$3'")" = 2 ] ||
-              { echo "::error::$2 wasn't granted to $3"; exit 1; }
+            tcc "$1" "SELECT auth_value FROM access WHERE service = '$2' AND client = '$3'"
+            [ "$said" = 2 ] || { echo "::error::$2 wasn't granted to $3"; exit 1; }
           }
           system="/Library/Application Support/com.apple.TCC/TCC.db"
           user="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
@@ -328,7 +339,7 @@ jobs:
           done
           # The app by its bundle and its path too, for a request that names it.
           for service in kTCCServiceCamera kTCCServiceMicrophone; do
-            sudo sqlite3 "$user" "INSERT OR REPLACE INTO access (service, client, client_type,
+            tcc "$user" "INSERT OR REPLACE INTO access (service, client, client_type,
               auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
               VALUES ('$service', 'dev.browser.app', 0, 2, 4, 1, 'UNUSED', 0, $now)"
             grant "$user" "$service" "$PWD/build/Browser.app/Contents/MacOS/Browser"

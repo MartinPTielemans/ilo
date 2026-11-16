@@ -248,15 +248,16 @@ double host_since_launch(void);
 // The browser window of |ui_view| has closed: what showed over it hides, and its windows go.
 void host_forget_window(void* ui_view);
 
-// The overlays: the command bar, the Space's icon and theme pickers, a closed folder's preview and
-// the Boost editor. One shows at a time.
+// The overlays: the command bar, the Space's icon and theme pickers, a closed folder's preview, the
+// Boost editor and the switcher a held ⌃Tab shows. One shows at a time.
 #define HOST_COMMAND_BAR 0
 #define HOST_ICON_PICKER 1
 #define HOST_THEME_PICKER 2
 #define HOST_FOLDER_PREVIEW 3
 #define HOST_BOOST_EDITOR 4
+#define HOST_TAB_SWITCHER 5
 // The Site Controls take the same elevation call, though they aren't one of the overlays.
-#define HOST_SITE_CONTROLS 5
+#define HOST_SITE_CONTROLS 6
 
 // Gives the |overlay| (or the Site Controls) the shadow its elevation level draws, in Core
 // Animation's terms: a black line round its shape and a black drop shadow, each with an opacity
@@ -565,6 +566,21 @@ void host_show_foot_bar(void* ui_view,
 
 // Hides the foot bar's window.
 void host_hide_foot_bar(void);
+
+// Makes the window of |mini_bar_view| Arrange's mini bar: the small bar over the thing selected on
+// a page, as a child of the browser window. A click on the bar reaches its buttons, but it never
+// takes the keyboard, which stays with the browser window and so with the page. The window reaches
+// |margin| points past the bar on every side, for its shadow, and the margin lets the mouse
+// through. It starts hidden.
+void host_add_mini_bar(void* mini_bar_view, double margin);
+
+// Shows the mini bar's window over |ui_view|'s window, or moves it there: the bar |width| by
+// |height| points, its top left |x| and |y| points from the top left of the window's content. It
+// keeps that place as the window resizes, until the UI moves it.
+void host_show_mini_bar(void* ui_view, double x, double y, double width, double height);
+
+// Hides the mini bar's window.
+void host_hide_mini_bar(void);
 
 // Makes the window of |tooltip_view| the tooltip's, which floats over a browser window as its
 // child when shown, and lets the mouse through and never takes the keyboard. It starts hidden.

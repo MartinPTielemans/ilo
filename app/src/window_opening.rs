@@ -704,6 +704,19 @@ pub(crate) fn finish_opening(
         },
         cx,
     );
+    when_asked::<tab_switcher::TabSwitcher>(
+        |cx| {
+            if let Some(switcher) = tab_switcher::open(Rc::new(TabSwitcherHost), cx)
+                && let Ok(view) = switcher.update(cx, |_, window, _| ns_view(window))
+            {
+                let radius = tab_switcher::RADIUS.into();
+                elevate(TAB_SWITCHER, Level::Modal);
+                let dismissed = tab_switcher_dismissed;
+                unsafe { platform::host_add_overlay(TAB_SWITCHER, view, radius, dismissed) };
+            }
+        },
+        cx,
+    );
     when_asked::<theme_picker::ThemePicker>(
         |cx| {
             if let Some(picker) = theme_picker::open(Rc::new(ThemeHost), cx)
@@ -784,6 +797,16 @@ pub(crate) fn finish_opening(
             ) && let Ok(view) = foot_bar.update(cx, |_, window, _| ns_view(window))
             {
                 unsafe { platform::host_add_foot_bar(view) };
+            }
+        },
+        cx,
+    );
+    when_asked::<browser::mini_bar::MiniBar>(
+        |cx| {
+            if let Some(bar) = browser::mini_bar::open(Rc::new(MiniBarHost), cx)
+                && let Ok(view) = bar.update(cx, |_, window, _| ns_view(window))
+            {
+                unsafe { platform::host_add_mini_bar(view, browser::mini_bar::MARGIN.into()) };
             }
         },
         cx,

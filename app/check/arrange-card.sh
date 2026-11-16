@@ -103,13 +103,19 @@ expect "^browser: arrange $tab on\$" "the card's Arrange didn't ask the core for
 expect "browser: tab $tab arrange on\$" "the core didn't turn the mode on"
 expect "^browser: boost card $tab closed\$" "the card stayed open over the mode"
 
-# Alpha carried to the edge under Gamma settles there: 6 pt lifts it, and the core places the
-# drop where it's let go, saves it, and the app writes the file.
+# Alpha carried to Gamma's bottom edge, its last 24 pt, settles after it: 6 pt lifts it, and the
+# core places the drop where it's let go, saves it, and the app writes the file. Under Gamma,
+# where the page has nothing, it would float (#3017), which the column's order alone can't tell.
+# While Alpha is lifted, Gamma is a gap higher than it was (#3028), so 418 is in its last 24 pt
+# either way.
 send press $(page_at 280 100)
 send dragto $(page_at 280 106)
 send dragto $(page_at 280 240)
-send dragto $(page_at 280 450)
-send release $(page_at 280 450)
+send dragto $(page_at 280 418)
+expect "^browser: arrange $tab Carrying Settles " "a carry to Gamma's bottom edge didn't show a settle"
+send release $(page_at 280 418)
+expect "^browser: arrange $tab Selected Settles selected section Alpha\$" \
+  "letting go at Gamma's bottom edge didn't settle Alpha"
 expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle"
 for _ in $(seq 100); do
   [ -s "$arranged" ] && break

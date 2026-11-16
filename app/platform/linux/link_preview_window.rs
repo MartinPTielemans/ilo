@@ -119,6 +119,8 @@ pub extern "C" fn host_add_link_preview(
         preview.view = view;
         preview.dismissed = Some(dismissed);
     });
+    // Peek stays while the user is in another app, beside it or under its window.
+    gpui_linux::set_overlay_managed(view);
     // The core shows the page in the browser window, under this one, and only needs to know there's
     // a view it goes with.
     view

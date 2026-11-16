@@ -140,6 +140,20 @@ impl Shell {
         self.forced_tone = tone;
     }
 
+    /// Draws the window's tint over `ground`, opaque, as the preview does where its window would
+    /// otherwise show the desktop through the tint.
+    pub fn set_ground(&mut self, ground: Rgba) {
+        self.ground = Some(ground);
+    }
+
+    /// The window's tint, over the ground if it has one.
+    pub(super) fn window_tint(&self) -> Rgba {
+        match self.ground {
+            Some(ground) => ground.blend(self.palette.tint),
+            None => self.palette.tint,
+        }
+    }
+
     /// `space`'s palette, worked out once for each theme and tone it shows rather than while
     /// drawing.
     pub(super) fn palette_of(&self, space: u64) -> Palette {

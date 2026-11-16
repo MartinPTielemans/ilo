@@ -1659,6 +1659,8 @@ impl Shell {
             Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
             Command::SortBySite => return self.sort_by_site(cx),
+            // While Arrange is on, ⌘Z and the Edit menu's Undo take back its steps (shell/arrange.rs).
+            Command::Undo if self.undo_arrange(self.field_tab(), cx) => return,
             Command::Undo => {
                 self.undo(cx);
                 return;
@@ -1892,47 +1894,6 @@ impl Shell {
             false => index + self.favorites.len(),
         };
         (index < count).then_some(index)
-    }
-
-    /// ⌃Tab, as in Arc: shows the Space's tab shown before this one at once, with no switcher.
-    /// While ⌃ is held, each ⌃Tab goes on to the one shown before that, and ⌃⇧Tab back. A split's
-    /// row counts once.
-    fn walk(&mut self, rows: Vec<u64>, forward: bool, cx: &mut Context<Self>) {
-        // Then the rows not shown yet, in the sidebar's order.
-        let mut order: Vec<u64> = Vec::new();
-        for row in self
-            .recent
-            .iter()
-            .map(|&tab| self.row_of(tab))
-            .chain(rows.iter().copied())
-        {
-            if rows.contains(&row) && !order.contains(&row) {
-                order.push(row);
-            }
-        }
-        let count = order.len();
-        let next = match order
-            .iter()
-            .position(|&row| row == self.row_of(self.selected))
-        {
-            Some(at) if forward => (at + 1) % count,
-            Some(at) => (at + count - 1) % count,
-            // With no tab shown, the tab shown last (Arc).
-            None if forward && count > 0 => 0,
-            None => match count.checked_sub(1) {
-                Some(last) => last,
-                None => return,
-            },
-        };
-        let tab = self.row_tab(order[next]);
-        if tab == self.selected {
-            return;
-        }
-        if self.walked.is_none() {
-            self.browser.watch_control(cx);
-        }
-        self.walked = Some(tab);
-        self.select(tab, cx);
     }
 
     /// Clears the Space shown, but the tab shown, unless that's all there is to clear. Its rows go
