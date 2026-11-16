@@ -249,7 +249,9 @@ pub(crate) fn open_window_as(
             .map(|size| gpui::WindowBounds::Windowed(Bounds::new(point(px(0.), px(0.)), size))),
         ..Default::default()
     };
+    log!("browser: proof mark ow gpui open_window at {:.1} ms", unsafe { crate::platform::host_since_launch() });
     let window = cx.open_window(options, |window, cx| {
+        log!("browser: proof mark ow closure at {:.1} ms", unsafe { crate::platform::host_since_launch() });
         let shell = cx.new(|cx| {
             // The page keeps its place in the card as the window resizes.
             cx.observe_window_bounds(window, move |shell: &mut Shell, window, cx| {
@@ -282,6 +284,7 @@ pub(crate) fn open_window_as(
             if wayland_size.is_none() {
                 drops::take(ui_view);
             }
+            log!("browser: proof mark ow engine at {:.1} ms", unsafe { crate::platform::host_since_launch() });
             let engine = Rc::new(Engine {
                 window: id,
                 ui_view,
@@ -308,23 +311,29 @@ pub(crate) fn open_window_as(
                 (None, None) => Shell::new(engine, cx),
             }
         });
+        log!("browser: proof mark ow shell made at {:.1} ms", unsafe { crate::platform::host_since_launch() });
         window.focus(&shell.focus_handle(cx), cx);
         // As Settings › Features has it, which the core read with the Spaces.
+        log!("browser: proof mark ow focused at {:.1} ms", unsafe { crate::platform::host_since_launch() });
         let little = unsafe { crate::bc::bc_little_windows() };
         shell.update(cx, |shell, cx| shell.set_little_windows(little, cx));
+        log!("browser: proof mark ow little windows at {:.1} ms", unsafe { crate::platform::host_since_launch() });
         CX.set(Some(cx.to_async()));
         if let Some(state) = SYNC_STATE.with_borrow_mut(Option::take) {
             settings::sync_changed(state, cx);
         }
         #[cfg(any(target_os = "linux", target_os = "windows"))]
+        log!("browser: proof mark ow sync at {:.1} ms", unsafe { crate::platform::host_since_launch() });
         emoji::keep(cx);
         // In front, as it's about to be key, or a saved one behind the others. One in front is the
         // key shell from now, as macOS reports no key change for the window first in the list, so
         // a window made key before it, such as the one left as another closed, hears too late to
         // take the shortcuts back (#2648).
+        log!("browser: proof mark ow emoji at {:.1} ms", unsafe { crate::platform::host_since_launch() });
         if saved.is_none() {
             update_app_later(shell::window_became_key(shell.downgrade()));
         }
+        log!("browser: proof mark ow became key at {:.1} ms", unsafe { crate::platform::host_since_launch() });
         WINDOWS.with_borrow_mut(|windows| {
             windows.insert(
                 if saved.is_some() { windows.len() } else { 0 },
@@ -347,15 +356,18 @@ pub(crate) fn open_window_as(
                 },
             )
         });
+        log!("browser: proof mark ow listed at {:.1} ms", unsafe { crate::platform::host_since_launch() });
         if from_shell.is_none() {
             // The core read the extensions before there was a shell to take them.
             unsafe { bc::bc_extensions_report() };
         }
         // As at a launch below 20 %, before there was a window to hear it.
+        log!("browser: proof mark ow extensions reported at {:.1} ms", unsafe { crate::platform::host_since_launch() });
         let battery = BATTERY_SAVER.get();
         shell.update(cx, |shell, cx| shell.set_battery_saver(battery, cx));
         shell
     });
+    log!("browser: proof mark ow gpui window returned at {:.1} ms", unsafe { crate::platform::host_since_launch() });
     let window = match window {
         Ok(window) => window,
         Err(error) => {
@@ -388,10 +400,13 @@ pub(crate) fn open_window_as(
             .update(cx, |shell, _, cx| shell.set_space(space, cx))
             .ok();
     }
+    log!("browser: proof mark ow frames set at {:.1} ms", unsafe { crate::platform::host_since_launch() });
     let first = from.is_none();
     // Once the page frame is set, so the tab shown loads at its size, and before the window is on
     // screen, so the core's reports of its tabs can come before its first frame.
+    log!("browser: proof mark ow spaces restoring at {:.1} ms", unsafe { crate::platform::host_since_launch() });
     let restored = first && restore_spaces(id, window, cx);
+    log!("browser: proof mark ow spaces restored at {:.1} ms", unsafe { crate::platform::host_since_launch() });
     // Under Wayland the compositor can answer a window the restore puts back full screen with a
     // configure of no size before its first frame, which Chromium, holding the full screen it asked
     // for (chromium-wayland-state-after-ack.patch), gives no bounds, and the frame it then commits
