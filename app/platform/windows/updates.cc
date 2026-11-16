@@ -532,7 +532,20 @@ bool host_updated_by_store(void) {
 }
 
 bool host_updates_available(void) {
-  static const bool available = kReleaseBuild && !FromTheStore() && !PublicKey().empty();
+  static const bool available = [] {
+    if (!kReleaseBuild) {
+      return false;
+    }
+    // A release build without its updater says why, once, as the run that waits for a check
+    // build's updater reads (check/update-checks.sh).
+    const char* off = FromTheStore()        ? "the Store updates it"
+                      : PublicKey().empty() ? "its update key isn't one"
+                                            : nullptr;
+    if (off) {
+      fprintf(stderr, "browser: no updates: %s\n", off);
+    }
+    return !off;
+  }();
   return available;
 }
 
