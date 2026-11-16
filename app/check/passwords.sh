@@ -210,11 +210,13 @@ count_children() {
 # key sent before the dropdown shows opens it instead of reaching it (#2772). By its frame, not the
 # count: a dropdown in another field can still be closing as the new one shows.
 dropdown_shown() {
-  wait_begins
+  # Its own clock: each look's send starts a wait of its own, which resets wait_began, so a deadline
+  # on that never came and a dropdown that never showed polled until the run's time ran out.
+  local looked_from=${SECONDS:-$(date +%s)}
   while :; do
     count_children
     printf '%s\n' "$listed" | grep . | grep -qvxF -e "$before" && return
-    [ $((${SECONDS:-$(date +%s)} - wait_began)) -lt 30 ] || break
+    [ $((${SECONDS:-$(date +%s)} - looked_from)) -lt 30 ] || break
   done
   seen="the child windows before the click: ${before:-none}; at the last look: ${listed:-none}"
   fail "$1 in 30 s; $seen"
