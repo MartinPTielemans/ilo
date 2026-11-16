@@ -143,7 +143,8 @@ if windows; then
   procs="$(cygpath -m "$app/chrome.exe")"
 elif [ -n "${BROWSER_FLATPAK:-}" ]; then
   # The Flatpak flatpak.yml installed, app.ilo.browser: the prod build in its sandbox, given the
-  # run's BROWSER_ settings, this folder and the profile's. Only sync-account runs in it so far.
+  # run's BROWSER_ settings, this folder and the profile's, and under sway sway's IPC, where the
+  # driver finds the app's windows (drive_wayland.rs). sync-account, policies and paste run in it.
   app=/app/ilo
   flatpak_browser() {
     set -- app.ilo.browser "$@"
@@ -153,6 +154,7 @@ elif [ -n "${BROWSER_FLATPAK:-}" ]; then
     # A run's own profile, as sync-devices gives each device, or the check's.
     dir=${BROWSER_PROFILE_DIR:-$profile_dir}
     count_off "$dir"
+    [ -z "${SWAYSOCK:-}" ] || set -- "--filesystem=$SWAYSOCK" "--env=SWAYSOCK=$SWAYSOCK" "$@"
     exec flatpak run --cwd="$PWD" --filesystem="$PWD" --filesystem="$dir:create" \
       --env=BROWSER_PROFILE_DIR="$dir" "$@"
   }
