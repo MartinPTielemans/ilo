@@ -7,7 +7,7 @@ use std::io::Cursor;
 use image::{ImageFormat, ImageReader, Limits, RgbaImage, imageops::FilterType};
 
 /// The largest side a picture may claim before it's decoded. Share images are 1200 × 630.
-const MAX_SIDE: u32 = 8192;
+const MAX_SIDE: u32 = 4096;
 /// The most a decode may allocate.
 const MAX_ALLOC: u64 = 64 << 20;
 /// The widest the card keeps it, in pixels: its well at twice its width in points, for 2× screens.

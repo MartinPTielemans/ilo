@@ -2,6 +2,7 @@
 //! says about itself, its title, description and picture, in a card over the page. The core fetches
 //! the page as no user would (bc_tab_link_card); what's read from it is `page`'s.
 
+pub mod blocked;
 pub mod outcome;
 pub mod page;
 pub mod picture;
