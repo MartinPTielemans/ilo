@@ -32,6 +32,9 @@ pub(crate) fn launch() -> Launch {
 pub(crate) fn launching() {
     // check.sh reads this line.
     log!("browser: ad blocker {} at launch", launch().engine.word());
+    if let (Engine::Native, Some(cache)) = (launch().engine, CACHE.get()) {
+        BLOCKER.read_early(cache.clone());
+    }
 }
 
 /// Settings' row keeps the choice in the app's folder, and restarts as Widevine's does.

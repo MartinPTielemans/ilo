@@ -721,18 +721,60 @@ enum Cached {
 
 /// The engine in `file`, for `setup`'s stand-ins.
 fn read_file(file: &Path, setup: &Setup) -> Option<Engine> {
-    let mut engine = read(&fs::read(file).ok()?)?;
-    engine.rules.use_resources(resources(&setup.folder));
-    engine.stand_ins = responses::stand_in_urls(&stand_ins(&setup.folder));
-    Some(engine)
+    Some(with_stand_ins(read(&fs::read(file).ok()?)?, setup))
 }
 
-fn cached(setup: &Setup, cache: Option<&Path>) -> Cached {
+fn with_stand_ins(mut engine: Engine, setup: &Setup) -> Engine {
+    engine.rules.use_resources(resources(&setup.folder));
+    engine.stand_ins = responses::stand_in_urls(&stand_ins(&setup.folder));
+    engine
+}
+
+/// The engine kept in `cache`, read before the core says what it blocks with, by its file's name.
+type Early = Option<(String, Engine)>;
+
+/// The engine `compile_and_keep` left in `cache`, which keeps one.
+fn read_kept(cache: &Path) -> Early {
+    let start = Instant::now();
+    let (name, engine) = (fs::read_dir(cache).ok()?.flatten()).find_map(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        (name.starts_with("engine-") && name.ends_with(".dat"))
+            .then(|| Some((name, read(&fs::read(entry.path()).ok()?)?)))
+            .flatten()
+    })?;
+    crate::log!(
+        "browser: ad block engine read at launch in {} ms",
+        start.elapsed().as_millis()
+    );
+    Some((name, engine))
+}
+
+fn cached(setup: &Setup, cache: Option<&Path>, early: Early) -> Cached {
     let Some(cache) = cache else {
         return Cached::None;
     };
     let start = Instant::now();
     let name = cache_name(setup);
+    let same = format!("engine-{:016x}-", kind(setup, COMPILED));
+    // The engine read as the launch started, if it's this setup's own or the last for it, else
+    // the folder as it is now.
+    match early {
+        Some((file, engine)) if file == name => {
+            crate::log!(
+                "browser: ad block engine loaded in {} ms, read at launch",
+                start.elapsed().as_millis()
+            );
+            return Cached::Current(with_stand_ins(engine, setup));
+        }
+        Some((file, engine)) if file.starts_with(&same) => {
+            crate::log!(
+                "browser: ad block engine loaded in {} ms, the last for these lists, read at launch",
+                start.elapsed().as_millis()
+            );
+            return Cached::Last(with_stand_ins(engine, setup));
+        }
+        _ => {}
+    }
     if let Some(engine) = read_file(&cache.join(&name), setup) {
         crate::log!(
             "browser: ad block engine loaded in {} ms",
@@ -740,7 +782,6 @@ fn cached(setup: &Setup, cache: Option<&Path>) -> Cached {
         );
         return Cached::Current(engine);
     }
-    let same = format!("engine-{:016x}-", kind(setup, COMPILED));
     let last = (fs::read_dir(cache).into_iter().flatten().flatten()).find_map(|entry| {
         let file = entry.file_name();
         let file = file.to_string_lossy();
@@ -803,7 +844,7 @@ fn compile_and_keep(setup: &Setup, cache: Option<&Path>) -> Engine {
 /// `setup`'s engine, from the cache in `cache` when it has one, in about 20 ms, else compiled and
 /// kept there, in place of the last, for the next launch.
 pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
-    match cached(setup, cache) {
+    match cached(setup, cache, None) {
         Cached::Current(engine) => engine,
         _ => compile_and_keep(setup, cache),
     }
@@ -834,6 +875,8 @@ fn read(bytes: &[u8]) -> Option<Engine> {
 pub struct Blocker {
     state: Mutex<State>,
     ready: Condvar,
+    /// The kept engine's read, begun as the launch starts, and the folder it reads.
+    early: Mutex<Option<(PathBuf, std::thread::JoinHandle<Early>)>>,
     /// Held by a test to keep a loaded engine from coming in.
     #[cfg(test)]
     swap: Mutex<()>,
@@ -863,11 +906,21 @@ impl Blocker {
                 ..Default::default()
             }),
             ready: Condvar::new(),
+            early: Mutex::new(None),
             #[cfg(test)]
             swap: Mutex::new(()),
             #[cfg(test)]
             current: Mutex::new(()),
         }
+    }
+
+    /// Reads the engine kept in `cache` on a thread of its own, from the launch's start, for the
+    /// first setup to take if it's that one's: the core says what it blocks with only once the
+    /// profile is in, and the read then ran while the first window was made (#2384).
+    pub fn read_early(&self, cache: PathBuf) {
+        let folder = cache.clone();
+        let reading = std::thread::spawn(move || read_kept(&folder));
+        *self.early.lock().unwrap() = Some((cache, reading));
     }
 
     /// Blocks with `setup` once it's loaded, on a thread of its own. The engine before it answers
@@ -884,9 +937,14 @@ impl Blocker {
             state.wanted = Some(setup.clone());
         }
         let blocker = self.clone();
+        let early = self.early.lock().unwrap().take();
         std::thread::spawn(move || {
             let cache = cache.as_deref();
-            let engine = match cached(&setup, cache) {
+            let early = early
+                .filter(|(folder, _)| Some(folder.as_path()) == cache)
+                .and_then(|(_, reading)| reading.join().ok())
+                .flatten();
+            let engine = match cached(&setup, cache, early) {
                 Cached::Current(engine) => engine,
                 Cached::Last(last) => {
                     if !blocker.swap_in(&setup, last) {

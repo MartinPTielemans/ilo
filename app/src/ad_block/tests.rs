@@ -475,6 +475,83 @@ fn a_launch_never_answers_with_an_engine_kept_in_another_layout() {
     assert_eq!(names, [cache_name(&chosen)]);
 }
 
+/// `blocker` once its early read has finished.
+fn read_early(blocker: &Blocker, cache: &Path) {
+    blocker.read_early(cache.to_path_buf());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !(blocker.early.lock().unwrap().as_ref())
+        .is_some_and(|(_, reading)| reading.is_finished())
+    {
+        assert!(Instant::now() < deadline, "the early read never finished");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The engine read as the launch starts answers for the setup it was kept for, and as the last for
+/// its lists, with nothing read from the folder after; any other setup has its own.
+#[test]
+fn a_launch_answers_with_the_engine_read_early_only_for_its_own_setup() {
+    let folder = folder("early");
+    let cache = folder.join("cache");
+    let page = "https://news.example/";
+    let chosen = setup(&folder, "||mine.example^");
+    load(&chosen, Some(&cache));
+    let kept = cache.join(cache_name(&chosen));
+
+    // Its own setup: the folder's file spoiled once it's read, and no compile rewrites it.
+    let blocker = Arc::new(Blocker::new());
+    read_early(&blocker, &cache);
+    fs::write(&kept, b"spoiled").unwrap();
+    blocker.use_setup(chosen.clone(), Some(cache.clone()));
+    let engine = blocker.engine().expect("the engine read early");
+    assert_eq!(
+        check(&engine, "https://mine.example/x", page, "image"),
+        Verdict::Block
+    );
+    assert!(
+        matches!(
+            check(&engine, "https://tracker.example/t.js", page, "script"),
+            Verdict::Redirect(_)
+        ),
+        "its stand-ins"
+    );
+    assert_eq!(fs::read(&kept).unwrap(), b"spoiled");
+
+    // A list's new copy: the engine read early answers as the last, with the folder emptied after.
+    fs::remove_dir_all(&cache).unwrap();
+    load(&chosen, Some(&cache));
+    let list = folder.join("assets/ublock/filters.txt");
+    fs::write(&list, "||ads.example^\n||new.example^\n").unwrap();
+    let blocker = Arc::new(Blocker::new());
+    read_early(&blocker, &cache);
+    fs::remove_dir_all(&cache).unwrap();
+    let held = blocker.current.lock().unwrap();
+    blocker.use_setup(chosen.clone(), Some(cache.clone()));
+    let last = blocker.engine().expect("the last engine, read early");
+    assert_eq!(
+        check(&last, "https://new.example/x.js", page, "script"),
+        Verdict::Allow,
+        "the list's last copy"
+    );
+    drop(held);
+    let current = other_engine(&blocker, &last);
+    assert_eq!(
+        check(&current, "https://new.example/x.js", page, "script"),
+        Verdict::Block,
+        "the list's new copy"
+    );
+
+    // My filters changed: the engine read early is left, and the launch waits for its own.
+    let blocker = Arc::new(Blocker::new());
+    read_early(&blocker, &cache);
+    blocker.use_setup(setup(&folder, ""), Some(cache.clone()));
+    let engine = blocker.engine().expect("its own engine, compiled");
+    assert_eq!(
+        check(&engine, "https://mine.example/x", page, "image"),
+        Verdict::Allow
+    );
+}
+
 #[test]
 fn a_page_hides_its_own_and_generic_selectors_and_runs_its_scriptlets() {
     let folder = folder("page");
