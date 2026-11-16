@@ -119,17 +119,36 @@ for screen in "${screens[@]}"; do
     tiles+=(-label "$name, $system" "$png")
   done
 done
-# The frames: grim as fast as it goes for 6 s once the folder's rows are still, named by the ms
-# since the first, so the press, 4 s after the preview started, is among them.
+# The frames: grim as fast as it goes once the folder's rows are still, to 2 s after the press,
+# which the preview logs, named by the ms since the first, with the press's ms in press. A press
+# before the first frame, or none in 10 s, is no capture, never frames that missed it.
 if [ "${systems[0]}" = wayland ]; then
   frames=$out/wayland/live-folder-press-frames
   mkdir -p "$frames"
+  # shellcheck disable=SC2016 # headless.sh runs it, with LOG its program's log.
+  grab='set -e
+    ms() { date +%s%3N; }
+    ! grep -q "^browser: preview press$" "$LOG" || { echo "pressed before the first frame" >&2; exit 1; }
+    start=$(ms) pressed= n=0
+    while [ -z "$pressed" ] || [ $(($(ms) - pressed)) -lt 2000 ]; do
+      [ $(($(ms) - start)) -lt 10000 ] || { echo "no press in 10 s" >&2; exit 1; }
+      grim "$FRAMES/frame-$n.png"
+      echo "$n $(ms)" >> "$FRAMES/times"
+      n=$((n + 1))
+      [ -n "$pressed" ] || ! grep -q "^browser: preview press$" "$LOG" || pressed=$(ms)
+    done
+    [ "$n" -gt 1 ] && [ "$(head -1 "$FRAMES/times" | cut -d" " -f2)" -lt "$pressed" ] ||
+      { echo "no frame before the press" >&2; exit 1; }
+    first=$(head -1 "$FRAMES/times" | cut -d" " -f2)
+    while read -r i at; do
+      mv "$FRAMES/frame-$i.png" "$FRAMES/$(printf %05d $((at - first))).png"
+    done < "$FRAMES/times"
+    echo $((pressed - first)) > "$FRAMES/press"
+    rm "$FRAMES/times"'
   if ! (export PREVIEW_SIZE=1280x800 PREVIEW_LIVE_FOLDER=open PREVIEW_APPEARANCE=light \
-    PREVIEW_PRESS=100,553,4000 && timeout 90 "$here/headless.sh" --moving 400 --then "set -e
-      start=\$(date +%s%3N)
-      while [ \$((\$(date +%s%3N) - start)) -lt 6000 ]; do
-        grim \"$frames/\$(printf %05d \$((\$(date +%s%3N) - start))).png\"
-      done" "$frames/start.png" 'live folder 9000 answered' "$preview" >/dev/null); then
+    PREVIEW_PRESS=100,553,4000 FRAMES="$frames" &&
+    timeout 90 "$here/headless.sh" --moving 400 --then "$grab" "$frames/start.png" \
+      'live folder 9000 answered' "$preview" > "$out/wayland/live-folder-press-frames.log" 2>&1); then
     missing+=("wayland/live-folder-press-frames")
   fi
 fi

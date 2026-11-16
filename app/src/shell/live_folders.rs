@@ -623,7 +623,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<super::undo::Edit> {
         let source = self.live_source(folder)?;
-        let space = self.shown_space();
+        // Its own Space's, which a redo with another Space shown isn't.
+        let space = (self.spaces.iter()).find(|space| space.folders.live.contains_key(&folder));
         let listed = space.and_then(|space| space.live_rooms.get(&folder));
         let listed = listed.map(|layout| layout.tabs.clone()).unwrap_or_default();
         // The core keeps them in the order they were opened, so each goes to the folder's end.
@@ -720,7 +721,7 @@ impl Shell {
         let mut runs = (layout.map_or(&[][..], |layout| &layout.rows[..]))
             .split(|row| matches!(row, LiveRow::Tab(_)));
         let rows = runs.nth(run).unwrap_or_default();
-        let rows = rows.iter().enumerate().map(|(index, row)| match row {
+        let rows = rows.iter().map(|row| match row {
             LiveRow::Heading(list) => div()
                 .flex_none()
                 .h(px(HEADING_HEIGHT))
@@ -732,7 +733,7 @@ impl Shell {
                 .text_color(self.palette.text(SECONDARY))
                 .child(list.heading())
                 .into_any_element(),
-            LiveRow::Item { item, new } => self.live_row(folder, inset, index, item, *new, cx),
+            LiveRow::Item { item, new } => self.live_row(folder, inset, item, *new, cx),
             LiveRow::SignIn => self.sign_in_row(source, inset, cx),
             LiveRow::Tab(_) => div().into_any_element(),
         });
@@ -757,7 +758,6 @@ impl Shell {
         &self,
         folder: u64,
         inset: f32,
-        index: usize,
         item: &LiveItem,
         new: bool,
         cx: &mut Context<Self>,
@@ -776,7 +776,13 @@ impl Shell {
             .hover(|plate| plate.bg(self.palette.plate(HOVERED)));
         row_box()
             .pl(px(inset))
-            .id(("live-row", index))
+            // Keyed by its item, not its place: an answer that moves the rows between press and
+            // release doesn't open another.
+            .id(SharedString::from(format!(
+                "live-row-{:?}-{}",
+                item.list,
+                item.url()
+            )))
             .when(self.a11y, |row| {
                 row.role(Role::Link)
                     .aria_label(format!("{}, {}", item.title, item.place()))

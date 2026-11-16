@@ -4,10 +4,12 @@
 
 use std::{rc::Rc, time::Duration};
 
-use gpui::{Entity, TestAppContext, VisualTestContext, point, px};
+use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 
 use super::{LiveAnswer, LiveItem, LiveList, LiveSource, PullState};
-use crate::shell::{Folders, ROW_PITCH, Shell, Slot, commands::bind_keys, recorder::Recorder};
+use crate::shell::{
+    Folders, ROW_HEIGHT, ROW_PITCH, Shell, Slot, commands::bind_keys, recorder::Recorder,
+};
 use crate::tokens::shell::live_folder::HEADING_HEIGHT;
 
 const FOLDER: u64 = 20;
@@ -353,6 +355,52 @@ fn a_pressed_row_opens_its_tab_in_its_place(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui::test]
+fn a_press_an_answer_moves_from_its_row_opens_nothing(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, true, &[]);
+    let answer = |shell: &Entity<Shell>, cx: &mut VisualTestContext, numbers: &[u32]| {
+        let mut items = vec![item(LiveList::ReviewRequests, 3)];
+        items.extend(
+            numbers
+                .iter()
+                .map(|&number| item(LiveList::Created, number)),
+        );
+        shell.update(cx, |shell, cx| {
+            shell.set_live_answer(FOLDER, LiveAnswer::Items(items), just_now(), cx)
+        });
+        draw(shell, cx);
+    };
+    answer(&shell, cx, &[7, 8]);
+    // Created by me's first row, #7's.
+    let at = shell.read_with(cx, |shell, _| {
+        let live = shell.layout()[&Slot::Live(FOLDER, 0)];
+        let y = shell.drawn_list_top() + live + 2. * HEADING_HEIGHT + ROW_PITCH + ROW_HEIGHT / 2.;
+        point(px(80.), px(y))
+    });
+    host.take();
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    // #5 comes in above it before the release, which is then over #5's row.
+    answer(&shell, cx, &[5, 7, 8]);
+    cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(!host.take().iter().any(|call| call.starts_with("open ")));
+    // Pressed and let go on it, #5's row opens #5.
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let opened: Vec<String> = (host.take().into_iter())
+        .filter(|call| call.starts_with("open "))
+        .collect();
+    assert_eq!(
+        opened,
+        [format!(
+            "open https://github.com/harbor/web/pull/5 true {FOLDER} 0"
+        )]
+    );
+}
+
 /// The folder holding tab 30 at #7, 31 at a page of its own and 32 at #3, in the order they were
 /// opened, and its lists' answer.
 fn three_tabs(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder) {
@@ -442,9 +490,16 @@ fn convert_to_folder_ends_its_lists_and_keeps_its_tabs(cx: &mut TestAppContext) 
     });
 }
 
-/// The core's report of Space 1 with only `folder` after pinned tab 1, open and empty: a Live
-/// Folder if `live`, else a plain one, or with no folder at all if `folder` is 0.
-fn report_only(shell: &Entity<Shell>, cx: &mut VisualTestContext, folder: u64, live: bool) {
+/// The core's report of Space 1 with `folder` after pinned tab 1, open and holding `tabs`: a Live
+/// Folder if `live`, else a plain one, or with no folder at all if `folder` is 0, `tabs` left
+/// after pinned tab 1, as deleting a folder leaves what it held.
+fn report_only(
+    shell: &Entity<Shell>,
+    cx: &mut VisualTestContext,
+    folder: u64,
+    live: bool,
+    tabs: &[u64],
+) {
     shell.update(cx, |shell, cx| {
         let mut folders = Folders::default();
         let mut pinned = vec![1];
@@ -456,80 +511,131 @@ fn report_only(shell: &Entity<Shell>, cx: &mut VisualTestContext, folder: u64, l
                 folders.live.insert(folder, LiveSource::PullRequests);
             }
             pinned.push(folder);
+            for &tab in tabs {
+                folders.parents.insert(tab, folder);
+            }
         }
+        pinned.extend(tabs);
         shell.set_tabs(1, pinned, vec![3], Vec::new(), folders, cx);
     });
     draw(shell, cx);
 }
 
-/// The Live Folder ⌘Z made again, in the edits that made it and put it back after pinned tab 1.
-fn made_live(host: &Recorder) -> u64 {
+/// The Live Folder ⌘Z made again, in the edits that made it, put it back after pinned tab 1 and
+/// moved `tabs` back into it, in their order, then `after`.
+fn made_live(host: &Recorder, tabs: &[u64], after: &[String]) -> u64 {
     let edits = host.take_edits();
     let made: u64 = (edits.first().and_then(|edit| edit.split(' ').nth(2)))
         .and_then(|id| id.parse().ok())
         .unwrap_or_else(|| panic!("no Live Folder made in {edits:?}"));
-    assert_eq!(
-        edits,
-        [
-            format!("live folder {made} 1 PullRequests Pull Requests"),
-            format!("move folder {made} 0 1"),
-        ]
-    );
+    let mut expected = vec![
+        format!("live folder {made} 1 PullRequests Pull Requests"),
+        format!("move folder {made} 0 1"),
+    ];
+    for (index, tab) in tabs.iter().enumerate() {
+        expected.push(format!("move {tab} true {made} {index}"));
+    }
+    expected.extend(after.iter().cloned());
+    assert_eq!(edits, expected);
     made
 }
 
 #[gpui::test]
 fn undo_brings_a_live_folder_deleted_or_unticked_back_live(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
-    report(&shell, cx, true, &[]);
+    three_tabs(&shell, cx, &host);
     host.take_edits();
     shell.update(cx, |shell, cx| {
         shell.tab_menu(FOLDER, point(px(10.), px(10.)), cx)
     });
     cx.update(|_, cx| host.choose("Delete Folder", cx));
     assert_eq!(host.take_edits(), [format!("delete folder {FOLDER}")]);
-    report_only(&shell, cx, 0, false);
+    let tabs = [30, 31, 32];
+    report_only(&shell, cx, 0, false, &tabs);
     assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
-    let made = made_live(&host);
-    // Unticked in the Space's menu, it comes back live too.
-    report_only(&shell, cx, made, true);
+    let made = made_live(&host, &tabs, &[]);
+    // Unticked in the Space's menu, it comes back live too, its tabs in it.
+    report_only(&shell, cx, made, true, &tabs);
     shell.update(cx, |shell, cx| {
         shell.space_menu(1, point(px(10.), px(10.)), cx)
     });
     cx.update(|_, cx| host.choose("GitHub Pull Requests", cx));
     assert_eq!(host.take_edits(), [format!("delete folder {made}")]);
-    report_only(&shell, cx, 0, false);
+    report_only(&shell, cx, 0, false, &tabs);
     assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
-    made_live(&host);
+    let made = made_live(&host, &tabs, &[]);
+    // The core can't make it live any more: it comes back plain, with its tabs, not lost.
+    report_only(&shell, cx, made, true, &tabs);
+    shell.update(cx, |shell, cx| shell.delete_folder_now(made, cx));
+    host.take_edits();
+    report_only(&shell, cx, 0, false, &tabs);
+    host.live_refused.set(true);
+    assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
+    let edits = host.take_edits();
+    assert!(edits[0].starts_with("folder "), "{edits:?}");
+    assert_eq!(edits.len(), 1 + tabs.len(), "{edits:?}");
 }
 
 #[gpui::test]
 fn undo_makes_a_folder_converted_live_again_and_redo_converts_it_again(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
-    report(&shell, cx, true, &[]);
+    three_tabs(&shell, cx, &host);
     host.take_edits();
     shell.update(cx, |shell, cx| {
         shell.tab_menu(FOLDER, point(px(10.), px(10.)), cx)
     });
     cx.update(|_, cx| host.choose("Convert to Folder", cx));
-    assert_eq!(host.take_edits(), [format!("end live folder {FOLDER}")]);
-    report_only(&shell, cx, FOLDER, false);
-    // The core makes a Live Folder new, so one is made in the plain one's place, and the plain
-    // one, emptied into it, goes.
-    assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
-    let edits = host.take_edits();
-    let made: u64 = edits[0].split(' ').nth(2).unwrap().parse().unwrap();
+    // #3's tab and #7's go to the end, in the order they were drawn.
     assert_eq!(
-        edits,
+        host.take_edits(),
         [
-            format!("live folder {made} 1 PullRequests Pull Requests"),
-            format!("move folder {made} 0 1"),
-            format!("delete folder {FOLDER}"),
+            format!("move 32 true {FOLDER} 2"),
+            format!("move 30 true {FOLDER} 2"),
+            format!("end live folder {FOLDER}"),
         ]
     );
-    report_only(&shell, cx, made, true);
+    let tabs = [31, 32, 30];
+    report_only(&shell, cx, FOLDER, false, &tabs);
+    // The core makes a Live Folder new, so one is made in the plain one's place, takes its tabs,
+    // and the plain one, emptied, goes.
+    assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
+    let made = made_live(&host, &tabs, &[format!("delete folder {FOLDER}")]);
+    report_only(&shell, cx, made, true, &tabs);
+    let items = vec![
+        item(LiveList::ReviewRequests, 3),
+        item(LiveList::Created, 7),
+    ];
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(made, LiveAnswer::Items(items), just_now(), cx)
+    });
+    draw(&shell, cx);
+    // Redone with another Space shown, it moves its own Space's tabs as Convert did.
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    draw(&shell, cx);
+    host.take_edits();
     assert!(shell.update(cx, |shell, cx| shell.redo(cx)));
-    assert_eq!(host.take_edits(), [format!("end live folder {made}")]);
+    assert_eq!(
+        host.take_edits(),
+        [
+            format!("move 32 true {made} 2"),
+            format!("move 30 true {made} 2"),
+            format!("end live folder {made}"),
+        ]
+    );
+}
+
+#[gpui::test]
+fn undo_of_a_convert_the_core_cant_make_live_leaves_the_plain_folder(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, true, &[]);
+    shell.update(cx, |shell, cx| shell.convert_live_folder(FOLDER, cx));
+    report_only(&shell, cx, FOLDER, false, &[]);
+    host.take_edits();
+    host.live_refused.set(true);
+    // The step can't be done: nothing is made or deleted, and there's no redo of it.
+    shell.update(cx, |shell, cx| shell.undo(cx));
+    assert!(host.take_edits().is_empty());
+    assert!(!shell.update(cx, |shell, cx| shell.redo(cx)));
 }
 
 #[gpui::test]
@@ -582,8 +688,11 @@ fn another_profile_for_the_space_drops_the_old_accounts_rows_and_asks(cx: &mut T
         )
     });
     host.take();
-    let rows =
-        |shell: &Shell| (shell.live.get(&FOLDER)).map_or(0, |kept| kept.rows(|_| None).len());
+    // The rows the sidebar draws, as Space 1's Live Folder rooms have them.
+    let rows = |shell: &Shell| {
+        let space = shell.spaces.iter().find(|space| space.id == 1).unwrap();
+        (space.live_rooms.get(&FOLDER)).map_or(0, |layout| layout.rows.len())
+    };
     assert!(shell.read_with(cx, |shell, _| rows(shell)) > 0);
     // Set Profile: the core reports Space 1 in profile 2.
     shell.update(cx, |shell, cx| {

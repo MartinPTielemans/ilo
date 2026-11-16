@@ -113,6 +113,8 @@ pub(super) struct Recorder {
     pub(super) arranged: Cell<Option<crate::boosts::Arranged>>,
     /// Whether the core refuses Arrange, as on a page that isn't http(s).
     pub(super) arrange_refused: Cell<bool>,
+    /// Whether the core refuses to make a Live Folder, as in a Space it can't fill one in.
+    pub(super) live_refused: Cell<bool>,
     /// The tab Arrange's mini bar shows for and what its press runs, while it shows.
     #[allow(clippy::type_complexity)]
     pub(super) mini_bar: RefCell<Option<(u64, crate::mini_bar::OnPress)>>,
@@ -502,6 +504,9 @@ impl Browser for Recorder {
     }
 
     fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, _: &mut App) -> u64 {
+        if self.live_refused.get() {
+            return 0;
+        }
         let made = self.make();
         self.edit(format!("live folder {made} {space} {source:?} {name}"));
         made

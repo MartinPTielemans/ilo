@@ -3606,6 +3606,8 @@ fn preview_press(shell: gpui::AnyWindowHandle, what: &str, cx: &mut App) {
                 modifiers,
             }),
         ];
+        // tools/parity.sh times the press's frames from this line.
+        log!("browser: preview press");
         shell
             .update(cx, |_, window, cx| {
                 for event in events {

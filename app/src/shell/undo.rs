@@ -554,7 +554,9 @@ impl Edit {
                 })
             }
             Edit::Restore(folder) => {
-                let made = shell.restore_folder(&folder, cx);
+                // A Live Folder the core can't make live any more comes back plain, its tabs in
+                // it, rather than not at all.
+                let made = shell.restore_folder(&folder, true, cx)?;
                 shell.history.rekey(folder.id, made);
                 Some(Edit::Delete(made))
             }
@@ -569,8 +571,9 @@ impl Edit {
                 };
                 snapshot.live = Some(source);
                 // Made in the plain folder's place, it takes what that holds, and the empty
-                // plain one goes.
-                let made = shell.restore_folder(&snapshot, cx);
+                // plain one goes. One the core can't make live, the plain folder is already: the
+                // step can't be done, so it goes as any such step does, the folder untouched.
+                let made = shell.restore_folder(&snapshot, false, cx)?;
                 shell.browser.delete_folder(folder, cx);
                 shell.history.rekey(folder, made);
                 Some(Edit::Unlive(made))
@@ -1579,11 +1582,20 @@ impl Shell {
     }
 
     /// Makes `folder` again where it was, puts what it held back in it, and returns its new id. A
-    /// Live Folder comes back live, filled from its source, unless the core can't make it one.
-    fn restore_folder(&mut self, folder: &Folder, cx: &mut Context<Self>) -> u64 {
+    /// Live Folder comes back live, filled from its source; one the core can't make live comes
+    /// back `plain`, else not at all.
+    fn restore_folder(
+        &mut self,
+        folder: &Folder,
+        plain: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
         let live = (folder.live)
             .map(|source| (self.browser).create_live_folder(folder.space, source, &folder.name, cx))
             .filter(|&made| made != 0);
+        if folder.live.is_some() && live.is_none() && !plain {
+            return None;
+        }
         let made = match live {
             // The core makes it at the bottom of the pinned tabs.
             Some(made) => {
@@ -1610,7 +1622,7 @@ impl Shell {
         if !folder.open {
             self.browser.set_folder_open(made, false, cx);
         }
-        made
+        Some(made)
     }
 
     pub(super) fn is_folder_anywhere(&self, row: u64) -> bool {
