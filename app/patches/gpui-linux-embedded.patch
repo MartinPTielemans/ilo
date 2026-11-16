@@ -2659,7 +2659,7 @@ index cbc962bcff..53aed61dfc 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..6e34f1c860 100644
+index 2d40cf7fa9..37cce599a0 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -3014,7 +3014,9 @@ index 2d40cf7fa9..6e34f1c860 100644
 +    ) -> bool {
 +        let Some(wl_pointer) = self.wl_pointer.clone() else {
 +            return false;
-+        };
+         };
+-        let scale = focused_window.primary_output_scale();
+-        self.cursor.set_icon(
 +        let scale = picture.scale.round().max(1.) as u32;
 +        if picture.width % scale != 0 || picture.height % scale != 0 {
 +            return false;
@@ -3032,9 +3034,7 @@ index 2d40cf7fa9..6e34f1c860 100644
 +                    .collect();
 +                shm_buffer(self, picture.width, picture.height, &bgra).ok_or(())
 +            }
-         };
--        let scale = focused_window.primary_output_scale();
--        self.cursor.set_icon(
++        };
 +        let Ok(buffer) = made else {
 +            return false;
 +        };
@@ -4025,10 +4025,83 @@ index 2d40cf7fa9..6e34f1c860 100644
              }
              _ => {}
          }
-@@ -3479,3 +4127,725 @@ mod tests {
+@@ -3478,4 +4126,836 @@ mod tests {
+             &[(10, 20, 1, 18)]
          );
      }
- }
++
++    fn key(keystroke: &'static str) -> PlatformInput {
++        PlatformInput::KeyDown(KeyDownEvent {
++            keystroke: Keystroke::parse(keystroke).unwrap(),
++            is_held: false,
++            prefer_character_input: false,
++        })
++    }
++
++    fn held_after(shortcut: &'static str) -> HeldKeys {
++        HeldKeys {
++            shortcut: Some(Keystroke::parse(shortcut).unwrap()),
++            since: Instant::now(),
++            after: false,
++            keys: Vec::new(),
++            to: None,
++        }
++    }
++
++    fn held_names(held: &HeldKeys) -> Vec<String> {
++        (held.keys.iter())
++            .map(|input| match input {
++                PlatformInput::KeyDown(down) => match down.keystroke.modifiers.platform {
++                    true => format!("super-{}", down.keystroke.key),
++                    false => down.keystroke.key.clone(),
++                },
++                _ => String::from("up"),
++            })
++            .collect()
++    }
++
++    #[test]
++    fn a_shortcut_the_embedder_answered_in_a_hold_is_not_held_but_the_keys_after_it_are() {
++        // ⌘F in a page that keeps it holds the keys after it, and ⌘N or ⇧⌘N comes within the hold.
++        for shortcut in ["super-n", "super-shift-n"] {
++            let answered = Keystroke::parse(shortcut).unwrap();
++            let mut held = held_after("super-f");
++            assert!(!hold(&mut held, key("super-f"), None));
++            assert!(hold(&mut held, key("a"), None));
++            assert!(!hold(&mut held, key(shortcut), Some(&answered)));
++            assert!(hold(&mut held, key("b"), Some(&answered)));
++            assert_eq!(held_names(&held), ["a", "b"], "{shortcut}");
++        }
++    }
++
++    #[test]
++    fn a_field_shortcut_s_own_hold_starts_at_its_answered_press() {
++        // ⌘T: the embedder holds and answers it, and GPUI drops the press (answered_press).
++        let answered = Keystroke::parse("super-t").unwrap();
++        let mut held = held_after("super-t");
++        assert!(!hold(&mut held, key("x"), Some(&answered)));
++        assert!(!hold(&mut held, key("super-t"), Some(&answered)));
++        assert!(held.after);
++        assert!(hold(&mut held, key("g"), Some(&answered)));
++        assert!(hold(&mut held, key("i"), None));
++        assert_eq!(held_names(&held), ["g", "i"]);
++    }
++
++    #[test]
++    fn a_held_press_the_embedder_then_answers_comes_out_of_the_held_keys() {
++        // GPUI read its copy of ⌘N first, in ⌘F's hold, and the embedder answers its own after.
++        let mut held = held_after("super-f");
++        hold(&mut held, key("super-f"), None);
++        hold(&mut held, key("a"), None);
++        assert!(hold(&mut held, key("super-n"), None));
++        hold(&mut held, key("super-n"), None);
++        assert!(unhold(&mut held, &Keystroke::parse("super-n").unwrap()));
++        assert_eq!(held_names(&held), ["a", "super-n"]);
++        let other = Keystroke::parse("super-shift-n").unwrap();
++        assert!(!unhold(&mut held, &other));
++        assert_eq!(held_names(&held), ["a", "super-n"]);
++    }
++}
 +
 +thread_local! {
 +    static EMBEDDED_CLIENT: RefCell<Option<std::rc::Weak<RefCell<WaylandClientState>>>> =
@@ -4538,19 +4611,48 @@ index 2d40cf7fa9..6e34f1c860 100644
 +            wl_keyboard::KeyState::Released => PlatformInput::KeyUp(KeyUpEvent { keystroke }),
 +            _ => return false,
 +        };
-+        if !held.after {
-+            held.after = match (&input, &held.shortcut) {
-+                (PlatformInput::KeyDown(down), Some(shortcut)) => {
-+                    down.keystroke.key == shortcut.key
-+                        && down.keystroke.modifiers == shortcut.modifiers
-+                }
-+                _ => false,
-+            };
-+            return false;
-+        }
-+        held.keys.push(input);
-+        true
++        let answered = ANSWERED_KEY.with_borrow(|answered| {
++            let (shortcut, since) = answered.as_ref()?;
++            (since.elapsed() <= HOLD_KEYS_FOR).then(|| shortcut.clone())
++        });
++        hold(held, input, answered.as_ref())
 +    })
++}
++
++/// Whether the hold `held` keeps `input`, a key GPUI read, which it then has: those after its
++/// shortcut's press. Not the press the embedder answered as a shortcut of its own (`answered`),
++/// as ⌘N in a page that kept ⌘F: GPUI drops that (`answered_press`), and the hold goes on for the
++/// keys after it, where it would run the shortcut again in the overlay that takes them (#3135).
++fn hold(held: &mut HeldKeys, input: PlatformInput, answered: Option<&Keystroke>) -> bool {
++    let pressed = |shortcut: &Keystroke| match &input {
++        PlatformInput::KeyDown(down) => same_key(&down.keystroke, shortcut),
++        _ => false,
++    };
++    if !held.after {
++        held.after = held.shortcut.as_ref().is_some_and(pressed);
++        return false;
++    }
++    if answered.is_some_and(pressed) {
++        return false;
++    }
++    held.keys.push(input);
++    true
++}
++
++/// Takes the press of `shortcut` out of the keys `held` has, as the embedder answered it as a
++/// shortcut of its own after GPUI had read it there: the embedder reads the keys GPUI does in the
++/// same order, so it's the first held. Says whether there was one.
++fn unhold(held: &mut HeldKeys, shortcut: &Keystroke) -> bool {
++    let press = (held.keys.iter()).position(|key| match key {
++        PlatformInput::KeyDown(down) => same_key(&down.keystroke, shortcut),
++        _ => false,
++    });
++    press.map(|at| held.keys.remove(at)).is_some()
++}
++
++/// Whether the keystrokes are the same key with the same modifiers, as a shortcut's are matched.
++fn same_key(keystroke: &Keystroke, shortcut: &Keystroke) -> bool {
++    keystroke.key == shortcut.key && keystroke.modifiers == shortcut.modifiers
 +}
 +
 +thread_local! {
@@ -4563,13 +4665,22 @@ index 2d40cf7fa9..6e34f1c860 100644
 +    if EMBEDDED_CLIENT.with_borrow(|client| client.is_none()) {
 +        return;
 +    }
-+    ANSWERED_KEY.set(Some((shortcut.clone(), Instant::now())));
++    // GPUI's copy of a key can come first: a read of the display GPUI's frames make can queue both
++    // copies, and GPUI's own wakes can dispatch its queue before the embedder does. A press already
++    // held is GPUI's, read, so it comes out of the keys held, with no mark for a press to come.
++    let held = HELD_KEYS.with_borrow_mut(|held| {
++        let held = held.as_mut().filter(|held| !expired(held));
++        held.is_some_and(|held| unhold(held, shortcut))
++    });
++    if !held {
++        ANSWERED_KEY.set(Some((shortcut.clone(), Instant::now())));
++    }
 +}
 +
 +/// Whether the key `key`, pressed or released as `key_state` says, is the press the embedder
 +/// answered (`answered_key`), which GPUI then drops. The key's next press is that one, as the
-+/// embedder reads each key first; its release ends the mark too, since an answer to a repeat the
-+/// embedder made has no press of GPUI's to drop.
++/// embedder mostly reads each key first (`answered_key` has the other order); its release ends the
++/// mark too, since an answer to a repeat the embedder made has no press of GPUI's to drop.
 +fn answered_press(state: &WaylandClientState, key: u32, key_state: wl_keyboard::KeyState) -> bool {
 +    let Some((shortcut, since)) = ANSWERED_KEY.take() else {
 +        return false;
@@ -4750,7 +4861,7 @@ index 2d40cf7fa9..6e34f1c860 100644
 +        }
 +        flush(&window);
 +    }
-+}
+ }
 diff --git a/crates/gpui_linux/src/linux/wayland/clipboard.rs b/crates/gpui_linux/src/linux/wayland/clipboard.rs
 index 86dc7da97b..6ab67f51e4 100644
 --- a/crates/gpui_linux/src/linux/wayland/clipboard.rs
