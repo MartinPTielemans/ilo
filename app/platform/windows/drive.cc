@@ -163,6 +163,10 @@ int g_flags = 0;
 // takes ⌃ to be until the flags change, so a ⌃Tab walk goes on to the next ⌃Tab, as Linux's driver
 // holds it (KEY_FLAGS).
 bool g_key_ctrl = false;
+// With real input, the keys the button the driver holds went down or last moved with. They stay
+// down past the command, as a hand holds a drag's ⌘ from its press to its release, and as
+// platform/linux/drive.rs holds them (#3109).
+int g_button_keys = 0;
 // The window a press went to, which hears the drag until the release, as capture does.
 HWND g_pressed = nullptr;
 // The window the pointer is in, which hears it leave.
@@ -752,6 +756,9 @@ void Move(const Target& to, int modifiers, UINT buttons) {
   g_real_aim = to.hwnd;
   HoldKeys(modifiers, buttons);
   if (g_real) {
+    if (buttons) {
+      g_button_keys = modifiers;
+    }
     RealPointerTo(to.screen);
     return;
   }
@@ -805,6 +812,7 @@ void Press(const Target& at, UINT button, int modifiers, bool second) {
   g_real_aim = at.hwnd;
   HoldKeys(modifiers, button);
   if (g_real) {
+    g_button_keys = modifiers;
     // Windows activates the window, tells its parents and makes a second press a double click.
     RealPointerTo(at.screen);
     RealPointer(RealFlags(button, false), XButton(button));
@@ -857,6 +865,7 @@ void Release(const Target& at, UINT button, int modifiers) {
   g_real_aim = at.hwnd;
   HoldKeys(modifiers);
   if (g_real) {
+    g_button_keys = 0;
     RealPointerTo(at.screen);
     RealPointer(RealFlags(button, true), XButton(button));
     // Its keys stay held past the button, as a hand's do, until the next step's.
@@ -1661,6 +1670,7 @@ bool AppDragLetGo(double x, double y, int modifiers) {
   g_app_drag->held = false;
   // The real button that started it comes up where the drag went.
   if (g_real) {
+    g_button_keys = 0;
     RealPointerTo(g_app_drag->at);
     RealPointer(MOUSEEVENTF_LEFTUP);
   }
@@ -2799,9 +2809,11 @@ void Next() {
       fprintf(stderr, "browser: drive %ld: can't do that\n", number);
     }
     // A click's real keys, held past its button as a hand's are, are let go as the command ends,
-    // so none is still down for the next, such as Win+D's (realkey). flags' and ⌃Tab's stay.
+    // so none is still down for the next, such as Win+D's (realkey). flags' and ⌃Tab's stay, and
+    // a held button's until it's let go.
     if (g_real) {
-      g_steps.push_back({[] { RealModifiers(g_flags | (g_key_ctrl ? kCtrl : 0)); }});
+      g_steps.push_back(
+          {[] { RealModifiers(g_flags | g_button_keys | (g_key_ctrl ? kCtrl : 0)); }});
     }
     // Done once the messages posted are handled, and what handling them posted. Twice, as GPUI
     // and Chromium post more as they handle some, such as the characters a key types.
