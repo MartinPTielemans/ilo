@@ -917,8 +917,18 @@ fn probe_focus(x: f64, y: f64) {
         Some(Keyboard::Browser(..)) => "browser",
         None => "none",
     };
+    let active = atom("_NET_ACTIVE_WINDOW")
+        .and_then(|a| {
+            connection
+                .get_property(false, *root, a, xproto::AtomEnum::WINDOW, 0, 1)
+                .ok()?
+                .reply()
+                .ok()
+        })
+        .and_then(|reply| reply.value32().and_then(|mut v| v.next()))
+        .unwrap_or(0);
     log!(
-        "browser: drive probe focus {focus:#x} in {keyboard}, overlays {overlays:x?}, top at point {top:x?}, stack {stack}"
+        "browser: drive probe focus {focus:#x} in {keyboard}, active {active:#x}, overlays {overlays:x?}, top at point {top:x?}, stack {stack}"
     );
 }
 

@@ -585,6 +585,20 @@ look_theme() {
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
 }
+# Probe for #3044, never merged: the Little ilo window key, then the main window, the picker and
+# its swatch, again and again; each round's probe line says where the focus was at the click.
+for round in $(seq 15); do
+  send window "$look_window"
+  look_theme
+  hidden=$(grep -c '^browser: theme picker hidden$' "$log")
+  send clickkey "$(swatch_x 7)" $swatch_y
+  send key escape
+  for _ in $(seq 100); do
+    [ "$(grep -c '^browser: theme picker hidden$' "$log")" -gt "$hidden" ] && break
+    sleep 0.1
+  done
+  echo "probe round $round: $(grep '^browser: drive probe ' "$log" | tail -1)"
+done
 look_theme
 send clickkey "$(swatch_x 7)" $swatch_y
 expect '^browser: colored space [0-9]* [0-9a-f]*$' "the blue swatch didn't colour the Space"
