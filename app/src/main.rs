@@ -411,6 +411,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
 }
 
 unsafe extern "C" fn started(_: *mut c_void) {
+    log!("browser: proof mark app started callback at {:.1} ms", unsafe { platform::host_since_launch() });
     // Before the first page, which Arrange may lift an element of.
     boosts_host::set_arrange_lift();
     // Chromium's message loop dispatches GPUI's messages, as its run loop does on the Mac.
@@ -509,6 +510,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         WAYLAND.set(!display.is_null());
         !display.is_null()
     };
+    log!("browser: proof mark app platform making at {:.1} ms", unsafe { platform::host_since_launch() });
     let application = gpui_platform::application().with_assets(shell::Assets);
     // On X11, as Chromium is, even with a Wayland display in the environment.
     #[cfg(target_os = "linux")]
@@ -522,6 +524,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         )),
     };
     let app = application.run_embedded(move |cx| {
+        log!("browser: proof mark app run_embedded at {:.1} ms", unsafe { platform::host_since_launch() });
         browser::face::register(cx);
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
@@ -575,6 +578,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         log!("browser: started at {:.1} ms", unsafe {
             platform::host_since_launch()
         });
+        log!("browser: proof mark app dock dot at {:.1} ms", unsafe { platform::host_since_launch() });
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
         // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
@@ -585,9 +589,11 @@ unsafe extern "C" fn started(_: *mut c_void) {
         ) {
             unsafe { platform::host_set_little_task(title.as_ptr(), switch.as_ptr()) };
         }
+        log!("browser: proof mark app hosts starting at {:.1} ms", unsafe { platform::host_since_launch() });
         needs_you_host::start(cx);
         daily_count_host::start(cx);
         safe_start_host::start(cx);
+        log!("browser: proof mark app open_window at {:.1} ms", unsafe { platform::host_since_launch() });
         open_window(None, None, cx);
         // Launched by New Incognito Window while ilo wasn't running, the private window opens
         // over the first.
@@ -1202,6 +1208,7 @@ pub extern "C" fn bc_app_host(
     argc: *mut c_int,
     argv: *mut *const *const c_char,
 ) -> *const bc::bc_host {
+    log!("browser: proof mark app host asked at {:.1} ms", unsafe { platform::host_since_launch() });
     // The arguments the process was given, from the core: Chromium on Linux has written its process
     // title over the ones std::env::args reads, joining each to the next (#605).
     let given = match unsafe { (*argc, *argv) } {

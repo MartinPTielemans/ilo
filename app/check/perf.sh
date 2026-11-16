@@ -253,11 +253,12 @@ perf_launch() {
     # shellcheck disable=SC2046,SC2086 # the flags, a word each
     BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch \
       $([ "$3" != warm ] || crlset_flags "$PWD/$perf_dir/crlset-warm.log" fast) \
-      < /dev/null > "$log" 2>&1 &
+      ${perf_launch_args:-} < /dev/null > "$log" 2>&1 &
   else
     BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch < /dev/null > "$log" 2>&1 &
   fi
   pid=$!
+  [ -z "${perf_launch_args:-}" ] || proof_anchor "$pid" "$perf_dir/launch-$3.anchor"
   # A tab put back has its last title, an earlier launch's paint, until its page loads.
   fcp=0
   for _ in $(seq 300); do
@@ -367,6 +368,32 @@ perf_row launch-restore "Launch, restored page painted${selfied:-}" \
 perf_row launch-held "Launch, the page held for uBlock Origin${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
 
+# Proof only (#2384): the process's start and the clocks now, read together: its start in clock
+# ticks since boot (/proc/<pid>/stat's 22nd field, the app's own zero), the ticks a second,
+# CLOCK_MONOTONIC and CLOCK_BOOTTIME in s. Chromium's trace times are CLOCK_MONOTONIC in µs, so
+# these put the trace on the process's start.
+proof_anchor() {
+  python3 -I -c '
+import os, sys, time
+fields = open("/proc/%s/stat" % sys.argv[1]).read().rsplit(")", 1)[1].split()
+print(fields[19], os.sysconf("SC_CLK_TCK"), time.clock_gettime(time.CLOCK_MONOTONIC),
+      time.clock_gettime(time.CLOCK_BOOTTIME), open("/proc/%s/comm" % sys.argv[1]).read().strip())' \
+    "$1" > "$2" || echo "perf: proof only: no anchor for $2"
+}
+proof_categories=startup,toplevel,disabled-by-default-toplevel.flow,browser,content,navigation,loading,ui,views,gpu,viz,cc,benchmark,base,mojom,ipc,shutdown
+# Proof only (#2384): three more link launches, traced from Chromium's start, not counted. The
+# trace is written as the browser quits, after its page painted.
+for n in 1 2 3; do
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  trace="$PWD/$perf_dir/trace-launch-$n.json"
+  perf_launch_args="--enable-tracing=$proof_categories --enable-tracing-format=json --trace-startup-file=$trace"
+  perf_launch "$page?trace$n" "trace$n" "trace$n"
+  perf_launch_args=
+  for _ in $(seq 50); do [ -s "$trace" ] && break; sleep 0.2; done
+  [ -s "$trace" ] || echo "perf: proof only: launch trace $n wasn't written"
+  echo "perf: proof only: traced launch $n: browser window $browser_on_screen ms, page painted $painted ms"
+done
+if false; then # Proof only (#2384): ilo's session skipped, to Chrome's launches.
 log="$perf_dir/session.log"
 step=0
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
@@ -652,6 +679,8 @@ if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
   scratch=
 fi
 
+fi # Proof only (#2384): the end of ilo's skipped session.
+
 # Google Chrome, where the runner has it, as GitHub's images do, measured on this machine as ilo was,
 # for each of the gate's rows that compares with it, on the same page. Chrome has no driver, so
 # DevTools opens its tabs in front, as a link from another app does, a couple of seconds apart, and
@@ -829,6 +858,56 @@ chrome_quit() {
   done
   fail "Chrome's processes outlived it: $(python3 -I check/usage.py kinds "$perf_dir/chrome-left.json")"
 }
+# Proof only (#2384): Chrome's launches as main's perf times them, five, each with its stages from
+# its histograms, then three traced with ilo's categories and anchored as ilo's are; then the run
+# ends. Chrome runs once, in perf, not again in perf-native.
+if [ -n "$engine_switch" ]; then
+  echo "ok: proof only (#2384): ilo's launches timed and 3 traced in $perf_dir; Chrome's are perf's"
+  return 0
+fi
+if [ ! -x "$chrome" ]; then
+  echo "skip: proof only: no Chrome at $chrome"
+  return 0
+fi
+snap_procs=$chrome_procs
+: > "$perf_dir/chrome.log"
+# shellcheck disable=SC2046 # the flags, a word each
+chrome_launch warm $(crlset_flags "$PWD/$perf_dir/crlset-chrome-warm.log" fast) ||
+  fail "Chrome didn't stay open for its warm launch: $(tail -3 "$perf_dir/chrome.log")"
+sleep 15
+crlset_await "$PWD/$perf_dir/crlset-chrome-warm.log" "$chrome_dir" $((launched / 1000)) "Chrome's"
+chrome_quit
+: > "$perf_dir/chrome-proof.tsv"
+for n in 1 2 3 4 5 6 7 8; do
+  trace=
+  if [ "$n" -gt 5 ]; then
+    trace="$PWD/$perf_dir/trace-chrome-launch-$((n - 5)).json"
+    chrome_launch "cl$n" "--enable-tracing=$proof_categories" --enable-tracing-format=json \
+      "--trace-startup-file=$trace" ||
+      fail "Chrome didn't stay open for traced launch $n: $(tail -3 "$perf_dir/chrome.log")"
+  else
+    chrome_launch "cl$n" || fail "Chrome didn't stay open for launch $n: $(tail -3 "$perf_dir/chrome.log")"
+  fi
+  proof_anchor "$pid" "$perf_dir/chrome-launch-$n.anchor"
+  chrome_await "^cdp: title [^ ]* cl$n fcp " "Chrome's launch $n didn't paint its page"
+  link=$(($(chrome_stamp "cl$n" fcp) - launched))
+  main=$(chrome_histogram Startup.LoadTime.ProcessCreateToApplicationStart)
+  shown=$(chrome_histogram Startup.BrowserWindowDisplay)
+  first=$(chrome_histogram Startup.BrowserWindow.FirstPaint)
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "${trace:+traced}" "$link" "$main" "$shown" "$first" \
+    >> "$perf_dir/chrome-proof.tsv"
+  echo "perf: proof only: Chrome launch $n${trace:+, traced}: link to painted $link ms, start to main $main ms," \
+    "main to window shown $shown ms, main to first paint ${first:-none} ms"
+  chrome_quit
+  if [ -n "$trace" ]; then
+    for _ in $(seq 50); do [ -s "$trace" ] && break; sleep 0.2; done
+    [ -s "$trace" ] || echo "perf: proof only: Chrome's launch trace $((n - 5)) wasn't written"
+  fi
+done
+snap_procs=
+echo "ok: proof only (#2384): ilo's launches timed and 3 traced, Chrome's 5 timed and 3 traced, in $perf_dir;" \
+  "the rest of perf skipped"
+return 0
 if [ "$active" != 1 ]; then
   :
 elif [ ! -x "$chrome" ]; then

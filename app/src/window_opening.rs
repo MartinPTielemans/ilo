@@ -198,6 +198,7 @@ pub(crate) fn open_window_as(
     #[cfg(target_os = "linux")]
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
     let after = from.as_ref().map(|from| from.ui_view);
+    log!("browser: proof mark ow core window opening at {:.1} ms", unsafe { platform::host_since_launch() });
     let id = open_browser_window(ui_view, after, own, saved, at)?;
     // A saved window maximized as it quit, at the frame it un-maximizes to, as the core kept it.
     // Before its UI opens, so that starts at the maximized size.
@@ -249,6 +250,7 @@ pub(crate) fn open_window_as(
             .map(|size| gpui::WindowBounds::Windowed(Bounds::new(point(px(0.), px(0.)), size))),
         ..Default::default()
     };
+    log!("browser: proof mark ow gpui open_window at {:.1} ms", unsafe { platform::host_since_launch() });
     let window = cx.open_window(options, |window, cx| {
         let shell = cx.new(|cx| {
             // The page keeps its place in the card as the window resizes.
@@ -308,6 +310,7 @@ pub(crate) fn open_window_as(
                 (None, None) => Shell::new(engine, cx),
             }
         });
+        log!("browser: proof mark ow shell made at {:.1} ms", unsafe { platform::host_since_launch() });
         window.focus(&shell.focus_handle(cx), cx);
         // As Settings › Features has it, which the core read with the Spaces.
         let little = unsafe { crate::bc::bc_little_windows() };
@@ -391,6 +394,7 @@ pub(crate) fn open_window_as(
     let first = from.is_none();
     // Once the page frame is set, so the tab shown loads at its size, and before the window is on
     // screen, so the core's reports of its tabs can come before its first frame.
+    log!("browser: proof mark ow spaces restoring at {:.1} ms", unsafe { platform::host_since_launch() });
     let restored = first && restore_spaces(id, window, cx);
     // Under Wayland the compositor can answer a window the restore puts back full screen with a
     // configure of no size before its first frame, which Chromium, holding the full screen it asked
@@ -427,6 +431,7 @@ pub(crate) fn open_window_as(
         },
         _ => unsafe { platform::host_show_window(ui_view) },
     }
+    log!("browser: proof mark ow shown at {:.1} ms", unsafe { platform::host_since_launch() });
     DRAWN_BEFORE_SHOWN.set(drawn.then(Instant::now));
     log_frame(id, ui_view);
     if !first {
