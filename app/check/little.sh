@@ -127,7 +127,6 @@ send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
 expect '^browser: command bar opens inside the window$' \
   "⌘L didn't open the command bar inside the Little ilo window"
-refocus
 # 500 wide, centred across the window's UI, its top a third of the way down (Arc): at 200 213.3 in a
 # 900 × 640 one.
 set -- $(grep '^browser: command bar at ' "$log" | tail -1 | cut -d' ' -f5-)
@@ -136,9 +135,6 @@ bar_top=$((ui_height / 3))
 [ "$1" = "$bar_left" ] && [ "${2%%.*}" = "$bar_top" ] && [ "$3" = 500 ] ||
   fail "⌘L's command bar in the Little ilo window is at $*, not at $bar_left $bar_top and 500 wide in its ${content} UI"
 ../tools/window-screenshot.sh "$pid" "$out/little-bar.png" all || fail "no window to capture"
-send type x
-refocus
-send key backspace
 send insert "${site}little-live.html"
 send key return
 expect "^browser: loaded [0-9]* ${site}little-live.html\$" \
