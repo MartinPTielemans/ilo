@@ -280,10 +280,11 @@ onkeydown = e => {
 };
 </script>' > "$out/site/clear.html"
 # Three plain pages the clear run opens, copies, closes and reopens, which it once loaded from live
-# sites that a runner can't always reach (#3144).
-for page in one two three; do
-  printf '<title>Clear %s</title><p style="font:24px system-ui">%s</p>' "$page" "$page" \
-    > "$out/site/clear-$page.html"
+# sites that a runner can't always reach (#3144). A run sources this file, so the loop's name is
+# one no run keeps: as $page it took the page window and windows had set before serve.
+for clear_page in one two three; do
+  printf '<title>Clear %s</title><p style="font:24px system-ui">%s</p>' \
+    "$clear_page" "$clear_page" > "$out/site/clear-$clear_page.html"
 done
 # Three plain pages for the runs that need only a page to be there, which they once loaded from live
 # sites that a runner can't always reach (#3144). Their text is well inside the page, where a run
