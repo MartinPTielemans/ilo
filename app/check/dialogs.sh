@@ -138,7 +138,7 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
 fi
 
 # Another tab takes the alert down, and its own brings it back.
-open_from_bar example.com
+open_from_bar "http://localhost:$port/one.html"
 other=$tab
 send click $(row 1)
 expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the dialogs page's row didn't show it"
@@ -169,7 +169,7 @@ send key u
 expect "^browser: title $page armed\$" "the page didn't ask to be asked before it's left"
 # Going from the page asks first, with Chrome's title.
 leave() {
-  go_from_bar example.org
+  go_from_bar "http://localhost:$port/two.html"
   expect "^browser: page $page dialog Leave Leave site?\$" "going from the page didn't ask first"
   expect '^browser: dialog settled$' "Leave site? didn't settle"
 }
@@ -194,7 +194,7 @@ fi
 leave
 send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't leave the page"
-expect "^browser: loaded $page https://example.org/\$" "the tab didn't go to example.org once left"
+expect "^browser: loaded $page http://localhost:$port/two.html\$" "the tab didn't go to two.html once left"
 
 # Each visit asks again, as a sign-in that was cancelled isn't asked for the page it shows.
 sign_in() {

@@ -260,7 +260,7 @@ const order = () => {
 arranged="$boosts/$host.arrange.json"
 keyed() { grep '^browser: site controls keyed ' "$log" | tail -1 | cut -d' ' -f5-; }
 # Writes file $1, the changes $2, outside ilo; turns it on from the Site Controls; opens its page;
-# and has the page count what it sees while it's idle, shown and behind example.org's tab.
+# and has the page count what it sees while it's idle, shown and behind two.html's tab.
 idle() {
   printf '{"version":1,"changes":[%s]}' "$2" > "$arranged"
   expect "^browser: arrangement for $host ([0-9]* bytes) \(New\|Changed\)\$" \
@@ -288,15 +288,15 @@ idle() {
     "idle $1 abcw r1r2r3r4 "*) fail "$1: the file placed nothing: the page says $(said)" ;;
   esac
   page=$tab
-  open_from_bar example.org
+  open_from_bar "http://localhost:$port/two.html"
   over=$tab
   tab=$page
   await "^browser: title $tab idle $1 .* hidden [0-9]* in [0-9]* ms\$" \
-    "$1: the page didn't say what it saw behind example.org's tab: it says $(said)"
+    "$1: the page didn't say what it saw behind two.html's tab: it says $(said)"
   tab=$over
   send key w cmd
   tab=$page
-  expect "^browser: selected $tab\( in .*\)*\$" "$1: ⌘W on example.org's tab didn't show the page again"
+  expect "^browser: selected $tab\( in .*\)*\$" "$1: ⌘W on two.html's tab didn't show the page again"
   await "^browser: title $tab idle $1 .* again [0-9]* quiet [0-9a-z]*\$" "$1: the page didn't say what it saw shown again: it says $(said)"
   case "$(said)" in
     *" quiet "[0-9]*" shown 0 late 0 hidden 0 in "*" again 0 quiet "[0-9]*) ;;
