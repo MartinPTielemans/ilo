@@ -1991,9 +1991,12 @@ typedef struct bc_boost_colors {
 // (--ilo-space-): the site's own scripts can read them there, so a page with no Boost, or a Boost
 // that doesn't use them, tells its site nothing. A frame another site's page holds gets none. A tab
 // moved to another Space, or a favorite whose window shows another, takes that Space's with no
-// reload. A tab in an agent's Space gets none. The core doesn't keep them across a relaunch: the
-// app gives them again at launch and as the theme or the appearance changes. Null takes them
-// away. The user's: agents get no path to them, as to a Boost.
+// reload. A tab in an agent's Space gets none. A private window shows its original's Boosts, and
+// its pages get the colours the app gives its Space, which must not differ from one user to the
+// next: the app gives a private window's Space no theme and dark, the same for everyone.
+// The core doesn't keep them across a relaunch: the app gives them again at launch and as the
+// theme or the appearance changes, and a Space deleted takes its own away. Null takes them away.
+// The user's: agents get no path to them, as to a Boost.
 BC_EXPORT void bc_space_set_boost_colors(bc_id space, const bc_boost_colors* colors);
 
 // Deletes the Space, unless it's the last, and returns whether it will. A window showing it shows
