@@ -1476,8 +1476,6 @@ pub fn menu_item(name: impl Into<SharedString>, command: Command) -> MenuItem {
 }
 
 impl Shell {
-    /// Runs a browser command and logs it. `from` says which side had the key: GPUI's bindings
-    /// ("ui"), the browser handing it back ("page"), or the sidebar.
     /// Opens the command bar on the tab the URL field shows, or as for a new one with none.
     pub(super) fn edit_url(&mut self, from: &str, cx: &mut Context<Self>) {
         self.set_new_tab(false, cx);
@@ -1503,9 +1501,13 @@ impl Shell {
             .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
     }
 
+    /// Runs a browser command and logs it. `from` says which side had the key: GPUI's bindings
+    /// ("ui"), the browser handing it back ("page"), or the sidebar.
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
+        // A command after a ⌘L still waiting for the tab shown next is the one the user wants.
+        self.edit_url_waits = None;
         if self.one_space() && !private_runs(command) {
             return;
         }
@@ -2877,13 +2879,35 @@ mod tests {
             // The pop-up's tab closes, and ⌘L comes before the window shows the tab before it.
             today(shell, vec![4, 6, 7], cx);
             shell.run(Command::EditUrl, "ui", cx);
-            shell.set_selected(7, cx);
         });
+        assert!(
+            host.bar_edits.take().is_empty(),
+            "the bar waits for the tab shown next"
+        );
+        shell.update(cx, |shell, cx| shell.set_selected(7, cx));
         assert_eq!(host.bar_edits.take(), [Some(7)]);
 
         // With the tab shown open, ⌘L opens the bar on it at once.
         shell.update(cx, |shell, cx| shell.run(Command::EditUrl, "ui", cx));
         assert_eq!(host.bar_edits.take(), [Some(7)]);
+
+        // A command after the ⌘L is the one the user wants: ⌘T's bar stays, and the tab shown next
+        // opens no other over it.
+        shell.update(cx, |shell, cx| {
+            today(shell, vec![4, 6], cx);
+            shell.run(Command::EditUrl, "ui", cx);
+            shell.run(Command::NewTab, "ui", cx);
+            shell.set_selected(6, cx);
+        });
+        assert_eq!(host.bar_edits.take(), [None], "only ⌘T's bar opened");
+
+        // The Space left empty shows no tab, and the bar opens as for none.
+        shell.update(cx, |shell, cx| {
+            today(shell, Vec::new(), cx);
+            shell.run(Command::EditUrl, "ui", cx);
+            shell.set_selected(0, cx);
+        });
+        assert_eq!(host.bar_edits.take(), [None]);
     }
 
     /// The bar finds Site Search Settings by its name or by Chrome's, and it opens the search

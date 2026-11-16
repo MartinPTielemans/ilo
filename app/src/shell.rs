@@ -3256,12 +3256,12 @@ impl Shell {
         log!("browser: favorite splits {}", splits.join(" "));
     }
 
-    /// What the shell knew of a closed tab goes with it. The core reports a tab in its new place
-    /// before it leaves the old, so one moving between a Space and the favorites stays.
     fn tab_open(&self, tab: u64) -> bool {
         open_in(&self.spaces, &self.task_spaces, &self.all_favorites, tab)
     }
 
+    /// What the shell knew of a closed tab goes with it. The core reports a tab in its new place
+    /// before it leaves the old, so one moving between a Space and the favorites stays.
     fn forget_closed(&mut self, cx: &mut App) {
         let (spaces, favorites) = (&self.spaces, &self.all_favorites);
         let task_spaces = &self.task_spaces;
