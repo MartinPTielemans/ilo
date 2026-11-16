@@ -22,6 +22,10 @@ reviews:
   # signed off, so it writes no description, title, label, reviewer or commit.
   high_level_summary: false
   high_level_summary_in_walkthrough: false
+  # A title or description that holds its placeholder is rewritten even with the summary off,
+  # and the defaults are words a PR here could hold, so these are words nobody writes.
+  auto_title_placeholder: "@coderabbitai never-write-the-title"
+  high_level_summary_placeholder: "@coderabbitai never-write-the-description"
   auto_apply_labels: false
   suggested_labels: false
   auto_assign_reviewers: false
@@ -110,8 +114,10 @@ reviews:
       - name: No AI attribution
         mode: warning
         instructions: >-
-          Fail when the PR body contains a `Co-Authored-By:` line or the words "Generated with".
-          Pass otherwise.
+          Fail when a line of the PR body starts with `Co-Authored-By:`, or the body ends in an
+          attribution footer that says a tool generated it, such as a line starting with
+          "Generated with" or "🤖 Generated with". Pass otherwise: the words quoted in code
+          formatting, or in a sentence about this rule, are not an attribution.
       - name: Before and after images
         mode: warning
         instructions: >-
