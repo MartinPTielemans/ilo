@@ -1417,8 +1417,9 @@ typedef struct bc_host {
   // below 0, or a BC_LINK_CARD_ refusal, and |url| the address it ended at after redirects, "" if
   // nothing was asked. For a page, |bytes| are its first |size| up to the end of its head or a
   // mebibyte; for its picture, all of it. None for a refusal, an answer outside 200–299, or one
-  // that isn't a page or an image the app decodes, whose |mime| says what it was. They last only
-  // for the call.
+  // that isn't a page or an image the app decodes, whose |mime| says what it was. |mime| is the
+  // answer's type, with ";charset=" and its charset when the server named one. They last only for
+  // the call.
   void (*link_card_fetched)(void* context,
                             uint64_t card,
                             int status,
