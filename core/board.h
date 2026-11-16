@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "base/containers/span.h"
+#include "base/functional/callback.h"
 
 class Profile;
 
@@ -21,10 +22,13 @@ namespace browser_core {
 void RegisterBoards();
 
 // Puts |png|, a capture, into |profile|'s Board |id| as a stored file and into its arrivals, for
-// its page to make a card of, after the call returns. False, and nothing is put there, for a
-// profile that keeps no Boards, an id that isn't one, or bytes that aren't a PNG of at most
-// board::kMaxFile; a Board whose folder isn't there refuses it later, in the log.
-bool AddCapture(Profile* profile, std::string_view id, base::span<const uint8_t> png);
+// its page to make a card of, after the call returns, then runs |done| with whether it's there.
+// False, |done| dropped and nothing put there, for a profile that keeps no Boards, an id that isn't
+// one, or bytes that aren't a PNG of at most board::kMaxFile.
+bool AddCapture(Profile* profile,
+                std::string_view id,
+                base::span<const uint8_t> png,
+                base::OnceCallback<void(bool)> done);
 
 }  // namespace browser_core
 

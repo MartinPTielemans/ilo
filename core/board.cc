@@ -564,24 +564,26 @@ class BoardUIConfig : public content::WebUIConfig {
   }
 };
 
-// Stores the capture in the Board and adds it to its arrivals, on the Boards' sequence. Its stored
-// name, or nothing.
-std::optional<std::string> StoreCapture(base::FilePath board, std::vector<uint8_t> png) {
-  std::optional<std::string> name = board::AddFile(board, png);
-  return name && board::Arrive(board, *name) ? name : std::nullopt;
+// Stores the capture in the Board and adds it to its arrivals, on the Boards' sequence.
+bool StoreCapture(base::FilePath board, std::vector<uint8_t> png) {
+  return board::AddArrival(board, png).has_value();
 }
 
-void CaptureStored(base::FilePath board, std::optional<std::string> name) {
-  // The stored name is a hash of the picture's bytes: nothing of the Board's or the user's.
-  LOG(ERROR) << "browser: board " << (name ? "arrived " + *name : std::string("refused a capture"));
-  if (BoardHandler* page = name ? BoardHandler::Writing(board) : nullptr) {
+void CaptureStored(base::FilePath board, base::OnceCallback<void(bool)> done, bool arrived) {
+  // Nothing of the capture's, not even its stored name, a hash of the user's picture.
+  LOG(ERROR) << "browser: board " << (arrived ? "arrived" : "refused a capture");
+  if (BoardHandler* page = arrived ? BoardHandler::Writing(board) : nullptr) {
     page->Arrived();
   }
+  std::move(done).Run(arrived);
 }
 
 }  // namespace
 
-bool AddCapture(Profile* profile, std::string_view id, base::span<const uint8_t> png) {
+bool AddCapture(Profile* profile,
+                std::string_view id,
+                base::span<const uint8_t> png,
+                base::OnceCallback<void(bool)> done) {
   const base::FilePath profile_dir = profile ? ProfileDir(profile) : base::FilePath();
   base::FilePath board = profile_dir.empty() ? base::FilePath() : board::BoardDir(profile_dir, id);
   if (board.empty() || png.empty() || png.size() > board::kMaxFile ||
@@ -592,7 +594,7 @@ bool AddCapture(Profile* profile, std::string_view id, base::span<const uint8_t>
   // the same sequence after the capture is in them.
   Sequence()->PostTaskAndReplyWithResult(
       FROM_HERE, base::BindOnce(&StoreCapture, board, std::vector<uint8_t>(png.begin(), png.end())),
-      base::BindOnce(&CaptureStored, board));
+      base::BindOnce(&CaptureStored, board, std::move(done)));
   return true;
 }
 

@@ -154,7 +154,20 @@ bool SaveArrived(const base::FilePath& board, const std::vector<std::string>& na
   return base::ImportantFileWriter::WriteFileAtomically(ArrivedFile(board), lines);
 }
 
+bool CanArrive(const base::FilePath& board) {
+  return !board.empty() && base::DirectoryExists(board) && Arrived(board).size() < kMaxArrived;
+}
+
 }  // namespace
+
+std::optional<std::string> AddArrival(const base::FilePath& board,
+                                      base::span<const uint8_t> bytes) {
+  if (!CanArrive(board)) {
+    return std::nullopt;
+  }
+  std::optional<std::string> name = AddFile(board, bytes);
+  return name && Arrive(board, *name) ? name : std::nullopt;
+}
 
 bool Arrive(const base::FilePath& board, std::string_view name) {
   if (board.empty() || FileImage(name) == Image::kNone || !base::DirectoryExists(board)) {

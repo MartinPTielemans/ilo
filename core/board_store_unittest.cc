@@ -228,5 +228,26 @@ TEST_F(BoardStore, AtMostKMaxArrivedWaitForThePage) {
   EXPECT_TRUE(Arrive(board_, name));
 }
 
+TEST_F(BoardStore, ACaptureArrivesOnlyWhereItCanWaitAndARefusalStoresNothing) {
+  const std::optional<std::string> name = AddArrival(board_, Bytes(kPng));
+  ASSERT_TRUE(name);
+  EXPECT_EQ(Arrived(board_), (std::vector<std::string>{*name}));
+  EXPECT_EQ(Names(files()), (std::vector<std::string>{*name}));
+  EXPECT_FALSE(AddArrival(board_, Bytes("not a picture's bytes")));
+  EXPECT_EQ(Arrived(board_), (std::vector<std::string>{*name}));
+
+  for (size_t i = 1; i < kMaxArrived; ++i) {
+    ASSERT_TRUE(Arrive(board_, *name)) << i;
+  }
+  // With kMaxArrived waiting, a new picture is refused before it's stored: nothing removes one.
+  EXPECT_FALSE(AddArrival(board_, Bytes(std::string(kPng) + " refused")));
+  EXPECT_EQ(Names(files()), (std::vector<std::string>{*name}));
+  EXPECT_EQ(Arrived(board_).size(), kMaxArrived);
+
+  ASSERT_TRUE(base::DeletePathRecursively(board_));
+  EXPECT_FALSE(AddArrival(board_, Bytes(kPng)));
+  EXPECT_FALSE(base::PathExists(board_));
+}
+
 }  // namespace
 }  // namespace browser_core::board

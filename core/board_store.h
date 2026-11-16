@@ -71,7 +71,14 @@ std::optional<std::string> AddFile(const base::FilePath& board, base::span<const
 
 // A Board's arrivals: stored files the browser put there for its page to make cards of, a name a
 // line in the Board's file "arrived", in the order they came. The page reads them when it opens,
-// or when told one came while it's open, and takes them once its cards hold them.
+// or when told one came while it's open, and takes them once its cards hold them. A page that stops
+// between saving those cards and taking them makes a second card of each at its next open, which
+// the user removes: kept over a token for each arrival, as it loses nothing.
+
+// Stores |bytes| in |board|'s files and adds them to its arrivals: the stored file's name, or
+// nothing if |board| isn't there, already has kMaxArrived waiting, or the bytes aren't a
+// picture's. Each of those refuses before anything is stored.
+std::optional<std::string> AddArrival(const base::FilePath& board, base::span<const uint8_t> bytes);
 
 // Adds the stored file |name| to |board|'s arrivals, and says whether it did: not for a name
 // FileName doesn't give, a Board that isn't there, or one with kMaxArrived waiting.
