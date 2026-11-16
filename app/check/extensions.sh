@@ -103,7 +103,9 @@ const frame = time => {
   time - first > 600 ? call() : done || requestAnimationFrame(frame);
 };
 requestAnimationFrame(frame);
+addEventListener("keydown", event => event.key === "t" && chrome.tabs.create({url: "opened.html"}));
 EOF2
+echo '<title>opened</title>the tab the popup opened' > "$extensions/popup/opened.html"
 cat > "$extensions/third/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Third", "version": "1",
  "action": {"default_popup": "popup.html"}, "options_ui": {"page": "options.html"},
@@ -212,13 +214,18 @@ expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show"
 expect "^browser: extension actions $popup:1 $clicked:7\$" \
   "the badge Check Popup's popup gave it didn't show at once"
 ../tools/window-screenshot.sh "$pid" "$out/extension-popup.png" || fail "no window to capture"
-# Closes the popup: escape, where it has the keyboard. Under Wayland the popup never gets it
-# (#2836), so a click on its action again closes it, as in Chrome, or on the page, $1.
+# Under Wayland the popup gets the keyboard on an engine with the core that lends it the UI's
+# (#2836). On an older one a click on its action again closes it, as in Chrome, or on the page, $1.
+popup_keys=yes
+if [ -n "${WAYLAND_DISPLAY:-}" ] && ! engine_has ../core/platform/linux/window_views.cc; then
+  popup_keys=no
+fi
+# Closes the popup: escape, where it has the keyboard.
 close_popup() {
-  if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${1:-}" ]; then
+  if [ "$popup_keys" = no ] && [ -n "${1:-}" ]; then
     send click $1
     how="a click on the page"
-  elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  elif [ "$popup_keys" = no ]; then
     send click $first_place
     how="a click on its action"
   else
@@ -245,8 +252,8 @@ painted_by_escape() {
       exit
     }' "$log"
 }
-if [ -n "${WAYLAND_DISPLAY:-}" ]; then
-  echo "skip: the extension's popup taking the keyboard and escape closing it: under Wayland the popup never gets the keyboard (#2836)."
+if [ "$popup_keys" = no ]; then
+  echo "skip: the extension's popup taking the keyboard and escape closing it: under Wayland an engine older than its core gives the popup no keyboard (#2836)."
   close_popup
 else
   send state
@@ -255,11 +262,38 @@ else
   send state
   [ "$key" = BrowserCoreNSWindow ] ||
     fail "the browser window didn't get the keyboard back from the popup: it's in $key"
+  # Opened by a click on its action, the popup had the keyboard from the UI, which has it back.
+  [ -z "${WAYLAND_DISPLAY:-}" ] || [ "$focus" = AccessKitSubclassOfGPUIView ] ||
+    fail "the UI didn't get the keyboard back from the popup it opened: focus is on $focus"
+fi
+# A tab the popup opens in front, as its button or a link in it does, has the keyboard once the
+# popup closes, not the UI that lent the popup it. On Linux, the core's, on an engine with it.
+if [ "$popup_keys" = no ] || [ "$(uname)" != Linux ] ||
+  ! engine_has ../core/window.cc ../core/platform/linux/window_views.cc; then
+  echo "skip: the keyboard in the tab an extension's popup opened: Linux's, on an engine with its core (#2935)."
+else
+  send click $first_place
+  expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show to open a tab"
+  send key t
+  expect "^browser: loaded [0-9]* chrome-extension://$popup/opened.html\$" \
+    "the popup's key didn't open its tab"
+  opened=$(grep "^browser: loaded [0-9]* chrome-extension://$popup/opened.html\$" "$log" |
+    tail -1 | cut -d' ' -f3)
+  expect '^browser: extension popup none$' "the popup didn't close as its tab opened"
+  expect "^browser: selected $opened\( in .*\)\{0,1\}\$" "the popup's tab didn't show"
+  send state
+  [ "$key" = BrowserCoreNSWindow ] && [ "$focus" = RenderWidgetHostViewCocoa ] ||
+    fail "the tab the popup opened didn't get the keyboard: it's in $key, focus on $focus"
+  send key w cmd
+  expect "^browser: today " "⌘W didn't close the tab the popup opened"
+  index=$(today | tr ' ' '\n' | grep -n "^$first\$" | cut -d: -f1)
+  send click $(row $((index - 1)))
+  expect "^browser: selected $first\( in .*\)\{0,1\}\$" "the first tab didn't show again"
 fi
 # The Extensions menu runs a pinned one too, its popup hanging from its action.
 send menu "Check Popup"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the menu"
-# Under Wayland a click on its action would run it again, so the page's click closes it.
+# Without the keyboard a click on its action would run it again, so the page's click closes it.
 close_popup "$page_point"
 # The command bar finds it by its name and runs it, as Arc's does (#1396). Captured before the
 # expect, so a build without the row shows what's there instead.
@@ -299,7 +333,7 @@ send click $((end_x - 45)) "$end_y"
 expect "^browser: run extension $popup ran\$" "a click on Check Popup's action in Little ilo didn't run it"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from Little ilo"
 ../tools/window-screenshot.sh "$pid" "$out/little-extension-popup.png" all || fail "no window to capture"
-if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+if [ "$popup_keys" = no ]; then
   send click $((end_x - 45)) "$end_y"
 else
   send key escape
@@ -330,7 +364,7 @@ expect "^browser: run extension $third ran\$" "Check Third didn't run from the o
 expect "^browser: extension popup $third\$" "Check Third's popup didn't show"
 ../tools/window-screenshot.sh "$pid" "$out/extension-overflow-popup.png" ||
   fail "no window to capture"
-# Its action is behind the overflow button, so under Wayland a click on the page closes it.
+# Its action is behind the overflow button, so without the keyboard a click on the page closes it.
 close_popup "$page_point"
 # Check Clicked unpinned, Check Third has a place of its own, where a right-click unpins it.
 send menu "Pin to URL Field › Check Clicked"
