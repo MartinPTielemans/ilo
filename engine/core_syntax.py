@@ -56,6 +56,16 @@ MICROSOFT = {
     "third_party/microsoft_webauthn",
     "third_party/microsoft_multimedia_redirection",
 }
+# The directories of Microsoft's toolchain and SDK, as the toolchain's zip lays them out, and the
+# vs_files and win_sdk Chromium's own scripts unpack them into. A packed name with one as a part is
+# a copy of Microsoft's files inside the tree, so it stops the Windows pack, as does a name under
+# any third_party/microsoft_* dir. Matched without case, as the toolchain's mount is
+# case-insensitive.
+# Chromium's own checked-in files of Microsoft origin elsewhere in its public tree, such as
+# third_party/win_build_output and third_party/wtl, are Chromium's to ship and stay: this is the
+# toolchain's layout, not a list of every Microsoft file, so it isn't widened by guess. MSVC counts
+# only under VC/Tools, where the toolchain has it: dav1d and libusb have msvc/ dirs of their own.
+TOOLCHAIN_PARTS = ["windows kits", "vc/tools", "win_sdk", "vs_files", "dia sdk"]
 # What a Windows check reads from Chromium's tree besides headers: clang's revision, whose Windows
 # package it compiles with, and the SDK the build was made with, which it names beside the runner's.
 WINDOWS_FILES = ["tools/clang/scripts/update.py", "build/vs_toolchain.py"]
@@ -110,6 +120,7 @@ def pack(src, archive, out=OUT, toolchain=None):
     written = {os.path.join(out, CORE_FILES): "".join(p + "\n" for p in core_files).encode()}
     if windows:
         names = in_tree(src, toolchain, names)
+        not_microsoft(names)
         written.update(scrubbed(src, out, toolchain, names))
     names = sorted(set(names) - set(written))
     zstd = subprocess.Popen(["zstd", "-10", "-T0", "-q", "-o", archive], stdin=subprocess.PIPE)
@@ -141,6 +152,23 @@ def in_tree(src, toolchain, names):
     if len(inside) < len(names):
         print(f"Left out {len(names) - len(inside)} files that lead out of the tree.")
     return inside
+
+
+def not_microsoft(names):
+    """Stops the pack where a packed name is in a copy of Microsoft's toolchain or SDK, or under a
+    third_party/microsoft_* dir. Its message names a packed file only."""
+    found = [
+        name
+        for name in names
+        for path in ["/" + name.replace(os.sep, "/").lower() + "/"]
+        if any("/" + part + "/" in path for part in TOOLCHAIN_PARTS)
+        or re.search(r"/third_party/microsoft_[^/]*/", path)
+    ]
+    if found:
+        sys.exit(
+            f"{len(found)} packed files are in a copy of Microsoft's toolchain or SDK, or of its "
+            f"sources, such as {found[0]}."
+        )
 
 
 def scrubbed(src, out, toolchain, names):
