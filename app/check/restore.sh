@@ -389,10 +389,12 @@ expect '^browser: library shown$' "⇧⌘L didn't open the Library"
 # Presses the archived tab's row, with the keys $1 held, where the Library drew it once History
 # had answered. Since #2337 the Archive lists the pages visited with the closed tabs, newest first,
 # so the row is below any visited after the tab closed, and a press on a visit opens that instead.
+# The Library and its History start afresh at its section's line: "library shown" comes once it
+# has slid in, which can be after History answered.
 press_archived() {
   local at=
   for _ in $(seq 100); do
-    at=$(awk '/^browser: library shown$/ { listed = 0; at = "" }
+    at=$(awk '/^browser: library section / { listed = 0; at = "" }
       /^browser: history listed [0-9]+$/ { listed = 1; at = "" }
       listed && /^browser: settings library archived [0-9]+ at / { at = $7 " " $8 }
       END { if (at == "") exit 1; print at }' "$log") && break
