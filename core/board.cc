@@ -1,11 +1,3 @@
-// A Board is a page of the browser's own, not a surface GPUI draws in the page's place: the
-// owner's choice on #3073, as a page already has what GPUI would need built on each OS (a tab with
-// no page on every tab path; a multi-line editor with IME, spell check and accessibility; paste and
-// drag across the page's edge). The page draws only its canvas: the hot paths and all chrome stay
-// native, and no other surface becomes a page by this precedent. It may never name the Board it
-// writes, store a file that isn't a PNG, JPEG, GIF or WebP by its bytes, run a script that isn't
-// its host's own, or be there in a private window.
-
 #include "browser_core/board.h"
 
 #include <map>
