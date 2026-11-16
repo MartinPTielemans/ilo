@@ -864,6 +864,15 @@ else
       [ -n "$shown" ] || fail "Chrome's launch $n timed no window shown"
       main=$(chrome_histogram Startup.LoadTime.ProcessCreateToApplicationStart)
       [ -n "$main" ] || fail "Chrome's launch $n timed no start to its main"
+      # On Linux, Chrome dates its process's start from /proc/stat's boot time, which is in whole
+      # seconds, so that histogram is long by the boot time's fraction, 0–999 ms on each runner.
+      if [ "$(uname)" = Linux ]; then
+        fraction=$(python3 -I -c 'import time
+boot = next(int(l.split()[1]) for l in open("/proc/stat") if l.startswith("btime "))
+print(int((time.clock_gettime(time.CLOCK_REALTIME) - time.clock_gettime(time.CLOCK_BOOTTIME) - boot) * 1000))')
+        echo "$main $fraction" >> "$perf_dir/chrome-start-to-main"
+        main=$((main - fraction))
+      fi
       echo $((main + shown)) >> "$perf_dir/chrome-on-screen"
       chrome_quit
     done
