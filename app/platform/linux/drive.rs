@@ -288,6 +288,7 @@ fn settle(n: u64) {
                 "browser: drive {n} done, key {key}, focus {focus}, active {}, marked {marked}",
                 active as u8
             );
+            debug_focus_2926();
         }));
     }));
 }
@@ -1251,6 +1252,39 @@ fn key(key: &str, state: u16) -> Option<()> {
         state,
         &[xproto::KEY_PRESS_EVENT, xproto::KEY_RELEASE_EVENT],
     )
+}
+
+/// [DEBUG-2926] The X input focus, the windows it's in up to the root's child, and the browser
+/// windows' own, for the probe of history's ⌘T after a click beside Chrome's warning on X11.
+fn debug_focus_2926() {
+    if crate::drive_wayland::on() {
+        return;
+    }
+    let Some(x) = server() else { return };
+    let (connection, _) = &*x;
+    let Some(focus) = connection.get_input_focus().ok().and_then(|c| c.reply().ok()) else {
+        return;
+    };
+    let mut chain = Vec::new();
+    let mut window = focus.focus;
+    while window != x11rb::NONE && chain.len() < 10 {
+        chain.push(format!("{window:#x}"));
+        match connection.query_tree(window).ok().and_then(|c| c.reply().ok()) {
+            Some(tree) if tree.parent != tree.root => window = tree.parent,
+            _ => break,
+        }
+    }
+    let browsers: Vec<String> = (0..4)
+        .filter_map(browser)
+        .map(|b| format!("window {:#x} ui {:#x} gpui {:#x}", b.window, b.ui, b.gpui))
+        .collect();
+    log!(
+        "browser: [DEBUG-2926] x focus {} revert {:?}, in {}; browsers {}",
+        format!("{:#x}", focus.focus),
+        focus.revert_to,
+        chain.join(" < "),
+        browsers.join("; ")
+    );
 }
 
 /// The window with the input focus.
