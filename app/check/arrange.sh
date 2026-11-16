@@ -302,11 +302,14 @@ picks 0 Gamma
 # Known under #3003: the edge, the gap between Side and Note, is the side's middle, and the core
 # trades Wide with the side itself, kept as it's let go. The run asserts that as the core gives it
 # today, reports it, and takes it back with ⌘Z, as it takes the float back below, so the steps
-# after it start from the page before it. Once the core refuses there, the run says so.
+# after it start from the page before it. Once the core refuses there, the run says so. A refusal
+# shows no preview: the rest finds the drop doesn't fit, and the step stays Carrying, Refused.
 carry $(slot 3) $(side_edge)
-expect "^browser: arrange $tab Preview " "a rest at the side's edge showed no drop"
+expect "^browser: arrange $tab \(Preview\|Carrying Refused\) " \
+  "a rest at the side's edge showed no drop and no refusal"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-refused.png" || fail "no window to capture"
-preview=$(grep "^browser: arrange $tab Preview " "$log" | tail -1 | cut -d' ' -f5)
+preview=$(grep "^browser: arrange $tab \(Preview\|Carrying Refused\) " "$log" | tail -1 |
+  cut -d' ' -f5)
 send release $(side_edge)
 expect "^browser: arrange $tab Selected " "letting go where the thing doesn't fit left no selection"
 case "$preview" in
