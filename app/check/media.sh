@@ -1007,6 +1007,7 @@ else
       [ -n "$dragged" ] && [ "$dragged" -le $((px - 190)) ] && break
       sleep 0.1
     done
+    # Twice the core's 100 ms release history, so the release comes after the move, not with it.
     sleep 0.2
   fi
   send pip release $((pw / 8 - 200)) $((ph / 2))
