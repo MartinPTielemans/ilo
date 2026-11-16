@@ -10,8 +10,8 @@ name: Flatpak
 
 on:
   # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here. Also
-  # the check runs the Sign in and Policies steps do, and sync-account's server, which change apart
-  # from the packaging (#3059).
+  # the check runs its steps do (Sign in, Policies, and Paste once #3083 adds it) and sync-account's
+  # server, which change apart from the packaging (#3059).
   push:
     branches: ['**']
     paths:
@@ -21,6 +21,7 @@ on:
       - app/check/sync-account.sh
       - app/check/ilo-server.sh
       - app/check/policies.sh
+      - app/check/paste.sh
   workflow_dispatch:
   workflow_call:
     inputs:
