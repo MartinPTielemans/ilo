@@ -30,8 +30,9 @@ procs() {
     echo "$p ${kind:-browser}"
   done
 }
+# Reads every line, as an awk that exits at the first match leaves procs writing to a closed pipe.
 pid_of() {
-  procs | awk -v k="$1" '$2 == k { print $1; exit }'
+  procs | awk -v k="$1" '$2 == k && !found++ { print $1 }'
 }
 
 # Starts the Flatpak on a page of its own, logging to $out/$1.log, and waits for its UI and the
