@@ -2,8 +2,10 @@
 
 `open PID` opens a plain window of this process's, in one colour, reaching 160 pixels past the
 browser window's frame on each side where the screen has room, under that window in Windows' order,
-so what's past the frame's edge is this other app's. It says "under <handle>, frame L T R B", the
-frame in pixels on screen, then "pressed X Y" for each press it hears, in pixels from the frame's
+so what's past the frame's edge is this other app's. It says "under <handle>, frame L T R B, window
+L T R B, client X Y": the frame in pixels on screen, then from the frame's top left the browser
+window's own rectangle, with the clear border round the frame Windows resizes it by, and its
+content's top left. Then "pressed X Y" for each press it hears, in pixels from the frame's
 top left, and keeps it until it's ended or the browser's process ends. A press brings it in front,
 as an app's does; once released, it goes back under the browser window, so the next step finds the
 browser window over it, as the user's own windows would be.
@@ -128,8 +130,16 @@ def open_under(pid):
         sys.exit("couldn't open the window")
     user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
     under_browser(hwnd)
-    print("under %#x, frame %d %d %d %d" % (hwnd, frame.left, frame.top, frame.right, frame.bottom),
-          flush=True)
+    # The browser window's own rectangle, with the border Windows leaves clear round its frame for
+    # resizing, which takes a press there, and its content's top left, from the frame's top left.
+    rect = w.RECT()
+    user32.GetWindowRect(w.HWND(browser), ctypes.byref(rect))
+    client = w.POINT(0, 0)
+    user32.ClientToScreen(w.HWND(browser), ctypes.byref(client))
+    print("under %#x, frame %d %d %d %d, window %d %d %d %d, client %d %d" %
+          (hwnd, frame.left, frame.top, frame.right, frame.bottom, rect.left - frame.left,
+           rect.top - frame.top, rect.right - frame.left, rect.bottom - frame.top,
+           client.x - frame.left, client.y - frame.top), flush=True)
     SYNCHRONIZE, INFINITE, QS_ALLINPUT, PM_REMOVE = 0x100000, 0xFFFFFFFF, 0x4FF, 1
     kernel32.OpenProcess.restype = w.HANDLE
     process = w.HANDLE(kernel32.OpenProcess(SYNCHRONIZE, False, pid))
