@@ -842,8 +842,9 @@ constexpr char16_t kScript[] =
         if (d !== 'inline' && d !== 'contents' && (r.width >= 16 || r.height >= 16) && t !== mode.marks.host) break;
         t = t.parentElement;
       }
+      // Where the page has no block of its own, there's no place: only the free key floats it.
       if (!t || t === document.body || t === document.documentElement || t.contains(el) || el.contains(t)) {
-        return { change: CHANGE.FLOATS };
+        return { change: CHANGE.NONE };
       }
       const slot = slotOf(t, [el]);
       const row = slot.axis === 'row', r = rect(t);
