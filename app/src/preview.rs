@@ -3573,8 +3573,9 @@ impl link_preview::Host for PreviewPeek {
         false
     }
 
-    fn close_waits(&self) -> bool {
-        false
+    fn shown_at_once(&self) -> bool {
+        // Nor any page that could be anywhere but where it's laid out.
+        true
     }
 
     fn release(&self) {}
