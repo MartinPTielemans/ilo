@@ -59,6 +59,28 @@ if [ "$active" != 1 ]; then
   echo "skip: history. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
+# [DEBUG-2926] ⌘T, and whether it opened the command bar, closed again with Escape if it did.
+probe_t() {
+  local at
+  send key t cmd
+  at=$step
+  for _ in $(seq 30); do
+    logged '^browser: command bar shown$' "$at" && break
+    sleep 0.1
+  done
+  if logged '^browser: command bar shown$' "$at"; then
+    echo "PROBE-2926 $1: ⌘T opened the command bar; $(since "$at" | grep -m1 '^browser: command new-tab via')" | tee -a "$out/probe-2926.txt"
+    send key escape
+    expect '^browser: command bar hidden$' "probe: Escape didn't close the bar"
+  else
+    echo "PROBE-2926 $1: ⌘T reached nothing; keys: $(since "$at" | grep -c '^browser: \[keys\]')" | tee -a "$out/probe-2926.txt"
+  fi
+}
+probe_t "plain page, first"
+send click $page_point
+probe_t "plain page, after ⌘T, Escape and a click on the page"
+send click $page_point
+probe_t "plain page, again after ⌘T, Escape and a click on the page"
 # The header's buttons, centred 23.5 below the window's top.
 back_button="138 24"
 forward_button="172 24"
@@ -357,6 +379,30 @@ if [ "$major" -ge 157 ]; then
   # The warning's in a second tab, so one ⌘W on it is seen to close that tab alone: under Wayland
   # the UI, which the closed tab gives the keyboard, read the press again and ran it twice (#2442).
   kept=$tab
+  below_point="$((warning_x + warning_width / 2)) $below"
+  on_warning="$((warning_x + warning_width / 2)) $((warning_y + 8))"
+  probe_t "warning: after ⌘T, Escape and a click on the page below"
+  probe_t "warning: a second ⌘T"
+  send click $below_point
+  probe_t "warning: another click on the page below"
+  send click $below_point
+  send click $sidebar_point
+  probe_t "warning: a click in the sidebar at $sidebar_point"
+  send click $below_point
+  send click $on_warning
+  probe_t "warning: a click on the warning"
+  send click $below_point
+  send desktop on
+  send desktop off
+  send window 1
+  probe_t "warning: the desktop shown, then the window brought back"
+  send click $below_point
+  send key escape
+  probe_t "warning: Escape"
+  cat "$out/probe-2926.txt"
+  exec 3>&-
+  quit
+  exit 0
   send key t cmd
   expect '^browser: command bar shown$' "⌘T after a click on the page beside Chrome's warning before http didn't open the command bar for a second tab"
   send type "$nearby:$port"
