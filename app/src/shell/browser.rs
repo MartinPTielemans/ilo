@@ -811,6 +811,15 @@ pub trait Browser {
     /// the browser keeps for it, at the window's `scale`. The user's: agents get none, as with the
     /// page's picture.
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App);
+    /// Settings › Links' Link cards: whether ⇧ on a link shows what its page says about itself.
+    fn link_cards(&self) -> bool {
+        false
+    }
+    /// Asks for the card of the link the pointer is on in `tab`'s page (bc_tab_link_card): its
+    /// id, or 0 where there's none to ask, as in an agent's tab.
+    fn link_card(&self, _tab: u64) -> u64 {
+        0
+    }
     /// Shows `plate`, the address of the link the pointer is on, at `frame` in the window, in
     /// `side` of the card, after its delay or at once if one shows or just went; or moves it there
     /// if it shows. `None` ends it.

@@ -16,6 +16,8 @@ use gpui::{
 
 use crate::{palette::Palette, tooltip};
 
+pub mod card;
+
 /// Ours (*interim*, Arc's isn't recorded): it waits this long with the pointer on a link, so a
 /// pointer crossing a page toward the sidebar shows nothing, and Chrome's 80 ms is a flash at each
 /// link it passes.
@@ -33,13 +35,16 @@ pub const WHOLE_AFTER: Duration = Duration::from_millis(1500);
 /// How often it asks whether the button is still down, while a press holds back what its window
 /// would do. No OS tells the UI of a release in a page, and the plate should follow it within a frame.
 pub const RELEASE_POLL: Duration = Duration::from_millis(16);
+/// Its window has room above the plate for the link card (`card`) the plate grows into, made so
+/// at its first use, so neither the plate nor the card resizes a native window as either shows.
+pub use crate::tokens::link_card::ROOM as CARD_ROOM;
 pub use crate::tokens::link_target::HEIGHT;
 pub use crate::tokens::link_target::MARGIN;
 pub use crate::tokens::link_target::NEAR;
 pub use crate::tokens::link_target::RESTING_WIDTH;
 /// Its window, wide enough for the whole address, which elides past it.
 pub use crate::tokens::link_target::WINDOW_WIDTH;
-pub const WINDOW_HEIGHT: f32 = HEIGHT;
+pub const WINDOW_HEIGHT: f32 = CARD_ROOM + HEIGHT;
 use crate::elevation::{Level, WINDOW_MARGIN};
 use crate::tokens::link_target::PAD_X;
 use crate::tokens::link_target::PRIMARY;
@@ -216,6 +221,12 @@ pub fn window_left(frame: Bounds<Pixels>, side: Side) -> f32 {
     }
 }
 
+/// Where the plate's window starts down the browser window, for the plate at `frame`: the card's
+/// room above it.
+pub fn window_top(frame: Bounds<Pixels>) -> f32 {
+    f32::from(frame.top()) - CARD_ROOM
+}
+
 /// Whether the pointer at (`x`, `y`) in the window is on `frame` or within `NEAR` of it.
 pub fn near(frame: Bounds<Pixels>, x: f32, y: f32) -> bool {
     let (left, top) = (
@@ -242,6 +253,12 @@ pub trait Host {
     /// takes as a drag. A press on a link with Alt held is then a selection, and its click is
     /// lost (#2666). Nothing should appear under a press on any OS.
     fn pressed(&self) -> bool;
+    /// Asks for `url`, the picture link card `card`'s page at `page` named (bc_link_card_picture),
+    /// unless the ad blocker blocks it as an image of that page (`crate::link_card::blocked`):
+    /// whether it asked.
+    fn card_picture(&self, card: u64, url: &str, page: &str) -> bool;
+    /// Stops link card `card` (bc_link_card_cancel): the core tells nothing more of it.
+    fn card_cancel(&self, card: u64);
 }
 
 /// The plate that waits for its delay, and where it goes.
@@ -271,6 +288,8 @@ pub struct LinkTarget {
     hide_held: bool,
     /// Asks every RELEASE_POLL whether the button is up, while a press holds back the window.
     release: Option<Task<()>>,
+    /// The link card asked for the link the plate shows, which goes with the plate.
+    card: Option<card::Card>,
 }
 
 struct LinkTargetWindow(WindowHandle<LinkTarget>);
@@ -317,6 +336,7 @@ pub fn open(
             went: None,
             hide_held: false,
             release: None,
+            card: None,
         })
     });
     match window {
@@ -340,7 +360,7 @@ pub fn show(window: u64, plate: Plate, frame: Bounds<Pixels>, side: Side, cx: &m
     let Some(target) = cx.try_global::<LinkTargetWindow>().map(|target| target.0) else {
         return;
     };
-    let (left, top) = (window_left(frame, side), f32::from(frame.top()));
+    let (left, top) = (window_left(frame, side), window_top(frame));
     target
         .update(cx, |target, _, cx| {
             target.pending = Some(Pending {
@@ -381,6 +401,86 @@ pub fn hide(cx: &mut App) {
     window.update(cx, |target, _, cx| target.hide(cx)).ok();
 }
 
+/// ⇧ asked the core for link card `id` (bc_tab_link_card) for `link`, the link the plate shows:
+/// it shows loading after the plate's own delay, which the core waits too before it asks, and
+/// takes the place of any card before it.
+pub fn card_asked(id: u64, link: Target, cx: &mut App) {
+    let Some(window) = cx.try_global::<LinkTargetWindow>().map(|target| target.0) else {
+        return;
+    };
+    window
+        .update(cx, |target, _, cx| {
+            target.close_card(cx);
+            let task = cx.spawn(async move |target, cx| {
+                cx.background_executor().timer(DELAY).await;
+                target
+                    .update(cx, |target, cx| {
+                        let Some(card) = target.card.as_mut().filter(|card| card.id == id) else {
+                            return;
+                        };
+                        card.task = None;
+                        card.shown = true;
+                        // check.sh reads this line.
+                        log!("browser: link card {}", card.state.name());
+                        cx.notify();
+                    })
+                    .ok();
+            });
+            target.card = Some(card::Card {
+                id,
+                link,
+                state: card::State::Loading,
+                shown: false,
+                task: Some(task),
+            });
+        })
+        .ok();
+}
+
+/// The core's answer for link card `id` (link_card_fetched): its page's first, then its picture's.
+pub fn card_fetched(id: u64, status: i32, url: String, mime: String, bytes: Vec<u8>, cx: &mut App) {
+    let Some(window) = cx.try_global::<LinkTargetWindow>().map(|target| target.0) else {
+        return;
+    };
+    window
+        .update(cx, |target, _, cx| {
+            let Some(card) = target.card.as_ref().filter(|card| card.id == id) else {
+                return;
+            };
+            match card.state {
+                card::State::Page {
+                    picture: card::Picture::Waiting,
+                    ..
+                } => target.card_picture(id, status, bytes, cx),
+                card::State::Loading => target.card_page(id, status, url, mime, bytes, cx),
+                _ => {}
+            }
+        })
+        .ok();
+}
+
+/// Whether a card is asked for or shows for `link`, so ⇧ again, or its auto-repeat, asks nothing.
+pub fn card_for(link: &Target, cx: &App) -> bool {
+    cx.try_global::<LinkTargetWindow>()
+        .and_then(|target| target.0.read(cx).ok())
+        .is_some_and(|target| target.card.as_ref().is_some_and(|card| &card.link == link))
+}
+
+/// Esc: the card that shows goes and the plate stays. Whether one showed, for Esc to be kept
+/// from the page only then.
+pub fn close_card(cx: &mut App) -> bool {
+    let Some(window) = cx.try_global::<LinkTargetWindow>().map(|target| target.0) else {
+        return false;
+    };
+    window
+        .update(cx, |target, _, cx| {
+            let shown = target.card.as_ref().is_some_and(|card| card.shown);
+            target.close_card(cx);
+            shown
+        })
+        .unwrap_or(false)
+}
+
 /// The browser window the plate shows over, whose shell hears the pointer's moves while it shows.
 pub fn over(cx: &App) -> Option<u64> {
     let window = cx.try_global::<LinkTargetWindow>()?.0;
@@ -414,10 +514,22 @@ impl LinkTarget {
         cx.notify();
     }
 
-    /// The window fades out with what it drew, so this draws nothing new.
+    /// The card goes, and the core stops its fetch.
+    fn close_card(&mut self, cx: &mut Context<Self>) {
+        if let Some(card) = self.card.take() {
+            self.host.card_cancel(card.id);
+            // check.sh reads this line.
+            log!("browser: link card closed");
+            cx.notify();
+        }
+    }
+
+    /// The window fades out with what it drew, so this draws nothing new. The card goes with the
+    /// plate, at once, as it's the plate grown.
     fn hide(&mut self, cx: &mut Context<Self>) {
         self.wait = None;
         self.pending = None;
+        self.close_card(cx);
         if self.shown.take().is_some() {
             self.went = Some(cx.background_executor().now());
             if self.host.pressed() {
@@ -469,21 +581,28 @@ impl LinkTarget {
 }
 
 impl Render for LinkTarget {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The plate is inset by the margin, which its shadow draws in.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The plate is inset by the margin, which its shadow draws in, at the window's bottom,
+        // under the card's room.
         let root = div()
             .size_full()
             .p(px(WINDOW_MARGIN))
             .font_family(crate::face::UI)
-            .flex();
+            .flex()
+            .flex_col()
+            .justify_end();
         let Some((plate, side)) = self.drawn.clone() else {
             return root;
         };
         let root = match side {
-            Side::Left => root,
-            Side::Right => root.justify_end(),
+            Side::Left => root.items_start(),
+            Side::Right => root.items_end(),
         };
         let (fill, palette) = (self.look)(cx);
+        if let Some(card) = self.card.as_ref().filter(|card| card.shown) {
+            let scale = window.scale_factor();
+            return root.child(card::render(&card.state, &plate, fill, &palette, scale));
+        }
         let text = div()
             .absolute()
             .left(px(PAD_X))
