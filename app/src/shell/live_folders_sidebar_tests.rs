@@ -203,9 +203,11 @@ fn only_what_the_user_does_asks_and_only_refresh_skips_the_cores_two_minutes(
     draw(&shell, cx);
     cx.update(|window, _| window.activate_window());
     draw(&shell, cx);
-    // The window's ask waits for the frame after the one that saw it active.
-    assert!(fetches(&host).is_empty());
+    // The window's ask is made once, when the frame that saw it active is drawn.
+    assert_eq!(fetches(&host).len(), 1);
     cx.update(|window, cx| window.simulate_next_frame(cx));
+    draw(&shell, cx);
+    assert!(fetches(&host).is_empty());
     report(&shell, cx, true, &[]);
     shell.update(cx, |shell, cx| {
         shell.live_page_committed(3, "https://github.com/harbor/web/pull/7", cx)
@@ -213,7 +215,7 @@ fn only_what_the_user_does_asks_and_only_refresh_skips_the_cores_two_minutes(
     let asked = fetches(&host);
     assert_eq!(
         asked,
-        vec![format!("fetch live folder {FOLDER} PullRequests refresh false"); 3]
+        vec![format!("fetch live folder {FOLDER} PullRequests refresh false"); 2]
     );
     // Refresh asks the site inside them.
     shell.update(cx, |shell, cx| {
