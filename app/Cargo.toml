@@ -56,6 +56,10 @@ adblock = { version = "0.13.5", default-features = false, features = ["embedded-
 # uBlock Origin's response-time filters (src/ad_block/responses.rs), whose regular expressions are
 # JavaScript's and some look ahead or behind, which the regex crate doesn't. MIT.
 fancy-regex = "0.14"
+# A link card's page (src/link_card/page.rs): its charset, as browsers decode it, and its picture's
+# address resolved against it. GPUI's dependencies bring both already.
+encoding_rs = "0.8"
+url = "2"
 # The screenshots a task's trace shows, which the core hands over in base64. GPUI's dependencies
 # bring it already.
 base64 = "0.22"
