@@ -14,6 +14,14 @@ section { height: 80px; background: rgb(217, 226, 230) }
 #m { position: absolute; left: 620px; top: 480px; width: 260px }
 #m section { height: 40px; margin: 10px 0 }
 #m #m3 { height: 70px }
+#n, #o { position: absolute; top: 470px; width: 260px; display: flex; flex-direction: column; gap: 10px }
+#n { left: 20px }
+#o { left: 320px }
+#n > div, #o > div > div { display: flex; flex-direction: column; gap: 10px }
+#n section, #o section { height: 30px }
+#nx, #ox { height: 10px !important }
+#na, #oa { height: 50px !important }
+#nb, #ob { height: 110px !important }
 </style>
 <div class="col" id="a">
 <section aria-label="A1"></section><section aria-label="A2"></section><section aria-label="A3"></section><section aria-label="A4"></section>
@@ -23,16 +31,18 @@ section { height: 80px; background: rgb(217, 226, 230) }
 </div>
 <div id="s"><div><section aria-label="C1"></section><section aria-label="C2"></section></div><div><section id="c3" aria-label="C3"></section><section aria-label="C4"></section></div></div>
 <div id="m"><div><section aria-label="M1"></section><section aria-label="M2"></section></div><div><section id="m3" aria-label="M3"></section><section aria-label="M4"></section></div></div>
+<div id="n"><section id="nx" aria-label="NX"></section><section id="na" aria-label="NA"></section><div><section id="nb" aria-label="NB"></section><section aria-label="ND"></section></div></div>
+<div id="o"><section id="ox" aria-label="OX"></section><section id="oa" aria-label="OA"></section><div><div><section id="ob" aria-label="OB"></section><section aria-label="OD"></section></div></div></div>
 <script>
 // #2990: a trade across two parents one over the other, the lower place first in its parent, in
 // flex columns with a gap and in blocks whose margins collapse through their parents; and three
 // trades arrange-trade.sh has, as controls. Each on main's runtime and on the fix's, carried by
 // the runtime's own ops.
-const regions = { a: [20, 280, 0, 1e4], b: [320, 580, 0, 1e4], s: [620, 880, 0, 470], m: [620, 880, 470, 1e4] };
+const regions = { a: [20, 280, 0, 460], b: [320, 580, 0, 460], n: [20, 280, 460, 1e4], o: [320, 580, 460, 1e4], s: [620, 880, 0, 470], m: [620, 880, 470, 1e4] };
 const R_ = (label) => document.querySelector('[aria-label="' + label + '"]').getBoundingClientRect();
 const region = (k) => {
   const [l, r, t, b] = regions[k];
-  const top = k === 'a' || k === 'b' ? 20 : document.getElementById(k).getBoundingClientRect().top;
+  const top = k === 'a' || k === 'b' ? 20 : k === 'n' || k === 'o' ? 470 : document.getElementById(k).getBoundingClientRect().top;
   const things = [...document.querySelectorAll('section')].filter((e) => {
     const q = e.getBoundingClientRect(), x = q.left + q.width / 2;
     return x > l && x < r && q.top >= t && q.top < b;
@@ -47,8 +57,10 @@ const mid = (label) => { const r = R_(label); return { x: r.left + r.width / 2, 
 const cases = [
   ['T1', 'C2', 'C3'], ['T2', 'C3', 'C2'], ['T3', 'M2', 'M3'], ['T4', 'M3', 'M2'],
   ['T5', 'B1', 'A3'], ['T6', 'A3', 'A1'], ['T7', 'B3', 'B1'],
+  ['T8', 'NA', 'NB'], ['T9', 'NB', 'NA'], ['T10', 'OA', 'OB'], ['T11', 'OB', 'OA'],
 ];
 const out = [];
+let first = '';
 const at = () => Object.keys(regions).map((k) => k + ' ' + region(k)).join(' ');
 async function run(k) {
   const src = await (await fetch('arrange-probe-stack-' + k + '.js')).text();
@@ -74,6 +86,11 @@ async function run(k) {
       await frames(3);
       while (document.getAnimations().some((x) => x.playState === 'running')) await frames(1);
       line = thing + ' onto ' + onto + ' rest ' + kind(rested) + ' ; ' + at();
+      // ⌘Z takes it back: the page as it was.
+      call('do', { action: 2 });
+      await frames(3);
+      while (document.getAnimations().some((x) => x.playState === 'running')) await frames(1);
+      line += ' ; undo ' + (at() === first ? 'as before' : at());
     } catch (e) { line = 'threw ' + String(e).slice(0, 100); }
     try { call('off'); call('unload'); } catch {}
     await frames(3);
@@ -83,8 +100,9 @@ async function run(k) {
 (async () => {
   document.title = 'drop start';
   await frames(5);
-  out.push('r page ' + at());
-  try { for (const k of ['before', 'after', 'order']) await run(k); } catch (e) { out.push('r drop threw ' + String(e).slice(0, 120)); }
+  first = at();
+  out.push('r page ' + first);
+  try { for (const k of ['before', 'after', 'room', 'order']) await run(k); } catch (e) { out.push('r drop threw ' + String(e).slice(0, 120)); }
   let chunk = [];
   const send = async () => { document.title = chunk.join(' | '); chunk = []; await new Promise((d) => setTimeout(d, 200)); };
   for (const line of out) {

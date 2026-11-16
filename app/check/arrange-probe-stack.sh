@@ -5,7 +5,7 @@
 
 serve
 cp check/arrange-probe-stack.html check/arrange-probe-stack-before.js \
-  check/arrange-probe-stack-after.js check/arrange-probe-stack-order.js "$out/site/"
+  check/arrange-probe-stack-after.js check/arrange-probe-stack-order.js check/arrange-probe-stack-room.js "$out/site/"
 log="$out/arrange-probe-stack.log"
 step=0
 rm -f "$saved" "$launch_frame"
