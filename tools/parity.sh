@@ -16,7 +16,9 @@
 # over the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380),
 # Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default naming
 # its model, light and dark (#2455), and the safe-start card at the sidebar's foot, light and dark,
-# and in the narrowest sidebar with ad blocking off (#2345). The preview's Linux host places no
+# and in the narrowest sidebar with ad blocking off (#2345), Library › Boards, light and dark, and
+# a Board's row's menu, and the protected-media note, whose card a Board's refused save follows
+# in the page (#3073). The preview's Linux host places no
 # window, so sway puts Site Controls and the icon picker in the middle rather than where the Mac's
 # host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
@@ -58,6 +60,10 @@ screens=(
   "safe-start-light|safe start card 0 at|PREVIEW_SAFE_START=1 PREVIEW_APPEARANCE=light"
   "safe-start-dark|safe start card 0 at|PREVIEW_SAFE_START=1 PREVIEW_APPEARANCE=dark"
   "safe-start-narrow|safe start card 0 at|PREVIEW_SAFE_START=unblocked PREVIEW_SIDEBAR=164"
+  "library-boards-light|library boards|PREVIEW_LIBRARY=boards PREVIEW_APPEARANCE=light"
+  "library-boards-dark|library boards|PREVIEW_LIBRARY=boards PREVIEW_APPEARANCE=dark"
+  "library-boards-menu|menu shown|PREVIEW_LIBRARY=boards PREVIEW_MENU=180,111"
+  "drm-note|drm note|PREVIEW_DRM=1"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
