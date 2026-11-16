@@ -9566,7 +9566,7 @@ index 0000000000..704677746c
 +        .log_err();
 +}
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
-index f6ee76ae8c..703e20989f 100644
+index f6ee76ae8c..c522655638 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs
 @@ -73,8 +73,11 @@ x11rb::atom_manager! {
@@ -9619,7 +9619,7 @@ index f6ee76ae8c..703e20989f 100644
      force_render_after_recovery: bool,
      fullscreen: bool,
      client_side_decorations_supported: bool,
-@@ -307,12 +327,163 @@ impl X11WindowState {
+@@ -307,12 +327,166 @@ impl X11WindowState {
      }
  }
  
@@ -9740,6 +9740,7 @@ index f6ee76ae8c..703e20989f 100644
 +    /// Fires a period after the last tick, or now if that's passed.
 +    pub(crate) fn wake(&self) {
 +        use std::os::fd::AsRawFd as _;
++        eprintln!("browser: proof t tick asked {}", { let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 }; unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) }; ts.tv_sec as i64 * 1_000_000 + ts.tv_nsec as i64 / 1000 });
 +        if self.armed.replace(true) {
 +            return;
 +        }
@@ -9756,6 +9757,7 @@ index f6ee76ae8c..703e20989f 100644
 +                tv_nsec: due.subsec_nanos() as _,
 +            },
 +        };
++        eprintln!("browser: proof t tick armed {} due {}", { let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 }; unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) }; ts.tv_sec as i64 * 1_000_000 + ts.tv_nsec as i64 / 1000 }, due.as_micros());
 +        // SAFETY: a plain system call on the timerfd this owns.
 +        unsafe { libc::timerfd_settime(self.fd.as_raw_fd(), 0, &spec, std::ptr::null_mut()) };
 +    }
@@ -9770,6 +9772,7 @@ index f6ee76ae8c..703e20989f 100644
 +        }
 +        self.armed.set(false);
 +        self.last.set(std::time::Instant::now());
++        eprintln!("browser: proof t tick fired {}", { let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 }; unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) }; ts.tv_sec as i64 * 1_000_000 + ts.tv_nsec as i64 / 1000 });
 +    }
 +}
 +
@@ -9783,7 +9786,7 @@ index f6ee76ae8c..703e20989f 100644
  }
  
  impl rwh::HasWindowHandle for RawWindow {
-@@ -522,7 +693,22 @@ impl X11WindowState {
+@@ -522,7 +696,22 @@ impl X11WindowState {
                      | xproto::EventMask::VISIBILITY_CHANGE,
              );
  
@@ -9806,7 +9809,7 @@ index f6ee76ae8c..703e20989f 100644
          if bounds.size.width.0 == 0 || bounds.size.height.0 == 0 {
              log::warn!(
                  "Window bounds contain a zero value. height={}, width={}. Falling back to defaults.",
-@@ -540,7 +726,7 @@ impl X11WindowState {
+@@ -540,7 +729,7 @@ impl X11WindowState {
                      visual.depth,
                      x_window,
                      visual_set.root,
@@ -9815,7 +9818,7 @@ index f6ee76ae8c..703e20989f 100644
                      bounds.origin.y.0,
                      bounds.size.width.0,
                      bounds.size.height.0
-@@ -549,8 +735,8 @@ impl X11WindowState {
+@@ -549,8 +738,8 @@ impl X11WindowState {
              xcb.create_window(
                  visual.depth,
                  x_window,
@@ -9826,7 +9829,7 @@ index f6ee76ae8c..703e20989f 100644
                  bounds.origin.y.0 as i16,
                  bounds.size.width.0 as u16,
                  bounds.size.height.0 as u16,
-@@ -576,7 +762,7 @@ impl X11WindowState {
+@@ -576,7 +765,7 @@ impl X11WindowState {
              )?;
  
              let reply = get_reply(|| "X11 GetGeometry failed.", xcb.get_geometry(x_window))?;
@@ -9835,7 +9838,7 @@ index f6ee76ae8c..703e20989f 100644
                  bounds.origin.x.0 += 2;
                  // Work around a bug where our rendered content appears
                  // outside the window bounds when opened at the default position
-@@ -769,11 +955,10 @@ impl X11WindowState {
+@@ -769,11 +958,10 @@ impl X11WindowState {
                      // Note: this has to be done after the GPU init, or otherwise
                      // the sizes are immediately invalidated.
                      size: query_render_extent(xcb, x_window)?,
@@ -9851,7 +9854,7 @@ index f6ee76ae8c..703e20989f 100644
                      preferred_present_mode: None,
                  };
                  WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?
-@@ -790,6 +975,12 @@ impl X11WindowState {
+@@ -790,6 +978,12 @@ impl X11WindowState {
                      Some((f32::from(size.width) as i32, f32::from(size.height) as i32));
              }
              size_hints.max_size = Some((max_texture_size as i32, max_texture_size as i32));
@@ -9864,7 +9867,7 @@ index f6ee76ae8c..703e20989f 100644
              check_reply(
                  || {
                      format!(
-@@ -827,6 +1018,8 @@ impl X11WindowState {
+@@ -827,6 +1021,8 @@ impl X11WindowState {
  
              Ok(Self {
                  parent,
@@ -9873,7 +9876,7 @@ index f6ee76ae8c..703e20989f 100644
                  children: FxHashSet::default(),
                  client,
                  executor,
-@@ -843,6 +1036,7 @@ impl X11WindowState {
+@@ -843,6 +1039,7 @@ impl X11WindowState {
                  // The window is not mapped until the client sees `MapNotify`.
                  visibility: WindowVisibility::Hidden,
                  hovered: false,
@@ -9881,7 +9884,7 @@ index f6ee76ae8c..703e20989f 100644
                  force_render_after_recovery: false,
                  fullscreen: false,
                  maximized_vertical: false,
-@@ -850,7 +1044,10 @@ impl X11WindowState {
+@@ -850,7 +1047,10 @@ impl X11WindowState {
                  hidden: false,
                  appearance,
                  handle,
@@ -9893,7 +9896,7 @@ index f6ee76ae8c..703e20989f 100644
                  client_side_decorations_supported,
                  decorations: WindowDecorations::Server,
                  last_insets: [0, 0, 0, 0],
-@@ -958,6 +1155,7 @@ impl X11Window {
+@@ -958,6 +1158,7 @@ impl X11Window {
              callbacks: Rc::new(RefCell::new(Callbacks::default())),
              xcb: xcb.clone(),
              x_window,
@@ -9901,7 +9904,7 @@ index f6ee76ae8c..703e20989f 100644
          };
  
          let state = ptr.state.borrow_mut();
-@@ -1049,6 +1247,23 @@ impl X11Window {
+@@ -1049,6 +1250,23 @@ impl X11Window {
  }
  
  impl X11WindowStatePtr {
@@ -9925,7 +9928,15 @@ index f6ee76ae8c..703e20989f 100644
      pub fn should_close(&self) -> bool {
          let mut cb = self.callbacks.borrow_mut();
          if let Some(mut should_close) = cb.should_close.take() {
-@@ -1194,6 +1409,15 @@ impl X11WindowStatePtr {
+@@ -1182,6 +1400,7 @@ impl X11WindowStatePtr {
+     }
+ 
+     pub fn refresh(&self, mut request_frame_options: RequestFrameOptions) {
++        eprintln!("browser: proof t refresh {}", { let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 }; unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) }; ts.tv_sec as i64 * 1_000_000 + ts.tv_nsec as i64 / 1000 });
+         let callback = self.callbacks.borrow_mut().request_frame.take();
+         if let Some(mut fun) = callback {
+             // Expose events can present a frame before the refresh timer runs,
+@@ -1194,6 +1413,15 @@ impl X11WindowStatePtr {
      }
  
      pub fn handle_input(&self, input: PlatformInput) {
@@ -9941,7 +9952,7 @@ index f6ee76ae8c..703e20989f 100644
          if self.is_blocked() {
              return;
          }
-@@ -1221,6 +1445,14 @@ impl X11WindowStatePtr {
+@@ -1221,6 +1449,14 @@ impl X11WindowStatePtr {
          }
      }
  
@@ -9956,7 +9967,7 @@ index f6ee76ae8c..703e20989f 100644
      pub fn handle_ime_commit(&self, text: String) {
          if self.is_blocked() {
              return;
-@@ -1384,7 +1616,30 @@ impl X11WindowStatePtr {
+@@ -1384,7 +1620,30 @@ impl X11WindowStatePtr {
      }
  }
  
@@ -9987,7 +9998,7 @@ index f6ee76ae8c..703e20989f 100644
      fn bounds(&self) -> Bounds<Pixels> {
          self.0.state.borrow().bounds
      }
-@@ -1473,6 +1728,9 @@ impl PlatformWindow for X11Window {
+@@ -1473,6 +1732,9 @@ impl PlatformWindow for X11Window {
      }
  
      fn mouse_position(&self) -> Point<Pixels> {
@@ -9997,7 +10008,7 @@ index f6ee76ae8c..703e20989f 100644
          get_reply(
              || "X11 QueryPointer failed.",
              self.0.xcb.query_pointer(self.0.x_window),
-@@ -1528,6 +1786,10 @@ impl PlatformWindow for X11Window {
+@@ -1528,6 +1790,10 @@ impl PlatformWindow for X11Window {
      }
  
      fn activate(&self) {
@@ -10008,7 +10019,7 @@ index f6ee76ae8c..703e20989f 100644
          let data = [1, xproto::Time::CURRENT_TIME.into(), 0, 0, 0];
          let message = xproto::ClientMessageEvent::new(
              32,
-@@ -1615,6 +1877,9 @@ impl PlatformWindow for X11Window {
+@@ -1615,6 +1881,9 @@ impl PlatformWindow for X11Window {
      }
  
      fn map_window(&mut self) -> anyhow::Result<()> {
@@ -10018,7 +10029,7 @@ index f6ee76ae8c..703e20989f 100644
          check_reply(
              || "X11 MapWindow failed.",
              self.0.xcb.map_window(self.0.x_window),
-@@ -1772,6 +2037,7 @@ impl PlatformWindow for X11Window {
+@@ -1772,13 +2041,17 @@ impl PlatformWindow for X11Window {
              }
  
              inner.force_render_after_recovery = true;
@@ -10026,7 +10037,9 @@ index f6ee76ae8c..703e20989f 100644
              return;
          }
  
-@@ -1779,6 +2045,7 @@ impl PlatformWindow for X11Window {
++        eprintln!("browser: proof t draw {}", { let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 }; unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) }; ts.tv_sec as i64 * 1_000_000 + ts.tv_nsec as i64 / 1000 });
+         renderer.draw(scene);
++        eprintln!("browser: proof t presented {}", { let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 }; unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) }; ts.tv_sec as i64 * 1_000_000 + ts.tv_nsec as i64 / 1000 });
  
          if renderer.needs_redraw() {
              inner.force_render_after_recovery = true;
@@ -10034,7 +10047,7 @@ index f6ee76ae8c..703e20989f 100644
          }
      }
  
-@@ -1842,11 +2109,6 @@ impl PlatformWindow for X11Window {
+@@ -1842,11 +2115,6 @@ impl PlatformWindow for X11Window {
      fn window_decorations(&self) -> gpui::Decorations {
          let state = self.0.state.borrow();
  
@@ -10046,7 +10059,7 @@ index f6ee76ae8c..703e20989f 100644
          match state.decorations {
              WindowDecorations::Server => Decorations::Server,
              WindowDecorations::Client => {
-@@ -1915,16 +2177,16 @@ impl PlatformWindow for X11Window {
+@@ -1915,16 +2183,16 @@ impl PlatformWindow for X11Window {
          }
      }
  
@@ -10068,7 +10081,7 @@ index f6ee76ae8c..703e20989f 100644
          }
  
          // https://github.com/rust-windowing/winit/blob/master/src/platform_impl/linux/x11/util/hint.rs#L53-L87
-@@ -1976,6 +2238,13 @@ impl PlatformWindow for X11Window {
+@@ -1976,6 +2244,13 @@ impl PlatformWindow for X11Window {
          client.update_ime_position(bounds);
      }
  
