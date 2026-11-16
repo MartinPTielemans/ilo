@@ -169,12 +169,17 @@ read -r local_port < "$out/handback-local.port" || true
 # Local Network Access remembers an answer by origin. The browser takes the certificate made for
 # this run by its key alone, and calls the server's address public, as a sign-in's site is.
 mkdir -p "$out/handback-tls"
+spki=x
+# Probe for #3108's -202: a certificate whose key starts with a slash.
+while [ "${spki#/}" = "$spki" ]; do
 MSYS2_ARG_CONV_EXCL=/CN= openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=signin.test \
   -addext "subjectAltName=DNS:little.signin.test,DNS:tab.signin.test" \
   -keyout "$out/handback-tls.key" -out "$out/handback-tls.pem" 2> /dev/null ||
   fail "openssl didn't make the sign-in's certificate"
 spki=$(openssl x509 -in "$out/handback-tls.pem" -pubkey -noout | openssl pkey -pubin -outform der |
   openssl dgst -sha256 -binary | base64)
+done
+echo "probe: the sign-in's certificate key is $spki"
 printf '<title>loading</title>
 <p style="font:16px system-ui">Signed in. You can go back to the app.</p>
 <script>
