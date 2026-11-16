@@ -218,6 +218,9 @@ class Card : public content::WebContentsObserver,
     asked_picture_ = true;
     picture_ = true;
     hops_ = 0;
+    // The page's, which a picture that fails before its answer starts mustn't be told with.
+    type_.clear();
+    mime_.clear();
     if (!LinkCardAsks(url)) {
       End(net::ERR_DISALLOWED_URL_SCHEME, url);
       return;
