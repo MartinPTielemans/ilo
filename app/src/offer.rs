@@ -173,7 +173,9 @@ pub fn open(
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
-            size(px(WIDTH), px(HEIGHT)),
+            Level::Popover
+                .panel_margin()
+                .around(size(px(WIDTH), px(HEIGHT))),
         ))),
         titlebar: Some(TitlebarOptions {
             title: None,
@@ -563,40 +565,42 @@ impl Render for OfferPrompt {
             .child(button("decline", offer.decline, Answer::NotNow, false))
             .child(button("accept", offer.accept, Answer::Accept, true));
         root.child(
-            div()
-                .key_context("Offer")
-                .track_focus(&self.focus)
-                .on_action(cx.listener(Self::accept))
-                .on_action(cx.listener(Self::not_now))
-                .size_full()
-                .p(px(INSET))
-                .flex()
-                .flex_col()
-                .rounded(px(RADIUS))
-                .bg(fill)
-                .border_1()
-                .border_color(Level::Popover.rim_in(&palette))
-                .text_color(palette.text(TITLE))
-                .text_size(px(text::BODY))
-                .line_height(px(18.))
-                .child(
-                    div()
-                        .line_height(px(TITLE_LINE))
-                        .font_weight(FontWeight::MEDIUM)
-                        .truncate()
-                        .child(offer.title),
-                )
-                .child(
-                    div()
-                        .text_size(px(text::SMALL))
-                        .line_height(px(SITE_LINE))
-                        .text_color(palette.text(DETAIL))
-                        .truncate()
-                        .child(offer.site),
-                )
-                .child(first.mt(px(HEADER_GAP)))
-                .child(second.mt(px(ROW_GAP)))
-                .child(buttons),
+            Level::Popover.in_window(
+                div()
+                    .key_context("Offer")
+                    .track_focus(&self.focus)
+                    .on_action(cx.listener(Self::accept))
+                    .on_action(cx.listener(Self::not_now))
+                    .size_full()
+                    .p(px(INSET))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(RADIUS))
+                    .bg(fill)
+                    .border_1()
+                    .border_color(Level::Popover.rim_in(&palette))
+                    .text_color(palette.text(TITLE))
+                    .text_size(px(text::BODY))
+                    .line_height(px(18.))
+                    .child(
+                        div()
+                            .line_height(px(TITLE_LINE))
+                            .font_weight(FontWeight::MEDIUM)
+                            .truncate()
+                            .child(offer.title),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(text::SMALL))
+                            .line_height(px(SITE_LINE))
+                            .text_color(palette.text(DETAIL))
+                            .truncate()
+                            .child(offer.site),
+                    )
+                    .child(first.mt(px(HEADER_GAP)))
+                    .child(second.mt(px(ROW_GAP)))
+                    .child(buttons),
+            ),
         )
     }
 }

@@ -271,6 +271,14 @@ void host_set_overlay_elevation(int overlay,
                                 double shadow_radius,
                                 double shadow_drop);
 
+// Windows' alone: the UI draws the shadow of the panel in |view|'s window, an overlay's, the find
+// bar's or the offer's, itself, |above|, |sides| and |below| points past the panel, as the menus
+// draw theirs, since Windows' own shadow comes only with its own corner (#2988). The host shows the
+// panel where it's asked, the window that much bigger round it, and lets clicks in that margin
+// through to what's under it, as clicks outside the panel. The Mac's and Linux's hosts draw it in a
+// window under the panel. Call it after the window is added.
+void host_set_shadow_margin(void* view, double above, double sides, double below);
+
 // Makes the window of |overlay_view| the |overlay| (one of the HOST_ overlays above), which
 // floats over a browser window when shown, for UI that has to draw over the page, translucent over
 // a blur of what's behind it, with a shadow, in a rounded shape of |radius|. It starts hidden.

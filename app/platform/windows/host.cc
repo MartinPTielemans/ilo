@@ -257,6 +257,10 @@ struct Floating {
   std::optional<RECT> plate;
   // Called after the event, when the user leaves it for a window that isn't its own.
   void (*dismissed)(void) = nullptr;
+  // The points round the panel in it, above, on each side and below, where the UI draws the
+  // panel's shadow (host_set_shadow_margin): it's shown and placed by the panel, and clicks there
+  // go through.
+  double margin_above = 0, margin_sides = 0, margin_below = 0;
   // Counts its fades, so one that ends after it showed or hid again leaves it be.
   int fades = 0;
   // Counts the overlays' shows and hides, so a show still to come after a hide leaves it hidden.
@@ -347,6 +351,76 @@ void TakePointer(HWND hwnd, uint16_t actions);
 void TellScale(HWND hwnd);
 void PutAway(HWND hwnd, HWND back, uint16_t actions);
 
+bool HasMargin(const Floating& floating) {
+  return floating.margin_above > 0 || floating.margin_sides > 0 || floating.margin_below > 0;
+}
+
+// Where the panel is in |floating|'s window, in pixels from its top left, as big as the window
+// less its margin at its scale now, so a panel growing or told another scale has it at once; empty
+// with no margin.
+RECT PanelRect(const Floating& floating) {
+  if (!HasMargin(floating)) {
+    return RECT{};
+  }
+  RECT client{};
+  GetClientRect(floating.hwnd, &client);
+  const double scale = Scale(floating.hwnd);
+  const long sides = std::lround(floating.margin_sides * scale);
+  return RECT{sides, std::lround(floating.margin_above * scale), client.right - sides,
+              client.bottom - std::lround(floating.margin_below * scale)};
+}
+
+// |floating|'s panel's size in points: its window's, less the margin round it.
+void PanelSize(const Floating& floating, double* width, double* height) {
+  WindowSize(floating.hwnd, width, height);
+  *width -= 2 * floating.margin_sides;
+  *height -= floating.margin_above + floating.margin_below;
+}
+
+// Clips the margin of |floating|'s window to its browser window's frame, so the shadow there ends
+// at the browser window's edge, as a child window's would. HTTRANSPARENT hands a press on the
+// margin only to this thread's windows under it: past that edge, over another app's window, the
+// margin took the press, and the app never heard it. The panel itself is never cut: a command bar
+// wider than a narrow window, or opened at its edge, still shows whole past the frame.
+void ClipToOwner(const Floating& floating) {
+  HWND root = GetWindow(floating.hwnd, GW_OWNER);
+  if (!HasMargin(floating) || !root) {
+    return;
+  }
+  RECT frame{}, window{}, inside{};
+  if (FAILED(DwmGetWindowAttribute(root, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof frame))) {
+    GetWindowRect(root, &frame);
+  }
+  GetWindowRect(floating.hwnd, &window);
+  IntersectRect(&inside, &frame, &window);
+  HRGN had = CreateRectRgn(0, 0, 0, 0);
+  const bool clipped = GetWindowRgn(floating.hwnd, had) != ERROR;
+  if (EqualRect(&inside, &window)) {
+    DeleteObject(had);
+    if (clipped) {
+      SetWindowRgn(floating.hwnd, nullptr, IsWindowVisible(floating.hwnd));
+    }
+    return;
+  }
+  // In the window's own pixels, from its top left, as a window region is.
+  RECT panel = PanelRect(floating);
+  MapWindowPoints(floating.hwnd, nullptr, reinterpret_cast<POINT*>(&panel), 2);
+  OffsetRect(&panel, -window.left, -window.top);
+  OffsetRect(&inside, -window.left, -window.top);
+  HRGN shown = CreateRectRgnIndirect(&inside);
+  HRGN own = CreateRectRgnIndirect(&panel);
+  CombineRgn(shown, shown, own, RGN_OR);
+  DeleteObject(own);
+  const bool same = clipped && EqualRgn(had, shown);
+  DeleteObject(had);
+  if (same) {
+    DeleteObject(shown);
+    return;
+  }
+  // The window owns the region from here.
+  SetWindowRgn(floating.hwnd, shown, IsWindowVisible(floating.hwnd));
+}
+
 LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
                               UINT_PTR, DWORD_PTR data) {
   auto* floating = reinterpret_cast<Floating*>(data);
@@ -389,6 +463,22 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
         if (!PtInRect(&*floating->plate, at)) {
           return HTTRANSPARENT;
         }
+      }
+      // A click on the shadow round a panel is one outside it: it goes to the browser window under
+      // it, which takes the keyboard from the panel, as a click there further out does.
+      if (const RECT panel = PanelRect(*floating); !IsRectEmpty(&panel)) {
+        POINT at{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+        ScreenToClient(hwnd, &at);
+        if (!PtInRect(&panel, at)) {
+          return HTTRANSPARENT;
+        }
+      }
+      break;
+    case WM_WINDOWPOSCHANGED:
+      // Moved or resized, by the host or by the UI as the panel grows: it keeps to its browser
+      // window's frame. SetWindowRgn's own WM_WINDOWPOSCHANGED neither moves nor sizes it.
+      if ((~reinterpret_cast<const WINDOWPOS*>(lparam)->flags) & (SWP_NOMOVE | SWP_NOSIZE)) {
+        ClipToOwner(*floating);
       }
       break;
     case WM_MOUSEACTIVATE:
@@ -466,13 +556,6 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
   return DefSubclassProc(hwnd, message, wparam, lparam);
 }
 
-// Windows 11 outlines a window it rounds, and the UI draws a floating panel's own rim, so with
-// both the panel had two, and a window larger than its panel an outline around nothing.
-void NoBorder(HWND hwnd) {
-  COLORREF none = DWMWA_COLOR_NONE;
-  DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &none, sizeof none);
-}
-
 // GPUI makes its windows the taskbar's, and an overlay would put a button there each time it
 // showed: one its browser window owns has none without it. Taken while hidden, as the taskbar
 // reads it as a window shows.
@@ -503,6 +586,9 @@ void Adopt(Floating& floating,
   floating.dismissed = dismissed;
   ShowWindow(floating.hwnd, SW_HIDE);
   OffTaskbar(floating.hwnd);
+  // GPUI makes a pop-up window topmost, over every app's. Owned by no browser window yet, it's in
+  // the band of the rest; it's shown in its browser window's (SameBand).
+  SetWindowPos(floating.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   if (mouse_through) {
     SetWindowLongPtrW(floating.hwnd, GWL_EXSTYLE,
                       GetWindowLongPtrW(floating.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
@@ -530,17 +616,6 @@ void Forget(Floating& floating) {
   }
 }
 
-// An overlay whose blur and shadow the host gives, as the Mac's does, and that is a rounded
-// rectangle as Windows' frame is (the command bar, the find bar and the offer): Windows 11 rounds
-// it and draws its shadow, without its outline, which the UI's rim would double.
-void SystemFrame(HWND hwnd) {
-  DWM_WINDOW_CORNER_PREFERENCE corners = DWMWCP_ROUND;
-  DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corners, sizeof corners);
-  DWMNCRENDERINGPOLICY policy = DWMNCRP_USEWINDOWSTYLE;
-  DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, &policy, sizeof policy);
-  NoBorder(hwnd);
-}
-
 void WatchOwner(HWND root);
 
 // The window at the end of |hwnd|'s owners, the browser window an overlay or a menu over it floats
@@ -550,6 +625,10 @@ HWND TopOwner(HWND hwnd) {
     hwnd = owner;
   }
   return hwnd;
+}
+
+bool Topmost(HWND hwnd) {
+  return GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST;
 }
 
 // Where |hwnd|, owned by a browser window, goes in the z-order: over that window and the others it
@@ -564,10 +643,24 @@ HWND InsertAfter(HWND hwnd) {
   for (HWND above = GetWindow(root, GW_HWNDPREV); above; above = GetWindow(above, GW_HWNDPREV)) {
     if (IsWindowVisible(above) && TopOwner(above) != root) {
       // A non-topmost window can't go between topmost ones; under them all is the top of the rest.
-      return (GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) ? HWND_TOP : above;
+      // A topmost one, over a browser window that stays on top, goes under the taskbar.
+      return Topmost(above) && !Topmost(hwnd) ? HWND_TOP : above;
     }
   }
   return HWND_TOP;
+}
+
+// |hwnd| is topmost as the browser window that owns it is: over every app's with one that stays on
+// top, and not otherwise. GPUI makes a pop-up topmost, and Windows makes a window topmost with its
+// owner only if it owned it then, where the sidebar's panel out is owned only once it shows: over
+// every app's, a menu from it went under it (#2989), and under a window on top, it didn't show.
+void SameBand(HWND hwnd) {
+  HWND root = TopOwner(hwnd);
+  const bool on_top = root != hwnd && Topmost(root);
+  if (Topmost(hwnd) != on_top) {
+    SetWindowPos(hwnd, on_top ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
 }
 
 // With the keyboard, a window takes the pointer too, from a press held in another window. GPUI
@@ -594,6 +687,7 @@ void TellScale(HWND hwnd) {
 // the keyboard if it takes them. PutAway carries out a hide's.
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, uint16_t actions) {
   TakePointer(hwnd, actions);
+  SameBand(hwnd);
   const HWND after = InsertAfter(hwnd);
   if (actions & kPlace) {
     SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
@@ -624,8 +718,25 @@ bool AppInFront() {
   return process == GetCurrentProcessId();
 }
 
+// check.sh reads this line: where |floating|'s panel and its window are, in pixels from its browser
+// window's top left as Windows draws it, where tools/window-screenshot.sh's picture starts.
+void LogPanel(const Floating& floating) {
+  HWND root = GetWindow(floating.hwnd, GW_OWNER);
+  RECT browser{}, window{};
+  if (FAILED(DwmGetWindowAttribute(root, DWMWA_EXTENDED_FRAME_BOUNDS, &browser, sizeof browser))) {
+    GetWindowRect(root, &browser);
+  }
+  GetWindowRect(floating.hwnd, &window);
+  const RECT panel = PanelRect(floating);
+  const long x = window.left - browser.left, y = window.top - browser.top;
+  fprintf(stderr, "browser: %s panel %ld %ld %ld %ld in its window %ld %ld %ld %ld\n",
+          floating.name, x + panel.left, y + panel.top, panel.right - panel.left,
+          panel.bottom - panel.top, x, y, window.right - window.left, window.bottom - window.top);
+}
+
 // Shows |floating| over |ui_view|'s browser window at |left|, |top| points in its content, |width|
-// by |height| points, or its own size where one is negative, with the keyboard if |keyboard|.
+// by |height| points, or its own size where one is negative, with the keyboard if |keyboard|. With
+// a margin round its panel, these are the panel's, and its window reaches past it by the margin.
 void Show(Floating& floating, void* ui_view, double left, double top, double width, double height,
           bool keyboard) {
   HWND root = Root(ui_view);
@@ -633,9 +744,11 @@ void Show(Floating& floating, void* ui_view, double left, double top, double wid
     return;
   }
   double own_width, own_height;
-  WindowSize(floating.hwnd, &own_width, &own_height);
-  width = width < 0 ? own_width : width;
-  height = height < 0 ? own_height : height;
+  PanelSize(floating, &own_width, &own_height);
+  width = (width < 0 ? own_width : width) + 2 * floating.margin_sides;
+  height = (height < 0 ? own_height : height) + floating.margin_above + floating.margin_below;
+  left -= floating.margin_sides;
+  top -= floating.margin_above;
   const double scale = Scale(root);
   // Rounded, not truncated: at 125% a 50-point bar is 63 pixels, not 62 that cut its last row.
   POINT origin{std::lround(left * scale), std::lround(top * scale)};
@@ -651,8 +764,12 @@ void Show(Floating& floating, void* ui_view, double left, double top, double wid
                                 (take ? kKeyboard : 0) | (IsIconic(root) ? kOverMinimized : 0));
   PlaceAndShow(floating.hwnd, origin.x, origin.y, static_cast<int>(std::lround(width * scale)),
                static_cast<int>(std::lround(height * scale)), actions);
+  ClipToOwner(floating);
   // Over a minimized window it would stand alone where the window was, so the UI hears it's gone.
   PutAway(floating.hwnd, root, actions);
+  if (HasMargin(floating) && IsWindowVisible(floating.hwnd)) {
+    LogPanel(floating);
+  }
   if (!(actions & kDismiss)) {
     return;
   }
@@ -817,6 +934,8 @@ void Resize(Floating& floating, double height) {
   }
   RECT rect{};
   GetWindowRect(floating.hwnd, &rect);
+  // |height| is the panel's, which the margin its shadow draws in is round.
+  height += floating.margin_above + floating.margin_below;
   SetWindowPos(floating.hwnd, nullptr, 0, 0, rect.right - rect.left,
                static_cast<int>(std::lround(height * Scale(floating.hwnd))),
                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1106,7 +1225,9 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
       return 0;
     case WM_ERASEBKGND:
       return 1;
-    case WM_DESTROY:
+    // Not WM_DESTROY, which Windows Server 2025 doesn't send the holder as its window closes, so
+    // the frame went unkept: WM_NCDESTROY comes on each, with the window still its parent (#3022).
+    case WM_NCDESTROY:
       // Its window is still there: Windows destroys a window's children before the window.
       if (HWND root = GetAncestor(hwnd, GA_ROOT); root && root != hwnd && !IsIconic(root)) {
         ClosedFrame closed{.maximized = IsZoomed(root) != FALSE};
@@ -1120,7 +1241,7 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         found->second->Release();
         DropTargets().erase(found);
       }
-      return 0;
+      break;
   }
   return DefWindowProcW(hwnd, message, wparam, lparam);
 }
@@ -1596,7 +1717,7 @@ void ShowCorner(Corner& corner, void* ui_view, bool keyboard) {
   HWND root = Root(ui_view);
   double content_width, content_height, width, height;
   ContentSize(root, &content_width, &content_height);
-  WindowSize(corner.floating.hwnd, &width, &height);
+  PanelSize(corner.floating, &width, &height);
   auto [extra_right, extra_top] = g_pane_corners[ui_view];
   Show(corner.floating, ui_view, content_width - corner.right - extra_right - width,
        corner.top + extra_top, -1, -1, keyboard);
@@ -1849,11 +1970,14 @@ void PlaceCorners(HWND root) {
       if (corner.floating.hwnd && IsWindowVisible(corner.floating.hwnd) && Root(ui_view) == root) {
         double content_width, content_height, width, height;
         ContentSize(root, &content_width, &content_height);
-        WindowSize(corner.floating.hwnd, &width, &height);
+        PanelSize(corner.floating, &width, &height);
         auto [extra_right, extra_top] = g_pane_corners[ui_view];
         const double scale = Scale(root);
-        POINT origin{std::lround((content_width - corner.right - extra_right - width) * scale),
-                     std::lround((corner.top + extra_top) * scale)};
+        // The panel keeps to the corner, and its window reaches past it by its shadow's margin.
+        const Floating& floating = corner.floating;
+        const double left = content_width - corner.right - extra_right - width;
+        POINT origin{std::lround((left - floating.margin_sides) * scale),
+                     std::lround((corner.top + extra_top - floating.margin_above) * scale)};
         ClientToScreen(root, &origin);
         SetWindowPos(corner.floating.hwnd, nullptr, origin.x, origin.y, 0, 0,
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1894,6 +2018,12 @@ void Moved(HWND root) {
     }
   }
   PlaceCorners(root);
+  // A frame that changed size leaves a panel that didn't move where it was, past the new edge.
+  for (auto& [hwnd, floating] : FloatingByHwnd()) {
+    if (IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == root) {
+      ClipToOwner(*floating);
+    }
+  }
 }
 
 // The window over |root| that takes the keyboard back as |root| takes it: the dialog, which is
@@ -3658,18 +3788,23 @@ void host_forget_window(void* ui_view) {
 void host_add_overlay(int overlay, void* overlay_view, double, void (*dismissed)(void)) {
   Adopt(g_overlays[overlay], overlay_view, kOverlayNames[overlay], false, dismissed);
   g_overlays[overlay].overlay = overlay;
-  // The command bar and the tab switcher are rounded rectangles, as Windows' frame is. The pickers
-  // and the folder preview have a beak, whose shape a rectangle's corners and shadow would show
-  // round.
-  if (overlay == HOST_COMMAND_BAR || overlay == HOST_TAB_SWITCHER) {
-    SystemFrame(g_overlays[overlay].hwnd);
-  }
 }
 
-// An overlay is a top-level window its browser window owns (host_add_overlay, through Adopt), so
-// Windows 11 rounds its corners (DWMWCP_ROUND) and draws its drop shadow on its own. It gives one
-// rounded-corner size and one shadow, not the Mac's free radius, per-corner shape or elevation
-// levels, and the overlay doesn't grow or shrink as it shows or hides; these carry no Windows work.
+// An overlay is a top-level window its browser window owns (host_add_overlay, through Adopt), with
+// no frame, corner or shadow of Windows': the command bar and the tab switcher draw their level's
+// shadow in their own window (host_set_shadow_margin). The overlay doesn't grow or shrink as it
+// shows or hides, so these carry no Windows work.
+void host_set_shadow_margin(void* view, double above, double sides, double below) {
+  const auto found = FloatingByHwnd().find(Hwnd(view));
+  if (found == FloatingByHwnd().end()) {
+    return;
+  }
+  Floating& floating = *found->second;
+  floating.margin_above = above;
+  floating.margin_sides = sides;
+  floating.margin_below = below;
+}
+
 void host_set_overlay_shape(int, const double*, size_t) {}
 void host_set_overlay_radius(int, double) {}
 void host_set_overlay_elevation(int, float, double, float, double, double) {}
@@ -3729,12 +3864,14 @@ void host_show_overlay(int overlay,
       // Placed and drawn before it's on screen, as the menu is: Windows sends a hidden window no
       // WM_PAINT, but GPUI's window draws on any it's sent.
       const double scale = Scale(root);
-      POINT origin{std::lround(left * scale), std::lround(top * scale)};
+      // Its window reaches past the panel by the margin its shadow draws in.
+      POINT origin{std::lround((left - floating.margin_sides) * scale),
+                   std::lround((top - floating.margin_above) * scale)};
       ClientToScreen(root, &origin);
       double own_width, own_height;
       WindowSize(floating.hwnd, &own_width, &own_height);
       SetWindowPos(floating.hwnd, nullptr, origin.x, origin.y,
-                   static_cast<int>(std::lround(width * scale)),
+                   static_cast<int>(std::lround((width + 2 * floating.margin_sides) * scale)),
                    static_cast<int>(std::lround(own_height * scale)),
                    SWP_NOACTIVATE | SWP_NOZORDER);
       SendMessageW(floating.hwnd, WM_PAINT, 0, 0);
@@ -3755,7 +3892,7 @@ void host_show_overlay(int overlay,
       return;
     }
     double own_width, own_height;
-    WindowSize(floating.hwnd, &own_width, &own_height);
+    PanelSize(floating, &own_width, &own_height);
     // check.sh reads these lines, in whole points, since at a fractional scale not every point is
     // a whole number of pixels.
     fprintf(stderr, "browser: %s at %g %g %g %g\n", kOverlayNames[overlay], left, top, width,
@@ -3771,15 +3908,19 @@ void host_set_overlay_height(int overlay, double height) {
   if (!floating.hwnd) {
     return;
   }
-  // In pixels, as Resize sets it.
+  // In pixels, as Resize sets it, with the margin round the panel.
   RECT rect{};
   GetWindowRect(floating.hwnd, &rect);
-  if (rect.bottom - rect.top == static_cast<int>(std::lround(height * Scale(floating.hwnd)))) {
+  const double tall = height + floating.margin_above + floating.margin_below;
+  if (rect.bottom - rect.top == static_cast<int>(std::lround(tall * Scale(floating.hwnd)))) {
     return;
   }
   Resize(floating, height);
-  // check.sh reads this line.
+  // check.sh reads these lines.
   fprintf(stderr, "browser: %s height %g\n", kOverlayNames[overlay], height);
+  if (HasMargin(floating) && IsWindowVisible(floating.hwnd)) {
+    LogPanel(floating);
+  }
 }
 
 // host_can_draw_emoji is the app's, from GPUI's text system (platform/linux/emoji.rs).
@@ -3822,7 +3963,6 @@ void host_release_held_keys(void) {
 void host_add_find_bar(void* ui_view, void* find_bar_view, double right, double top) {
   Corner& corner = g_find_bars[ui_view];
   Adopt(corner.floating, find_bar_view, "find bar", false, nullptr);
-  SystemFrame(corner.floating.hwnd);
   corner.right = right;
   corner.top = top;
 }
@@ -3856,7 +3996,6 @@ void host_hide_find_bar(void* ui_view) {
 void host_add_offer(void* ui_view, void* offer_view, double right, double top) {
   Corner& corner = g_offers[ui_view];
   Adopt(corner.floating, offer_view, "offer", false, nullptr);
-  SystemFrame(corner.floating.hwnd);
   corner.right = right;
   corner.top = top;
 }
@@ -3909,7 +4048,8 @@ void host_show_hud(void* ui_view) {
     HWND bar = it->second.floating.hwnd;
     double bar_width, bar_height;
     if (bar && IsWindowVisible(bar)) {
-      WindowSize(bar, &bar_width, &bar_height);
+      // The bar's own height, without the margin its shadow draws in.
+      PanelSize(it->second.floating, &bar_width, &bar_height);
       top = it->second.top + bar_height + 8 - g_hud_margin;
     }
   }
@@ -5761,6 +5901,18 @@ const char* host_floating_name(void* hwnd) {
     return it->second->name;
   }
   return g_menu.hwnd && g_menu.hwnd == hwnd ? "menu" : nullptr;
+}
+
+// The panel in |hwnd|'s window, on the screen, for the driver's layout, which gives what the user
+// sees: false for a window with no margin round its panel (host_set_shadow_margin), all panel.
+bool host_floating_panel(void* hwnd, RECT* panel) {
+  auto it = FloatingByHwnd().find(static_cast<HWND>(hwnd));
+  if (it == FloatingByHwnd().end() || !HasMargin(*it->second)) {
+    return false;
+  }
+  *panel = PanelRect(*it->second);
+  MapWindowPoints(it->second->hwnd, HWND_DESKTOP, reinterpret_cast<POINT*>(panel), 2);
+  return true;
 }
 
 // Each window the host floats over a browser window, made so far, and the menu, by its name, its
