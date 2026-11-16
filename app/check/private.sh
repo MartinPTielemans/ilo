@@ -312,10 +312,16 @@ if [ "$status" = 3 ]; then
   done
   on_switch || fail "Tab didn't reach Check Allowed's Allow in Incognito switch in 30 presses: $(grep '^cdp: focus-within ' "$cdp_log" | tail -1)"
   send key space
-  # Chrome turns the extension off to reload it with the switch's setting: a quit before the menu
-  # lists it again saves it off, and the next launch keeps it so (#3052).
-  expect "^browser: extensions menu $allowed $not_allowed\$" \
-    "Check Allowed didn't come back after its Allow in Incognito switch: $(grep '^browser: extensions menu' "$log" | tail -1)"
+  # Chrome turns the extension off to reload it with the switch's setting, and lists the extensions
+  # again once the reload has installed it. A quit before then saves it off for a reload, which the
+  # next launch keeps (#3052). Installed, it's an unpacked one, which Chrome keeps off with
+  # developer mode off; the next launch's --load-extension turns it on.
+  reloaded() { [ "$(since | grep -c '^browser: extensions [0-9]* ')" -ge 2 ]; }
+  for _ in $(seq 100); do
+    reloaded && break
+    sleep 0.1
+  done
+  reloaded || fail "Chrome didn't reload Check Allowed after its Allow in Incognito switch"
   exec 3>&-
   quit
   exec 5>&-
