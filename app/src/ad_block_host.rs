@@ -32,7 +32,10 @@ pub(crate) fn launch() -> Launch {
 pub(crate) fn launching() {
     // check.sh reads this line.
     log!("browser: ad blocker {} at launch", launch().engine.word());
-    if let (Engine::Native, Some(cache)) = (launch().engine, CACHE.get()) {
+    // Proof only (#2384): the A/B's launches without the early read.
+    let proof_off = std::env::var_os("BROWSER_PROOF_NO_EARLY").is_some();
+    log!("browser: proof early read {}", if proof_off { "off" } else { "on" });
+    if let (Engine::Native, Some(cache), false) = (launch().engine, CACHE.get(), proof_off) {
         BLOCKER.read_early(cache.clone());
     }
 }

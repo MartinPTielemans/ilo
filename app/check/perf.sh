@@ -341,6 +341,24 @@ if [ -n "${selfied:-}" ]; then
     urlhaus=unread
   selfied="$selfied, urlhaus $urlhaus"
 fi
+# Proof only (#2384): the early engine read's A/B, perf-native alone, alternated, then the run ends.
+if [ -z "$engine_switch" ]; then
+  echo "ok: proof only (#2384): perf skipped; the A/B is perf-native's"
+  return 0
+fi
+: > "$perf_dir/proof-ab.tsv"
+for n in $(seq 24); do
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  mode=on
+  [ $((n % 2)) = 1 ] || { mode=off; export BROWSER_PROOF_NO_EARLY=1; }
+  perf_launch "$page?ab$n" "ab$n" "ab$n"
+  unset BROWSER_PROOF_NO_EARLY
+  first=$(sed -n 's/^browser: first frame at \([0-9.]*\) ms.*$/\1/p' "$log" | head -1)
+  printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$mode" "$on_screen" "${first:-}" "$painted" >> "$perf_dir/proof-ab.tsv"
+  echo "perf: proof only: A/B launch $n, early read $mode: window $on_screen ms, first frame ${first:-none} ms, page painted $painted ms"
+done
+echo "ok: proof only (#2384): 24 launches, the early read alternately on and off, in $perf_dir/proof-ab.tsv"
+return 0
 for n in 1 2 3 4 5; do
   rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
   perf_launch "$page?link$n" "link$n" "link$n"
