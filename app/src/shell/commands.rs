@@ -234,6 +234,9 @@ pub enum Command {
     NewNote,
     /// The same, in a split view with the tab shown.
     NewNoteSplit,
+    /// Makes a Board in the Space's profile and opens it in a pinned tab, with its row's name in
+    /// a field to type over, as New Folder names a folder (#3073).
+    NewBoard,
     /// Closes the split view's focused page.
     CloseSplitPane,
     /// Takes the split view's focused page out of it, to show alone.
@@ -395,6 +398,7 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("ctrl-shift-=", Command::AddSplit, false),
     ("ctrl-shift-+", Command::AddSplit, false),
     ("ctrl-shift-n", Command::NewNote, false),
+    ("ctrl-shift-e", Command::NewBoard, false),
     ("ctrl-shift--", Command::CloseSplitPane, false),
     ("ctrl-shift-_", Command::CloseSplitPane, false),
     ("ctrl-shift-]", Command::NextPane, false),
@@ -634,6 +638,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "New Note Split",
         Command::NewNoteSplit,
         &["document", "side by side"],
+    ),
+    (
+        "New Board",
+        Command::NewBoard,
+        &["canvas", "whiteboard", "moodboard", "easel", "sketch"],
     ),
     ("Toggle Sidebar", Command::ToggleSidebar, &["hide", "show"]),
     (
@@ -1300,6 +1309,7 @@ impl Command {
             Command::AddSplit => "add-split",
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
+            Command::NewBoard => "new-board",
             Command::CloseSplitPane => "close-split-pane",
             Command::SeparatePane => "separate-pane",
             Command::SeparateSplit => "separate-split",
@@ -1764,6 +1774,7 @@ impl Shell {
             Command::Quit => return self.browser.quit(cx),
             Command::AddSplit => return self.add_pane(cx),
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
+            Command::NewBoard => return self.new_board(cx),
             Command::NewNoteSplit => {
                 let with = self.selected;
                 if with != 0 && !self.split_full(with, cx) {
@@ -2315,6 +2326,7 @@ impl Shell {
             | Command::RenameSpace
             | Command::EditTheme
             | Command::ExportSpace
+            | Command::NewBoard
             | Command::ViewLibrary
             | Command::ViewArchive
             | Command::ClearArchive
@@ -2557,6 +2569,8 @@ pub(super) fn private_runs(command: Command) -> bool {
             // The service's document needs the profile's sign-in, which a private window hasn't.
             | Command::NewNote
             | Command::NewNoteSplit
+            // A Board is a folder of the profile's, and a private window keeps none.
+            | Command::NewBoard
     )
 }
 
@@ -3141,6 +3155,67 @@ mod tests {
             host.notes.borrow().len(),
             2,
             "a private window opened a note"
+        );
+    }
+
+    /// New Board, from ⌃⇧E, the command bar or the + menu, makes a Board in the Space shown and
+    /// puts its row's name in a field, "Board" all selected, to type over. A private window keeps
+    /// no Boards, so it neither offers nor runs it (#3073's condition 4).
+    #[gpui::test]
+    fn new_board_names_its_row_and_a_private_window_makes_none(cx: &mut gpui::TestAppContext) {
+        use std::rc::Rc;
+
+        use gpui::{AppContext as _, point, px};
+
+        use crate::shell::{Browser, Naming};
+
+        assert_eq!(
+            UserKeys::default().command_for("ctrl-shift-e", false),
+            Some(Command::NewBoard)
+        );
+        let (shell, host) = shell_with_today(cx, vec![10]);
+        shell.update(cx, |shell, cx| {
+            assert!(shell.offers(Command::NewBoard));
+            shell.run(Command::NewBoard, "keys", cx);
+        });
+        cx.run_until_parked();
+        shell.update(cx, |shell, cx| {
+            let renaming = shell
+                .renaming
+                .as_ref()
+                .expect("no field for the Board's name");
+            assert!(matches!(renaming.naming, Naming::Tab(900)));
+            let field = renaming.name.read(cx);
+            assert_eq!((field.text(), field.selection()), ("Board", 0..5));
+            shell.plus_menu(point(px(100.), px(700.)), cx);
+        });
+        let titles: Vec<String> = host
+            .menus
+            .borrow()
+            .last()
+            .unwrap()
+            .iter()
+            .map(|(title, _)| title.to_string())
+            .collect();
+        let split = titles.iter().position(|title| title == "New Split View");
+        assert_eq!(
+            titles.iter().position(|title| title == "New Board"),
+            split.map(|at| at + 1),
+            "New Board isn't after New Split View: {titles:?}"
+        );
+        assert_eq!(host.boards.borrow().len(), 1);
+
+        let browser: Rc<dyn Browser> = host.clone();
+        let private = cx.new(|cx| Shell::private_window(browser, 1, "Incognito".into(), 1, cx));
+        private.update(cx, |shell, cx| {
+            assert!(!shell.offers(Command::NewBoard));
+            assert_eq!(shell.bar_name("New Board", Command::NewBoard, cx), None);
+            shell.run(Command::NewBoard, "keys", cx);
+        });
+        assert_eq!(
+            host.boards.borrow().len(),
+            1,
+            "a private window made a Board"
         );
     }
 

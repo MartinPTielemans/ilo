@@ -22,6 +22,8 @@ use crate::{
 
 /// How long a picker waits for the name row it points at to stop moving.
 const PICKER_WAIT: Duration = Duration::from_secs(2);
+/// A new Board's name until the user types one: the product's.
+const BOARD: &str = "Board";
 
 impl Shell {
     /// Shows the Space with its name in a field, all selected, to type a new one over.
@@ -529,6 +531,36 @@ impl Shell {
         if folder != 0 {
             self.name_folder(folder, name, cx);
         }
+    }
+
+    /// New Board: the Board's tab opens pinned, its row's name in a field, as New Folder's is.
+    pub(super) fn new_board(&mut self, cx: &mut Context<Self>) {
+        let shell = cx.entity().downgrade();
+        let opened = Box::new(move |tab, cx: &mut App| {
+            shell.update(cx, |shell, cx| shell.name_board(tab, cx)).ok();
+        });
+        self.browser.new_board(self.space, opened, cx);
+    }
+
+    /// Shows the new Board's row with its name in a field, all selected, to type another over.
+    pub(super) fn name_board(&mut self, tab: u64, cx: &mut Context<Self>) {
+        log!("browser: name board {tab}");
+        let name = cx.new(|cx| {
+            TextInput::new("Board name", cx)
+                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .with_text(BOARD.into())
+        });
+        self.renaming = Some(Renaming {
+            opened: field_opens(),
+            naming: Naming::Tab(tab),
+            name,
+            in_library: false,
+            _watches: Vec::new(),
+        });
+        self.dock(cx);
+        self.browser.focus_ui(cx);
+        self.focus_renaming = true;
+        cx.notify();
     }
 
     /// Puts the new profile's name in the New Space form's Profile row, all selected, to type

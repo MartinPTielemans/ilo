@@ -113,6 +113,7 @@ pub mod account;
 pub mod ad_block;
 pub mod agent_history;
 pub mod agents;
+pub mod boards;
 pub mod boost_editor;
 pub mod boost_style;
 pub mod boosts;

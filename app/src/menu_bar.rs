@@ -114,6 +114,7 @@ pub(crate) fn menus(
             .chain([
                 item("New Incognito Window", Command::NewPrivateWindow),
                 item("Blank Window", Command::NewBlankWindow),
+                item("New Board", Command::NewBoard),
                 item("Restore Last Closed Tab", Command::ReopenClosedTab),
                 MenuItem::separator(),
                 item("Open Command Bar", Command::EditUrl),
