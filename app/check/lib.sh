@@ -1051,8 +1051,10 @@ start_with_cdp() {
     exec 3> "$out/drive"
     await '^DevTools listening on ws://' || fail "DevTools didn't say where it listens"
     socket=$(grep -m1 '^DevTools listening on ws://' "$log" | cut -d' ' -f4 | tr -d '\r')
-    cat "$scratch/cdp" | python3 -I -u check/cdp.py --socket "$socket" "${cdp_page#/}" \
-      > "$cdp_log" 2>&1 &
+    # Neither holds the driver's pipe: wait "$helper" doesn't wait for cat, and a writer left open
+    # gives the next launch a pipe no command reaches, as exited() says (#3125).
+    cat "$scratch/cdp" 3>&- | python3 -I -u check/cdp.py --socket "$socket" "${cdp_page#/}" \
+      3>&- > "$cdp_log" 2>&1 &
   else
     mkfifo "$scratch/to-browser" "$scratch/from-browser"
     # Each end of a pipe waits for the other to open, in this order: the driver's, the browser's
