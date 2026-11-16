@@ -979,7 +979,28 @@ else
   send pip dragto $((pw / 8 - 10)) $((ph / 2))
   expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
   send pip dragto $((pw / 8 - 200)) $((ph / 2))
+  if windows; then
+    # Windows' move loop moves the window a moment after the pointer, and a release within 100 ms
+    # of a move longer than 6 points throws it to a corner (core/mini_player_place.h). So once it's
+    # there, the pointer rests a moment before it lets go, as a hand meaning to leave it there does.
+    for _ in $(seq 50); do
+      send pip
+      dragged=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: pip at ' | tail -1 |
+        cut -d' ' -f4)
+      [ -n "$dragged" ] && [ "$dragged" -le $((px - 190)) ] && break
+      sleep 0.1
+    done
+    sleep 0.2
+  fi
   send pip release $((pw / 8 - 200)) $((ph / 2))
+  if windows; then
+    expect 'browser: mini player let go at ' "the Mini Player wasn't let go"
+    let_go=$(grep 'browser: mini player let go at ' "$log" | tail -1 | sed 's/.*browser: //')
+    case $let_go in
+    *", staying") ;;
+    *) fail "the Mini Player let go after a rest was thrown: $let_go" ;;
+    esac
+  fi
   moved="x == px - 200"
   ! windows || moved="x >= px - 200 && x <= px - 190"
   ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
