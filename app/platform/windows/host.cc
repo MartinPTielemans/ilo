@@ -3966,7 +3966,8 @@ void host_show_hud(void* ui_view) {
     HWND bar = it->second.floating.hwnd;
     double bar_width, bar_height;
     if (bar && IsWindowVisible(bar)) {
-      WindowSize(bar, &bar_width, &bar_height);
+      // The bar's own height, without the margin its shadow draws in.
+      PanelSize(it->second.floating, &bar_width, &bar_height);
       top = it->second.top + bar_height + 8 - g_hud_margin;
     }
   }

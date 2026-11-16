@@ -101,6 +101,19 @@ panel_line() {
 shot() {
   ../tools/window-screenshot.sh "$pid" "$1" all || fail "no window to capture"
 }
+# Rests the pointer on the page's press strip, and waits for a tab's hover card, which a click on
+# a sidebar row can leave, to be off the screen, so a capture before a panel opens has only the page
+# where the panel and its shadow go.
+rest_pointer() {
+  send move $press_point
+  for _ in $(seq 20); do
+    send stack
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: stack ' | grep -q 'hover card' ||
+      return 0
+    sleep 0.1
+  done
+  fail "a tab's hover card stayed on screen with the pointer on the page: $(grep '^browser: stack ' "$log" | tail -1)"
+}
 # Captures the panel $1, opened from the step $opened over $before, as $2, until its margin and
 # shadow read as they should, its shadow $3 levels darker than the page under its bottom edge at
 # least, for up to 10 captures, as the panel's first frames may still be on their way.
@@ -144,6 +157,7 @@ offers=0
 # Opens the panel $1 over the page $2 as a user does, captures it as $3 and checks its margin and
 # shadow, closes it, and checks no shadow is left.
 panel() {
+  rest_pointer
   case "$1" in
     'command bar')
       before="$3.before.png"
