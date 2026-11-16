@@ -95,6 +95,7 @@ pub extern "C" fn host_set_overlays_still(still: bool) {
 /// The overlay of `view` takes the keyboard of `window`, or gives it back. The core lends it while
 /// any has it, as the find bar can keep it under the command bar.
 pub(crate) fn lend_keyboard(window: bc::bc_id, view: *mut c_void, takes: bool) {
+    crate::drive_wayland::probe_mark(&format!("lend keyboard {takes}"));
     let entry = (window, view as usize);
     let (before, after) = LENT.with_borrow_mut(|lent| {
         let before = lent.iter().any(|&(each, _)| each == window);
@@ -348,6 +349,7 @@ pub extern "C" fn host_show_overlay(
     let at = [origin.x, origin.y, size.width, size.height].map(f32::from);
     browser::log!("browser: {name} at {} {} {} {}", at[0], at[1], at[2], at[3]);
     if !was_shown {
+        crate::drive_wayland::probe_mark("bar shown");
         browser::log!("browser: {name} shown");
     }
 }

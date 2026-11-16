@@ -169,6 +169,14 @@ thread_local! {
     /// Whether the input method is new and sway hasn't told it its state yet.
     static IM_FRESH: Cell<bool> = const { Cell::new(false) };
     static PROBE_EVENTS: RefCell<Vec<(Instant, &'static str)>> = const { RefCell::new(Vec::new()) };
+    static PROBE_AT: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Probe: logs `what` in ms since probegap's Ctrl+L, for 3 s after it.
+pub(crate) fn probe_mark(what: &str) {
+    if let Some(began) = PROBE_AT.get().filter(|began| began.elapsed() < Duration::from_secs(3)) {
+        log!("browser: probe mark {what} +{:.1}", began.elapsed().as_secs_f64() * 1000.);
+    }
 }
 
 /// Probe: Ctrl+L through the virtual keyboard, then the input method's activations as sway sends
@@ -177,6 +185,7 @@ fn probe_gap() -> Option<()> {
     input_method()?;
     PROBE_EVENTS.with_borrow_mut(Vec::clear);
     let began = Instant::now();
+    PROBE_AT.set(Some(began));
     key_events("l", CONTROL, &[true, false])?;
     drive::go_on(Box::new(move |done| probe_watch(began, done)));
     Some(())

@@ -327,7 +327,7 @@ if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
     expect '^browser: command bar hidden$' "escape didn't close the command bar"
     in_browser RenderWidgetHostViewCocoa "after the command bar closed"
   done
-  grep '^browser: probe gap' "$log" | sed 's/^/probe: /'
+  grep '^browser: probe \(gap\|mark\)' "$log" | sed 's/^/probe: /'
 fi
 for shortcut in t l; do
   typed_after $shortcut abc

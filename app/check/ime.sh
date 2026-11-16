@@ -142,7 +142,8 @@ if [ "${1:-}" = --steps ]; then
 
   # Probe (#3154): under Wayland, fcitx5's composition typed right after Ctrl+L, with no wait.
   if [ "$mode" = wayland ]; then
-    at=$(mark); key '^l'; compose xyz
+    # One vkbd call, so its settle comes before Ctrl+L and the rest follows 20 ms a press.
+    at=$(mark); key '^l^;xyz'
     went=neither
     for _ in $(seq 100); do
       if tail -n "+$((at + 1))" "$LOG" | grep -q 'command bar drew "[^"]*xyz"'; then went=bar; break; fi

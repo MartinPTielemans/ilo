@@ -238,6 +238,8 @@ fn log_key(key: *const bc::bc_key, when: &str, route: &str) {
 
 /// Whether ilo keeps `key` from the page that has it, and where it went.
 fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static str) {
+    #[cfg(target_os = "linux")]
+    drive_wayland::probe_mark("key before page");
     // Read at each of the page's keys, whichever way it goes, so the next knows the one before.
     #[cfg(target_os = "linux")]
     let repeated_here = held_escape::page_key_repeated(&keystroke(unsafe { &*key }));
@@ -451,6 +453,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
                     .is_some_and(|window| unsafe { bc::bc_window_keyboard_is_ui(window) })
             },
             text_input: |surface, caret| {
+                drive_wayland::probe_mark(&format!("ui text input caret {}", caret.is_some()));
                 if let Some(window) = window_in(surface) {
                     let caret = caret.map(|caret| {
                         (
