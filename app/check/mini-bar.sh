@@ -333,6 +333,20 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
     [ "$7" != "$was_y" ] && break
     sleep 0.1
   done
+  # The bar hides as the page starts to scroll and shows again once it rests, and its new place can
+  # come before either. Another app's window raised before that show would have the bar mapped over
+  # it (#2790), so the step waits for the show and reads the place from then.
+  for _ in $(seq 50); do
+    since=$(sed -n "$((n + 1)),\$p" "$log" | grep '^browser: mini bar \(hidden\|shown\)$')
+    hides=$(printf '%s\n' "$since" | grep -c 'hidden$')
+    last=$(printf '%s\n' "$since" | tail -1)
+    [ "$hides" -gt 0 ] && [ "$last" = 'browser: mini bar shown' ] && break
+    sleep 0.1
+  done
+  [ "$hides" -gt 0 ] && [ "$last" = 'browser: mini bar shown' ] ||
+    fail "the mini bar didn't hide as the page scrolled and show again once it rested. Lines since the scroll: $(sed -n "$((n + 1)),\$p" "$log" | grep '^browser: \(arrange\|mini bar\)' | tail -8)"
+  bar_after "$n" "the scroll's rest" "the bar shown again"
+  set -- $placed
   [ "$7" -lt "$was_y" ] && [ "$6" = "$was_x" ] ||
     fail "after a notch down the bar is over a thing at $6 $7, not Inner moved up from $was_x $was_y"
   if [ $(($2 + $4)) -le "$7" ]; then
