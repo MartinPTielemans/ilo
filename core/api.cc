@@ -1198,8 +1198,8 @@ void bc_folder_live_end(bc_id folder) {
   }
 }
 
-void bc_folder_live_fetch(bc_id folder) {
-  browser_core::FetchLiveFolder(folder);
+void bc_folder_live_fetch(bc_id folder, bool refresh) {
+  browser_core::FetchLiveFolder(folder, refresh);
 }
 
 void bc_tab_forget_page(bc_id id) {

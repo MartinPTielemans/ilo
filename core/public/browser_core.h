@@ -1448,11 +1448,12 @@ typedef struct bc_host {
   // nor on the Mac, where the page is in the app's view, over what it draws.
   void (*tab_shown_in)(void* context, bc_id tab, bc_rect frame);
   // The answer to the Live Folder's bc_folder_live_fetch: a BC_LIVE_ answer, with |items|, review
-  // requests first, only with BC_LIVE_ANSWERED. Once a fetch, never for one the core refused. The
-  // items last only for the call, and the core logs none of them. The user's alone: agents get
-  // none.
-  void (*folder_live_answered)(void* context, bc_id folder, int answer, const bc_live_item* items,
-                               size_t count);
+  // requests first, only with BC_LIVE_ANSWERED. |answered| is when the site gave it, in
+  // milliseconds since the Unix epoch: up to two minutes ago for an answer the core kept. Once an
+  // ask, never for one the core refused. The items last only for the call, and the core logs none
+  // of them. The user's alone: agents get none.
+  void (*folder_live_answered)(void* context, bc_id folder, int answer, int64_t answered,
+                               const bc_live_item* items, size_t count);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2096,10 +2097,12 @@ BC_EXPORT void bc_folder_live_end(bc_id folder);
 // Asks for the Live Folder's lists on its Space's profile's own session: the site's cookies, which
 // neither the app nor an agent sees. The site and what's asked of it are the core's; the app gives
 // neither. Answers with folder_live_answered, once, never inside this call. Does nothing for a
-// plain folder, one in an agent's Space or a private window, or one whose fetch is under way. The
-// core never fetches on its own, and never again on a failure: when to ask is the app's, which
-// waits two minutes between fetches but Refresh's (#2979).
-BC_EXPORT void bc_folder_live_fetch(bc_id folder);
+// plain folder, one in an agent's Space or a private window, or one waiting on an answer. The core
+// never fetches on its own, and never again on a failure: when to ask is the app's. How often is
+// the core's: it asks the site at most once each two minutes for a profile, however many ask, and
+// inside that answers what the site last gave. A |refresh|, the user's Refresh alone, asks inside
+// the two minutes too, but joins a fetch under way (#3074).
+BC_EXPORT void bc_folder_live_fetch(bc_id folder, bool refresh);
 
 // Where the favorites are kept, as the user chose: who shows the same ones above their own tabs. A
 // favorite is a site, and each profile that shows it has a tab of its own for it, in no Space,

@@ -1,9 +1,12 @@
 #include "browser_core/live_folder_rule.h"
 
 #include <string>
+#include <vector>
 
+#include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/origin.h"
 
@@ -131,6 +134,117 @@ TEST(LiveFolderRule, TitlesArePlainText) {
   // Cut inside a character, the character goes whole.
   const std::string cut = PlainTitle(std::string(kMaxTitle - 1, 'a') + "é");
   EXPECT_EQ(cut.size(), kMaxTitle - 1);
+}
+
+// The shared fetches on a made-up clock: who asked the site, and what each ask was answered.
+class LiveFolderFetches : public testing::Test {
+ protected:
+  using Key = SharedFetches::Key;
+
+  // Asks for |key| as |who|, counting each time the site would be asked.
+  void Ask(const Key& key, int who, bool refresh = false) {
+    fetches_.Ask(key, refresh,
+                 base::BindOnce([](int* asked) { ++*asked; }, base::Unretained(&asked_)),
+                 base::BindOnce([](std::vector<std::pair<int, Kept>>* answered, int who,
+                                   const Kept& kept) { answered->emplace_back(who, kept); },
+                                base::Unretained(&answered_), who));
+  }
+
+  // The site's answer: one row with |number| in each list.
+  void Ends(const Key& key, uint32_t number) {
+    Answer answer{.signed_in = true, .items = {Item{.number = number}}};
+    fetches_.Ended(key, {answer, answer});
+  }
+
+  base::test::TaskEnvironment clock_{base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  SharedFetches fetches_;
+  int asked_ = 0;
+  std::vector<std::pair<int, Kept>> answered_;
+  const Key work_{"Default", 1};
+};
+
+TEST_F(LiveFolderFetches, TheSiteIsAskedAtMostOnceAFloorForAProfile) {
+  Ask(work_, 1);
+  EXPECT_EQ(asked_, 1);
+  clock_.FastForwardBy(base::Seconds(1));
+  Ends(work_, 7);
+  const base::Time first = base::Time::Now();
+  ASSERT_EQ(answered_.size(), 1u);
+  EXPECT_EQ(answered_[0].second.answered, first);
+
+  // Inside the floor, whoever asks gets what the site gave, with when it gave it, a task later.
+  clock_.FastForwardBy(kFloor - base::Seconds(1));
+  Ask(work_, 2);
+  EXPECT_EQ(asked_, 1);
+  EXPECT_EQ(answered_.size(), 1u);
+  clock_.RunUntilIdle();
+  ASSERT_EQ(answered_.size(), 2u);
+  EXPECT_EQ(answered_[1].first, 2);
+  EXPECT_EQ(answered_[1].second.answered, first);
+  ASSERT_TRUE(answered_[1].second.answers[0]);
+  EXPECT_EQ(answered_[1].second.answers[0]->items[0].number, 7u);
+
+  // Another profile has a floor of its own.
+  Ask({"Profile 1", 1}, 3);
+  EXPECT_EQ(asked_, 2);
+
+  // Once it's past, the next ask asks the site.
+  clock_.FastForwardBy(base::Seconds(1));
+  Ask(work_, 4);
+  EXPECT_EQ(asked_, 3);
+}
+
+TEST_F(LiveFolderFetches, AnAskWhileOneIsUnderWayJoinsIt) {
+  Ask(work_, 1);
+  Ask(work_, 2);
+  // Refresh too: the site is already being asked.
+  Ask(work_, 3, /*refresh=*/true);
+  clock_.RunUntilIdle();
+  EXPECT_EQ(asked_, 1);
+  EXPECT_TRUE(answered_.empty());
+
+  Ends(work_, 7);
+  ASSERT_EQ(answered_.size(), 3u);
+  for (size_t i = 0; i < answered_.size(); ++i) {
+    EXPECT_EQ(answered_[i].first, static_cast<int>(i + 1));
+    EXPECT_EQ(answered_[i].second.answered, base::Time::Now());
+  }
+}
+
+TEST_F(LiveFolderFetches, RefreshAsksInsideTheFloor) {
+  Ask(work_, 1);
+  Ends(work_, 7);
+  clock_.FastForwardBy(base::Seconds(10));
+
+  Ask(work_, 2, /*refresh=*/true);
+  EXPECT_EQ(asked_, 2);
+  Ends(work_, 8);
+  const base::Time refreshed = base::Time::Now();
+  ASSERT_EQ(answered_.size(), 2u);
+  EXPECT_EQ(answered_[1].second.answers[0]->items[0].number, 8u);
+
+  // The floor runs from the Refresh's answer, and asks inside it get that.
+  clock_.FastForwardBy(kFloor - base::Seconds(1));
+  Ask(work_, 3);
+  clock_.RunUntilIdle();
+  EXPECT_EQ(asked_, 2);
+  ASSERT_EQ(answered_.size(), 3u);
+  EXPECT_EQ(answered_[2].second.answered, refreshed);
+  EXPECT_EQ(answered_[2].second.answers[0]->items[0].number, 8u);
+}
+
+TEST_F(LiveFolderFetches, AFailureIsKeptForTheFloorToo) {
+  Ask(work_, 1);
+  fetches_.Ended(work_, {std::nullopt, std::nullopt});
+  clock_.FastForwardBy(base::Seconds(30));
+  // Inside the floor, a failure is answered again without asking the site. Refresh asks it.
+  Ask(work_, 2);
+  clock_.RunUntilIdle();
+  EXPECT_EQ(asked_, 1);
+  ASSERT_EQ(answered_.size(), 2u);
+  EXPECT_FALSE(answered_[1].second.answers[0]);
+  Ask(work_, 3, /*refresh=*/true);
+  EXPECT_EQ(asked_, 2);
 }
 
 }  // namespace

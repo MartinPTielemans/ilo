@@ -4,10 +4,13 @@
 #include <tuple>
 #include <utility>
 
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/location.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 
 namespace browser_core::live_folder {
@@ -112,6 +115,47 @@ std::optional<Answer> Parse(std::string_view body, List list) {
     }
   }
   return parsed;
+}
+
+SharedFetches::Shared::Shared() = default;
+SharedFetches::Shared::Shared(Shared&&) = default;
+SharedFetches::Shared::~Shared() = default;
+
+SharedFetches::SharedFetches() = default;
+SharedFetches::~SharedFetches() = default;
+
+void SharedFetches::Ask(const Key& key, bool refresh, base::OnceClosure start, Done done) {
+  Shared& shared = shared_[key];
+  if (shared.under_way) {
+    shared.waiting.push_back(std::move(done));
+    return;
+  }
+  if (!refresh && shared.last && base::TimeTicks::Now() - shared.ended < kFloor) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(done), *shared.last));
+    return;
+  }
+  shared.under_way = true;
+  shared.waiting.push_back(std::move(done));
+  std::move(start).Run();
+}
+
+void SharedFetches::Ended(const Key& key, std::vector<std::optional<Answer>> answers) {
+  auto it = shared_.find(key);
+  if (it == shared_.end() || !it->second.under_way) {
+    return;
+  }
+  Shared& shared = it->second;
+  shared.under_way = false;
+  shared.last = Kept{.answers = std::move(answers), .answered = base::Time::Now()};
+  shared.ended = base::TimeTicks::Now();
+  // Copied, as one answered may ask again, which then finds this kept.
+  const Kept kept = *shared.last;
+  std::vector<Done> waiting = std::move(shared.waiting);
+  shared.waiting.clear();
+  for (Done& done : waiting) {
+    std::move(done).Run(kept);
+  }
 }
 
 Outcome OutcomeOf(const std::vector<std::optional<Answer>>& answers,

@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,8 +48,8 @@ constexpr net::NetworkTrafficAnnotationTag kLiveFolder =
         trigger:
           "Only what the user does with a Live Folder in a Space: the window coming back, its "
           "Space shown, the folder made or opened, a GitHub page loaded in its Space, or Refresh. "
-          "The app asks at most once in two minutes but for Refresh. Never on a timer, never "
-          "again after a failure."
+          "At most once in two minutes for each profile, however many ask, but for Refresh. "
+          "Never on a timer, never again after a failure."
         data: "Two fixed searches, with the profile's GitHub cookies."
         destination: WEBSITE
       }
@@ -66,18 +67,27 @@ constexpr base::TimeDelta kTimeout = base::Seconds(30);
 constexpr std::array<live_folder::List, 2> kLists = {live_folder::List::kReviewRequests,
                                                      live_folder::List::kCreated};
 
-// A folder's fetch, until both its lists have come.
+// A profile's fetch of a source's lists, until both have come.
 struct Fetch {
-  // The directory of the profile whose session it asked with: its rows are that profile's alone.
-  std::string profile;
   std::array<std::unique_ptr<network::SimpleURLLoader>, kLists.size()> loaders;
   std::array<std::optional<live_folder::Answer>, kLists.size()> answers;
   size_t waiting = kLists.size();
 };
 
-std::map<bc_id, Fetch>& Fetches() {
-  static base::NoDestructor<std::map<bc_id, Fetch>> fetches;
+std::map<live_folder::SharedFetches::Key, Fetch>& Fetches() {
+  static base::NoDestructor<std::map<live_folder::SharedFetches::Key, Fetch>> fetches;
   return *fetches;
+}
+
+live_folder::SharedFetches& Shared() {
+  static base::NoDestructor<live_folder::SharedFetches> shared;
+  return *shared;
+}
+
+// The folders waiting on an answer, each once: one made plain while it waits leaves.
+std::set<bc_id>& Waiting() {
+  static base::NoDestructor<std::set<bc_id>> waiting;
+  return *waiting;
 }
 
 // The folder's Space's profile, which is the user's own, loaded, and not off the record; else
@@ -95,7 +105,10 @@ static_assert(static_cast<int>(live_folder::Kind::kAnswered) == BC_LIVE_ANSWERED
 static_assert(static_cast<int>(live_folder::Kind::kSignedOut) == BC_LIVE_SIGNED_OUT);
 static_assert(static_cast<int>(live_folder::Kind::kFailed) == BC_LIVE_FAILED);
 
-void Report(bc_id folder, int answer, const std::vector<live_folder::Item>& items) {
+void Report(bc_id folder,
+            int answer,
+            base::Time answered,
+            const std::vector<live_folder::Item>& items) {
   // The rows are the user's account's, so nothing of them is logged, here or by the app.
   if (!Host().folder_live_answered) {
     return;
@@ -109,11 +122,31 @@ void Report(bc_id folder, int answer, const std::vector<live_folder::Item>& item
                     .title = item.title.c_str(),
                     .state = static_cast<int>(item.state)});
   }
-  Host().folder_live_answered(Host().context, folder, answer, rows.data(), rows.size());
+  Host().folder_live_answered(Host().context, folder, answer,
+                              answered.InMillisecondsSinceUnixEpoch(), rows.data(), rows.size());
 }
 
-void Answered(bc_id folder, size_t list, std::optional<std::string> body) {
-  auto it = Fetches().find(folder);
+// Answers the folder that asked with |asked|'s session, unless it was made plain since.
+void Deliver(bc_id folder, const std::string& asked, const live_folder::Kept& kept) {
+  if (!Waiting().erase(folder)) {
+    return;
+  }
+  // Made plain, deleted or moved to an agent's Space while it waited: nobody asked for this.
+  const Space* space = Space::HoldingFolder(folder);
+  if (!space || !space->FolderLive(folder)) {
+    return;
+  }
+  // Moved while it waited to a Space on another profile, or one not loaded: it fails rather than
+  // give that Space rows from the session it was asked with.
+  const std::string now = ProfileOf(*space) ? space->profile() : std::string();
+  const live_folder::Outcome outcome = live_folder::OutcomeOf(kept.answers, asked, now);
+  Report(folder, static_cast<int>(outcome.kind), kept.answered, outcome.items);
+}
+
+void Answered(const live_folder::SharedFetches::Key& key,
+              size_t list,
+              std::optional<std::string> body) {
+  auto it = Fetches().find(key);
   if (it == Fetches().end()) {
     return;
   }
@@ -133,17 +166,7 @@ void Answered(bc_id folder, size_t list, std::optional<std::string> body) {
   }
   const Fetch done = std::move(it->second);
   Fetches().erase(it);
-  // Made plain, deleted or moved to an agent's Space while it waited: nobody asked for this.
-  const Space* space = Space::HoldingFolder(folder);
-  if (!space || !space->FolderLive(folder)) {
-    return;
-  }
-  // Moved while it waited to a Space on another profile, or one not loaded: it fails rather than
-  // give that Space rows from the session it was asked with.
-  const std::string now = ProfileOf(*space) ? space->profile() : std::string();
-  const live_folder::Outcome outcome =
-      live_folder::OutcomeOf({done.answers.begin(), done.answers.end()}, done.profile, now);
-  Report(folder, static_cast<int>(outcome.kind), outcome.items);
+  Shared().Ended(key, {done.answers.begin(), done.answers.end()});
 }
 
 std::unique_ptr<network::SimpleURLLoader> Ask(live_folder::List list) {
@@ -171,44 +194,51 @@ std::unique_ptr<network::SimpleURLLoader> Ask(live_folder::List list) {
   return loader;
 }
 
+// Asks the site for |key|'s lists on |profile|'s session.
+void Start(const live_folder::SharedFetches::Key& key, Profile* profile) {
+  scoped_refptr<network::SharedURLLoaderFactory> factory =
+      profile->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess();
+  Fetch& fetch = Fetches()[key];
+  for (size_t list = 0; list < kLists.size(); ++list) {
+    fetch.loaders[list] = Ask(kLists[list]);
+  }
+  // Each loader answers a task later at the soonest, after both have started.
+  for (size_t list = 0; list < kLists.size(); ++list) {
+    fetch.loaders[list]->DownloadToString(factory.get(), base::BindOnce(&Answered, key, list),
+                                          live_folder::kMaxBytes);
+  }
+}
+
 }  // namespace
 
-void FetchLiveFolder(bc_id folder) {
+void FetchSourceLists(Profile* profile,
+                      int source,
+                      bool refresh,
+                      base::OnceCallback<void(const live_folder::Kept&)> done) {
+  const live_folder::SharedFetches::Key key(DirOf(profile), source);
+  Shared().Ask(key, refresh, base::BindOnce(&Start, key, base::Unretained(profile)),
+               std::move(done));
+}
+
+void FetchLiveFolder(bc_id folder, bool refresh) {
   const Space* space = Space::HoldingFolder(folder);
-  if (!space || !space->FolderLive(folder) || space->agent() || space->own() ||
-      Fetches().contains(folder)) {
+  const int source = space ? space->FolderLive(folder) : 0;
+  if (!source || space->agent() || space->own() || !Waiting().insert(folder).second) {
     return;
   }
   Profile* profile = ProfileOf(*space);
   if (!profile) {
     // Its profile isn't loaded: the fetch fails, a task later, as one that went would.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](bc_id folder) {
-                         const Space* space = Space::HoldingFolder(folder);
-                         if (space && space->FolderLive(folder)) {
-                           Report(folder, BC_LIVE_FAILED, {});
-                         }
-                       },
-                       folder));
+        FROM_HERE, base::BindOnce(&Deliver, folder, space->profile(),
+                                  live_folder::Kept{.answered = base::Time::Now()}));
     return;
   }
-  scoped_refptr<network::SharedURLLoaderFactory> factory =
-      profile->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess();
-  Fetch& fetch = Fetches()[folder];
-  fetch.profile = space->profile();
-  for (size_t list = 0; list < kLists.size(); ++list) {
-    fetch.loaders[list] = Ask(kLists[list]);
-  }
-  // Each loader answers a task later at the soonest, after both have started.
-  for (size_t list = 0; list < kLists.size(); ++list) {
-    fetch.loaders[list]->DownloadToString(factory.get(), base::BindOnce(&Answered, folder, list),
-                                          live_folder::kMaxBytes);
-  }
+  FetchSourceLists(profile, source, refresh, base::BindOnce(&Deliver, folder, space->profile()));
 }
 
 void DropLiveFolderFetch(bc_id folder) {
-  Fetches().erase(folder);
+  Waiting().erase(folder);
 }
 
 }  // namespace browser_core
