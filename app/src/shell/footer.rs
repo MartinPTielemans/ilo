@@ -1,4 +1,5 @@
-//! The sidebar's footer: the Space switcher and the plus button beside it.
+//! The sidebar's footer: the Space switcher, the plus button beside it, and off the Mac the menu
+//! control before the plus.
 
 use gpui::{
     AnyElement, Context, DragMoveEvent, MouseButton, MouseDownEvent, Rgba, Role, div, prelude::*,
@@ -6,14 +7,15 @@ use gpui::{
 };
 
 use super::{
-    FOOTER_HEIGHT, NAV, NAV_GLYPH, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLUS_INSET, SPACE_CLEAR,
-    SPACE_DRAGGED, SPACE_GLYPH, SPACE_HEIGHT, SPACE_HOVERED, SPACE_ICON_SWITCHER, SPACE_LEAST,
-    SPACE_OTHER, SPACE_PITCH, SPACE_SHOWN, SPACE_SHOWN_LEAST, SPACE_SWATCH, SPACE_SWATCH_HOVERED,
-    SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell, Space,
+    FOOTER_HEIGHT, NAV, NAV_GLYPH, NAV_HOVERED, NAV_PITCH, NAV_RADIUS, NAV_SIZE, PLUS_INSET,
+    SPACE_CLEAR, SPACE_DRAGGED, SPACE_GLYPH, SPACE_HEIGHT, SPACE_HOVERED, SPACE_ICON_SWITCHER,
+    SPACE_LEAST, SPACE_OTHER, SPACE_PITCH, SPACE_SHOWN, SPACE_SHOWN_LEAST, SPACE_SWATCH,
+    SPACE_SWATCH_HOVERED, SPACE_SWATCH_SHOWN, SWITCHER_INSET, Shell, Space,
     access::Accessible,
     space_order::{Along, DraggedSpace},
 };
 use crate::space_icon::{GLYPHS, SpaceIcon};
+use crate::tooltip::{Anchor, Tip};
 
 /// How much of a glyph's box its drawing fills, so that it's squeezed by its ink.
 const GLYPH_INK: f32 = 20. / 24.;
@@ -68,7 +70,7 @@ impl Shell {
         if self.spaces.len() < 2 {
             return None;
         }
-        let span = self.width() - 2. * SWITCHER_INSET;
+        let span = self.switcher_span();
         let cells = self.switcher_cells(span);
         let behind = self.switcher_behind();
         let shell = cx.weak_entity();
@@ -134,6 +136,13 @@ impl Shell {
                 .children(self.space_drop_line(Along::Switcher))
                 .child(self.space_drop_listener(Along::Switcher, cx)),
         )
+    }
+
+    /// How wide the switcher is: the footer between its insets, less the menu control's pitch where
+    /// it has one, so the dots stay centred between the Library and the control (#3148).
+    pub(super) fn switcher_span(&self) -> f32 {
+        let control = if self.menu_control { NAV_PITCH } else { 0. };
+        self.width() - 2. * SWITCHER_INSET - control
     }
 
     /// What the switcher's swatches lie on: the window at the footer, over whatever is behind it.
@@ -241,7 +250,67 @@ impl Shell {
                     .text_color(self.palette.glyph(NAV)),
             )
     }
+
+    /// Off the Mac, the control before the + that opens ilo's menu, which the Mac's menu bar holds
+    /// (#3148). It keeps its plate while its menu is up, as the name row keeps its fill.
+    pub(super) fn menu_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let lit = self.app_menu && self.menu_open;
+        div()
+            .id(MENU_CONTROL)
+            .when(self.a11y, |button| {
+                button
+                    .button_named(MENU_CONTROL_NAME)
+                    .pressed_by_mouse_down(true, false)
+            })
+            .absolute()
+            .right(px(PLUS_INSET + NAV_PITCH))
+            .bottom(px((FOOTER_HEIGHT - NAV_SIZE) / 2.))
+            .size(px(NAV_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(NAV_RADIUS))
+            .block_mouse_except_scroll()
+            .when(lit, |button| button.bg(self.palette.plate(NAV_HOVERED)))
+            .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
+            .on_hover(
+                cx.listener(|shell, hovered: &bool, _, cx| shell.hover_menu_control(*hovered, cx)),
+            )
+            // On the press, as a pop-up button opens, as the + does.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|shell, _, _, cx| {
+                    shell.browser.tooltip(None, cx);
+                    shell.app_menu(cx)
+                }),
+            )
+            .child(self.button_frame(MENU_CONTROL))
+            .child(
+                svg()
+                    .path("icons/nav-menu.svg")
+                    .size(px(NAV_GLYPH))
+                    .text_color(self.palette.glyph(NAV)),
+            )
+    }
+
+    /// The pointer has come onto or left the menu control, whose tooltip names it as the header's
+    /// buttons' name theirs, with no keys, as the menu has none.
+    fn hover_menu_control(&self, hovered: bool, cx: &mut Context<Self>) {
+        let busy = self.dragging().is_some() || self.menu_row.is_some() || self.menu_open;
+        let frame = self.button_frames.borrow().get(MENU_CONTROL).copied();
+        let tip = frame.filter(|_| hovered && !busy).map(|frame| {
+            let tip = Tip::named(MENU_CONTROL_NAME.into());
+            (tip, Anchor::under(frame, self.viewport))
+        });
+        self.hover_tip(tip, cx);
+    }
 }
+
+/// The menu control's key among the buttons' frames, and its id.
+pub(super) const MENU_CONTROL: &str = "app-menu";
+/// What the menu control's tooltip and the screen reader call it: the menu the Mac's menu bar names
+/// after the app.
+const MENU_CONTROL_NAME: &str = concat!(env!("APP_NAME"), " menu");
 
 #[cfg(test)]
 mod tests {
