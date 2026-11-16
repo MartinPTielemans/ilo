@@ -1,8 +1,8 @@
 # check.sh runs this at 210.
-# Stay On Top keeps a window over the others, and Don't Stay On Top lets it go back. ⌘N opens
-# another window on the same Spaces, showing the key window's Space with no page, with ⌘T's
-# command bar, which escape closes to its card and its one line, and a click on the card with ⌘T's
-# bar open only closes the bar. Settings
+# Stay On Top keeps a window over the others, with its sidebar out over it on Windows, and Don't
+# Stay On Top lets it go back. ⌘N opens another window on the same Spaces, showing the key window's
+# Space with no page, with ⌘T's command bar, which escape closes to its card and its one line, and a
+# click on the card with ⌘T's bar open only closes the bar. Settings
 # opened from it and closed by its button gives it the keyboard back. The new window never shows
 # another window's page: a Space it switches to and back shows the first tab no window shows.
 # The Spaces menu acts on the window in front. A click on a row whose page another window shows
@@ -544,6 +544,29 @@ else
   ../tools/window-screenshot.sh "$pid" "$out/stay-on-top.png" all || fail "no window to capture"
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar over the window on top"
+  # On Windows, the sidebar out over the window on top is in front of it, under no other app's
+  # window: it's topmost with it, where it had been made not topmost so that a menu from it opened
+  # in front of it, and didn't show over the window on top (#2989).
+  if windows; then
+    send key s cmd
+    expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar of the window on top"
+    send move 600 400
+    send move 3 300
+    send move 3 306
+    expect '^browser: reveal shown$' "the pointer at the edge of the window on top didn't bring its sidebar out"
+    expect '^browser: reveal window shown$' "the sidebar out of the window on top didn't come on screen"
+    send stack
+    stack=$(grep '^browser: stack ' "$log" | tail -1 | cut -c16-)
+    case $stack in
+      reveal*driven*) ;;
+      *) fail "the sidebar out isn't in front of the window on top, with no other window between, front first: $stack" ;;
+    esac
+    ../tools/window-screenshot.sh "$pid" "$out/stay-on-top-reveal.png" all || fail "no window to capture"
+    send move 600 400
+    expect '^browser: reveal hidden$' "the pointer leaving the sidebar out of the window on top left it out"
+    send key s cmd
+    expect '^browser: sidebar shown$' "⌘S didn't bring back the sidebar of the window on top"
+  fi
   bar_command stay-on-top "Don't Stay On Top" "stay on top"
   expect '^browser: stays on top 0$' "Don't Stay On Top didn't let the window go back"
   send window $driven_fourth
