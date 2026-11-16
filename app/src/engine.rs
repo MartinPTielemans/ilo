@@ -1752,6 +1752,14 @@ impl Browser for Engine {
         }
     }
 
+    fn link_cards(&self) -> bool {
+        crate::link_cards::on()
+    }
+
+    fn link_card(&self, tab: u64) -> u64 {
+        crate::link_cards::ask(tab)
+    }
+
     fn link_target(
         &self,
         plate: Option<(link_target::Plate, Bounds<Pixels>, link_target::Side)>,

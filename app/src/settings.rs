@@ -2290,6 +2290,51 @@ impl Settings {
 
     /// Features: ilo's own tools, each its glyph, its name, its ways in and its switch, and its
     /// own settings under it.
+    /// Links: the cards ⇧ shows of a link in a page, then where a link from another app opens.
+    fn links(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
+        let shift = if cfg!(target_os = "macos") {
+            "⇧"
+        } else {
+            "Shift"
+        };
+        let cards = self.toggle(
+            "link cards",
+            "Link cards",
+            crate::link_cards::on(),
+            set_link_cards,
+            accent,
+            cx,
+        );
+        // The privacy page's line, as the switch's (#3080).
+        let cards = setting(
+            &self.look,
+            "Link cards",
+            Some(
+                format!(
+                    "Press {shift} on a link to see its page's title, description and picture, \
+                     asked without your cookies."
+                )
+                .into(),
+            ),
+            vec![cards],
+        );
+        let rules = self
+            .links
+            .clone()
+            .map(|links| Block::View(links.into_any_element()));
+        Page::new(
+            Section::Links,
+            "What a link in a page shows, and where a link from another app opens.",
+            [
+                Block::Rows(vec![cards]),
+                Block::Heading("From other apps".into()),
+            ]
+            .into_iter()
+            .chain(rules)
+            .collect(),
+        )
+    }
+
     fn features(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let mac = cfg!(target_os = "macos");
@@ -4837,6 +4882,10 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
     crate::set_little_in_menu_bar(on);
 }
 
+fn set_link_cards(on: bool, cx: &mut App) {
+    crate::link_cards::set_on(on, cx);
+}
+
 fn set_sign_in_close(on: bool, cx: &mut App) {
     crate::sign_in_close::set_sign_in_close(on, cx);
 }
@@ -5667,18 +5716,7 @@ impl Settings {
                 Some(agents) => self.agents(&agents, accent, cx),
                 None => Page::new(Section::Agents, "", Vec::new()),
             },
-            Section::Links => {
-                let links = self
-                    .links
-                    .clone()
-                    .map(|links| Block::View(links.into_any_element()));
-                Page::new(
-                    Section::Links,
-                    "Where a link from another app opens. Rules run from the top, and the first \
-                     match wins.",
-                    links.into_iter().collect(),
-                )
-            }
+            Section::Links => self.links(accent, cx),
             Section::Shortcuts => self.shortcuts(accent, cx),
             Section::Profiles => {
                 let profiles = profiles();
