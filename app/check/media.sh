@@ -957,6 +957,11 @@ fi
 # the Mac its move loop follows the real pointer too, which check/pointer.mm drags in CI, as for
 # the floating call.
 grown="(2 * x + w - 2 * px - pw) ^ 2 <= 16 && (2 * y + h - 2 * py - ph) ^ 2 <= 16"
+if windows; then
+  echo "probe: before $(reg query 'HKCU\Control Panel\Desktop' //v DragFullWindows 2>&1 | grep -i DragFull)" >&2
+  powershell -NoProfile -Command "Add-Type -Name P -Namespace W -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SystemParametersInfo(uint a, uint b, System.IntPtr c, uint d);'; [W.P]::SystemParametersInfo(0x25, 1, [System.IntPtr]::Zero, 3)" >&2
+  echo "probe: after $(reg query 'HKCU\Control Panel\Desktop' //v DragFullWindows 2>&1 | grep -i DragFull)" >&2
+fi
 if windows && [ "${BROWSER_DRIVE_REAL:-}" != 1 ]; then
   echo "skip: moving the Mini Player with a drag on Windows without real input: Windows moves" \
     "it with the desktop's pointer."
