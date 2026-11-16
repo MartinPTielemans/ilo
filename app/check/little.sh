@@ -590,11 +590,11 @@ look_theme() {
 for round in $(seq 15); do
   send window "$look_window"
   look_theme
-  hidden=$(grep -c '^browser: theme picker hidden$' "$log")
+  hidden=$(grep -c '^browser: theme picker hidden$' "$log" || true)
   send clickkey "$(swatch_x 7)" $swatch_y
   send key escape
   for _ in $(seq 100); do
-    [ "$(grep -c '^browser: theme picker hidden$' "$log")" -gt "$hidden" ] && break
+    [ "$(grep -c '^browser: theme picker hidden$' "$log" || true)" -gt "$hidden" ] && break
     sleep 0.1
   done
   echo "probe round $round: $(grep '^browser: drive probe ' "$log" | tail -1)"
