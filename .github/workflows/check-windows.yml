@@ -12,6 +12,12 @@ on:
   # 04:23 UTC, after the Windows engine's nightly build at 02:00 (engine-windows-cross.yml).
   schedule:
     - cron: '23 4 * * *'
+    # 07:23 UTC, on windows-2025 beside the gate on windows-2022, until the suite moves there
+    # (#3011). It gates nothing: its jobs are named apart, so main-check.sh counts them only for
+    # its own nights; it waits in a concurrency group of its own; its red stays in the steps, so
+    # it passes the jobs, the run and main's checks, and complete's summary gives its verdict; and
+    # it opens no issue on main.
+    - cron: '23 7 * * *'
   workflow_dispatch:
     inputs:
       runs:
@@ -37,10 +43,12 @@ on:
           #2377's, latency among them; empty for latency alone in tabs and no traced switches
         default: ''
 
+# Main's run in progress finishes, and while it runs a newer dispatch's or the night's pending run
+# replaces the older pending one; a branch's newer dispatch cancels its older run. Runs on
+# windows-2025, the night's or dispatched, have a group of their own, so one that gates nothing
+# never waits for, delays or replaces one on the gate's windows-2022 (#3055).
 concurrency:
-  group: check-windows-${{ github.ref }}
-  # Main's run in progress finishes, and while it runs a newer dispatch's or the night's pending run
-  # replaces the older pending one; a branch's newer dispatch cancels its older run.
+  group: check-windows-${{ github.ref }}${{ (github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') && '-windows-2025' || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
@@ -65,6 +73,7 @@ jobs:
       - id: seen
         env:
           GH_TOKEN: ${{ github.token }}
+          CHECK_ON: ${{ (github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') && ' on windows-2025' || '' }}
         run: .github/scripts/main-check.sh seen
 
   # Whether an engine fits, alone, so that a commit none fits shows its check as skipped, not as
@@ -109,7 +118,7 @@ jobs:
     needs: engine
     if: ${{ needs.engine.outputs.found == 'true' }}
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
-    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, inputs.runs == 'all' && 3 || 2) || '' }}
+    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, inputs.runs == 'all' && 3 || 2) || '' }}${{ (github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') && ' on windows-2025' || '' }}
     # runs=all takes longer than the job's 120 minutes, so it's dealt across three jobs, each with
     # its share of the runs (.github/scripts/runs.sh, #2271). Since 11-12 the default runs take longer
     # too, so they're dealt across two (#2618). Any other list is one job's.
@@ -117,7 +126,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || inputs.runs == '' && '[1, 2]' || '[0]') }}
-    runs-on: ${{ inputs.runner || 'windows-2022' }}
+    runs-on: ${{ github.event.schedule == '23 7 * * *' && 'windows-2025' || inputs.runner || 'windows-2022' }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -421,7 +430,11 @@ jobs:
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which
       # the complete job reads.
+      # The 2025 night's red stays in this step and Microsoft sign-in's, which go on past it, so the
+      # job's check run on main passes (#3055). Its outcome goes to complete's summary.
       - name: Runs
+        id: checks
+        continue-on-error: ${{ github.event.schedule == '23 7 * * *' }}
         env:
           RUNS: ${{ steps.runs.outputs.list }}
           SHARD: ${{ matrix.shard }}
@@ -509,7 +522,9 @@ jobs:
       # ilo's key (docs/policies.md): Chromium's, which every other Chromium on the machine reads,
       # leaves it off (engine/patches/ours/chromium-policy-windows-key.patch).
       - name: Microsoft sign-in
+        id: sign-in
         if: ${{ !cancelled() && (steps.build.outcome == 'success' || steps.unpacked.outcome == 'success') }}
+        continue-on-error: ${{ github.event.schedule == '23 7 * * *' }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out"
@@ -549,6 +564,17 @@ jobs:
           reg add "$key" /v CloudAPAuthEnabled /t REG_DWORD /d 1 /f > /dev/null
           sign_in policy-on 1
 
+      # The outcomes of the 2025 night's steps that go on past a failure, for complete's summary,
+      # beside the results (runs.sh reads only their .tsv files).
+      - if: ${{ always() && github.event.schedule == '23 7 * * *' }}
+        env:
+          RUNS_OUTCOME: ${{ steps.checks.outcome }}
+          SIGN_IN_OUTCOME: ${{ steps.sign-in.outcome }}
+          STEPS: ${{ runner.temp }}/results/windows-${{ matrix.shard }}.steps
+        run: |
+          mkdir -p "$(dirname "$STEPS")"
+          printf 'Runs\t%s\nMicrosoft sign-in\t%s\n' "${RUNS_OUTCOME:-skipped}" "${SIGN_IN_OUTCOME:-skipped}" > "$STEPS"
+
       - if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
@@ -582,7 +608,9 @@ jobs:
           pattern: results-windows-*
           path: ${{ runner.temp }}/results
           merge-multiple: true
-      - env:
+      - id: results
+        continue-on-error: ${{ github.event.schedule == '23 7 * * *' }}
+        env:
           RUNS: ${{ inputs.runs }}
         run: |
           named=
@@ -594,13 +622,40 @@ jobs:
             printf 'Failed: no result for %s.\n' "$missing" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+      # The 2025 night's verdict, whose reds pass its jobs (#3055): its failed runs, its steps that
+      # didn't pass, and whether every run has a result.
+      - if: ${{ always() && github.event.schedule == '23 7 * * *' }}
+        env:
+          RESULTS: ${{ runner.temp }}/results
+          COMPLETE: ${{ steps.results.outcome }}
+        run: |
+          # It never fails itself, or its job's check run would fail on main.
+          failed=$({ cat "$RESULTS"/*.tsv 2> /dev/null || true; } |
+            awk -F'\t' '$2 ~ /^failed/ { print "- " $1 ": " $2 }')
+          steps=
+          for file in "$RESULTS"/*.steps; do
+            [ -e "$file" ] || continue
+            job=$(basename "$file" .steps)
+            steps+=$(awk -F'\t' -v job="${job#windows-}" '$2 != "success" {
+              said = $2 == "failure" ? "failed" : "was " $2
+              print "- check " job "/2: the " $1 " step " said
+            }' "$file")$'\n'
+          done
+          ls "$RESULTS"/*.steps > /dev/null 2>&1 || steps="- No check job said how its steps went."$'\n'
+          [ "$COMPLETE" = success ] || steps+="- Not every run has a result, as the step above says."
+          verdict=Passed
+          [ -z "$failed" ] && [ -z "${steps//$'\n'/}" ] || verdict=Failed
+          {
+            echo "## windows-2025's night, which gates nothing: $verdict"
+            printf '%s\n' "$failed" "$steps" | sed '/^$/d'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
   # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
   # An engine that fails to fetch fails the run too.
   report:
     needs: [gate, engine, check]
-    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' }}
+    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && !(github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
