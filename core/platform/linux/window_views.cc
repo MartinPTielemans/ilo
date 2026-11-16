@@ -43,6 +43,7 @@
 #include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host_platform.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_solid_color.h"
@@ -862,10 +863,44 @@ class WindowViews : public views::WidgetObserver,
   // once each time the Mini Player shows: a click in it later gives it the keys. Posted, as the
   // compositor tells the Mini Player it has the keyboard after telling the window it lost it.
   void OnWidgetActivationChanged(views::Widget*, bool active) override {
+    if (active && !OnWayland()) {
+      PostFocusDialog();
+    }
     if (!active && OnWayland()) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(&WindowViews::TakeKeyboardFromMiniPlayer, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  // On X11 a tab's dialog over the shown page takes the keyboard back from a window activated, or
+  // focused, with none of its views focused, as by a click on the page beside the dialog, which
+  // ignores input under it (#2926). The dialog is a child widget, which shares the window's focus
+  // manager, and views gives a key only to the focused view, so with none every key, ilo's
+  // shortcuts too, was lost. Views focuses the view it stored as the window lost activation, the
+  // dialog's, unless the UI took the keyboard since, which forgets it (#2789). Posted, after views
+  // has restored the focus, and not while the UI has the keyboard, which a click in it keeps.
+  void PostFocusDialog() {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WindowViews::FocusDialog, weak_factory_.GetWeakPtr()));
+  }
+
+  void FocusDialog() {
+    views::FocusManager* focus = widget_->GetFocusManager();
+    if (!focus || focus->GetFocusedView() || ui_has_keyboard_ || overlay_has_keyboard_ ||
+        !widget_->IsActive()) {
+      return;
+    }
+    // Chrome shows the dialog of the selected tab alone.
+    for (views::Widget* dialog : views::Widget::GetAllOwnedWidgets(widget_->GetNativeView())) {
+      if (dialog == widget_ || !dialog->IsVisible() || !dialog->widget_delegate() ||
+          dialog->widget_delegate()->GetModalType() != ui::mojom::ModalType::kChild) {
+        continue;
+      }
+      if (views::View* first = dialog->widget_delegate()->GetInitiallyFocusedView()) {
+        first->RequestFocus();
+      }
+      return;
     }
   }
 
@@ -950,6 +985,9 @@ class WindowViews : public views::WidgetObserver,
   // tab's dialog. That gives it back as it goes to the UI or page that had it, as Chrome's views
   // restore the focus, which here would leave it with the window, where no page hears the keys.
   void OnWindowFocused(aura::Window* gained_focus, aura::Window* lost_focus) override {
+    if (gained_focus && !OnWayland()) {
+      PostFocusDialog();
+    }
     if (gained_focus && gained_focus != content()) {
       if (InSlot(gained_focus)) {
         ui_lent_ = false;
