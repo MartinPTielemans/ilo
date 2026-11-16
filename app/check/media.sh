@@ -292,6 +292,13 @@ EOF
   done
   fail "$2"
 }
+# drag_full_windows <0 or 1>: Windows' "Show window contents while dragging", for this user.
+drag_full_windows() {
+  local user32='[DllImport(\"user32.dll\")] public static extern bool SystemParametersInfo(uint action, uint value, System.IntPtr unused, uint save);'
+  powershell -NoProfile -Command "Add-Type -Name Desktop -Namespace Check -MemberDefinition '$user32';
+    exit !([Check.Desktop]::SystemParametersInfo(0x25, $1, [System.IntPtr]::Zero, 3))" ||
+    fail "Windows didn't set Show window contents while dragging to $1"
+}
 # pip_driven: whether the driver presses and drags in a Picture in Picture window, which it does
 # through X11 or sway's tree. Windows' and the Mac's leave the drag to the desktop's pointer.
 pip_driven() {
@@ -974,6 +981,14 @@ elif [ "$(uname)" = Darwin ]; then
   mini_player_at "x >= px - 200 && x <= px - 190 && y == py && w == pw && h == ph" \
     "a drag didn't move the Mini Player: $(cat "$out/pointer.txt")"
 else
+  if windows; then
+    # Windows 11 shows a window's contents while it's dragged, as the core's throw expects: with
+    # that off, as on GitHub's runners, Windows moves the window once, at the release, which the
+    # core reads as a throw (#3062). So the drag has it on, and puts back what was set after.
+    drag_full=$(reg query 'HKCU\Control Panel\Desktop' //v DragFullWindows 2> /dev/null |
+      awk '/DragFullWindows/ { print $3 }')
+    drag_full_windows 1
+  fi
   send pip press $((pw / 8)) $((ph / 2))
   expect 'browser: mini player pressed at ' "a press off its controls didn't reach the Mini Player"
   send pip dragto $((pw / 8 - 10)) $((ph / 2))
@@ -983,6 +998,7 @@ else
     # Windows' move loop moves the window a moment after the pointer, and a release within 100 ms
     # of a move longer than 6 points throws it to a corner (core/mini_player_place.h). So once it's
     # there, the pointer rests a moment before it lets go, as a hand meaning to leave it there does.
+    # The release goes regardless, so the setting is put back before a failure.
     for _ in $(seq 50); do
       send pip
       dragged=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: pip at ' | tail -1 |
@@ -994,6 +1010,9 @@ else
   fi
   send pip release $((pw / 8 - 200)) $((ph / 2))
   if windows; then
+    drag_full_windows "${drag_full:-1}"
+    [ -n "$dragged" ] && [ "$dragged" -le $((px - 190)) ] ||
+      fail "the Mini Player didn't follow the pointer as it was dragged: it stayed at ${dragged:-none}"
     expect 'browser: mini player let go at ' "the Mini Player wasn't let go"
     let_go=$(grep 'browser: mini player let go at ' "$log" | tail -1 | sed 's/.*browser: //')
     case $let_go in
