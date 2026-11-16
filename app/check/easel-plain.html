@@ -1,0 +1,35 @@
+<!doctype html><meta charset=utf-8><title>loading</title>
+<!-- A spike for #3073, never merged: perf.sh's page without its clock, for a plain page to set the
+     Easel's numbers beside. -->
+<style>
+body { font: 14px/1.4 sans-serif; margin: 16px }
+.box { display: inline-block; width: 72px; height: 40px; margin: 4px; border-radius: 6px }
+</style>
+<h1>ilo plain page</h1><div id=boxes></div><div id=text></div>
+<script>
+const id = location.search.slice(1);
+for (let i = 0; i < 60; i++) {
+  const box = document.createElement("div");
+  box.className = "box";
+  box.style.background = `hsl(${i * 6} 60% 60%)`;
+  boxes.append(box);
+}
+for (let i = 0; i < 120; i++) {
+  const p = document.createElement("p");
+  p.textContent = `Paragraph ${i}: the quick brown fox jumps over the lazy dog, again and again.`;
+  text.append(p);
+}
+const at = (t) => Math.round(Date.now() - performance.now() + t);
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    if (entry.name == "first-contentful-paint") document.title = `${id} fcp ${at(entry.startTime)}`;
+  }
+}).observe({ type: "paint", buffered: true });
+let shown = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState == "visible") {
+    const n = ++shown;
+    requestAnimationFrame(() => requestAnimationFrame(() => document.title = `${id} shown ${n} ${Date.now()}`));
+  }
+});
+</script>

@@ -1,0 +1,205 @@
+<!doctype html><meta charset=utf-8><title>loading</title>
+<!-- A spike for #3073, never merged: an Easel drawn as a page, full, so its open, its pans, its
+     zooms, its typing and a tab switch to and from it can be timed. Its items are made up. -->
+<style>
+html, body { margin: 0; height: 100% }
+body { font: 14px/1.45 system-ui, -apple-system, sans-serif; background: #f4f2ee; color: #1f1d1a }
+#scroller { position: fixed; inset: 0; overflow: auto }
+#surface { position: relative; width: 6000px; height: 4000px }
+#board { position: absolute; left: 0; top: 0; width: 6000px; height: 4000px; transform-origin: 0 0 }
+.note { position: absolute; width: 220px; padding: 10px 12px; background: #fff; border-radius: 8px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .06), 0 2px 8px rgb(0 0 0 / .08); outline: none }
+.note:focus { box-shadow: 0 0 0 2px #5b5bd6 }
+.image { position: absolute; border-radius: 6px; box-shadow: 0 0 0 1px rgb(0 0 0 / .08) }
+.link { position: absolute; width: 260px; height: 64px; background: #fff; border-radius: 8px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .08); display: flex; gap: 10px; align-items: center; padding: 0 12px;
+  box-sizing: border-box; font-size: 13px }
+.link i { width: 28px; height: 28px; border-radius: 6px; flex: none }
+svg { position: absolute; left: 0; top: 0; overflow: visible }
+</style>
+<div id=scroller><div id=surface><div id=board><svg id=ink width=6000 height=4000></svg></div></div></div>
+<script>
+const id = location.search.slice(1) || "easel";
+const at = (t) => Math.round(Date.now() - performance.now() + t);
+const say = (s) => { document.title = `${id} ${s}`; };
+let seed = 3073;
+const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const words = ("the quick brown fox jumps over a lazy dog while notes gather on the easel beside " +
+  "links images and drawings for the trip and the plan").split(" ");
+const japanese = ["旅の計画を立てる", "明日の会議の資料", "日本語の入力を試す", "東京から京都まで"];
+const sentence = (n) => Array.from({ length: n }, () => words[Math.floor(rand() * words.length)]).join(" ");
+
+// 240 notes, 48 pictures, 16 links and 80 strokes over 6000 by 4000 points, as a full Easel.
+const items = [];
+for (let i = 0; i < 240; i++) {
+  const note = document.createElement("div");
+  note.className = "note";
+  note.spellcheck = true;
+  note.textContent = (i % 7 == 0 ? japanese[i % 4] + " " : "") + sentence(4 + Math.floor(rand() * 30));
+  note.style.left = `${40 + (i % 20) * 296 + rand() * 30}px`;
+  note.style.top = `${40 + Math.floor(i / 20) * 320 + rand() * 40}px`;
+  board.append(note);
+  items.push(note);
+}
+const typing = items[0];
+typing.style.left = "40px";
+typing.style.top = "40px";
+const pictures = [];
+for (let i = 0; i < 48; i++) {
+  const c = new OffscreenCanvas(640, 440);
+  const g = c.getContext("2d");
+  const grad = g.createLinearGradient(0, 0, 640, 440);
+  grad.addColorStop(0, `hsl(${i * 37} 60% 62%)`);
+  grad.addColorStop(1, `hsl(${i * 37 + 90} 55% 38%)`);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 640, 440);
+  for (let k = 0; k < 40; k++) {
+    g.fillStyle = `hsl(${rand() * 360} 70% 60% / .5)`;
+    g.beginPath();
+    g.arc(rand() * 640, rand() * 440, 8 + rand() * 60, 0, 7);
+    g.fill();
+  }
+  const img = new Image();
+  img.className = "image";
+  img.width = 320;
+  img.height = 220;
+  img.style.left = `${180 + (i % 8) * 720 + rand() * 60}px`;
+  img.style.top = `${200 + Math.floor(i / 8) * 620 + rand() * 60}px`;
+  pictures.push(c.convertToBlob().then((b) => { img.src = URL.createObjectURL(b); return img.decode(); }));
+  board.append(img);
+}
+for (let i = 0; i < 16; i++) {
+  const link = document.createElement("a");
+  link.className = "link";
+  link.href = "https://example.com/" + i;
+  link.innerHTML = `<i style="background:hsl(${i * 23} 50% 55%)"></i><span>${sentence(5)}</span>`;
+  link.style.left = `${400 + (i % 4) * 1400}px`;
+  link.style.top = `${120 + Math.floor(i / 4) * 980}px`;
+  board.append(link);
+}
+for (let i = 0; i < 80; i++) {
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  let x = rand() * 6000, y = rand() * 4000, d = `M${x} ${y}`;
+  for (let k = 0; k < 24; k++) {
+    x += (rand() - 0.5) * 120; y += (rand() - 0.5) * 120;
+    d += ` Q${x + (rand() - 0.5) * 60} ${y + (rand() - 0.5) * 60} ${x} ${y}`;
+  }
+  p.setAttribute("d", d);
+  p.setAttribute("fill", "none");
+  p.setAttribute("stroke", `hsl(${i * 47} 60% 45%)`);
+  p.setAttribute("stroke-width", 3);
+  p.setAttribute("stroke-linecap", "round");
+  ink.append(p);
+}
+
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    if (entry.name == "first-contentful-paint") say(`fcp ${at(entry.startTime)}`);
+  }
+}).observe({ type: "paint", buffered: true });
+let longFrames = [];
+try {
+  new PerformanceObserver((list) => longFrames.push(...list.getEntries()))
+    .observe({ type: "long-animation-frame", buffered: false });
+} catch (e) {}
+
+const stats = (xs) => {
+  const v = [...xs].sort((a, b) => a - b);
+  if (!v.length) return "none";
+  const q = (f) => v[Math.min(v.length - 1, Math.floor(f * v.length))].toFixed(1);
+  return `n ${v.length} p50 ${q(0.5)} p95 ${q(0.95)} max ${v[v.length - 1].toFixed(1)}`;
+};
+// The frames from now until <until> resolves: their intervals, how many took longer than one and
+// a half of the display's, and the long animation frames the renderer saw, with their total ms.
+let base = 16.7;
+const frames = (until) => new Promise((done) => {
+  const times = [];
+  longFrames = [];
+  let going = true;
+  until.then(() => { going = false; });
+  const tick = (t) => {
+    times.push(t);
+    if (going) requestAnimationFrame(tick);
+    else {
+      const gaps = times.slice(1).map((t, i) => t - times[i]);
+      const late = gaps.filter((g) => g > base * 1.5).length;
+      const long = longFrames.reduce((s, e) => s + e.duration, 0);
+      done(`${stats(gaps)} late ${late} long ${longFrames.length} ${long.toFixed(0)}ms`);
+    }
+  };
+  requestAnimationFrame(tick);
+});
+const quiet = (ms) => new Promise((r) => {
+  let timer = setTimeout(r, 2000);
+  const again = () => { clearTimeout(timer); timer = setTimeout(() => { scroller.removeEventListener("scroll", again); r(); }, ms); };
+  scroller.addEventListener("scroll", again);
+});
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A zoom from 1 to 0.25 and back over 2 s about the view's middle, each frame re-rastered crisp,
+// or with "hint" as one layer scaled, which blurs until it rests and draws again.
+const zoom = (hint) => {
+  const cx = scroller.scrollLeft + innerWidth / 2, cy = scroller.scrollTop + innerHeight / 2;
+  if (hint) board.style.willChange = "transform";
+  const start = performance.now();
+  const ended = new Promise((r) => {
+    const step = (t) => {
+      const k = Math.min(1, (t - start) / 2000);
+      const s = 1 - 0.75 * Math.sin(Math.PI * k);
+      board.style.transform = `translate(${cx * (1 - s)}px, ${cy * (1 - s)}px) scale(${s})`;
+      if (k < 1) requestAnimationFrame(step); else r();
+    };
+    requestAnimationFrame(step);
+  });
+  return frames(ended).then((r) => { board.style.willChange = ""; board.style.transform = ""; return r; });
+};
+
+let readyAt = 0;
+Promise.all(pictures).then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))).then(async () => {
+  readyAt = at(performance.now());
+  say(`ready ${readyAt}`);
+  // The display's own interval, from a second of frames at rest.
+  const rest = frames(sleep(1000));
+  const r = await rest;
+  base = parseFloat(r.split(" p50 ")[1]);
+  say(`rest ${r}`);
+});
+
+let shown = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState == "visible") {
+    const n = ++shown;
+    requestAnimationFrame(() => requestAnimationFrame(() => say(`shown ${n} ${Date.now()}`)));
+  }
+});
+
+// A click on a link stays on the Easel, as the check's click into the page may land on one.
+document.addEventListener("click", (e) => e.target.closest("a") && e.preventDefault());
+// The check's keys: p pans (frames until the scroll has rested 400 ms), z and x zoom, t starts
+// typing in the first note, whose keys are timed from each event to the start of the frame that
+// draws it.
+const keyGaps = [];
+document.addEventListener("keydown", async (e) => {
+  if (document.activeElement == typing) return;
+  if (e.key == "p") say(`pan ${await frames(quiet(400))}`);
+  if (e.key == "z") say(`zoom crisp ${await zoom(false)}`);
+  if (e.key == "x") say(`zoom hinted ${await zoom(true)}`);
+  if (e.key == "t") {
+    e.preventDefault();
+    typing.contentEditable = "true";
+    typing.focus();
+    getSelection().selectAllChildren(typing);
+    getSelection().collapseToEnd();
+    say("typing");
+  }
+});
+typing.addEventListener("keydown", (e) => {
+  if (e.isComposing || e.key.length != 1) return;
+  const t0 = e.timeStamp;
+  requestAnimationFrame((t) => {
+    keyGaps.push(t - t0);
+    say(`typed ${keyGaps.length} ${stats(keyGaps)}`);
+  });
+});
+typing.addEventListener("compositionend", (e) => say(`composed ${e.data} note ends ${typing.textContent.slice(-6)}`));
+</script>
