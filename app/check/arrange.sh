@@ -7,8 +7,8 @@
 # takes back the last change, the mini bar's Hide is Zap's rule, which ⌘Z takes back, and its Put
 # back on a traded thing takes the trade back. The mini bar goes with Hide and with the mode. Each
 # change is saved in the site's .arrange.json as it happens. Last, a settle then a trade of the
-# thing it's kept by: the run asserts the order the core gives, known under #2975, and reports what
-# a press on Wide picks, known under #2981, rather than failing on it.
+# thing it went beside: each thing takes the other's place in the order the settle left (#2975),
+# and a press then picks the thing drawn there (#2981).
 # A carry to the page's bare background with no key held is no change: only ⌘ floats a thing.
 # Reloaded, the page shows the arrangement, and the run measures whether its first frame already
 # did, in arrange-first-frame.txt, and says which in its summary rather than failing: a flash there
@@ -458,12 +458,9 @@ expect "^browser: arrange $tab off\$" "escape didn't end the mode"
 expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
 mini_bar_went "escape ended the mode"
 
-# Known under #2975 and #2981, last, as the run reports and doesn't fail on them. #2975: a settle is
-# kept by the thing it was let go beside, Gamma, so a trade of Gamma with Beta takes Alpha along,
-# ahead of Gamma; the order is asserted as the core gives it today, and changes with #2975's fix.
-# #2981: the settle and the trade both style Gamma and undo each other's styles on each layout pass,
-# so a press where Wide is drawn hasn't picked Wide (43728216309, 43729257766); the run reports what
-# it picks.
+# A settle, then a trade of the thing it went beside: the arrangement is an order, so Gamma and Beta
+# swap places in the order the settle left, and Alpha stays where it went (#2975). Each thing is
+# styled once a pass, so a press where Wide is drawn picks Wide (#2981).
 start_arranging
 carry $(slot 0) $(slot_edge 1)
 expect "^browser: arrange $tab Preview Settles " "a rest at an edge didn't show a settle"
@@ -474,8 +471,8 @@ carry $(slot 2) $(slot 0)
 expect "^browser: arrange $tab Preview Trades " "a rest on a thing's middle didn't show a trade"
 send release $(slot 0)
 expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade"
-shows 'a,c,b,w side s,n hidden - float -' \
-  "the trade of the settle's Gamma didn't leave Alpha ahead of Gamma, as #2975 has it today"
+shows 'c,a,b,w side s,n hidden - float -' \
+  "the trade of Gamma with Beta after the settle didn't swap the two where the settle left them (#2975)"
 kept 2 "the settle and the trade weren't saved"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-2975.png" || fail "no window to capture"
 send press $(slot 3)
@@ -486,11 +483,8 @@ for _ in $(seq 50); do
   sleep 0.1
 done
 send release $(slot 3)
-case "$pointed" in
-  "section Wide") wide="a press on Wide picked Wide" ;;
-  "" | -) wide="a press where Wide is drawn picked nothing" ;;
-  *) wide="a press where Wide is drawn picked $pointed" ;;
-esac
+[ "$pointed" = "section Wide" ] ||
+  fail "after the settle and the trade, a press where Wide is drawn picked ${pointed:-nothing}, not Wide (#2981)"
 send key escape
 expect "^browser: arrange $tab off\$" "escape didn't end the mode"
 expect "browser: tab $tab arrange off\$" "the core didn't end the mode"
@@ -592,8 +586,8 @@ echo "ok: from the Boost card's Arrange, a click picked a thing with the page ta
   "which a click picked each thing where it was drawn, was carried where it didn't fit, and with" \
   "⌘ floated one, whose pin turned it to scroll with the page and back. ⌘Z took the float back," \
   "Hide was Zap's rule, which ⌘Z took back, and Put back on a traded thing took the trade back." \
-  "$went Each change was saved in $host.arrange.json. Known under #2975: a trade of the thing" \
-  "a settle is kept by left a,c,b,w. Known under #2981: after it, $wide. Known under #3003:" \
+  "$went Each change was saved in $host.arrange.json. A settle then a trade of the thing it" \
+  "went beside swapped the two in the settle's order, and a press after picked Wide. Known under #3003:" \
   "$refusal. Reloaded, the page" \
   "placed the arrangement, and" \
   "$first_frame." \
