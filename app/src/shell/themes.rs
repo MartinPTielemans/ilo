@@ -98,8 +98,9 @@ impl Shell {
         };
         self.system_tone = self.forced_tone.or(chosen).unwrap_or(system);
         let active = window.is_window_active();
+        // Its Live Folders ask after the frame, as a Space shown's do, so the fetch holds none.
         if active && !self.window_active {
-            self.live_window_active(cx);
+            cx.on_next_frame(window, |shell, _, cx| shell.live_window_active(cx));
         }
         self.window_active = active;
         if self.window_watches.is_empty() {

@@ -1445,7 +1445,7 @@ impl Shell {
         let bright = Some(Row::Tab(tab)) == self.selected_row() || page.developer_mode;
         // A tab opened from a Live Folder is its item's row: its title and place, and its state's
         // glyph, merged or closed too, while the tab stays.
-        let item = self.live_item_of(tab).filter(|_| !back);
+        let item = self.live_item_of(tab).filter(|_| !back).cloned();
         let label = item.as_ref().map_or(label, |item| item.title.clone());
         let title = title(&self.palette, label, bright);
         let host = item

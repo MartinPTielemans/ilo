@@ -731,14 +731,24 @@ impl Space {
         let shown = self.panes(self.shown)[0];
         let folded = move |row| collapsed || self.holders(row).any(|folder| !self.is_open(folder));
         let listed = move |row| row == shown || (!collapsed && self.peeked.contains(&row));
-        (self.drawn_pinned().into_iter())
+        let drawn = self.drawn_pinned();
+        (0..drawn.len())
+            .map(move |at| drawn[at])
             .filter(move |&row| !self.later(row) && (listed(row) || !folded(row)))
     }
 
     /// Its pinned tabs in the order they're drawn: a tab opened from a Live Folder's item still
     /// listed goes in its item's place, after the folder's other rows, in the lists' order. The
     /// core keeps them in the order they were opened, which next and previous tab don't follow.
-    fn drawn_pinned(&self) -> Vec<u64> {
+    /// With none in their items' places, as in a Space with no Live Folder, it's the pinned tabs.
+    fn drawn_pinned(&self) -> std::borrow::Cow<'_, [u64]> {
+        if self
+            .live_rooms
+            .values()
+            .all(|layout| layout.tabs.is_empty())
+        {
+            return std::borrow::Cow::Borrowed(&self.pinned);
+        }
         let mut pinned = self.pinned.clone();
         for (&folder, layout) in &self.live_rooms {
             if layout.tabs.is_empty() {
@@ -751,7 +761,7 @@ impl Space {
             };
             pinned.splice(at + 1..at + 1, layout.tabs.iter().copied());
         }
-        pinned
+        std::borrow::Cow::Owned(pinned)
     }
 
     /// Whether `tab` is drawn in a Live Folder's item's place.
@@ -1561,7 +1571,7 @@ pub struct Shell {
     putting_back: bool,
     swipe: Option<Swipe>,
     settle: Option<Settle>,
-    /// Each Live Folder's lists as last fetched, and when to fetch them again (#2979).
+    /// Each Live Folder's lists as the core last answered them (#2979).
     live: HashMap<u64, live_folders::LiveFolder>,
     /// A Space was shown, and its Live Folders ask for their lists once its switch's frames are
     /// drawn, so the fetch never holds the switch.
@@ -1740,6 +1750,9 @@ pub struct Shell {
     downloads_seen: HashSet<u64>,
     /// Every tab a Space has listed, so a tab a Space lists that none did is new, not moved.
     listed: HashSet<u64>,
+    /// The Spaces whose tabs the core has reported, so a Live Folder new in a later report was
+    /// made, not brought back at launch, in a Space with no tabs too.
+    spaces_filled: HashSet<u64>,
     /// Every Space listed, so one ⌘Z brings back isn't new; and the new ones the toast tells of,
     /// and when it last did, so Spaces made one after another are told of together.
     spaces_listed: HashSet<u64>,
@@ -2206,6 +2219,7 @@ impl Shell {
             recent_downloads: RecentDownloads::default(),
             downloads_seen: HashSet::new(),
             listed: HashSet::new(),
+            spaces_filled: HashSet::new(),
             spaces_listed: HashSet::new(),
             spaces_toasted: (Vec::new(), None),
             downloads_read: false,
@@ -2882,6 +2896,7 @@ impl Shell {
             .filter(|&id| listed.insert(id))
             .collect();
         let mut old = std::mem::take(&mut self.spaces);
+        let mut reprofiled = Vec::new();
         self.spaces = spaces
             .into_iter()
             .map(|(id, name, color, profile, icon, agent, theme)| {
@@ -2934,6 +2949,7 @@ impl Shell {
                 }
                 if space.profile != profile {
                     log!("browser: profiled space {id} {profile}");
+                    reprofiled.push(id);
                 }
                 let theme = Theme::parse(&theme);
                 if space.theme != theme {
@@ -2964,6 +2980,7 @@ impl Shell {
             of.iter().copied().filter(|id| with.contains(id)).collect()
         };
         self.glide_spaces(places, kept(&order, &now) != kept(&now, &order));
+        self.live_profiles_changed(&reprofiled, cx);
         self.settle_theme_preview();
         if let Some(form) = &self.form
             && !self.spaces.iter().any(|space| space.id == form.space)
@@ -3236,7 +3253,8 @@ impl Shell {
         if space == self.space {
             self.keep_chosen(cx);
         }
-        self.live_folders_changed(space, &before_folders, had_tabs, cx);
+        let filled = !self.spaces_filled.insert(space);
+        self.live_folders_changed(space, &before_folders, filled, cx);
         self.update_live_rooms(cx);
         // Pinning or unpinning the tab shown renames Tabs › Pin Tab.
         self.update_menus(cx);

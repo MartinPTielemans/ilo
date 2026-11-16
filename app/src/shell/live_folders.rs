@@ -154,10 +154,15 @@ pub enum LiveEvent {
     SpaceShown,
     /// The folder was opened.
     Opened,
+    /// The folder's Space was given another profile, whose account's lists it shows now.
+    Profile,
+    /// The folder was made, which each window hears from the core. Nothing kept is fetched, and a
+    /// kept answer is under two minutes old, so it's no refresh.
+    Made,
     /// A page from the source's site committed in a tab of the folder's profile.
     SiteCommitted,
-    /// The folder's menu's Refresh, or the folder made: the user's own ask, which the core's two
-    /// minutes don't hold back.
+    /// The folder's menu's Refresh: the user's own ask, which the core's two minutes don't hold
+    /// back.
     Refresh,
 }
 
@@ -176,11 +181,16 @@ pub enum LiveRow {
 
 /// How an open Live Folder's rows are drawn under its other tabs: runs of its own rows, each so
 /// tall, with the tabs opened from its listed items between them, each in its item's place. Run
-/// `i` is above `tabs[i]`, so there's one run more than tabs.
+/// `i` is above `tabs[i]`, so there's one run more than tabs. Made once for each answer and each
+/// report of the Space's tabs, so a frame reads it and builds nothing.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LiveLayout {
     pub runs: Vec<f32>,
     pub tabs: Vec<u64>,
+    /// Its rows, each run's split from the next by its tab's.
+    pub rows: Vec<LiveRow>,
+    /// The item each tab directly in it at an item's URL stands for.
+    pub items: HashMap<u64, LiveItem>,
 }
 
 /// A Live Folder's lists as last fetched.
@@ -194,6 +204,9 @@ pub struct LiveFolder {
     signed_out: bool,
     /// Items that came after the first answer, until the user opens them.
     new: HashSet<(SharedString, u32)>,
+    /// When the core says the site gave the rows, in milliseconds since the Unix epoch: the same
+    /// answer again, kept by the core, changes nothing.
+    answered: Option<i64>,
 }
 
 /// When the site gave an answer the core says it gave at `answered`, in milliseconds since the Unix
@@ -233,6 +246,16 @@ impl LiveFolder {
                 self.updated = Some(now);
             }
             LiveAnswer::Failed => self.failed = true,
+        }
+    }
+
+    /// Whether `answer`, which the site gave at `answered`, is what the folder holds already.
+    pub fn holds(&self, answer: &LiveAnswer, answered: i64) -> bool {
+        match answer {
+            LiveAnswer::Failed => self.failed,
+            _ if self.failed || self.answered != Some(answered) => false,
+            LiveAnswer::Items(items) => !self.signed_out && self.items == *items,
+            LiveAnswer::SignedOut => self.signed_out,
         }
     }
 
@@ -315,18 +338,35 @@ pub(super) fn rooms(
 ) -> HashMap<u64, LiveLayout> {
     (space.folders.live.keys())
         .map(|&folder| {
-            let rows = live
-                .get(&folder)
-                .map(|kept| kept.rows(|item| opened_in(space, folder, &url, item)))
-                .unwrap_or_default();
             let mut layout = LiveLayout {
                 runs: vec![0.],
-                tabs: Vec::new(),
+                ..LiveLayout::default()
             };
-            for row in rows {
+            let Some(kept) = live.get(&folder) else {
+                return (folder, layout);
+            };
+            // Each tab directly in it, by its pinned URL, read once.
+            let tabs: Vec<(u64, String)> = (space.pinned.iter().copied())
+                .filter(|&tab| space.folder_of(tab) == folder)
+                .map(|tab| (tab, url(tab)))
+                .collect();
+            for (tab, at) in &tabs {
+                if let Some(item) = kept.item_at(at) {
+                    layout.items.insert(*tab, item.clone());
+                }
+            }
+            // The tab open at an item, whose row stands for it, if there's one with a row of its
+            // own: the first of its split, if it's in one.
+            let opened = |item: &str| {
+                (tabs.iter())
+                    .find(|(tab, at)| at == item && !space.later(*tab))
+                    .map(|&(tab, _)| tab)
+            };
+            layout.rows = kept.rows(opened);
+            for row in &layout.rows {
                 match row {
                     LiveRow::Tab(tab) => {
-                        layout.tabs.push(tab);
+                        layout.tabs.push(*tab);
                         layout.runs.push(0.);
                     }
                     LiveRow::Heading(_) => *layout.runs.last_mut().unwrap() += HEADING_HEIGHT,
@@ -336,13 +376,6 @@ pub(super) fn rooms(
             (folder, layout)
         })
         .collect()
-}
-
-/// The tab open at `item` directly in `folder`, whose row stands for it, if there's one with a
-/// row of its own: the first of its split, if it's in one.
-fn opened_in(space: &Space, folder: u64, url: &impl Fn(u64) -> String, item: &str) -> Option<u64> {
-    (space.pinned.iter().copied())
-        .find(|&tab| space.folder_of(tab) == folder && !space.later(tab) && url(tab) == item)
 }
 
 impl Shell {
@@ -415,7 +448,8 @@ impl Shell {
     }
 
     /// The core's answer for `folder`'s lists, which the site gave at `answered`, in milliseconds
-    /// since the Unix epoch. Only its kind is logged: the rows are the user's account's.
+    /// since the Unix epoch. Only its kind is logged: the rows are the user's account's. One the
+    /// folder holds already, as each ask inside the core's two minutes gets, draws nothing.
     pub fn set_live_answer(
         &mut self,
         folder: u64,
@@ -423,7 +457,32 @@ impl Shell {
         answered: i64,
         cx: &mut Context<Self>,
     ) {
+        let kept = self.live.get(&folder);
+        if kept.is_some_and(|kept| kept.holds(&answer, answered)) {
+            return;
+        }
+        let failed = answer == LiveAnswer::Failed;
         self.set_live_answer_at(folder, answer, answered_at(answered), cx);
+        if let Some(kept) = self.live.get_mut(&folder).filter(|_| !failed) {
+            kept.answered = Some(answered);
+        }
+    }
+
+    /// The Spaces `spaces` were each given another profile: their Live Folders' rows were the old
+    /// account's, so they go, a failed answer keeping none of them, and the new one's are asked.
+    pub(super) fn live_profiles_changed(&mut self, spaces: &[u64], cx: &mut Context<Self>) {
+        let folders: Vec<u64> = (self.spaces.iter())
+            .filter(|space| spaces.contains(&space.id))
+            .flat_map(|space| space.folders.live.keys().copied())
+            .collect();
+        if folders.is_empty() {
+            return;
+        }
+        for folder in &folders {
+            self.live.remove(folder);
+        }
+        self.update_live_rooms(cx);
+        self.ask_live(LiveEvent::Profile, folders, cx);
     }
 
     /// The answer for `folder` as the site gave it at `at`.
@@ -469,7 +528,8 @@ impl Shell {
     }
 
     /// Takes the core's report of `space`'s folders after `was`: a Live Folder made since asks
-    /// for its lists at once, and one opened, as it's shown.
+    /// for its lists at once, and one opened, as it's shown. Unless the Space was `filled` before,
+    /// its Live Folders weren't made but brought back, as at launch.
     pub(super) fn live_folders_changed(
         &mut self,
         space: u64,
@@ -491,7 +551,7 @@ impl Shell {
             .copied()
             .collect();
         let shown = space == self.space;
-        self.ask_live(LiveEvent::Refresh, made, cx);
+        self.ask_live(LiveEvent::Made, made, cx);
         if shown {
             self.ask_live(LiveEvent::Opened, opened, cx);
         }
@@ -524,8 +584,19 @@ impl Shell {
     }
 
     /// Convert to Folder: the tabs opened from it stay, in a plain folder in the order they're
-    /// drawn, and its lists go.
+    /// drawn, and its lists go. ⌘Z makes it a Live Folder again.
     pub(super) fn convert_live_folder(&mut self, folder: u64, cx: &mut Context<Self>) {
+        let relive = self.convert_live_folder_now(folder, cx);
+        self.keep(super::undo::What::CONVERT_TO_FOLDER, relive, cx);
+    }
+
+    /// Converts `folder`, and returns the step that makes it live again.
+    pub(super) fn convert_live_folder_now(
+        &mut self,
+        folder: u64,
+        cx: &mut Context<Self>,
+    ) -> Option<super::undo::Edit> {
+        let source = self.live_source(folder)?;
         let space = self.shown_space();
         let listed = space.and_then(|space| space.live_rooms.get(&folder));
         let listed = listed.map(|layout| layout.tabs.clone()).unwrap_or_default();
@@ -540,6 +611,7 @@ impl Shell {
                 .move_tab(tab, true, folder, end.saturating_sub(1), cx);
         }
         self.browser.end_live_folder(folder, cx);
+        Some(super::undo::Edit::Relive { folder, source })
     }
 
     /// Opens the item at `url` as a pinned tab at the end of `folder`, shown, as a pinned tab's
@@ -561,13 +633,10 @@ impl Shell {
     /// The item a tab opened from a Live Folder stands for: the tab directly in one, at an item's
     /// URL. Its row shows the item's glyph, title and place while the lists have it; once it has
     /// left them, merged or closed, the tab is a tab like any other, its page's title and icon.
-    pub(super) fn live_item_of(&self, tab: u64) -> Option<LiveItem> {
-        let space = self
-            .spaces
-            .iter()
-            .find(|space| space.pinned.contains(&tab))?;
-        let kept = self.live.get(&space.folder_of(tab))?;
-        kept.item_at(&self.browser.pinned_url(tab)).cloned()
+    pub(super) fn live_item_of(&self, tab: u64) -> Option<&LiveItem> {
+        (self.spaces.iter())
+            .flat_map(|space| space.live_rooms.values())
+            .find_map(|layout| layout.items.get(&tab))
     }
 
     /// The folder's glyph, the source's, marked after a refresh that failed.
@@ -619,18 +688,13 @@ impl Shell {
         };
         let source = self.live_source(folder).unwrap_or(LiveSource::PullRequests);
         let depth = space.listed_depth(folder) + 1;
-        let browser = self.browser.clone();
-        let url = |tab| browser.pinned_url(tab);
-        let rows = (self.live.get(&folder))
-            .map(|kept| kept.rows(|item| opened_in(space, folder, &url, item)))
-            .unwrap_or_default();
-        let room = (space.live_rooms.get(&folder))
-            .and_then(|layout| layout.runs.get(run).copied())
-            .unwrap_or_default();
+        let layout = space.live_rooms.get(&folder);
+        let room = (layout.and_then(|layout| layout.runs.get(run).copied())).unwrap_or_default();
         let inset = PLATE_INSET + depth as f32 * FOLDER_INDENT;
-        let mut runs = rows.split(|row| matches!(row, LiveRow::Tab(_)));
-        let rows = runs.nth(run).unwrap_or_default().to_vec();
-        let rows = rows.into_iter().map(|row| match row {
+        let mut runs = (layout.map_or(&[][..], |layout| &layout.rows[..]))
+            .split(|row| matches!(row, LiveRow::Tab(_)));
+        let rows = runs.nth(run).unwrap_or_default();
+        let rows = rows.iter().enumerate().map(|(index, row)| match row {
             LiveRow::Heading(list) => div()
                 .flex_none()
                 .h(px(HEADING_HEIGHT))
@@ -642,7 +706,7 @@ impl Shell {
                 .text_color(self.palette.text(SECONDARY))
                 .child(list.heading())
                 .into_any_element(),
-            LiveRow::Item { item, new } => self.live_row(folder, inset, item, new, cx),
+            LiveRow::Item { item, new } => self.live_row(folder, inset, index, item, *new, cx),
             LiveRow::SignIn => self.sign_in_row(source, inset, cx),
             LiveRow::Tab(_) => div().into_any_element(),
         });
@@ -667,11 +731,11 @@ impl Shell {
         &self,
         folder: u64,
         inset: f32,
-        item: LiveItem,
+        index: usize,
+        item: &LiveItem,
         new: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let url = item.url();
         let draft = item.state == PullState::Draft;
         let glyph = svg()
             .path(item.state.glyph())
@@ -686,15 +750,16 @@ impl Shell {
             .hover(|plate| plate.bg(self.palette.plate(HOVERED)));
         row_box()
             .pl(px(inset))
-            .id(SharedString::from(format!("live-{folder}-{url}")))
+            .id(("live-row", index))
             .when(self.a11y, |row| {
                 row.role(Role::Link)
                     .aria_label(format!("{}, {}", item.title, item.place()))
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(
-                cx.listener(move |shell, _, _, cx| shell.open_live_item(folder, url.clone(), cx)),
-            )
+            .on_click({
+                let item = item.clone();
+                cx.listener(move |shell, _, _, cx| shell.open_live_item(folder, item.url(), cx))
+            })
             .child(plate)
             .into_any_element()
     }

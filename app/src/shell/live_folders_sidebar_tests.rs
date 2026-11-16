@@ -28,7 +28,14 @@ fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc
         bind_keys(cx);
         cx.set_reduce_motion(true);
     });
-    let host = Rc::new(Recorder::default());
+    window_on(cx, Rc::new(Recorder::default()))
+}
+
+/// The window of `window` on `host`, which another window may share, as the core is.
+fn window_on(
+    cx: &mut TestAppContext,
+    host: Rc<Recorder>,
+) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
@@ -52,6 +59,7 @@ fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc
     draw(&shell, cx);
     cx.update(|window, _| window.activate_window());
     draw(&shell, cx);
+    cx.update(|window, cx| window.simulate_next_frame(cx));
     host.take();
     host.take_edits();
     (shell, cx, host)
@@ -118,7 +126,7 @@ fn the_spaces_menu_makes_one_and_unticking_deletes_it(cx: &mut TestAppContext) {
     assert_eq!(
         fetches(&host),
         [format!(
-            "fetch live folder {FOLDER} PullRequests refresh true"
+            "fetch live folder {FOLDER} PullRequests refresh false"
         )]
     );
     shell.update(cx, |shell, cx| {
@@ -135,6 +143,25 @@ fn the_spaces_menu_makes_one_and_unticking_deletes_it(cx: &mut TestAppContext) {
             .iter()
             .any(|edit| edit.contains(&FOLDER.to_string()))
     );
+}
+
+#[gpui::test]
+fn a_folder_made_asks_once_in_each_window_and_isnt_a_refresh(cx: &mut TestAppContext) {
+    let (shell, first, host) = window(cx);
+    report(&shell, first, false, &[]);
+    let once = vec![format!(
+        "fetch live folder {FOLDER} PullRequests refresh false"
+    )];
+    assert_eq!(fetches(&host), once);
+    // Drawn again, or reported again unchanged, it doesn't ask again.
+    report(&shell, first, false, &[]);
+    draw(&shell, first);
+    assert!(fetches(&host).is_empty());
+    // Another window hears the same report from the core, and asks once too; the core joins the
+    // two, or answers the second from what it kept.
+    let (other, second, _) = window_on(cx, host.clone());
+    report(&other, second, false, &[]);
+    assert_eq!(fetches(&host), once);
 }
 
 #[gpui::test]
@@ -176,6 +203,9 @@ fn only_what_the_user_does_asks_and_only_refresh_skips_the_cores_two_minutes(
     draw(&shell, cx);
     cx.update(|window, _| window.activate_window());
     draw(&shell, cx);
+    // The window's ask waits for the frame after the one that saw it active.
+    assert!(fetches(&host).is_empty());
+    cx.update(|window, cx| window.simulate_next_frame(cx));
     report(&shell, cx, true, &[]);
     shell.update(cx, |shell, cx| {
         shell.live_page_committed(3, "https://github.com/harbor/web/pull/7", cx)
@@ -292,7 +322,7 @@ fn a_pressed_row_opens_its_tab_in_its_place(cx: &mut TestAppContext) {
             layout[&Slot::Divider],
             layout[&Slot::Live(FOLDER, 0)] + room
         );
-        assert_eq!(shell.live_item_of(30), Some(items[1].clone()));
+        assert_eq!(shell.live_item_of(30), Some(&items[1]));
     });
     // Its item gone from the lists, it's a tab like the folder's others, over the headings.
     let without = vec![items[0].clone(), items[2].clone()];
@@ -407,4 +437,226 @@ fn convert_to_folder_ends_its_lists_and_keeps_its_tabs(cx: &mut TestAppContext) 
         assert!(shell.live.is_empty());
         assert_eq!(shell.live_source(FOLDER), None);
     });
+}
+
+/// The core's report of Space 1 with only `folder` after pinned tab 1, open and empty: a Live
+/// Folder if `live`, else a plain one, or with no folder at all if `folder` is 0.
+fn report_only(shell: &Entity<Shell>, cx: &mut VisualTestContext, folder: u64, live: bool) {
+    shell.update(cx, |shell, cx| {
+        let mut folders = Folders::default();
+        let mut pinned = vec![1];
+        if folder != 0 {
+            folders
+                .folders
+                .insert(folder, ("Pull Requests".into(), true));
+            if live {
+                folders.live.insert(folder, LiveSource::PullRequests);
+            }
+            pinned.push(folder);
+        }
+        shell.set_tabs(1, pinned, vec![3], Vec::new(), folders, cx);
+    });
+    draw(shell, cx);
+}
+
+/// The Live Folder ⌘Z made again, in the edits that made it and put it back after pinned tab 1.
+fn made_live(host: &Recorder) -> u64 {
+    let edits = host.take_edits();
+    let made: u64 = (edits.first().and_then(|edit| edit.split(' ').nth(2)))
+        .and_then(|id| id.parse().ok())
+        .unwrap_or_else(|| panic!("no Live Folder made in {edits:?}"));
+    assert_eq!(
+        edits,
+        [
+            format!("live folder {made} 1 PullRequests Pull Requests"),
+            format!("move folder {made} 0 1"),
+        ]
+    );
+    made
+}
+
+#[gpui::test]
+fn undo_brings_a_live_folder_deleted_or_unticked_back_live(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, true, &[]);
+    host.take_edits();
+    shell.update(cx, |shell, cx| {
+        shell.tab_menu(FOLDER, point(px(10.), px(10.)), cx)
+    });
+    cx.update(|_, cx| host.choose("Delete Folder", cx));
+    assert_eq!(host.take_edits(), [format!("delete folder {FOLDER}")]);
+    report_only(&shell, cx, 0, false);
+    assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
+    let made = made_live(&host);
+    // Unticked in the Space's menu, it comes back live too.
+    report_only(&shell, cx, made, true);
+    shell.update(cx, |shell, cx| {
+        shell.space_menu(1, point(px(10.), px(10.)), cx)
+    });
+    cx.update(|_, cx| host.choose("GitHub Pull Requests", cx));
+    assert_eq!(host.take_edits(), [format!("delete folder {made}")]);
+    report_only(&shell, cx, 0, false);
+    assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
+    made_live(&host);
+}
+
+#[gpui::test]
+fn undo_makes_a_folder_converted_live_again_and_redo_converts_it_again(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, true, &[]);
+    host.take_edits();
+    shell.update(cx, |shell, cx| {
+        shell.tab_menu(FOLDER, point(px(10.), px(10.)), cx)
+    });
+    cx.update(|_, cx| host.choose("Convert to Folder", cx));
+    assert_eq!(host.take_edits(), [format!("end live folder {FOLDER}")]);
+    report_only(&shell, cx, FOLDER, false);
+    // The core makes a Live Folder new, so one is made in the plain one's place, and the plain
+    // one, emptied into it, goes.
+    assert!(shell.update(cx, |shell, cx| shell.undo(cx)));
+    let edits = host.take_edits();
+    let made: u64 = edits[0].split(' ').nth(2).unwrap().parse().unwrap();
+    assert_eq!(
+        edits,
+        [
+            format!("live folder {made} 1 PullRequests Pull Requests"),
+            format!("move folder {made} 0 1"),
+            format!("delete folder {FOLDER}"),
+        ]
+    );
+    report_only(&shell, cx, made, true);
+    assert!(shell.update(cx, |shell, cx| shell.redo(cx)));
+    assert_eq!(host.take_edits(), [format!("end live folder {made}")]);
+}
+
+#[gpui::test]
+fn an_answer_the_folder_holds_already_draws_nothing(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window(cx);
+    report(&shell, cx, true, &[]);
+    let answered = just_now();
+    let items = || LiveAnswer::Items(vec![item(LiveList::Created, 7)]);
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(FOLDER, items(), answered, cx)
+    });
+    draw(&shell, cx);
+    let drawn = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counted = drawn.clone();
+    let _watch = cx.update(|_, cx| cx.observe(&shell, move |_, _| counted.set(counted.get() + 1)));
+    // The core's kept answer, for each ask inside its two minutes, is what the folder holds.
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(FOLDER, items(), answered, cx);
+        shell.set_live_answer(FOLDER, items(), answered, cx);
+    });
+    assert_eq!(drawn.get(), 0);
+    // The same rows the site gave again later make the folder's age new, and a failure shows.
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(FOLDER, items(), answered + 1, cx)
+    });
+    let again = drawn.get();
+    assert!(again > 0);
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(FOLDER, LiveAnswer::Failed, answered + 2, cx)
+    });
+    let failed = drawn.get();
+    assert!(failed > again);
+    // A failure again, the core's kept one or the site's, changes nothing either.
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(FOLDER, LiveAnswer::Failed, answered + 3, cx)
+    });
+    assert_eq!(drawn.get(), failed);
+}
+
+#[gpui::test]
+fn another_profile_for_the_space_drops_the_old_accounts_rows_and_asks(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, true, &[]);
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(
+            FOLDER,
+            LiveAnswer::Items(vec![item(LiveList::Created, 7)]),
+            just_now(),
+            cx,
+        )
+    });
+    host.take();
+    let rows =
+        |shell: &Shell| (shell.live.get(&FOLDER)).map_or(0, |kept| kept.rows(|_| None).len());
+    assert!(shell.read_with(cx, |shell, _| rows(shell)) > 0);
+    // Set Profile: the core reports Space 1 in profile 2.
+    shell.update(cx, |shell, cx| {
+        let space = (1, "Space".into(), None, 2, "".into(), "".into(), "".into());
+        let other = (2, "Other".into(), None, 1, "".into(), "".into(), "".into());
+        let agent = (
+            9,
+            "Agent".into(),
+            None,
+            1,
+            "".into(),
+            "claude".into(),
+            "".into(),
+        );
+        shell.set_spaces(vec![space, other, agent], cx);
+    });
+    assert_eq!(shell.read_with(cx, |shell, _| rows(shell)), 0);
+    assert_eq!(
+        fetches(&host),
+        [format!(
+            "fetch live folder {FOLDER} PullRequests refresh false"
+        )]
+    );
+    // The new account's fetch failing keeps none of the old one's rows.
+    shell.update(cx, |shell, cx| {
+        shell.set_live_answer(FOLDER, LiveAnswer::Failed, just_now(), cx)
+    });
+    assert_eq!(shell.read_with(cx, |shell, _| rows(shell)), 0);
+}
+
+#[gpui::test]
+fn a_live_folder_made_in_a_space_with_no_tabs_asks(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Folders::default(),
+            cx,
+        )
+    });
+    draw(&shell, cx);
+    host.take();
+    shell.update(cx, |shell, cx| {
+        let mut folders = Folders::default();
+        folders
+            .folders
+            .insert(FOLDER, ("Pull Requests".into(), true));
+        folders.live.insert(FOLDER, LiveSource::PullRequests);
+        shell.set_tabs(1, vec![FOLDER], Vec::new(), Vec::new(), folders, cx);
+    });
+    draw(&shell, cx);
+    assert_eq!(
+        fetches(&host),
+        [format!(
+            "fetch live folder {FOLDER} PullRequests refresh false"
+        )]
+    );
+}
+
+#[gpui::test]
+fn a_live_folder_brought_back_with_its_space_doesnt_ask_as_made(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    // Space 2's first report, as at launch, has the folder already.
+    shell.update(cx, |shell, cx| {
+        let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+        let other = (2, "Other".into(), None, 1, "".into(), "".into(), "".into());
+        let more = (4, "More".into(), None, 1, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space, other, more], cx);
+        let mut folders = Folders::default();
+        folders.folders.insert(40, ("Pull Requests".into(), false));
+        folders.live.insert(40, LiveSource::PullRequests);
+        shell.set_tabs(4, vec![40], Vec::new(), Vec::new(), folders, cx);
+    });
+    draw(&shell, cx);
+    assert!(fetches(&host).is_empty());
 }

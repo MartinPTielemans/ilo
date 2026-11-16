@@ -19,7 +19,8 @@
 # and in the narrowest sidebar with ad blocking off (#2345), and a Live Folder of made-up pull
 # requests, open light and dark, closed with its count, signed out, after a failed refresh and
 # with its tooltip then, the Space's menu with Live Folders open, the folder's menu, and in the
-# narrowest sidebar (#2979). The preview's Linux host places no window, so sway puts Site
+# narrowest sidebar, and frames of a press on its row, 4 s in, for a video of it (#2979), on
+# Wayland. The preview's Linux host places no window, so sway puts Site
 # Controls, the icon picker and the tooltip in the middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
@@ -118,6 +119,20 @@ for screen in "${screens[@]}"; do
     tiles+=(-label "$name, $system" "$png")
   done
 done
+# The frames: grim as fast as it goes for 6 s once the folder's rows are still, named by the ms
+# since the first, so the press, 4 s after the preview started, is among them.
+if [ "${systems[0]}" = wayland ]; then
+  frames=$out/wayland/live-folder-press-frames
+  mkdir -p "$frames"
+  if ! (export PREVIEW_SIZE=1280x800 PREVIEW_LIVE_FOLDER=open PREVIEW_APPEARANCE=light \
+    PREVIEW_PRESS=100,553,4000 && timeout 90 "$here/headless.sh" --moving 400 --then "set -e
+      start=\$(date +%s%3N)
+      while [ \$((\$(date +%s%3N) - start)) -lt 6000 ]; do
+        grim \"$frames/\$(printf %05d \$((\$(date +%s%3N) - start))).png\"
+      done" "$frames/start.png" 'live folder 9000 answered' "$preview" >/dev/null); then
+    missing+=("wayland/live-folder-press-frames")
+  fi
+fi
 "${montage[@]}" -font "$face" -pointsize 20 -fill white -background '#101010' -tile 2x \
   -geometry +12+12 "${tiles[@]}" "$out/sheet.png"
 echo "$out/sheet.png"

@@ -3439,8 +3439,9 @@ fn main() {
                     preview_hover(shell.into(), &what, cx);
                 }
             }
-            // PREVIEW_PRESS=<x>,<y> presses there in the window, as on a Live Folder's row, and
-            // takes the pointer off the sidebar after, so no row is hovered.
+            // PREVIEW_PRESS=<x>,<y>[,<ms>] presses there in the window, as on a Live Folder's row,
+            // half a second in or <ms> in, and takes the pointer off the sidebar after, so no row
+            // is hovered.
             if let Ok(what) = std::env::var("PREVIEW_PRESS") {
                 if let Some(shell) = shell_window {
                     preview_press(shell.into(), &what, cx);
@@ -3571,11 +3572,12 @@ fn preview_press(shell: gpui::AnyWindowHandle, what: &str, cx: &mut App) {
     let (Some(Some(x)), Some(Some(y))) = (parts.next(), parts.next()) else {
         return;
     };
+    // Once the folder's rows are drawn, whose boxes the press finds, or later, for frames of it.
+    let after = parts.next().flatten().map_or(500, |ms| ms as u64);
     let page = f32::from(PREVIEW_AREA.get().width) - 10.;
     cx.spawn(async move |cx| {
-        // Once the folder's rows are drawn, whose boxes the press finds.
         cx.background_executor()
-            .timer(Duration::from_millis(500))
+            .timer(Duration::from_millis(after))
             .await;
         let (position, modifiers) = (point(px(x), px(y)), gpui::Modifiers::default());
         let button = gpui::MouseButton::Left;

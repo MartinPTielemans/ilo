@@ -8,7 +8,7 @@ use gpui::{Context, SharedString};
 
 use crate::link_preview::Closed;
 
-use super::{Shell, Space};
+use super::{Shell, Space, live_folders::LiveSource};
 
 /// How long the toast that offers an Undo stays, and for as long as the pointer is over it.
 const OFFER_TIME: Duration = Duration::from_secs(5);
@@ -56,6 +56,7 @@ impl What {
     pub const MOVE_TO_SPACE: What = What::said("Move to Space", "Tab Moved to Space");
     pub const MOVE_FOLDER_TO_SPACE: What = What::said("Move to Space", "Folder Moved to Space");
     pub const DELETE_FOLDER: What = What::said("Delete Folder", "Folder Deleted");
+    pub const CONVERT_TO_FOLDER: What = What::quiet("Convert to Folder");
     pub const REMOVE_FROM_SPLIT: What = What::quiet("Remove from Split");
     pub const SPLIT: What = What::quiet("Split View");
     pub const SEPARATE_ALL: What = What::quiet("Separate All Tabs");
@@ -117,6 +118,8 @@ pub(super) struct Folder {
     index: usize,
     /// What it held, in order: the first tab of each split view, and the folders.
     children: Vec<u64>,
+    /// What filled it, if it was a Live Folder, which it's made again as.
+    live: Option<LiveSource>,
 }
 
 /// What a name, an icon or a colour belongs to. A Space's colour comes with the theme it's the
@@ -196,6 +199,14 @@ pub(super) enum Edit {
     Restore(Folder),
     /// Deletes a folder.
     Delete(u64),
+    /// Makes the plain folder that Convert to Folder left a Live Folder that `source` fills again,
+    /// in its place, with what it holds: the core makes Live Folders new, so it's a new one.
+    Relive {
+        folder: u64,
+        source: LiveSource,
+    },
+    /// Converts the Live Folder to a plain one, as Convert to Folder does.
+    Unlive(u64),
     /// Puts a tab in a split view with another, at its left end or right end.
     Join {
         tab: u64,
@@ -369,7 +380,7 @@ impl Edit {
                 id(&mut folder.container);
                 ids(&mut folder.children);
             }
-            Edit::Delete(folder) => id(folder),
+            Edit::Delete(folder) | Edit::Unlive(folder) | Edit::Relive { folder, .. } => id(folder),
             Edit::Join { tab, with, .. } => {
                 id(tab);
                 id(with);
@@ -552,6 +563,19 @@ impl Edit {
                 shell.browser.delete_folder(folder, cx);
                 Some(snapshot)
             }
+            Edit::Relive { folder, source } => {
+                let Some(Edit::Restore(mut snapshot)) = shell.folder_snapshot(folder) else {
+                    return None;
+                };
+                snapshot.live = Some(source);
+                // Made in the plain folder's place, it takes what that holds, and the empty
+                // plain one goes.
+                let made = shell.restore_folder(&snapshot, cx);
+                shell.browser.delete_folder(folder, cx);
+                shell.history.rekey(folder, made);
+                Some(Edit::Unlive(made))
+            }
+            Edit::Unlive(folder) => shell.convert_live_folder_now(folder, cx),
             Edit::Join { tab, with, left } => {
                 if !shell.has_tab(tab) || !shell.has_tab(with) {
                     return None;
@@ -1550,18 +1574,30 @@ impl Shell {
             container,
             index,
             children,
+            live: space.folders.live.get(&folder).copied(),
         }))
     }
 
-    /// Makes `folder` again where it was, puts what it held back in it, and returns its new id.
+    /// Makes `folder` again where it was, puts what it held back in it, and returns its new id. A
+    /// Live Folder comes back live, filled from its source, unless the core can't make it one.
     fn restore_folder(&mut self, folder: &Folder, cx: &mut Context<Self>) -> u64 {
-        let made = self.browser.create_folder(
-            folder.space,
-            &folder.name,
-            folder.container,
-            folder.index,
-            cx,
-        );
+        let live = (folder.live)
+            .map(|source| (self.browser).create_live_folder(folder.space, source, &folder.name, cx))
+            .filter(|&made| made != 0);
+        let made = match live {
+            // The core makes it at the bottom of the pinned tabs.
+            Some(made) => {
+                (self.browser).move_folder(made, folder.container, folder.index, cx);
+                made
+            }
+            None => self.browser.create_folder(
+                folder.space,
+                &folder.name,
+                folder.container,
+                folder.index,
+                cx,
+            ),
+        };
         let mut index = 0;
         for &child in &folder.children {
             let panes = self.panes_in(folder.space, child);
