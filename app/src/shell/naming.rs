@@ -557,6 +557,7 @@ impl Shell {
             in_library: false,
             _watches: Vec::new(),
         });
+        self.board_named = Some(tab);
         self.dock(cx);
         self.browser.focus_ui(cx);
         self.focus_renaming = true;
@@ -696,6 +697,17 @@ impl Shell {
         match renaming.naming {
             Naming::Profile(_) => {
                 self.focus_form = renaming.name.focus_handle(cx).is_focused(window);
+            }
+            // A Board New Board just made, its name kept or left with ↩ or esc, gives its page
+            // the keyboard, where its first note's field waits for the first key (#3073's
+            // condition 13). A press that took the keyboard elsewhere leaves it there.
+            Naming::Tab(tab) if self.board_named.take() == Some(tab) => {
+                let keys = renaming.name.focus_handle(cx).is_focused(window);
+                window.focus(&self.focus_handle, cx);
+                if keys && tab == self.selected {
+                    log!("browser: board {tab} has the keyboard");
+                    self.browser.focus_page(cx);
+                }
             }
             _ => window.focus(&self.focus_handle, cx),
         }

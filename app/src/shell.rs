@@ -1841,6 +1841,8 @@ pub struct Shell {
     /// has asked for, off the main thread, of which only the last one's list is kept.
     board_list: Vec<crate::boards::Listed>,
     boards_asked: u64,
+    /// The tab whose name field New Board opened, which gives its page the keyboard as it closes.
+    board_named: Option<u64>,
     /// The tab Portrait Mode's card is open over, with the background chosen on it, and where the
     /// card and its swatches were drawn last (portrait.rs).
     portrait_card: Option<(u64, crate::capture::portrait::Background)>,
@@ -2237,6 +2239,7 @@ impl Shell {
             boost_list: Vec::new(),
             board_list: Vec::new(),
             boards_asked: 0,
+            board_named: None,
             battery_saver: None,
             battery_leaf_drawn: Rc::default(),
             frozen: HashSet::new(),
