@@ -1,0 +1,97 @@
+<!doctype html><meta charset="utf-8"><title>-</title>
+<style>
+body { margin: 0; height: 100vh; font: 16px sans-serif; background: rgb(243, 245, 246) }
+.col { position: absolute; top: 20px; width: 260px; display: flex; flex-direction: column; gap: 20px }
+#a { left: 20px }
+#b { left: 320px }
+section { height: 80px; background: rgb(217, 226, 230) }
+#b1 { height: 50px }
+#b3 { height: 140px }
+#s { position: absolute; left: 620px; top: 20px; width: 260px }
+#s > div { display: flex; flex-direction: column; gap: 20px }
+#s > div + div { margin-top: 20px }
+#c3 { height: 140px }
+#m { position: absolute; left: 620px; top: 480px; width: 260px }
+#m section { height: 40px; margin: 10px 0 }
+#m #m3 { height: 70px }
+</style>
+<div class="col" id="a">
+<section aria-label="A1"></section><section aria-label="A2"></section><section aria-label="A3"></section><section aria-label="A4"></section>
+</div>
+<div class="col" id="b">
+<section id="b1" aria-label="B1"></section><section aria-label="B2"></section><section id="b3" aria-label="B3"></section><section aria-label="B4"></section>
+</div>
+<div id="s"><div><section aria-label="C1"></section><section aria-label="C2"></section></div><div><section id="c3" aria-label="C3"></section><section aria-label="C4"></section></div></div>
+<div id="m"><div><section aria-label="M1"></section><section aria-label="M2"></section></div><div><section id="m3" aria-label="M3"></section><section aria-label="M4"></section></div></div>
+<script>
+// #2990: a trade across two parents one over the other, the lower place first in its parent, in
+// flex columns with a gap and in blocks whose margins collapse through their parents; and three
+// trades arrange-trade.sh has, as controls. Each on main's runtime and on the fix's, carried by
+// the runtime's own ops.
+const regions = { a: [20, 280, 0, 1e4], b: [320, 580, 0, 1e4], s: [620, 880, 0, 470], m: [620, 880, 470, 1e4] };
+const R_ = (label) => document.querySelector('[aria-label="' + label + '"]').getBoundingClientRect();
+const region = (k) => {
+  const [l, r, t, b] = regions[k];
+  const top = k === 'a' || k === 'b' ? 20 : document.getElementById(k).getBoundingClientRect().top;
+  const things = [...document.querySelectorAll('section')].filter((e) => {
+    const q = e.getBoundingClientRect(), x = q.left + q.width / 2;
+    return x > l && x < r && q.top >= t && q.top < b;
+  }).sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top);
+  return things.map((e) => e.getAttribute('aria-label')).join(',') + ' ' +
+    things.map((e) => Math.round(e.getBoundingClientRect().top - top) + '-' + Math.round(e.getBoundingClientRect().bottom - top)).join(',');
+};
+const frames = (n) => new Promise((done) => { const f = () => (--n <= 0 ? done() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+const CH = ['none', 'settles', 'trades', 'floats', 'refused'];
+const kind = (st) => (st && CH[st.change]) || JSON.stringify(st).slice(0, 40);
+const mid = (label) => { const r = R_(label); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+const cases = [
+  ['T1', 'C2', 'C3'], ['T2', 'C3', 'C2'], ['T3', 'M2', 'M3'], ['T4', 'M3', 'M2'],
+  ['T5', 'B1', 'A3'], ['T6', 'A3', 'A1'], ['T7', 'B3', 'B1'],
+];
+const out = [];
+const at = () => Object.keys(regions).map((k) => k + ' ' + region(k)).join(' ');
+async function run(k) {
+  const src = await (await fetch('arrange-probe-stack-' + k + '.js')).text();
+  delete globalThis.__iloArrange;
+  const R = (0, eval)(src);
+  const call = (op, a) => R(op, a ? JSON.stringify(a) : '');
+  for (const [name, thing, onto] of cases) {
+    let line = '';
+    try {
+      call('load', { changes: [] });
+      call('on', { look: {} });
+      await frames(2);
+      const p = mid(thing);
+      call('down', p);
+      call('move', { x: p.x, y: p.y + 6 });
+      await frames(2);
+      const t = mid(onto);
+      const moved = call('move', t);
+      await frames(1);
+      const rested = call('rest', {});
+      await frames(1);
+      call('up', t);
+      await frames(3);
+      while (document.getAnimations().some((x) => x.playState === 'running')) await frames(1);
+      line = thing + ' onto ' + onto + ' rest ' + kind(rested) + ' ; ' + at();
+    } catch (e) { line = 'threw ' + String(e).slice(0, 100); }
+    try { call('off'); call('unload'); } catch {}
+    await frames(3);
+    out.push(`r ${k} ${name} ${line}`);
+  }
+}
+(async () => {
+  document.title = 'drop start';
+  await frames(5);
+  out.push('r page ' + at());
+  try { for (const k of ['before', 'after']) await run(k); } catch (e) { out.push('r drop threw ' + String(e).slice(0, 120)); }
+  let chunk = [];
+  const send = async () => { document.title = chunk.join(' | '); chunk = []; await new Promise((d) => setTimeout(d, 200)); };
+  for (const line of out) {
+    if (chunk.join(' | ').length + line.length > 900) await send();
+    chunk.push(line);
+  }
+  if (chunk.length) await send();
+  document.title = 'drop done ' + out.length;
+})();
+</script>
