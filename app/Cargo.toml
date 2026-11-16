@@ -28,8 +28,9 @@ prod = []
 gpui = { path = ".deps/zed/crates/gpui" }
 # Without threads, which on the web need nightly Rust and a cross-origin-isolated page.
 gpui_platform = { path = ".deps/zed/crates/gpui_platform", default-features = false, features = ["font-kit", "runtime_shaders"] }
-# The version GPUI decodes with, for a favicon's pixels and the images drawn from them.
-image = { version = "0.25", default-features = false, features = ["png"] }
+# The version GPUI decodes with, for a favicon's pixels and the images drawn from them, and a link
+# card's picture (src/link_card/picture.rs). GPUI's workspace has the other three already.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 raw-window-handle = "0.6"
 unicode-segmentation = "1.10"
 # Which characters make a word for a field's word moves, as AppKit's: letters, numbers, marks
