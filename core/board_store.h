@@ -18,9 +18,15 @@
 
 namespace browser_core::board {
 
-// A picture's bytes, the most one may be. A Board's own file and the Library's picture are less.
+// The most bytes a slice of the page's writes carries, the size the page sends (app/board/board.js).
+inline constexpr size_t kSlice = 256 * 1024;
+// A picture's bytes, the most one may be.
 inline constexpr uint64_t kMaxFile = 50 * 1024 * 1024;
-inline constexpr uint64_t kMaxBoardJson = 64 * 1024 * 1024;
+// A Board's own file, held whole in memory and written whole at each save. Its cards are text and
+// references: a note's words, a link, a picture's hash, a line's points. 4 MiB holds some 2,000
+// notes of a page of text each, or about 200,000 points of ink.
+inline constexpr uint64_t kMaxBoardJson = 4 * 1024 * 1024;
+// The Library's picture of a Board: a PNG of its page, 536 by 376.
 inline constexpr uint64_t kMaxThumb = 4 * 1024 * 1024;
 
 // A Board's id: 32 lowercase hex digits, 128 random bits the app makes. Never a path.

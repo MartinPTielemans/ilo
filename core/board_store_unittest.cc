@@ -157,5 +157,14 @@ TEST_F(BoardStore, TheBoardsFileAndItsPictureAreWrittenWhole) {
   EXPECT_EQ(Names(board_), (std::vector<std::string>{"board.json", "thumb.png"}));
 }
 
+TEST_F(BoardStore, ABoardsFileOverItsCapIsRefusedAndTheLastOneStays) {
+  ASSERT_TRUE(SaveBoardJson(board_, R"({"cards":[1]})"));
+  EXPECT_FALSE(SaveBoardJson(board_, std::string(kMaxBoardJson + 1, ' ')));
+  std::string json;
+  ASSERT_TRUE(base::ReadFileToString(board_.Append(FILE_PATH_LITERAL("board.json")), &json));
+  EXPECT_EQ(json, R"({"cards":[1]})");
+  EXPECT_TRUE(SaveBoardJson(board_, std::string(kMaxBoardJson, ' ')));
+}
+
 }  // namespace
 }  // namespace browser_core::board

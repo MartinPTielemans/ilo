@@ -209,12 +209,17 @@ class Writes {
 
   bool Here() const { return base::DirectoryExists(board_); }
 
+  // The most a write of |kind| may be.
+  static uint64_t Cap(Kind kind) {
+    return kind == Kind::kBoard   ? board::kMaxBoardJson
+           : kind == Kind::kThumb ? board::kMaxThumb
+           : kind == Kind::kFile  ? board::kMaxFile
+                                  : 0;
+  }
+
   bool Start(Kind kind, uint64_t size) {
     Drop();
-    const uint64_t max = kind == Kind::kBoard   ? board::kMaxBoardJson
-                         : kind == Kind::kThumb ? board::kMaxThumb
-                                                : board::kMaxFile;
-    if (size == 0 || size > max || !Here()) {
+    if (size == 0 || size > Cap(kind) || !Here()) {
       return false;
     }
     if (kind == Kind::kFile && !(add_ = board::FileAdd::Start(board_, size))) {
@@ -413,7 +418,7 @@ class BoardHandler : public content::WebUIMessageHandler {
                                 : *kind == "file"  ? Writes::Kind::kFile
                                                    : Writes::Kind::kNone;
     if (!Writer() || writes == Writes::Kind::kNone || !size || *size < 1 ||
-        *size > static_cast<double>(board::kMaxBoardJson)) {
+        *size > static_cast<double>(Writes::Cap(writes))) {
       Answer(args[0].Clone(), base::Value(false));
       return;
     }
@@ -428,6 +433,13 @@ class BoardHandler : public content::WebUIMessageHandler {
     }
     // A slice comes as an ArrayBuffer, which chrome.send carries as binary.
     if (!Writer() || args.size() != 2 || !args[1].is_blob()) {
+      Answer(args[0].Clone(), base::Value(false));
+      return;
+    }
+    // A wall against a page that goes wrong, not the budget: by now the UI thread has carried the
+    // slice. The write it was part of goes.
+    if (args[1].GetBlob().size() > board::kSlice) {
+      writes_.AsyncCall(&Writes::Drop);
       Answer(args[0].Clone(), base::Value(false));
       return;
     }
