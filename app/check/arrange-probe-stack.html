@@ -84,7 +84,7 @@ async function run(k) {
   document.title = 'drop start';
   await frames(5);
   out.push('r page ' + at());
-  try { for (const k of ['before', 'after']) await run(k); } catch (e) { out.push('r drop threw ' + String(e).slice(0, 120)); }
+  try { for (const k of ['before', 'after', 'order']) await run(k); } catch (e) { out.push('r drop threw ' + String(e).slice(0, 120)); }
   let chunk = [];
   const send = async () => { document.title = chunk.join(' | '); chunk = []; await new Promise((d) => setTimeout(d, 200)); };
   for (const line of out) {
