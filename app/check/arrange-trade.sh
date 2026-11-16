@@ -4,7 +4,8 @@
 # columns with a 20 px gap: one of four things of one height, and one of four of different heights,
 # so the room each leaves isn't the other's size. Carried up and carried down, with one thing between
 # them, with two, and next to each other, and across the two columns; and between two parents one
-# over the other, where the lower place is first in its parent, which the upper room moves (#2990).
+# over the other, where the lower place is first in its parent, which the upper room moves (#2990):
+# flex columns with a gap, and blocks whose margins collapse through them.
 # After each, ⌘Z with the page focused takes the trade back
 # and a click on the page's empty part ends the selection, so each starts from the page as it was.
 # Then an arranged page at rest asks for nothing (#2981): each of the three files whose trade
@@ -29,6 +30,9 @@ section { height: 80px; background: rgb(217, 226, 230) }
 #s > div { display: flex; flex-direction: column; gap: 20px }
 #s > div + div { margin-top: 20px }
 #c3 { height: 140px }
+#m { position: absolute; left: 620px; top: 480px; width: 260px }
+#m section { height: 40px; margin: 10px 0 }
+#m #m3 { height: 70px }
 a { position: absolute; left: 20px; width: 60px; height: 30px }
 </style>
 <a href="arrange-idle.html?m2" style="top: 470px">m2</a><a href="arrange-idle.html?m4" style="top: 510px">m4</a><a href="arrange-idle.html?m12" style="top: 550px">m12</a>
@@ -39,6 +43,7 @@ a { position: absolute; left: 20px; width: 60px; height: 30px }
 <section id="b1" aria-label="B1"></section><section aria-label="B2"></section><section id="b3" aria-label="B3"></section><section aria-label="B4"></section>
 </div>
 <div id="s"><div><section aria-label="C1"></section><section aria-label="C2"></section></div><div><section id="c3" aria-label="C3"></section><section aria-label="C4"></section></div></div>
+<div id="m"><div><section aria-label="M1"></section><section aria-label="M2"></section></div><div><section id="m3" aria-label="M3"></section><section aria-label="M4"></section></div></div>
 <script>
 let at = "-";
 addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," + Math.round(event.clientY); });
@@ -58,9 +63,9 @@ function column(col) {
   const order = things.map((t) => t.getAttribute("aria-label").slice(t.parentNode === col ? 1 : 0)).join(",");
   return order + " " + (gaps.every((g) => Math.abs(g - 20) <= 1) ? "packed" : gaps.join(","));
 }
-// The two parents one over the other: their things from the top, and where each starts, from the
-// top of the first.
-function stacked() {
+// Two parents one over the other: their things from the top, and where each starts, from the top
+// of the two.
+function stacked(s) {
   const top = s.getBoundingClientRect().top;
   const things = [...s.querySelectorAll("section")].sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top);
   return things.map((t) => t.getAttribute("aria-label").slice(1)).join(",") + " " +
@@ -70,7 +75,7 @@ let said;
 setInterval(() => {
   // Not while the things move: only where they come to rest.
   if (document.getAnimations().some((x) => x.playState === "running")) return;
-  const now = "a " + column(a) + " b " + column(b) + " c " + stacked() + " at " + at;
+  const now = "a " + column(a) + " b " + column(b) + " c " + stacked(s) + " m " + stacked(m) + " at " + at;
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/arrange-trade.html"
@@ -91,7 +96,7 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 await "^browser: boost shown $host " || fail "the app didn't give the core the site's Boost"
-await '^browser: title [0-9]* a 1,2,3,4 packed b 1,2,3,4 packed c 1,2,3,4 0,100,200,360 at -$' || fail "the fixture page didn't draw"
+await '^browser: title [0-9]* a 1,2,3,4 packed b 1,2,3,4 packed c 1,2,3,4 0,100,200,360 m 1,2,3,4 10,60,110,190 at -$' || fail "the fixture page didn't draw"
 tab=$(grep '^browser: title [0-9]* a ' "$log" | tail -1 | cut -d' ' -f3)
 said() { grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f4-; }
 # Waits for the page to say $1, as a pattern over its title, and fails with $2.
@@ -140,6 +145,7 @@ middle() {
     A*) x=150 tops='20 120 220 320' heights='80 80 80 80' ;;
     B*) x=450 tops='20 90 190 350' heights='50 80 140 80' ;;
     C*) x=750 tops='20 120 220 380' heights='80 80 140 80' ;;
+    M*) x=750 tops='490 540 590 670' heights='40 40 70 40' ;;
   esac
   set -- ${1#?} $tops $heights
   eval "echo $x \$((\${$(($1 + 1))} + \${$(($1 + 5))} / 2))"
@@ -160,7 +166,7 @@ trade() {
   ../tools/window-screenshot.sh "$pid" "$out/arrange-trade-$1-$2.png" || fail "no window to capture"
   traded="$traded $1 onto $2,"
   send key z cmd
-  page_says '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,2,3,4 0,100,200,360 ' "$1 onto $2: ⌘Z didn't take the trade back"
+  page_says '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,2,3,4 0,100,200,360 m 1,2,3,4 10,60,110,190 ' "$1 onto $2: ⌘Z didn't take the trade back"
   # The selection ends, so its mini bar covers nothing the next press needs.
   send click $(page_at 600 600)
   expect "^browser: arrange $tab Pointing None" "$1 onto $2: a click on the page's empty part didn't end the selection"
@@ -191,6 +197,10 @@ trade B1 A3 '^a 1,2,B1,4 packed b A3,2,3,4 packed '
 # down with it, so C2 starts there and C4 20 under C2 (#2990).
 trade C2 C3 '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,3,2,4 0,100,260,360 '
 trade C3 C2 '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,3,2,4 0,100,260,360 '
+# The same with 10 pt margins that collapse through both parents, which move a parent's own edge
+# rather than what it follows: M2 starts 10 under the taller M3, and M4 10 under M2.
+trade M2 M3 '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,2,3,4 0,100,200,360 m 1,3,2,4 10,60,140,190 '
+trade M3 M2 '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,2,3,4 0,100,200,360 m 1,3,2,4 10,60,140,190 '
 
 send key escape
 expect "browser: tab $tab arrange off\$" "escape in the page didn't end Arrange"
