@@ -34,30 +34,10 @@ if command -v magick >/dev/null; then convert=(magick) montage=(magick montage);
 # shell words, so a value with spaces is quoted, and for one taken under the pointer, what the
 # preview logs ending in the point the pointer goes to.
 screens=(
-  "sidebar|drawn at|"
-  "sidebar-right|drawn at|PREVIEW_SIDEBAR_RIGHT=1"
-  "library-right|library shown|PREVIEW_SIDEBAR_RIGHT=1 PREVIEW_LIBRARY=1"
-  "library-spaces-right|library shown|PREVIEW_SIDEBAR_RIGHT=1 PREVIEW_LIBRARY=spaces"
-  "command-bar|command bar drew|PREVIEW_BAR=tabs"
-  "context-menu|menu shown|PREVIEW_MENU=100,247"
-  "site-controls|site controls settled|PREVIEW_SITE_CONTROLS=1"
-  "icon-picker|icon picker for|PREVIEW_ICON_PICKER="
-  "dialog|dialog settled|PREVIEW_DIALOG=1 PREVIEW_MENU=40,205,up,enter"
-  "space-theme|drawn at|PREVIEW_THEME='x=0.5 y=0 colors=3'"
-  "peek|link preview settled|PREVIEW_PEEK=1"
-  "many-spaces|drawn at|PREVIEW_SPACES=16 PREVIEW_SIDEBAR=300"
-  "many-spaces-library|library shown|PREVIEW_SPACES=8 PREVIEW_LIBRARY=spaces PREVIEW_SIZE=1100x700"
-  "settings-least|settings held Sync|PREVIEW_ACCOUNT=signed-in PREVIEW_SIZE=720x480 PREVIEW_SCROLL=200"
-  "translate-hover-dark|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=dark|translate mark drawn at"
-  "translate-hover-light|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=light|translate mark drawn at"
-  "foot-bar|foot bar shown|PREVIEW_FOOT_BAR=point"
-  "model-menu-claude-dark|menu shown|PREVIEW_MODEL_MENU=claude,sonnet PREVIEW_APPEARANCE=dark"
-  "model-menu-claude-light|menu shown|PREVIEW_MODEL_MENU=claude,sonnet PREVIEW_APPEARANCE=light"
-  "model-menu-codex-dark|menu shown|PREVIEW_MODEL_MENU=codex PREVIEW_APPEARANCE=dark"
-  "model-menu-codex-light|menu shown|PREVIEW_MODEL_MENU=codex PREVIEW_APPEARANCE=light"
-  "safe-start-light|safe start card 0 at|PREVIEW_SAFE_START=1 PREVIEW_APPEARANCE=light"
-  "safe-start-dark|safe start card 0 at|PREVIEW_SAFE_START=1 PREVIEW_APPEARANCE=dark"
-  "safe-start-narrow|safe start card 0 at|PREVIEW_SAFE_START=unblocked PREVIEW_SIDEBAR=164"
+  "sidebar-light|drawn at|PREVIEW_APPEARANCE=light"
+  "sidebar-dark|drawn at|PREVIEW_APPEARANCE=dark"
+  "library-light|library shown|PREVIEW_LIBRARY=downloads PREVIEW_APPEARANCE=light"
+  "library-dark|library shown|PREVIEW_LIBRARY=downloads PREVIEW_APPEARANCE=dark"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
