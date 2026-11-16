@@ -5707,7 +5707,7 @@ index f9b9727330..e1e2214d9d 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..b2ea494f22 100644
+index e21f019c64..0c8ed6aa4c 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -5726,7 +5726,7 @@ index e21f019c64..b2ea494f22 100644
      protocol::xinput::ConnectionExt,
      protocol::xkb::ConnectionExt as _,
      protocol::xproto::{
-@@ -58,12 +60,87 @@ use crate::linux::{
+@@ -58,12 +60,86 @@ use crate::linux::{
  };
  use crate::linux::{LinuxCommon, LinuxKeyboardLayout, X11Window, modifiers_from_xinput_info};
  
@@ -5766,9 +5766,8 @@ index e21f019c64..b2ea494f22 100644
 +    /// it as none of them, nor as it is now, refused it the place (`managed_overlay_refused`).
 +    static ASKED_SIZES: RefCell<Vec<(xproto::Window, u32, u32)>> =
 +        const { RefCell::new(Vec::new()) };
-+    /// Each managed overlay waiting for its place (`UNPLACED`), or to be seen once it has it, with
-+    /// the timer that ends the wait (`bound_place`, `bound_seen`), as nothing else does with a
-+    /// manager that never moves it or never takes its shape.
++    /// Each managed overlay waiting for its place (`UNPLACED`), with the timer that ends the wait
++    /// (`bound_place`), as nothing else does with a manager that never moves it.
 +    static PLACE_BOUNDS: RefCell<Vec<(xproto::Window, calloop::RegistrationToken)>> =
 +        const { RefCell::new(Vec::new()) };
 +    /// The managed overlays shown and not yet mapped since, whose place is checked as they map.
@@ -5815,7 +5814,7 @@ index e21f019c64..b2ea494f22 100644
  };
  use gpui_wgpu::{CompositorGpuHint, GpuContext};
  
-@@ -163,8 +240,106 @@ pub struct Xdnd {
+@@ -163,8 +239,106 @@ pub struct Xdnd {
  struct PointerDeviceState {
      horizontal: ScrollAxisState,
      vertical: ScrollAxisState,
@@ -5922,7 +5921,7 @@ index e21f019c64..b2ea494f22 100644
  #[derive(Debug, Default)]
  struct ScrollAxisState {
      /// Valuator number for looking up this axis's scroll value.
-@@ -176,7 +351,7 @@ struct ScrollAxisState {
+@@ -176,7 +350,7 @@ struct ScrollAxisState {
      /// This gets set to `None` whenever it might be invalid - when devices change or when window focus changes.
      /// The logic errs on the side of invalidating this, since the consequence is just skipping the delta of one scroll event.
      /// The consequence of not invalidating it can be large invalid deltas, which are much more user visible.
@@ -5931,7 +5930,7 @@ index e21f019c64..b2ea494f22 100644
  }
  
  pub struct X11ClientState {
-@@ -204,12 +379,19 @@ pub struct X11ClientState {
+@@ -204,12 +378,19 @@ pub struct X11ClientState {
      pub(crate) xcb_connection: Rc<XCBConnection>,
      xkb_device_id: i32,
      client_side_decorations_supported: bool,
@@ -5951,7 +5950,7 @@ index e21f019c64..b2ea494f22 100644
      pub(crate) xkb: xkbc::State,
      keyboard_layout: LinuxKeyboardLayout,
      pub(crate) ximc: Option<X11rbClient<Rc<XCBConnection>>>,
-@@ -228,10 +410,16 @@ pub struct X11ClientState {
+@@ -228,10 +409,16 @@ pub struct X11ClientState {
      pub(crate) cursor_handle: cursor::Handle,
      pub(crate) cursor_styles: HashMap<xproto::Window, CursorStyle>,
      pub(crate) cursor_cache: HashMap<CursorStyle, Option<xproto::Cursor>>,
@@ -5968,7 +5967,7 @@ index e21f019c64..b2ea494f22 100644
  
      pub(crate) supports_xinput_gestures: bool,
  
-@@ -239,6 +427,9 @@ pub struct X11ClientState {
+@@ -239,6 +426,9 @@ pub struct X11ClientState {
      pub(crate) clipboard: Clipboard,
      pub(crate) clipboard_item: Option<ClipboardItem>,
      pub(crate) xdnd_state: Xdnd,
@@ -5978,7 +5977,7 @@ index e21f019c64..b2ea494f22 100644
  }
  
  #[derive(Clone)]
-@@ -249,6 +440,36 @@ impl X11ClientStatePtr {
+@@ -249,6 +439,36 @@ impl X11ClientStatePtr {
          self.0.upgrade().map(X11Client)
      }
  
@@ -6015,7 +6014,7 @@ index e21f019c64..b2ea494f22 100644
      pub fn drop_window(&self, x_window: u32) {
          let Some(client) = self.get_client() else {
              return;
-@@ -272,6 +493,11 @@ impl X11ClientStatePtr {
+@@ -272,6 +492,11 @@ impl X11ClientStatePtr {
              state.cursor_hidden_window = None;
          }
          state.cursor_styles.remove(&x_window);
@@ -6027,7 +6026,7 @@ index e21f019c64..b2ea494f22 100644
      }
  
      pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
-@@ -416,7 +642,12 @@ impl X11Connection {
+@@ -416,7 +641,12 @@ impl X11Connection {
              .context("Failed to get XCB atoms")?;
  
          let root = xcb_connection.setup().roots[0].root;
@@ -6041,7 +6040,7 @@ index e21f019c64..b2ea494f22 100644
          let gtk_frame_extents_supported =
              check_gtk_frame_extents_supported(&xcb_connection, &atoms, root);
          let client_side_decorations_supported = compositor_present && gtk_frame_extents_supported;
-@@ -487,6 +718,21 @@ impl X11Connection {
+@@ -487,6 +717,21 @@ impl X11Connection {
  
          let screen = &xcb_connection.setup().roots[x_root_index];
          let compositor_gpu = detect_compositor_gpu(&xcb_connection, screen);
@@ -6063,7 +6062,7 @@ index e21f019c64..b2ea494f22 100644
  
          let xcb_connection = Rc::new(xcb_connection);
  
-@@ -525,12 +771,16 @@ impl X11Connection {
+@@ -525,12 +770,16 @@ impl X11Connection {
                  xcb_connection,
                  xkb_device_id,
                  client_side_decorations_supported,
@@ -6080,7 +6079,7 @@ index e21f019c64..b2ea494f22 100644
                  xkb: xkb_state,
                  keyboard_layout,
                  ximc,
-@@ -544,16 +794,21 @@ impl X11Connection {
+@@ -544,16 +793,21 @@ impl X11Connection {
                  cursor_handle,
                  cursor_styles: HashMap::default(),
                  cursor_cache: HashMap::default(),
@@ -6102,7 +6101,7 @@ index e21f019c64..b2ea494f22 100644
              })
          })));
          // From here on, `Drop` removes whatever was registered if a later step fails.
-@@ -568,6 +823,23 @@ impl X11Connection {
+@@ -568,6 +822,23 @@ impl X11Connection {
  pub(crate) struct X11Client(pub(crate) Rc<RefCell<X11ClientState>>);
  
  impl X11Client {
@@ -6126,7 +6125,7 @@ index e21f019c64..b2ea494f22 100644
      fn register_sources(
          &self,
          handle: &LoopHandle<'static, ()>,
-@@ -745,6 +1017,10 @@ impl X11Client {
+@@ -745,6 +1016,10 @@ impl X11Client {
              }
  
              for event in events.into_iter() {
@@ -6137,7 +6136,7 @@ index e21f019c64..b2ea494f22 100644
                  let mut state = self.0.borrow_mut();
                  if !state.has_xim() {
                      drop(state);
-@@ -879,9 +1155,206 @@ impl X11Client {
+@@ -879,9 +1154,206 @@ impl X11Client {
              .map(|window_reference| window_reference.window.clone())
      }
  
@@ -6344,7 +6343,7 @@ index e21f019c64..b2ea494f22 100644
                  let mut state = self.0.borrow_mut();
                  if let Some(window_ref) = state.windows.get_mut(&event.window) {
                      window_ref.is_mapped = false;
-@@ -889,13 +1362,34 @@ impl X11Client {
+@@ -889,13 +1361,31 @@ impl X11Client {
                  handle_visibility_changed(state, event.window);
              }
              Event::MapNotify(event) => {
@@ -6375,13 +6374,10 @@ index e21f019c64..b2ea494f22 100644
 +                if event.state != xproto::Visibility::FULLY_OBSCURED {
 +                    self.0.borrow().managed_focus_on_map(event.window).log_err();
 +                }
-+                if event.state != xproto::Visibility::FULLY_OBSCURED {
-+                    self.0.borrow().unbound_seen(event.window);
-+                }
                  let mut state = self.0.borrow_mut();
                  if let Some(window_ref) = state.windows.get_mut(&event.window) {
                      window_ref.last_visibility = event.state;
-@@ -1033,7 +1527,15 @@ impl X11Client {
+@@ -1033,7 +1523,15 @@ impl X11Client {
                      self.0.borrow_mut().xdnd_state.retrieved = true;
                  }
              }
@@ -6397,7 +6393,7 @@ index e21f019c64..b2ea494f22 100644
                  let bounds = Bounds {
                      origin: Point {
                          x: event.x.into(),
-@@ -1044,13 +1546,114 @@ impl X11Client {
+@@ -1044,13 +1542,114 @@ impl X11Client {
                          height: event.height.into(),
                      },
                  };
@@ -6512,7 +6508,7 @@ index e21f019c64..b2ea494f22 100644
                  let window = self.get_window(event.window)?;
                  window
                      .property_notify(event)
-@@ -1069,6 +1672,24 @@ impl X11Client {
+@@ -1069,6 +1668,24 @@ impl X11Client {
                  self.enable_ime();
              }
              Event::FocusOut(event) => {
@@ -6537,7 +6533,7 @@ index e21f019c64..b2ea494f22 100644
                  let window = self.get_window(event.event)?;
                  window.set_active(false);
                  let mut state = self.0.borrow_mut();
-@@ -1117,6 +1738,12 @@ impl X11Client {
+@@ -1117,6 +1734,12 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xkb(&state.xkb);
                  let capslock = capslock_from_xkb(&state.xkb);
@@ -6550,7 +6546,7 @@ index e21f019c64..b2ea494f22 100644
                  if state.last_modifiers_changed_event == modifiers
                      && state.last_capslock_changed_event == capslock
                  {
-@@ -1143,6 +1770,7 @@ impl X11Client {
+@@ -1143,6 +1766,7 @@ impl X11Client {
                  }
              }
              Event::KeyPress(event) => {
@@ -6558,7 +6554,7 @@ index e21f019c64..b2ea494f22 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
  
-@@ -1156,7 +1784,17 @@ impl X11Client {
+@@ -1156,7 +1780,17 @@ impl X11Client {
                      let mut keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
                      let keysym = key_event_state.key_get_one_sym(code);
  
@@ -6576,7 +6572,7 @@ index e21f019c64..b2ea494f22 100644
                          return Some(());
                      }
  
-@@ -1200,6 +1838,7 @@ impl X11Client {
+@@ -1200,6 +1834,7 @@ impl X11Client {
                      keystroke
                  };
                  drop(state);
@@ -6584,7 +6580,7 @@ index e21f019c64..b2ea494f22 100644
                  window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
                      keystroke,
                      is_held: false,
-@@ -1220,6 +1859,9 @@ impl X11Client {
+@@ -1220,6 +1855,9 @@ impl X11Client {
                      let keysym = key_event_state.key_get_one_sym(code);
  
                      if keysym.is_modifier_key() {
@@ -6594,7 +6590,7 @@ index e21f019c64..b2ea494f22 100644
                          return Some(());
                      }
  
-@@ -1229,8 +1871,26 @@ impl X11Client {
+@@ -1229,8 +1867,26 @@ impl X11Client {
                  window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
              }
              Event::XinputButtonPress(event) => {
@@ -6621,7 +6617,7 @@ index e21f019c64..b2ea494f22 100644
  
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
-@@ -1307,7 +1967,12 @@ impl X11Client {
+@@ -1307,7 +1963,12 @@ impl X11Client {
                      }
                  }
              }
@@ -6635,7 +6631,7 @@ index e21f019c64..b2ea494f22 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  let modifiers = modifiers_from_xinput_info(event.mods);
-@@ -1332,7 +1997,26 @@ impl X11Client {
+@@ -1332,7 +1993,26 @@ impl X11Client {
                      None => {}
                  }
              }
@@ -6663,7 +6659,7 @@ index e21f019c64..b2ea494f22 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  state.restore_cursor_after_hide();
-@@ -1384,12 +2068,8 @@ impl X11Client {
+@@ -1384,12 +2064,8 @@ impl X11Client {
                  if let Some(pointer) = state.pointer_device_states.get_mut(&event.sourceid) {
                      let scroll_delta = get_scroll_delta_and_update_state(pointer, &event);
                      drop(state);
@@ -6678,7 +6674,7 @@ index e21f019c64..b2ea494f22 100644
                      }
                  }
              }
-@@ -1400,7 +2080,21 @@ impl X11Client {
+@@ -1400,7 +2076,21 @@ impl X11Client {
                  state.mouse_focused_window = Some(event.event);
                  state.restore_cursor_after_hide();
              }
@@ -6701,7 +6697,7 @@ index e21f019c64..b2ea494f22 100644
                  let mut state = self.0.borrow_mut();
  
                  // Set last scroll values to `None` so that a large delta isn't created if scrolling is done outside the window (the valuator is global)
-@@ -1413,9 +2107,15 @@ impl X11Client {
+@@ -1413,9 +2103,15 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
@@ -6717,7 +6713,7 @@ index e21f019c64..b2ea494f22 100644
                  window.handle_input(PlatformInput::MouseExited(gpui::MouseExitEvent {
                      pressed_button,
                      position,
-@@ -1523,6 +2223,35 @@ impl X11Client {
+@@ -1523,6 +2219,35 @@ impl X11Client {
          };
      }
  
@@ -6753,7 +6749,7 @@ index e21f019c64..b2ea494f22 100644
      fn xim_handle_event(&self, event: Event) -> Option<()> {
          match event {
              Event::KeyPress(event) | Event::KeyRelease(event) => {
-@@ -1781,7 +2510,7 @@ impl X11Client {
+@@ -1781,7 +2506,7 @@ impl X11Client {
              return;
          }
  
@@ -6762,7 +6758,7 @@ index e21f019c64..b2ea494f22 100644
              return;
          };
  
-@@ -1842,8 +2571,9 @@ impl X11Client {
+@@ -1842,8 +2567,9 @@ impl X11Client {
          let mut state = self.0.borrow_mut();
          state
              .clipboard
@@ -6773,7 +6769,7 @@ index e21f019c64..b2ea494f22 100644
                  clipboard::ClipboardKind::Clipboard,
                  clipboard::WaitConfig::None,
              )
-@@ -1888,6 +2618,11 @@ impl X11Client {
+@@ -1888,6 +2614,11 @@ impl X11Client {
          })
      }
  
@@ -6785,7 +6781,7 @@ index e21f019c64..b2ea494f22 100644
      pub(crate) fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
          let state = self.0.borrow();
          let root = state.xcb_connection.setup().roots[state.x_root_index].root;
-@@ -2052,6 +2787,9 @@ impl X11ClientState {
+@@ -2052,6 +2783,9 @@ impl X11ClientState {
          x_window: xproto::Window,
          refresh_rate: Duration,
      ) -> RegistrationToken {
@@ -6795,7 +6791,7 @@ index e21f019c64..b2ea494f22 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,43 +2825,1680 @@ impl X11ClientState {
+@@ -2087,44 +2821,1660 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
@@ -7143,15 +7139,8 @@ index e21f019c64..b2ea494f22 100644
  
 -        let cursor = match result {
 -            Ok(cursor) => Some(cursor),
-+    /// Drops the timer that would end the managed overlay `window`'s wait to be seen, now it is.
-+    fn unbound_seen(&self, window: xproto::Window) {
-+        if !UNPLACED.with_borrow(|all| all.iter().any(|(each, _)| *each == window)) {
-+            self.unbound_place(window);
-+        }
-+    }
-+
-+    /// Drops the timer that would end the managed overlay `window`'s wait for its place, or to be
-+    /// seen.
+-            Err(err) => {
++    /// Drops the timer that would end the managed overlay `window`'s wait for its place.
 +    fn unbound_place(&self, window: xproto::Window) {
 +        // A window dropped as the thread ends, as GPUI's app is at exit, may outlive the table.
 +        let timers: Vec<_> = (PLACE_BOUNDS.try_with(|all| {
@@ -7166,43 +7155,30 @@ index e21f019c64..b2ea494f22 100644
 +        }
 +    }
 +
-+    /// Ends the managed overlay `window`'s wait to be seen, now it has its shape, in `PLACE_BOUND`
-+    /// at most. The X server says it's seen once the manager's frame round it has the shape too,
-+    /// which the manager copies on hearing of it (KWin's `X11Window::updateShape`). On KWin a
-+    /// run's first prompt once heard nothing more, so it never drew (#2800). Then the manager is
-+    /// told of the shape again, and the overlay draws.
-+    fn bound_seen(&self, window: xproto::Window) {
++    /// The managed overlay `window`, which had no shape while it waited for its place, so the X
++    /// server said it was fully obscured, counts as seen once it takes its shape, and draws. The
++    /// server says it's seen once the manager's frame round it has the shape too, which the manager
++    /// copies on hearing of it (KWin's `X11Window::updateShape`), but on KWin the server once said
++    /// nothing more though the frame had the shape, and the overlay never drew (#2940). Covered by
++    /// another window then, it draws once for nothing, and the server's next `VisibilityNotify`
++    /// says it's obscured. It's marked once the events in hand are handled, as the caller holds the
++    /// client.
++    fn seen_with_shape(&self, window: xproto::Window) {
 +        let this = self.this.clone();
-+        let timer = crate::linux::platform::insert_timer(&self.loop_handle, PLACE_BOUND, move |_| {
-+            PLACE_BOUNDS.with_borrow_mut(|all| all.retain(|&(each, _)| each != window));
++        self.loop_handle.insert_idle(move |_| {
 +            let Some(client) = this.get_client() else {
-+                return calloop::timer::TimeoutAction::Drop;
++                return;
 +            };
 +            let mut state = client.0.borrow_mut();
-+            let xcb = state.xcb_connection.clone();
-+            let frame = (state.top_level(window).ok())
-+                .and_then(|frame| xcb.shape_query_extents(frame).ok()?.reply().ok());
-+            let frame = frame.map(|e| {
-+                let (w, h) = (e.bounding_shape_extents_width, e.bounding_shape_extents_height);
-+                format!("shaped {} {w}x{h}", e.bounding_shaped)
-+            });
-+            eprintln!(
-+                "browser: x11 managed overlay {window:#x} not seen {} ms after its shape, frame {}",
-+                PLACE_BOUND.as_millis(),
-+                frame.as_deref().unwrap_or("unknown")
-+            );
-+            // An offset of nothing changes nothing but tells the manager of the shape again.
-+            xcb.shape_offset(shape::SK::BOUNDING, window, 0, 0).log_err();
-+            xcb.flush().log_err();
-+            if let Some(window_ref) = state.windows.get_mut(&window) {
-+                window_ref.last_visibility = xproto::Visibility::UNOBSCURED;
++            let Some(window_ref) = state.windows.get_mut(&window) else {
++                return;
++            };
++            if window_ref.last_visibility != xproto::Visibility::FULLY_OBSCURED {
++                return;
 +            }
++            window_ref.last_visibility = xproto::Visibility::UNOBSCURED;
 +            handle_visibility_changed(state, window);
-+            calloop::timer::TimeoutAction::Drop
 +        });
-+        if let Some(timer) = timer.log_err() {
-+            PLACE_BOUNDS.with_borrow_mut(|all| all.push((window, timer)));
-+        }
 +    }
 +
 +    /// The managed overlay `window` is where it was put, or shows unmanaged there: it takes the
@@ -7229,7 +7205,7 @@ index e21f019c64..b2ea494f22 100644
 +        let unseen = (self.windows.get(&window))
 +            .is_some_and(|w| w.last_visibility == xproto::Visibility::FULLY_OBSCURED);
 +        if unseen && crate::linux::overlay::is_managed(window as usize) {
-+            self.bound_seen(window);
++            self.seen_with_shape(window);
 +        }
 +        Ok(())
 +    }
@@ -8502,10 +8478,11 @@ index e21f019c64..b2ea494f22 100644
 +
 +        let cursor = match result {
 +            Ok(cursor) => Some(cursor),
-             Err(err) => {
++            Err(err) => {
                  match self
                      .cursor_handle
-@@ -2197,7 +4572,7 @@ impl X11ClientState {
+                     .load_cursor(&self.xcb_connection, DEFAULT_CURSOR_ICON_NAME)
+@@ -2197,7 +4547,7 @@ impl X11ClientState {
              .get(&hidden_window)
              .copied()
              .unwrap_or(CursorStyle::Arrow);
@@ -8514,7 +8491,7 @@ index e21f019c64..b2ea494f22 100644
              log::warn!(
                  "X11: no cursor icon available to restore {:?} after hide; cursor may stay invisible",
                  style
-@@ -2219,6 +4594,63 @@ impl X11ClientState {
+@@ -2219,6 +4569,63 @@ impl X11ClientState {
      }
  }
  
@@ -8578,7 +8555,7 @@ index e21f019c64..b2ea494f22 100644
  // Adapted from:
  // https://docs.rs/winit/0.29.11/src/winit/platform_impl/linux/x11/monitor.rs.html#103-111
  pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
-@@ -2232,6 +4664,51 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+@@ -2232,6 +4639,51 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
      Duration::from_micros(micros)
  }
  
@@ -8630,7 +8607,7 @@ index e21f019c64..b2ea494f22 100644
  /// Applies a mapped/obscured change to the refresh loop and reports the
  /// resulting visibility to the window. Consumes the client borrow because the
  /// visibility callback re-enters GPUI.
-@@ -2246,10 +4723,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +4698,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -8685,7 +8662,7 @@ index e21f019c64..b2ea494f22 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +4794,77 @@ fn detect_compositor_gpu(
+@@ -2273,73 +4769,77 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -8826,7 +8803,7 @@ index e21f019c64..b2ea494f22 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +4990,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +4965,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -8847,7 +8824,7 @@ index e21f019c64..b2ea494f22 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +5037,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +5012,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -8856,7 +8833,7 @@ index e21f019c64..b2ea494f22 100644
                          },
                      ))
                  }
-@@ -2539,10 +5080,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +5055,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -8870,7 +8847,7 @@ index e21f019c64..b2ea494f22 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +5098,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +5073,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -8887,7 +8864,7 @@ index e21f019c64..b2ea494f22 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +5113,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +5088,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -8923,7 +8900,7 @@ index e21f019c64..b2ea494f22 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +5192,11 @@ fn get_scale_factor(
+@@ -2620,6 +5167,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -8935,7 +8912,7 @@ index e21f019c64..b2ea494f22 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +5475,160 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +5450,160 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
@@ -9096,7 +9073,7 @@ index e21f019c64..b2ea494f22 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +5944,101 @@ mod tests {
+@@ -3213,3 +5919,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }
