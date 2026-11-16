@@ -438,9 +438,13 @@ std::optional<bc_boost_colors> Boosts::SpaceColors() const {
 }
 
 void Boosts::Reapply() {
+  // Blink would hold the script in a page in the back-forward cache and run it at the restore,
+  // which applies the sheet again anyway, so the tab's colours are its live frames' alone.
+  colors_ = SpaceColors();
   const bc_id profile = ProfileIdOf(web_contents());
   web_contents()->ForEachRenderFrameHost([&](content::RenderFrameHost* frame) {
-    if (!CssFor(profile, SiteOf(frame->GetLastCommittedURL())).empty()) {
+    if (!frame->IsInLifecycleState(content::RenderFrameHost::LifecycleState::kInBackForwardCache) &&
+        !CssFor(profile, SiteOf(frame->GetLastCommittedURL())).empty()) {
       Apply(frame);
     }
   });
@@ -556,12 +560,23 @@ void Boosts::DidFinishNavigation(content::NavigationHandle* navigation) {
   if (!frame) {
     return;
   }
-  // A site with no Boost has nothing to run, but a page from the back-forward cache keeps the sheet
-  // it had, which may have changed since. A new document with none, or an error page, leaves the
+  const bc_id profile = ProfileIdOf(web_contents());
+  if (navigation->IsServedFromBackForwardCache()) {
+    // A restored page keeps the sheets its frames had, which may have changed since, and Reapply
+    // passed it by while it was cached. Only its main frame navigates, so each frame that had a
+    // Boost or has one now takes it again here.
+    frame->ForEachRenderFrameHost([&](content::RenderFrameHost* each) {
+      if (boosted_frames_.contains(each->GetGlobalId()) ||
+          !CssFor(profile, SiteOf(each->GetLastCommittedURL())).empty()) {
+        Apply(each);
+      }
+    });
+    return;
+  }
+  // A site with no Boost has nothing to run. A new document with none, or an error page, leaves the
   // frame unboosted.
   if (!navigation->IsErrorPage() &&
-      (navigation->IsServedFromBackForwardCache() ||
-       !CssFor(ProfileIdOf(web_contents()), SiteOf(frame->GetLastCommittedURL())).empty())) {
+      !CssFor(profile, SiteOf(frame->GetLastCommittedURL())).empty()) {
     Apply(frame);
   } else {
     Took(frame, false);
