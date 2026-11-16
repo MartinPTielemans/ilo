@@ -537,7 +537,12 @@ pub(crate) struct Tracking {
 }
 
 /// Whether `at` is inside the triangle `a`, `b`, `c`.
-fn in_triangle(at: Point<Pixels>, a: Point<Pixels>, b: Point<Pixels>, c: Point<Pixels>) -> bool {
+pub(crate) fn in_triangle(
+    at: Point<Pixels>,
+    a: Point<Pixels>,
+    b: Point<Pixels>,
+    c: Point<Pixels>,
+) -> bool {
     let cross = |p: Point<Pixels>, q: Point<Pixels>, r: Point<Pixels>| {
         f32::from(q.x - p.x) * f32::from(r.y - p.y) - f32::from(q.y - p.y) * f32::from(r.x - p.x)
     };

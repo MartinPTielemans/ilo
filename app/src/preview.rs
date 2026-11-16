@@ -1379,7 +1379,15 @@ impl Browser for Fake {
     fn view_history(&self, _: &mut App) {}
     fn open_page(&self, _: &str, _: &mut App) {}
     fn new_note(&self, _: u64, _: Option<u64>, _: &mut App) {}
-    fn new_board(&self, _: u64, _: Box<dyn FnOnce(u64, &mut App)>, _: &mut App) {}
+    fn new_board(
+        &self,
+        _: u64,
+        _: String,
+        _: Option<Vec<u8>>,
+        _: Box<dyn FnOnce(u64, &mut App)>,
+        _: &mut App,
+    ) {
+    }
     fn site_search_settings(&self, _: &mut App) {}
 
     fn clear_browsing_data(&self, _: &mut App) {}

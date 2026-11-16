@@ -1013,12 +1013,19 @@ impl Browser for Engine {
         }
     }
 
-    fn new_board(&self, space: u64, opened: Box<dyn FnOnce(u64, &mut App)>, cx: &mut App) {
+    fn new_board(
+        &self,
+        space: u64,
+        id: String,
+        capture: Option<Vec<u8>>,
+        opened: Box<dyn FnOnce(u64, &mut App)>,
+        cx: &mut App,
+    ) {
         let profile = unsafe { bc::bc_space_profile(space) };
         let Some(folder) = bar_picks_host::folder(profile) else {
             return;
         };
-        let (id, window) = (browser::boards::new_id(), self.window);
+        let window = self.window;
         let made = cx.background_spawn({
             let id = id.clone();
             async move { browser::boards::make(&folder, &id) }
@@ -1027,6 +1034,10 @@ impl Browser for Engine {
             if let Err(error) = made.await {
                 log!("browser: new board {id} failed: {error}");
                 return;
+            }
+            // The capture is in the Board before a page of it opened after this reads it.
+            if let Some(png) = capture {
+                capture_host::put_on_board(profile, &id, &png);
             }
             // Its page opens once the folder is there, so the host finds the Board at its hello.
             cx.update(|cx| {

@@ -1,16 +1,22 @@
 //! Capture mode's keys and clicks, on a host that records what it asks of its window, the core
 //! and the system.
 
-use std::{cell::RefCell, io::Cursor};
+use std::{
+    cell::{Cell, RefCell},
+    io::Cursor,
+};
 
-use gpui::{Modifiers, TestAppContext, VisualTestContext};
+use gpui::{Modifiers, TestAppContext, VisualTestContext, hsla};
 
 use super::*;
+use crate::tokens::menu::OVERLAP;
 
 const TAB: u64 = 7;
 
+/// What it was asked, the last picture copied, and whether the core refuses a capture put on a
+/// Board at once, as when the Board's folder is gone.
 #[derive(Default)]
-struct Recorder(RefCell<Vec<String>>, RefCell<Option<Vec<u8>>>);
+struct Recorder(RefCell<Vec<String>>, RefCell<Option<Vec<u8>>>, Cell<bool>);
 
 impl Recorder {
     fn record(&self, call: String) {
@@ -72,6 +78,33 @@ impl Host for Recorder {
     fn desktop_picture(&self) -> Option<Vec<u8>> {
         None
     }
+
+    fn read_boards(&self, tab: u64) {
+        self.record(format!("read boards {tab}"));
+    }
+
+    fn new_board(&self, tab: u64, id: &str, png: &[u8]) {
+        self.record(format!("new board {tab} {id} {}", png.len()));
+    }
+
+    fn add_to_board(&self, tab: u64, board: &Board, png: &[u8]) -> bool {
+        self.record(format!("add to board {tab} {} {}", board.id, png.len()));
+        !self.2.get()
+    }
+
+    fn open_board(&self, id: &str) {
+        self.record(format!("open board {id}"));
+    }
+}
+
+/// The toast's window, which shows nothing here.
+struct Toasts;
+
+impl toast::Host for Toasts {
+    fn show(&self) {}
+    fn hide(&self) {}
+    fn take_clicks(&self, _: bool) {}
+    fn plate(&self, _: Bounds<Pixels>) {}
 }
 
 /// A picture as the core sends one.
@@ -95,6 +128,11 @@ struct Mode {
 impl Mode {
     fn new(cx: &mut TestAppContext) -> Self {
         let host = Rc::new(Recorder::default());
+        cx.update(|cx| {
+            let look = |_: &App| (hsla(0., 0., 0., 1.), Default::default());
+            toast::open(Rc::new(Toasts), look, cx)
+        })
+        .expect("no window for the toast");
         let window = cx
             .update(|cx| open(host.clone(), cx))
             .expect("no window for Capture");
@@ -175,10 +213,17 @@ impl Mode {
         mode.library = library;
         mode.start();
         mode.captured(1);
-        assert_eq!(
-            mode.calls(),
-            [format!("capture {TAB} 1 view"), "show 0 0 800 600".into()]
-        );
+        // A window with a Library asks for its profile's Boards, for Add to Board.
+        let asked = [
+            format!("capture {TAB} 1 view"),
+            format!("read boards {TAB}"),
+        ];
+        let shown = "show 0 0 800 600".to_string();
+        let calls = match library {
+            true => vec![asked[0].clone(), asked[1].clone(), shown],
+            false => vec![asked[0].clone(), shown],
+        };
+        assert_eq!(mode.calls(), calls);
         mode
     }
 
@@ -261,7 +306,11 @@ fn escape_leaves_and_shift_cmd_2_comes_back(cx: &mut TestAppContext) {
     mode.keys("escape");
     assert!(mode.calls().is_empty());
     mode.start();
-    assert_eq!(mode.calls(), [format!("capture {TAB} 2 view")]);
+    let started = [
+        format!("capture {TAB} 2 view"),
+        format!("read boards {TAB}"),
+    ];
+    assert_eq!(mode.calls(), started);
 }
 
 #[gpui::test]
@@ -276,7 +325,14 @@ fn the_second_shift_cmd_2_leaves(cx: &mut TestAppContext) {
     let left = ["hide".to_string(), format!("end {TAB}")];
     assert_eq!(
         mode.calls(),
-        [&[format!("capture {TAB} 2 view")], &left[..]].concat()
+        [
+            &[
+                format!("capture {TAB} 2 view"),
+                format!("read boards {TAB}")
+            ],
+            &left[..]
+        ]
+        .concat()
     );
 }
 
@@ -343,10 +399,12 @@ fn a_shift_cmd_drag_on_the_page_takes_the_rectangle_dragged(cx: &mut TestAppCont
         .cx
         .update(|cx| page_dragged(TAB, point(px(200.), px(150.)), cx));
     mode.captured(1);
-    assert_eq!(
-        mode.calls(),
-        [format!("capture {TAB} 1 view"), "show 0 0 800 600".into()]
-    );
+    let shown = [
+        format!("capture {TAB} 1 view"),
+        format!("read boards {TAB}"),
+        "show 0 0 800 600".into(),
+    ];
+    assert_eq!(mode.calls(), shown);
     // Another ⇧⌘-drag's start, past its window, doesn't leave, as ⇧⌘2's second press does.
     mode.start_from(Some(point(px(10.), px(10.))));
     mode.cx
@@ -641,4 +699,296 @@ fn edit_undoes_and_escape_goes_back(cx: &mut TestAppContext) {
     assert_eq!(mode.marks(), (1, false));
     mode.keys("escape");
     assert_eq!(mode.calls(), ["hide".to_string(), format!("end {TAB}")]);
+}
+
+/// The profile's Boards in the order Library › Boards lists them, the last changed first.
+const BOARDS: [&str; 3] = ["Kyoto trip", "Kitchen ideas", "Reading list"];
+
+impl Mode {
+    /// The menu over the element at 50, 60, its corner returned, with the profile's Boards
+    /// `names`, each id `b` and where it is in the list.
+    fn menu_with(&mut self, names: &[&str]) -> Point<f32> {
+        self.hover(100., 100., rect(50., 60., 200., 80.));
+        self.click(100., 100.);
+        assert_eq!(self.calls(), ["camera false"]);
+        self.boards(names);
+        point(50. - RING + MENU_LEFT, 60. - RING)
+    }
+
+    /// The core's list of the profile's Boards, named `names`.
+    fn boards(&mut self, names: &[&str]) {
+        let boards = (names.iter().enumerate())
+            .map(|(at, name)| Board {
+                id: format!("b{at}"),
+                name: name.to_string().into(),
+            })
+            .collect();
+        self.cx.cx.update(|cx| boards_listed(TAB, boards, cx));
+        self.cx.run_until_parked();
+    }
+
+    /// The pointer to `x`, `y`.
+    fn point_to(&mut self, x: f32, y: f32) {
+        let at = point(px(x), px(y));
+        self.cx.simulate_mouse_move(at, None, Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
+    /// The row lit, whether Add to Board's submenu shows, and the rows drawn lit.
+    fn menu_state(&mut self) -> (Option<Action>, bool, [Option<Action>; 2]) {
+        let window = self.window;
+        let state = |capture: &mut Capture| {
+            let session = capture.session.as_ref().unwrap();
+            (session.lit, session.submenu, session.lit_rows())
+        };
+        self.cx
+            .cx
+            .update(|cx| window.update(cx, |capture, _, _| state(capture)))
+            .unwrap()
+    }
+
+    /// Where Add to Board's submenu is, while it shows.
+    fn submenu_at(&mut self) -> Option<Bounds<Pixels>> {
+        let window = self.window;
+        let at = |capture: &mut Capture| {
+            let session = capture.session.as_ref().unwrap();
+            session
+                .submenu_bounds(session.chosen?)
+                .filter(|_| session.submenu)
+        };
+        self.cx
+            .cx
+            .update(|cx| window.update(cx, |capture, _, _| at(capture)))
+            .unwrap()
+    }
+
+    /// The core's word on the capture put on Board `id`.
+    fn answer(&mut self, id: &str, arrived: bool) {
+        self.cx
+            .cx
+            .update(|cx| board_answered(BoardAnswer { id, arrived }, cx));
+        self.cx.run_until_parked();
+    }
+
+    fn toast_shows(&mut self, text: &str) -> bool {
+        self.cx.cx.update(|cx| toast::showing(text, cx))
+    }
+
+    /// A click on the toast's button `name`.
+    fn press_toast(&mut self, name: &str) {
+        let pressed = self.cx.cx.update(|cx| toast::press(name, cx));
+        assert!(pressed, "the toast showing has no {name} button");
+        self.cx.run_until_parked();
+    }
+}
+
+/// The toast a Board with no room for a capture shows, naming it and saying what to do.
+fn no_room(board: &str) -> String {
+    format!(
+        "{board} has no room for this yet. Open it and place what's waiting there, then add this again."
+    )
+}
+
+/// The pointer on Add to Board opens its submenu beside the menu, its first row level with Add to
+/// Board's; a Board under the pointer lights with Add to Board lit too, as menu.rs keeps a
+/// submenu's parent lit, and a click adds the capture to it and leaves; the toast names it.
+#[gpui::test]
+fn the_pointer_opens_add_to_board_and_a_click_adds_to_the_board(cx: &mut TestAppContext) {
+    let mut mode = Mode::shown(cx);
+    let menu = mode.menu_with(&BOARDS);
+    let add = menu.y + row(Action::AddToBoard);
+    mode.point_to(menu.x + MENU_WIDTH / 2., add);
+    let parent = Some(Action::AddToBoard);
+    assert_eq!(mode.menu_state(), (parent, true, [parent, parent]));
+    let submenu = mode
+        .submenu_at()
+        .expect("Add to Board's submenu didn't show");
+    // OVERLAP over the menu's right edge, its first row level with Add to Board's.
+    assert_eq!(f32::from(submenu.left()), menu.x + MENU_WIDTH - OVERLAP);
+    assert_eq!(f32::from(submenu.top()) + PADDING, add - ROW / 2.);
+    let x = f32::from(submenu.left()) + 40.;
+    mode.point_to(x, add);
+    let first = Some(Action::Board(0));
+    assert_eq!(mode.menu_state(), (first, true, [first, parent]));
+    let second = Some(Action::Board(1));
+    mode.point_to(x, add + ROW);
+    assert_eq!(mode.menu_state(), (second, true, [second, parent]));
+    mode.click(x, add + ROW);
+    assert_eq!(mode.calls(), [format!("capture {TAB} 2 50 60 200 80")]);
+    mode.captured(2);
+    let len = png().len();
+    let added = [
+        "hide".to_string(),
+        format!("end {TAB}"),
+        format!("add to board {TAB} b1 {len}"),
+    ];
+    assert_eq!(mode.calls(), added);
+    // The toast waits for the core's word, which says the capture is there.
+    assert!(!mode.toast_shows("Added to Kitchen ideas"));
+    // A word on another Board's capture isn't this one's.
+    mode.answer("b0", true);
+    assert!(!mode.toast_shows("Added to Kitchen ideas"));
+    mode.answer("b1", true);
+    assert!(mode.toast_shows("Added to Kitchen ideas"));
+}
+
+/// Another of the menu's rows under the pointer closes the submenu, but on the pointer's way to
+/// it the submenu stays, until the pointer rests, as menu.rs's safe triangle keeps one.
+#[gpui::test]
+fn the_submenu_stays_on_the_pointers_way_to_it(cx: &mut TestAppContext) {
+    let mut mode = Mode::shown(cx);
+    let menu = mode.menu_with(&BOARDS);
+    let (add, new) = (
+        menu.y + row(Action::AddToBoard),
+        menu.y + row(Action::NewBoard),
+    );
+    let parent = Some(Action::AddToBoard);
+    mode.point_to(menu.x + 20., add);
+    assert_eq!(mode.menu_state(), (parent, true, [parent, parent]));
+    // Across New Board, toward the submenu.
+    mode.point_to(menu.x + MENU_WIDTH - 12., new);
+    assert_eq!(mode.menu_state(), (parent, true, [parent, parent]));
+    mode.cx.executor().advance_clock(Duration::from_millis(300));
+    mode.cx.run_until_parked();
+    let lit = Some(Action::NewBoard);
+    assert_eq!(mode.menu_state(), (lit, false, [lit, None]));
+    // Away from it, the submenu closes at once.
+    mode.point_to(menu.x + 20., add);
+    assert_eq!(mode.menu_state(), (parent, true, [parent, parent]));
+    mode.point_to(menu.x + 10., menu.y + row(Action::Retake));
+    let lit = Some(Action::Retake);
+    assert_eq!(mode.menu_state(), (lit, false, [lit, None]));
+}
+
+/// The keys as menu.rs has them: → or ↩ on Add to Board opens its submenu with its first Board
+/// lit, ↑ and ↓ stay at the ends, ← or esc closes only the submenu, and ↩ on a Board adds to it.
+#[gpui::test]
+fn the_keys_open_add_to_board_and_return_adds_to_the_board(cx: &mut TestAppContext) {
+    let mut mode = Mode::shown(cx);
+    mode.menu_with(&BOARDS);
+    let parent = Some(Action::AddToBoard);
+    // From none, ↑ lights the last row, New Board, and ↓ stays there.
+    mode.keys("up");
+    assert_eq!(mode.menu_state().0, Some(Action::NewBoard));
+    mode.keys("down");
+    assert_eq!(mode.menu_state().0, Some(Action::NewBoard));
+    mode.keys("up");
+    assert_eq!(mode.menu_state(), (parent, false, [parent, None]));
+    mode.keys("right");
+    let first = Some(Action::Board(0));
+    assert_eq!(mode.menu_state(), (first, true, [first, parent]));
+    mode.keys("up");
+    assert_eq!(mode.menu_state().0, first);
+    mode.keys("down down down down");
+    assert_eq!(mode.menu_state().0, Some(Action::Board(2)));
+    mode.keys("left");
+    assert_eq!(mode.menu_state(), (parent, false, [parent, None]));
+    mode.keys("enter");
+    assert_eq!(mode.menu_state(), (first, true, [first, parent]));
+    // esc closes the submenu, and capture mode stays.
+    mode.keys("escape");
+    assert_eq!(mode.menu_state(), (parent, false, [parent, None]));
+    assert!(mode.calls().is_empty());
+    // ← with no submenu does nothing.
+    mode.keys("left");
+    assert_eq!(mode.menu_state(), (parent, false, [parent, None]));
+    mode.keys("right down enter");
+    assert_eq!(mode.calls(), [format!("capture {TAB} 2 50 60 200 80")]);
+    mode.captured(2);
+    let len = png().len();
+    assert_eq!(mode.calls()[2], format!("add to board {TAB} b1 {len}"));
+}
+
+/// Add to Board shows only where there's a Board to add to: not before the profile's Boards are
+/// read, not when it has none, and never in a private window, which asks for none, nor New Board.
+/// It lists ten, the last changed first: an eleventh is reached by opening it.
+#[gpui::test]
+fn add_to_board_needs_a_board_and_a_library(cx: &mut TestAppContext) {
+    let mut mode = Mode::shown(cx);
+    mode.menu_with(&[]);
+    mode.keys("up");
+    assert_eq!(mode.menu_state().0, Some(Action::NewBoard));
+    mode.keys("up");
+    assert_eq!(mode.menu_state().0, Some(Action::Retake));
+    // Another tab's Boards aren't this page's.
+    mode.cx.cx.update(|cx| {
+        boards_listed(
+            TAB + 1,
+            vec![Board {
+                id: "b0".into(),
+                name: "Kyoto trip".into(),
+            }],
+            cx,
+        )
+    });
+    mode.cx.run_until_parked();
+    mode.keys("down");
+    assert_eq!(mode.menu_state().0, Some(Action::NewBoard));
+    let twelve: Vec<String> = (0..12).map(|at| format!("Board {at}")).collect();
+    mode.boards(&twelve.iter().map(String::as_str).collect::<Vec<_>>());
+    mode.keys("up right down down down down down down down down down down down");
+    assert_eq!(mode.menu_state().0, Some(Action::Board(boards::LISTED - 1)));
+
+    let mut private = Mode::shown_with(false, cx);
+    private.menu_with(&BOARDS);
+    private.keys("up");
+    assert_eq!(private.menu_state().0, Some(Action::Retake));
+    private.keys("right");
+    assert_eq!(
+        private.menu_state(),
+        (Some(Action::Retake), false, [Some(Action::Retake), None])
+    );
+}
+
+/// The core refuses a capture when the Board can take no more arrivals: nothing is stored and
+/// capture mode has left, so the toast names the Board and what to do, with Open to go there and
+/// Copy to keep the capture another way.
+#[gpui::test]
+fn a_board_with_no_room_says_so_and_offers_open_and_copy(cx: &mut TestAppContext) {
+    let mut mode = Mode::shown(cx);
+    let menu = mode.menu_with(&BOARDS);
+    let add = menu.y + row(Action::AddToBoard);
+    mode.point_to(menu.x + MENU_WIDTH / 2., add);
+    let x = f32::from(mode.submenu_at().unwrap().left()) + 40.;
+    mode.click_at((x, add));
+    mode.captured(2);
+    let len = png().len();
+    assert_eq!(mode.calls()[3], format!("add to board {TAB} b0 {len}"));
+    mode.answer("b0", false);
+    assert!(mode.toast_shows(&no_room("Kyoto trip")));
+    mode.press_toast("open");
+    assert_eq!(mode.calls(), ["open board b0"]);
+
+    // Refused at once, as when the Board's folder is gone: the same toast, and Copy copies.
+    mode.host.2.set(true);
+    mode.start();
+    mode.captured(3);
+    mode.calls();
+    let menu = mode.menu_with(&BOARDS);
+    mode.point_to(menu.x + MENU_WIDTH / 2., add);
+    mode.click_at((x, add + 2. * ROW));
+    mode.captured(4);
+    assert_eq!(mode.calls()[3], format!("add to board {TAB} b2 {len}"));
+    assert!(mode.toast_shows(&no_room("Reading list")));
+    mode.press_toast("copy");
+    assert_eq!(mode.calls(), [format!("copy {len}")]);
+    assert!(mode.toast_shows(COPIED));
+}
+
+/// New Board makes a Board of the capture, which opens with it, so only a refusal says anything.
+#[gpui::test]
+fn new_board_makes_a_board_of_the_capture(cx: &mut TestAppContext) {
+    let mut mode = Mode::shown(cx);
+    let menu = mode.menu_with(&BOARDS);
+    mode.click_at((menu.x + 20., menu.y + row(Action::NewBoard)));
+    mode.captured(2);
+    let calls = mode.calls();
+    let len = png().len();
+    let id = (calls[3].strip_prefix(&format!("new board {TAB} ")))
+        .and_then(|rest| rest.strip_suffix(&format!(" {len}")))
+        .unwrap_or_else(|| panic!("New Board made no Board: {calls:?}"))
+        .to_string();
+    mode.answer(&id, true);
+    assert!(!mode.toast_shows("Added to Board"));
+    assert!(!mode.toast_shows(&no_room("Board")));
 }
