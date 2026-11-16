@@ -87,6 +87,7 @@ await_load
 await '^browser: title [0-9]* ready$' || fail "the Spaces test page didn't draw"
 first=$(space)
 await "^browser: spaces $first\$" || fail "the app didn't start with one Space"
+dots_window=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 a=$(today)
 send click $page_point
 if [ "$active" != 1 ]; then
@@ -236,11 +237,13 @@ lost_keyboard() {
   grep '^browser: field lost the keyboard' "$log" | tail -1 | grep . || echo "it never lost it"
 }
 
-# Where the switcher last drew Space $1's dot, "x y": the footer logs each place it draws one, as
-# what else it holds, such as the menu control off the Mac, moves the dots (#3175).
+# Where the first window's switcher last drew Space $1's dot, "x y": each window's footer logs each
+# place it draws one, as what else it holds, such as the menu control off the Mac, moves the dots
+# (#3175).
 dot() {
   for _ in $(seq 100); do
-    sed -n "s/^browser: switcher dot $1 at //p" "$log" | tail -1 | grep . && return 0
+    sed -n "s/^browser: switcher dot $1 in window $dots_window at //p" "$log" | tail -1 | grep . &&
+      return 0
     sleep 0.1
   done
   fail "the switcher didn't draw Space $1's dot"
@@ -1384,7 +1387,7 @@ expect '^browser: rename cancelled$' \
 # Deleting a Space with tabs asks first, in a dialog over the window, and a click around it cancels.
 # Return deletes the Space once the dialog has gone. Its tabs close with it, and ⇧⌘T reopens them
 # here.
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
@@ -1397,7 +1400,7 @@ expect '^browser: dialog hidden$' "the dialog didn't go"
 send state
 [ "$key" = BrowserCoreNSWindow ] || fail "the window didn't get the keyboard back: $key has it"
 none_since '^browser: spaces' || fail "a click around the dialog deleted the Space"
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
@@ -1432,7 +1435,7 @@ expect "^browser: settled space $second\$" "the Space ⌘Z brought back didn't s
 # of Work's pinned tabs and its tab the top of Work's Today, shows Work and deletes the Space, and a
 # toast offers the Undo. ⌘Z brings the Space back where it was, with its tab, and shows it (#1400).
 t=$(today)
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, Export “reading 日本語” into Folder › Work, \
 Export “reading 日本語” into Folder › reading 日本語 (disabled), Export as Markdown…, Manage Spaces…, \
@@ -1457,7 +1460,7 @@ expect "^browser: space $second\( in .*\)\{0,1\}\$" "⌘Z didn't show the export
 expect "^browser: today $t\$" "⌘Z didn't put the exported Space's tab back: Today is \"$(today)\""
 expect "^browser: settled space $second\$" "the exported Space ⌘Z brought back didn't settle"
 # Deleted again, its tab reopens here with ⇧⌘T, and ⌘Z brings back the Space without it.
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
@@ -1491,7 +1494,7 @@ expect '^browser: window opened [0-9]' "⌘N didn't open a window"
 other=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 new_window_bar
 send window 1
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 # ⌘Z brought the Space back with its theme.
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $empty_profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
@@ -1546,7 +1549,7 @@ none_since '^browser: library hidden$' || fail "the drag back onto the first car
 send key escape
 expect '^browser: library hidden$' "escape didn't close the Library after the cards' drags"
 # Empty, it goes without asking, and says so too.
-post rightclick 131 $dots_y
+post rightclick "$(dot "$second")"
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $empty_profile, \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"

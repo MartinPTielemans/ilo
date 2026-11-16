@@ -140,19 +140,19 @@ impl Shell {
     }
 
     /// Logs where Space `id`'s dot is drawn, its centre in the window, as "browser: switcher dot
-    /// `id` at x y", each time that moves, for check.sh to click it there whatever else the footer
-    /// holds (#3175).
+    /// `id` in window `window` at x y", each time that moves, for check.sh to click it there
+    /// whatever else the footer holds (#3175).
     fn dot_drawn(&self, id: u64) -> impl IntoElement + use<> {
-        let drawn = self.space_dots_drawn.clone();
+        let (drawn, window) = (self.space_dots_drawn.clone(), self.browser.window());
         canvas(
             |_, _, _| {},
             move |bounds, _, _, _| {
                 let centre = bounds.center();
                 let at = (f32::from(centre.x).round(), f32::from(centre.y).round());
-                let at = (at.0 as i32, at.1 as i32);
-                if drawn.borrow_mut().insert(id, at) != Some(at) {
+                let (x, y) = (at.0 as i32, at.1 as i32);
+                if drawn.borrow_mut().insert(id, (x, y)) != Some((x, y)) {
                     // check.sh reads this line.
-                    log!("browser: switcher dot {id} at {} {}", at.0, at.1);
+                    log!("browser: switcher dot {id} in window {window} at {x} {y}");
                 }
             },
         )
