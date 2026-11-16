@@ -69,7 +69,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   background: var(--ring); color: #fff
 }
 #zoom output { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; font-size: 12px }
-#fills, #colors, #widths { display: flex; gap: 4px }
+#fills, #sizes, #colors, #widths { display: flex; gap: 4px }
 #fills button, #colors button { width: 20px; height: 20px; border-radius: 50%; box-shadow: 0 0 0 1px var(--rim) }
 #fills button[aria-checked="true"], #colors button[aria-checked="true"] { box-shadow: 0 0 0 2px var(--ring) }
 #widths button { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center }
