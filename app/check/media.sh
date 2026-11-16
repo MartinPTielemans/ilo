@@ -1314,6 +1314,11 @@ document.title = "ready";
   w=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
   send click $page_point
   expect "^browser: title $w playing\$" "a click didn't play the switch's video"
+  # Chromium floats a page on a hide only once it's audible and its media session plays
+  # (AutoPictureInPictureTabHelper), which the browser learns a moment after it plays, so the switch
+  # waits for both: one sooner floats nothing, in Chrome too.
+  expect "^browser: page $w audible 1 " "the switch's video didn't become audible"
+  expect "^browser: page $w media 1 playing 1 " "the switch's video's media session didn't play"
   shown "$v"
   expect "^browser: title $w floating\$" "the video playing with sound didn't float as a switch hid it"
   expect '^browser: handover mini player on screen ' \
