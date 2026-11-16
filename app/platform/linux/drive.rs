@@ -3016,6 +3016,21 @@ fn run_command(line: &str) -> Option<()> {
             Some(())
         }
         "stack" => stack(),
+        // The window manager focusing the driven browser window again with no input, as sway does
+        // as it activates it while an overlay over it maps (#3044): the X focus to its window, and
+        // a raise asked of the manager, which sway's leaves to its own activations.
+        "refocus" => {
+            let browser = driven()?;
+            let x = server()?;
+            let (connection, _) = &*x;
+            let focus = xproto::InputFocus::POINTER_ROOT;
+            connection.set_input_focus(focus, browser.window, x11rb::CURRENT_TIME).ok()?;
+            let above = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+            connection.configure_window(browser.window, &above).ok()?;
+            sync();
+            log!("browser: drive refocused the browser window");
+            Some(())
+        }
         "front" => {
             let driven = driven().map(|b| b.id);
             let describe = |browser: Option<Browser>| match browser {
