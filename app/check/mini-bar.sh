@@ -322,6 +322,8 @@ pinned="$pinned $out/mini-bar-mode-resized.png"
 # window (#2790). The page then scrolls back, for the steps after.
 stacked=
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+for rep in $(seq 30); do
+  stacked=
   inner_bar=$placed
   set -- $placed
   was_x=$6 was_y=$7
@@ -383,8 +385,20 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
     *'"beside"'*) stacked="beside another app's window a tiling manager put beside" ;;
     *) stacked="under another app's window raised over ilo's" ;;
   esac
+  nb=$(wc -l < "$log")
   send scroll $(page_at $((vw2 / 2)) $((vh2 / 2))) -1 1
   bar_back "the scroll back up"
+  # Proof only: the next rep starts once the scroll back has rested and the bar shows again.
+  for _ in $(seq 50); do
+    back=$(sed -n "$((nb + 1)),\$p" "$log" | grep '^browser: mini bar \(hidden\|shown\)$')
+    printf '%s\n' "$back" | grep -q 'hidden$' && [ "$(printf '%s\n' "$back" | tail -1)" = 'browser: mini bar shown' ] && break
+    sleep 0.1
+  done
+  # Proof only: whether the bar's new place came before the scroll's hide, the race's window.
+  early=$(sed -n "$((n + 1)),\$p" "$log" | grep '^browser: mini bar \(at \|hidden$\)' | head -1)
+  case $early in *' at '*) early=yes ;; *) early=no ;; esac
+  echo "rep $rep passed, place before the hide: $early" >> "$out/raised-over-reps.txt"
+done
 fi
 
 # The foot bar's Undo and Reset with the page focused, which a press on the bar leaves it.
