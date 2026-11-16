@@ -1,5 +1,5 @@
-"""The core's compile, checked in minutes on a hosted runner before an engine build: the Mac's
-(#2668), and the Windows engine's pack for its own check (#3105).
+"""The core's Mac and Windows compiles, checked in minutes on a hosted runner before an engine build
+(#2668, #3105).
 
 pack <src> <out.tar.zst>: run in the Mac engine build's tree once it's built. It packs what a
   compile of //browser_core reads besides the core and the macOS SDK. That's every header in the
@@ -15,17 +15,21 @@ pack <src> <out.tar.zst> <out dir> <toolchain dir>: the same for the Windows eng
   toolchain's as a path that holds nothing. A packed file that still names the machine's home,
   account or engine directory stops it.
 check <pack dir> <checkout> [<engine dir>]: runs clang -fsyntax-only on each core file the engine
-  compiled, as the branch has it, with the build's own flags, against the runner's SDK. The engine
-  dir is the engine/ the packed engine was built from: its series and patches. Given it, the pack's
-  headers are first brought to the branch's own patches, as engine/tree.sh brings a tree, so a core
-  change that needs a new engine patch is checked with it (#2747).
+  compiled, as the branch has it, with the build's own flags, against the runner's SDK: on a Mac,
+  the Mac's, and on Windows, with the clang-cl of Chromium's Windows package put in the pack's
+  llvm-build, the one Visual Studio's environment gives in INCLUDE. The engine dir is the engine/
+  the packed engine was built from: its series and patches. Given it, the pack's headers are first
+  brought to the branch's own patches, as engine/tree.sh brings a tree, so a core change that needs
+  a new engine patch is checked with it (#2747).
 """
 import concurrent.futures
 import getpass
+import glob
 import io
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -61,6 +65,8 @@ CORE_FILES = "core-files.txt"
 # Where the Windows pack's build files say Microsoft's toolchain was. Nothing is there, and a
 # check's compiler takes the runner's own from Visual Studio's environment.
 NO_TOOLCHAIN = "/windows-toolchain"
+# A compile's error, as clang gives it, file:line:col, or as clang-cl does, file(line,col).
+ERROR = re.compile(r"^(\S+?)(?::(\d+):(\d+)|\((\d+),(\d+)\)): (?:fatal )?error: (.*)$", re.M)
 # What an engine patch changes that the build turns into headers in gen/, which the pack holds only
 # as the engine generated them.
 GENERATES = re.compile(r"\.(mojom|proto|pdl|idl|json5|gni?)$|(^|/)BUILD\.gn$")
@@ -212,9 +218,11 @@ def command(clang, rule, variables, source):
     args = [
         a
         for a in shlex.split(" ".join(variables.get(k, "") for k in keys))
-        if not a.startswith(("-fprofile-use", "-fcrash-diagnostics-dir"))
+        if not a.removeprefix("/clang:").startswith(("-fprofile-use", "-fcrash-diagnostics-dir"))
     ]
-    return [clang, *args, "-fno-color-diagnostics", "-fsyntax-only", "../../browser_core/" + source]
+    # clang-cl takes cl's /Zs for -fsyntax-only.
+    only = "/Zs" if os.path.basename(clang).startswith("clang-cl") else "-fsyntax-only"
+    return [clang, *args, "-fno-color-diagnostics", only, "../../browser_core/" + source]
 
 
 def xcrun(*args):
@@ -223,13 +231,15 @@ def xcrun(*args):
     ).stdout.strip()
 
 
-def series(engine, major):
-    """The Mac's series for a Chromium major, as tree.sh's series_for gives it."""
+def series(engine, major, mac=True):
+    """The Mac's series for a Chromium major, or another OS's, as tree.sh's series_for gives it."""
     names = []
     for line in open(os.path.join(engine, "series")):
         if line.startswith("#") or not line.split():
             continue
         name, when = (line.split() + [""])[:2]
+        if name.startswith("mac/") and not mac:
+            continue
         if when.startswith("<") and major >= int(when[1:]):
             continue
         if when.startswith(">=") and major < int(when[2:]):
@@ -253,7 +263,7 @@ def sections(text):
     return found
 
 
-def engine_patches(src, checkout, built):
+def engine_patches(src, checkout, built, mac=True):
     """Brings the pack's headers from the series the engine was built with to the branch's: the
     headers' part of each patch from the first that differs is taken out, last first, and the
     branch's from there are put in. Returns the summary's lines, and an error when one can't be."""
@@ -262,7 +272,7 @@ def engine_patches(src, checkout, built):
 
     def headers(engine):
         out = []
-        for name in series(engine, major):
+        for name in series(engine, major, mac):
             parts = sections(open(os.path.join(engine, "patches", name)).read())
             text = "".join(t for path, t in parts if HEADER.search(path))
             generates = [(path, t) for path, t in parts if GENERATES.search(path)]
@@ -302,7 +312,7 @@ def engine_patches(src, checkout, built):
             return lines, (
                 f"This branch's core needs an engine with patch {name}: its change to {files} "
                 "doesn't apply to the packed engine's headers, so the core can't be checked here "
-                "until a Mac engine with it is built."
+                f"until a {'Mac' if mac else 'Windows'} engine with it is built."
             )
     # The patches that differ, without those taken out only to go back in after them.
     out = [name for name, text in had[first:] if (name, text) not in wants]
@@ -326,44 +336,73 @@ def engine_patches(src, checkout, built):
 
 
 def check(pack_dir, checkout, built=None):
+    windows = sys.platform == "win32"
+    os_name = "Windows" if windows else "the Mac"
     src = os.path.join(pack_dir, "src")
-    engine_lines, error = engine_patches(src, checkout, built) if built else ([], None)
+    engine_lines, error = (
+        engine_patches(src, checkout, built, not windows) if built else ([], None)
+    )
     if error:
         print(f"::error::{error}")
         summary("\n\n".join([*engine_lines, error]))
         return 1
-    out_dir = os.path.join(src, OUT)
+    # The Mac's build is out/Release, and the Windows engine's out/Default.
+    (out_dir,) = [
+        os.path.dirname(os.path.dirname(d))
+        for d in glob.glob(os.path.join(src, "out", "*", "obj", "browser_core"))
+    ]
     core = os.path.join(os.path.abspath(checkout), "core")
-    if not os.path.lexists(os.path.join(src, "browser_core")):
-        os.symlink(core, os.path.join(src, "browser_core"))
-    # The runner's SDK, where the build had its own.
-    ninja = open(os.path.join(out_dir, "obj/browser_core/browser_core.ninja")).read()
-    sysroot = re.search(r"-isysroot (\S+)", ninja).group(1)
-    built_with = re.search(r"MacOSX([\d.]+)\.sdk", sysroot).group(1)
-    have = xcrun("--show-sdk-version")
-    if have != built_with:
-        print(f"::warning::The engine was built with macOS SDK {built_with}, and this has {have}.")
-    os.makedirs(os.path.dirname(os.path.join(out_dir, sysroot)), exist_ok=True)
-    if not os.path.lexists(os.path.join(out_dir, sysroot)):
-        os.symlink(xcrun("--show-sdk-path"), os.path.join(out_dir, sysroot))
+    link = os.path.join(src, "browser_core")
+    if not os.path.lexists(link):
+        try:
+            os.symlink(core, link, target_is_directory=True)
+        except OSError:
+            # Windows lets only some accounts make links; a copy is the core as the branch has it.
+            shutil.copytree(core, link)
+    if windows:
+        sdk_lines = windows_sdk(src)
+    else:
+        sdk_lines = []
+        # The runner's SDK, where the build had its own.
+        ninja = open(os.path.join(out_dir, "obj/browser_core/browser_core.ninja")).read()
+        sysroot = re.search(r"-isysroot (\S+)", ninja).group(1)
+        built_with = re.search(r"MacOSX([\d.]+)\.sdk", sysroot).group(1)
+        have = xcrun("--show-sdk-version")
+        if have != built_with:
+            print(
+                f"::warning::The engine was built with macOS SDK {built_with}, and this has {have}."
+            )
+        os.makedirs(os.path.dirname(os.path.join(out_dir, sysroot)), exist_ok=True)
+        if not os.path.lexists(os.path.join(out_dir, sysroot)):
+            os.symlink(xcrun("--show-sdk-path"), os.path.join(out_dir, sysroot))
 
     built = compiles(out_dir)
     jobs = [job for job in built if os.path.exists(os.path.join(core, job[0]))]
     gone = [job[0] for job in built if not os.path.exists(os.path.join(core, job[0]))]
-    # A file the branch adds is checked with the core's flags if it's the Mac's or portable: a .mm,
-    # or a .cc outside platform/, where the core keeps each OS's own. One in platform/ may be
-    # another OS's, which Core on Linux and Windows compile.
+    # A file the branch adds is checked with the core's flags if it's this OS's or portable: on the
+    # Mac a .mm, or a .cc outside platform/, where the core keeps each OS's own; on Windows a .cc
+    # in platform/win/ or outside platform/. One in another OS's platform/ is that OS's to compile.
     before = set(open(os.path.join(out_dir, CORE_FILES)).read().splitlines())
     added = [
-        f
+        f.replace(os.sep, "/")
         for f in sorted(files_under(core, ".", lambda f: f.endswith((".mm", ".cc"))))
-        if f not in before and not f.endswith("_unittest.cc")
+        if f.replace(os.sep, "/") not in before and not f.endswith("_unittest.cc")
     ]
-    checked = [f for f in added if f.endswith(".mm") or not f.startswith("platform/")]
+    if windows:
+        checked = [
+            f
+            for f in added
+            if f.endswith(".cc")
+            and (f.startswith("platform/win/") or not f.startswith("platform/"))
+        ]
+    else:
+        checked = [f for f in added if f.endswith(".mm") or not f.startswith("platform/")]
     core_flags = next(v for _, _, v, target in built if target == "browser_core")
     jobs += [(f, "objcxx" if f.endswith(".mm") else "cxx", core_flags, "") for f in checked]
 
-    clang = os.path.abspath(os.path.join(src, CLANG, "bin/clang++"))
+    clang = os.path.abspath(
+        os.path.join(src, CLANG, "bin/clang-cl.exe" if windows else "bin/clang++")
+    )
 
     def run(job):
         source, rule, variables, _ = job
@@ -381,22 +420,44 @@ def check(pack_dir, checkout, built=None):
                 print("::endgroup::")
             if code:
                 failed.append("core/" + source)
-            for m in re.finditer(r"^(\S+?):(\d+):(\d+): (?:fatal )?error: (.*)$", err, re.M):
-                path = re.sub(r"^\.\./\.\./browser_core/", "core/", m.group(1))
-                print(f"::error file={path},line={m.group(2)},col={m.group(3)}::{m.group(4)}")
+            for m in ERROR.finditer(err):
+                path = re.sub(r"^\.\./\.\./browser_core/", "core/", m.group(1).replace("\\", "/"))
+                line, col = (m.group(2), m.group(3)) if m.group(2) else (m.group(4), m.group(5))
+                print(f"::error file={path},line={line},col={col}::{m.group(6)}")
 
-    lines = [*engine_lines, f"Checked {len(jobs)} core files for the Mac; {len(failed)} failed."]
+    lines = [
+        *engine_lines,
+        *sdk_lines,
+        f"Checked {len(jobs)} core files for {os_name}; {len(failed)} failed.",
+    ]
     if failed:
         lines.append("Failed: " + ", ".join(failed) + ".")
     if checked:
         lines.append("Added by this branch, checked with the core's flags: " + ", ".join(checked))
     skipped = [f for f in added if f not in checked]
     if skipped:
-        lines.append("Added in platform/, maybe another OS's, not checked: " + ", ".join(skipped))
+        lines.append("Added for another OS, not checked: " + ", ".join(skipped))
     if gone:
         lines.append("In the engine's build, not in this branch: " + ", ".join(gone) + ".")
     summary("\n\n".join(lines))
     return 1 if failed else 0
+
+
+def windows_sdk(src):
+    """The summary's line on the SDK: the runner's, which Visual Studio's environment names, and the
+    one the engine was built with, which may differ (#3105)."""
+    tools = open(os.path.join(src, "build/vs_toolchain.py")).read()
+    built_with = re.search(r"^SDK_VERSION = '(.*)'$", tools, re.M).group(1)
+    have = os.environ.get("WindowsSDKVersion", "").strip("\\/ ")
+    if not os.environ.get("INCLUDE"):
+        sys.exit("No INCLUDE: this runs in Visual Studio's environment, for the SDK's headers.")
+    if have == built_with:
+        return []
+    return [
+        f"Checked against the runner's Windows SDK {have or '(unnamed)'}; the engine is built with "
+        f"{built_with}, so an error only one of them gives is missed here, or reported where the "
+        "engine builds."
+    ]
 
 
 def summary(text):
