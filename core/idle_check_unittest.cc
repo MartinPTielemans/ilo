@@ -162,5 +162,90 @@ TEST(IdleCheckTest, NothingIsUnloadedWhileOffAndAskingAgainChecksAgain) {
   EXPECT_EQ(host.checked, 2);
 }
 
+// Memory short, as calls.sh raises it: each tab with when it was last seen and what the core
+// knows of it.
+struct PressureTabs {
+  std::optional<uint64_t> Pick() {
+    std::vector<std::pair<uint64_t, base::Time>> tabs;
+    for (const auto& [tab, when] : seen) {
+      tabs.emplace_back(tab, when);
+    }
+    return PickUnderPressure(tabs, [this](uint64_t tab) {
+      asked.push_back(tab);
+      return facts[tab];
+    });
+  }
+  // As the pick's tab lets go of its page.
+  void Unload(uint64_t tab) { facts[tab].has_page = false; }
+
+  std::map<uint64_t, base::Time> seen;
+  std::map<uint64_t, UnloadFacts> facts;
+  std::vector<uint64_t> asked;
+};
+
+// The fault in #686: a tab with no page, such as one put back at launch and not yet shown, stayed
+// the unseen longest, so every notification picked it and freed nothing.
+TEST(PressurePickTest, ATabWithNoPageIsPassedOverAndEachNotificationFreesAnother) {
+  const base::Time now = base::Time::Now();
+  PressureTabs tabs;
+  tabs.seen = {{1, now - base::Hours(3)}, {2, now - base::Hours(2)}, {3, now - base::Hours(1)}};
+  tabs.facts[1].has_page = false;
+  EXPECT_EQ(tabs.Pick(), 2u);
+  tabs.Unload(2);
+  EXPECT_EQ(tabs.Pick(), 3u);
+  tabs.Unload(3);
+  EXPECT_EQ(tabs.Pick(), std::nullopt);
+}
+
+TEST(PressurePickTest, ACallThatOnlyListensAnAgentsTabAndAPageThatAsksKeepTheirPages) {
+  const base::Time now = base::Time::Now();
+  PressureTabs tabs;
+  tabs.seen = {{1, now - base::Hours(4)},
+               {2, now - base::Hours(3)},
+               {3, now - base::Hours(2)},
+               {4, now - base::Hours(1)}};
+  tabs.facts[1].in_call = true;
+  tabs.facts[2].agents = true;
+  tabs.facts[3].asks_before_leaving = true;
+  EXPECT_EQ(tabs.Pick(), 4u);
+  tabs.Unload(4);
+  EXPECT_EQ(tabs.Pick(), std::nullopt);
+}
+
+TEST(PressurePickTest, TheTabShownAndOneChromesChecksKeepAreKept) {
+  const base::Time now = base::Time::Now();
+  PressureTabs tabs;
+  tabs.seen = {{1, now - base::Hours(2)}, {2, now - base::Hours(1)}, {3, now}};
+  tabs.facts[1].chrome_keeps = true;
+  tabs.facts[3].shown = true;
+  EXPECT_EQ(tabs.Pick(), 2u);
+}
+
+// Chrome's checks cost a look at the page, so the pick stops at the first tab that may go.
+TEST(PressurePickTest, TabsAreAskedOldestFirstUntilOneMayGo) {
+  const base::Time now = base::Time::Now();
+  PressureTabs tabs;
+  tabs.seen = {{7, now - base::Hours(1)}, {8, now - base::Hours(3)}, {9, now - base::Hours(2)}};
+  tabs.facts[8].in_call = true;
+  EXPECT_EQ(tabs.Pick(), 9u);
+  EXPECT_EQ(tabs.asked, (std::vector<uint64_t>{8, 9}));
+}
+
+// The 2-hour check lets a tab with no page go too, which costs nothing, but nothing else keeps a
+// tab the user would lose something in.
+TEST(MayUnloadTest, OnlyATabNothingKeepsMayGo) {
+  EXPECT_TRUE(MayUnload(UnloadFacts{}));
+  EXPECT_TRUE(MayUnload(UnloadFacts{.has_page = false}));
+  EXPECT_FALSE(MayUnload(UnloadFacts{.agents = true, .has_page = false}));
+  for (bool UnloadFacts::*kept :
+       {&UnloadFacts::closing, &UnloadFacts::shown, &UnloadFacts::private_window,
+        &UnloadFacts::agents, &UnloadFacts::system_page, &UnloadFacts::devtools_open,
+        &UnloadFacts::asks_before_leaving, &UnloadFacts::in_call, &UnloadFacts::chrome_keeps}) {
+    UnloadFacts facts;
+    facts.*kept = true;
+    EXPECT_FALSE(MayUnload(facts));
+  }
+}
+
 }  // namespace
 }  // namespace browser_core
