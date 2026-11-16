@@ -1,5 +1,6 @@
 # check.sh runs this at 20.
-# Clicks move keyboard focus between the page and the UI, and typing goes where the focus is. With
+# Clicks move keyboard focus between the page and the UI, and typing goes where the focus is. On the
+# Mac, each modifier pressed alone reaches the page as its own key (#3097). With
 # the page focused, the browser's reserved shortcuts reach the UI and never the page, and the others
 # reach the page first, which can keep them. ⌘N, from the page and the UI, opens a window whose UI
 # has the keyboard, and ⇧⌘W, from either, closes it, giving back the page it took, live, as ⌘W does
@@ -50,6 +51,7 @@ addEventListener("keydown", e => {
 }, true);
 addEventListener("keydown", e => {
   if (e.key == "Escape") document.title = "page saw escape " + (e.repeat ? "repeat" : "press");
+  if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) document.title = "page saw alone " + e.key;
 });
 </script>'
 log="$out/keys.log"
@@ -90,6 +92,16 @@ fi
 [ "$focus" = RenderWidgetHostViewCocoa ] || fail "a click on the page left focus on $focus"
 send type abc
 expect '^browser: title [0-9]* value abc$' "typing didn't reach the focused page"
+# Each modifier pressed alone reaches the page as its own key going down, as the Mac's driver
+# posts it with that key's code (#3097).
+if [ "$(uname)" = Darwin ]; then
+  for modifier in shift:Shift ctrl:Control alt:Alt cmd:Meta; do
+    send flags "${modifier%%:*}"
+    expect "^browser: title [0-9]* page saw alone ${modifier#*:}\$" \
+      "${modifier%%:*} pressed alone didn't reach the page as ${modifier#*:}"
+    send flags
+  done
+fi
 # In a text field, ⌘← and ⌘→ move the caret, so they don't come back to go back and forward.
 send key left cmd
 send key right cmd
