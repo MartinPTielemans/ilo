@@ -120,6 +120,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
             zwp_input_method_v2::Event::Activate => IM_PENDING.set(Some(true)),
             zwp_input_method_v2::Event::Deactivate => IM_PENDING.set(Some(false)),
             zwp_input_method_v2::Event::Done => {
+                IM_FRESH.set(false);
                 if let Some(active) = IM_PENDING.take() {
                     IM_ACTIVE.set(active);
                 }
@@ -159,6 +160,8 @@ thread_local! {
     static IM_PENDING: Cell<Option<bool>> = const { Cell::new(None) };
     static IM_DONES: Cell<u32> = const { Cell::new(0) };
     static IM_UNAVAILABLE: Cell<bool> = const { Cell::new(false) };
+    /// Whether the input method is new and sway hasn't told it its state yet.
+    static IM_FRESH: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Makes the driver's pointer and keyboard under Wayland, before the app's windows, so Chromium
@@ -1057,6 +1060,7 @@ pub(crate) fn input_method() -> Option<()> {
                 return Some(Err("sway offers no zwp_input_method_manager_v2"));
             };
             IM_UNAVAILABLE.set(false);
+            IM_FRESH.set(true);
             let handle = session.queue.handle();
             session.input_method = Some(manager.get_input_method(&session.seat, &handle, ()));
         }
@@ -1078,13 +1082,17 @@ pub(crate) fn input_method() -> Option<()> {
 
 /// Sends what `pending` sets of the input method's state, and the commit that has sway give it to
 /// the text input it's active for. False, saying so, when none has it active: no field there takes
-/// text from an input method.
+/// text from an input method. An input method the command has just made waits for sway's first
+/// state of it, which comes once the text input with the keys has heard of it and enabled itself
+/// again; until then the command runs again (drive::again).
 fn input_method_commit(pending: impl FnOnce(&ZwpInputMethodV2)) -> bool {
     if input_method().is_none() {
         return false;
     }
     if !IM_ACTIVE.get() {
-        log!("browser: drive's input method isn't active: no text input has the keys");
+        if !(IM_FRESH.get() && drive::again()) {
+            log!("browser: drive's input method isn't active: no text input has the keys");
+        }
         return false;
     }
     with_session(|session, _| {
