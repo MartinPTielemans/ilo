@@ -21,6 +21,8 @@ std::string BoostSheet(const bc_boost_colors* colors, std::string_view css);
 // A Space changed, or a window showed another: each Boosted tab whose Space's colours aren't the
 // ones it took takes them again. In boosts.cc; posted after the change.
 void BoostSpacesChanged();
+// A Space went, and its colours with it. In boosts.cc.
+void BoostSpaceGone(bc_id space);
 
 }  // namespace browser_core
 

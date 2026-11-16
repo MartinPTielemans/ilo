@@ -132,6 +132,7 @@ void Space::Delete(bc_id id) {
   // The Spaces listed don't change with a window's own.
   const bool listed = !it->second->own();
   Spaces().erase(it);
+  BoostSpaceGone(id);
   if (listed) {
     std::erase(SpaceOrder(), id);
     ReportSpacesChanged();

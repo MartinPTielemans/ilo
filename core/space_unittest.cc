@@ -29,6 +29,7 @@ void SessionChanged() {}
 void ScheduleAutoArchive() {}
 
 void BoostSpacesChanged() {}
+void BoostSpaceGone(bc_id) {}
 
 namespace {
 

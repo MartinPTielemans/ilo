@@ -2,8 +2,10 @@
 
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/functional/bind.h"
 #include "base/json/string_escape.h"
@@ -140,6 +142,13 @@ std::map<bc_id, bc_boost_colors>& SpaceColorStore() {
   return *store;
 }
 
+// The tabs with a frame showing a Boost, so a change of Spaces walks those alone and a user with
+// none pays nothing per tab.
+std::set<Boosts*>& Boosted() {
+  static base::NoDestructor<std::set<Boosts*>> boosted;
+  return *boosted;
+}
+
 bool Same(const std::optional<bc_boost_colors>& a, const std::optional<bc_boost_colors>& b) {
   if (!a || !b) {
     return !a == !b;
@@ -241,6 +250,7 @@ Boosts::Boosts(content::WebContents* contents, bc_id tab)
       tab_(tab) {}
 
 Boosts::~Boosts() {
+  Boosted().erase(this);
   Unhook();
 }
 
@@ -302,10 +312,13 @@ void Boosts::SetSpaceColors(bc_id space, const bc_boost_colors* colors) {
 
 // static
 void Boosts::SpacesChanged() {
-  for (Tab* tab : Tab::All()) {
-    content::WebContents* contents = tab->web_contents();
-    Boosts* each = contents ? Boosts::FromWebContents(contents) : nullptr;
-    if (each && each->boosted_ && !Same(each->SpaceColors(), each->colors_)) {
+  if (Boosted().empty()) {
+    return;
+  }
+  // Reapply can take a tab out, as one of its frames no longer takes a Boost.
+  const std::vector<Boosts*> boosted(Boosted().begin(), Boosted().end());
+  for (Boosts* each : boosted) {
+    if (Boosted().contains(each) && !Same(each->SpaceColors(), each->colors_)) {
       each->Reapply();
     }
   }
@@ -313,6 +326,10 @@ void Boosts::SpacesChanged() {
 
 void BoostSpacesChanged() {
   Boosts::SpacesChanged();
+}
+
+void BoostSpaceGone(bc_id space) {
+  SpaceColorStore().erase(space);
 }
 
 // static
@@ -398,10 +415,11 @@ void Boosts::Apply(content::RenderFrameHost* frame) {
   const std::string_view css = CssFor(ProfileIdOf(web_contents()), site);
   if (css.empty()) {
     Run(frame, "css", css, 0, 0, content::RenderFrameHost::JavaScriptResultCallback());
+    Took(frame, false);
     return;
   }
-  boosted_ = true;
   colors_ = SpaceColors();
+  Took(frame, true);
   // A frame another site's page holds takes its own Boost, but not the colours of the Space the
   // page is in.
   const bc_boost_colors* colors = colors_ && AllOf(frame, site) ? &*colors_ : nullptr;
@@ -426,6 +444,20 @@ void Boosts::Reapply() {
       Apply(frame);
     }
   });
+}
+
+void Boosts::Took(content::RenderFrameHost* frame, bool boosted) {
+  if (boosted) {
+    boosted_frames_.insert(frame->GetGlobalId());
+  } else {
+    boosted_frames_.erase(frame->GetGlobalId());
+  }
+  if (boosted_frames_.empty()) {
+    Boosted().erase(this);
+    colors_.reset();
+  } else {
+    Boosted().insert(this);
+  }
 }
 
 void Boosts::Zap(bool on) {
@@ -517,16 +549,22 @@ void Boosts::Zapped(base::Value selector) {
 }
 
 void Boosts::DidFinishNavigation(content::NavigationHandle* navigation) {
-  if (!navigation->HasCommitted() || navigation->IsSameDocument() || navigation->IsErrorPage()) {
+  if (!navigation->HasCommitted() || navigation->IsSameDocument()) {
     return;
   }
   content::RenderFrameHost* frame = navigation->GetRenderFrameHost();
+  if (!frame) {
+    return;
+  }
   // A site with no Boost has nothing to run, but a page from the back-forward cache keeps the sheet
-  // it had, which may have changed since.
-  if (frame &&
+  // it had, which may have changed since. A new document with none, or an error page, leaves the
+  // frame unboosted.
+  if (!navigation->IsErrorPage() &&
       (navigation->IsServedFromBackForwardCache() ||
        !CssFor(ProfileIdOf(web_contents()), SiteOf(frame->GetLastCommittedURL())).empty())) {
     Apply(frame);
+  } else {
+    Took(frame, false);
   }
 }
 
@@ -540,6 +578,10 @@ void Boosts::RenderFrameCreated(content::RenderFrameHost* frame) {
   }
 }
 
+void Boosts::RenderFrameDeleted(content::RenderFrameHost* frame) {
+  Took(frame, false);
+}
+
 void Boosts::PrimaryPageChanged(content::Page& page) {
   // Zap was the last page's.
   if (zapping_) {
@@ -548,6 +590,8 @@ void Boosts::PrimaryPageChanged(content::Page& page) {
 }
 
 void Boosts::WebContentsDestroyed() {
+  boosted_frames_.clear();
+  Boosted().erase(this);
   zapping_ = false;
   Unhook();
 }

@@ -3,6 +3,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -11,6 +12,7 @@
 #include "base/scoped_multi_source_observation.h"
 #include "browser_core/boost_script.h"
 #include "browser_core/public/browser_core.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_observer.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -47,7 +49,8 @@ class Boosts : public content::WebContentsObserver,
   // null, and shows them on the Boosted pages open in it.
   static void SetSpaceColors(bc_id space, const bc_boost_colors* colors);
   // Gives each Boosted tab its Space's colours again where they aren't the ones it took: a tab
-  // moved to another Space, or a favorite whose window shows another.
+  // moved to another Space, or a favorite whose window shows another. It walks the Boosted tabs
+  // alone, so with none it does nothing.
   static void SpacesChanged();
 
   // The script the app read from |site|'s file for the profile, or none to take it away, which the
@@ -83,9 +86,14 @@ class Boosts : public content::WebContentsObserver,
   // Shows the profile's CSS for its site in |frame|, after its Space's colours, or takes it away.
   void Apply(content::RenderFrameHost* frame);
   // The colours of the Space the tab is in, as SetSpaceColors gave them: none in an agent's Space.
+  // A private window's Space has the ones the app gives it, which carry nothing of the user's:
+  // no theme, and dark, the same for everyone (app/src/shell/themes.rs, space_theme and
+  // tone_with).
   std::optional<bc_boost_colors> SpaceColors() const;
   // Gives every Boosted frame of the tab its CSS again.
   void Reapply();
+  // Notes whether |frame| shows a Boost now, so the tab is among the Boosted while one does.
+  void Took(content::RenderFrameHost* frame, bool boosted);
   // Runs the site's script in |frame| if it's on and may run there.
   void RunScript(content::RenderFrameHost* frame);
   void Hook(content::RenderWidgetHost* widget);
@@ -96,6 +104,7 @@ class Boosts : public content::WebContentsObserver,
   // content::WebContentsObserver:
   void DidFinishNavigation(content::NavigationHandle* navigation) override;
   void RenderFrameCreated(content::RenderFrameHost* frame) override;
+  void RenderFrameDeleted(content::RenderFrameHost* frame) override;
   void PrimaryPageChanged(content::Page& page) override;
   void DOMContentLoaded(content::RenderFrameHost* frame) override;
   void WebContentsDestroyed() override;
@@ -104,8 +113,8 @@ class Boosts : public content::WebContentsObserver,
 
   const bc_id tab_;
   bool zapping_ = false;
-  // Whether a frame of the tab took a Boost, and the Space's colours it took them with.
-  bool boosted_ = false;
+  // The frames showing a Boost, and the Space's colours they took: none while no frame does.
+  std::set<content::GlobalRenderFrameHostId> boosted_frames_;
   std::optional<bc_boost_colors> colors_;
   std::map<raw_ptr<content::RenderWidgetHost>, content::RenderWidgetHost::MouseEventCallback>
       hooked_;
