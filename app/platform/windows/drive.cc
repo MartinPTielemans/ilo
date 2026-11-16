@@ -104,6 +104,7 @@ bool host_drive_pointer(unsigned message, long x, long y);
 bool host_drive_key(unsigned vk, long lparam);
 uint64_t host_browser_window_id(size_t index);
 const char* host_floating_name(void* hwnd);
+bool host_floating_panel(void* hwnd, RECT* panel);
 void host_floating_lives(void (*each)(void* context, const char* name, void* hwnd, int life),
                          void* context);
 bool host_save_dialog_answer(const char* path);
@@ -368,13 +369,25 @@ bool TargetAt(double x, double y, Target* target) {
   return true;
 }
 
+// |x|, |y| in the window with the keyboard |key|, on the screen: from its panel's top left where
+// the panel draws its shadow round it in the window, as a check names a point in the panel the
+// Mac's window is the size of.
+POINT InKey(HWND key, double x, double y) {
+  RECT panel{};
+  if (!host_floating_panel(key, &panel)) {
+    return OnScreen(key, x, y);
+  }
+  const double scale = Scale(key);
+  return POINT{panel.left + std::lround(x * scale), panel.top + std::lround(y * scale)};
+}
+
 // The point in the window with the keyboard, as clickkey names it.
 bool TargetInKey(double x, double y, Target* target) {
   HWND key = GetActiveWindow();
   if (!key) {
     return false;
   }
-  const POINT screen = OnScreen(key, x, y);
+  const POINT screen = InKey(key, x, y);
   *target = At(Descend(key, screen), screen);
   return true;
 }
@@ -1155,8 +1168,11 @@ void LogLayout(HWND root) {
     if (!Ours(top) || GetWindow(top, GW_OWNER) != root || !IsWindowVisible(top)) {
       continue;
     }
+    // A panel that draws its shadow round it in its window is where the panel is in it.
     RECT rect;
-    GetWindowRect(top, &rect);
+    if (!host_floating_panel(top, &rect)) {
+      GetWindowRect(top, &rect);
+    }
     const double x = (rect.left - origin.x) / scale, y = (rect.top - origin.y) / scale;
     const double across = (rect.right - rect.left) / scale;
     const double down = (rect.bottom - rect.top) / scale;
@@ -2199,8 +2215,8 @@ bool Run(const std::string& line) {
       return false;
     }
     HWND key = GetActiveWindow();
-    const Target half = At(from.hwnd, OnScreen(key, (x + x2) / 2, (y + y2) / 2));
-    const Target to = At(from.hwnd, OnScreen(key, x2, y2));
+    const Target half = At(from.hwnd, InKey(key, (x + x2) / 2, (y + y2) / 2));
+    const Target to = At(from.hwnd, InKey(key, x2, y2));
     AddPress(from, MK_LBUTTON, 0);
     g_steps.push_back({[=] { Move(half, 0, MK_LBUTTON); }});
     g_steps.push_back({[=] { Move(to, 0, MK_LBUTTON); }});
