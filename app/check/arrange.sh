@@ -398,7 +398,6 @@ carried=$(grep -E "^browser: arrange $tab (Pointing|Carrying|Preview|Selected) "
 [ "$carried" = "Carrying Floats" ] || fail "a carry with ⌘ held wasn't a float: $carried"
 send release $(page_at 300 760) cmd
 expect "^browser: arrange $tab Selected Floats selected " "letting go with ⌘ held didn't float"
-send flags
 landed_bar $(page_at 300 760) "the mini bar wasn't first placed over the float where it was let go"
 expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the float"
 kept 2 "the float wasn't saved"
@@ -419,6 +418,8 @@ pin_said "the foot bar didn't say how the float is pinned"
 pinned=$pin pinned_words=$words
 shows "c,b,a,w side s hidden - float n:$pinned" "the page doesn't draw the float as the core pins it"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-floats.png" || fail "no window to capture"
+# ⌘ goes once the float's lines since its release are read, before the mini bar is pressed.
+send flags
 # The pin pressed: the UI asks the core to turn it, the core's answer comes, then the page.
 turn_pin() {
   local ask=$turn
