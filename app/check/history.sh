@@ -196,7 +196,7 @@ expect "^browser: loaded $tab http://$written/\$" \
 $(grep "^browser: loaded $tab" "$log" | tail -1)"
 [ "$(tls)" = "$before" ] || fail "http://$written was tried over https"
 
-# Only an address the user typed counts (#2417): a link, and at the end an agent's open_tab and
+# Only an address the user typed counts (#2417): a link, and later an agent's open_tab and
 # navigate, to an http:// address go as a bare host does, over https first, then to 156's http or
 # 157's warning.
 # Each goes to a host of its own, never $written: Chromium lets a host's later loads through once
@@ -307,6 +307,36 @@ expect '^browser: command clear-site-data via sidebar$' "Clear Site Data and Rel
 stored 127.0.0.1 "0 0 0" "Clear Site Data and Reload kept 127.0.0.1's cookie, localStorage or IndexedDB"
 go_from_bar "http://$nearby:$port/stored.html?$stored_key"
 stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's data"
+# The agent's open_tab and navigate, in a Space of its own that isn't shown, with the user's tab on
+# a page of the check's own. Then, with the agent's tab at its last load, ⌘L still opens the command
+# bar in the user's window: an agent's tab never takes the user's keyboard, as its warning took it
+# on Windows (#3164).
+agent_steps() {
+  send agentspace claude-code Claude Code
+  expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
+  before=$(tls)
+  send agentopen claude-code "http://$agent_opened/"
+  expect '^browser: agent claude-code opened [1-9][0-9]*$' "the agent didn't open http://$agent_opened/"
+  agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
+  upgraded "$agent_tab" "$agent_opened" "the agent's open_tab"
+  before=$(tls)
+  send agentnavigate claude-code "$agent_tab" "http://$agent_moved/"
+  expect "^browser: agent claude-code navigated $agent_tab: 1\$" \
+    "the core didn't take the agent's navigate to http://$agent_moved/"
+  upgraded "$agent_tab" "$agent_moved" "the agent's navigate"
+  agent_at="at Chrome's warning before http"
+  [ "$major" -ge 157 ] || agent_at="loaded over http"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L in the user's window, with the agent's tab $agent_at, didn't open the command bar"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘L opened in the user's window"
+}
+# Under Wayland they come here, before Chrome's warning, and the run ends on the warning's ⌘W, as
+# a ⌘L after it reaches nothing there (#3167). Elsewhere they come last, so Windows runs the
+# warning's keys before #3164's row stops it.
+wayland=
+[ "$(uname)" != Linux ] || [ -z "${WAYLAND_DISPLAY:-}" ] || wayland=1
+[ -z "$wayland" ] || agent_steps
 # Where Chrome's warning before http is, from the window's top-left corner, and the window's height.
 warning_box() {
   send layout
@@ -407,44 +437,17 @@ if [ "$major" -ge 157 ]; then
   ran_on_warning close-tab "one ⌘W"
 fi
 
-# The agent's open_tab and navigate come last, in a Space of its own that isn't shown, with the
-# user's tab on a page of the check's own. Then, with the agent's tab at its last load, ⌘L still
-# opens the command bar in the user's window: an agent's tab never takes the user's keyboard, as
-# its warning took it on Windows (#3164).
-[ -z "${kept:-}" ] || tab=$kept
-# Under Wayland, ⌘L straight after the ⌘W above, which closed a tab on its warning, reaches nothing
-# (#3167). A click on the user's tab's row gives the UI the keyboard first there, as the user's
-# would; elsewhere the ⌘L goes straight, as it passes. #3167's fix takes the click out.
-if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${kept:-}" ]; then
-  index=0
-  for each in $(today); do
-    [ "$each" != "$tab" ] || break
-    index=$((index + 1))
-  done
-  send click $(row "$index")
-  echo "skip: ⌘L straight after ⌘W closed a tab on Chrome's warning before http: under Wayland it reaches nothing (#3167), so a click on tab $tab's row gives the UI the keyboard first"
+if [ -n "$wayland" ]; then
+  [ "$major" -lt 157 ] ||
+    echo "skip: under Wayland the agent's steps come before Chrome's warning before http and the run ends on its ⌘W: a ⌘L after ⌘W closed a tab on its warning reaches nothing there, even after a click on a tab's row (#3167)"
+else
+  # With the user's tab back on a page of the check's own.
+  [ -z "${kept:-}" ] || tab=$kept
+  go_from_bar "$nearby:$port"
+  expect "^browser: loaded $tab http://$nearby:$port/\$" \
+    "$nearby:$port didn't load before the agent's steps: $(grep "^browser: loaded $tab " "$log" | tail -1)"
+  agent_steps
 fi
-go_from_bar "$nearby:$port"
-expect "^browser: loaded $tab http://$nearby:$port/\$" \
-  "$nearby:$port didn't load before the agent's steps: $(grep "^browser: loaded $tab " "$log" | tail -1)"
-send agentspace claude-code Claude Code
-expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
-before=$(tls)
-send agentopen claude-code "http://$agent_opened/"
-expect '^browser: agent claude-code opened [1-9][0-9]*$' "the agent didn't open http://$agent_opened/"
-agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
-upgraded "$agent_tab" "$agent_opened" "the agent's open_tab"
-before=$(tls)
-send agentnavigate claude-code "$agent_tab" "http://$agent_moved/"
-expect "^browser: agent claude-code navigated $agent_tab: 1\$" \
-  "the core didn't take the agent's navigate to http://$agent_moved/"
-upgraded "$agent_tab" "$agent_moved" "the agent's navigate"
-agent_at="at Chrome's warning before http"
-[ "$major" -ge 157 ] || agent_at="loaded over http"
-send key l cmd
-expect '^browser: command bar shown$' "⌘L in the user's window, with the agent's tab $agent_at, didn't open the command bar"
-send key escape
-expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘L opened in the user's window"
 exec 3>&-
 quit
 kill "$stuck"
