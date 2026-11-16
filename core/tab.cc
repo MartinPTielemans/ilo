@@ -475,6 +475,12 @@ std::vector<content::WebContents*> Tab::Pages() {
 }
 
 // static
+GURL Tab::LinkTarget(bc_id id) {
+  const Tab* tab = Get(id);
+  return tab ? tab->link_target_ : GURL();
+}
+
+// static
 void Tab::StopHearingCaptures() {
   CapturesStopped() = true;
   for (const auto& [id, tab] : Tabs()) {
@@ -1540,10 +1546,10 @@ void Tab::DidGetUserInteraction(const blink::WebInputEvent& event) {
 
 void Tab::ReportLinkTarget(const GURL& url) {
   // Only as it changes: nothing is told while the pointer is on no link and none was shown.
-  if (url.is_empty() && !link_target_) {
+  if (url.is_empty() && link_target_.is_empty()) {
     return;
   }
-  link_target_ = !url.is_empty();
+  link_target_ = url;
   if (!Host().tab_link_target) {
     return;
   }

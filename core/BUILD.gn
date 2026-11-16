@@ -284,6 +284,19 @@ source_set("typed_http") {
   ]
 }
 
+# What a link card asks for and refuses, apart so browser_core_unittests tests the rules alone.
+source_set("link_card_rule") {
+  sources = [
+    "link_card_rule.cc",
+    "link_card_rule.h",
+  ]
+  deps = [
+    "//base",
+    "//net",
+    "//url",
+  ]
+}
+
 # How an agent's typing goes to a page as key events, apart so browser_core_unittests tests it alone.
 source_set("typing_keys") {
   sources = [
@@ -511,6 +524,8 @@ source_set("browser_core") {
     "leave_dialog.h",
     "link_preview.cc",
     "link_preview.h",
+    "link_card.cc",
+    "link_card.h",
     "link_target.cc",
     "link_target.h",
     "main_delegate.cc",
@@ -621,6 +636,7 @@ source_set("browser_core") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":link_card_rule",
     ":typed_http",
     ":typing_keys",
     ":window_frames",
@@ -919,6 +935,7 @@ test("browser_core_unittests") {
 
     # The engine's patch to leveldb's cache, through leveldb's own API.
     "leveldb_cache_unittest.cc",
+    "link_card_rule_unittest.cc",
     "mini_player_place_unittest.cc",
 
     # The engine patch that gives a history match its last visit, which the core's suggestions
@@ -970,6 +987,7 @@ test("browser_core_unittests") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":link_card_rule",
     ":typed_http",
     ":typing_keys",
     ":window_frames",

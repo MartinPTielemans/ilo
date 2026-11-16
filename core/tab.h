@@ -87,6 +87,9 @@ class Tab : public content::WebContentsObserver,
                           const gfx::PointF& point);
   // Every tab's page, of the tabs that have one.
   static std::vector<content::WebContents*> Pages();
+  // The link |id|'s page has the pointer on, as the app was last told of it, else empty: the one a
+  // link card asks (link_card.cc).
+  static GURL LinkTarget(bc_id id);
   // Stops every tab hearing Chrome's capture indicator, at a quit once the run loop is done: the
   // tabs outlive it, and it checks it has no one left to tell as it goes.
   static void StopHearingCaptures();
@@ -438,8 +441,8 @@ class Tab : public content::WebContentsObserver,
   // Whether the app was last told the page is full screen.
   bool fullscreen_ = false;
   bool page_may_close_ = false;
-  // Whether the app was last told the pointer is on a link.
-  bool link_target_ = false;
+  // The link the app was last told the pointer is on, empty for none.
+  GURL link_target_;
   // The favicon the app was last told of.
   gfx::Image favicon_;
   base::ScopedObservation<favicon::FaviconDriver, favicon::FaviconDriverObserver>
