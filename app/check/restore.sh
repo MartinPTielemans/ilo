@@ -386,13 +386,33 @@ send click $page_point
 send key l cmd shift
 expect '^browser: command view-library via page$' "⇧⌘L with the page focused didn't reach the UI"
 expect '^browser: library shown$' "⇧⌘L didn't open the Library"
+# Presses the archived tab's row, with the keys $1 held, where the Library drew it once History
+# had answered. Since #2337 the Archive lists the pages visited with the closed tabs, newest first,
+# so the row is below any visited after the tab closed, and a press on a visit opens that instead.
+press_archived() {
+  local at=
+  for _ in $(seq 100); do
+    at=$(awk '/^browser: library shown$/ { listed = 0; at = "" }
+      /^browser: history listed [0-9]+$/ { listed = 1; at = "" }
+      listed && /^browser: settings library archived [0-9]+ at / { at = $7 " " $8 }
+      END { if (at == "") exit 1; print at }' "$log") && break
+    sleep 0.1
+  done
+  [ -n "$at" ] || fail "the Library didn't draw the archived tab's row once History had answered"
+  # shellcheck disable=SC2086 # x, y and the keys
+  send click $at ${1:-}
+  expect '^browser: \(archived [0-9][0-9]* in preview\|restore archived [0-9][0-9]*\|history page in preview\|history open\)$' \
+    "a press on the archived tab's row at $at did nothing"
+  none_since '^browser: history \(page in preview\|open\)$' ||
+    fail "a press on the archived tab's row at $at opened a visited page above it instead"
+}
 # Opens the archived tab in a preview, in the appearance $1, and sets $p to the preview's tab.
 archived_preview() {
   item=Dark
   [ "$1" = dark ] || item=Light
   send menu "Appearance › $item"
   expect "^browser: appearance $1\$" "View › Appearance › $item didn't change the appearance"
-  send click 300 111
+  press_archived
   expect '^browser: archived [0-9][0-9]* in preview$' "a click on the archived tab didn't preview it"
   none_since '^browser: restore archived' || fail "a click on the archived tab restored it at once"
   expect '^browser: link preview [1-9][0-9]* https://example.org/$' \
@@ -583,7 +603,7 @@ expect "^browser: loaded $e https://example.com/\$" "the second Space's tab didn
 send menu "View Archive…"
 expect '^browser: library section archive$' "View Archive… didn't open the Library on Archived Tabs"
 expect '^browser: library shown$' "View Archive… didn't open the Library"
-send click 300 111 cmd
+press_archived cmd
 expect '^browser: restore archived [0-9][0-9]*$' "a ⌘-click on the archived tab didn't restore it"
 # The core switches Space here, not the app, so the line has no "in N ms".
 expect "^browser: space $first\$" "the tab from the archive didn't take the window to its Space"
@@ -604,7 +624,7 @@ expect_tabs "$e" "$e" "back in the second Space"
 # Kept from its preview in the second Space, the tab goes back to the first too, as it is (#696).
 send menu "View Archive…"
 expect '^browser: library shown$' "View Archive… in the second Space didn't open the Library"
-send click 300 111
+press_archived
 expect '^browser: archived [0-9][0-9]* in preview$' \
   "a click on the archived tab in the second Space didn't preview it"
 expect '^browser: link preview [1-9][0-9]* https://example.org/$' \
