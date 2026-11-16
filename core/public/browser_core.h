@@ -2921,6 +2921,16 @@ BC_EXPORT void bc_tab_translate_revert(bc_id tab);
 // page's DevTools, so a page that isn't being captured pays nothing.
 BC_EXPORT void bc_tab_capture_end(bc_id tab);
 
+// Puts |png|, a capture tab_captured gave, |size| bytes, into the profile's Board |id| (a Board's
+// folder the app made, Boards/<id>/ in bc_profile_dir) as a picture of its own, for the Board's page
+// to make a card of: when it next opens, or at once if it's open. Returns whether it will try: not
+// for a profile that isn't loaded or keeps no Boards (a private window's, a guest's), an id that
+// isn't 32 lowercase hex digits, or bytes that aren't a PNG of at most 50 MB; a Board whose folder
+// isn't there, or one with 100 pictures still waiting for its page, refuses it after. The picture
+// is in the Board before a page of it opened after this call reads it. The user's: agents get none,
+// as a Board and what's on it are the user's alone.
+BC_EXPORT bool bc_board_add_capture(bc_id profile, const char* id, const uint8_t* png, size_t size);
+
 // Answers to the question tab_permission_asked put: the site may, now and whenever it asks again;
 // it may not, now or again; or not now, and it may ask again.
 #define BC_PERMISSION_ALLOW 0

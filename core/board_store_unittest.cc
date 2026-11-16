@@ -1,6 +1,7 @@
 #include "browser_core/board_store.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -164,6 +165,67 @@ TEST_F(BoardStore, ABoardsFileOverItsCapIsRefusedAndTheLastOneStays) {
   ASSERT_TRUE(base::ReadFileToString(board_.Append(FILE_PATH_LITERAL("board.json")), &json));
   EXPECT_EQ(json, R"({"cards":[1]})");
   EXPECT_TRUE(SaveBoardJson(board_, std::string(kMaxBoardJson, ' ')));
+}
+
+TEST_F(BoardStore, ACaptureIsStoredWholeAndWaitsInTheArrivalsInTheOrderItCame) {
+  const std::string other = std::string(kPng) + " another";
+  const std::optional<std::string> first = AddFile(board_, Bytes(kPng));
+  const std::optional<std::string> second = AddFile(board_, Bytes(other));
+  ASSERT_TRUE(first && second);
+  EXPECT_EQ(Names(files()),
+            (std::vector<std::string>{std::min(*first, *second), std::max(*first, *second)}));
+  EXPECT_TRUE(Arrived(board_).empty());
+  ASSERT_TRUE(Arrive(board_, *second));
+  ASSERT_TRUE(Arrive(board_, *first));
+  // The same picture twice is two cards to make.
+  ASSERT_TRUE(Arrive(board_, *second));
+  EXPECT_EQ(Arrived(board_), (std::vector<std::string>{*second, *first, *second}));
+}
+
+TEST_F(BoardStore, WhatTheBoardsPageTookLeavesTheArrivalsAndWhatCameSinceStays) {
+  const std::string name = *AddFile(board_, Bytes(kPng));
+  const std::string later = *AddFile(board_, Bytes(std::string(kPng) + " later"));
+  ASSERT_TRUE(Arrive(board_, name) && Arrive(board_, name) && Arrive(board_, later));
+  // The page took the two it read; the third came after its read.
+  ASSERT_TRUE(TakeArrived(board_, {name, name}));
+  EXPECT_EQ(Arrived(board_), (std::vector<std::string>{later}));
+  // A name it never had takes nothing.
+  ASSERT_TRUE(TakeArrived(board_, {name}));
+  EXPECT_EQ(Arrived(board_), (std::vector<std::string>{later}));
+  ASSERT_TRUE(TakeArrived(board_, {later}));
+  EXPECT_TRUE(Arrived(board_).empty());
+  // The pictures stay: nothing removes a stored file.
+  EXPECT_EQ(Names(files()).size(), 2u);
+}
+
+TEST_F(BoardStore, OnlyAStoredFilesNameArrivesAndOnlyInABoardThatsThere) {
+  EXPECT_FALSE(AddFile(board_, Bytes("not a picture's bytes")));
+  EXPECT_FALSE(Arrive(board_, "../../Cookies"));
+  EXPECT_FALSE(Arrive(board_, "board.json"));
+  EXPECT_FALSE(Arrive(board_, std::string(64, 'a') + ".svg"));
+  EXPECT_TRUE(Arrived(board_).empty());
+  // A line the browser didn't write is passed over.
+  const std::string name = FileName(std::string(64, 'a'), Image::kPng);
+  ASSERT_TRUE(base::WriteFile(board_.Append(FILE_PATH_LITERAL("arrived")),
+                              "../../Cookies\n" + name + "\n\nthumb.png\n"));
+  EXPECT_EQ(Arrived(board_), (std::vector<std::string>{name}));
+
+  ASSERT_TRUE(base::DeletePathRecursively(board_));
+  EXPECT_FALSE(AddFile(board_, Bytes(kPng)));
+  EXPECT_FALSE(Arrive(board_, name));
+  EXPECT_FALSE(TakeArrived(board_, {name}));
+  EXPECT_FALSE(base::PathExists(board_));
+}
+
+TEST_F(BoardStore, AtMostKMaxArrivedWaitForThePage) {
+  const std::string name = *AddFile(board_, Bytes(kPng));
+  for (size_t i = 0; i < kMaxArrived; ++i) {
+    ASSERT_TRUE(Arrive(board_, name)) << i;
+  }
+  EXPECT_FALSE(Arrive(board_, name));
+  EXPECT_EQ(Arrived(board_).size(), kMaxArrived);
+  ASSERT_TRUE(TakeArrived(board_, {name}));
+  EXPECT_TRUE(Arrive(board_, name));
 }
 
 }  // namespace

@@ -8,10 +8,23 @@
 #ifndef BROWSER_CORE_BOARD_H_
 #define BROWSER_CORE_BOARD_H_
 
+#include <cstdint>
+#include <string_view>
+
+#include "base/containers/span.h"
+
+class Profile;
+
 namespace browser_core {
 
 // Makes chrome://board a host of the browser's, before the first profile is made.
 void RegisterBoards();
+
+// Puts |png|, a capture, into |profile|'s Board |id| as a stored file and into its arrivals, for
+// its page to make a card of, after the call returns. False, and nothing is put there, for a
+// profile that keeps no Boards, an id that isn't one, or bytes that aren't a PNG of at most
+// board::kMaxFile; a Board whose folder isn't there refuses it later, in the log.
+bool AddCapture(Profile* profile, std::string_view id, base::span<const uint8_t> png);
 
 }  // namespace browser_core
 

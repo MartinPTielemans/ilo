@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -28,6 +30,7 @@
 #include "browser_core/arrangement.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
+#include "browser_core/board.h"
 #include "browser_core/boosts.h"
 #include "browser_core/autofill_data.h"
 #include "browser_core/autofill_offer.h"
@@ -2228,6 +2231,15 @@ void bc_tab_capture_end(bc_id id) {
           contents ? browser_core::PageCapture::FromWebContents(contents) : nullptr) {
     capture->End();
   }
+}
+
+bool bc_board_add_capture(bc_id profile, const char* id, const uint8_t* png, size_t size) {
+  if (!id || !png || size == 0) {
+    return false;
+  }
+  // SAFETY: the app passes the PNG tab_captured gave it, |size| bytes.
+  return browser_core::AddCapture(browser_core::ProfileOrLoad(profile), id,
+                                  UNSAFE_BUFFERS(base::span<const uint8_t>(png, size)));
 }
 
 void bc_tab_answer_permission(bc_id id, int answer) {

@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "base/containers/span.h"
 #include "base/files/file.h"
@@ -28,6 +29,9 @@ inline constexpr uint64_t kMaxFile = 50 * 1024 * 1024;
 inline constexpr uint64_t kMaxBoardJson = 4 * 1024 * 1024;
 // The Library's picture of a Board: a PNG of its page, 536 by 376.
 inline constexpr uint64_t kMaxThumb = 4 * 1024 * 1024;
+// The pictures waiting in a Board's arrivals for its page, the most there may be: each a capture
+// the user put there since the page last took them.
+inline constexpr size_t kMaxArrived = 100;
 
 // A Board's id: 32 lowercase hex digits, 128 random bits the app makes. Never a path.
 bool IsBoardId(std::string_view id);
@@ -60,6 +64,25 @@ bool SaveBoardJson(const base::FilePath& board, std::string_view json);
 
 // The Library's picture of the Board, a PNG, written the same way.
 bool SaveThumb(const base::FilePath& board, base::span<const uint8_t> png);
+
+// Stores |bytes| in |board|'s files whole, as a FileAdd does: the stored file's name, or nothing if
+// |board| isn't there or the bytes aren't a picture's.
+std::optional<std::string> AddFile(const base::FilePath& board, base::span<const uint8_t> bytes);
+
+// A Board's arrivals: stored files the browser put there for its page to make cards of, a name a
+// line in the Board's file "arrived", in the order they came. The page reads them when it opens,
+// or when told one came while it's open, and takes them once its cards hold them.
+
+// Adds the stored file |name| to |board|'s arrivals, and says whether it did: not for a name
+// FileName doesn't give, a Board that isn't there, or one with kMaxArrived waiting.
+bool Arrive(const base::FilePath& board, std::string_view name);
+
+// |board|'s arrivals, the first come first, leaving out a line that isn't a stored file's name.
+std::vector<std::string> Arrived(const base::FilePath& board);
+
+// Takes |names| out of |board|'s arrivals, each once, and keeps the rest. False if the Board
+// isn't there or the file couldn't be written.
+bool TakeArrived(const base::FilePath& board, const std::vector<std::string>& names);
 
 // A picture on its way into a Board's files, its bytes hashed as they come. The bytes go into a
 // temporary file in the Board's files/, which becomes files/<FileName> once all have come and
