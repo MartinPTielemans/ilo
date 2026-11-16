@@ -1106,8 +1106,9 @@ expect "^browser: title $v landed\$" "the Mini Player didn't land as its window 
 # The new window's command bar closes as the video's window takes the keyboard, which stays there:
 # the Mac's host gave it back to the bar's window (#2179). On X11 the bar is a window over all of
 # the app's, so one left open stays over the video's, and it took the keyboard back as another of
-# the app's windows took it (#3082).
-if [ "$(uname)" = Linux ] && ! wayland; then
+# the app's windows took it (#3082). Under Wayland the keys the video's window gets went to the bar
+# over the other (#3116).
+if [ "$(uname)" = Linux ]; then
   expect '^browser: command bar hidden$' \
     "the new window's command bar didn't close as the video's window took the keyboard" "$back"
 fi
