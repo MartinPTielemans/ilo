@@ -5,6 +5,9 @@
 //! tooltip is, it's a window of its own that the host shows over the browser window, as its child,
 //! and it never takes the keyboard. What it asks of its window goes through `Host`.
 //!
+//! A pinned tab or a favorite on a site with rows has what's recent there in its picture's place
+//! instead (crate::recent, #3074), which the shell gives the card as it's shown.
+//!
 //! The pictures are the core's (`bc_tab_picture`), taken after a tab is hidden, never on the switch
 //! that hides it, at most twice the card's size, and held here in memory alone, by tab, until the
 //! tab unloads or closes or the system is short of memory.
@@ -23,11 +26,16 @@ use crate::elevation::{Level, WINDOW_MARGIN};
 use crate::palette::{
     Palette, STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
 };
+use crate::recent::{List, Recent, Row as RecentRow};
 use crate::shell::{PagePicture, cubic_bezier, scaled::scaled, spring};
+use crate::tokens::folder_preview as rows;
 use crate::tokens::hover_card::{
     BUTTON, BUTTON_GAP, BUTTON_INSET, BUTTON_RADIUS, FAVICON, GLYPH, GLYPH_ALPHA, GROUND, HOST,
     HOST_SIZE, PADDING, PAUSED_GAP, PICTURE_DEFAULT, PICTURE_LEAST, PICTURE_MOST, PICTURE_RADIUS,
-    RADIUS, RIM, SPLIT_GAP, SPLIT_RING, TEXT_TOP, TEXT_X, TITLE, TITLE_LINE, TITLE_SIZE,
+    RADIUS, RECENT_BAR, RECENT_BAR_GAP, RECENT_DETAIL_BAR, RECENT_DETAIL_BAR_HEIGHT, RECENT_DRAFT,
+    RECENT_HEADING, RECENT_HEADING_UNDER, RECENT_ROW_RADIUS, RECENT_TITLE_BAR,
+    RECENT_TITLE_BAR_HEIGHT, RIM, SPLIT_GAP, SPLIT_RING, TEXT_TOP, TEXT_X, TITLE, TITLE_LINE,
+    TITLE_SIZE,
 };
 pub use crate::tokens::hover_card::{EDGE, GAP, WIDTH};
 
@@ -196,6 +204,9 @@ pub struct Card {
     pub panes: Vec<(u64, Icon)>,
     pub focused: u64,
     pub ring: Hsla,
+    /// What's recent on its site, in its picture's place, for a pinned tab or a favorite whose page
+    /// is on a site with rows (#3074), else none.
+    pub recent: Option<Recent>,
 }
 
 /// The row a card goes beside, in the browser window, and the window's size, which it stays
@@ -208,8 +219,27 @@ pub struct Anchor {
     pub left: bool,
 }
 
+/// Where a row of what's recent opens: in the card's tab, in a tab behind (⌘), or beside the page
+/// shown (⌥), as a modifier changes where everywhere (docs/ux-principles.md).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Opening {
+    Here,
+    Behind,
+    Beside,
+}
+
+impl Opening {
+    pub fn label(self) -> &'static str {
+        match self {
+            Opening::Here => "here",
+            Opening::Behind => "behind",
+            Opening::Beside => "beside",
+        }
+    }
+}
+
 /// What the card tells the shell that asked for it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// It shows, so a loaded tab's picture can be taken again, as it is now.
     Shown,
@@ -218,6 +248,10 @@ pub enum Event {
     /// The pointer came onto the card, or left it, which a hidden sidebar's panel counts as its
     /// own (#830).
     Pointer(bool),
+    /// A row of what's recent was clicked, and the card has gone.
+    Open(RecentRow, Opening),
+    /// Signed out, its box was clicked, and the card has gone.
+    SignIn,
 }
 
 /// The pointer rests on a row: in which browser window, what its card shows, where, and who hears
@@ -357,9 +391,20 @@ impl Global for Early {}
 /// Opens the card's window, hidden, for `host` to show over the browser window, ahead of time as
 /// the tooltip's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<HoverCard>> {
+    open_at(host, point(px(0.), px(0.)), false, cx)
+}
+
+/// `open`, with its window's top left at `origin` on screen, shown if `show`: the preview's, which
+/// has no host to move it.
+pub fn open_at(
+    host: Rc<dyn Host>,
+    origin: gpui::Point<Pixels>,
+    show: bool,
+    cx: &mut App,
+) -> Option<WindowHandle<HoverCard>> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-            point(px(0.), px(0.)),
+            origin,
             size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)),
         ))),
         titlebar: Some(TitlebarOptions {
@@ -368,7 +413,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<HoverCard>>
             traffic_light_position: None,
         }),
         kind: WindowKind::Floating,
-        show: false,
+        show,
         focus: false,
         is_movable: false,
         is_resizable: false,
@@ -667,18 +712,16 @@ impl HoverCard {
             })
             .collect();
         // A split's box keeps the default shape, as its pages are of more than one.
-        let height = height(picture_height(
-            card.pictured,
-            picture.as_ref().map(|p| p.size()),
-        ));
+        let height = height(box_height(&card, picture.as_ref()));
         let (left, top) = place(rest.anchor, height);
         // check.sh reads this line, to see the card is beside its row.
         log!("browser: hover card at {left} {top} {WIDTH} {height}");
         let pictured = picture.is_some() || panes.iter().any(Option::is_some);
-        let holds = match (pictured, card.pictured) {
-            (true, _) => "picture",
-            (false, true) => "favicon",
-            (false, false) => "none",
+        let holds = match (&card.recent, pictured, card.pictured) {
+            (Some(recent), _, _) => recent_label(recent),
+            (None, true, _) => "picture",
+            (None, false, true) => "favicon",
+            (None, false, false) => "none",
         };
         self.drawn = Some(Drawn {
             card,
@@ -756,6 +799,31 @@ impl HoverCard {
         (rest.events)(rest.card.tab, Event::Act(action), cx);
     }
 
+    /// A row of what's recent, or the signed-out box with none, was clicked.
+    fn open(&mut self, row: Option<RecentRow>, opening: Opening, cx: &mut Context<Self>) {
+        let Some(rest) = self.shown.clone() else {
+            return;
+        };
+        let tab = rest.card.tab;
+        let event = match row {
+            Some(row) => {
+                // check.sh reads this line.
+                log!(
+                    "browser: hover card {tab} opens #{} {}",
+                    row.number,
+                    opening.label()
+                );
+                Event::Open(row, opening)
+            }
+            None => {
+                log!("browser: hover card {tab} sign in");
+                Event::SignIn
+            }
+        };
+        self.close(cx);
+        (rest.events)(tab, event, cx);
+    }
+
     /// A picture it holds went: the window lets go of the one it drew, if it's gone, and draws the
     /// card again without it.
     fn let_go(&mut self, cx: &mut Context<Self>) {
@@ -822,10 +890,11 @@ impl Render for HoverCard {
         }
         let pose = self.pose();
         let pictured = drawn.picture.is_some() || drawn.panes.iter().any(Option::is_some);
-        let holds = match (pictured, drawn.card.pictured) {
-            (true, _) => "picture",
-            (false, true) => "favicon",
-            (false, false) => "none",
+        let holds = match (&drawn.card.recent, pictured, drawn.card.pictured) {
+            (Some(recent), _, _) => recent_label(recent),
+            (None, true, _) => "picture",
+            (None, false, true) => "favicon",
+            (None, false, false) => "none",
         };
         if self.logged != Some((drawn.card.tab, holds)) {
             self.logged = Some((drawn.card.tab, holds));
@@ -836,7 +905,7 @@ impl Render for HoverCard {
         let a11y = window.is_a11y_active();
         let on_card = self.on_card;
         let card = &drawn.card;
-        let picture_h = picture_height(card.pictured, drawn.picture.as_ref().map(|p| p.size()));
+        let picture_h = box_height(card, drawn.picture.as_ref());
         let text_top = if picture_h > 0. {
             PADDING + picture_h
         } else {
@@ -852,6 +921,9 @@ impl Render for HoverCard {
                 .rounded(px(PICTURE_RADIUS))
                 .overflow_hidden()
                 .bg(palette.plate(GROUND));
+            if let Some(recent) = &card.recent {
+                return frame.child(recent_box(&palette, recent, a11y, on_card, cx));
+            }
             if !card.panes.is_empty() {
                 return frame.child(split_pictures(&palette, card, &drawn.panes, picture_h));
             }
@@ -983,6 +1055,311 @@ impl Render for HoverCard {
             corner,
         ))
     }
+}
+
+/// How tall the box over the title is: what's recent at the picture's tallest share in every state,
+/// so nothing moves as its rows come, else the picture's.
+fn box_height(card: &Card, picture: Option<&PagePicture>) -> f32 {
+    match card.recent {
+        Some(Recent::Rows { stale: Some(_), .. }) => RECENT_BOX + RECENT_HEADING,
+        Some(_) => RECENT_BOX,
+        None => picture_height(card.pictured, picture.map(|p| p.size())),
+    }
+}
+
+/// What's recent's box: the two lists' headings over the rows shown, in every state, so an answer
+/// replacing the rows' places on an open card doesn't move it. It grows by the stale line alone.
+const RECENT_BOX: f32 = 2. * RECENT_HEADING + crate::recent::SHOWN as f32 * rows::ROW_FILL;
+const _: () = assert!(RECENT_BOX + RECENT_HEADING <= INNER * PICTURE_MOST);
+
+/// How the log names what the box holds of what's recent.
+fn recent_label(recent: &Recent) -> &'static str {
+    match recent {
+        Recent::Loading => "recent-loading",
+        Recent::Rows { stale: Some(_), .. } => "recent-stale",
+        Recent::Rows { rows, .. } if rows.is_empty() => "recent-none",
+        Recent::Rows { .. } => "recent-rows",
+        Recent::SignedOut => "recent-signed-out",
+        Recent::Unreachable => "recent-unreachable",
+    }
+}
+
+/// The text column of the card's title and host, in the box, which is PADDING in from the card.
+const COLUMN: f32 = TEXT_X - PADDING;
+/// Lucide's glyphs draw their ink from 2 of 24 in, the pull requests' and log-in, and 1 of 24, the
+/// circle-alert, which the column is to have on it.
+const ROW_INK: f32 = 2. / 24. * rows::ICON;
+const ALERT_INK: f32 = 1. / 24. * HOST_SIZE;
+
+/// What's recent, in the picture's box: the rows under their lists' headings, their places while
+/// loading, the one thing to do signed out, or that it couldn't be reached.
+fn recent_box(
+    palette: &Palette,
+    recent: &Recent,
+    a11y: bool,
+    on_card: bool,
+    cx: &mut Context<HoverCard>,
+) -> gpui::AnyElement {
+    match recent {
+        // Under both headings, as most answers have both lists.
+        Recent::Loading => div()
+            .flex()
+            .flex_col()
+            .child(heading(palette, List::Review.heading()))
+            .child(row_place(palette, 0))
+            .child(row_place(palette, 1))
+            .child(heading(palette, List::Created.heading()))
+            .child(row_place(palette, 2))
+            .into_any_element(),
+        Recent::Rows { rows: shown, stale } => {
+            let mut list = div().flex().flex_col();
+            let mut last = None;
+            for (index, (row, new)) in shown.iter().enumerate() {
+                if last != Some(row.list) {
+                    list = list.child(heading(palette, row.list.heading()));
+                    last = Some(row.list);
+                }
+                list = list.child(recent_row(palette, index, row, *new, a11y, on_card, cx));
+            }
+            let lone = shown.is_empty().then(|| {
+                centred(
+                    palette,
+                    "icons/git-pull-request.svg",
+                    "No open pull requests",
+                    None,
+                )
+            });
+            // In the line the box grows by under the rows.
+            let stale = stale.clone().map(|stale| {
+                div()
+                    .absolute()
+                    .left(px(COLUMN - ALERT_INK))
+                    .bottom_0()
+                    .h(px(RECENT_HEADING))
+                    .flex()
+                    .items_center()
+                    .text_size(px(HOST_SIZE))
+                    .text_color(palette.on_overlay(HOST))
+                    .child(
+                        svg()
+                            .path("icons/circle-alert.svg")
+                            .flex_none()
+                            .mr(px(PAUSED_GAP))
+                            .size(px(HOST_SIZE))
+                            .text_color(palette.on_overlay(HOST)),
+                    )
+                    .child(div().truncate().child(stale))
+            });
+            div()
+                .relative()
+                .size_full()
+                .child(list)
+                .children(lone)
+                .children(stale)
+                .into_any_element()
+        }
+        Recent::SignedOut => {
+            let palette = *palette;
+            div()
+                .id("recent-sign-in")
+                .when(a11y, |plate| {
+                    plate.role(Role::Button).aria_label("Sign in to GitHub")
+                })
+                .size_full()
+                .rounded(px(PICTURE_RADIUS))
+                .when(on_card, |plate| {
+                    plate.hover(move |style| style.bg(palette.state(0., STATE_HOVERED)))
+                })
+                .active(move |style| style.bg(palette.state(0., STATE_PRESSED)))
+                .on_click(cx.listener(|card, _, _, cx| card.open(None, Opening::Here, cx)))
+                .child(centred(
+                    &palette,
+                    "icons/log-in.svg",
+                    "Sign in to GitHub",
+                    Some("to see your pull requests here"),
+                ))
+                .into_any_element()
+        }
+        Recent::Unreachable => centred(
+            palette,
+            "icons/circle-alert.svg",
+            "Couldn't reach GitHub",
+            None,
+        )
+        .into_any_element(),
+    }
+}
+
+/// A list's heading, its text on the card's column.
+fn heading(palette: &Palette, text: &'static str) -> impl IntoElement + use<> {
+    div()
+        .h(px(RECENT_HEADING))
+        .pl(px(COLUMN))
+        .flex()
+        .items_end()
+        .pb(px(RECENT_HEADING_UNDER))
+        .text_size(px(rows::AGE_SIZE))
+        .line_height(px(rows::AGE_LINE))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(palette.on_overlay(rows::HINT))
+        .child(text)
+}
+
+/// A row's plate, inset by the box's padding with its glyph's ink on the card's column.
+fn row_plate(id: gpui::ElementId) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .h(px(rows::ROW_FILL))
+        .mx(px(PADDING))
+        .rounded(px(RECENT_ROW_RADIUS))
+        .flex()
+        .items_center()
+}
+
+/// The glyph's room: the ink on the column, and the text at the folder preview's offset from it.
+fn glyph_room(glyph: impl IntoElement) -> impl IntoElement {
+    div()
+        .w(px(COLUMN - PADDING - ROW_INK + rows::TITLE_X - rows::ICON_X))
+        .flex_none()
+        .pl(px(COLUMN - PADDING - ROW_INK))
+        .child(glyph)
+}
+
+/// A row's place while loading: bars where its glyph and lines will be, the same size, so nothing
+/// moves as the rows come.
+fn row_place(palette: &Palette, index: usize) -> impl IntoElement + use<> {
+    let bar = |width: f32, height: f32| {
+        div()
+            .w(px(width))
+            .h(px(height))
+            .rounded(px(height / 2.))
+            .bg(palette.plate(RECENT_BAR))
+    };
+    row_plate(("recent-place", index).into())
+        .child(glyph_room(
+            div()
+                .size(px(rows::ICON))
+                .rounded(px(rows::ICON / 2.))
+                .bg(palette.plate(RECENT_BAR)),
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(RECENT_BAR_GAP))
+                .child(bar(RECENT_TITLE_BAR, RECENT_TITLE_BAR_HEIGHT))
+                .child(bar(RECENT_DETAIL_BAR, RECENT_DETAIL_BAR_HEIGHT)),
+        )
+}
+
+/// A pull request's row: its glyph, its title over its repo and number, a draft dimmed and a new
+/// one semibold. A click opens it where its modifiers say.
+fn recent_row(
+    palette: &Palette,
+    index: usize,
+    row: &RecentRow,
+    new: bool,
+    a11y: bool,
+    on_card: bool,
+    cx: &mut Context<HoverCard>,
+) -> impl IntoElement + use<> {
+    let palette = *palette;
+    let alpha = if row.draft { RECENT_DRAFT } else { 1. };
+    let glyph = match row.draft {
+        true => "icons/git-pull-request-draft.svg",
+        false => "icons/git-pull-request.svg",
+    };
+    let clicked = row.clone();
+    let title = row.title.clone();
+    row_plate(("recent-row", index).into())
+        .when(a11y, |plate| {
+            plate.role(Role::Link).aria_label(title.clone())
+        })
+        .when(on_card, |plate| {
+            plate.hover(move |style| style.bg(palette.state(0., STATE_HOVERED)))
+        })
+        .active(move |style| style.bg(palette.state(0., STATE_PRESSED)))
+        .on_click(cx.listener(move |card, event: &gpui::ClickEvent, _, cx| {
+            let modifiers = event.modifiers();
+            let opening = match (modifiers.secondary(cx), modifiers.alt) {
+                (true, _) => Opening::Behind,
+                (false, true) => Opening::Beside,
+                (false, false) => Opening::Here,
+            };
+            card.open(Some(clicked.clone()), opening, cx)
+        }))
+        .child(glyph_room(
+            svg()
+                .path(glyph)
+                .size(px(rows::ICON))
+                .text_color(palette.on_overlay_glyph(GLYPH_ALPHA * alpha)),
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .pr(px(COLUMN))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(rows::TITLE_SIZE))
+                        .line_height(px(rows::TITLE_LINE))
+                        .font_weight(match new {
+                            true => FontWeight::SEMIBOLD,
+                            false => FontWeight::NORMAL,
+                        })
+                        .text_color(palette.on_overlay(rows::TITLE * alpha))
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(rows::AGE_SIZE))
+                        .line_height(px(rows::AGE_LINE))
+                        .text_color(palette.on_overlay(rows::HINT * alpha))
+                        .child(row.detail()),
+                ),
+        )
+}
+
+/// A glyph over a line, and another under it, on the box's centre.
+fn centred(
+    palette: &Palette,
+    glyph: &'static str,
+    line: &'static str,
+    under: Option<&'static str>,
+) -> gpui::Div {
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(PAUSED_GAP))
+        .child(
+            svg()
+                .path(glyph)
+                .size(px(FAVICON))
+                .text_color(palette.on_overlay_glyph(GLYPH_ALPHA)),
+        )
+        .child(
+            div()
+                .text_size(px(rows::TITLE_SIZE))
+                .line_height(px(rows::TITLE_LINE))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(palette.on_overlay(rows::TITLE))
+                .child(line),
+        )
+        .children(under.map(|under| {
+            div()
+                .text_size(px(rows::AGE_SIZE))
+                .line_height(px(rows::AGE_LINE))
+                .text_color(palette.on_overlay(rows::HINT))
+                .child(under)
+        }))
 }
 
 /// The plate's top left corner in its window.

@@ -153,6 +153,7 @@ pub mod offer;
 pub mod overlay_life;
 pub mod palette;
 pub mod passwords;
+pub mod recent;
 pub mod safe_start;
 pub mod settings_card;
 pub mod settings_column;

@@ -76,6 +76,8 @@ pub(super) struct Recorder {
     /// answer.
     pub(super) safe_start: Cell<bool>,
     pub(super) ad_blocking: Cell<bool>,
+    /// The core can ask a site what's recent for a card, as `recent_reached` answers (#3074).
+    pub(super) recent_reached: Cell<bool>,
     /// The build updates itself, as `updates` answers, and how often Check for Updates ran.
     pub(super) updates: Cell<bool>,
     pub(super) checked_for_updates: Cell<usize>,
@@ -557,6 +559,18 @@ impl Browser for Recorder {
 
     fn back_to_pinned_url(&self, tab: u64, _: &mut App) {
         self.record(format!("back to pinned url {tab}"))
+    }
+
+    fn navigate(&self, tab: u64, url: &str, _: &mut App) {
+        self.record(format!("navigate {tab} {url}"))
+    }
+
+    fn recent_reached(&self) -> bool {
+        self.recent_reached.get()
+    }
+
+    fn fetch_recent(&self, tab: u64, _: &mut App) {
+        self.record(format!("fetch recent {tab}"))
     }
 
     fn set_muted(&self, tab: u64, muted: bool, _: &mut App) {
