@@ -99,7 +99,7 @@ impl Shell {
             .page_dialogs
             .remove(&tab)
             .is_some_and(|dialog| dialog.kind == DialogKind::Leave && !reply.accept);
-        self.page_dialog_shown = None;
+        self.page_dialog_shown = Some(None);
         // check.sh reads this line, which never has what was typed.
         log!("browser: page {tab} dialog answered {reply:?}");
         // A page that asks to stay stops a quit, and so a restart into an update.
@@ -131,10 +131,10 @@ impl Shell {
         let key = wanted
             .as_ref()
             .map(|(tab, dialog, over)| (*tab, dialog.id, *over));
-        if self.page_dialog_shown == key {
+        if self.page_dialog_shown == Some(key) {
             return;
         }
-        self.page_dialog_shown = key;
+        self.page_dialog_shown = Some(key);
         self.browser.show_page_dialog(wanted, cx);
     }
 }
