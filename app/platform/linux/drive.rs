@@ -21,7 +21,7 @@
 //! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, warp (Linux's), scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
-//! agentopen, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
+//! agentopen, agentnavigate, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
 //! desktop on and off, Linux's own, shows the desktop and the windows again as a pager asks,
 //! desktop shell maps a desktop window as a desktop shell does and desktop shell off takes it away, and
 //! onscreen logs what the X server shows of the driven window and the app's overlays over it.
@@ -3180,6 +3180,15 @@ fn run_command(line: &str) -> Option<()> {
             let tab = unsafe { bc::bc_agent_open_tab(agent_c.as_ptr(), url_c.as_ptr()) };
             (tab != 0).then_some(())?;
             log!("browser: agent {agent} opened {tab}");
+            Some(())
+        }
+        "agentnavigate" => {
+            let agent = words.next()?;
+            let tab: bc::bc_id = words.next()?.parse().ok()?;
+            let url = words.next()?;
+            let (agent_c, url_c) = (CString::new(agent).ok()?, CString::new(url).ok()?);
+            let went = unsafe { bc::bc_agent_navigate(agent_c.as_ptr(), tab, url_c.as_ptr()) };
+            log!("browser: agent {agent} navigated {tab}: {}", went as u8);
             Some(())
         }
         "agentrelease" => {
