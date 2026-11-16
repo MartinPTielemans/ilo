@@ -292,3 +292,42 @@ fn a_link_that_fits_waits_for_nothing(cx: &mut TestAppContext) {
     });
     assert!(plates(&host)[0].contains('…'));
 }
+
+/// What the shell asked of the core's link cards since the last time.
+fn cards(host: &Recorder) -> Vec<String> {
+    host.take()
+        .into_iter()
+        .filter(|call| call.starts_with("link card"))
+        .collect()
+}
+
+#[gpui::test]
+fn shift_asks_for_the_card_of_the_link_the_plate_shows(cx: &mut TestAppContext) {
+    let (shell, host, cx) = window(cx);
+    assert!(
+        !shell.update(cx, |shell, cx| shell.ask_link_card(10, cx)),
+        "⇧ with no plate asked for a card"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.link_target_changed(10, Some(target()), cx)
+    });
+    host.take();
+    assert!(
+        !shell.update(cx, |shell, cx| shell.ask_link_card(20, cx)),
+        "⇧ in a page the plate isn't for asked for a card"
+    );
+    assert_eq!(cards(&host), Vec::<String>::new());
+    assert!(shell.update(cx, |shell, cx| shell.ask_link_card(10, cx)));
+    assert_eq!(cards(&host), vec!["link card 10".to_string()]);
+}
+
+#[gpui::test]
+fn with_link_cards_off_shift_asks_nothing(cx: &mut TestAppContext) {
+    let (shell, host, cx) = window(cx);
+    host.link_cards_off.set(true);
+    shell.update(cx, |shell, cx| {
+        shell.link_target_changed(10, Some(target()), cx)
+    });
+    assert!(!shell.update(cx, |shell, cx| shell.ask_link_card(10, cx)));
+    assert_eq!(cards(&host), Vec::<String>::new());
+}
