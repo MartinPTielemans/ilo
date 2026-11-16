@@ -52,6 +52,105 @@ pub fn make(profile: &Path, id: &str) -> io::Result<PathBuf> {
     Ok(folder)
 }
 
+/// A Board as the Library lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    pub id: String,
+    /// The name its row was given, else the product's.
+    pub name: String,
+    /// Its picture, which the page saves as it's left, if it has one yet.
+    pub thumb: Option<PathBuf>,
+    /// When its page last saved it, in milliseconds since 1970, for the Library's days.
+    pub changed: f64,
+}
+
+/// Where a removed Board waits for ⌘Z, out of the list. The next launch's list empties it.
+const REMOVED: &str = ".removed";
+
+/// `profile`'s Boards, the last changed first. It reads the disk, so it runs off the main thread.
+pub fn list(profile: &Path) -> Vec<Listed> {
+    let Ok(entries) = std::fs::read_dir(dir(profile)) else {
+        return Vec::new();
+    };
+    let mut boards: Vec<Listed> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let id = entry.file_name().into_string().ok()?;
+            let folder = entry.path();
+            (is_id(&id) && folder.is_dir()).then(|| {
+                let name = std::fs::read_to_string(folder.join("name"))
+                    .ok()
+                    .map(|name| name.trim().to_owned())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| "Board".to_owned());
+                let thumb = Some(folder.join("thumb.png")).filter(|thumb| thumb.is_file());
+                let changed = (std::fs::metadata(folder.join("board.json")))
+                    .or_else(|_| std::fs::metadata(&folder))
+                    .and_then(|data| data.modified())
+                    .ok()
+                    .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0., |since| since.as_millis() as f64);
+                Listed {
+                    id,
+                    name,
+                    thumb,
+                    changed,
+                }
+            })
+        })
+        .collect();
+    boards.sort_by(|a, b| {
+        b.changed
+            .total_cmp(&a.changed)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    boards
+}
+
+/// Keeps `name` as Board `id`'s, for the Library, as its row was named. Off the main thread.
+pub fn write_name(profile: &Path, id: &str, name: &str) -> io::Result<()> {
+    if !is_id(id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a Board's id",
+        ));
+    }
+    std::fs::write(dir(profile).join(id).join("name"), name.trim())
+}
+
+/// Takes Board `id` out of the list, aside where `restore` brings it back from. Off the main
+/// thread.
+pub fn remove(profile: &Path, id: &str) -> io::Result<()> {
+    if !is_id(id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a Board's id",
+        ));
+    }
+    let aside = dir(profile).join(REMOVED);
+    std::fs::create_dir_all(&aside)?;
+    std::fs::rename(dir(profile).join(id), aside.join(id))
+}
+
+/// Brings Board `id` back from where `remove` put it.
+pub fn restore(profile: &Path, id: &str) -> io::Result<()> {
+    if !is_id(id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a Board's id",
+        ));
+    }
+    std::fs::rename(dir(profile).join(REMOVED).join(id), dir(profile).join(id))
+}
+
+/// Deletes the Boards removed before this launch, which ⌘Z can no longer bring back.
+pub fn forget_removed(profile: &Path) -> io::Result<()> {
+    match std::fs::remove_dir_all(dir(profile).join(REMOVED)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        done => done,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,6 +195,50 @@ mod tests {
         // Again is the same folder, as a second New Board never meets one.
         assert_eq!(make(&profile, &id).unwrap(), made);
         assert!(make(&profile, "../outside").is_err());
+        std::fs::remove_dir_all(&profile).unwrap();
+    }
+
+    #[test]
+    fn the_list_is_the_last_changed_first_with_each_name_and_picture_and_a_removed_one_comes_back()
+    {
+        let profile = std::env::temp_dir().join(format!("ilo-boards-{}", new_id()));
+        let (old, new) = ("a".repeat(32), "b".repeat(32));
+        make(&profile, &old).unwrap();
+        std::fs::write(dir(&profile).join(&old).join("board.json"), "{}").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let folder = make(&profile, &new).unwrap();
+        std::fs::write(folder.join("board.json"), "{}").unwrap();
+        std::fs::write(folder.join("thumb.png"), b"\x89PNG").unwrap();
+        write_name(&profile, &new, "  Trip  ").unwrap();
+        // Not a Board's: the list leaves it out.
+        std::fs::create_dir_all(dir(&profile).join("notes")).unwrap();
+
+        let listed = list(&profile);
+        let ids: Vec<&str> = listed.iter().map(|board| board.id.as_str()).collect();
+        assert_eq!(ids, [new.as_str(), old.as_str()]);
+        assert_eq!(
+            (listed[0].name.as_str(), listed[1].name.as_str()),
+            ("Trip", "Board")
+        );
+        assert_eq!(listed[0].thumb, Some(folder.join("thumb.png")));
+        assert_eq!(listed[1].thumb, None);
+
+        remove(&profile, &new).unwrap();
+        assert_eq!(list(&profile).len(), 1, "the removed Board is still listed");
+        restore(&profile, &new).unwrap();
+        assert_eq!(
+            list(&profile)[0].name,
+            "Trip",
+            "⌘Z didn't bring the Board back whole"
+        );
+        remove(&profile, &new).unwrap();
+        forget_removed(&profile).unwrap();
+        assert!(
+            restore(&profile, &new).is_err(),
+            "a Board removed before came back"
+        );
+        forget_removed(&profile).unwrap();
+        assert!(remove(&profile, "../x").is_err() && write_name(&profile, "x", "y").is_err());
         std::fs::remove_dir_all(&profile).unwrap();
     }
 }
