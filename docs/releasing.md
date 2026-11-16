@@ -94,6 +94,7 @@ A draft release whose files keep their names, so `releases/latest/download/<name
 - `ilo-windows-x64.msix`: unsigned; the Store signs it.
 - `ilo-windows-x64-setup.exe`: unsigned, for winget and direct downloads.
 - `ilo-linux-x86_64.flatpak` and `ilo.flatpakref`.
+- `ilo-linux-x86_64.tar.xz`, its `.sha256` and `install.sh`: the native install's one line (#2453). They're the same build as the Flatpak's (`tools/linux-tarball.sh`), and join the draft only once `linux-install.yml` has run the line on them. That run uses a clean container of each of Arch, Fedora and Ubuntu, and Ubuntu 24.04 with the AppArmor step the script names. Without them, the line fails at its download until a release has them. The checksum is fetched over HTTPS from the same release. Nothing is signed: a signature needs a key in this workflow, which is the owner's to add.
 - `SHA256SUMS` and `appcast.xml`.
 - `ilo-mac-arm64-<a>-to-<b>.delta`: Sparkle's deltas to the DMG's app from the feed's three Mac builds before it, made from their releases' DMGs. A copy on one downloads a few MB instead of the DMG; any other copy, or one a delta doesn't match, takes the DMG.
 - `ilo-demo.tar.gz`, the site's live demo built from the same commit (`.github/workflows/demo.yml`), when the commit has one.

@@ -28,13 +28,23 @@ ilo will also be on winget (`winget install ilo.ilo`) and in the Microsoft Store
 
 ### Linux
 
-x86-64, as a Flatpak:
+x86-64, in either of two ways.
+
+As a Flatpak, on any distribution with Flatpak:
 
 ```bash
 flatpak install --user https://github.com/MartinPTielemans/ilo/releases/latest/download/ilo.flatpakref
 ```
 
 Then start ilo from your apps. It updates with your other Flatpaks.
+
+Or as a native build, which runs Chromium's own sandbox, as a distribution's browser package does. It needs glibc 2.38 or later, such as Ubuntu 24.04, Fedora 39, Debian 13 or Arch:
+
+```bash
+curl -fsSL https://github.com/MartinPTielemans/ilo/releases/latest/download/install.sh | sh
+```
+
+It installs in your home folder and never asks for root. Run the same line again to update it, or add `-s -- --uninstall` after `sh` to remove it, which keeps your profile. On Ubuntu 23.10 and later, it first names one command to run with sudo, which lets ilo's sandbox start. The two ways can be installed side by side, each with its own profile.
 
 ## Build from source
 

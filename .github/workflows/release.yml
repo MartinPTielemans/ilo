@@ -5,6 +5,9 @@
 #   ilo-windows-x64-setup.exe    unsigned, for winget and direct downloads
 #   ilo-linux-x86_64.flatpak     flatpak.yml's bundle, naming ilo's Flatpak repository, which it
 #   ilo.flatpakref               updates from, and the repository's entry (tools/flatpak-repo.sh)
+#   ilo-linux-x86_64.tar.xz      the native install (#2453): the same build, its .sha256, and
+#   install.sh                   the script its one line runs (tools/linux-tarball.sh), once
+#                                linux-install.yml has run that line on them
 #   SHA256SUMS, and appcast.xml  the updates feed's next state (tools/appcast.sh)
 #   ilo-mac-arm64-<a>-to-<b>.delta  Sparkle's deltas to the DMG's app from the three builds before
 #   ilo-demo.tar.gz              the site's live demo, when the commit has one (demo.yml)
@@ -295,6 +298,15 @@ jobs:
       symbols: ${{ needs.version.outputs.nightly != 'true' }}
     secrets:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+  # The native install's line, run on the release's own tarball in a clean container of each of
+  # Arch, Fedora and Ubuntu, and on Ubuntu 24.04 with the AppArmor step it names (#2453).
+  native:
+    needs: [version, linux]
+    if: ${{ needs.version.outputs.nightly != 'true' }}
+    uses: ./.github/workflows/linux-install.yml
+    with:
+      prebuilt: true
 
   demo:
     needs: version
@@ -651,10 +663,10 @@ jobs:
 
   # The draft, once the Mac's and Linux's packages and, with a signed DMG, the appcast are built.
   # Windows's join it when they built; 0.1.0's Windows packages wait on a Windows engine and the
-  # Store's identity. The site's demo joins it when it built, and a release without one leaves the
-  # site's demo as it was.
+  # Store's identity. The native install joins it when its line passed (native, above). The site's
+  # demo joins it when it built, and a release without one leaves the site's demo as it was.
   release:
-    needs: [version, windows, flatpak-repo, mac, appcast, demo]
+    needs: [version, windows, flatpak-repo, native, mac, appcast, demo]
     if: >-
       ${{ !cancelled() && needs.version.outputs.nightly != 'true' && needs.mac.result == 'success' &&
       needs.flatpak-repo.result == 'success' &&
@@ -686,6 +698,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: linux
+          path: assets
+      - uses: actions/download-artifact@v4
+        if: ${{ needs.native.result == 'success' }}
+        with:
+          name: ilo-linux-native
           path: assets
       - uses: actions/download-artifact@v4
         if: ${{ needs.demo.result == 'success' && needs.demo.outputs.built == 'true' }}
@@ -724,7 +741,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - run: |
-          (cd assets && sha256sum -- ilo-* > SHA256SUMS)
+          (cd assets && sha256sum -- ilo-* $([ ! -f install.sh ] || echo install.sh) > SHA256SUMS)
+          # Without them, the line fails at its download until the next release has them.
+          [ -f assets/install.sh ] ||
+            echo "No native install: its check didn't pass (linux-install.yml), so the draft has no tarball or install.sh." >> "$GITHUB_STEP_SUMMARY"
           # The Mac's minimum, LSMinimumSystemVersion in app/build.sh.
           printf '\nThe Mac build needs macOS 15 (Sequoia) or later, on Apple silicon.\n' >> notes/notes.md
           if [ ! -f assets/ilo-windows-x64-setup.exe ]; then
