@@ -228,7 +228,8 @@ void FetchLiveFolder(bc_id folder, bool refresh) {
   }
   Profile* profile = ProfileOf(*space);
   if (!profile) {
-    // Its profile isn't loaded: the fetch fails, a task later, as one that went would.
+    // Its profile isn't loaded: the fetch fails, a task later, as one that went would. No lists
+    // fails in OutcomeOf even if the profile has loaded by then.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Deliver, folder, space->profile(),
                                   live_folder::Kept{.answered = base::Time::Now()}));

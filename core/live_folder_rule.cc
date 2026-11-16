@@ -161,7 +161,8 @@ void SharedFetches::Ended(const Key& key, std::vector<std::optional<Answer>> ans
 Outcome OutcomeOf(const std::vector<std::optional<Answer>>& answers,
                   std::string_view asked,
                   std::string_view now) {
-  if (now.empty() || asked != now) {
+  // No lists is nothing asked, as for a profile that wasn't loaded: never an answer of no rows.
+  if (answers.empty() || now.empty() || asked != now) {
     return {.kind = Kind::kFailed};
   }
   Outcome outcome{.kind = Kind::kAnswered};

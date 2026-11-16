@@ -89,6 +89,13 @@ TEST(LiveFolderRule, RowsReachOnlyASpaceOnTheProfileTheyWereAskedWith) {
   EXPECT_TRUE(signed_out.items.empty());
 }
 
+TEST(LiveFolderRule, NoListsIsNeverAnAnswer) {
+  // As a folder whose profile wasn't loaded when it asked is answered, though it's loaded now.
+  const Outcome none = OutcomeOf({}, "Default", "Default");
+  EXPECT_EQ(none.kind, Kind::kFailed);
+  EXPECT_TRUE(none.items.empty());
+}
+
 TEST(LiveFolderRule, SignedOutHasNoRows) {
   const std::optional<Answer> answer = Parse(Search("false", Row("7", "x")), List::kCreated);
   ASSERT_TRUE(answer);

@@ -123,6 +123,7 @@ class SharedFetches {
 // profile isn't loaded. Rows asked with one
 // profile's session never reach a Space on another, so a folder moved to another profile's Space
 // while it waited gets kFailed: one answer to the fetch, and the core doesn't ask again on its own.
+// No |answers| is kFailed too: nothing was asked.
 Outcome OutcomeOf(const std::vector<std::optional<Answer>>& answers,
                   std::string_view asked,
                   std::string_view now);
