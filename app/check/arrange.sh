@@ -306,11 +306,13 @@ picks 1 Beta
 picks 0 Gamma
 
 # A fit refusal: the wide section at the side's edge, where it doesn't fit, and nothing changes.
-# Known under #3003: the edge, the gap between Side and Note, is the side's middle, and the core
-# trades Wide with the side itself, kept as it's let go. The run asserts that as the core gives it
-# today, reports it, and takes it back with ⌘Z, as it takes the float back below, so the steps
-# after it start from the page before it. Once the core refuses there, the run says so. A refusal
-# shows no preview: the rest finds the drop doesn't fit, and the step stays Carrying, Refused.
+# Known under #3003, in two shapes. On main's core the edge, the gap between Side and Note, is the
+# side's middle, and the core trades Wide with the side itself, kept as it's let go. On the
+# batch's core the rest refuses, but the release lands the settle the move showed before it,
+# between Side and Note, and saves it. The run asserts each as the core gives it, reports it, and
+# takes it back with ⌘Z, as it takes the float back below, so the steps after it start from the
+# page before it. Once the core refuses there and saves nothing, the run says so. A refusal shows
+# no preview: the rest finds the drop doesn't fit, and the step stays Carrying, Refused.
 carry $(slot 3) $(side_edge)
 expect "^browser: arrange $tab \(Preview\|Carrying Refused\) " \
   "a rest at the side's edge showed no drop and no refusal"
@@ -321,9 +323,26 @@ send release $(side_edge)
 expect "^browser: arrange $tab Selected " "letting go where the thing doesn't fit left no selection"
 case "$preview" in
   Refused)
-    shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
-    [ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
-    refusal="the rest where Wide doesn't fit refused it, so #3003's known row is a line to remove"
+    # The core logs a release's save before its selection, so once Selected is in, a settle the
+    # release landed is in the log too.
+    if sed -n "/^browser: drive $step: /,\$p" "$log" |
+      grep "^browser: arrange $tab Selected Settles " > /dev/null; then
+      expect "browser: tab $tab arrange saved 2 changes\$" \
+        "the release after the refusal settled Wide but the core didn't save it"
+      shows 'c,b,a,w side s,n hidden - float -' \
+        "the settle the release landed after the refusal didn't read as #3003 has it on the batch"
+      kept 2 "the settle the release landed after the refusal wasn't saved"
+      send key z cmd
+      expect "browser: tab $tab arrange saved 1 changes\$" "⌘Z didn't reach the mode"
+      shows 'c,b,a,w side s,n hidden - float -' "⌘Z didn't take back the settle after the refusal"
+      kept 1 "⌘Z's step back wasn't saved"
+      refusal="the rest where Wide doesn't fit refused it, but letting go there settled it between"
+      refusal="$refusal Side and Note all the same, which ⌘Z took back"
+    else
+      shows 'c,b,a,w side s,n hidden - float -' "the refused drop changed the page"
+      [ "$(changes)" = 1 ] || fail "the refused drop was saved: $(changes) changes"
+      refusal="the rest where Wide doesn't fit refused it, so #3003's known row is a line to remove"
+    fi
     ;;
   Trades)
     expect "browser: tab $tab arrange saved 2 changes\$" "the core didn't save the trade with the side"
