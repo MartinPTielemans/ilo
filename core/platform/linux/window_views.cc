@@ -865,14 +865,16 @@ class WindowViews : public views::WidgetObserver,
   // A link preview's page has the keyboard through the focus client, which views never sees, so
   // as the window lost activation views stored the page under it, and focused that once the
   // window was active again, sending the preview's keys to it (#2858). The preview's page has the
-  // keyboard back instead, as the Mac's window makes the preview's key again.
+  // keyboard back instead, as the Mac's window makes the preview's key again. Each side asks that
+  // the preview still shows: the note outlives a preview that closed with the keyboard, and the
+  // page under it would lose its keys to a cleared view with no preview to take them.
   void OnWidgetActivationChanged(views::Widget*, bool active) override {
-    if (!active && preview_had_keyboard_) {
+    if (!active && preview_had_keyboard_ && PreviewShows()) {
       if (views::FocusManager* focus = widget_->GetFocusManager()) {
         focus->SetStoredFocusView(nullptr);
       }
     }
-    if (active && preview_had_keyboard_) {
+    if (active && preview_had_keyboard_ && PreviewShows()) {
       PreviewTakesBackKeyboard();
     }
     if (!active && OnWayland()) {
@@ -882,12 +884,15 @@ class WindowViews : public views::WidgetObserver,
     }
   }
 
-  // The link preview's page has the keyboard again, if it still shows and nothing else took it.
+  bool PreviewShows() const {
+    return preview_.page && preview_.holder && preview_.holder->IsVisible();
+  }
+
+  // The link preview's page has the keyboard again, if nothing else took it.
   void PreviewTakesBackKeyboard() {
     aura::client::FocusClient* client = aura::client::GetFocusClient(content());
     aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
-    if (client && !ui_has_keyboard_ && (!focused || focused == content()) && preview_.page &&
-        preview_.holder->IsVisible()) {
+    if (client && !ui_has_keyboard_ && (!focused || focused == content())) {
       client->FocusWindow(preview_.page);
     }
   }
