@@ -72,10 +72,11 @@ pub trait Host {
     /// screen there, not from the frame after it's laid out at rest: only where the window's page
     /// showed through on main (#2640).
     fn open_waits(&self) -> bool;
-    /// Whether the card holds at rest as it closes until the core says a page under the window
-    /// has left, which leaves the frame after the hole closes over it: only where Peek's page
-    /// showed round the shrinking card on main (#2640).
-    fn close_waits(&self) -> bool;
+    /// Whether a page under the window is on screen where it's laid out as soon as it is, its view
+    /// moved at once, so the core never says it: Windows'.
+    fn shown_at_once(&self) -> bool {
+        false
+    }
     /// It stops taking the keyboard and clicks, which the browser window gets back, as it leaves.
     fn release(&self);
     /// Hides its window, once it has left.
@@ -558,7 +559,7 @@ impl Preview {
     fn lay_out(&mut self, host: &dyn Host, at: Bounds<Pixels>) {
         if self.placed != at {
             self.placed = at;
-            self.there = false;
+            self.there = host.shown_at_once();
             self._wait = None;
             host.place(self.tab, at, RADIUS);
         }
@@ -920,8 +921,9 @@ impl LinkPreview {
         // A page under the window that shows leaves in the card's frames first (render), while it
         // still has the keyboard, as laying it out takes it.
         shown.releasing = how == Leave::Close && shown.cut && why != "dismissed";
-        // And the card holds at rest until it has, as shrinking would show it round the card.
-        shown.held = shown.releasing && self.host.close_waits();
+        // And the card holds at rest until it has, as shrinking would show it round the card, or
+        // the window's page in it where the page left with the hole (#2640).
+        shown.held = shown.releasing;
         if !shown.releasing {
             self.host.release();
         }
@@ -1074,12 +1076,11 @@ impl Render for LinkPreview {
         // out of sight while the card grows with a plate where it will show, comes in under the
         // plate the frame after the card first draws at rest, and shows through the hole from the
         // frame after that, or under Wayland once the core says it's on screen there. As it
-        // closes, the plate is in the hole the frame before the hole closes. On Linux the page
-        // leaves the frame after, and the card shrinks back once the core says the page has gone;
-        // on Windows the page leaves with the hole, and the card shrinks back from the key. The
-        // hole changes at once, and the frames of the page and the window reach the screen later,
-        // each in its own time, so each step waits for the frame that covers it to be there where
-        // a run on main showed one late (#2640).
+        // closes, the plate is in the hole the frame before the hole closes, the page leaves the
+        // frame after, and the card shrinks back once the page has gone: on Linux once the core
+        // says so, on Windows as it's laid out. The hole changes at once, and the frames of the
+        // page and the window reach the screen later, each in its own time, so each step waits for
+        // the frame that covers it to be there (#2640).
         let mut leave_to = None;
         let place = page;
         let (page, plate) = match under {

@@ -1957,6 +1957,9 @@ pub struct Shell {
     /// drew (`Shell::right`).
     right: bool,
     forced_tone: Option<Tone>,
+    /// What lies under the tint where nothing else does: the preview's, whose window has no
+    /// material and shows the desktop through the tint, as the app's never does (#3033).
+    ground: Option<Rgba>,
     window_active: bool,
     window_watches: Vec<Subscription>,
     /// Whether the window is the one the user is in, as the host says (host_watch_window_main):
@@ -2325,6 +2328,7 @@ impl Shell {
             lone_header: false,
             right: false,
             forced_tone: None,
+            ground: None,
             window_active: true,
             window_main: true,
             nav_dimmed_drawn: Cell::new(None),
@@ -4685,7 +4689,7 @@ impl Render for Shell {
             .size_full()
             .relative()
             .font_family(crate::face::UI)
-            .when(!WEB, |shell| shell.bg(self.palette.tint))
+            .when(!WEB, |shell| shell.bg(self.window_tint()))
             .capture_any_mouse_down(cx.listener(|shell, _, _, cx| shell.leave_keys("press", cx)))
             // The rows, buttons and fields keep their presses. Everywhere else is the window's
             // background, which moves the window as a title bar does.
