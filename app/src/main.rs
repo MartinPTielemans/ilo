@@ -715,7 +715,10 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     #[cfg(target_os = "linux")]
     if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
         gpui_wgpu::WgpuContext::make_instance_early();
-        gpui_wgpu::scan_fonts_early();
+        // Proof only (#2384): the A/B's launches without the early font scan.
+        if std::env::var_os("BROWSER_PROOF_NO_EARLY_FONTS").is_none() {
+            gpui_wgpu::scan_fonts_early();
+        }
     }
     #[cfg(target_os = "windows")]
     if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
