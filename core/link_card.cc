@@ -349,9 +349,11 @@ class Card : public content::WebContentsObserver,
 
   void Started(const GURL& url, const network::mojom::URLResponseHead& head) {
     status_ = head.headers ? head.headers->response_code() : 0;
-    mime_ = head.mime_type;
+    type_ = head.mime_type;
+    // With the charset the server named, which the app decodes the page with before its meta's.
+    mime_ = head.charset.empty() ? type_ : type_ + ";charset=" + head.charset;
     const bool fine = status_ >= 200 && status_ < 300 &&
-                      (picture_ ? LinkCardPicture(mime_) : LinkCardPage(mime_));
+                      (picture_ ? LinkCardPicture(type_) : LinkCardPage(type_));
     if (!fine) {
       End(status_, url_);
       return;
@@ -412,7 +414,7 @@ class Card : public content::WebContentsObserver,
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Tell, id_, status, url.is_valid() ? url.spec() : std::string(),
                                   mime_, std::move(bytes)));
-    if (!picture_ && status >= 200 && status < 300 && LinkCardPage(mime_)) {
+    if (!picture_ && status >= 200 && status < 300 && LinkCardPage(type_)) {
       told_page_ = true;
       return;
     }
@@ -428,6 +430,7 @@ class Card : public content::WebContentsObserver,
   bool told_page_ = false;
   bool asked_picture_ = false;
   int status_ = 0;
+  std::string type_;
   std::string mime_;
   std::string read_;
   base::OneShotTimer wait_;
