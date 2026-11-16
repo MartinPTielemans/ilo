@@ -1101,7 +1101,7 @@ impl Render for Dialog {
         // GPUI draw it, so the motion starts there rather than skip its start.
         if asked.shown.is_none() && window.is_visible() {
             asked.shown = Some(Instant::now());
-            // check.sh reads this line: from the ask to the dialog's first frame on screen.
+            // How long it took to reach the screen, which a window manager can hold back (#2940).
             log!(
                 "browser: dialog first frame in {:.1} ms",
                 asked.asked.elapsed().as_secs_f64() * 1000.
