@@ -452,20 +452,8 @@ else
   for context in little tab; do
     # popup-closes thrice: its window is activated as it closes, which on X11 once crashed the
     # browser in a focus posted for the window and run once it had gone (#3088).
-    popup_closes=0
     for case in delay click popup popup-closes popup-closes popup-closes newtab; do
       [ "$context $case" != "little newtab" ] || continue
-      if [ "$case" = popup-closes ]; then
-        popup_closes=$((popup_closes + 1))
-        # On Windows a new Little ilo window after one whose pop-up closed hears ⌘L in its UI and
-        # opens no command bar, so the repeats there are known under #3108.
-        if [ "$context" = little ] && [ "$popup_closes" -gt 1 ] && windows; then
-          echo "skip: handback little popup-closes, round $popup_closes, known under #3108: on" \
-            "Windows ⌘L in a new Little ilo window, after the last one's pop-up closed, reaches its" \
-            "UI and opens no command bar"
-          continue
-        fi
-      fi
       by_scheme "$context" "$case"
     done
   done
