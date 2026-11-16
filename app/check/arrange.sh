@@ -183,15 +183,22 @@ EOF
 # thing at ($1 $2), its box centred there: the core sends the box at rest, where the thing lands,
 # not partway through its landing (#3008).
 landed_bar() {
+  first=
   for _ in $(seq 100); do
-    first=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: mini bar at ')
+    # The bar is placed a frame after the drop is logged, so no line yet is a wait, not a failure:
+    # under set -e grep's status 1 would end the run unsaid (#2974's race).
+    first=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: mini bar at ' ||
+      true)
     [ -n "$first" ] && break
+    kill -0 "$pid" 2> /dev/null || gone
     sleep 0.1
   done
+  [ -n "$first" ] ||
+    fail "$3: no mini bar was placed in 10 s after the drop; the log ends: $(tail -5 "$log")"
   read -r ox oy ow oh << EOF
 $(echo "$first" | cut -d' ' -f10-13)
 EOF
-  [ -n "$oh" ] || fail "$3: the UI placed no mini bar after the drop"
+  [ -n "$oh" ] || fail "$3: the mini bar's line has no box: $first"
   dx=$((ox + ow / 2 - $1)) dy=$((oy + oh / 2 - $2))
   [ ${dx#-} -le 1 ] && [ ${dy#-} -le 1 ] || fail "$3: $first"
 }
