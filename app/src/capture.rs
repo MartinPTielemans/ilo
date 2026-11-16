@@ -10,10 +10,10 @@ use std::{rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
     App, Bounds, ContentMask, Context, Corners, CursorStyle, Div, FocusHandle, FontWeight, Global,
-    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    RenderImage, SharedString, Stateful, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, point, prelude::*,
-    px, rgba, size, svg,
+    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Radians,
+    RenderImage, SharedString, Stateful, TitlebarOptions, Transformation, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
+    canvas, div, point, prelude::*, px, rgba, size, svg,
 };
 use image::{Frame, RgbaImage};
 
@@ -43,7 +43,9 @@ use crate::tokens::capture::RING_RADIUS;
 use crate::tokens::capture::markup::{BUTTON, COLOURS as MARK_COLOURS, DOT, GAP as BAR_GAP};
 // The menu is ilo's (menu.rs), in its tokens, the narrowest it comes.
 use crate::tokens::menu::MIN_WIDTH as MENU_WIDTH;
-use crate::tokens::menu::{GAP, LINE, PADDING, RADIUS, ROW, ROW_RADIUS, ROW_X, TEXT};
+use crate::tokens::menu::{
+    CHEVRON, GAP, LINE, OVERLAP, PADDING, RADIUS, ROW, ROW_RADIUS, ROW_X, TEXT,
+};
 /// How far the pointer moves with the button down before a click is a drag (ours).
 pub const DRAG: f32 = 4.;
 /// How long the toast after a capture stays, and longer while the pointer is over it (ours).
@@ -71,7 +73,14 @@ pub enum Action {
     Retake,
     /// A new Board with what's chosen on it, as Arc's New Easel (#3073).
     NewBoard,
+    /// Mock only (#3073 slice 2b): the submenu of the profile's Boards, most recent first.
+    AddToBoard,
+    /// Mock only: a Board in Add to Board's submenu, by its place in `MOCK_BOARDS`.
+    Board(u8),
 }
+
+/// Mock only: made-up Boards, most recent first.
+const MOCK_BOARDS: &[&str] = &["Kyoto trip", "Kitchen ideas", "Reading list"];
 
 /// The menu's rows under its field, a line between groups. Messages is the Mac's alone.
 const ROWS: &[Option<Action>] = if cfg!(target_os = "macos") {
@@ -83,6 +92,7 @@ const ROWS: &[Option<Action>] = if cfg!(target_os = "macos") {
         Some(Action::Edit),
         None,
         Some(Action::Retake),
+        Some(Action::AddToBoard),
         Some(Action::NewBoard),
     ]
 } else {
@@ -93,6 +103,7 @@ const ROWS: &[Option<Action>] = if cfg!(target_os = "macos") {
         Some(Action::Edit),
         None,
         Some(Action::Retake),
+        Some(Action::AddToBoard),
         Some(Action::NewBoard),
     ]
 };
@@ -111,6 +122,8 @@ impl Action {
             Action::Edit => "Edit",
             Action::Retake => "Retake",
             Action::NewBoard => "New Board",
+            Action::AddToBoard => "Add to Board",
+            Action::Board(i) => MOCK_BOARDS[i as usize],
         }
     }
 
@@ -124,6 +137,8 @@ impl Action {
             Action::Edit => "icons/pencil.svg",
             Action::Retake => "icons/rotate-ccw.svg",
             Action::NewBoard => "icons/presentation.svg",
+            Action::AddToBoard => "icons/plus.svg",
+            Action::Board(_) => "icons/presentation.svg",
         }
     }
 
@@ -138,6 +153,8 @@ impl Action {
             Action::Edit => "edit",
             Action::Retake => "retake",
             Action::NewBoard => "new-board",
+            Action::AddToBoard => "add-to-board",
+            Action::Board(i) => ["board-0", "board-1", "board-2"][i as usize],
         }
     }
 }
@@ -311,11 +328,13 @@ impl Session {
     /// The menu's rows, without Save to Library where there's no Library to save to.
     fn rows(&self) -> impl Iterator<Item = Option<Action>> + use<> {
         let library = self.library;
-        ROWS.iter()
-            .copied()
-            .filter(move |row| {
-                library || (*row != Some(Action::SaveToLibrary) && *row != Some(Action::NewBoard))
-            })
+        ROWS.iter().copied().filter(move |row| {
+            library
+                || !matches!(
+                    row,
+                    Some(Action::SaveToLibrary | Action::NewBoard | Action::AddToBoard)
+                )
+        })
     }
 
     /// The field, a line under it, the rows and their lines, inside the panel's padding.
@@ -859,7 +878,12 @@ impl Capture {
             }
             Action::Save => self.host.save(&png),
             Action::Messages => self.host.share(&png, Share::Messages),
-            Action::SendTo | Action::Edit | Action::Retake | Action::NewBoard => {}
+            Action::SendTo
+            | Action::Edit
+            | Action::Retake
+            | Action::NewBoard
+            | Action::AddToBoard
+            | Action::Board(_) => {}
         }
     }
 
@@ -1189,6 +1213,14 @@ impl Capture {
     ) -> impl IntoElement + use<> {
         let palette = look.palette();
         let highlight = look.highlight;
+        // Mock only: Add to Board's row's top inside the panel, under the field and its line.
+        let add_top = PADDING
+            + ROW
+            + LINE
+            + (rows.iter())
+                .take_while(|row| **row != Some(Action::AddToBoard))
+                .map(|row| if row.is_some() { ROW } else { LINE })
+                .sum::<f32>();
         // A row of ilo's menu: the Space's accent under the pointer, with its title and glyph in
         // the label solved on it, as menu.rs lights a row. Lit from state, not a hover style,
         // since a hover's text colour never reaches the title (#3137).
@@ -1240,10 +1272,69 @@ impl Capture {
                             }),
                     )
                     .child(action.label())
+                    .when(action == Action::AddToBoard, |row| {
+                        row.child(div().flex_1()).child(
+                            svg()
+                                .path("icons/chevron-down.svg")
+                                .size(px(CHEVRON))
+                                .flex_none()
+                                .text_color(match lit == Some(action) {
+                                    true => highlight.label,
+                                    false => rgba(palette.secondary),
+                                })
+                                .with_transformation(Transformation::rotate(Radians(
+                                    -std::f32::consts::FRAC_PI_2,
+                                ))),
+                        )
+                    })
                     .into_any_element(),
                 None => line(),
             })
             .collect();
+        // Mock only: Add to Board's submenu, as menu.rs places one, OVERLAP over the menu's right
+        // edge with its first row level with its parent's.
+        let open = matches!(lit, Some(Action::AddToBoard | Action::Board(_)));
+        let submenu = open.then(|| {
+            let boards = (0..MOCK_BOARDS.len() as u8).map(|i| {
+                let board = Action::Board(i);
+                row(board)
+                    .child(
+                        svg()
+                            .path(board.glyph())
+                            .size(px(GLYPH))
+                            .flex_none()
+                            .text_color(match lit == Some(board) {
+                                true => highlight.label,
+                                false => rgba(palette.secondary),
+                            }),
+                    )
+                    .child(board.label())
+            });
+            div()
+                .id("capture-boards")
+                .absolute()
+                .left(px(MENU_WIDTH - OVERLAP))
+                .top(px(add_top - PADDING))
+                .w(px(MENU_WIDTH))
+                .py(px(PADDING))
+                .flex()
+                .flex_col()
+                .rounded(px(RADIUS))
+                .bg(rgba(palette.fill))
+                .shadow(Level::Popover.shadow())
+                .occlude()
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .rounded(px(RADIUS))
+                        .border_1()
+                        .border_color(rgba(palette.rim)),
+                )
+                .children(boards)
+        });
         // Arc's field, as a row tinted the menu's line colour. Its words are the label's, as the
         // secondary colour falls under 4.5:1 on the tint in the dark look.
         let field = row(Action::SendTo)
@@ -1281,6 +1372,7 @@ impl Capture {
             .child(field)
             .child(line())
             .children(rows)
+            .children(submenu)
     }
 }
 

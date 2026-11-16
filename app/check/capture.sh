@@ -394,6 +394,13 @@ capture_look() {
   expect '^browser: capture menu lit save-to-library$' \
     "the pointer back on Save to Library's row didn't light it in the $1 look"
   ../tools/window-screenshot.sh "$pid" "$out/capture-menu-$1.png" || fail "no window to capture"
+  # Mock only (#3073 slice 2b): Add to Board's row opens its Boards, and the first lights.
+  send move $(in_page 406 374)
+  expect '^browser: capture menu lit add-to-board$' "the pointer on Add to Board didn't light it in the $1 look"
+  ../tools/window-screenshot.sh "$pid" "$out/capture-menu-add-$1.png" || fail "no window to capture"
+  send move $(in_page 560 374)
+  expect '^browser: capture menu lit board-0$' "the pointer on the first Board didn't light it in the $1 look"
+  ../tools/window-screenshot.sh "$pid" "$out/capture-menu-boards-$1.png" || fail "no window to capture"
   send key escape
   expect '^browser: capture left (escape)$' "escape didn't leave capture mode in the $1 look"
 }
