@@ -107,7 +107,9 @@ def pack(src, archive, out=OUT, toolchain=None):
         written.update(scrubbed(src, out, toolchain, names))
     names = sorted(set(names) - set(written))
     zstd = subprocess.Popen(["zstd", "-10", "-T0", "-q", "-o", archive], stdin=subprocess.PIPE)
-    with tarfile.open(fileobj=zstd.stdin, mode="w|") as t:
+    # A Windows checker's tar can't always make a link, and each one here leads to a file in the
+    # tree (in_tree), so that file goes in in its place.
+    with tarfile.open(fileobj=zstd.stdin, mode="w|", dereference=windows) as t:
         for name in names:
             t.add(os.path.join(src, name), arcname="src/" + name, recursive=False)
         for name, data in sorted(written.items()):
