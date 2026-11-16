@@ -53,6 +53,20 @@ const KEEP: f32 = 0.275;
 /// had (#2640).
 const SHOWN_WAIT: Duration = Duration::from_millis(150);
 
+/// Proof only (#2640): a stamp on the system clock, which the film's frames are on too.
+fn probe(what: std::fmt::Arguments) {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0., |at| at.as_secs_f64() * 1000.);
+    log!("browser: probe {ms:.1} {what}");
+}
+
+fn probe_rect(at: Bounds<Pixels>) -> String {
+    let (x, y) = (f32::from(at.origin.x), f32::from(at.origin.y));
+    let (w, h) = (f32::from(at.size.width), f32::from(at.size.height));
+    format!("{x:.0},{y:.0} {w:.0}x{h:.0}")
+}
+
 /// What the preview asks of its window and the core.
 pub trait Host {
     /// Puts `tab`'s page in the preview's window at `page`, from its top left, with corners of
@@ -560,7 +574,9 @@ impl Preview {
             self.placed = at;
             self.there = false;
             self._wait = None;
+            probe(format_args!("place {}", probe_rect(at)));
             host.place(self.tab, at, RADIUS);
+            probe(format_args!("placed"));
         }
     }
 
@@ -917,6 +933,7 @@ impl LinkPreview {
             "closing"
         };
         log!("browser: link preview {what} ({why})");
+        probe(format_args!("leave {what}"));
         // A page under the window that shows leaves in the card's frames first (render), while it
         // still has the keyboard, as laying it out takes it.
         shown.releasing = how == Leave::Close && shown.cut && why != "dismissed";
@@ -939,6 +956,7 @@ impl LinkPreview {
         let Some(shown) = self.preview.take() else {
             return;
         };
+        probe(format_args!("finish"));
         match shown.leaving {
             Some((_, Leave::Keep, _)) => {
                 self.host.keep(shown.window, shown.tab, shown.archived);
@@ -1129,6 +1147,16 @@ impl Render for LinkPreview {
                 }
             }
         };
+        if shown.leaving.is_some() || (shown.settled && !settling) {
+            probe(format_args!(
+                "frame scale {:.3} cut {} plate {} hole {} leave_to {}",
+                pose.scale,
+                shown.cut,
+                plate,
+                probe_rect(page),
+                leave_to.map_or("-".into(), probe_rect)
+            ));
+        }
         if moving || settling || under {
             self.host.drew(page, page_radius * pose.scale, pose.page);
         }
@@ -1137,6 +1165,7 @@ impl Render for LinkPreview {
             shown.lay_out(&*self.host, at);
             if std::mem::take(&mut shown.releasing) {
                 self.host.release();
+                probe(format_args!("released"));
             }
         }
         // And the card shrinks back once it has left.

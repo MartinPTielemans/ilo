@@ -48,11 +48,15 @@ const say = () => document.title = 'peek ready ' + first + ' ' + painted + ' ' +
 addEventListener('resize', () => { painted ? (after++, say()) : before++; });
 requestAnimationFrame(() => requestAnimationFrame(() => { painted = innerWidth + 'x' + innerHeight; say(); }));
 </script>" > "$out/site/peek-motion-target.html"
-log="$out/peek-motion.log"
 frames="$out/peek-frames"
+rm -rf "$frames"
+animations=
+# Proof only (#2640): a launch of its own for each 6 rounds, as the one Windows close fault was a
+# launch's first close.
+session() {
+log="$out/peek-motion-s$1.log"
 step=0
 rm -f "$saved"
-rm -rf "$frames"
 BROWSER_DRIVE=1 BROWSER_URL="${site}peek-motion.html" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -66,11 +70,7 @@ if [ "$active" != 1 ]; then
   echo "skip: peek-motion. Browser wasn't the active app, so the page ignored the click."
   exit 0
 fi
-# The motion is what it reads, and the app keeps still under Reduce Motion, as with Windows'
-# animations off, which GitHub's runner starts with. Turned on only on a CI VM, as the setting is
-# the system's, and off again after.
-animations=
-if windows && [ -n "${GITHUB_ACTIONS:-}" ] && [ "$(last 'reduce motion')" = on ]; then
+if [ "$1" = 1 ] && windows && [ -n "${GITHUB_ACTIONS:-}" ] && [ "$(last 'reduce motion')" = on ]; then
   windows_animations 1 || fail "PowerShell didn't turn Windows' animations on"
   animations=off
   expect '^browser: reduce motion off$' "Windows' animations turned on didn't bring the app's motion back"
@@ -86,6 +86,7 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
 width=${content%x*}
 height=${content#*x}
+}
 
 # Films the window's content into $frames/$1 until stop_film.
 film() {
@@ -152,16 +153,21 @@ round() {
 # so it opens and closes Peek again until a frame has caught each motion mid-way, eight times at
 # most, and fails at once on a frame that shows Peek's resting frame outside its card.
 resized=
-for n in 1 2 3 4 5 6 7 8; do
-  round $n
-  # shellcheck disable=SC2086 # numbers: x y w h from x y
-  python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
-    > "$out/peek-motion.txt" 2>&1 && status=0 || status=$?
-  [ $status = 2 ] && ! grep -q "isn't drawn blended" "$out/peek-motion.txt" || break
+n=0
+for s in $(seq 12); do
+  session $s
+  for _ in 1 2 3 4 5 6; do
+    n=$((n + 1))
+    round $n
+  done
+  [ "$(today)" = "$a" ] || fail "Peek opened a tab: Today is \"$(today)\""
+  exec 3>&-
+  quit
 done
-[ "$(today)" = "$a" ] || fail "Peek opened a tab: Today is \"$(today)\""
-exec 3>&-
-quit
+# Proof only (#2640): every round read at once, each round's verdict kept.
+# shellcheck disable=SC2086 # numbers: x y w h from x y
+python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
+  > "$out/peek-motion.txt" 2>&1 && status=0 || status=$?
 [ -z "$animations" ] || windows_animations 0 || fail "PowerShell didn't turn Windows' animations off again"
 case $status in
 0) ;;
