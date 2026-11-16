@@ -4,31 +4,28 @@
 # WebRTC connection that takes nothing and makes no sound, two peers of its page on a data channel.
 # A tab in no call, unseen as long, lets go of its page beside them (core/idle_unload.cc). And each
 # time the system says memory is short, the tab with a page unseen longest that's in no call lets go
-# of its page, whatever its age, one a notification, and nothing else lets go of one: DevTools'
-# Memory domain says it, as the driver can't (check/cdp.py).
+# of its page, whatever its age, one a notification: DevTools' Memory domain says it, as the driver
+# can't (check/cdp.py). A tab opened behind, waiting to load until it's shown, has no page to let
+# go of, so it's passed over, though it's unseen longer.
 
 serve
 # Each page is named by its query, "call" without one. "c" calls with the camera and microphone,
-# "w" connects two peers of the page on a data channel, and "o" opens the next page of the names,
-# with no opener, as a tab the user opens has none. "r" calls the roll: each page that still has its
-# page answers on a BroadcastChannel, and the title of the one calling says who has, sorted, once
-# each answer is in, so a page Chrome let go of in place, which says nothing in the log, is missing.
+# "w" connects two peers of the page on a data channel, and "o" opens the next page of the names.
+# The call page is a link to the page named behind, which a ⌘-click, Ctrl off the Mac, opens in a tab
+# behind; a click alone does nothing.
 printf '%s' '<title>loading</title><body style="background:#333">
 <script>
 const names = ["call", "listening", "quiet", "last", "extra"];
 const name = location.search.slice(1) || "call";
 requestAnimationFrame(() => setTimeout(() => document.title = name));
 const held = [];
-const roll = new BroadcastChannel("roll");
-const here = new Set();
-roll.onmessage = e => {
-  if (e.data == "who") {
-    roll.postMessage(name);
-  } else if (here.size) {
-    here.add(e.data);
-    document.title = "here " + [...here].sort().join(" ");
-  }
-};
+if (name == "call") {
+  const link = document.createElement("a");
+  link.href = "?behind";
+  link.style = "position: fixed; inset: 0";
+  link.onclick = e => e.metaKey || e.ctrlKey || e.preventDefault();
+  document.body.append(link);
+}
 const gathered = peer => new Promise(done => {
   const check = () => peer.iceGatheringState == "complete" && done();
   peer.onicegatheringstatechange = check;
@@ -54,12 +51,7 @@ onkeydown = async e => {
       await gathered(b);
       await a.setRemoteDescription(b.localDescription);
     } else if (e.key == "o") {
-      open("?" + names[names.indexOf(name) + 1], "_blank", "noopener");
-    } else if (e.key == "r") {
-      here.clear();
-      here.add(name);
-      document.title = "here " + name;
-      roll.postMessage("who");
+      open("?" + names[names.indexOf(name) + 1]);
     }
   } catch (error) {
     document.title = "failed " + error.name;
@@ -104,6 +96,9 @@ send click $((qx + qw * 3 / 4)) $((qy + qh - 26))
 expect "^browser: title $a in a call\$" "Allow didn't give the call the camera and microphone"
 expect "^browser: page $a camera 1 microphone 1 sharing 0 shared 0\$" \
   "the call's tab didn't show it uses the camera"
+send click $page_point cmd
+expect "^browser: tab [0-9]* opened by $a in the background\$" \
+  "a ⌘-click on the call page's link didn't open a tab behind"
 # opened <name>: the page shown opens the page named <name>, which is shown, and sets $tab to it.
 opened() {
   send click $page_point
@@ -142,18 +137,9 @@ unloaded_since() {
   sed -n "/^browser: drive $1: /,\$p" "$log" |
     sed -n 's/^.*browser: tab \([0-9]*\) without its page$/\1/p' | tr '\n' ' '
 }
-# The tab shown calls the roll, and every page named $1, sorted, answers it; $2 says what it's
-# after.
-roll() {
-  send click $page_point
-  send key r
-  expect "^browser: title $e here $1\$" \
-    "$2, the pages with theirs were \"$(grep "^browser: title $e here " "$log" | tail -1 |
-      cut -d' ' -f5-)\", not \"$1\""
-}
-# Each notification lets go of one page, the unseen longest's in no call, at any age: the quiet
-# tab's, then the last's, then none, as the calls and the tab shown keep theirs. Chrome's own
-# urgent discarding, off, lets go of none, the listening call's included.
+# Each notification lets go of one page, the unseen longest's in no call, at any age, passing over
+# the tab opened behind: the quiet tab's, then the last's, then none, as the calls and the tab shown
+# keep theirs.
 send layout
 pressed=$step
 pressure
@@ -161,7 +147,6 @@ expect "browser: tab $c without its page\$" "memory short, the tab unseen longes
   "$pressed"
 [ "$(unloaded_since "$pressed")" = "$c " ] ||
   fail "memory short, the tabs $(unloaded_since "$pressed")let go of their pages, not $c alone"
-roll "call extra last listening" "memory short once"
 send layout
 pressed=$step
 pressure
@@ -172,7 +157,7 @@ expect "browser: tab $d without its page\$" "memory short again, the next tab in
 send layout
 pressed=$step
 pressure
-roll "call extra listening" "memory short a third time"
+send layout
 [ -z "$(unloaded_since "$pressed")" ] ||
   fail "memory short a third time, the tabs $(unloaded_since "$pressed")let go of their pages"
 # Unseen 2 hours, each tab but the one shown lets go of its page once another is switched to,
@@ -197,7 +182,7 @@ exec 3>&- 5>&-
 quit
 rm -rf "$profile_dir" "$scratch"
 echo "ok: memory short, the tab with a page unseen longest in no call let go of its page, one each" \
-  "time, none once only the calls and the tab shown had theirs, and no other page went, the" \
-  "listening call's included; unseen 2 hours, a tab using the camera and microphone and one holding a WebRTC" \
+  "time, passing over the tab opened behind, and none once only the calls and the tab shown had" \
+  "theirs; unseen 2 hours, a tab using the camera and microphone and one holding a WebRTC" \
   "connection that takes nothing and makes no sound kept their pages, and a tab in no call let" \
   "go of its page. Window: $out/calls.png"
