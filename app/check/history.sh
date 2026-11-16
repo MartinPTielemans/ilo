@@ -412,6 +412,18 @@ fi
 # opens the command bar in the user's window: an agent's tab never takes the user's keyboard, as
 # its warning took it on Windows (#3164).
 [ -z "${kept:-}" ] || tab=$kept
+# Under Wayland, ⌘L straight after the ⌘W above, which closed a tab on its warning, reaches nothing
+# (#3167). A click on the user's tab's row gives the UI the keyboard first there, as the user's
+# would; elsewhere the ⌘L goes straight, as it passes. #3167's fix takes the click out.
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${kept:-}" ]; then
+  index=0
+  for each in $(today); do
+    [ "$each" != "$tab" ] || break
+    index=$((index + 1))
+  done
+  send click $(row "$index")
+  echo "skip: ⌘L straight after ⌘W closed a tab on Chrome's warning before http: under Wayland it reaches nothing (#3167), so a click on tab $tab's row gives the UI the keyboard first"
+fi
 go_from_bar "$nearby:$port"
 expect "^browser: loaded $tab http://$nearby:$port/\$" \
   "$nearby:$port didn't load before the agent's steps: $(grep "^browser: loaded $tab " "$log" | tail -1)"
