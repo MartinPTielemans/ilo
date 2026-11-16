@@ -1,0 +1,115 @@
+<!doctype html><meta charset="utf-8"><title>-</title>
+<style>
+body { margin: 0; height: 100vh; font: 16px sans-serif; background: rgb(243, 245, 246) }
+#col { position: absolute; left: 20px; top: 20px; width: 260px; display: flex; flex-direction: column; gap: 20px }
+#col > section { height: 80px; background: rgb(217, 226, 230) }
+#row { position: absolute; left: 320px; top: 20px; display: flex; gap: 10px }
+#row > span { display: block; height: 40px; background: rgb(217, 226, 230) }
+#p, #q { position: absolute; top: 100px; width: 200px; display: flex; flex-direction: column; gap: 20px; background: rgb(230, 234, 236) }
+#p { left: 320px } #q { left: 560px }
+#p > section, #q > section { background: rgb(217, 226, 230) }
+</style>
+<div id="col"><section id="a"></section><section id="b"></section><section id="c"></section><section id="w"></section></div>
+<div id="row"><span id="r1" style="width: 60px"></span><span id="r2" style="width: 100px"></span><span id="r3" style="width: 140px"></span><span id="r4" style="width: 80px"></span></div>
+<div id="p"><section id="p1" style="height: 80px"></section><section id="p2" style="height: 80px"></section></div>
+<div id="q"><section id="q1" style="height: 50px"></section><section id="q2" style="height: 140px"></section><section id="q3" style="height: 80px"></section></div>
+<script>
+// arrange-trade's idle step (#2981), run on each runtime in this page's own world: the same page,
+// files and windows, so a runtime with no engine yet says "again N quiet N" as the check would.
+// x1 and x2 trade between two columns of different heights, so the trade changes both columns'
+// boxes, which #3010's pass observes.
+const things = [...document.querySelectorAll("#col > section, #row > span, #p > section, #q > section")];
+let seen = 0;
+document.addEventListener("toggle", (e) => { if (things.includes(e.target)) seen++; }, true);
+new MutationObserver((records) => { for (const r of records) if (things.includes(r.target)) seen++; })
+  .observe(document.body, { subtree: true, attributes: true, attributeFilter: ["style", "popover"] });
+const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+const drawn = () => new Promise((done) => requestAnimationFrame(() => setTimeout(done, 0)));
+const quiet = async (by) => {
+  await drawn();
+  for (let n = 1; ; n++) {
+    const was = seen;
+    await drawn();
+    if (seen === was && !document.getAnimations().some((x) => x.playState === "running")) return n;
+    if (performance.now() > by) return "none";
+  }
+};
+const until = (hidden) => new Promise((done) => {
+  const f = () => { if (document.hidden === hidden) { document.removeEventListener("visibilitychange", f); done(); } };
+  document.addEventListener("visibilitychange", f);
+  f();
+});
+const count = async (ms) => { const n = seen, t = performance.now(); await wait(ms); return [seen - n, Math.round(performance.now() - t)]; };
+// Each column's things from the top, columns from the left, and the row's from the left.
+const order = () => {
+  const r = (t) => t.getBoundingClientRect();
+  const col = things.slice(0, 4).sort((x, y) => r(x).top - r(y).top).map((t) => t.id).join("");
+  const row = things.slice(4, 8).sort((x, y) => r(x).left - r(y).left).map((t) => t.id).join("");
+  const pq = things.slice(8), lefts = [...new Set(pq.map((t) => Math.round(r(t).left)))].sort((x, y) => x - y);
+  return col + " " + row + " " + lefts.map((l) => pq.filter((t) => Math.round(r(t).left) === l)
+    .sort((x, y) => r(x).top - r(y).top).map((t) => t.id).join("")).join("/");
+};
+const T = (id) => ({ name: id, role: "region", target: { path: "#" + id } });
+const settle = (x, where, y) => ({ kind: "settle", ...T(x), [where]: T(y) });
+const trade = (x, y) => ({ kind: "trade", ...T(x), with: T(y) });
+const files = [
+  ["m2", [trade("c", "b"), settle("a", "before", "c")]],
+  ["m4", [settle("a", "after", "b"), trade("c", "b"), settle("w", "after", "c")]],
+  ["m12", [trade("r1", "r3"), settle("r2", "after", "r1")]],
+  ["x1", [trade("p2", "q2")]],
+  ["x2", [trade("p2", "q2"), settle("q3", "before", "p2")]],
+];
+const out = [];
+let hides = 0;
+async function run(kind) {
+  const src = await (await fetch("arrange-probe-idle-" + kind + ".js")).text();
+  delete globalThis.__iloArrange;
+  const R = (0, eval)(src);
+  const call = (op, a) => R(op, a ? JSON.stringify(a) : "");
+  for (const [file, changes] of files) {
+    let said;
+    try {
+      const lifted = new Promise((done) => {
+        const now = () => things.some((t) => t.hasAttribute("popover")) && (done(performance.now()), true);
+        const o = new MutationObserver(() => now() && o.disconnect());
+        o.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["popover", "style"] });
+      });
+      const t0 = performance.now();
+      call("load", { changes });
+      // A trade alone lifts nothing: its first window starts at the load.
+      const at = await Promise.race([lifted, wait(300).then(() => t0)]);
+      const settled = await quiet(at + 1200);
+      const [first] = await count(250);
+      await wait(Math.max(0, at + 2500 - performance.now()));
+      const [late] = await count(250);
+      said = "idle " + kind + " " + file + " " + order() + " quiet " + settled + " shown " + first + " late " + late;
+      hides++;
+      document.title = "probe hide " + hides;
+      await until(true);
+      const [hidden, ms] = await count(250);
+      said += " hidden " + hidden + " in " + ms + " ms";
+      document.title = "probe hidden-done " + hides;
+      await until(false);
+      const back = await quiet(performance.now() + 1000);
+      const [again] = await count(250);
+      said += " again " + again + " quiet " + back;
+    } catch (e) { said = "idle " + kind + " " + file + " threw " + String(e).slice(0, 80); }
+    try { call("unload"); } catch {}
+    await drawn(); await drawn();
+    out.push("r " + said);
+  }
+}
+(async () => {
+  document.title = "probe start";
+  await drawn();
+  try { for (const k of ["main", "f3010", "order"]) await run(k); } catch (e) { out.push("r probe threw " + String(e).slice(0, 120)); }
+  let chunk = [];
+  const send = async () => { document.title = chunk.join(" | "); chunk = []; await wait(200); };
+  for (const line of out) {
+    if (chunk.join(" | ").length + line.length > 900) await send();
+    chunk.push(line);
+  }
+  if (chunk.length) await send();
+  document.title = "probe done " + out.length;
+})();
+</script>
