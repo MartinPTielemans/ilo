@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- A Board (#3073): chrome://board/<id>, served by the core's host (core/board.cc) from the app's
+     board/ folder. Its script is board.js alone: no inline script, no markup made from strings. -->
+<html lang="en">
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>Board</title>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/board.css">
+<script type="module" src="/board.js"></script>
+<body>
+  <div id="view" tabindex="-1">
+    <div id="world">
+      <svg id="ink" width="1" height="1" aria-hidden="true"></svg>
+    </div>
+  </div>
+  <div id="tools" role="toolbar" aria-label="Board tools">
+    <button data-tool="select" aria-label="Select" title="Select (V)"><i class="icon icon-mouse-pointer-2"></i></button>
+    <button data-tool="hand" aria-label="Pan" title="Pan (H)"><i class="icon icon-hand"></i></button>
+    <button data-tool="note" aria-label="Note" title="Note (N)"><i class="icon icon-sticky-note"></i></button>
+    <button data-tool="pen" aria-label="Pen" title="Pen (P)"><i class="icon icon-pencil"></i></button>
+    <button data-tool="eraser" aria-label="Eraser" title="Eraser (E)"><i class="icon icon-eraser"></i></button>
+    <button data-action="picture" aria-label="Picture" title="Picture"><i class="icon icon-image"></i></button>
+  </div>
+  <div id="style" role="toolbar" aria-label="Card style" hidden>
+    <div id="fills" role="radiogroup" aria-label="Fill"></div>
+    <div id="sizes" role="radiogroup" aria-label="Size">
+      <button data-size="s" role="radio">S</button>
+      <button data-size="m" role="radio">M</button>
+      <button data-size="l" role="radio">L</button>
+    </div>
+    <div id="colors" role="radiogroup" aria-label="Colour"></div>
+    <div id="widths" role="radiogroup" aria-label="Width">
+      <button data-width="2" role="radio" aria-label="Thin"><i class="dot"></i></button>
+      <button data-width="4" role="radio" aria-label="Medium"><i class="dot"></i></button>
+      <button data-width="8" role="radio" aria-label="Thick"><i class="dot"></i></button>
+    </div>
+  </div>
+  <div id="zoom" role="group" aria-label="Zoom">
+    <button data-action="zoom-out" aria-label="Zoom out" title="Zoom out (⌘−)"><i class="icon icon-minus"></i></button>
+    <output id="zoom-level">100%</output>
+    <button data-action="zoom-in" aria-label="Zoom in" title="Zoom in (⌘+)"><i class="icon icon-plus"></i></button>
+  </div>
+  <div id="note" role="status" hidden></div>
+  <div id="toast" role="status" hidden></div>
+  <input id="chooser" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+</body>
+</html>

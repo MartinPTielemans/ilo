@@ -11,6 +11,48 @@
 # Timings, springs and other motion stay in the code, as the design file has no motion, except a
 # surface's `motion` table, which design sync leaves out: seconds, and points for distances.
 
+[board]
+# A Board's page (#3073), which copy-board.sh writes as CSS custom properties, `--<key>`, each
+# `-dark` key the same property in dark mode: a colour as #rrggbb(aa), a `-share` as a percentage,
+# any other number in px. The values are the mocks' the owner chose (#3073).
+canvas = 0xFBF9F4
+canvas-dark = 0x131313
+ink = 0x16140F
+ink-dark = 0xF3F0E8
+ink-soft = 0x16140F99
+ink-soft-dark = 0xF3F0E899
+# A note's and a link's plate.
+plate = 0xFFFFFF
+plate-dark = 0x2A2720
+rim = 0x0000002E
+rim-dark = 0xFFFFFF1A
+shadow = 0x00000033
+shadow-dark = 0x00000066
+# The selection's ring and the chosen tool.
+ring = 0x5B5BD6
+ring-dark = 0x8B8BF0
+# The tools' and the zoom's bars, over the canvas.
+bar = 0xF3F0E8
+bar-dark = 0x1F1D17
+# A note's fills and the pen's colours, by name. A fill is its swatch this much over the plate.
+fill-sand = 0xF0EAE5
+fill-pink = 0xE59EBA
+fill-plum = 0x9E749B
+fill-red = 0xE1676F
+fill-orange = 0xEF8C63
+fill-yellow = 0xF2D46C
+fill-green = 0x73E49B
+fill-blue = 0x7EB6D5
+fill-slate = 0x656786
+fill-share = 0.3
+fill-share-dark = 0.22
+card-radius = 12.0
+bar-radius = 16.0
+note-s = 13.0
+note-m = 15.0
+# The size a title takes: a note with no fill, at L.
+note-l = 28.0
+
 [boost-editor]
 # A Boost's editor without code (#695, ours as the owner approved it on 2026-11-10): the theme
 # picker's card, as wide and with its arrow, radius and field's look (`theme-picker`), over a
