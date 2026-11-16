@@ -98,9 +98,11 @@ impl Shell {
         };
         self.system_tone = self.forced_tone.or(chosen).unwrap_or(system);
         let active = window.is_window_active();
-        // Its Live Folders ask after the frame, as a Space shown's do, so the fetch holds none.
+        // Its Live Folders ask once this frame is drawn, not inside render. Deferred, not a
+        // next-frame callback: that asks for a frame of its own, and on Linux one asked for as
+        // the ⌘T bar closes held the new tab's page about 300 ms (#3004).
         if active && !self.window_active {
-            cx.on_next_frame(window, |shell, _, cx| shell.live_window_active(cx));
+            cx.defer_in(window, |shell, _, cx| shell.live_window_active(cx));
         }
         self.window_active = active;
         if self.window_watches.is_empty() {
