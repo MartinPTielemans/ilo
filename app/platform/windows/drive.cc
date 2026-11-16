@@ -1082,6 +1082,52 @@ double CornerRadius(HWND hwnd, double scale) {
       DeleteObject(bottom);
     }
   }
+  {
+    // [DEBUG-3020] the pane's region as GetWindowRgn reads it, beside its client and window rects.
+    HRGN probe = CreateRectRgn(0, 0, 0, 0);
+    const int type = GetWindowRgn(hwnd, probe);
+    RECT box{}, window{};
+    const int box_type = type == ERROR ? ERROR : GetRgnBox(probe, &box);
+    GetWindowRect(hwnd, &window);
+    DWORD bytes = type == ERROR ? 0 : GetRegionData(probe, 0, nullptr);
+    DWORD rects = 0;
+    if (bytes) {
+      std::vector<char> data(bytes);
+      if (GetRegionData(probe, bytes, reinterpret_cast<RGNDATA*>(data.data()))) {
+        rects = reinterpret_cast<RGNDATA*>(data.data())->rdh.nCount;
+      }
+    }
+    fprintf(stderr,
+            "browser: [DEBUG-3020] pane %p class %ls style %08lx exstyle %08lx: region %s, box "
+            "%ld %ld %ld %ld (%d), %lu rects; client %ld by %ld; window %ld %ld %ld %ld; scale "
+            "%.2f; radius %.1f; parent %p %ls\n",
+            static_cast<void*>(hwnd), ClassOf(hwnd).c_str(),
+            static_cast<unsigned long>(GetWindowLongPtrW(hwnd, GWL_STYLE)),
+            static_cast<unsigned long>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)),
+            type == ERROR         ? "none"
+            : type == NULLREGION  ? "empty"
+            : type == SIMPLEREGION ? "simple"
+                                   : "complex",
+            box.left, box.top, box.right, box.bottom, box_type, static_cast<unsigned long>(rects),
+            client.right, client.bottom, window.left, window.top, window.right, window.bottom,
+            scale, radius, static_cast<void*>(GetParent(hwnd)), ClassOf(GetParent(hwnd)).c_str());
+    for (HWND inner = GetWindow(hwnd, GW_CHILD); inner; inner = GetWindow(inner, GW_HWNDNEXT)) {
+      HRGN own = CreateRectRgn(0, 0, 0, 0);
+      const int inner_type = GetWindowRgn(inner, own);
+      RECT inner_box{};
+      if (inner_type != ERROR) GetRgnBox(own, &inner_box);
+      RECT inner_rect{};
+      GetWindowRect(inner, &inner_rect);
+      fprintf(stderr,
+              "browser: [DEBUG-3020]   inside %p class %ls visible %d: region %d box %ld %ld %ld "
+              "%ld; window %ld %ld %ld %ld\n",
+              static_cast<void*>(inner), ClassOf(inner).c_str(), IsWindowVisible(inner) ? 1 : 0,
+              inner_type, inner_box.left, inner_box.top, inner_box.right, inner_box.bottom,
+              inner_rect.left, inner_rect.top, inner_rect.right, inner_rect.bottom);
+      DeleteObject(own);
+    }
+    DeleteObject(probe);
+  }
   DeleteObject(region);
   return radius;
 }
