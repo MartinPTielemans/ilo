@@ -1,0 +1,182 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# The review bot is a second reader on the PRs that ask for one, and advisory only: the owner and
+# the integrator decide what merges. PRs here merge minutes after they're ready, so reviewing every
+# PR would read most of them after they've landed; a lane adds `review:bot` where a reader is worth
+# it, a draft included.
+tone_instructions: >-
+  Plain, short findings. Each names the concrete failure: the input or state, then the wrong
+  result. No praise, no nits a formatter catches, no retelling of the diff.
+
+reviews:
+  profile: chill
+
+  auto_review:
+    # With automatic reviews off, a positive label match is what starts one.
+    enabled: false
+    labels: ["review:bot"]
+    drafts: true
+    # Core changes merge into a batch branch before main, so a PR into one is read too.
+    base_branches: ["^engine-build/batch-"]
+
+  # Nothing of the bot's own goes into a PR: authorship here is human only and every commit is
+  # signed off, so it writes no description, title, label, reviewer or commit.
+  high_level_summary: false
+  high_level_summary_in_walkthrough: false
+  auto_apply_labels: false
+  suggested_labels: false
+  auto_assign_reviewers: false
+  suggested_reviewers: false
+  finishing_touches:
+    unit_tests:
+      enabled: false
+    simplify:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+
+  # Advisory: it never approves, requests changes or fails a status.
+  auto_approvals:
+    enabled: false
+    allow_author_approval: false
+    approve_on_skipped_review: false
+  fail_commit_status: false
+
+  # Quiet: its notes on reviews it skipped were most of its comments here before this file, and
+  # the walkthrough's extras retell what the diff and the PR body already say.
+  review_status: false
+  review_info: false
+  in_progress_fortune: false
+  poem: false
+  sequence_diagrams: false
+  changed_files_summary: false
+  estimate_code_review_effort: false
+  assess_linked_issues: false
+  related_issues: false
+  related_prs: false
+  enable_prompt_for_ai_agents: false
+  # Classifying an outside contributor's PR is a reply to them, which is the owner's.
+  slop_detection:
+    enabled: false
+
+  # What it can't read usefully. A patch file's diff is a diff of a diff, against a tree the bot
+  # hasn't checked out; the rest is binary, a lock, someone else's code or recorded data.
+  path_filters:
+    - "!app/patches/**"
+    - "!engine/patches/**"
+    - "!engine/series"
+    - "!**/*.lock"
+    - "!**/*.png"
+    - "!**/*.webp"
+    - "!**/*.jpg"
+    - "!**/*.gif"
+    - "!**/*.ico"
+    - "!**/*.icns"
+    - "!**/*.svg"
+    - "!**/*.webm"
+    - "!**/*.mp4"
+    - "!**/*.ttf"
+    - "!**/*.pen"
+    - "!app/branding/ilo.icon/**"
+    - "!app/src/agents/runner/answers/**"
+    - "!app/src/import/fixture/**"
+    - "!app/src/import/fixture-cra/**"
+
+  pre_merge_checks:
+    # The generic description and linked-issue checks would restate the custom checks below.
+    description:
+      mode: "off"
+    issue_assessment:
+      mode: "off"
+    title:
+      mode: warning
+      requirements: >-
+        A conventional commit title, `type(scope): summary` or `type: summary`, with type one of
+        feat, fix, perf, test, ci, docs, chore, style or revert. The summary is plain words that
+        say the outcome someone sees, not the code changed, e.g. `fix(app): the sidebar recedes
+        under the Library`.
+    custom_checks:
+      - name: Issue reference
+        mode: warning
+        instructions: >-
+          Pass when the body uses a closing keyword (close, closes, closed, fix, fixes, fixed,
+          resolve, resolves, resolved) only before the one issue this PR finishes, and names any
+          other issue it works on as `Part of #N`, or names no issue. Fail when a closing keyword
+          is before an issue the body says has work left after this PR, or before more than one
+          issue.
+      - name: No AI attribution
+        mode: warning
+        instructions: >-
+          Fail when the PR body contains a `Co-Authored-By:` line or the words "Generated with".
+          Pass otherwise.
+      - name: Before and after images
+        mode: warning
+        instructions: >-
+          Applies when the PR changes what the app draws: app/design/tokens.toml, app/assets/,
+          or code that sets a view's layout, colour, size, type, icon, shadow or animation. Then
+          fail when the body has no before-and-after images (Markdown images or links to
+          .png, .jpg, .webp or .gif files or GitHub attachments), or, for a change to motion (an
+          animation, a transition or its timing), no video link (.mp4, .mov, .webm or a GitHub
+          attachment). Pass when the PR changes nothing drawn.
+      - name: Hot path numbers
+        mode: warning
+        instructions: >-
+          Applies when the PR changes the path of switching tabs, opening a new tab, opening or
+          typing in the command bar, or launching the app. Then fail when the body gives no
+          before-and-after timings for that path (numbers with a unit such as ms, with the
+          measurement named). Pass when it changes none of those paths.
+
+  path_instructions:
+    - path: "core/public/browser_core.h"
+      instructions: >-
+        The app and Chromium build with different C++ standard libraries, so only plain C
+        crosses this header. A change to it lands in a header batch with the engine that builds
+        it, never alone.
+    - path: "core/**"
+      instructions: >-
+        A new capability an agent can use ships in the same change with its permission check,
+        its confirmation UI and its activity-log entry. Nothing logs page content.
+    - path: "app/check/**"
+      instructions: >-
+        bash 3.2 parses these, so no associative arrays, mapfile, ${var,,} or ;&. A check waits
+        for the log line that marks the event, never a fixed sleep. A fail message says what it
+        waited for and didn't see.
+    - path: "app/platform/**"
+      instructions: >-
+        The test driver's input (drive*.rs, drive*.mm, drive*.cc) goes only to the app's own
+        windows, in the check's own session: flag any path where it could reach another app or
+        the user's desktop.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Secrets reach a step only through env, never argv or a log line. A job on a self-hosted
+        runner never runs a fork's code. A change to triggers or concurrency groups says which
+        runs it starts or cancels.
+
+  tools:
+    # Prose and YAML style linters: the docs and workflows keep their own style.
+    languagetool:
+      enabled: false
+    markdownlint:
+      enabled: false
+    yamllint:
+      enabled: false
+
+chat:
+  # Replies to outside users are the owner's, so it answers only when asked, and only to them.
+  auto_reply: false
+  allow_non_org_members: false
+  art: false
+
+issue_enrichment:
+  # Issues come from outside reporters too; it writes nothing on them.
+  auto_enrich:
+    enabled: false
+  planning:
+    enabled: false
+    auto_planning:
+      enabled: false
+  labeling:
+    auto_apply_labels: false
