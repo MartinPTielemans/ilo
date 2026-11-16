@@ -50,6 +50,7 @@ sign_in_keys() {
     send "$@"
     return
   fi
+  installed xdotool "giving the sign-in window keys"
   if [ -z "$sign_in_window" ]; then
     sign_in_window=$(timeout 10 xdotool search --sync --all --onlyvisible --pid "$(window_pid)" \
       --name '^localhost$' | head -1)
@@ -139,16 +140,24 @@ settings_keyboard() {
     return 0
   fi
   [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
+  installed xdotool "giving Settings the keyboard back"
   settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$(window_pid)" --name '^Sync$' | head -1)
   [ -n "$settings" ] || fail "the X server has no Settings window"
   xdotool windowactivate --sync "$settings" 2>/dev/null || xdotool windowfocus --sync "$settings" ||
     fail "Settings couldn't have the keyboard again"
 }
 
+# installed <tool> <what for>: fails the step, naming the tool, when the runner hasn't got it. Its
+# empty answer would otherwise read as the app's fault: the Flatpak job had no xclip, and Copy's
+# words read as missing (#3059).
+installed() {
+  command -v "$1" > /dev/null || fail "$2 needs $1, which isn't installed here"
+}
 # Sets clipped to what the clipboard holds, the X server's, the Wayland session's or Windows': its
 # text, or with formats the formats it holds. On the Mac the driver gives each copy a pasteboard of
 # its own in its place, which nothing else reads, so it's the device's, as its driver logs it. A
 # variable, not output, since the Mac's asks the driver, whose steps a subshell would lose count of.
+# An empty clipboard reads as empty, as the words' leaving waits for, but a missing reader fails.
 clipboard() {
   if windows; then
     clipped=$(python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true)
@@ -160,8 +169,10 @@ clipboard() {
       sed -n "s/^browser: pasteboard $held //p" | tail -1)
     [ "$held" = text ] || clipped=$(echo "$clipped" | tr ' ' '\n')
   elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    installed wl-paste "reading Wayland's clipboard"
     clipped=$(timeout 5 wl-paste -n ${1:+-l} 2>/dev/null || true)
   else
+    installed xclip "reading the X server's clipboard"
     clipped=$(timeout 5 xclip -selection clipboard -o ${1:+-t TARGETS} 2>/dev/null || true)
   fi
 }
