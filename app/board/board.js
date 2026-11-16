@@ -431,13 +431,15 @@ async function picture(file, bitmap) {
 
 // A capture the browser put into this Board waits in its arrivals, a stored file's name a line
 // (core/board.cc), until the page takes it. Each lands as a picture card at the centre of what's
-// in view, a step down and right of any card already there so none hides another, and the newest
-// is selected, as a paste lands, so ⌘Z takes a landing back. The arrivals are taken only once the
-// save holding their cards is written: a crash between lands one again rather than losing it.
-const STEP = 24;
+// in view, a step down and right of any card already there so none hides another, and leaves the
+// selection as a drop does. A landing is an edit, as a paste is, so ⌘Z takes it back. A Board whose
+// tab isn't showing lands nothing until it's shown, so its arrivals land in the view the user sees.
+// The arrivals are taken only once the save holding their cards is written: a crash between lands
+// one again rather than losing it.
+const STEP = 24, RUN = 8; // A run of 8 steps starts again a step across.
 let landing = null, landAgain = false;
 async function land() {
-  if (!writable) return;
+  if (!writable || document.visibilityState === "hidden") return;
   if (landing) {
     landAgain = true;
     return;
@@ -468,7 +470,6 @@ async function landArrivals() {
     if (bitmap) landed.push(await picture(file, bitmap));
   }
   if (landed.length) {
-    selection.clear();
     edit(() => {
       for (const card of landed) {
         [card.x, card.y] = spot(card);
@@ -477,22 +478,24 @@ async function landArrivals() {
       }
     });
     for (const card of landed) make(card);
-    selection.add(landed.at(-1).id);
-    renderSelection();
   }
   // A save already under way doesn't hold the cards just landed.
   while (saving) await saving;
   if (await save()) await send("taken", names);
 }
-// Where |card| lands: centred in the view, stepped down and right past any card already there.
+// Where |card| lands: centred in the view, or the first free place down a run of steps from there,
+// each run a step across from the last, so a long list of arrivals stays in view.
 function spot(card) {
   const [cx, cy] = toWorld(innerWidth / 2, innerHeight / 2);
   const step = STEP / camera.zoom;
-  let x = Math.round(cx - card.w / 2), y = Math.round(cy - card.h / 2);
-  const taken = () => cards.some((other) => other.kind !== "stroke" &&
+  const x0 = cx - card.w / 2, y0 = cy - card.h / 2;
+  const free = (x, y) => !cards.some((other) => other.kind !== "stroke" &&
     Math.abs(other.x - x) < step && Math.abs(other.y - y) < step);
-  while (taken()) x += step, y += step;
-  return [Math.round(x), Math.round(y)];
+  for (let k = 0; k < RUN * RUN; k++) {
+    const down = k % RUN, x = x0 + (down + Math.floor(k / RUN)) * step, y = y0 + down * step;
+    if (free(x, y)) return [Math.round(x), Math.round(y)];
+  }
+  return [Math.round(x0), Math.round(y0)];
 }
 
 // What's pasted or dropped: a picture's bytes, a web address, or text as a note.
@@ -928,6 +931,8 @@ async function open_() {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && writable) save().then(saveThumb);
+  // What came while its tab wasn't showing lands now, at the centre of the view shown.
+  else land();
 });
 
 open_();
