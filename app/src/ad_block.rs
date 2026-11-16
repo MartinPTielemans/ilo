@@ -677,22 +677,23 @@ pub fn hide(engine: &Engine, classes: &[String], ids: &[String], exceptions: &[S
 /// their lines after the two engines, the second's length first.
 const COMPILED: u32 = 6;
 
-/// What of `setup` the user chose: the folder, the lists turned on and My filters. An engine
-/// compiled for other choices never answers for these, even for a moment at launch (#2513).
-fn choices(setup: &Setup) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    setup.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// The compiled engine's name in the cache folder, for `setup` as its files are now: its choices,
-/// then everything else too: a change to a list's content, adblock-rust's version or COMPILED
-/// changes only the second part.
-fn cache_name(setup: &Setup) -> String {
+/// What an engine must have been compiled for and laid out as to answer for `setup` at all, even
+/// for a moment at launch (#2513): the user's choices (the folder, the lists turned on and My
+/// filters) and the file's layout (this build's version, adblock-rust's, whose serialisation it
+/// holds, and `compiled`, our own's). Only a list's new copy is left out, for `cache_name`.
+fn kind(setup: &Setup, compiled: u32) -> u64 {
     let mut hasher = DefaultHasher::new();
     setup.hash(&mut hasher);
     env!("CARGO_PKG_VERSION").hash(&mut hasher);
-    COMPILED.hash(&mut hasher);
+    env!("ADBLOCK_VERSION").hash(&mut hasher);
+    compiled.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The compiled engine's name in the cache folder, for `setup` as its files are now: its kind,
+/// then each list's copy: a list's new copy changes only the second part.
+fn cache_name(setup: &Setup) -> String {
+    let mut hasher = DefaultHasher::new();
     for list in &setup.lists {
         let meta = fs::metadata(list).ok();
         meta.as_ref().map(|meta| meta.len()).hash(&mut hasher);
@@ -703,7 +704,7 @@ fn cache_name(setup: &Setup) -> String {
     }
     format!(
         "engine-{:016x}-{:016x}.dat",
-        choices(setup),
+        kind(setup, COMPILED),
         hasher.finish()
     )
 }
@@ -712,8 +713,8 @@ fn cache_name(setup: &Setup) -> String {
 enum Cached {
     /// Its engine, as its files are now.
     Current(Engine),
-    /// The engine a launch before compiled for the same choices, from older copies of the lists
-    /// or another version: it answers while the current one compiles.
+    /// The engine a launch before compiled for the same choices, in the same layout, from older
+    /// copies of the lists: it answers while the current one compiles.
     Last(Engine),
     None,
 }
@@ -739,7 +740,7 @@ fn cached(setup: &Setup, cache: Option<&Path>) -> Cached {
         );
         return Cached::Current(engine);
     }
-    let same = format!("engine-{:016x}-", choices(setup));
+    let same = format!("engine-{:016x}-", kind(setup, COMPILED));
     let last = (fs::read_dir(cache).into_iter().flatten().flatten()).find_map(|entry| {
         let file = entry.file_name();
         let file = file.to_string_lossy();
