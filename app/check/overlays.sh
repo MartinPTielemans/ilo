@@ -436,6 +436,7 @@ expect '^browser: overlays shown none$' "an overlay was still shown before the d
 restarted=$(powershell.exe -NoProfile -Command \
   'Get-PnpDevice -Class Display -Status OK | ForEach-Object { pnputil /restart-device $_.InstanceId }' \
   2>&1 || true)
+restarted_at=$SECONDS
 case "$restarted" in
   *"restarted successfully"*)
     send overlays
@@ -443,6 +444,7 @@ case "$restarted" in
       "the windows drew nothing after the display adapter restarted with no overlay shown"
     ../tools/window-screenshot.sh "$pid" "$out/overlays-adapter-restarted.png" all ||
       fail "no window to capture"
+    echo "note: overlays-adapter-restarted.png is the window $((SECONDS - restarted_at)) s after the display adapter restarted, once GPUI said it drew on the new device"
     walk "the display adapter restarting" adapter
     events="$events, the display adapter restarting"
     ;;
