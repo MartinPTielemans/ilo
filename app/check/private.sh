@@ -312,6 +312,10 @@ if [ "$status" = 3 ]; then
   done
   on_switch || fail "Tab didn't reach Check Allowed's Allow in Incognito switch in 30 presses: $(grep '^cdp: focus-within ' "$cdp_log" | tail -1)"
   send key space
+  # Chrome turns the extension off to reload it with the switch's setting: a quit before the menu
+  # lists it again saves it off, and the next launch keeps it so (#3052).
+  expect "^browser: extensions menu $allowed $not_allowed\$" \
+    "Check Allowed didn't come back after its Allow in Incognito switch: $(grep '^browser: extensions menu' "$log" | tail -1)"
   exec 3>&-
   quit
   exec 5>&-
