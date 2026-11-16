@@ -769,10 +769,25 @@ jobs:
           pattern: check-linux-*
           delete-merged: true
 
+  # ilo's Flatpak, built, started and signed in to sync in its sandbox (flatpak.yml), beside the
+  # shards. Its own trigger is its packaging's paths, which the app's and the checks' changes that
+  # break it don't touch, so four of its runs failed unseen (#3059). With the default runs or all
+  # alone, so a run asked for by name doesn't pay its 20 min, and on the default X11 leg alone, as
+  # the report is, so a train's sway, KWin and Wayland legs don't build and sign in the same bundle
+  # again: its own steps cover the sessions they need. With no engine it skips, as a shard does.
+  flatpak:
+    needs: gate
+    if: needs.gate.outputs.check == 'true' && (inputs.runs == '' || inputs.runs == 'all') && inputs.session != 'sway' && inputs.session != 'kwin' && inputs.session != 'wayland'
+    name: Flatpak
+    uses: ./.github/workflows/flatpak.yml
+    with:
+      release: false
+
   # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
   # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
+  # The Flatpak failing fails it too, and the issue names its job and step.
   report:
-    needs: [gate, check]
+    needs: [gate, check, flatpak]
     if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && inputs.session != 'sway' && inputs.session != 'kwin' && inputs.session != 'wayland' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -790,6 +805,8 @@ jobs:
             app/check
       - env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ needs.check.result }}
+          # The check's, unless it passed and the Flatpak didn't: then the Flatpak's, failure or
+          # cancelled.
+          RESULT: ${{ needs.check.result == 'success' && needs.flatpak.result != 'success' && needs.flatpak.result || needs.check.result }}
           FOUND: ${{ needs.check.outputs.found }}
         run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"
