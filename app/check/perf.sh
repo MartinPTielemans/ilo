@@ -407,6 +407,12 @@ perf_switches() {
   i=0
   for k in 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1; do
     i=$((i + 1))
+    # Proof only (#2377): in the traced switches, the modifier comes down 50 ms before the key, as a
+    # hand's does, not 0.4 ms before it as the driver's chord presses it.
+    if [ -n "${2:-}" ]; then
+      send flags cmd
+      sleep 0.05
+    fi
     perf_stamp
     pressed=$stamp
     send key "$k" cmd
@@ -422,6 +428,7 @@ perf_switches() {
     shown=${title##* }
     echo $((shown - pressed)) >> "$perf_dir/$1"
     echo "loaded $step ${title% *} $pressed $shown" | sed 's/ shown / /' >> "$perf_dir/$1-rows"
+    [ -z "${2:-}" ] || send flags
     [ -z "${2:-}" ] || [ "$i" -gt 8 ] || sleep 1
   done
 }
