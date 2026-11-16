@@ -103,17 +103,18 @@ function changed() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(save, SAVE_AFTER);
 }
+// Returns whether the Board as it is now was written.
 async function save() {
   clearTimeout(saveTimer);
-  if (!writable) return;
+  if (!writable) return false;
   if (saving) {
     again = true;
-    return saving;
+    return saving.then((done) => done !== false);
   }
   const bytes = new TextEncoder().encode(JSON.stringify({ version: 1, camera, cards }));
   if (bytes.byteLength > MAX_BOARD) {
     unsaved("This Board is too large to save. What's here stays on screen: remove some notes or ink, and it saves again.");
-    return;
+    return false;
   }
   saving = write("board", bytes);
   const done = await saving;
@@ -123,6 +124,7 @@ async function save() {
     again = false;
     return save();
   }
+  return done !== false;
 }
 
 // The Library's picture, 268 × 188 at twice that, of what's in view.
@@ -403,6 +405,14 @@ async function addPicture(blob, x, y) {
   } catch {
     return say("That picture can't be read.", true);
   }
+  const card = { ...(await picture(file, bitmap)), x, y };
+  edit(() => cards.push(card));
+  make(card);
+}
+
+// A picture card of the stored |file|, drawn from |bitmap|, at most 480 wide, with a small copy
+// stored beside a big one; it's placed by the caller.
+async function picture(file, bitmap) {
   let small = "";
   const long = Math.max(bitmap.width, bitmap.height);
   if (long > SMALL) {
@@ -414,9 +424,75 @@ async function addPicture(blob, x, y) {
   }
   const w = Math.min(480, bitmap.width), h = Math.round((w * bitmap.height) / bitmap.width);
   bitmap.close();
-  const card = { id: newId(), kind: "picture", x, y, w, h, z: top(), file, small };
-  edit(() => cards.push(card));
-  make(card);
+  return { id: newId(), kind: "picture", x: 0, y: 0, w, h, z: top(), file, small };
+}
+
+// --- Arrivals ---
+
+// A capture the browser put into this Board waits in its arrivals, a stored file's name a line
+// (core/board.cc), until the page takes it. Each lands as a picture card at the centre of what's
+// in view, a step down and right of any card already there so none hides another, and the newest
+// is selected, as a paste lands, so ⌘Z takes a landing back. The arrivals are taken only once the
+// save holding their cards is written: a crash between lands one again rather than losing it.
+const STEP = 24;
+let landing = null, landAgain = false;
+async function land() {
+  if (!writable) return;
+  if (landing) {
+    landAgain = true;
+    return;
+  }
+  landing = landArrivals();
+  await landing;
+  landing = null;
+  if (landAgain) {
+    landAgain = false;
+    return land();
+  }
+}
+async function landArrivals() {
+  const response = await fetch(`/${id}/arrived`).catch(() => null);
+  if (!response?.ok) return;
+  const names = (await response.text()).split("\n").filter(Boolean);
+  if (!names.length) return;
+  const landed = [];
+  for (const file of names) {
+    const blob = await fetch(`/${id}/files/${file}`).then((r) => (r.ok ? r.blob() : null), () => null);
+    let bitmap;
+    try {
+      bitmap = blob && (await createImageBitmap(blob));
+    } catch {
+      bitmap = null;
+    }
+    // One that can't be read is taken all the same, as it can never land.
+    if (bitmap) landed.push(await picture(file, bitmap));
+  }
+  if (landed.length) {
+    selection.clear();
+    edit(() => {
+      for (const card of landed) {
+        [card.x, card.y] = spot(card);
+        card.z = top();
+        cards.push(card);
+      }
+    });
+    for (const card of landed) make(card);
+    selection.add(landed.at(-1).id);
+    renderSelection();
+  }
+  // A save already under way doesn't hold the cards just landed.
+  while (saving) await saving;
+  if (await save()) await send("taken", names);
+}
+// Where |card| lands: centred in the view, stepped down and right past any card already there.
+function spot(card) {
+  const [cx, cy] = toWorld(innerWidth / 2, innerHeight / 2);
+  const step = STEP / camera.zoom;
+  let x = Math.round(cx - card.w / 2), y = Math.round(cy - card.h / 2);
+  const taken = () => cards.some((other) => other.kind !== "stroke" &&
+    Math.abs(other.x - x) < step && Math.abs(other.y - y) < step);
+  while (taken()) x += step, y += step;
+  return [Math.round(x), Math.round(y)];
 }
 
 // What's pasted or dropped: a picture's bytes, a web address, or text as a note.
@@ -844,6 +920,9 @@ async function open_() {
   $("#note").hidden = true;
   moveCamera(false);
   renderAll();
+  // What came while it was closed lands now, and what comes while it's open lands as it comes.
+  listeners.set("board-arrived", land);
+  await land();
   offerFirstNote();
 }
 
