@@ -377,11 +377,10 @@ void PanelSize(const Floating& floating, double* width, double* height) {
   *height -= floating.margin_above + floating.margin_below;
 }
 
-// Clips the margin of |floating|'s window to its browser window's frame, so the shadow there ends
-// at the browser window's edge, as a child window's would. HTTRANSPARENT hands a press on the
-// margin only to this thread's windows under it: past that edge, over another app's window, the
-// margin took the press, and the app never heard it. The panel itself is never cut: a command bar
-// wider than a narrow window, or opened at its edge, still shows whole past the frame.
+// Clips |floating|'s window to its browser window's frame where its panel has a margin round it,
+// so the shadow there ends at the browser window's edge, as a child window's would. HTTRANSPARENT
+// hands a press on the margin only to this thread's windows under it: past that edge, over another
+// app's window, the margin took the press, and the app never heard it.
 void ClipToOwner(const Floating& floating) {
   HWND root = GetWindow(floating.hwnd, GW_OWNER);
   if (!HasMargin(floating) || !root) {
@@ -393,32 +392,16 @@ void ClipToOwner(const Floating& floating) {
   }
   GetWindowRect(floating.hwnd, &window);
   IntersectRect(&inside, &frame, &window);
-  HRGN had = CreateRectRgn(0, 0, 0, 0);
-  const bool clipped = GetWindowRgn(floating.hwnd, had) != ERROR;
-  if (EqualRect(&inside, &window)) {
-    DeleteObject(had);
-    if (clipped) {
-      SetWindowRgn(floating.hwnd, nullptr, IsWindowVisible(floating.hwnd));
-    }
-    return;
-  }
-  // In the window's own pixels, from its top left, as a window region is.
-  RECT panel = PanelRect(floating);
-  MapWindowPoints(floating.hwnd, nullptr, reinterpret_cast<POINT*>(&panel), 2);
-  OffsetRect(&panel, -window.left, -window.top);
+  const bool whole = EqualRect(&inside, &window);
   OffsetRect(&inside, -window.left, -window.top);
-  HRGN shown = CreateRectRgnIndirect(&inside);
-  HRGN own = CreateRectRgnIndirect(&panel);
-  CombineRgn(shown, shown, own, RGN_OR);
-  DeleteObject(own);
-  const bool same = clipped && EqualRgn(had, shown);
-  DeleteObject(had);
-  if (same) {
-    DeleteObject(shown);
+  RECT had{};
+  const int region = GetWindowRgnBox(floating.hwnd, &had);
+  if (whole ? region == ERROR : region != ERROR && EqualRect(&had, &inside)) {
     return;
   }
   // The window owns the region from here.
-  SetWindowRgn(floating.hwnd, shown, IsWindowVisible(floating.hwnd));
+  SetWindowRgn(floating.hwnd, whole ? nullptr : CreateRectRgnIndirect(&inside),
+               IsWindowVisible(floating.hwnd));
 }
 
 LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
