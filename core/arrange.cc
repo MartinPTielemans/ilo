@@ -323,6 +323,8 @@ constexpr char16_t kScript[] =
         }
       }
     }
+    // |el|'s box where it comes to rest, while the page moves to show or make a change.
+    const atRest = (el) => (motion.size ? still(() => rect(el)) : rect(el));
     const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
     // A box in the document's coordinates, so a scroll a change makes isn't taken for motion.
     function spot(el) {
@@ -428,7 +430,8 @@ constexpr char16_t kScript[] =
       try { el.showPopover(); lifted.add(el); } catch { el.removeAttribute('popover'); return; }
       if (s && !s.heard) {
         s.heard = true;
-        el.addEventListener('toggle', (e) => { if (lifted.has(el) && e.newState === 'closed') later(); });
+        // A pass that hides and lifts it again fires closed then open, so only a close that holds asks.
+        el.addEventListener('toggle', (e) => { if (lifted.has(el) && e.newState === 'closed' && !el.matches(':popover-open')) later(); });
       }
       // The marks stay over whatever was lifted after them.
       if (mode) raise();
@@ -583,9 +586,16 @@ constexpr char16_t kScript[] =
         else groups.push({ parent: sl.parent, prev: sl.prev, next: sl.next, axis: sl.axis, slots: [sl] });
       }
       for (const g of groups) {
+        const start = (r) => (g.axis === 'row' ? r.left : r.top);
+        g.slots.sort((a, b) => start(a.r) - start(b.r));
+      }
+      // Each room is opened before either thing is pinned, the one earlier on the page first, so
+      // each place is measured in the layout it rests in: a room opened after a thing was pinned
+      // further down would move the place from under it (#2980).
+      groups.sort((x, y) => (x.slots[0].el.compareDocumentPosition(y.slots[0].el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+      for (const g of groups) {
         const row = g.axis === 'row';
         const start = (r) => (row ? r.left : r.top), end = (r) => (row ? r.right : r.bottom);
-        g.slots.sort((a, b) => start(a.r) - start(b.r));
         if (g.next && g.slots.some((sl) => sl.next !== g.next)) g.next = g.slots[g.slots.length - 1].next;
         const firstSlot = g.slots[0], last = g.slots[g.slots.length - 1];
         const pcs = getComputedStyle(g.parent);
@@ -600,6 +610,9 @@ constexpr char16_t kScript[] =
         // the parent's edge, which a margin collapsing through it moves.
         const anchor = start(firstSlot.r) - before;
         const roomStart = () => (g.prev ? end(rect(g.prev)) : anchor);
+        g.roomStart = roomStart;
+        g.before = before;
+        g.inner = inner;
         const span = () => {
           const b = g.next ? start(rect(g.next)) : row ? rect(g.parent).right : rect(g.parent).bottom;
           return b - roomStart();
@@ -624,18 +637,24 @@ constexpr char16_t kScript[] =
             set(keeper, prop, px(base));
           }
         }
-        let at = roomStart() + before;
+        // A row's height is a room too, for a thing taller than the place it takes.
+        for (const sl of g.slots) {
+          if (row && sl.inCross > sl.r.height + 0.5) {
+            keepers.push(g.parent);
+            set(g.parent, 'min-height', px(sl.pr.height + sl.inCross - sl.r.height));
+          }
+        }
+      }
+      for (const g of groups) {
+        const row = g.axis === 'row';
+        let at = g.roomStart() + g.before;
         const prNow = rect(g.parent);
         g.slots.forEach((sl, i) => {
           const m = sl.incoming, o = origin(m);
           const cross = row ? prNow.top + (sl.r.top - sl.pr.top) : prNow.left + (sl.r.left - sl.pr.left);
           set(m, 'left', px((row ? at : cross) - o.x));
           set(m, 'top', px((row ? cross : at) - o.y));
-          at += sl.inMain + (inner[i] || 0);
-          if (row && sl.inCross > sl.r.height + 0.5) {
-            keepers.push(g.parent);
-            set(g.parent, 'min-height', px(sl.pr.height + sl.inCross - sl.r.height));
-          }
+          at += sl.inMain + (g.inner[i] || 0);
         });
       }
       if ([sa, sb].some((sl) => overruns(sl.incoming, sl.r.width, was.get(sl.incoming)))) {
@@ -805,7 +824,7 @@ constexpr char16_t kScript[] =
       // one: a line outside its box, and its label 4 px over the box at the line's left, or inside
       // the box's top where the viewport's top cuts it.
       // While the page moves to show or make a drop, each mark is where its element comes to rest.
-      const at = (e) => (motion.size ? still(() => rect(e)) : rect(e));
+      const at = atRest;
       const el = carry ? (mode.previewing ? carry.el : null) : mode.selected || mode.pointed;
       box(m.outline, el && grown(at(el), m.w));
       if (el) {
@@ -1023,8 +1042,10 @@ constexpr char16_t kScript[] =
         out.on_screen = c.kind === 'float' && c.pin === 'screen';
         if (s.covered) out.refused = WHY.COVERED;
       }
+      // Where it comes to rest, as its mark is: the answer to a drop comes while it's still landing,
+      // and the page can't answer again when the landing ends (#3008).
       if (!scrollingNow) {
-        const r = rect(el);
+        const r = atRest(el);
         out.box = { x: r.left, y: r.top, width: r.width, height: r.height };
       }
       return out;
