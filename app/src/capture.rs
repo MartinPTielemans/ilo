@@ -69,6 +69,8 @@ pub enum Action {
     Edit,
     /// Back to choosing.
     Retake,
+    /// A new Board with what's chosen on it, as Arc's New Easel (#3073).
+    NewBoard,
 }
 
 /// The menu's rows under its field, a line between groups. Messages is the Mac's alone.
@@ -81,6 +83,7 @@ const ROWS: &[Option<Action>] = if cfg!(target_os = "macos") {
         Some(Action::Edit),
         None,
         Some(Action::Retake),
+        Some(Action::NewBoard),
     ]
 } else {
     &[
@@ -90,6 +93,7 @@ const ROWS: &[Option<Action>] = if cfg!(target_os = "macos") {
         Some(Action::Edit),
         None,
         Some(Action::Retake),
+        Some(Action::NewBoard),
     ]
 };
 
@@ -106,6 +110,7 @@ impl Action {
             Action::Messages => "Send via iMessage…",
             Action::Edit => "Edit",
             Action::Retake => "Retake",
+            Action::NewBoard => "New Board",
         }
     }
 
@@ -118,6 +123,7 @@ impl Action {
             Action::Messages => "icons/message-circle.svg",
             Action::Edit => "icons/pencil.svg",
             Action::Retake => "icons/rotate-ccw.svg",
+            Action::NewBoard => "icons/presentation.svg",
         }
     }
 
@@ -131,6 +137,7 @@ impl Action {
             Action::Messages => "messages",
             Action::Edit => "edit",
             Action::Retake => "retake",
+            Action::NewBoard => "new-board",
         }
     }
 }
@@ -306,7 +313,9 @@ impl Session {
         let library = self.library;
         ROWS.iter()
             .copied()
-            .filter(move |row| library || *row != Some(Action::SaveToLibrary))
+            .filter(move |row| {
+                library || (*row != Some(Action::SaveToLibrary) && *row != Some(Action::NewBoard))
+            })
     }
 
     /// The field, a line under it, the rows and their lines, inside the panel's padding.
@@ -850,7 +859,7 @@ impl Capture {
             }
             Action::Save => self.host.save(&png),
             Action::Messages => self.host.share(&png, Share::Messages),
-            Action::SendTo | Action::Edit | Action::Retake => {}
+            Action::SendTo | Action::Edit | Action::Retake | Action::NewBoard => {}
         }
     }
 
