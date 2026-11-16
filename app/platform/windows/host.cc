@@ -382,6 +382,10 @@ void PanelSize(const Floating& floating, double* width, double* height) {
 // hands a press on the margin only to this thread's windows under it: past that edge, over another
 // app's window, the margin took the press, and the app never heard it.
 void ClipToOwner(const Floating& floating) {
+  // Probe (#2988): unclipped, to see what a press past the frame does without it.
+  if (floating.hwnd) {
+    return;
+  }
   HWND root = GetWindow(floating.hwnd, GW_OWNER);
   if (!HasMargin(floating) || !root) {
     return;
