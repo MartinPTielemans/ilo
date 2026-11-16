@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -20,6 +21,7 @@
 #include "base/values.h"
 #include "browser_core/hooks.h"
 #include "browser_core/mini_player_place.h"
+#include "browser_core/platform/window_views.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
@@ -145,10 +147,14 @@ KeyboardWatch& Watching() {
 // (app/src/shell.rs).
 constexpr base::TimeDelta kReleaseHistory = base::Milliseconds(100);
 
-// Where a Mini Player was each time its move loop moved it, for the speed it's let go at.
+// Where a Mini Player was each time its move loop moved it, for the speed it's let go at. Where the
+// loop moves only its outline, and the window at the release, it's where the outline was (#3062).
 class MoveWatch : public views::WidgetObserver {
  public:
-  explicit MoveWatch(views::Widget* widget) {
+  explicit MoveWatch(views::Widget* widget)
+      : outline_(platform::WatchOutlineMoves(
+            widget,
+            base::BindRepeating(&MoveWatch::Moved, base::Unretained(this)))) {
     Moved(widget->GetWindowBoundsInScreen().origin());
     observation_.Observe(widget);
   }
@@ -199,6 +205,7 @@ class MoveWatch : public views::WidgetObserver {
 
   std::vector<Move> moves_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+  base::ScopedClosureRunner outline_;
 };
 
 // Settles a Mini Player let go onto its rest, on the spring its release starts, moving it a frame

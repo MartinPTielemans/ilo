@@ -14,6 +14,7 @@
 #include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -1175,7 +1176,44 @@ class PassThrough : public ui::HWNDMessageFilter, public views::WidgetObserver {
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
 };
 
+// Hears the origins a move loop proposes for a window it moves as an outline, which WM_MOVING gives
+// it whether or not it shows the window's contents.
+class OutlineMoves : public ui::HWNDMessageFilter {
+ public:
+  OutlineMoves(HWND window, base::RepeatingCallback<void(const gfx::Point&)> moved)
+      : moved_(std::move(moved)) {
+    ui::HWNDSubclass::AddFilterToTarget(window, this);
+  }
+  ~OutlineMoves() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
+
+  // ui::HWNDMessageFilter:
+  bool FilterMessage(HWND, UINT message, WPARAM, LPARAM l_param, LRESULT*) override {
+    if (message == WM_MOVING) {
+      // The window's rectangle in pixels, converted as views converts the window's bounds
+      // (DesktopWindowTreeHostWin::GetWindowBoundsInScreen) once it's there: by the display
+      // nearest it, where the window isn't yet.
+      const gfx::Rect proposed(*reinterpret_cast<const RECT*>(l_param));
+      moved_.Run(display::win::GetScreenWin()->ScreenToDIPRect(nullptr, proposed).origin());
+    }
+    return false;
+  }
+
+ private:
+  base::RepeatingCallback<void(const gfx::Point&)> moved_;
+};
+
 }  // namespace
+
+base::ScopedClosureRunner WatchOutlineMoves(
+    views::Widget* widget,
+    base::RepeatingCallback<void(const gfx::Point&)> moved) {
+  BOOL contents = TRUE;
+  if (!SystemParametersInfo(SPI_GETDRAGFULLWINDOWS, 0, &contents, 0) || contents) {
+    return base::ScopedClosureRunner();
+  }
+  return base::ScopedClosureRunner(base::DoNothingWithBoundArgs(
+      std::make_unique<OutlineMoves>(views::HWNDForWidget(widget), std::move(moved))));
+}
 
 void PassPointerThrough(views::Widget* widget) {
   new PassThrough(widget);
