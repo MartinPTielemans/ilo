@@ -60,6 +60,8 @@ if [ -n "${engine:-}" ] && [ "$engine" != ublock ]; then
   engine_switch=--ad-block-engine=$engine
 fi
 rm -rf "$perf_dir"
+# Proof only (#2377): the tick's pacing as this file says.
+export BROWSER_PROOF_TICK_FILE="$perf_dir/proof-tick-mode"
 mkdir -p "$perf_dir"
 profile_dir="$PWD/$perf_dir/profile"
 mkdir -p "$profile_dir"
@@ -465,6 +467,35 @@ perf_session() {
   perf_row settled-cpu-20 "Idle CPU, 20 tabs, settled" "$cpu" "Ardia 0.31 %"
   perf_row settled-wakeups-20 "Idle wakeups, 20 tabs, settled" "$wakeups /s" "Ardia 11.82 /s"
 
+  # Proof only (#2377): the tick's pacing, old, at 72e241d2a and new, in a balanced order, with
+  # each round's idle ticks, 16 switches and 8 sidebar slides.
+  : > "$perf_dir/proof-ab.tsv"
+  : > "$perf_dir/proof-slides.tsv"
+  for round in new old head head new old old head new new head old old new head head old new; do
+    if [ "$round" = new ]; then rm -f "$BROWSER_PROOF_TICK_FILE"; else echo "$round" > "$BROWSER_PROOF_TICK_FILE"; fi
+    from=$(wc -l < "$log")
+    sleep 5
+    to=$(wc -l < "$log")
+    idle=$(sed -n "$((from + 1)),${to}p" "$log" | grep -c '^browser: proof t tick fired ' || true)
+    first=$(wc -l < "$log")
+    perf_switches "ab-$round"
+    printf '%s\t%s\t%s\t%s\n' "$round" "$idle" "$first" "$(perf_stats '%.1f' < "$perf_dir/ab-$round")" \
+      >> "$perf_dir/proof-ab.tsv"
+    cat "$perf_dir/ab-$round" >> "$perf_dir/ab-$round-all"
+    sleep 1
+    for way in hidden shown hidden shown hidden shown hidden shown; do
+      at=$(wc -l < "$log")
+      send key s cmd
+      expect "^browser: sidebar $way\$" "⌘S didn't leave the sidebar $way"
+      sleep 0.3
+      printf '%s\t%s\t%s\t%s\n' "$round" "$way" "$at" "$(wc -l < "$log")" >> "$perf_dir/proof-slides.tsv"
+    done
+    echo "perf: proof only: tick $round: idle ticks $idle in 5 s, switch $(perf_stats '%.1f' < "$perf_dir/ab-$round")"
+  done
+  rm -f "$BROWSER_PROOF_TICK_FILE"
+  cp "$log" "$perf_dir/proof-session.log"
+  echo "ok: proof only (#2377): the tick A/B is in $perf_dir/proof-ab.tsv and proof-slides.tsv"
+  return 0
   perf_switches switch
   perf_row switch "Tab switch, key to page shown" "$(perf_stats '%.0f' < "$perf_dir/switch") ms" \
     "Ardia 14 ms, Chrome 8 ms (gate: 16 ms)"
