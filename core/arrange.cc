@@ -620,7 +620,9 @@ constexpr char16_t kScript[] =
     // last in flow before the parent, its own sibling or else an ancestor's: a sibling beside it, as
     // a column in a row is, doesn't place it, and the row's own lead does. Another list's room moves
     // it, and the list with it. A margin collapsing through the parent can't, nor can its things
-    // leaving it, which move the parent's own edge.
+    // leaving it, which move the parent's own edge. A moved thing there is a place in an outer list,
+    // whose room is made after this one's and puts the parent after it, so the parent's own start
+    // leads then.
     function leadOf(l, skip) {
       const row = l.axis === 'row';
       const start = (r) => (row ? r.left : r.top), end = (r) => (row ? r.right : r.bottom);
@@ -628,9 +630,9 @@ constexpr char16_t kScript[] =
         if (/absolute|fixed/.test(getComputedStyle(p).position)) return null;
         const at = start(rect(p));
         for (let q = p.previousElementSibling; q; q = q.previousElementSibling) {
-          if (skip.includes(q) || lifted.has(q) || !drawn(q) ||
-            /absolute|fixed/.test(getComputedStyle(q).position)) continue;
+          if (lifted.has(q) || !drawn(q) || /absolute|fixed/.test(getComputedStyle(q).position)) continue;
           if (end(rect(q)) > at + 0.5) break;
+          if (skip.includes(q)) return null;
           return { el: q, end: end(rect(q)) };
         }
       }
