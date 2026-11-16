@@ -930,12 +930,15 @@ constexpr char16_t kScript[] =
         t = t.parentElement;
       }
       // Where the page has no block of its own, there's no place: only the free key floats it.
-      if (!t || t === document.body || t === document.documentElement || t.contains(el) || el.contains(t)) {
+      if (!t || t === document.body || t === document.documentElement || el.contains(t)) {
         return { change: CHANGE.NONE };
       }
       // A track, such as the gap between two of its things, is no thing to trade with: the drop is
       // at its nearest thing's edge (#3003). A card is a thing, with its own words and gaps.
       const near = trackFor(t, el) ? nearest(t, x, y) : null;
+      // A block holding the carried thing is a place only as a track beside another of its things:
+      // a card moves up or down its own column by a gap, but not out of its own wrapper by one.
+      if (t.contains(el) && (!near || near.ref.contains(el))) return { change: CHANGE.NONE };
       if (near) {
         const slot = slotOf(near.ref, [el]);
         if (roomless(slot.axis)) return { change: CHANGE.REFUSED, why: WHY.DOESNT_FIT, ref: near.ref };
