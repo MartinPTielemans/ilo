@@ -11,8 +11,9 @@
 # Win+D and minimizing, and the click in its margin is one outside it: the bar closes and the link
 # opens, as a click further out reaches the page. Captured as panel-shadows-<page>-<appearance>-
 # <scale>-<panel>.png, and panel-shadows-out-<way>.png after each way out. Past the browser window's
-# frame, over another app's window under it, each panel's window is clipped: panel-shadows-edge.txt
-# says how far each reaches past each edge, and that a press there reaches the other app and not ilo,
+# frame, over another app's window under it, each panel's margin is clipped and its panel isn't:
+# panel-shadows-edge.txt says how far each reaches past each edge and how much of that is margin,
+# that the panel shows whole, that a press in the margin there reaches the other app and not ilo,
 # and that the screen there is the same with the panel open as closed.
 # Real input needs CI's hosted desktop, and the display's scale is the runner's own to change.
 
@@ -410,10 +411,11 @@ shadow_gone 'command bar' "$out/panel-shadows-out-minimize.png" "minimizing"
 
 # Past the browser window's edge. HTTRANSPARENT hands a press on a panel's margin only to this
 # thread's windows under it, so past the browser window's frame, over another app's, the margin
-# would take the press: the host clips each panel's window to the frame. With another app's window
-# under ilo's, reaching past its frame, each panel says how far its window reaches past each edge;
-# past the side it reaches furthest, a press reaches the other app and not ilo, and the screen
-# there is as it is once the panel has closed, with no shadow past the edge.
+# would take the press: the host clips each panel's margin to the frame, and leaves the panel whole.
+# With another app's window under ilo's, reaching past its frame, each panel says how far its
+# window reaches past each edge, and how much of that is margin; its panel's left and right edges
+# show; past the side it reaches furthest, a press in the margin reaches the other app and not ilo,
+# and the screen there is as it is once the panel has closed, with no shadow past the edge.
 send place 300 150 1100 700
 was_bottom=$page_bottom
 for _ in $(seq 20); do
@@ -441,11 +443,38 @@ open_under() {
 open_under
 edges="$out/panel-shadows-edge.txt"
 : > "$edges"
+# The panel $1, at $2 $3, $4 by $5 from the frame's top left, shows whole: its left and right edges,
+# across its middle rows, which its corners leave straight, are none of the other app's colour,
+# and where the panel itself reaches past the frame, all of that part shows the panel too. Only
+# its margin is cut at the frame.
+panel_whole() {
+  local rows_top=$(($3 + $5 / 2 - 2)) rows_bottom=$(($3 + $5 / 2 + 2)) from to said side
+  for side in left right; do
+    case $side in
+      left) from=$(($2 + 1)) to=$(($2 < 0 ? 0 : $2 + 5)) ;;
+      right) from=$(($2 + $4 > frame_width ? frame_width : $2 + $4 - 5)) to=$(($2 + $4 - 1)) ;;
+    esac
+    # Read again until the panel has drawn there, as its line comes as it's placed.
+    for _ in $(seq 20); do
+      said=$(python3 -I check/under-window.py strip "$(cat "/proc/$pid/winpid")" \
+        $from $rows_top $to $rows_bottom "$out/panel-shadows-edge-panel.raw") ||
+        fail "couldn't read the $1's panel at its $side edge: $said"
+      case $said in *", 0 the other app's colour") break ;; esac
+      sleep 0.1
+    done
+    case $said in
+      *", 0 the other app's colour") ;;
+      *) fail "the $1's panel, at $2 $3, $4 by $5 in a frame $frame_width by $frame_height, is cut at its $side edge, which shows the other app's window: $said" ;;
+    esac
+    echo "the $1's panel at its $side edge, $said" >> "$edges"
+  done
+}
 # The panel $1, open since the step $opened: how far its window reaches past each edge of the frame,
 # and past the side it reaches furthest, a press, which the other app hears and ilo doesn't, unless
 # $3 says why not, with the screen there read as $2.shown.raw. False where it reaches past none.
 edge() {
   local x y w h left right above below most side box
+  local name=$1 file=$2 why=${3:-}
   line=
   for _ in $(seq 20); do
     line=$(panel_line "$1")
@@ -453,7 +482,10 @@ edge() {
     sleep 0.1
   done
   [ -n "$line" ] || fail "the $1 logged no panel line since step $opened"
-  set -- "$1" "$2" "${3:-}" ${line##* in its window }
+  local px py pw ph
+  set -- ${line%% in its window *}
+  px=$1 py=$2 pw=$3 ph=$4
+  set -- "$name" "$file" "$why" ${line##* in its window }
   local nopress=$3
   x=$4 y=$5 w=$6 h=$7
   pressed_at=
@@ -462,7 +494,15 @@ edge() {
   [ $right -gt 0 ] || right=0
   [ $above -gt 0 ] || above=0
   [ $below -gt 0 ] || below=0
-  echo "the $1's window, at $x $y, $w by $h, in a frame $frame_width by $frame_height, reaches past its left by $left, its right by $right, its top by $above, its bottom by $below" >> "$edges"
+  # How much of each reach is the panel's own, not its margin's.
+  local panel_left=$((-px)) panel_right=$((px + pw - frame_width)) panel_above=$((-py))
+  local panel_below=$((py + ph - frame_height))
+  [ $panel_left -gt 0 ] || panel_left=0
+  [ $panel_right -gt 0 ] || panel_right=0
+  [ $panel_above -gt 0 ] || panel_above=0
+  [ $panel_below -gt 0 ] || panel_below=0
+  echo "the $1's window, at $x $y, $w by $h, in a frame $frame_width by $frame_height, reaches past its left by $left, of which margin $((left - panel_left)), its right by $right, of which margin $((right - panel_right)), its top by $above, of which margin $((above - panel_above)), its bottom by $below, of which margin $((below - panel_below)); its panel is at $px $py, $pw by $ph, in a margin of $((px - x)) at the left, $((x + w - px - pw)) at the right, $((py - y)) above and $((y + h - py - ph)) below" >> "$edges"
+  panel_whole "$1" $px $py $pw $ph
   most=$left side=left
   [ $right -le $most ] || { most=$right side=right; }
   [ $above -le $most ] || { most=$above side=top; }
@@ -475,21 +515,27 @@ edge() {
   local from to
   case $side in
     left)
-      box="$x $y 0 $((y + h))" from=$x to=$((own_left < 0 ? own_left : 0))
+      to=$((own_left < 0 ? own_left : 0))
+      to=$((px < to ? px : to))
+      box="$x $y $((px < 0 ? px : 0)) $((y + h))" from=$x
       press="$(((from + to) / 2 - client_x)) $((y + h / 2 - client_y))"
       ;;
     right)
-      box="$frame_width $y $((x + w)) $((y + h))" to=$((x + w))
-      from=$((own_right > frame_width ? own_right : frame_width))
+      from=$((px + pw > frame_width ? px + pw : frame_width))
+      box="$from $y $((x + w)) $((y + h))" to=$((x + w))
+      from=$((own_right > from ? own_right : from))
       press="$(((from + to) / 2 - client_x)) $((y + h / 2 - client_y))"
       ;;
     top)
-      box="$x $y $((x + w)) 0" from=$y to=$((own_top < 0 ? own_top : 0))
+      to=$((own_top < 0 ? own_top : 0))
+      to=$((py < to ? py : to))
+      box="$x $y $((x + w)) $((py < 0 ? py : 0))" from=$y
       press="$((x + w / 2 - client_x)) $(((from + to) / 2 - client_y))"
       ;;
     bottom)
-      box="$x $frame_height $((x + w)) $((y + h))" to=$((y + h))
-      from=$((own_bottom > frame_height ? own_bottom : frame_height))
+      from=$((py + ph > frame_height ? py + ph : frame_height))
+      box="$x $from $((x + w)) $((y + h))" to=$((y + h))
+      from=$((own_bottom > from ? own_bottom : from))
       press="$((x + w / 2 - client_x)) $(((from + to) / 2 - client_y))"
       ;;
   esac
@@ -507,7 +553,6 @@ edge() {
       ;;
   esac
   strip_box="$4 $5 $6 $7"
-  local name=$1 file=$2
   set -- "$name" "$file"
   python3 -I check/under-window.py strip "$(cat "/proc/$pid/winpid")" $strip_box "$2.shown.raw" \
     >> "$edges" || fail "couldn't read the screen past the $1's frame: $(tail -1 "$edges")"
@@ -603,6 +648,8 @@ open_under
 rest_pointer
 file="$out/panel-shadows-edge-narrow-command-bar"
 open_panel 'command bar' white "$file"
+# The bar is wider than this window's frame: the capture shows its panel whole past it.
+shot "$file.png"
 if edge 'command bar' "$file" && [ -n "$pressed_at" ]; then
   expect '^browser: command bar hidden$' "a press on another app's window past the narrow frame didn't close the command bar" "$pressed_at"
   page_hears "once the other app had the press"
@@ -615,4 +662,4 @@ cat "$edges"
 
 exec 3>&-
 quit
-echo "ok: panel-shadows. The command bar, find bar, tab switcher and offer, in $rounds rounds over a white and a dark page, in Light and Dark, at ${scales// /% and }%: the margin never showed and the shadow did, and none was left once each closed. The command bar closed with Escape, a click further out, a click in its margin, which opened the link under it, another app, Win+D and minimizing, its shadow gone each time. Past the browser window's frame, a press in a panel's margin reached the other app's window under it and not ilo, and no shadow drew there."
+echo "ok: panel-shadows. The command bar, find bar, tab switcher and offer, in $rounds rounds over a white and a dark page, in Light and Dark, at ${scales// /% and }%: the margin never showed and the shadow did, and none was left once each closed. The command bar closed with Escape, a click further out, a click in its margin, which opened the link under it, another app, Win+D and minimizing, its shadow gone each time. Past the browser window's frame, each panel showed whole, a press in its margin reached the other app's window under it and not ilo, and no shadow drew there."
