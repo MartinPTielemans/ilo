@@ -63,11 +63,13 @@ def page_pane(m, t, w, h):
     sub = "#555" if t["name"] == "light" else "#a8a8a8"
     para = ("The path follows a canal lined with cherry trees for about two kilometres, from "
             "Ginkaku-ji in the north to Nanzen-ji. Go early: by ten the narrow stretches fill.")
+    more = ("Halfway along, Honen-in sits up a short flight of steps under the trees. Its gate is "
+            "thatched, and the sand beds inside are raked into a new pattern each season.")
     return (f'<div class=a style="inset:0;background:{t["page"]};padding:36px 36px;color:{fg};font:16px/1.55 Georgia,serif">'
             f'<div style="font:600 12px Inter;letter-spacing:.06em;color:{sub};text-transform:uppercase">Walks · Kyoto</div>'
             f'<div style="font:700 30px/1.15 Georgia,serif;margin:10px 0 18px">The Philosopher\'s Path</div>'
             f'<div style="position:relative;width:{w - 72}px;height:220px">{m.photo(t, 0, 0, w - 72, 220, "temple")}</div>'
-            f'<p style="margin-top:18px">{para}</p><p style="margin-top:12px;color:{sub}">{para}</p></div>')
+            f'<p style="margin-top:18px">{para}</p><p style="margin-top:12px;color:{sub}">{more}</p></div>')
 
 
 def split(m, t, base):

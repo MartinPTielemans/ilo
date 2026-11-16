@@ -171,8 +171,8 @@ def board_full(t, w, h, selected=True):
     s += photo(t, 316, 430, 260, 170, "market")
     s += note(t, 600, 444, 220, "Ask", "Is the garden open on the 14th? If not, swap days 3 and 4.", fill=SW["blue"])
     red = SW["red"]
-    s += drawing(t, f'<path d="M1052 506 C 1110 500, 1150 440, 1166 364" stroke="{red}" stroke-width="3" fill="none" stroke-linecap="round"/>'
-                    f'<path d="M1154 374 L1167 361 L1176 377" stroke="{red}" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+    s += drawing(t, f'<path d="M824 506 C 882 500, 922 440, 938 364" stroke="{red}" stroke-width="3" fill="none" stroke-linecap="round"/>'
+                    f'<path d="M926 374 L939 361 L948 377" stroke="{red}" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
                     f'<path d="M590 610 C 640 586, 760 590, 812 612" stroke="{SW["plum"]}" stroke-width="3" fill="none" stroke-linecap="round"/>')
     if selected:
         s += context_bar(t, 316, 82)
