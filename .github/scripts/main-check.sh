@@ -8,7 +8,8 @@
 # passed with its "Runs" step done: one with no engine for the commit, or cancelled, checked nothing.
 #
 # `main-check.sh rerun`, in a re-run's check job, fails when an earlier attempt of this run failed
-# past its "Engine" step. A run's page, summary and conclusion are its last attempt's, and each
+# past its "Engine" step, or passed with a failure in its annotations, as the windows-2025 night's
+# steps leave one. A run's page, summary and conclusion are its last attempt's, and each
 # attempt's artifact has the same name, so a re-run's pass would show over that failure, as run
 # 41574039797's attempt 2 did over attempt 1 failing spaces (#1589). A new run checks again instead.
 #
@@ -36,8 +37,10 @@ gh() {
 }
 
 # The jobs with the default runs: the one named "check", or Windows' "check 1/2" and "check 2/2",
-# which they're dealt across (#2618).
-defaults='[.jobs[] | select(.name == "check" or (.name | test("^check [0-9]+/[0-9]+$")))]'
+# which they're dealt across (#2618). CHECK_ON names the runner a run beside the gate's says it
+# ran on, such as " on windows-2025" (check-windows.yml, #3011), so its runs and the gate's are
+# each other's to skip for, never one for the other.
+defaults='[.jobs[] | select(.name == "check'"${CHECK_ON:-}"'" or (.name | test("^check [0-9]+/[0-9]+'"${CHECK_ON:-}"'$")))]'
 
 # Whether run $1 checked its commit: one of its default jobs failed past its "Engine" step, or each
 # passed with its "Runs" step done.
@@ -77,9 +80,16 @@ seen)
 rerun)
   attempt=1
   while [ "$attempt" -lt "$GITHUB_RUN_ATTEMPT" ]; do
-    failed=$(gh api "repos/$repo/actions/runs/$GITHUB_RUN_ID/attempts/$attempt/jobs" --jq 'any(.jobs[];
+    jobs="repos/$repo/actions/runs/$GITHUB_RUN_ID/attempts/$attempt/jobs"
+    failed=$(gh api "$jobs" --jq 'any(.jobs[];
       (.name | startswith("check")) and .conclusion == "failure"
         and (any(.steps[]; .name == "Engine" and .conclusion == "failure") | not))')
+    # The windows-2025 night's steps go on past a failure, so its job passes with the failure left
+    # in its annotations (check-windows.yml, #3055).
+    for job in $(gh api "$jobs" --jq '.jobs[] | select((.name | startswith("check")) and .conclusion == "success") | .id'); do
+      [ "$failed" != true ] || break
+      failed=$(gh api "repos/$repo/check-runs/$job/annotations" --jq 'any(.[]; .annotation_level == "failure")')
+    done
     if [ "$failed" = true ]; then
       echo "::error::Attempt $attempt of this run failed, so a pass here would show over it: start a new run to check again. $run/attempts/$attempt"
       printf 'Failed: [attempt %s](%s) of this run failed, so a pass here would show over it. Start a new run to check again.\n' \
