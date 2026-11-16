@@ -71,7 +71,7 @@ function column(col) {
 const frames = (n) => new Promise((done) => { const f = () => (--n <= 0 ? done() : requestAnimationFrame(f)); requestAnimationFrame(f); });
 const CH = ['none', 'settles', 'trades', 'floats', 'refused'];
 const kind = (st) => (st && CH[st.change]) || JSON.stringify(st).slice(0, 40);
-const drops = [["L1", "140", "70", "400", "190", "Trades"], ["R2", "400", "190", "140", "190", "Trades"], ["L1", "140", "70", "400", "130", "Settles"], ["R2", "400", "190", "140", "130", "Settles"], ["L1", "140", "70", "600", "90", "Refused"], ["CB", "140", "445", "400", "130", "Settles"], ["CB", "140", "445", "400", "190", "Trades"], ["CB", "140", "445", "600", "90", "Refused"], ["K1", "300", "425", "600", "260", "Settles"], ["K1", "300", "425", "600", "295", "Trades"], ["K1", "300", "425", "400", "575", "Trades"]];
+const drops = [["L1", "140", "70", "400", "190", "Trades"], ["R2", "400", "190", "140", "190", "Trades"], ["L1", "140", "70", "400", "130", "Settles"], ["R2", "400", "190", "140", "130", "Settles"], ["L1", "140", "70", "600", "90", "Refused"], ["CB", "140", "445", "400", "130", "Settles"], ["CB", "140", "445", "400", "190", "Trades"], ["CB", "140", "445", "600", "90", "Refused"], ["K1", "300", "425", "600", "260", "Settles"], ["K1", "300", "425", "600", "295", "Trades"], ["K1", "300", "425", "480", "560", "Trades"]];
 const out = [];
 async function run(k) {
   const src = await (await fetch('arrange-probe-drop2-' + k + '.js')).text();
@@ -95,6 +95,8 @@ async function run(k) {
       await frames(1);
       call('up', { x: +rx, y: +ry });
       await frames(3);
+      // Where they come to rest, as the check reads them.
+      while (document.getAnimations().some((x) => x.playState === 'running')) await frames(1);
       line = thing + ' want ' + want.toLowerCase() + ' carry ' + kind(moved) + ' rest ' + kind(rested) + ' ; ' +
         cols.map((col) => col.id + ' ' + column(col)).join(' ');
     } catch (e) { line = 'threw ' + String(e).slice(0, 100); }
