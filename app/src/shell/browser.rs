@@ -87,9 +87,10 @@ pub trait Browser {
     fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, cx: &mut App) -> u64;
     /// Makes the Live Folder a plain one. The tabs opened from it stay in it.
     fn end_live_folder(&self, folder: u64, cx: &mut App);
-    /// Asks for `folder`'s lists from `source`, on its Space's profile's session. The browser
-    /// answers with `Shell::set_live_answer`.
-    fn fetch_live_folder(&self, folder: u64, source: LiveSource, cx: &mut App);
+    /// Asks for `folder`'s lists from `source`, on its Space's profile's session, at most once in
+    /// two minutes for the profile but for a `refresh`. The browser answers with
+    /// `Shell::set_live_answer`.
+    fn fetch_live_folder(&self, folder: u64, source: LiveSource, refresh: bool, cx: &mut App);
     /// Takes `tab` out of its split view.
     fn separate(&self, tab: u64, cx: &mut App);
     /// Moves `tab` to `index` in its split view, counted from the left or the top.

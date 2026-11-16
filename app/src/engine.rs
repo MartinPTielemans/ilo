@@ -195,7 +195,7 @@ impl Browser for Engine {
 
     fn end_live_folder(&self, _: u64, _: &mut App) {}
 
-    fn fetch_live_folder(&self, _: u64, _: LiveSource, _: &mut App) {}
+    fn fetch_live_folder(&self, _: u64, _: LiveSource, _: bool, _: &mut App) {}
 
     fn separate(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_separate(tab) };

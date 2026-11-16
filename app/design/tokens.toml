@@ -1796,9 +1796,6 @@ failed-mark = 9.0
 # Closed, the folder's row ends with how many review requests wait, this far in from its plate's
 # end.
 count-end = 12.0
-# The least time between two fetches of one folder's lists, but for its menu's Refresh. Nothing
-# runs on a timer for it: only what the user does asks (#2979's spike).
-floor-seconds = 120.0
 
 [shell.new-space]
 # The circle: across, its white ring, and the line of the sidebar's colour inside the ring.

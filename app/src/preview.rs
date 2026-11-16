@@ -803,28 +803,27 @@ impl Browser for Fake {
 
     // The stand-in for the core's fetch: the mock's made-up pull requests, or with
     // PREVIEW_LIVE_FOLDER=signed-out or failed, that answer.
-    fn fetch_live_folder(&self, folder: u64, _: LiveSource, cx: &mut App) {
+    fn fetch_live_folder(&self, folder: u64, _: LiveSource, _: bool, cx: &mut App) {
         let answer = live_stand_in();
         let mode = std::env::var("PREVIEW_LIVE_FOLDER").unwrap_or_default();
+        let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH);
+        let now = now.unwrap_or_default().as_millis() as i64;
         self.later(cx, move |shell, cx| match (mode.as_str(), answer) {
             // The rows came 12 minutes ago; the refresh now didn't.
             ("failed", answer) => {
-                let ago = Duration::from_secs(12 * 60);
-                let then = web_time::Instant::now().checked_sub(ago);
-                let then = then.unwrap_or_else(web_time::Instant::now);
-                shell.set_live_answer_at(folder, answer, then, cx);
-                shell.set_live_answer(folder, LiveAnswer::Failed, cx);
+                shell.set_live_answer(folder, answer, now - 12 * 60 * 1000, cx);
+                shell.set_live_answer(folder, LiveAnswer::Failed, now, cx);
             }
             // The answer before had no #412, so it's new, and #57 has merged since, so this one
             // has left it out.
             ("states", LiveAnswer::Items(items)) => {
                 let before = items.iter().filter(|item| item.number != 412);
                 let before = LiveAnswer::Items(before.cloned().collect());
-                let now = items.into_iter().filter(|item| item.number != 57);
-                shell.set_live_answer(folder, before, cx);
-                shell.set_live_answer(folder, LiveAnswer::Items(now.collect()), cx);
+                let after = items.into_iter().filter(|item| item.number != 57);
+                shell.set_live_answer(folder, before, now, cx);
+                shell.set_live_answer(folder, LiveAnswer::Items(after.collect()), now, cx);
             }
-            (_, answer) => shell.set_live_answer(folder, answer, cx),
+            (_, answer) => shell.set_live_answer(folder, answer, now, cx),
         });
     }
 

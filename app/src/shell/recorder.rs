@@ -511,8 +511,8 @@ impl Browser for Recorder {
         self.edit(format!("end live folder {folder}"));
     }
 
-    fn fetch_live_folder(&self, folder: u64, source: LiveSource, _: &mut App) {
-        self.record(format!("fetch live folder {folder} {source:?}"));
+    fn fetch_live_folder(&self, folder: u64, source: LiveSource, refresh: bool, _: &mut App) {
+        self.record(format!("fetch live folder {folder} {source:?} refresh {refresh}"));
     }
 
     fn separate(&self, tab: u64, _: &mut App) {

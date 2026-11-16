@@ -2,9 +2,10 @@
 //! the user does and never by a timer, so an idle browser stays asleep.
 //!
 //! The core keeps which folders are live, with the folder, and fetches a list on the folder's
-//! Space's profile's own session. The app names the source, never a URL, and gets parsed items
-//! back. What's here is what the sidebar decides: when to ask, what an answer leaves, and which
-//! rows show.
+//! Space's profile's own session, at most once in two minutes for a profile however often it's
+//! asked, but for Refresh. The app names the source, never a URL, and gets parsed items back, with
+//! when the site gave them. What's here is what the sidebar decides: when to ask, what an answer
+//! leaves, and which rows show.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -12,14 +13,14 @@ use std::time::Duration;
 use gpui::{
     AnyElement, Context, FontWeight, MouseButton, Role, SharedString, div, prelude::*, px, svg,
 };
-use web_time::Instant;
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use super::{
     FAVICON_DRAWN, FOLDER_INDENT, HOVERED, PLATE_INSET, ROW_PITCH, SECONDARY, Shell, Slot, Space,
     TITLE_END_INSET, plate, row_box, rows::with_host, title,
 };
 use crate::tokens::shell::live_folder::{
-    DRAFT, FAILED_MARK, FLOOR_SECONDS, HEADING_HEIGHT, HEADING_X,
+    DRAFT, FAILED_MARK, HEADING_HEIGHT, HEADING_X,
 };
 use crate::tokens::text;
 
@@ -157,7 +158,8 @@ pub enum LiveEvent {
     Opened,
     /// A page from the source's site committed in a tab of the folder's profile.
     SiteCommitted,
-    /// The folder's menu's Refresh, which the floor doesn't hold back.
+    /// The folder's menu's Refresh, or the folder made: the user's own ask, which the core's two
+    /// minutes don't hold back.
     Refresh,
 }
 
@@ -183,15 +185,12 @@ pub struct LiveLayout {
     pub tabs: Vec<u64>,
 }
 
-/// A Live Folder's lists as last fetched, and when to fetch them again.
+/// A Live Folder's lists as last fetched.
 #[derive(Clone, Debug, Default)]
 pub struct LiveFolder {
     items: Vec<LiveItem>,
-    /// When the rows were last fetched, which is their age in the folder's tooltip.
+    /// When the site gave the rows, which is their age in the folder's tooltip.
     updated: Option<Instant>,
-    /// When the last fetch was asked for, from which the floor counts.
-    asked: Option<Instant>,
-    asking: bool,
     /// The last fetch failed, so its glyph has the mark and its tooltip says so.
     failed: bool,
     signed_out: bool,
@@ -199,28 +198,18 @@ pub struct LiveFolder {
     new: HashSet<(SharedString, u32)>,
 }
 
-pub const FLOOR: Duration = Duration::from_secs(FLOOR_SECONDS as u64);
+/// When the site gave an answer the core says it gave at `answered`, in milliseconds since the Unix
+/// epoch: an answer the core kept from inside its two minutes is that old, not new.
+pub fn answered_at(answered: i64) -> Instant {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let age = now.saturating_sub(Duration::from_millis(answered.max(0) as u64));
+    let now = Instant::now();
+    now.checked_sub(age).unwrap_or(now)
+}
 
 impl LiveFolder {
-    /// Whether `event` asks for the lists at `now`: Refresh unless a fetch is under way, anything
-    /// else only once the floor has passed since the last ask.
-    pub fn due(&self, event: LiveEvent, now: Instant) -> bool {
-        if self.asking {
-            return false;
-        }
-        event == LiveEvent::Refresh
-            || self
-                .asked
-                .is_none_or(|asked| now.saturating_duration_since(asked) >= FLOOR)
-    }
-
-    pub fn ask(&mut self, now: Instant) {
-        self.asking = true;
-        self.asked = Some(now);
-    }
-
+    /// The site's answer, given at `now`.
     pub fn answer(&mut self, answer: LiveAnswer, now: Instant) {
-        self.asking = false;
         match answer {
             LiveAnswer::Items(items) => {
                 // The first answer has nothing new: what came before it isn't known.
@@ -383,21 +372,17 @@ impl Shell {
         live.into_iter().flatten().collect()
     }
 
-    /// Asks the core for the lists of each of `folders` that `event` is due for, under the floor.
+    /// Asks the core for the lists of each of `folders` on `event`. How often the site is asked is
+    /// the core's: it answers what it has from inside its two minutes, but for Refresh.
     fn ask_live(&mut self, event: LiveEvent, folders: Vec<u64>, cx: &mut Context<Self>) {
-        let now = Instant::now();
+        let refresh = event == LiveEvent::Refresh;
         for folder in folders {
             let Some(source) = self.live_source(folder) else {
                 continue;
             };
-            let kept = self.live.entry(folder).or_default();
-            if !kept.due(event, now) {
-                continue;
-            }
-            kept.ask(now);
             // check.sh reads this line.
             log!("browser: live folder {folder} fetch on {event:?}");
-            self.browser.fetch_live_folder(folder, source, cx);
+            self.browser.fetch_live_folder(folder, source, refresh, cx);
         }
     }
 
@@ -429,14 +414,20 @@ impl Shell {
         self.ask_live(LiveEvent::SiteCommitted, folders, cx);
     }
 
-    /// The core's answer for `folder`'s lists. Only its kind is logged: the rows are the user's
-    /// account's.
-    pub fn set_live_answer(&mut self, folder: u64, answer: LiveAnswer, cx: &mut Context<Self>) {
-        self.set_live_answer_at(folder, answer, Instant::now(), cx);
+    /// The core's answer for `folder`'s lists, which the site gave at `answered`, in milliseconds
+    /// since the Unix epoch. Only its kind is logged: the rows are the user's account's.
+    pub fn set_live_answer(
+        &mut self,
+        folder: u64,
+        answer: LiveAnswer,
+        answered: i64,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_live_answer_at(folder, answer, answered_at(answered), cx);
     }
 
-    /// The answer for `folder` as of `at`, as the preview gives an older one.
-    pub fn set_live_answer_at(
+    /// The answer for `folder` as the site gave it at `at`.
+    fn set_live_answer_at(
         &mut self,
         folder: u64,
         answer: LiveAnswer,
@@ -527,7 +518,7 @@ impl Shell {
         }
     }
 
-    /// Refresh in the folder's menu, which the floor doesn't hold back.
+    /// Refresh in the folder's menu, which the core's two minutes don't hold back.
     pub(super) fn refresh_live_folder(&mut self, folder: u64, cx: &mut Context<Self>) {
         self.ask_live(LiveEvent::Refresh, vec![folder], cx);
     }

@@ -79,6 +79,12 @@ fn report(shell: &Entity<Shell>, cx: &mut VisualTestContext, open: bool, tabs: &
     draw(shell, cx);
 }
 
+/// Now, in milliseconds since the Unix epoch, as the core gives an answer's time.
+fn just_now() -> i64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.unwrap().as_millis() as i64
+}
+
 fn fetches(host: &Recorder) -> Vec<String> {
     let calls = host.take().into_iter();
     calls
@@ -111,7 +117,7 @@ fn the_spaces_menu_makes_one_and_unticking_deletes_it(cx: &mut TestAppContext) {
     report(&shell, cx, true, &[]);
     assert_eq!(
         fetches(&host),
-        [format!("fetch live folder {FOLDER} PullRequests")]
+        [format!("fetch live folder {FOLDER} PullRequests refresh true")]
     );
     shell.update(cx, |shell, cx| {
         shell.space_menu(1, point(px(10.), px(10.)), cx)
@@ -144,7 +150,9 @@ fn an_agents_space_has_none(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn only_what_the_user_does_asks_and_the_floor_holds_all_but_refresh(cx: &mut TestAppContext) {
+fn only_what_the_user_does_asks_and_only_refresh_skips_the_cores_two_minutes(
+    cx: &mut TestAppContext,
+) {
     let (shell, cx, host) = window(cx);
     report(&shell, cx, false, &[]);
     assert_eq!(fetches(&host).len(), 1);
@@ -152,6 +160,7 @@ fn only_what_the_user_does_asks_and_the_floor_holds_all_but_refresh(cx: &mut Tes
         shell.set_live_answer(
             FOLDER,
             LiveAnswer::Items(vec![item(LiveList::Created, 7)]),
+            just_now(),
             cx,
         )
     });
@@ -159,7 +168,8 @@ fn only_what_the_user_does_asks_and_the_floor_holds_all_but_refresh(cx: &mut Tes
     draw(&shell, cx);
     draw(&shell, cx);
     assert!(fetches(&host).is_empty());
-    // Under the floor, the window coming back, the folder opening and a page of the site don't.
+    // The window coming back, the folder opening and a page of the site ask, and the core answers
+    // what it has from inside its two minutes.
     cx.deactivate_window();
     draw(&shell, cx);
     cx.update(|window, _| window.activate_window());
@@ -168,8 +178,12 @@ fn only_what_the_user_does_asks_and_the_floor_holds_all_but_refresh(cx: &mut Tes
     shell.update(cx, |shell, cx| {
         shell.live_page_committed(3, "https://github.com/harbor/web/pull/7", cx)
     });
-    assert!(fetches(&host).is_empty());
-    // Refresh does.
+    let asked = fetches(&host);
+    assert_eq!(
+        asked,
+        [format!("fetch live folder {FOLDER} PullRequests refresh false"); 3]
+    );
+    // Refresh asks the site inside them.
     shell.update(cx, |shell, cx| {
         shell.tab_menu(FOLDER, point(px(10.), px(10.)), cx)
     });
@@ -185,7 +199,10 @@ fn only_what_the_user_does_asks_and_the_floor_holds_all_but_refresh(cx: &mut Tes
         ]
     );
     cx.update(|_, cx| host.choose("Refresh", cx));
-    assert_eq!(fetches(&host).len(), 1);
+    assert_eq!(
+        fetches(&host),
+        [format!("fetch live folder {FOLDER} PullRequests refresh true")]
+    );
 }
 
 #[gpui::test]
@@ -193,9 +210,7 @@ fn a_space_shown_asks_once_its_switch_is_drawn(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
     report(&shell, cx, true, &[]);
     shell.update(cx, |shell, cx| {
-        shell.set_live_answer(FOLDER, LiveAnswer::Failed, cx);
-        // Past the floor, as if two minutes had gone.
-        shell.live.get_mut(&FOLDER).unwrap().asked = None;
+        shell.set_live_answer(FOLDER, LiveAnswer::Failed, just_now(), cx);
         shell.set_space(2, cx);
     });
     host.take();
@@ -224,7 +239,7 @@ fn a_space_shown_asks_once_its_switch_is_drawn(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.simulate_next_frame(cx));
     assert_eq!(
         fetches(&host),
-        [format!("fetch live folder {FOLDER} PullRequests")]
+        [format!("fetch live folder {FOLDER} PullRequests refresh false")]
     );
 }
 
@@ -238,7 +253,7 @@ fn a_pressed_row_opens_its_tab_in_its_place(cx: &mut TestAppContext) {
         item(LiveList::Created, 8),
     ];
     shell.update(cx, |shell, cx| {
-        shell.set_live_answer(FOLDER, LiveAnswer::Items(items.clone()), cx)
+        shell.set_live_answer(FOLDER, LiveAnswer::Items(items.clone()), just_now(), cx)
     });
     draw(&shell, cx);
     let room = 2. * HEADING_HEIGHT + 3. * ROW_PITCH;
@@ -276,7 +291,7 @@ fn a_pressed_row_opens_its_tab_in_its_place(cx: &mut TestAppContext) {
     // Its item gone from the lists, it's a tab like the folder's others, over the headings.
     let without = vec![items[0].clone(), items[2].clone()];
     shell.update(cx, |shell, cx| {
-        shell.set_live_answer(FOLDER, LiveAnswer::Items(without), cx)
+        shell.set_live_answer(FOLDER, LiveAnswer::Items(without), just_now(), cx)
     });
     draw(&shell, cx);
     shell.read_with(cx, |shell, _| {
@@ -313,7 +328,7 @@ fn three_tabs(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder
     drop(urls);
     report(shell, cx, true, &[30, 31, 32]);
     shell.update(cx, |shell, cx| {
-        shell.set_live_answer(FOLDER, LiveAnswer::Items(items), cx)
+        shell.set_live_answer(FOLDER, LiveAnswer::Items(items), just_now(), cx)
     });
     draw(shell, cx);
 }

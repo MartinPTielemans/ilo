@@ -1,4 +1,4 @@
-//! What a Live Folder asks for and when, and what each answer leaves of its rows (#2979).
+//! What a Live Folder's answers leave of its rows, and how old they read (#2979).
 
 use std::time::Duration;
 
@@ -44,35 +44,23 @@ fn shown(rows: &[LiveRow]) -> Vec<String> {
 }
 
 #[test]
-fn the_floor_holds_back_all_but_refresh() {
-    let start = Instant::now();
+fn an_answer_the_core_kept_reads_as_old_as_the_sites() {
+    let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH);
+    let now = now.unwrap().as_millis() as i64;
     let mut folder = LiveFolder::default();
-    assert!(folder.due(LiveEvent::SpaceShown, start));
-    folder.ask(start);
-    // Under way, nothing asks again, Refresh neither.
-    assert!(!folder.due(LiveEvent::Refresh, start));
-    folder.answer(LiveAnswer::Items(vec![mine(1)]), start);
-    let soon = start + FLOOR - Duration::from_secs(1);
-    for event in [
-        LiveEvent::WindowActive,
-        LiveEvent::SpaceShown,
-        LiveEvent::Opened,
-        LiveEvent::SiteCommitted,
-    ] {
-        assert!(!folder.due(event, soon), "{event:?} under the floor");
-        assert!(folder.due(event, start + FLOOR), "{event:?} past the floor");
-    }
-    assert!(folder.due(LiveEvent::Refresh, soon));
-}
-
-#[test]
-fn the_floor_counts_from_a_failed_try_too() {
-    let start = Instant::now();
-    let mut folder = LiveFolder::default();
-    folder.ask(start);
-    folder.answer(LiveAnswer::Failed, start);
-    assert!(!folder.due(LiveEvent::WindowActive, start + Duration::from_secs(30)));
-    assert!(folder.due(LiveEvent::Refresh, start + Duration::from_secs(30)));
+    // The core kept it from 90 s ago, inside its two minutes, and gives it again with that time.
+    folder.answer(LiveAnswer::Items(vec![mine(1)]), answered_at(now - 90_000));
+    assert_eq!(
+        folder.age(Instant::now()).as_deref(),
+        Some("Updated 1 min ago")
+    );
+    folder.answer(LiveAnswer::Items(vec![mine(1)]), answered_at(now));
+    assert_eq!(
+        folder.age(Instant::now()).as_deref(),
+        Some("Updated just now")
+    );
+    // A time ahead of this computer's clock is now, never later.
+    assert!(answered_at(now + 60_000) <= Instant::now());
 }
 
 #[test]
