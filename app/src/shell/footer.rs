@@ -2,8 +2,8 @@
 //! control before the plus.
 
 use gpui::{
-    AnyElement, Context, DragMoveEvent, MouseButton, MouseDownEvent, Rgba, Role, div, prelude::*,
-    px, svg,
+    AnyElement, Context, DragMoveEvent, MouseButton, MouseDownEvent, Rgba, Role, canvas, div,
+    prelude::*, px, svg,
 };
 
 use super::{
@@ -113,6 +113,7 @@ impl Shell {
                     Shell::start_space_drag(&shell, id, Along::Switcher, cell, grab, cx)
                 })
                 .child(self.space_mark(space, shown, cell, &behind))
+                .child(self.dot_drawn(id))
         });
         Some(
             div()
@@ -136,6 +137,27 @@ impl Shell {
                 .children(self.space_drop_line(Along::Switcher))
                 .child(self.space_drop_listener(Along::Switcher, cx)),
         )
+    }
+
+    /// Logs where Space `id`'s dot is drawn, its centre in the window, as "browser: switcher dot
+    /// `id` at x y", each time that moves, for check.sh to click it there whatever else the footer
+    /// holds (#3175).
+    fn dot_drawn(&self, id: u64) -> impl IntoElement + use<> {
+        let drawn = self.space_dots_drawn.clone();
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, _, _| {
+                let centre = bounds.center();
+                let at = (f32::from(centre.x).round(), f32::from(centre.y).round());
+                let at = (at.0 as i32, at.1 as i32);
+                if drawn.borrow_mut().insert(id, at) != Some(at) {
+                    // check.sh reads this line.
+                    log!("browser: switcher dot {id} at {} {}", at.0, at.1);
+                }
+            },
+        )
+        .absolute()
+        .inset_0()
     }
 
     /// How wide the switcher is: the footer between its insets, less the menu control's pitch where
