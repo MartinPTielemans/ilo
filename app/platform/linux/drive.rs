@@ -3026,7 +3026,9 @@ fn run_command(line: &str) -> Option<()> {
             let x = server()?;
             let (connection, _) = &*x;
             let focus = xproto::InputFocus::POINTER_ROOT;
-            connection.set_input_focus(focus, browser.window, x11rb::CURRENT_TIME).ok()?;
+            connection
+                .set_input_focus(focus, browser.window, x11rb::CURRENT_TIME)
+                .ok()?;
             let above = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
             connection.configure_window(browser.window, &above).ok()?;
             sync();
