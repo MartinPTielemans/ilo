@@ -4,6 +4,9 @@
 // and nothing runs while the Board is idle: no timer outlives the edit or gesture that set it.
 
 const SLICE = 256 * 1024;
+// The most a Board's own file may be, as the host has it (core/board_store.h, kMaxBoardJson).
+const MAX_BOARD = 4 * 1024 * 1024;
+const tenth = (v) => Math.round(v * 10) / 10;
 const MAX_FILE = 50 * 1024 * 1024;
 const SMALL = 2048; // A picture draws from a copy at most this long on its long side.
 const SAVE_AFTER = 1000;
@@ -107,8 +110,12 @@ async function save() {
     again = true;
     return saving;
   }
-  const json = JSON.stringify({ version: 1, camera, cards });
-  saving = write("board", new TextEncoder().encode(json));
+  const bytes = new TextEncoder().encode(JSON.stringify({ version: 1, camera, cards }));
+  if (bytes.byteLength > MAX_BOARD) {
+    say("This Board is full: its notes and ink are over 4 MB, so the last change isn't saved.", true);
+    return;
+  }
+  saving = write("board", bytes);
   const done = await saving;
   saving = null;
   if (done === false) say("This Board couldn't be saved.", true);
@@ -508,7 +515,8 @@ view.addEventListener("pointermove", (e) => {
     moveCamera();
   } else if (drag.kind === "stroke") {
     const [x, y] = toWorld(e.clientX, e.clientY);
-    drag.card.points.push([x - drag.card.x, y - drag.card.y]);
+    // A tenth of a pixel is finer than a line can show, and keeps the Board's file small.
+    drag.card.points.push([tenth(x - drag.card.x), tenth(y - drag.card.y)]);
     drag.moved = true;
     byId.get(drag.card.id).setAttribute("d", strokePath(drag.card));
   } else if (drag.kind === "erase") {
