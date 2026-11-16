@@ -148,3 +148,43 @@ fn a_boards_row_offers_open_and_delete(cx: &mut TestAppContext) {
     assert_eq!(listed(&shell, cx), []);
     std::fs::remove_dir_all(&profile).unwrap();
 }
+
+/// Seven sections keep Arc's gap and place in a tall window. At 800 tall, Arc's place would put
+/// Media's button under the heading, so they start under its caps and close up only as far as
+/// the back button needs.
+#[gpui::test]
+fn the_sections_stay_under_the_library_heading(cx: &mut TestAppContext) {
+    use crate::tokens::shell::library::{
+        SECTION_GAP, SECTION_HEIGHT, SECTIONS_BOTTOM, SECTIONS_TOP,
+    };
+    let profile = std::env::temp_dir().join(format!("ilo-board-fit-{}", boards::new_id()));
+    let (shell, _) = window(cx, &profile);
+    let fit = |height: f32, cx: &mut TestAppContext| {
+        shell.update(cx, |shell, _| {
+            shell.viewport = gpui::size(px(1280.), px(height));
+            (shell.sections_fit(), shell.has_section(Section::Boards))
+        })
+    };
+    let ((gap, lower), boards) = fit(1000., cx);
+    assert!(boards);
+    assert_eq!(
+        (gap, lower),
+        (SECTION_GAP, 0.),
+        "a tall window moved Arc's place"
+    );
+    let ((gap, lower), _) = fit(800., cx);
+    let stack = 7. * SECTION_HEIGHT + 6. * gap;
+    let top = (800. - stack) / 2. - 5. + lower;
+    assert!(
+        top >= SECTIONS_TOP - 0.01,
+        "Media's button starts at {top}, under the heading"
+    );
+    assert!(
+        top + stack <= 800. - SECTIONS_BOTTOM + 0.01,
+        "Boosts' reaches the back button"
+    );
+    assert!(
+        gap > SECTION_GAP - 1.,
+        "the gaps closed more than they need: {gap}"
+    );
+}

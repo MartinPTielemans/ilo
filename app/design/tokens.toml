@@ -1712,6 +1712,11 @@ section-glyph-unselected = 0.6
 section-hovered = 0.05
 # Between two sections' buttons, 100 apart.
 section-gap = 20.0
+# Ours: where the buttons may reach in a window too short for Arc's place, as seven need at 800
+# tall: the first starts no higher than 74, 8 under the heading's caps, and the last ends 8 above
+# the back button.
+sections-top = 74.0
+sections-bottom = 48.0
 # The plate under the selected section and the search field.
 library-plate = 0.09
 # The back button, at the column's bottom.

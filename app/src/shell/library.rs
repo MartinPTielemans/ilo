@@ -92,6 +92,8 @@ use crate::tokens::shell::library::SECTION_LABEL_Y;
 use crate::tokens::shell::library::SECTION_RADIUS;
 use crate::tokens::shell::library::SECTION_WIDTH;
 use crate::tokens::shell::library::SECTION_X;
+use crate::tokens::shell::library::SECTIONS_BOTTOM;
+use crate::tokens::shell::library::SECTIONS_TOP;
 use crate::tokens::shell::library::TITLE_CAP;
 use crate::tokens::shell::library::TITLE_LINE;
 use crate::tokens::shell::library::TITLE_SIZE;
@@ -938,6 +940,30 @@ impl Shell {
         }
     }
 
+    /// The gap between the sections' buttons and how far below Arc's place, 5 above the column's
+    /// middle, they start: Arc's gap and place while the window has room, and in a shorter window,
+    /// as seven buttons need at 800 tall, under the heading's caps, with the gaps closing before
+    /// they'd reach the back button.
+    pub(super) fn sections_fit(&self) -> (f32, f32) {
+        let shown = [
+            Section::Spaces,
+            Section::Boards,
+            Section::Archive,
+            Section::Agents,
+            Section::Boosts,
+        ];
+        let count = 2. + shown.iter().filter(|each| self.has_section(**each)).count() as f32;
+        let height = f32::from(self.viewport.height);
+        if height <= 0. {
+            return (SECTION_GAP, 0.);
+        }
+        let room = height - SECTIONS_TOP - SECTIONS_BOTTOM - count * SECTION_HEIGHT;
+        let gap = (room / (count - 1.)).clamp(0., SECTION_GAP);
+        let stack = count * SECTION_HEIGHT + (count - 1.) * gap;
+        let top = (height - stack) / 2. - 5.;
+        (gap, (SECTIONS_TOP - top).max(0.))
+    }
+
     /// Opens the Library on its Spaces, for the preview, which has no pointer to pick it with.
     pub fn show_spaces(&mut self, cx: &mut Context<Self>) {
         self.view_section(Section::Spaces, cx);
@@ -1676,12 +1702,14 @@ impl Shell {
         };
         // The selected section's glyph has the Space's accent, as in Arc, where it reads there.
         let color = Hsla::from(self.palette.section_glyph);
+        let (gap, lower) = self.sections_fit();
         let sections = div()
             .flex()
             .flex_col()
-            .gap(px(SECTION_GAP))
-            // Arc's buttons sit 5 above the column's middle.
+            .gap(px(gap))
+            // Arc's buttons sit 5 above the column's middle, and lower where the heading needs it.
             .mb(px(10.))
+            .mt(px(2. * lower))
             .child(self.section_button(Section::Media, color, cx))
             .child(self.section_button(Section::Downloads, color, cx))
             .children(
