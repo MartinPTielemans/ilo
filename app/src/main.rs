@@ -711,8 +711,11 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     ad_block_host::launching();
     // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
     // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
+    // Proof only (#2384): the A/B's launches without the early wgpu thread.
+    let proof_off = std::env::var_os("BROWSER_PROOF_NO_EARLY_WGPU").is_some();
+    log!("browser: proof early wgpu {}", if proof_off { "off" } else { "on" });
     #[cfg(target_os = "linux")]
-    if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
+    if !proof_off && !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
         gpui_wgpu::WgpuContext::make_instance_early();
     }
     #[cfg(target_os = "windows")]
