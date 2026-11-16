@@ -5,7 +5,9 @@
 # its cards. A rest in a column's gap settles at the nearest card's edge, in a column that wraps its
 # cards one box deeper too. One that can't be as narrow as its place is refused. A block that
 # scrolls sideways settles and trades between places of its own width, and is refused only in a
-# narrower one. After each, ⌘Z takes it back and a click on the page's empty part ends the
+# narrower one. On markup with no classes, a card under the rest trades and a column's gap settles,
+# though both are plain boxes of plain boxes. A paragraph with a button in it, beside the carried
+# card's column, is a thing to trade with, not a track to settle in among its words. After each, ⌘Z takes it back and a click on the page's empty part ends the
 # selection, so each starts from the page as it was.
 
 serve
@@ -27,6 +29,13 @@ section { box-sizing: border-box; background: rgb(217, 226, 230) }
 #dlw .card { min-width: 220px }
 #CB { height: 60px; overflow-x: auto; white-space: pre }
 #CB p { margin: 0 }
+#dj { left: 540px; top: 200px; width: 120px }
+#dk { left: 280px; top: 400px; width: 240px }
+#dj > div, #dk > div { display: flex; flex-direction: column; gap: 20px }
+#dj > div > div, #dk > div > div { box-sizing: border-box; height: 50px; padding: 6px; display: flex;
+  flex-direction: column; justify-content: space-between; background: rgb(217, 226, 230) }
+#PT { box-sizing: border-box; height: 60px; margin: 0; padding: 6px; background: rgb(217, 226, 230) }
+#PT button { font: inherit }
 </style>
 <div id="dual">
 <div class="col" id="dl"><div id="dlw">
@@ -47,17 +56,29 @@ section { box-sizing: border-box; background: rgb(217, 226, 230) }
 <section id="CB" aria-label="CB"><p>const line = "a line of code long enough to run out of its box sideways, so it scrolls";</p></section>
 <section class="card" aria-label="C2"><h3>Code two</h3><p>Its words</p></section>
 </div>
+<div class="col" id="dj"><div>
+<div aria-label="J1"><div>Jay one</div><div>Its words</div></div>
+<div aria-label="J2"><div>Jay two</div><div>Its words</div></div>
+</div></div>
+<div class="col" id="dk"><div>
+<div aria-label="K1"><div>Key one</div><div>Its words</div></div>
+<div aria-label="K2"><div>Key two</div><div>Its words</div></div>
+</div>
+<p id="PT" aria-label="PT">Words, <button>Go</button> and <a href="#">a link</a></p>
+</div>
 </div>
 <script>
 let at = "-";
 addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," + Math.round(event.clientY); });
-const cols = ["dl", "dr", "dn", "dc"].map((id) => document.getElementById(id));
+const cols = ["dl", "dr", "dn", "dj", "dc", "dk"].map((id) => document.getElementById(id));
+// Where the things of each column start, from the top: the code and class-less columns are under
+// the left and right ones, and the narrow class-less one under the narrow one.
+const band = { dl: [0, 380], dr: [0, 380], dn: [0, 180], dj: [180, 380], dc: [380, 1e4], dk: [380, 1e4] };
 function column(col) {
-  const c = col.getBoundingClientRect();
-  return [...document.querySelectorAll("section")].filter((t) => {
+  const c = col.getBoundingClientRect(), [top, bottom] = band[col.id];
+  return [...document.querySelectorAll("[aria-label]")].filter((t) => {
     const r = t.getBoundingClientRect();
-    // The code column is under the left one: a thing at 380 or lower is in it.
-    return r.left + r.width / 2 > c.left && r.left + r.width / 2 < c.right && (r.top >= 380) === (col.id === "dc");
+    return r.left + r.width / 2 > c.left && r.left + r.width / 2 < c.right && r.top >= top && r.top < bottom;
   }).sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top)
     .map((t) => t.getAttribute("aria-label")).join(",");
 }
@@ -69,7 +90,7 @@ setInterval(() => {
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/arrange-drop.html"
-before='dl L1,L2,L3 dr R1,R2,R3 dn N1,N2 dc CB,C2 '
+before='dl L1,L2,L3 dr R1,R2,R3 dn N1,N2 dj J1,J2 dc CB,C2 dk K1,K2,PT '
 
 host=${site#http://}
 host=${host%%:*}
@@ -169,9 +190,20 @@ drop L1 140 70 400 130 Settles 'dl L2,L3 dr R1,L1,R2,R3 ' 'a wrapped card in the
 drop R2 400 190 140 130 Settles 'dl L1,R2,L2,L3 dr R1,R3 ' 'a card in the gap of the column that wraps its cards settles' 4
 drop L1 140 70 600 90 Refused "$before" 'a card that can'"'"'t be 120 wide is refused in the narrow column' 5
 # The block that scrolls sideways where it stands, carried by its empty part under its line.
-drop CB 140 445 400 130 Settles 'dl L1,L2,L3 dr R1,CB,R2,R3 dn N1,N2 dc C2 ' 'the scrolling block settles in a place of its width' 6
-drop CB 140 445 400 190 Trades 'dl L1,L2,L3 dr R1,CB,R3 dn N1,N2 dc R2,C2 ' 'the scrolling block trades with a card of its width' 7
+drop CB 140 445 400 130 Settles 'dl L1,L2,L3 dr R1,CB,R2,R3 dn N1,N2 dj J1,J2 dc C2 ' 'the scrolling block settles in a place of its width' 6
+drop CB 140 445 400 190 Trades 'dl L1,L2,L3 dr R1,CB,R3 dn N1,N2 dj J1,J2 dc R2,C2 ' 'the scrolling block trades with a card of its width' 7
 drop CB 140 445 600 90 Refused "$before" 'the scrolling block is refused in a narrower place' 8
+# Class-less cards, 50 tall, 20 apart, in columns that wrap them one box deeper: the narrow one's
+# from 200, the other's from 400, with a paragraph under it beside the box its cards are in. Each
+# card is a box of two boxes, and its column's box holds two such.
+drop K1 300 425 600 260 Settles 'dl L1,L2,L3 dr R1,R2,R3 dn N1,N2 dj J1,K1,J2 dc CB,C2 dk K2,PT ' \
+  'a class-less card in the gap of a class-less column settles' 9
+drop K1 300 425 600 295 Trades 'dl L1,L2,L3 dr R1,R2,R3 dn N1,N2 dj J1,K1 dc CB,C2 dk J2,K2,PT ' \
+  'a class-less card on a class-less card trades' 10
+# The paragraph's middle, right of its line of words and its button. While K1 is lifted, its column
+# closes its gap with it (#3028), so the paragraph is 20 pt higher: 560 is its middle either way.
+drop K1 300 425 480 560 Trades 'dl L1,L2,L3 dr R1,R2,R3 dn N1,N2 dj J1,J2 dc CB,C2 dk PT,K2,K1 ' \
+  'a card on a paragraph with a button in it trades rather than settling among its words' 11
 
 exec 3>&-
 quit

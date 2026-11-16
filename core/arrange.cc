@@ -856,6 +856,11 @@ constexpr char16_t kScript[] =
       const things = [...t.children].filter((k) => k !== mode.marks.host && shown(k) &&
         !/absolute|fixed/.test(getComputedStyle(k).position) && !lifted.has(k));
       if (!things.length) return null;
+      // A track lays out blocks or flex items. A paragraph with a link or a button in it is running
+      // text, whose things are its words, though a button reads as a block of its own.
+      if (!/flex/.test(getComputedStyle(t).display) &&
+        ([...t.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.data.trim()) ||
+          things.some((k) => /^inline/.test(getComputedStyle(k).display)))) return null;
       const axis = slotOf(things[0], []).axis;
       if (axis !== 'column' && axis !== 'row') return null;
       const row = axis === 'row', at = row ? x : y;
@@ -871,9 +876,18 @@ constexpr char16_t kScript[] =
     // trades with: it's beside one of |el|'s ancestors, as #side is beside the column Wide is in
     // (#3003); or it holds things like |el|, as a column that wraps its cards in one more box does.
     // A card in another column is neither, however deep either column wraps its things: it holds
-    // its own words.
-    const like = (a, b) => a.localName === b.localName && a.className === b.className;
+    // its own words. A site's header beside the column is a track too, so a rest in its gaps goes
+    // beside its logo or its nav, as the preview shows first.
+    // Two elements are alike by tag and class. A tag says little without a class, so class-less
+    // ones are alike only when their children are, two levels down: a card of two lines isn't a
+    // column of two cards.
+    const shape = (e, n) => e.localName + '.' + e.className +
+      (n ? '(' + [...e.children].map((k) => shape(k, n - 1)).join(',') + ')' : '');
+    const like = (a, b) => a.localName === b.localName && a.className === b.className &&
+      (a.className !== '' || shape(a, 2) === shape(b, 2));
     const trackFor = (t, el) => {
+      // A block like the carried thing is a thing to trade with, whatever it holds.
+      if (like(t, el)) return false;
       const p = t.parentElement;
       return (!!p && p !== el.parentElement && p.contains(el)) || [...t.children].some((c) => like(c, el));
     };
