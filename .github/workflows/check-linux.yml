@@ -771,10 +771,12 @@ jobs:
   # ilo's Flatpak, built, started and signed in to sync in its sandbox (flatpak.yml), beside the
   # shards. Its own trigger is its packaging's paths, which the app's and the checks' changes that
   # break it don't touch, so four of its runs failed unseen (#3059). With the default runs or all
-  # alone, so a run asked for by name doesn't pay its 20 min. With no engine it skips, as a shard does.
+  # alone, so a run asked for by name doesn't pay its 20 min, and on the default X11 leg alone, as
+  # the report is, so a train's sway, KWin and Wayland legs don't build and sign in the same bundle
+  # again: its own steps cover the sessions they need. With no engine it skips, as a shard does.
   flatpak:
     needs: gate
-    if: needs.gate.outputs.check == 'true' && (inputs.runs == '' || inputs.runs == 'all')
+    if: needs.gate.outputs.check == 'true' && (inputs.runs == '' || inputs.runs == 'all') && inputs.session != 'sway' && inputs.session != 'kwin' && inputs.session != 'wayland'
     name: Flatpak
     uses: ./.github/workflows/flatpak.yml
     with:
