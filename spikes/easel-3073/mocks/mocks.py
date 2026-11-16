@@ -76,13 +76,11 @@ def split(m, t, base):
     x, y, w, h = CARD
     gap = 10  # [shell] split-gap
     pw = (w - gap) / 2
-    # The page's picture, dragged into the Board's empty stretch under the first day's notes: where
-    # it lands is marked while it's held (Wait for intent), dashed in the accent, at the size it
-    # takes, and the picture rides the pointer half seen, as a drag from a page does.
+    # The page's picture, dragged into the Board's empty stretch under the first day's notes. Nothing
+    # snaps in the first cut, so there's no slot: the picture rides the pointer half seen, as a drag
+    # from a page does, and lands where it's held.
     dx, dy = 70, 420
-    drag = (f'<div class=a style="left:{dx}px;top:{dy}px;width:220px;height:146px;border-radius:6px;'
-            f'outline:1.5px dashed {m.ACCENT};outline-offset:3px;background:rgba(40,144,84,0.08)"></div>'
-            f'<div class=a style="left:{dx + 14}px;top:{dy + 12}px;width:220px;height:146px;opacity:.7">'
+    drag = (f'<div class=a style="left:{dx + 14}px;top:{dy + 12}px;width:220px;height:146px;opacity:.7">'
             f'{m.photo(t, 0, 0, 220, 146, "temple")}</div>'
             f'<svg class=a style="left:{dx + 124}px;top:{dy + 84}px" width="18" height="24" viewBox="0 0 18 24">'
             f'<path d="M1 1 L1 19 L6 14 L9.5 22 L12.5 20.8 L9.2 13 L16 13 Z" fill="#000" stroke="#fff" stroke-width="1.3"/></svg>')
@@ -112,7 +110,17 @@ def empty(m, t, base):
     m.write(f"board-empty-{t['name']}", m.page(body, f"{base}/sidebar-{t['name']}.png"))
 
 
-STRIP_W = 290  # make.strip's width: five tools, two rules, the colour and the percent
+def first_note(m, t, base):
+    x, y, w, h = CARD
+    caret = f'<span style="display:inline-block;width:1.5px;height:18px;background:{m.ACCENT};vertical-align:-3px;margin-left:1px"></span>'
+    inner = (f'<div class=a style="left:0;top:0;width:{w}px;height:{h}px;{m.ground(t, w, h)}"></div>'
+             + m.note(t, w / 2 - 110, h / 2 - 24, 220, "Ky" + caret, "", editing=True)
+             + m.strip(t, w / 2, 12, chosen="type"))
+    body = row_patch(m, t, "Kyoto trip") + m.card(x, y, w, h, inner)
+    m.write(f"board-first-note-{t['name']}", m.page(body, f"{base}/sidebar-{t['name']}.png"))
+
+
+STRIP_W = None  # make.STRIP_W, read in tools()
 
 
 def tools(m, t, base):
@@ -126,14 +134,11 @@ def tools(m, t, base):
                                   f'box-shadow:{t["popover"]};padding:6px">{inner}</div>')
     top = 180
     bottom = H - top - 44
-    pen = lambda cx: cx - STRIP_W / 2 + 6 + 3 * 34 + 16  # the pencil's centre
+    pen = lambda cx: cx - m.STRIP_W / 2 + 6 + 3 * 34 + 16  # the pencil's centre
     s += lab(48, 36, "At rest, Select chosen") + m.strip(t, 210, bottom)
     s += lab(448, 36, "Draw under the pointer") + m.strip(t, 610, bottom, hovered="pencil")
-    inv_bg, inv_fg = ("#16140f", "#f3f0e8") if t["name"] == "light" else ("#f3f0e8", "#16140f")
-    s += (f'<div class=a style="left:{pen(610)}px;top:{top - 34}px;transform:translateX(-50%);height:26px;padding:0 8px;'
-          f'border-radius:6px;background:{inv_bg};color:{inv_fg};font:500 11px/26px Inter;white-space:nowrap">'
-          f'Draw<span style="opacity:.6;margin-left:8px">P</span></div>')
-    s += lab(848, 36, "Draw chosen, its pen") + m.strip(t, 1010, bottom, chosen="pencil", colour=m.SW["red"])
+    s += m.tooltip(pen(610), top + 22, "Draw", "P")
+    s += lab(848, 36, "Draw chosen opens its pen") + m.strip(t, 1010, bottom, chosen="pencil")
     cols = ["rgb(" + t["ink"] + ")"] + [m.SW[k] for k in ("red", "orange", "yellow", "green", "blue", "plum", "pink", "slate")]
     swatches = "".join(
         f'<div style="width:24px;height:24px;display:grid;place-items:center"><div style="width:16px;height:16px;border-radius:50%;'
@@ -161,12 +166,12 @@ def tools(m, t, base):
                                          f'font:500 13px Inter;color:{m.ink(t, 0.72)}">{i}</div>' for i in items) + "</div>")
     ring = lambda x, y, w, h, r: f'<div class=a style="left:{x}px;top:{y}px;width:{w}px;height:{h}px;border-radius:{r}px;box-shadow:0 0 0 1.5px {m.ACCENT}"></div>'
     more = m.icon("ellipsis", 16, m.ink(t, 0.72))
-    s += lab(300, 300, "A note: fill, size, more") + m.context_bar(t, 300, 324)
+    s += lab(300, 300, "A note: fill, size, more") + m.context_bar(t, 300, 324, chosen=2)
     s += m.note(t, 300, 380, 200, "Bring", "Rail pass · coin purse · umbrella", fill=m.SW["yellow"], selected=True)
     s += lab(620, 300, "A picture") + bar(620, 324, ["Copy", more])
     s += m.photo(t, 620, 380, 200, 136, "bamboo") + ring(615, 375, 210, 146, 9)
     s += lab(900, 300, "A link") + bar(900, 324, ["Open", more])
-    s += m.link(t, 900, 380, 280, "Nishiki Market: hours and stalls", "example.com", m.SW["orange"]) + ring(895, 375, 290, 66, 15)
+    s += m.link(t, 900, 380, 280, "Nishiki Market: hours and stalls", "example.com", None) + ring(895, 375, 290, 66, 15)
     s += lab(48, 580, "A drawing") + bar(48, 604, [
         f'<div style="width:16px;height:16px;border-radius:50%;background:{m.SW["red"]}"></div>',
         f'<div style="width:18px;height:3.5px;border-radius:3px;background:{m.ink(t, 0.75)}"></div>', more])
@@ -175,6 +180,8 @@ def tools(m, t, base):
     s += lab(448, 580, "Several selected") + bar(448, 604, ["Copy", more])
     s += m.note(t, 448, 664, 150, "Day 4", "Fushimi Inari, early.") + m.note(t, 614, 664, 150, "Day 5", "Pack, Nishiki, train.")
     s += ring(442, 658, 328, 84, 15)
+    s += lab(840, 580, "A note with no fill, size L") + m.context_bar(t, 840, 604, chosen=0, size="L")
+    s += m.note(t, 840, 664, 360, "Kyoto in April", "Five days, mostly on foot.", fill="none", size="L", selected=True)
     m.write(f"board-tools-{t['name']}", m.page(s))
 
 
@@ -244,5 +251,5 @@ def library(m, t, base):
 
 
 def build(m, t, base, out):
-    for f in (window, split, empty, tools, library):
+    for f in (window, split, empty, first_note, tools, library):
         f(m, t, base)
