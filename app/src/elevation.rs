@@ -231,7 +231,8 @@ impl Level {
             .pt(px(margin.above))
             .px(px(margin.sides))
             .pb(px(margin.below))
-            .child(panel.shadow(self.shadow()))
+            // Probe (#2988): the margin kept, the shadow not drawn.
+            .child(panel)
             .into_any_element()
     }
 }
