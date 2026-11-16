@@ -1187,19 +1187,32 @@ class OutlineMoves : public ui::HWNDMessageFilter {
   ~OutlineMoves() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
 
   // ui::HWNDMessageFilter:
-  bool FilterMessage(HWND, UINT message, WPARAM, LPARAM l_param, LRESULT*) override {
+  bool FilterMessage(HWND window, UINT message, WPARAM, LPARAM l_param, LRESULT*) override {
     if (message == WM_MOVING) {
       // The window's rectangle in pixels, converted as views converts the window's bounds
       // (DesktopWindowTreeHostWin::GetWindowBoundsInScreen) once it's there: by the display
       // nearest it, where the window isn't yet.
-      const gfx::Rect proposed(*reinterpret_cast<const RECT*>(l_param));
-      moved_.Run(display::win::GetScreenWin()->ScreenToDIPRect(nullptr, proposed).origin());
+      proposed_ = gfx::Rect(*reinterpret_cast<const RECT*>(l_param));
+      moved_.Run(display::win::GetScreenWin()->ScreenToDIPRect(nullptr, *proposed_).origin());
+    } else if (message == WM_EXITSIZEMOVE && proposed_) {
+      // Where the window landed beside the outline's last place, in pixels and in the DIPs each
+      // gives the move watch, which counts a move only where they differ. check.sh reads this line.
+      RECT landed;
+      ::GetWindowRect(window, &landed);
+      display::win::ScreenWin* screen = display::win::GetScreenWin();
+      LOG(ERROR) << "browser: outline move ended at " << proposed_->origin().ToString() << " ("
+                 << screen->ScreenToDIPRect(nullptr, *proposed_).origin().ToString()
+                 << " DIPs), the window at " << gfx::Rect(landed).origin().ToString() << " ("
+                 << screen->ScreenToDIPRect(window, gfx::Rect(landed)).origin().ToString()
+                 << " DIPs)";
     }
     return false;
   }
 
  private:
   base::RepeatingCallback<void(const gfx::Point&)> moved_;
+  // The outline's last place, in pixels.
+  std::optional<gfx::Rect> proposed_;
 };
 
 }  // namespace
