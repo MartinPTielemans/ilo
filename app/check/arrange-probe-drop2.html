@@ -1,0 +1,119 @@
+<!doctype html><meta charset="utf-8"><title>-</title>
+<style>
+body { margin: 0; height: 100vh; font: 12px/14px sans-serif; background: rgb(243, 245, 246) }
+.col { position: absolute; top: 20px; display: flex; flex-direction: column; gap: 20px }
+#dl { left: 20px; width: 240px }
+#dlw { display: flex; flex-direction: column; gap: 20px }
+#dr { left: 280px; width: 240px }
+#dn { left: 540px; width: 120px }
+#dc { left: 20px; top: 400px; width: 240px }
+section { box-sizing: border-box; background: rgb(217, 226, 230) }
+.card { height: 100px; padding: 10px; display: flex; flex-direction: column; justify-content: space-between }
+.card h3, .card p { margin: 0; font-size: 12px; line-height: 14px }
+#dn .card { height: 60px }
+#dlw .card { min-width: 220px }
+#CB { height: 60px; overflow-x: auto; white-space: pre }
+#CB p { margin: 0 }
+#dj { left: 540px; top: 200px; width: 120px }
+#dk { left: 280px; top: 400px; width: 240px }
+#dj > div, #dk > div { display: flex; flex-direction: column; gap: 20px }
+#dj > div > div, #dk > div > div { box-sizing: border-box; height: 50px; padding: 6px; display: flex;
+  flex-direction: column; justify-content: space-between; background: rgb(217, 226, 230) }
+#PT { box-sizing: border-box; height: 60px; margin: 0; padding: 6px; background: rgb(217, 226, 230) }
+#PT button { font: inherit }
+</style>
+<div id="dual">
+<div class="col" id="dl"><div id="dlw">
+<section class="card" aria-label="L1"><h3>Left one</h3><p>Its words</p></section>
+<section class="card" aria-label="L2"><h3>Left two</h3><p>Its words</p></section>
+<section class="card" aria-label="L3"><h3>Left three</h3><p>Its words</p></section>
+</div></div>
+<div class="col" id="dr">
+<section class="card" aria-label="R1"><h3>Right one</h3><p>Its words</p></section>
+<section class="card" aria-label="R2"><h3>Right two</h3><p>Its words</p></section>
+<section class="card" aria-label="R3"><h3>Right three</h3><p>Its words</p></section>
+</div>
+<div class="col" id="dn">
+<section class="card" aria-label="N1"><h3>Narrow one</h3></section>
+<section class="card" aria-label="N2"><h3>Narrow two</h3></section>
+</div>
+<div class="col" id="dc">
+<section id="CB" aria-label="CB"><p>const line = "a line of code long enough to run out of its box sideways, so it scrolls";</p></section>
+<section class="card" aria-label="C2"><h3>Code two</h3><p>Its words</p></section>
+</div>
+<div class="col" id="dj"><div>
+<div aria-label="J1"><div>Jay one</div><div>Its words</div></div>
+<div aria-label="J2"><div>Jay two</div><div>Its words</div></div>
+</div></div>
+<div class="col" id="dk"><div>
+<div aria-label="K1"><div>Key one</div><div>Its words</div></div>
+<div aria-label="K2"><div>Key two</div><div>Its words</div></div>
+</div>
+<p id="PT" aria-label="PT">Words, <button>Go</button> and <a href="#">a link</a></p>
+</div>
+</div>
+<script>
+// Arrange's drop (#3010's review), on arrange-drop.sh's fixture: each of its drops, pressed and
+// rested where it carries them, by each runtime's own ops in this page's world. The page says the
+// carry's and the rest's change, and the columns once it's let go.
+const cols = ["dl", "dr", "dn", "dj", "dc", "dk"].map((id) => document.getElementById(id));
+// Where the things of each column start, from the top: the code and class-less columns are under
+// the left and right ones, and the narrow class-less one under the narrow one.
+const band = { dl: [0, 380], dr: [0, 380], dn: [0, 180], dj: [180, 380], dc: [380, 1e4], dk: [380, 1e4] };
+function column(col) {
+  const c = col.getBoundingClientRect(), [top, bottom] = band[col.id];
+  return [...document.querySelectorAll("[aria-label]")].filter((t) => {
+    const r = t.getBoundingClientRect();
+    return r.left + r.width / 2 > c.left && r.left + r.width / 2 < c.right && r.top >= top && r.top < bottom;
+  }).sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top)
+    .map((t) => t.getAttribute("aria-label")).join(",");
+}
+const frames = (n) => new Promise((done) => { const f = () => (--n <= 0 ? done() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+const CH = ['none', 'settles', 'trades', 'floats', 'refused'];
+const kind = (st) => (st && CH[st.change]) || JSON.stringify(st).slice(0, 40);
+const drops = [["L1", "140", "70", "400", "190", "Trades"], ["R2", "400", "190", "140", "190", "Trades"], ["L1", "140", "70", "400", "130", "Settles"], ["R2", "400", "190", "140", "130", "Settles"], ["L1", "140", "70", "600", "90", "Refused"], ["CB", "140", "445", "400", "130", "Settles"], ["CB", "140", "445", "400", "190", "Trades"], ["CB", "140", "445", "600", "90", "Refused"], ["K1", "300", "425", "600", "260", "Settles"], ["K1", "300", "425", "600", "295", "Trades"], ["K1", "300", "425", "400", "575", "Trades"]];
+const out = [];
+async function run(k) {
+  const src = await (await fetch('arrange-probe-drop2-' + k + '.js')).text();
+  delete globalThis.__iloArrange;
+  const R = (0, eval)(src);
+  const call = (op, a) => R(op, a ? JSON.stringify(a) : '');
+  let i = 0;
+  for (const [thing, px, py, rx, ry, want] of drops) {
+    i++;
+    let line = '';
+    try {
+      call('load', { changes: [] });
+      call('on', { look: {} });
+      await frames(2);
+      call('down', { x: +px, y: +py });
+      call('move', { x: +px, y: +py + 6 });
+      await frames(1);
+      const moved = call('move', { x: +rx, y: +ry });
+      await frames(1);
+      const rested = call('rest', {});
+      await frames(1);
+      call('up', { x: +rx, y: +ry });
+      await frames(3);
+      line = thing + ' want ' + want.toLowerCase() + ' carry ' + kind(moved) + ' rest ' + kind(rested) + ' ; ' +
+        cols.map((col) => col.id + ' ' + column(col)).join(' ');
+    } catch (e) { line = 'threw ' + String(e).slice(0, 100); }
+    try { call('off'); call('unload'); } catch {}
+    await frames(3);
+    out.push(`r ${k} D${i} ${line}`);
+  }
+}
+(async () => {
+  document.title = 'drop start';
+  await frames(5);
+  try { for (const k of ['old', 'new']) await run(k); } catch (e) { out.push('r drop threw ' + String(e).slice(0, 120)); }
+  let chunk = [];
+  const send = async () => { document.title = chunk.join(' | '); chunk = []; await new Promise((d) => setTimeout(d, 200)); };
+  for (const line of out) {
+    if (chunk.join(' | ').length + line.length > 900) await send();
+    chunk.push(line);
+  }
+  if (chunk.length) await send();
+  document.title = 'drop done ' + out.length;
+})();
+</script>
