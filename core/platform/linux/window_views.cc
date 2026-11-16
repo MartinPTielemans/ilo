@@ -990,6 +990,10 @@ class WindowViews : public views::WidgetObserver,
   }
 
   void OnWidgetDestroying(views::Widget*) override {
+    // The views outlive the widget (AllWindowViews), so what they posted for it goes with it: on
+    // X11 a window closing is activated and focused as it goes, and the focus it posted ran on its
+    // freed focus manager (#3088).
+    weak_factory_.InvalidateWeakPtrs();
     ui_text_input_.SetKeyboard(false);
     x11_observation_.Reset();
     children_events_ = x11::ScopedEventSelector();
