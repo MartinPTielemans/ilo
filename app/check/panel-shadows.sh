@@ -10,7 +10,10 @@
 # leaves it, with Escape, a click further out, a click in its margin over a link, another app,
 # Win+D and minimizing, and the click in its margin is one outside it: the bar closes and the link
 # opens, as a click further out reaches the page. Captured as panel-shadows-<page>-<appearance>-
-# <scale>-<panel>.png, and panel-shadows-out-<way>.png after each way out.
+# <scale>-<panel>.png, and panel-shadows-out-<way>.png after each way out. Past the browser window's
+# frame, over another app's window under it, each panel's window is clipped: panel-shadows-edge.txt
+# says how far each reaches past each edge, and that a press there reaches the other app and not ilo,
+# and that the screen there is the same with the panel open as closed.
 # Real input needs CI's hosted desktop, and the display's scale is the runner's own to change.
 
 if ! windows; then
@@ -154,10 +157,8 @@ page_hears() {
   fail "the page didn't hear a click $1"
 }
 offers=0
-# Opens the panel $1 over the page $2 as a user does, captures it as $3 and checks its margin and
-# shadow, closes it, and checks no shadow is left.
-panel() {
-  rest_pointer
+# Opens the panel $1 over the page $2 as a user does, having captured the page as $3.before.png.
+open_panel() {
   case "$1" in
     'command bar')
       before="$3.before.png"
@@ -204,8 +205,9 @@ panel() {
       expect '^browser: offer shown$' "a login on the $2 login page brought no offer" "$opened"
       ;;
   esac
-  case "$2" in white) darken=10 ;; *) darken=2 ;; esac
-  shadow_shown "$1" "$3.png" "$darken"
+}
+# Closes the panel $1, opened by open_panel, as a user does.
+close_panel() {
   case "$1" in
     'command bar' | 'find bar')
       send key escape
@@ -223,6 +225,15 @@ panel() {
       show_tab $m
       ;;
   esac
+}
+# Opens the panel $1 over the page $2, captures it as $3 and checks its margin and shadow, closes
+# it, and checks no shadow is left.
+panel() {
+  rest_pointer
+  open_panel "$@"
+  case "$2" in white) darken=10 ;; *) darken=2 ;; esac
+  shadow_shown "$1" "$3.png" "$darken"
+  close_panel "$1"
   shadow_gone "$1" "$3.gone.png" "closing it"
   [ "$1" != offer ] || go_to "$2" page ready
 }
@@ -397,6 +408,189 @@ send minimize
 page_hears "once the window was back from minimized"
 shadow_gone 'command bar' "$out/panel-shadows-out-minimize.png" "minimizing"
 
+# Past the browser window's edge. HTTRANSPARENT hands a press on a panel's margin only to this
+# thread's windows under it, so past the browser window's frame, over another app's, the margin
+# would take the press: the host clips each panel's window to the frame. With another app's window
+# under ilo's, reaching past its frame, each panel says how far its window reaches past each edge;
+# past the side it reaches furthest, a press reaches the other app and not ilo, and the screen
+# there is as it is once the panel has closed, with no shadow past the edge.
+send place 300 150 1100 700
+was_bottom=$page_bottom
+for _ in $(seq 20); do
+  page_points
+  [ "$page_bottom" != "$was_bottom" ] && break
+  sleep 0.2
+done
+[ "$page_bottom" != "$was_bottom" ] || fail "the window placed at 1100 by 700 kept its page's layout"
+under_log="$out/panel-shadows-under.log"
+python3 -I -u check/under-window.py open "$(cat "/proc/$pid/winpid")" > "$under_log" 2>&1 &
+under=$!
+for _ in $(seq 100); do
+  grep -q '^under ' "$under_log" || ! kill -0 "$under" 2>/dev/null && break
+  sleep 0.1
+done
+set -- $(grep -m1 '^under ' "$under_log" | sed 's/^under [^,]*, frame //')
+[ $# = 4 ] || fail "another app's window didn't open under ilo's: $(cat "$under_log")"
+frame_width=$(($3 - $1)) frame_height=$(($4 - $2))
+edges="$out/panel-shadows-edge.txt"
+: > "$edges"
+# The panel $1, open since the step $opened: how far its window reaches past each edge of the frame,
+# and past the side it reaches furthest, a press, which the other app hears and ilo doesn't, unless
+# $3 says why not, with the screen there read as $2.shown.raw. False where it reaches past none.
+edge() {
+  local x y w h left right above below most side box
+  line=
+  for _ in $(seq 20); do
+    line=$(panel_line "$1")
+    [ -n "$line" ] && break
+    sleep 0.1
+  done
+  [ -n "$line" ] || fail "the $1 logged no panel line since step $opened"
+  set -- "$1" "$2" "${3:-}" ${line##* in its window }
+  x=$4 y=$5 w=$6 h=$7
+  left=$((-x)) right=$((x + w - frame_width)) above=$((-y)) below=$((y + h - frame_height))
+  [ $left -gt 0 ] || left=0
+  [ $right -gt 0 ] || right=0
+  [ $above -gt 0 ] || above=0
+  [ $below -gt 0 ] || below=0
+  echo "the $1's window, at $x $y, $w by $h, in a frame $frame_width by $frame_height, reaches past its left by $left, its right by $right, its top by $above, its bottom by $below" >> "$edges"
+  most=$left side=left
+  [ $right -le $most ] || { most=$right side=right; }
+  [ $above -le $most ] || { most=$above side=top; }
+  [ $below -le $most ] || { most=$below side=bottom; }
+  [ $most -gt 0 ] || return 1
+  # The part of its window past that side, and a point in its middle, in pixels from the frame.
+  case $side in
+    left) box="$x $y 0 $((y + h))" press="$((x / 2)) $((y + h / 2))" ;;
+    right) box="$frame_width $y $((x + w)) $((y + h))" press="$(((frame_width + x + w) / 2)) $((y + h / 2))" ;;
+    top) box="$x $y $((x + w)) 0" press="$((x + w / 2)) $((y / 2))" ;;
+    bottom) box="$x $frame_height $((x + w)) $((y + h))" press="$((x + w / 2)) $(((frame_height + y + h) / 2))" ;;
+  esac
+  # Beside the frame: along that side, it's kept to the frame's length.
+  set -- "$1" "$2" "$3" $box
+  case $side in
+    left | right)
+      [ $5 -ge 0 ] || set -- "$1" "$2" "$3" $4 0 $6 $7
+      [ $7 -le $frame_height ] || set -- "$1" "$2" "$3" $4 $5 $6 $frame_height
+      ;;
+    *)
+      [ $4 -ge 0 ] || set -- "$1" "$2" "$3" 0 $5 $6 $7
+      [ $6 -le $frame_width ] || set -- "$1" "$2" "$3" $4 $5 $frame_width $7
+      ;;
+  esac
+  strip_box="$4 $5 $6 $7"
+  local name=$1 file=$2 nopress=$3
+  set -- "$name" "$file"
+  python3 -I check/under-window.py strip "$(cat "/proc/$pid/winpid")" $strip_box "$2.shown.raw" \
+    >> "$edges" || fail "couldn't read the screen past the $1's frame: $(tail -1 "$edges")"
+  if [ -n "$nopress" ]; then
+    echo "no press past the $1's frame: $nopress" >> "$edges"
+    return 0
+  fi
+  local pressed
+  pressed=$(grep -c '^pressed ' "$under_log" || true)
+  send click $press
+  pressed_at=$step
+  for _ in $(seq 50); do
+    [ "$(grep -c '^pressed ' "$under_log" || true)" -gt "$pressed" ] && break
+    sleep 0.1
+  done
+  [ "$(grep -c '^pressed ' "$under_log" || true)" -gt "$pressed" ] ||
+    fail "a press past the frame's $side edge at $press, in the $1's margin over the other app's window, didn't reach that app: ilo heard $(logged '^browser: drive: real press in' && sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: drive: real press in' || echo nothing)"
+  ! logged '^browser: drive: real press in' "$pressed_at" ||
+    fail "ilo heard the press past the frame's $side edge at $press, which the other app also heard: $(sed -n "/^browser: drive $pressed_at: /,\$p" "$log" | grep -m1 '^browser: drive: real press in')"
+  echo "a press at $press, past the frame's $side edge in the $1's margin, reached the other app, $(tail -1 "$under_log"), and not ilo" >> "$edges"
+}
+# The screen past the edge, read as $2.shown.raw while the panel $1 showed, is as it is now it's
+# closed: its shadow didn't draw past the frame.
+edge_gone() {
+  python3 -I check/under-window.py strip "$(cat "/proc/$pid/winpid")" $strip_box "$2.gone.raw" \
+    "$2.shown.raw" >> "$edges" ||
+    fail "the $1's shadow drew past the browser window's frame, over the other app's window: $(tail -1 "$edges")"
+}
+go_to white page ready
+for name in 'command bar' 'find bar' 'tab switcher' offer; do
+  file="$out/panel-shadows-edge-$(echo "$name" | tr ' ' -)"
+  rest_pointer
+  open_panel "$name" white "$file"
+  why=
+  [ "$name" != 'tab switcher' ] || why="the driver lets go of the Ctrl that keeps the tab switcher open before a click"
+  if ! edge "$name" "$file" "$why"; then
+    close_panel "$name"
+    [ "$name" != offer ] || go_to white page ready
+    continue
+  fi
+  # The other app took the foreground with any press: ilo's window back in front, the panel closed
+  # if it's still open, as a user would.
+  case "$name" in
+    'command bar')
+      expect '^browser: command bar hidden$' "a press on another app's window past the frame didn't close the command bar, as a click further out does" "$pressed_at"
+      page_hears "once the other app had the press"
+      ;;
+    'find bar')
+      page_hears "once the other app had the press"
+      if ! logged '^browser: find bar hidden$' "$pressed_at"; then
+        post key f cmd
+        send key escape
+        expect '^browser: find bar hidden$' "Escape didn't close the find bar" "$pressed_at"
+      fi
+      ;;
+    'tab switcher')
+      close_panel 'tab switcher'
+      ;;
+    offer)
+      page_hears "once the other app had the press"
+      logged '^browser: offer hidden$' "$pressed_at" || close_panel offer
+      ;;
+  esac
+  edge_gone "$name" "$file"
+  [ "$name" != offer ] || go_to white page ready
+done
+# The command bar over the URL field, a click on which opens it there, at its field's left.
+rest_pointer
+opened=$((step + 1))
+send click 90 50
+expect '^browser: command bar opens over the URL field$' "a click on the URL field at 90,50 didn't open the command bar over the field"
+expect '^browser: command bar shown$' "a click on the URL field didn't open the command bar"
+file="$out/panel-shadows-edge-field-bar"
+if edge 'command bar' "$file"; then
+  expect '^browser: command bar hidden$' "a press on another app's window past the frame didn't close the command bar over the URL field" "$pressed_at"
+  page_hears "once the other app had the press"
+  edge_gone 'command bar' "$file"
+else
+  send key escape
+  expect '^browser: command bar hidden$' "Escape didn't close the command bar over the URL field"
+fi
+# The command bar in the middle of a window narrower than it and its margin.
+send place 300 150 760 520
+for _ in $(seq 20); do
+  page_points
+  [ "$page_bottom" != "$was_bottom" ] && [ "$page_bottom" -lt 520 ] && break
+  sleep 0.2
+done
+taskkill //F //PID "$(cat "/proc/$under/winpid")" > /dev/null 2>&1 || true
+python3 -I -u check/under-window.py open "$(cat "/proc/$pid/winpid")" > "$under_log" 2>&1 &
+under=$!
+for _ in $(seq 100); do
+  grep -q '^under ' "$under_log" || ! kill -0 "$under" 2>/dev/null && break
+  sleep 0.1
+done
+set -- $(grep -m1 '^under ' "$under_log" | sed 's/^under [^,]*, frame //')
+[ $# = 4 ] || fail "another app's window didn't open under ilo's narrower window: $(cat "$under_log")"
+frame_width=$(($3 - $1)) frame_height=$(($4 - $2))
+rest_pointer
+file="$out/panel-shadows-edge-narrow-command-bar"
+open_panel 'command bar' white "$file"
+if edge 'command bar' "$file"; then
+  expect '^browser: command bar hidden$' "a press on another app's window past the narrow frame didn't close the command bar" "$pressed_at"
+  page_hears "once the other app had the press"
+  edge_gone 'command bar' "$file"
+else
+  close_panel 'command bar'
+fi
+taskkill //F //PID "$(cat "/proc/$under/winpid")" > /dev/null 2>&1 || true
+cat "$edges"
+
 exec 3>&-
 quit
-echo "ok: panel-shadows. The command bar, find bar, tab switcher and offer, in $rounds rounds over a white and a dark page, in Light and Dark, at ${scales// /% and }%: the margin never showed and the shadow did, and none was left once each closed. The command bar closed with Escape, a click further out, a click in its margin, which opened the link under it, another app, Win+D and minimizing, its shadow gone each time."
+echo "ok: panel-shadows. The command bar, find bar, tab switcher and offer, in $rounds rounds over a white and a dark page, in Light and Dark, at ${scales// /% and }%: the margin never showed and the shadow did, and none was left once each closed. The command bar closed with Escape, a click further out, a click in its margin, which opened the link under it, another app, Win+D and minimizing, its shadow gone each time. Past the browser window's frame, a press in a panel's margin reached the other app's window under it and not ilo, and no shadow drew there."

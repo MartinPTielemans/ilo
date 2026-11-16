@@ -377,6 +377,33 @@ void PanelSize(const Floating& floating, double* width, double* height) {
   *height -= floating.margin_above + floating.margin_below;
 }
 
+// Clips |floating|'s window to its browser window's frame where its panel has a margin round it,
+// so the shadow there ends at the browser window's edge, as a child window's would. HTTRANSPARENT
+// hands a press on the margin only to this thread's windows under it: past that edge, over another
+// app's window, the margin took the press, and the app never heard it.
+void ClipToOwner(const Floating& floating) {
+  HWND root = GetWindow(floating.hwnd, GW_OWNER);
+  if (!HasMargin(floating) || !root) {
+    return;
+  }
+  RECT frame{}, window{}, inside{};
+  if (FAILED(DwmGetWindowAttribute(root, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof frame))) {
+    GetWindowRect(root, &frame);
+  }
+  GetWindowRect(floating.hwnd, &window);
+  IntersectRect(&inside, &frame, &window);
+  const bool whole = EqualRect(&inside, &window);
+  OffsetRect(&inside, -window.left, -window.top);
+  RECT had{};
+  const int region = GetWindowRgnBox(floating.hwnd, &had);
+  if (whole ? region == ERROR : region != ERROR && EqualRect(&had, &inside)) {
+    return;
+  }
+  // The window owns the region from here.
+  SetWindowRgn(floating.hwnd, whole ? nullptr : CreateRectRgnIndirect(&inside),
+               IsWindowVisible(floating.hwnd));
+}
+
 LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
                               UINT_PTR, DWORD_PTR data) {
   auto* floating = reinterpret_cast<Floating*>(data);
@@ -428,6 +455,13 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
         if (!PtInRect(&panel, at)) {
           return HTTRANSPARENT;
         }
+      }
+      break;
+    case WM_WINDOWPOSCHANGED:
+      // Moved or resized, by the host or by the UI as the panel grows: it keeps to its browser
+      // window's frame. SetWindowRgn's own WM_WINDOWPOSCHANGED neither moves nor sizes it.
+      if ((~reinterpret_cast<const WINDOWPOS*>(lparam)->flags) & (SWP_NOMOVE | SWP_NOSIZE)) {
+        ClipToOwner(*floating);
       }
       break;
     case WM_MOUSEACTIVATE:
@@ -713,6 +747,7 @@ void Show(Floating& floating, void* ui_view, double left, double top, double wid
                                 (take ? kKeyboard : 0) | (IsIconic(root) ? kOverMinimized : 0));
   PlaceAndShow(floating.hwnd, origin.x, origin.y, static_cast<int>(std::lround(width * scale)),
                static_cast<int>(std::lround(height * scale)), actions);
+  ClipToOwner(floating);
   // Over a minimized window it would stand alone where the window was, so the UI hears it's gone.
   PutAway(floating.hwnd, root, actions);
   if (HasMargin(floating) && IsWindowVisible(floating.hwnd)) {
@@ -1966,6 +2001,12 @@ void Moved(HWND root) {
     }
   }
   PlaceCorners(root);
+  // A frame that changed size leaves a panel that didn't move where it was, past the new edge.
+  for (auto& [hwnd, floating] : FloatingByHwnd()) {
+    if (IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == root) {
+      ClipToOwner(*floating);
+    }
+  }
 }
 
 // The window over |root| that takes the keyboard back as |root| takes it: the dialog, which is
