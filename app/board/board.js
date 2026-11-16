@@ -112,13 +112,13 @@ async function save() {
   }
   const bytes = new TextEncoder().encode(JSON.stringify({ version: 1, camera, cards }));
   if (bytes.byteLength > MAX_BOARD) {
-    unsaved("This Board is too large to save: its notes and ink are over 4 MB. What's here stays on screen, but it isn't saved until it's smaller.");
+    unsaved("This Board is too large to save. What's here stays on screen: remove some notes or ink, and it saves again.");
     return;
   }
   saving = write("board", bytes);
   const done = await saving;
   saving = null;
-  unsaved(done === false ? "This Board couldn't be saved. What's here stays on screen, but it isn't saved." : null);
+  unsaved(done === false ? "This Board couldn't be saved. What's here stays on screen, and it tries again at your next change." : null);
   if (again) {
     again = false;
     return save();
@@ -264,6 +264,7 @@ function moveCamera(moved = true) {
   settle = setTimeout(() => {
     world.style.willChange = "";
     if (moved) changed();
+    clearUnsaved();
   }, 200);
 }
 function zoomAt(zoom, cx = innerWidth / 2, cy = innerHeight / 2) {
@@ -508,6 +509,7 @@ view.addEventListener("pointerdown", (e) => {
 
 view.addEventListener("pointermove", (e) => {
   if (!drag) return;
+  clearUnsaved(true);
   const dx = (e.clientX - (drag.sx ?? 0)) / camera.zoom, dy = (e.clientY - (drag.sy ?? 0)) / camera.zoom;
   if (drag.kind === "pan") {
     camera.x = drag.cx + e.clientX - drag.sx;
@@ -587,6 +589,7 @@ function renderSelection() {
     else el?.setAttribute("stroke-opacity", selection.has(card.id) ? "0.6" : "1");
   }
   showStyle();
+  clearUnsaved();
 }
 
 // --- Notes ---
@@ -609,6 +612,7 @@ function typed(e) {
   if (editing) {
     editing.card.text = e.target.innerText;
     changed();
+    clearUnsaved(true);
   }
 }
 function stopEditing() {
@@ -767,10 +771,41 @@ view.addEventListener("drop", (e) => {
 
 // A save that didn't go through stays said over the Board until one does: what's on screen is
 // kept, and nothing reads as saved that isn't.
+// A save the core refused, said until one goes through: a note in the page's top corner, as a
+// page's question hangs under the URL field beside it, never over the cards being worked on and
+// never taking the keyboard.
 function unsaved(text) {
-  const bar = $("#unsaved");
-  bar.textContent = text ?? "";
-  bar.hidden = !text;
+  const note = $("#unsaved");
+  note.textContent = text ?? "";
+  note.hidden = !text;
+  clearUnsaved();
+}
+// The top corner with fewer cards under the note, and never one with a card being worked on.
+// While a card moves or grows (|moving|), only that is looked at, and the note moves away from it.
+function clearUnsaved(moving = false) {
+  const note = $("#unsaved");
+  if (note.hidden) return;
+  const worked = new Set([...selection, editing?.card.id]);
+  const under = (aside) => {
+    note.classList.toggle("aside", aside);
+    const at = note.getBoundingClientRect();
+    let count = 0;
+    for (const cardId of moving ? worked : byId.keys()) {
+      const r = byId.get(cardId)?.getBoundingClientRect();
+      if (r && r.left < at.right && r.right > at.left && r.top < at.bottom && r.bottom > at.top) {
+        if (worked.has(cardId)) return Infinity;
+        count++;
+      }
+    }
+    return count;
+  };
+  const aside = note.classList.contains("aside");
+  if (moving) {
+    if (under(aside) === Infinity) note.classList.toggle("aside", !aside);
+    return;
+  }
+  const left = under(false), right = under(true);
+  note.classList.toggle("aside", right < left);
 }
 
 // |text| in place of the Board, or for a moment over it.

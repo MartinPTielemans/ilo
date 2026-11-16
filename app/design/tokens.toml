@@ -52,6 +52,13 @@ note-s = 13.0
 note-m = 15.0
 # The size a title takes: a note with no fill, at L.
 note-l = 28.0
+# A refused save's note: a page question's card (shell.permission), in the page's top corner, at
+# the tools' inset, as wide as the URL field.
+notice-inset = 16.0
+notice-width = 260.0
+notice-padding = 12.0
+notice-text = 13.0
+notice-line = 18.0
 
 [boost-editor]
 # A Boost's editor without code (#695, ours as the owner approved it on 2026-11-10): the theme
