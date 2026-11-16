@@ -1006,18 +1006,11 @@ step=$((step + 1))
 passed=$step
 echo "move 3 306" >&3
 send move 400 300
-if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-  # Under X11 the shell hears neither the pointer over the page nor its leaving for the page, so
-  # the pass brings the sidebar out once its wait is up, which may be before the pointer is back at
-  # the edge: the line is looked for from the pass on. Under Wayland the page is a surface of its
-  # own, whose entering is the leave of the shell's.
-  echo "skip: the pointer passing the window's edge, whose leaving for the page X11's shell doesn't hear."
-  reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out" "$passed"
-else
-  reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out"
-  [ "$(sed -n "/^browser: drive $passed: /,\$p" "$log" | grep -c '^browser: reveal shown$')" = 1 ] ||
-    fail "the pointer passing the window's edge brought the sidebar out"
-fi
+# Over the page the shell hears no moves on Linux and Windows, as the page is Chromium's window, but
+# it hears the pointer leave its own for it, which ends the wait (Shell::leave_listener).
+reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out"
+[ "$(sed -n "/^browser: drive $passed: /,\$p" "$log" | grep -c '^browser: reveal shown$')" = 1 ] ||
+  fail "the pointer passing the window's edge brought the sidebar out"
 check_reveal "with the sidebar out" shown
 check_layout "with the sidebar out" inset
 check_buttons "with the sidebar out" hidden
