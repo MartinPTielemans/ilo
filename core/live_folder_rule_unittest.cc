@@ -240,6 +240,25 @@ TEST_F(LiveFolderFetches, RefreshAsksInsideTheFloor) {
   EXPECT_EQ(answered_[2].second.answers[0]->items[0].number, 8u);
 }
 
+TEST_F(LiveFolderFetches, SignedOutIsntKeptSoSigningInShowsAtOnce) {
+  Ask(work_, 1);
+  fetches_.Ended(work_, {Answer{.signed_in = false}, Answer{.signed_in = false}});
+  ASSERT_EQ(answered_.size(), 1u);
+  EXPECT_FALSE(answered_[0].second.answers[0]->signed_in);
+  // The user signs in, and the page's commit asks inside the floor: the site is asked.
+  clock_.FastForwardBy(base::Seconds(10));
+  Ask(work_, 2);
+  EXPECT_EQ(asked_, 2);
+  Ends(work_, 7);
+  // Signed in, it's kept: the next ask inside the floor asks nothing.
+  clock_.FastForwardBy(base::Seconds(10));
+  Ask(work_, 3);
+  clock_.RunUntilIdle();
+  EXPECT_EQ(asked_, 2);
+  ASSERT_EQ(answered_.size(), 3u);
+  EXPECT_EQ(answered_[2].second.answers[0]->items[0].number, 7u);
+}
+
 TEST_F(LiveFolderFetches, AFailureIsKeptForTheFloorToo) {
   Ask(work_, 1);
   fetches_.Ended(work_, {std::nullopt, std::nullopt});
