@@ -545,6 +545,41 @@ typedef struct bc_agent_response {
   const char* error;
 } bc_agent_response;
 
+// What fills a Live Folder (bc_folder_live_create, #2979): 0 for a plain folder.
+// The pull requests waiting on the review of the user signed in to GitHub in the Space's profile,
+// and their own open ones.
+#define BC_LIVE_PULL_REQUESTS 1
+
+// How a Live Folder's fetch ended (folder_live_answered).
+// With its rows, perhaps none.
+#define BC_LIVE_ANSWERED 0
+// Nobody is signed in to the site in the Space's profile.
+#define BC_LIVE_SIGNED_OUT 1
+// Offline, a redirect off the site, an answer that wasn't the site's or was too big, or one past
+// the 30 s a request is given. The rows the app has stay.
+#define BC_LIVE_FAILED 2
+
+// The list a Live Folder's row is in.
+#define BC_LIVE_REVIEW_REQUESTS 0
+#define BC_LIVE_CREATED 1
+
+// A pull request's state. The lists are of open ones, so one merged or closed leaves them.
+#define BC_LIVE_OPEN 0
+#define BC_LIVE_DRAFT 1
+
+// A row of a Live Folder's answer. The strings are UTF-8 and last only for the call.
+typedef struct bc_live_item {
+  // A BC_LIVE_REVIEW_REQUESTS or BC_LIVE_CREATED.
+  int list;
+  // Its repository, as "owner/name", whose address the app makes with |number|.
+  const char* repo;
+  uint32_t number;
+  // Its title, plain text: no markup, which the core takes out.
+  const char* title;
+  // A BC_LIVE_OPEN or BC_LIVE_DRAFT.
+  int state;
+} bc_live_item;
+
 // Why an agent's session with a tab ended (agent_session_ended).
 // Its client disconnected (bc_agent_disconnected).
 #define BC_AGENT_SESSION_DISCONNECTED 0
@@ -1412,6 +1447,13 @@ typedef struct bc_host {
   // that one's. Never on Windows, where the app opens and closes the hole without waiting for it,
   // nor on the Mac, where the page is in the app's view, over what it draws.
   void (*tab_shown_in)(void* context, bc_id tab, bc_rect frame);
+  // The answer to the Live Folder's bc_folder_live_fetch: a BC_LIVE_ answer, with |items|, review
+  // requests first, only with BC_LIVE_ANSWERED. |answered| is when the site gave it, in
+  // milliseconds since the Unix epoch: up to two minutes ago for an answer the core kept. Once an
+  // ask, never for one the core refused. The items last only for the call, and the core logs none
+  // of them. The user's alone: agents get none.
+  void (*folder_live_answered)(void* context, bc_id folder, int answer, int64_t answered,
+                               const bc_live_item* items, size_t count);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2035,6 +2077,32 @@ BC_EXPORT void bc_folder_move(bc_id folder, bc_id to, size_t index);
 // Deletes the folder, leaving what was in it where it was, in the folder that held it. Then
 // space_changed.
 BC_EXPORT void bc_folder_delete(bc_id folder);
+
+// Makes an open Live Folder named |name| at the bottom of the Space's pinned tabs, filled from
+// |source|, a BC_LIVE_ source, once the app asks (bc_folder_live_fetch). Returns it, or 0, making
+// none, for an agent's Space, a private window's, a source the core doesn't know, or one the Space
+// has a folder of already. Kept across a quit, on this device: the folder syncs as a plain one.
+// Then space_changed.
+BC_EXPORT bc_id bc_folder_live_create(bc_id space, int source, const char* name);
+
+// What fills the folder, a BC_LIVE_ source, or 0 for a plain folder or none. A duplicate is plain,
+// and so is a Live Folder moved to a Space bc_folder_live_create would make none in: an agent's,
+// or one that has a Live Folder of its source already.
+BC_EXPORT int bc_folder_live(bc_id folder);
+
+// Makes the Live Folder a plain one, the tabs opened from it staying in it. A fetch under way
+// answers nothing. Then space_changed.
+BC_EXPORT void bc_folder_live_end(bc_id folder);
+
+// Asks for the Live Folder's lists on its Space's profile's own session: the site's cookies, which
+// neither the app nor an agent sees. The site and what's asked of it are the core's; the app gives
+// neither. Answers with folder_live_answered, once, never inside this call. Does nothing for a
+// plain folder, one in an agent's Space or a private window, or one waiting on an answer. The core
+// never fetches on its own, and never again on a failure: when to ask is the app's. How often is
+// the core's: it asks the site at most once each two minutes for a profile, however many ask, and
+// inside that answers what the site last gave. A |refresh|, the user's Refresh alone, asks inside
+// the two minutes too, but joins a fetch under way (#3074).
+BC_EXPORT void bc_folder_live_fetch(bc_id folder, bool refresh);
 
 // Where the favorites are kept, as the user chose: who shows the same ones above their own tabs. A
 // favorite is a site, and each profile that shows it has a tab of its own for it, in no Space,

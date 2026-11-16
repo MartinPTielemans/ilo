@@ -202,6 +202,52 @@ TEST_F(SpaceTest, OnlyAFolderMovesAndNeverIntoAWindowsOwnSpace) {
   Space::Delete(little->id());
 }
 
+// A Live Folder is the user's: a Space has one of each source, an agent's Space and a window's own
+// none, and one moved to a Space with its own comes plain (#2979).
+TEST_F(SpaceTest, ASpaceHasOneLiveFolderOfASourceAndOnlyTheUsersHaveAny) {
+  Fill();
+  work_->SetFolderLive(docs_, BC_LIVE_PULL_REQUESTS);
+  EXPECT_EQ(work_->FolderLive(docs_), BC_LIVE_PULL_REQUESTS);
+  EXPECT_EQ(work_->LiveFolderOf(BC_LIVE_PULL_REQUESTS), docs_);
+  // A second of the source, and a source the core doesn't know, stay plain.
+  work_->SetFolderLive(notes_, BC_LIVE_PULL_REQUESTS);
+  work_->SetFolderLive(notes_, 7);
+  EXPECT_EQ(work_->FolderLive(notes_), 0);
+
+  Space* agent = Space::Create("Claude Code", 0, Space::Agent{.id = "claude", .name = "Claude"});
+  const bc_id agents = agent->AddFolder("Pull Requests", 0, 0);
+  agent->SetFolderLive(agents, BC_LIVE_PULL_REQUESTS);
+  EXPECT_EQ(agent->FolderLive(agents), 0);
+  Space::Delete(agent->id());
+
+  // Home has one of its own, so Docs comes plain, its tabs with it.
+  const bc_id homes = home_->AddFolder("Pull Requests", 0, 1);
+  home_->SetFolderLive(homes, BC_LIVE_PULL_REQUESTS);
+  home_->TakeFolder(*work_, docs_, {});
+  EXPECT_EQ(home_->FolderLive(docs_), 0);
+  EXPECT_EQ(home_->LiveFolderOf(BC_LIVE_PULL_REQUESTS), homes);
+  EXPECT_EQ(work_->LiveFolderOf(BC_LIVE_PULL_REQUESTS), 0u);
+
+  // A Live Folder taken into an agent's Space comes plain there, as one made there would be.
+  Space* agents_space = Space::Create("Codex", 0, Space::Agent{.id = "codex", .name = "Codex"});
+  agents_space->TakeFolder(*home_, homes, {});
+  EXPECT_TRUE(agents_space->IsFolder(homes));
+  EXPECT_EQ(agents_space->FolderLive(homes), 0);
+  EXPECT_FALSE(agents_space->TakesLiveFolder(BC_LIVE_PULL_REQUESTS));
+  EXPECT_EQ(home_->LiveFolderOf(BC_LIVE_PULL_REQUESTS), 0u);
+  EXPECT_TRUE(home_->TakesLiveFolder(BC_LIVE_PULL_REQUESTS));
+  home_->TakeFolder(*agents_space, homes, {});
+  // Back in a user's Space it stays plain: what was live went with the move into the agent's.
+  EXPECT_EQ(home_->FolderLive(homes), 0);
+  Space::Delete(agents_space->id());
+  home_->SetFolderLive(homes, BC_LIVE_PULL_REQUESTS);
+
+  // Ended, it's a plain folder with what's in it.
+  home_->SetFolderLive(homes, 0);
+  EXPECT_EQ(home_->LiveFolderOf(BC_LIVE_PULL_REQUESTS), 0u);
+  EXPECT_TRUE(home_->IsFolder(homes));
+}
+
 // A Space moved goes right after the one named, or first, and only its place changes, so sync
 // sends it alone. Where it is already, or after a Space that's gone, changes nothing.
 TEST_F(SpaceTest, ASpaceMovedTakesANewPlaceAndTheOthersKeepTheirs) {
