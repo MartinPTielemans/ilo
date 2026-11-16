@@ -9,6 +9,7 @@
 # change is saved in the site's .arrange.json as it happens. Last, a settle then a trade of the
 # thing it's kept by: the run asserts the order the core gives, known under #2975, and reports what
 # a press on Wide picks, known under #2981, rather than failing on it.
+# A carry to the page's bare background with no key held is no change: only ⌘ floats a thing.
 # Reloaded, the page shows the arrangement, and the run measures whether its first frame already
 # did, in arrange-first-frame.txt, and says which in its summary rather than failing: a flash there
 # is what would bring a renderer hook at document start (#2347's slice 2 plan). Edited outside ilo,
@@ -327,6 +328,32 @@ case "$preview" in
     ;;
   *) fail "a rest where the thing doesn't fit didn't refuse it: $preview" ;;
 esac
+
+# The page's bare background, where it has no block, is no place: carried there with no key held,
+# the note goes back where it was, and the foot bar says so rather than naming ⌘ (#3017).
+carry $(side_slot 1) $(page_at 300 760)
+for _ in $(seq 50); do
+  carried=$(grep -E "^browser: arrange $tab (Pointing|Carrying|Preview|Selected) " "$log" | tail -1 |
+    cut -d' ' -f4-5)
+  [ "$carried" = "Carrying None" ] && break
+  sleep 0.1
+done
+[ "$carried" = "Carrying None" ] || fail "a carry to the bare page with no key held wasn't no change: $carried"
+# The foot bar's last line, as an earlier step of the carry may have said it.
+for _ in $(seq 50); do
+  foot=$(grep "^browser: arrange $tab foot bar: " "$log" | tail -1 | cut -d' ' -f6-)
+  case "$foot" in "Let go where it goes"*) break ;; esac
+  sleep 0.1
+done
+case "$foot" in
+  "Let go where it goes"*) ;;
+  *) fail "the foot bar didn't say a drop on the bare page goes nowhere: it says $foot" ;;
+esac
+send release $(page_at 300 760)
+expect "^browser: arrange $tab Selected None selected complementary Note\$" \
+  "letting go on the bare page with no key held didn't leave the note as it was"
+shows 'c,b,a,w side s,n hidden - float -' "letting go on the bare page with no key held moved the note"
+[ "$(changes)" = 1 ] || fail "letting go on the bare page with no key held was saved: $(changes) changes"
 
 # A float: the note carried with ⌘ held stays where it's let go, over the page, and the mini bar's
 # pin, its first button, turns it between staying on screen and scrolling with the page.
