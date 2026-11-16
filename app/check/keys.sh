@@ -36,6 +36,10 @@
 
 # The test page puts what reached it in its title, which the app logs. Chromium drops input
 # to a page that hasn't drawn yet, so the page says when it has.
+# Only the Mac's page says when it gets a modifier alone (#3097): the other drivers press real
+# modifier keys for every shortcut, and the line would come between the ones later steps wait on.
+alone='if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) document.title = "page saw alone " + e.key;'
+[ "$(uname)" = Darwin ] || alone=
 page='data:text/html,<title>loading</title>
 <textarea id=text autofocus style="font:24px system-ui;width:95%25;height:90vh"></textarea>
 <script>
@@ -51,7 +55,7 @@ addEventListener("keydown", e => {
 }, true);
 addEventListener("keydown", e => {
   if (e.key == "Escape") document.title = "page saw escape " + (e.repeat ? "repeat" : "press");
-  if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) document.title = "page saw alone " + e.key;
+  '"$alone"'
 });
 </script>'
 log="$out/keys.log"
