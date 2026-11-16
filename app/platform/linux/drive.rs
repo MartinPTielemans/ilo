@@ -881,6 +881,47 @@ fn close(window: xproto::Window) -> Option<()> {
 /// The point (`x`, `y`) in points from the key window's top-left corner, such as the command
 /// bar's or a Little ilo window's that has the keyboard though another is driven, as the Mac's
 /// driver clicks in its key window, or else the driven browser window's.
+// Probe for #3044, never merged: where the X focus and the topmost window are at a clickkey.
+fn probe_focus(x: f64, y: f64) {
+    let Some(server) = server() else { return };
+    let (connection, root) = &*server;
+    let focus = (connection.get_input_focus().ok().and_then(|c| c.reply().ok()))
+        .map_or(0, |reply| reply.focus);
+    let overlays: Vec<u32> = overlay_views().into_iter().map(|v| v as usize as u32).collect();
+    let top = driven()
+        .and_then(|browser| target_in(browser.window, x, y))
+        .and_then(|at| {
+            let reply = connection
+                .translate_coordinates(*root, *root, at.root_x, at.root_y)
+                .ok()?
+                .reply()
+                .ok()?;
+            Some((reply.child, at.root_x, at.root_y))
+        });
+    let stack = (connection.query_tree(*root).ok().and_then(|c| c.reply().ok()))
+        .map(|tree| {
+            (tree.children.iter().rev())
+                .filter(|&&w| {
+                    (connection.get_window_attributes(w).ok().and_then(|c| c.reply().ok()))
+                        .is_some_and(|a| a.map_state == xproto::MapState::VIEWABLE)
+                })
+                .take(6)
+                .map(|w| format!("{w:#x}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    let keyboard = match keyboard_window() {
+        Some(Keyboard::Overlay(_)) => "overlay",
+        Some(Keyboard::Settings(..)) => "settings",
+        Some(Keyboard::Browser(..)) => "browser",
+        None => "none",
+    };
+    log!(
+        "browser: drive probe focus {focus:#x} in {keyboard}, overlays {overlays:x?}, top at point {top:x?}, stack {stack}"
+    );
+}
+
 fn target_in_key(x: f64, y: f64) -> Option<Target> {
     match keyboard_window() {
         Some(Keyboard::Overlay(window) | Keyboard::Settings(window, _)) => target_in(window, x, y),
@@ -2665,6 +2706,7 @@ fn run_command(line: &str) -> Option<()> {
             {
                 return close(window);
             }
+            probe_focus(x, y);
             let at = target_in_key(x, y)?;
             click(
                 at,
@@ -3016,6 +3058,21 @@ fn run_command(line: &str) -> Option<()> {
             Some(())
         }
         "stack" => stack(),
+        // The window manager focusing the driven browser window again with no input, as sway does
+        // as it activates it while an overlay over it maps (#3044): the X focus to its window, and
+        // a raise asked of the manager, which sway's leaves to its own activations.
+        "refocus" => {
+            let browser = driven()?;
+            let x = server()?;
+            let (connection, _) = &*x;
+            let focus = xproto::InputFocus::POINTER_ROOT;
+            connection.set_input_focus(focus, browser.window, x11rb::CURRENT_TIME).ok()?;
+            let above = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+            connection.configure_window(browser.window, &above).ok()?;
+            sync();
+            log!("browser: drive refocused the browser window");
+            Some(())
+        }
         "front" => {
             let driven = driven().map(|b| b.id);
             let describe = |browser: Option<Browser>| match browser {

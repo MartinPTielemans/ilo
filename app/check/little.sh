@@ -77,6 +77,14 @@ fi
 
 # The Little ilo window that opened last, from its log line.
 opened() { grep '^browser: little window opened ' "$log" | tail -1 | cut -d' ' -f5; }
+# On X11, the window manager focuses the browser window again just after an overlay over it has
+# taken the keyboard, with no input, as sway does as it activates it (#3044): the overlay takes the
+# keyboard and its place on top back, and the step after shows it has them.
+refocus() {
+  [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
+  send refocus
+  expect '^browser: drive refocused the browser window$' "the driver didn't focus the browser window"
+}
 # grew <what> <from>: on the Mac with motion, the window grew in from a 40 × 28 rectangle at <from>
 # once its UI drew on screen, its content at full size (Arc). Elsewhere, and under Reduce Motion, it
 # didn't.
@@ -118,6 +126,7 @@ send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
 expect '^browser: command bar opens inside the window$' \
   "⌘L didn't open the command bar inside the Little ilo window"
+refocus
 # 500 wide, centred across the window's UI, its top a third of the way down (Arc): at 200 213.3 in a
 # 900 × 640 one.
 set -- $(grep '^browser: command bar at ' "$log" | tail -1 | cut -d' ' -f5-)
@@ -146,6 +155,7 @@ expect "^browser: title $moved live ada playing [1-9][0-9]*\$" \
 send click $((ui_width - 18)) 23
 expect "^browser: command bar lists spaces $home\$" "the chevron didn't list the user's Space $home"
 expect '^browser: command bar shown$' "the chevron didn't open the Spaces menu"
+refocus
 set -- $(grep '^browser: command bar at ' "$log" | tail -1 | cut -d' ' -f5-)
 menu_left=$((ui_width - 248))
 [ "$1" = "$menu_left" ] && [ "$2" = 43.5 ] && [ "$3" = 240 ] ||
@@ -580,6 +590,7 @@ look_theme() {
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
+  refocus
 }
 look_theme
 send clickkey "$(swatch_x 7)" $swatch_y

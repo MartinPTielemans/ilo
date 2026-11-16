@@ -244,10 +244,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..353412bb88
+index 0000000000..e60eafc269
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1873 @@
+@@ -0,0 +1,1879 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -1520,7 +1520,13 @@ index 0000000000..353412bb88
 +                let Some(taken) = x11.focus_taken(view as _).log_err() else {
 +                    return false;
 +                };
-+                if !asks_again(view, showing, taken) {
++                let again = asks_again(view, showing, taken);
++                // Probe for #3044, never merged.
++                eprintln!(
++                    "browser: x11 probe overlay {view:#x} showing {showing} lost the focus: own {}, pressed {}, active {}, asks again {again}",
++                    taken.to_own, taken.pressed, taken.active
++                );
++                if !again {
 +                    return false;
 +                }
 +                log::info!("overlay {view:#x} asks again for the input focus taken back");
