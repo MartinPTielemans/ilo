@@ -138,6 +138,10 @@ bar_top=$((ui_height / 3))
 ../tools/window-screenshot.sh "$pid" "$out/little-bar.png" all || fail "no window to capture"
 send type x
 refocus
+send type y
+expect '^browser: command bar lists "xy": ' \
+  "the command bar didn't list xy: it closed as the browser window was focused again after a key in it"
+send key backspace
 send key backspace
 send insert "${site}little-live.html"
 send key return
