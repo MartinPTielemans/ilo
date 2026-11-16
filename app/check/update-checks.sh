@@ -35,7 +35,29 @@ update_checks_launch() {
   pid=$!
   exec 3> "$out/drive"
   await_load
-  await '^browser: updater started$' || fail "the check build didn't start its updater"
+  await '^browser: \(updater started\|no updates: .*\)$' ||
+    fail "the check build didn't start its updater, nor say why; $(update_checks_built)"
+  local off
+  off=$(grep -m1 '^browser: no updates: ' "$log") &&
+    fail "the check build didn't start its updater: ${off#browser: }"
+}
+
+# Whether the check build carries the run's feed, which build.rs builds in only when it builds the
+# updater: one without it was built without the run's feed, so it has no updater.
+update_checks_built() {
+  local feed="${site}updates/appcast.xml" file built
+  if windows; then
+    file=Browser.dll
+    grep -aqF "$feed" "$app/$file" && built=1
+  else
+    file=Info.plist
+    [ "$(plutil -extract SUFeedURL raw "$app/Contents/$file" 2> /dev/null)" = "$feed" ] && built=1
+  fi
+  if [ -n "${built:-}" ]; then
+    echo "its $file has the run's feed"
+  else
+    echo "its $file hasn't the run's feed, $feed"
+  fi
 }
 
 # Settings' About tab, drawn, with its update row's Check.
