@@ -1272,8 +1272,16 @@ document.title = "ready";
   on_screen=$(grep '^browser: handover mini player on screen ' "$log" | tail -1 |
     sed 's/.* +\([0-9.]*\) ms.*/\1/')
   echo "the Mini Player was on screen $on_screen ms after the switch"
-  awk -v ms="$on_screen" 'BEGIN { exit !(ms <= 250) }' ||
-    fail "the Mini Player was on screen $on_screen ms after the switch, over twice Dia's 125 ms"
+  # A hosted runner is a slower machine shared with other jobs, where GitHub's Mac took 0.7 s to
+  # put the window's first frame on screen, so there the time only reports, as perf.sh's targets
+  # do, and the check VMs keep the bar.
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "skip: the Mini Player on screen within twice Dia's 125 ms of the switch: a hosted" \
+      "runner only reports it (#2822)."
+  else
+    awk -v ms="$on_screen" 'BEGIN { exit !(ms <= 250) }' ||
+      fail "the Mini Player was on screen $on_screen ms after the switch, over twice Dia's 125 ms"
+  fi
 else
   echo "skip: the Mini Player's time from a switch: an engine older than its core doesn't time it (#2822)."
 fi
