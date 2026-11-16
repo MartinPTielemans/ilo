@@ -502,6 +502,30 @@ constexpr char16_t kScript[] =
       return { el, parent, axis, prev, next, r: rect(el), pr: rect(parent), prevR: prev && rect(prev), nextR: next && rect(next) };
     }
     const roomless = (axis) => axis === 'table' || axis === 'grid' || axis === 'inline';
+    // What the parent of the place |sl| follows along the place's axis, and where it ends: the last
+    // box in flow before it, its own sibling or an ancestor's, or the other thing's place when that
+    // thing is it. A room opened before the place's own moves that, and the place with it (#2990),
+    // while a margin collapsing through the parent, as the room's keeper's can, doesn't. One beside
+    // the parent, as a column's in a row, says nothing of where it starts, so the row's own lead
+    // does, as a room opened above the row moves its columns.
+    function leadOf(sl, skip) {
+      const row = sl.axis === 'row';
+      const start = (r) => (row ? r.left : r.top), end = (r) => (row ? r.right : r.bottom);
+      for (let p = sl.parent; p && p !== document.body; p = p.parentElement) {
+        if (/absolute|fixed/.test(getComputedStyle(p).position)) return null;
+        const at = start(rect(p));
+        for (let q = p.previousElementSibling; q; q = q.previousElementSibling) {
+          const mine = skip.includes(q);
+          if ((!mine && lifted.has(q)) || !q.getClientRects().length ||
+            /absolute|fixed/.test(getComputedStyle(q).position)) continue;
+          // One beside it, as columns in a row are, doesn't place it along the axis.
+          if (end(rect(q)) > at + 0.5) break;
+          // The other thing's place is a room, which ends where what goes in it does.
+          return { el: q, end: end(rect(q)), place: mine };
+        }
+      }
+      return null;
+    }
 
     // Settle: out of flow where it stood, which closes its place, and drawn before or after |ref|
     // at its width, whose room a margin on |ref| keeps.
@@ -563,6 +587,19 @@ constexpr char16_t kScript[] =
       const was = new Map([[el, over(el)], [ref, over(ref)]]);
       const sa = slotOf(el, skip), sb = slotOf(ref, skip);
       if (roomless(sa.axis) || roomless(sb.axis)) { s.misfit = 'room'; s.keepers = []; return; }
+      for (const sl of [sa, sb]) if (!sl.prev) sl.lead = leadOf(sl, skip);
+      // Where the other thing's place ends once its room is open, which is first, as it's earlier on
+      // the page: where what goes in it ends. Along another axis than |axis|, it says nothing.
+      const placeEnd = (el, axis) => {
+        const sl = el === sa.el ? sa : sb, g = groups.find((x) => x.slots.includes(sl));
+        if (!g || !g.roomStart || g.axis !== axis) return null;
+        let at = g.roomStart() + g.before;
+        for (const [i, each] of g.slots.entries()) {
+          if (each === sl) return at + each.inMain;
+          at += each.inMain + (g.inner[i] || 0);
+        }
+        return null;
+      };
       sa.incoming = ref;
       sb.incoming = el;
       const keepers = (s.keepers = []);
@@ -606,9 +643,12 @@ constexpr char16_t kScript[] =
         const after = g.next ? start(last.nextR) - end(last.r) : 0;
         const sum = (a) => a.reduce((t, x) => t + x, 0);
         const want = before + sum(g.slots.map((sl) => sl.inMain)) + sum(inner) + after;
-        // Where the room starts: after the place before it, or where the first place was. Not
-        // the parent's edge, which a margin collapsing through it moves.
-        const anchor = start(firstSlot.r) - before;
+        // Where the room starts: after the place before it, or where the first place was, as far
+        // on as a room opened before this one moved what its parent follows. Not the parent's
+        // edge, which a margin collapsing through it moves.
+        const lead = firstSlot.lead;
+        const leadNow = lead && (lead.place ? placeEnd(lead.el, g.axis) : end(rect(lead.el)));
+        const anchor = start(firstSlot.r) - before + (leadNow == null ? 0 : leadNow - lead.end);
         const roomStart = () => (g.prev ? end(rect(g.prev)) : anchor);
         g.roomStart = roomStart;
         g.before = before;
