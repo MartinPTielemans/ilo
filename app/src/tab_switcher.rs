@@ -151,7 +151,10 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<TabSwitcher
         KeyBinding::new("ctrl-escape", Stay, Some("TabSwitcher")),
         KeyBinding::new("escape", Stay, Some("TabSwitcher")),
     ]);
-    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(height(1))));
+    let window = Level::Modal
+        .panel_margin()
+        .around(size(px(WIDTH), px(height(1))));
+    let bounds = Bounds::new(point(px(0.), px(0.)), window);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -503,27 +506,31 @@ impl Render for TabSwitcher {
             .border(px(1.))
             .border_color(Level::Modal.rim_in(&palette));
         root.child(
-            div()
-                .id("tab-switcher")
-                .key_context("TabSwitcher")
-                .track_focus(&self.focus)
-                .on_action(
-                    cx.listener(|switcher, _: &Next, _, cx| switcher.heard(Heard::Step(true), cx)),
-                )
-                .on_action(
-                    cx.listener(|switcher, _: &Back, _, cx| switcher.heard(Heard::Step(false), cx)),
-                )
-                .on_action(cx.listener(|switcher, _: &Stay, _, cx| switcher.heard(Heard::Stay, cx)))
-                .relative()
-                .w(px(WIDTH))
-                .h(px(height(count)))
-                .overflow_hidden()
-                .rounded(px(RADIUS))
-                .bg(palette.overlay)
-                .font_weight(FontWeight::MEDIUM)
-                .text_size(px(text::BODY))
-                .child(list)
-                .child(rim),
+            Level::Modal.in_window(
+                div()
+                    .id("tab-switcher")
+                    .key_context("TabSwitcher")
+                    .track_focus(&self.focus)
+                    .on_action(cx.listener(|switcher, _: &Next, _, cx| {
+                        switcher.heard(Heard::Step(true), cx)
+                    }))
+                    .on_action(cx.listener(|switcher, _: &Back, _, cx| {
+                        switcher.heard(Heard::Step(false), cx)
+                    }))
+                    .on_action(
+                        cx.listener(|switcher, _: &Stay, _, cx| switcher.heard(Heard::Stay, cx)),
+                    )
+                    .relative()
+                    .w(px(WIDTH))
+                    .h(px(height(count)))
+                    .overflow_hidden()
+                    .rounded(px(RADIUS))
+                    .bg(palette.overlay)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_size(px(text::BODY))
+                    .child(list)
+                    .child(rim),
+            ),
         )
     }
 }

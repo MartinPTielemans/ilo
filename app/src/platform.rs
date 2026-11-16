@@ -151,6 +151,9 @@ unsafe extern "C" {
         shadow_radius: f64,
         shadow_drop: f64,
     );
+    // Windows' alone, as the Mac's and Linux's hosts draw a panel's shadow under it.
+    #[cfg(target_os = "windows")]
+    pub fn host_set_shadow_margin(view: *mut c_void, above: f64, sides: f64, below: f64);
     pub fn host_set_overlay_shape(overlay: c_int, corners: *const f64, count: usize);
     pub fn host_set_overlay_radius(overlay: c_int, radius: f64);
     pub fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64);

@@ -25,6 +25,8 @@
 //! desktop on and off, Linux's own, shows the desktop and the windows again as a pager asks,
 //! desktop shell maps a desktop window as a desktop shell does and desktop shell off takes it away, and
 //! onscreen logs what the X server shows of the driven window and the app's overlays over it.
+//! refocus, X11's own, gives the driven browser window the input focus and asks it raised, as a
+//! window manager activating it again does.
 //! The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
 //! and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt
 //! with Alt. flags presses and lets go of those keys, the last key's among them, and the keys after
@@ -1366,33 +1368,6 @@ fn held_modifiers() -> u16 {
     FLAGS.get() | KEY_FLAGS.get() & u16::from(KeyButMask::CONTROL)
 }
 
-/// Unlocks the Control and Alt of the X server's keyboard, which the driver locked for `flags`
-/// before it held them through XTEST (#2721): the server keeps a lock its client leaves. Only a
-/// server a build from before then drove can have one, so this goes a release on (#2899). Only
-/// on a display XTEST may drive, as the driver leaves anyone else's keyboard alone.
-fn unlock_modifiers() -> Option<()> {
-    use x11rb::protocol::xkb::{self, ConnectionExt as _};
-    xtest()?;
-    let x = server()?;
-    let (connection, _) = &*x;
-    // The server takes no other XKB request from a client before this one.
-    connection.xkb_use_extension(1, 0).ok()?.reply().ok()?;
-    let affected = xproto::ModMask::CONTROL | xproto::ModMask::M1;
-    let none = xproto::ModMask::from(0u16);
-    (connection.xkb_latch_lock_state(
-        xkb::ID::USE_CORE_KBD.into(),
-        affected,
-        none,
-        false,
-        xkb::Group::M1,
-        none,
-        false,
-        0,
-    ))
-    .ok()?;
-    connection.flush().ok()
-}
-
 /// Lets go of the keys and buttons an earlier launch's driver left down through XTEST. The server
 /// keeps a key or button XTEST pressed, so a launch that quit or crashed after a key with ⌘ or ⌃
 /// left the next launch on the same server reading every key typed as a shortcut, in its UI and
@@ -1401,7 +1376,6 @@ fn release_held_modifiers() {
     if crate::drive_wayland::on() {
         return;
     }
-    unlock_modifiers();
     let release = || -> Option<()> {
         let x = server()?;
         let (connection, root) = &*x;
@@ -3016,6 +2990,23 @@ fn run_command(line: &str) -> Option<()> {
             Some(())
         }
         "stack" => stack(),
+        // The window manager focusing the driven browser window again with no input, as sway does
+        // as it activates it while an overlay over it maps (#3044): the X focus to its window, and
+        // a raise asked of the manager, which sway's leaves to its own activations.
+        "refocus" => {
+            let browser = driven()?;
+            let x = server()?;
+            let (connection, _) = &*x;
+            let focus = xproto::InputFocus::POINTER_ROOT;
+            connection
+                .set_input_focus(focus, browser.window, x11rb::CURRENT_TIME)
+                .ok()?;
+            let above = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+            connection.configure_window(browser.window, &above).ok()?;
+            sync();
+            log!("browser: drive refocused the browser window");
+            Some(())
+        }
         "front" => {
             let driven = driven().map(|b| b.id);
             let describe = |browser: Option<Browser>| match browser {
