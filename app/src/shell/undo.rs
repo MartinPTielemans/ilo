@@ -78,6 +78,7 @@ impl What {
     pub const EXPORT_INTO_FOLDER: What =
         What::said("Export into Folder", "Space Exported into Folder");
     pub const DELETE_ARCHIVED: What = What::said("Delete from Archive", "Deleted from Archive");
+    pub const DELETE_BOARD: What = What::said("Delete Board", "Board Deleted");
     pub const CLEAR_ARCHIVE: What = What::said("Clear Archive", "Archive Cleared");
     /// The command bar's trash, ⇧⌦ or ⌥⌘⌫ on a page or search from history. The row going from
     /// the list under the pointer is what it did, so there's no toast.
@@ -300,6 +301,19 @@ pub(super) enum Edit {
     PutBackSuggestion(u64),
     /// Takes it out again.
     RemoveSuggestion(u64),
+    /// Brings Board `id` of `profile` back from where Delete put it, and then, as its page finds
+    /// it there, reopens the window's tabs of it that Delete closed, by the steps `tabs`, the last
+    /// closed first.
+    RestoreBoard {
+        profile: u64,
+        id: String,
+        tabs: Vec<Edit>,
+    },
+    /// Takes Board `id` of `profile` out of the list again, and closes the window's tabs of it.
+    DeleteBoard {
+        profile: u64,
+        id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -396,6 +410,8 @@ impl Edit {
             | Edit::UndeleteTask(_)
             | Edit::DeleteTask(_) => {}
             Edit::PutBackSuggestion(_) | Edit::RemoveSuggestion(_) => {}
+            Edit::RestoreBoard { tabs, .. } => tabs.iter_mut().for_each(|tab| tab.rekey(from, to)),
+            Edit::DeleteBoard { .. } => {}
             Edit::Set(prop, _) => match prop {
                 Prop::TabName(each)
                 | Prop::TabIcon(each)
@@ -460,6 +476,11 @@ impl Edit {
                     .task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
                 Some(Edit::UndeleteTask(agent))
             }
+            Edit::RestoreBoard { profile, id, tabs } => {
+                shell.restore_board(profile, id.clone(), tabs, cx);
+                Some(Edit::DeleteBoard { profile, id })
+            }
+            Edit::DeleteBoard { profile, id } => shell.take_board(profile, id, cx),
             Edit::Reopen { tabs: closed, show } => {
                 let mut tabs = Vec::new();
                 let mut shown = None;
@@ -1693,7 +1714,10 @@ impl Shell {
     fn set_prop(&mut self, prop: Prop, value: &Value, cx: &mut Context<Self>) {
         let browser = self.browser.clone();
         match (prop, value) {
-            (Prop::TabName(tab), Value::Text(name)) => browser.rename_tab(tab, name, cx),
+            (Prop::TabName(tab), Value::Text(name)) => {
+                browser.rename_tab(tab, name, cx);
+                self.keep_board_name(tab, name, cx);
+            }
             (Prop::TabIcon(tab), Value::Text(icon)) => browser.set_icon(tab, icon, cx),
             (Prop::PinnedUrl(tab), Value::Text(url)) => browser.set_pinned_url(tab, url, cx),
             (Prop::FolderName(folder), Value::Text(name)) => {

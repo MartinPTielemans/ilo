@@ -326,6 +326,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Clear Archive", Keys::Of(Command::ClearArchive)),
             ("View Downloads", Keys::Of(Command::ViewDownloads)),
             ("View Media", Keys::Of(Command::ViewMedia)),
+            ("View Boards", Keys::Of(Command::ViewBoards)),
             ("View History", Keys::Of(Command::ViewHistory)),
             ("Clear Browsing Data", Keys::Of(Command::ClearBrowsingData)),
         ],

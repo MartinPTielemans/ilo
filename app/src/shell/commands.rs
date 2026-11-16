@@ -227,6 +227,8 @@ pub enum Command {
     EditBoost,
     /// Opens the Library on the profile's Boosts, or closes it there.
     ViewBoosts,
+    /// Opens the Library on the profile's Boards, or closes it there.
+    ViewBoards,
     /// Opens the command bar over a new pane beside the pages shown, for a split view.
     AddSplit,
     /// Opens a new document in the notes service the Space's profile picks (`crate::notes`), in a
@@ -642,6 +644,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     (
         "New Board",
         Command::NewBoard,
+        &["canvas", "whiteboard", "moodboard", "easel", "sketch"],
+    ),
+    (
+        "View Boards…",
+        Command::ViewBoards,
         &["canvas", "whiteboard", "moodboard", "easel", "sketch"],
     ),
     ("Toggle Sidebar", Command::ToggleSidebar, &["hide", "show"]),
@@ -1310,6 +1317,7 @@ impl Command {
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
             Command::NewBoard => "new-board",
+            Command::ViewBoards => "view-boards",
             Command::CloseSplitPane => "close-split-pane",
             Command::SeparatePane => "separate-pane",
             Command::SeparateSplit => "separate-split",
@@ -1775,6 +1783,7 @@ impl Shell {
             Command::AddSplit => return self.add_pane(cx),
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
             Command::NewBoard => return self.new_board(cx),
+            Command::ViewBoards => return self.view_section(Section::Boards, cx),
             Command::NewNoteSplit => {
                 let with = self.selected;
                 if with != 0 && !self.split_full(with, cx) {
@@ -2327,6 +2336,7 @@ impl Shell {
             | Command::EditTheme
             | Command::ExportSpace
             | Command::NewBoard
+            | Command::ViewBoards
             | Command::ViewLibrary
             | Command::ViewArchive
             | Command::ClearArchive
@@ -2571,6 +2581,7 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::NewNoteSplit
             // A Board is a folder of the profile's, and a private window keeps none.
             | Command::NewBoard
+            | Command::ViewBoards
     )
 }
 

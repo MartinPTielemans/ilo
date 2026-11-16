@@ -68,7 +68,18 @@ pub struct Listed {
 const REMOVED: &str = ".removed";
 
 /// `profile`'s Boards, the last changed first. It reads the disk, so it runs off the main thread.
+/// Its first read of a profile in a launch deletes the Boards removed before it, which no ⌘Z of
+/// this launch's can bring back, and none can have been removed yet, as removing needs the list.
 pub fn list(profile: &Path) -> Vec<Listed> {
+    static FORGOTTEN: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+    if let Ok(mut forgotten) = FORGOTTEN.lock()
+        && !forgotten.iter().any(|each| each == profile)
+    {
+        forgotten.push(profile.to_owned());
+        if let Err(error) = forget_removed(profile) {
+            crate::log!("browser: removed boards stay: {error}");
+        }
+    }
     let Ok(entries) = std::fs::read_dir(dir(profile)) else {
         return Vec::new();
     };

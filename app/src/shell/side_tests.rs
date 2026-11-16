@@ -300,8 +300,8 @@ fn on_the_right_the_library_s_columns_swap(cx: &mut TestAppContext) {
         x >= library && x + across <= WIDTH - COLUMN_WIDTH,
         "the empty line isn't in the list: {drawn}"
     );
-    // The column's buttons are centred 5 above its middle, 100 apart.
-    let archive = |x: f32| point(px(x), px(700. / 2. + 45.));
+    // The column's seven buttons are centred 5 above its middle, 100 apart: History is the fifth.
+    let archive = |x: f32| point(px(x), px(700. / 2. + 95.));
     let menu = |at, cx: &mut VisualTestContext| {
         host.menus.borrow_mut().clear();
         cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());

@@ -1,6 +1,6 @@
 //! The Library, which slides in from the left over the sidebar and pushes the card right without
-//! resizing it (Arc): a column of its sections, Media, Downloads, Spaces, History, Agents and
-//! Boosts, and beside it the section's list, newest first under day headings, with a search field
+//! resizing it (Arc): a column of its sections, Media, Downloads, Spaces, Boards, History, Agents
+//! and Boosts, and beside it the section's list, newest first under day headings, with a search field
 //! over it, or for Spaces a card for each (docs/ux-spec.md › Archive and Downloads).
 
 use std::{
@@ -198,6 +198,7 @@ pub struct Archived {
     pub little: bool,
 }
 
+mod board_list;
 mod history_list;
 pub use history_list::Visited;
 use history_list::{History, Pointed, history_text, history_when};
@@ -383,6 +384,8 @@ pub(super) enum Section {
     Agents,
     /// The window's profile's Boosts (#695).
     Boosts,
+    /// The window's profile's Boards (#3073).
+    Boards,
 }
 
 impl Section {
@@ -394,6 +397,7 @@ impl Section {
             Section::Archive => "archive",
             Section::Agents => "agents",
             Section::Boosts => "boosts",
+            Section::Boards => "boards",
         }
     }
 }
@@ -514,6 +518,8 @@ enum Item {
     PastStep(usize, usize),
     /// The Boost at this index of `Shell::boost_list`.
     Boost(usize),
+    /// The Board at this index of `Shell::board_list`.
+    Board(usize),
     /// The download at this index of `Shell::downloads`.
     Download(usize),
     /// A row of Media's tiles, from its left.
@@ -973,6 +979,7 @@ impl Shell {
             Section::Archive => "Search History…",
             Section::Agents => "Search Agents…",
             Section::Boosts => "Search Boosts…",
+            Section::Boards => "Search Boards…",
         };
         let search = cx.new(|cx| {
             TextInput::new(placeholder, cx)
@@ -1096,6 +1103,10 @@ impl Shell {
         }
         if self.section == Section::Boosts && self.library.is_some() {
             self.read_boosts(cx);
+        }
+        // Not as the search changes: the list it searches is the one read.
+        if changed && self.section == Section::Boards && self.library.is_some() {
+            self.read_boards(cx);
         }
         if self.section == Section::Archive && self.library.is_some() {
             self.ask_visited(cx);
@@ -1234,6 +1245,10 @@ impl Shell {
             Section::Boosts => (self.boost_list.iter().enumerate())
                 .filter(|(_, boost)| query.is_empty() || found(&boost.site))
                 .map(|(index, _)| (Item::Boost(index), 0.))
+                .collect(),
+            Section::Boards => (self.board_list.iter().enumerate())
+                .filter(|(_, board)| query.is_empty() || found(&board.name.clone().into()))
+                .map(|(index, board)| (Item::Board(index), board.changed))
                 .collect(),
             Section::Downloads => (self.downloads.iter().enumerate())
                 .filter(|(_, each)| query.is_empty() || found(&each.name) || found(&each.url))
@@ -1640,6 +1655,8 @@ impl Shell {
             (Section::Agents, false) => "No tasks match.",
             (Section::Boosts, true) => "New Boost makes one for the page shown.",
             (Section::Boosts, false) => "No Boosts match.",
+            (Section::Boards, true) => "New Board makes one, from the + menu.",
+            (Section::Boards, false) => "No Boards match.",
             (Section::Downloads, true) => "Files you download show here.",
             (Section::Downloads, false) => "No downloads match.",
             (Section::Media, true) => "Saved captures and downloaded media show here.",
@@ -1670,6 +1687,11 @@ impl Shell {
             .children(
                 self.has_section(Section::Spaces)
                     .then(|| self.section_button(Section::Spaces, color, cx)),
+            )
+            // Ours: after Spaces, as both are what the user made; Arc's Easels aren't recorded.
+            .children(
+                self.has_section(Section::Boards)
+                    .then(|| self.section_button(Section::Boards, color, cx)),
             )
             .children(
                 self.has_section(Section::Archive)
@@ -2510,6 +2532,7 @@ impl Shell {
             Item::PastSite(site) => return self.past_site_item(site, cx),
             Item::PastStep(past, step) => return self.past_step_item(past, step, cx),
             Item::Boost(boost) => return self.boost_item(boost, cx),
+            Item::Board(board) => return self.board_item(board, cx),
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
         };
@@ -3576,6 +3599,7 @@ impl Shell {
             Section::Archive => ("icons/rotate-ccw-clock.svg", "History"),
             Section::Agents => ("icons/square-mouse-pointer.svg", "Agents"),
             Section::Boosts => ("icons/paintbrush.svg", "Boosts"),
+            Section::Boards => ("icons/presentation.svg", "Boards"),
         };
         div()
             .id(label)
@@ -4144,6 +4168,8 @@ pub(super) fn of(received: i64, total: i64) -> String {
 #[cfg(test)]
 mod agents_tests;
 #[cfg(test)]
+mod board_tests;
+#[cfg(test)]
 mod drag_tests;
 #[cfg(test)]
 mod history_tests;
@@ -4374,8 +4400,8 @@ mod tests {
         });
         cx.run_until_parked();
         let height = cx.update(|window, _| f32::from(window.viewport_size().height));
-        // The fourth button, Archived Tabs, the column's six centred 5 above its middle, 100 apart.
-        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 45.));
+        // The fifth button, History, the column's seven centred 5 above its middle, 100 apart.
+        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 95.));
         let menu = |cx: &mut gpui::VisualTestContext| {
             cx.simulate_mouse_down(section, MouseButton::Right, Modifiers::none());
             cx.simulate_mouse_up(section, MouseButton::Right, Modifiers::none());

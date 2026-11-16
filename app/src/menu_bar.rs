@@ -312,6 +312,7 @@ pub(crate) fn menus(
                 Some(item("Open Library…", Command::ViewLibrary)),
                 Some(item("View Downloads…", Command::ViewDownloads)),
                 Some(item("View Media…", Command::ViewMedia)),
+                Some(item("View Boards…", Command::ViewBoards)),
                 // Arc's, after View Media…, where the window lists Boosts (Library › Boosts).
                 bar.boosts
                     .then(|| item("View Boosts…", Command::ViewBoosts)),
