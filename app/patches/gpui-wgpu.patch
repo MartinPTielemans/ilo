@@ -13,6 +13,103 @@ index 3ce9dcecc4..ce6de4149b 100644
  
  [target.'cfg(not(any(target_os = "linux", target_os = "freebsd")))'.dependencies]
  wgpu = { workspace = true, default-features = true }
+diff --git a/crates/gpui_wgpu/src/cosmic_text_system.rs b/crates/gpui_wgpu/src/cosmic_text_system.rs
+index 775067518c..01d973cb81 100644
+--- a/crates/gpui_wgpu/src/cosmic_text_system.rs
++++ b/crates/gpui_wgpu/src/cosmic_text_system.rs
+@@ -23,6 +23,36 @@ use unicode_segmentation::UnicodeSegmentation;
+ 
+ pub struct CosmicTextSystem(RwLock<CosmicTextSystemState>);
+ 
++/// The system's fonts, scanned on a thread scan_fonts_early started, until the text system takes
++/// them.
++#[cfg(target_os = "linux")]
++static EARLY_FONTS: parking_lot::Mutex<Option<std::thread::JoinHandle<FontSystem>>> =
++    parking_lot::Mutex::new(None);
++
++/// Starts scanning the system's fonts on a thread, for the text system to take rather than scan
++/// them itself. The scan took 6–17 ms of the main thread on the way to the browser's first window,
++/// on the CI runner (#2384), and needs no display.
++#[cfg(target_os = "linux")]
++pub fn scan_fonts_early() {
++    let mut early = EARLY_FONTS.lock();
++    if early.is_none() {
++        *early = std::thread::Builder::new()
++            .name("font scan".into())
++            .spawn(FontSystem::new)
++            .ok();
++    }
++}
++
++/// The fonts the early thread scanned, if it's done: the text system never waits for it, and
++/// scans in place if it isn't done or failed.
++#[cfg(any(target_os = "linux", test))]
++fn scanned_or<T>(early: Option<std::thread::JoinHandle<T>>, scan: impl FnOnce() -> T) -> T {
++    match early {
++        Some(thread) if thread.is_finished() => thread.join().unwrap_or_else(|_| scan()),
++        _ => scan(),
++    }
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+ struct FontKey {
+     family: SharedString,
+@@ -129,6 +159,9 @@ impl CosmicTextSystem {
+     }
+ 
+     pub fn new(system_font_fallback: &str) -> Self {
++        #[cfg(target_os = "linux")]
++        let font_system = scanned_or(EARLY_FONTS.lock().take(), FontSystem::new);
++        #[cfg(not(target_os = "linux"))]
+         let font_system = FontSystem::new();
+ 
+         Self(RwLock::new(CosmicTextSystemState {
+@@ -1873,3 +1906,45 @@ mod tests {
+         assert!(spans.is_empty());
+     }
+ }
++
++#[cfg(test)]
++mod early_scan_tests {
++    use super::scanned_or;
++
++    #[test]
++    fn the_early_scan_is_taken_once_it_is_done() {
++        let thread = std::thread::spawn(|| "early");
++        while !thread.is_finished() {
++            std::thread::yield_now();
++        }
++        assert_eq!(scanned_or(Some(thread), || "in place"), "early");
++    }
++
++    #[test]
++    fn a_scan_that_panicked_falls_back_to_the_scan_in_place() {
++        let thread = std::thread::spawn(|| -> &'static str { panic!("the scan failed") });
++        while !thread.is_finished() {
++            std::thread::yield_now();
++        }
++        assert_eq!(scanned_or(Some(thread), || "in place"), "in place");
++    }
++
++    #[test]
++    fn a_scan_not_done_is_never_waited_for() {
++        let (done, wait) = std::sync::mpsc::channel::<()>();
++        let thread = std::thread::spawn(move || {
++            wait.recv().ok();
++            "early"
++        });
++        assert_eq!(scanned_or(Some(thread), || "in place"), "in place");
++        done.send(()).ok();
++    }
++
++    #[test]
++    fn with_no_early_scan_it_scans_in_place() {
++        assert_eq!(
++            scanned_or(None::<std::thread::JoinHandle<&str>>, || "in place"),
++            "in place"
++        );
++    }
++}
 diff --git a/crates/gpui_wgpu/src/wgpu_atlas.rs b/crates/gpui_wgpu/src/wgpu_atlas.rs
 index b2a7bfeb49..f64a20ab03 100644
 --- a/crates/gpui_wgpu/src/wgpu_atlas.rs
