@@ -244,10 +244,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..d667db802e
+index 0000000000..af8dd2f992
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1925 @@
+@@ -0,0 +1,1977 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -305,10 +305,10 @@ index 0000000000..d667db802e
 +struct Asked {
 +    view: usize,
 +    showing: u64,
-+    /// The presses, and the buttons pressed anywhere and in an overlay, as it last took the keys.
++    /// The presses, and the buttons pressed outside the overlays (`OUTSIDE`), as it last took the
++    /// keys.
 +    presses: u64,
-+    buttons: u64,
-+    in_overlays: u64,
++    outside: u64,
 +    /// It took them back since, with no input after.
 +    again: bool,
 +}
@@ -395,10 +395,14 @@ index 0000000000..d667db802e
 +    static LET_GO: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
 +    /// On X11, the presses so far, keys and buttons (`pressed_key_or_button`).
 +    static PRESSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-+    /// On X11, the buttons pressed anywhere on the display (`pressed_button_anywhere`), and in an
-+    /// overlay that shows (`pressed_in`).
-+    static BUTTONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-+    static IN_OVERLAYS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
++    /// On X11, the buttons heard pressed anywhere on the display (`pressed_button_anywhere`) that
++    /// no overlay heard pressed in it: each its count, and its time. A press has the same time as
++    /// both, so the two are paired by it, and heard in either order.
++    static OUTSIDE: RefCell<Vec<(u64, u32)>> = const { RefCell::new(Vec::new()) };
++    static OUTSIDE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
++    /// On X11, the times of the presses an overlay heard in it that weren't heard anywhere yet,
++    /// which an overlay hears whether or not it holds the focus.
++    static IN_OVERLAYS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
 +    /// On X11, whether GPUI hears every button press on the display (`hears_presses`).
 +    static HEARING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 +    /// On X11, the overlays that hold the input focus: from their ask for it to the focus leaving
@@ -575,9 +579,6 @@ index 0000000000..d667db802e
 +    let keyboard = SHOWN.with_borrow(|all| {
 +        all.iter().find(|shown| shown.view == view).map(|shown| shown.keyboard)
 +    });
-+    if keyboard.is_some() {
-+        IN_OVERLAYS.set(IN_OVERLAYS.get() + 1);
-+    }
 +    match keyboard {
 +        Some(false) if is_panel(view) => later(Op::Pressed(view)),
 +        Some(true) => later(Op::Retake { view, pressed: true }),
@@ -616,12 +617,50 @@ index 0000000000..d667db802e
 +    PRESSES.set(PRESSES.get() + 1);
 +}
 +
-+/// A button pressed anywhere on the display, heard while an overlay holds the input focus
-+/// (`hears_presses`): in an overlay, GPUI hears it there too (`pressed_in`).
++/// On X11, a press at `time` in GPUI's window `view` (`pressed_in`), which is no press outside
++/// the overlays if `view` is one, as the same press heard anywhere says, before or after.
 +#[allow(dead_code)]
-+pub(crate) fn pressed_button_anywhere() {
-+    BUTTONS.set(BUTTONS.get() + 1);
++pub(crate) fn pressed_in_at(view: usize, time: u32) {
++    if is_shown(view) {
++        let heard = OUTSIDE.with_borrow_mut(|all| {
++            let at = all.iter().position(|&(_, each)| each == time);
++            at.map(|at| all.remove(at)).is_some()
++        });
++        if !heard {
++            IN_OVERLAYS.with_borrow_mut(|all| kept(all, time));
++        }
++    }
++    pressed_in(view);
++}
++
++/// A button pressed anywhere on the display at `time`, heard while an overlay holds the input
++/// focus (`hears_presses`): in an overlay, GPUI hears it there too (`pressed_in`), before or after.
++#[allow(dead_code)]
++pub(crate) fn pressed_button_anywhere(time: u32) {
 +    pressed_key_or_button();
++    let in_overlay = IN_OVERLAYS.with_borrow_mut(|all| {
++        let at = all.iter().position(|&each| each == time);
++        at.map(|at| all.remove(at)).is_some()
++    });
++    if !in_overlay {
++        OUTSIDE_COUNT.set(OUTSIDE_COUNT.get() + 1);
++        let count = OUTSIDE_COUNT.get();
++        OUTSIDE.with_borrow_mut(|all| kept(all, (count, time)));
++    }
++}
++
++/// Adds `each` to the presses not paired yet, keeping the last 16: a press's two events come
++/// within a few of each other, and of the unpaired presses outside, the last says enough.
++fn kept<T>(all: &mut Vec<T>, each: T) {
++    if all.len() == 16 {
++        all.remove(0);
++    }
++    all.push(each);
++}
++
++/// The count of the last press outside the overlays not since heard in one, or 0.
++fn last_outside() -> u64 {
++    OUTSIDE.with_borrow(|all| all.last().map_or(0, |&(count, _)| count))
 +}
 +
 +/// Whether the window manager last named this app's window the active one, or named none since
@@ -689,23 +728,22 @@ index 0000000000..d667db802e
 +            view,
 +            showing,
 +            presses: PRESSES.get(),
-+            buttons: BUTTONS.get(),
-+            in_overlays: IN_OVERLAYS.get(),
++            outside: OUTSIDE_COUNT.get(),
 +            again: false,
 +        });
 +    });
 +    holds(view, true);
 +}
 +
-+/// Whether the overlay `view`, whose keys the input focus just left as `taken` says, takes them back
-+/// rather than taking that for the user leaving it. Something other than the user can put the focus
-+/// on the window the overlay shows over while it has the keys: wlroots' Xwayland does as an overlay
-+/// first maps, before it knows the window is this app's (#2943), and sway as it activates that
-+/// window again, raising it over the overlay (#3044). So the overlay takes them back if the focus
-+/// went to one of the app's own windows with no button down or pressed outside an overlay since it
-+/// last took them, and the app still active. It does once a loss: taken again with no input from
-+/// the user in between, it's left, as a window manager that keeps taking them won't give them up
-+/// and a second take would fight it. Any other way, the user left it.
++/// Whether the overlay `view`, whose keys the input focus just left as `taken` says, takes them
++/// back rather than taking that for the user leaving it. Something other than the user can put the
++/// focus on the window the overlay shows over while it has the keys: wlroots' Xwayland does as an
++/// overlay first maps, before it knows the window is this app's (#2943), and sway as it activates
++/// that window again, raising it over the overlay (#3044). So the overlay takes them back if the
++/// focus went to one of the app's own windows with no button down or pressed outside an overlay
++/// since it last took them, and the app still active. It does once a loss: taken again with no
++/// input from the user in between, it's left, as a window manager that keeps taking them won't
++/// give them up and a second take would fight it. Any other way, the user left it.
 +#[allow(dead_code)]
 +pub(crate) fn asks_again(view: usize, showing: u64, taken: Taken) -> bool {
 +    let shown = SHOWN.with_borrow(|all| {
@@ -725,8 +763,9 @@ index 0000000000..d667db802e
 +        else {
 +            return false;
 +        };
-+        // A press outside the overlays, as on the page, is heard only as a button anywhere.
-+        let outside = BUTTONS.get() - asked.buttons > IN_OVERLAYS.get() - asked.in_overlays;
++        // A press outside the overlays, as on the page, is heard anywhere and in no overlay. Paired
++        // by time, a press in one heard while it didn't hold the focus can't hide a later one.
++        let outside = last_outside() > asked.outside;
 +        if (asked.again && asked.presses == PRESSES.get())
 +            || outside
 +            || taken.pressed
@@ -736,8 +775,7 @@ index 0000000000..d667db802e
 +            return false;
 +        }
 +        asked.presses = PRESSES.get();
-+        asked.buttons = BUTTONS.get();
-+        asked.in_overlays = IN_OVERLAYS.get();
++        asked.outside = OUTSIDE_COUNT.get();
 +        asked.again = true;
 +        true
 +    })
@@ -2031,14 +2069,28 @@ index 0000000000..d667db802e
 +        assert!(asks_again(view, 2, taken));
 +        pressed_key_or_button();
 +        assert!(asks_again(view, 2, taken), "taken again after a key in it, and it was left");
-+        pressed_in(view);
-+        pressed_button_anywhere();
++        pressed_in_at(view, 10);
++        pressed_button_anywhere(10);
++        assert!(asks_again(view, 2, taken), "taken again after a click in it, and it was left");
++        // The same press heard anywhere first, then in the overlay.
++        pressed_button_anywhere(11);
++        pressed_in_at(view, 11);
 +        assert!(asks_again(view, 2, taken), "taken again after a click in it, and it was left");
 +        assert!(!asks_again(view, 2, taken), "taken twice with no input between, it fought for them");
 +        // A button pressed outside the overlays, as on the page: the user left.
 +        show(3);
-+        pressed_button_anywhere();
++        pressed_button_anywhere(20);
 +        assert!(!asks_again(view, 3, taken), "a click outside it, and it took the keys back");
++        // A click in the overlay heard only there, as it didn't hold the focus the manager had just
++        // taken, then one on the page heard only anywhere: the page's is still outside.
++        show(7);
++        assert!(asks_again(view, 7, taken));
++        pressed_in_at(view, 30);
++        pressed_button_anywhere(31);
++        assert!(
++            !asks_again(view, 7, taken),
++            "a click on the page after one in it heard only there, and it took the keys back"
++        );
 +        // A button down where GPUI doesn't hear it, as a press on the embedder's window.
 +        show(6);
 +        let pressed = Taken { pressed: true, ..taken };
@@ -5493,7 +5545,7 @@ index f9b9727330..e1e2214d9d 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..629f29af73 100644
+index e21f019c64..2f7089894f 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -5997,8 +6049,8 @@ index e21f019c64..629f29af73 100644
      fn handle_event(&self, event: Event) -> Option<()> {
          match event {
 +            // A button pressed anywhere on the display, heard while an overlay holds the focus.
-+            Event::XinputRawButtonPress(_) => {
-+                crate::linux::overlay::pressed_button_anywhere();
++            Event::XinputRawButtonPress(event) => {
++                crate::linux::overlay::pressed_button_anywhere(event.time);
 +            }
 +            // A file's drag has the pointer until it's let go (drag.rs).
 +            Event::XinputMotion(event) if self.file_drag_held() => {
@@ -6352,7 +6404,7 @@ index e21f019c64..629f29af73 100644
 +                // The wheel's buttons too, which come with its smooth scrolling.
 +                crate::linux::overlay::alt_interrupted();
 +                let hosted = window.focus_if_hosted();
-+                crate::linux::overlay::pressed_in(event.event as usize);
++                crate::linux::overlay::pressed_in_at(event.event as usize, event.time);
 +                // A click, not the wheel's buttons, ends the embedder's watch on Control, as a ⌃Tab
 +                // walk ends at a click on the Mac, and takes the keyboard into the embedder's window.
 +                if !(4..=7).contains(&event.detail) {
