@@ -9,8 +9,9 @@
 # Site Controls, the icon picker, the delete-Space dialog, the sidebar of a Space whose theme has
 # three colours, whose dot in the switcher draws all three (#1354), Peek over the page, its card a
 # hole the shell's page shows through, and more Spaces than fit (#1401): 16 in the switcher of a
-# sidebar 300 wide, and 8 in the Library's Spaces in a window 1100 wide, and Settings › Sync at
-# Settings' 720 by 480 least size, scrolled, the section's name held at the card's top, and the URL
+# sidebar 300 wide, and 8 in the Library's Spaces in a window 1100 wide, and Settings › Sync signed
+# in, a page taller than the card, at Settings' 720 by 480 least size, scrolled, the section's name
+# held at the card's top (a page that fits never scrolls, #2102), and the URL
 # field's translate mark lit under the pointer, light and dark (#2112), the foot bar with two lines
 # over the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380),
 # Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default naming
@@ -46,7 +47,7 @@ screens=(
   "peek|link preview settled|PREVIEW_PEEK=1"
   "many-spaces|drawn at|PREVIEW_SPACES=16 PREVIEW_SIDEBAR=300"
   "many-spaces-library|library shown|PREVIEW_SPACES=8 PREVIEW_LIBRARY=spaces PREVIEW_SIZE=1100x700"
-  "settings-least|settings held Sync|PREVIEW_ACCOUNT=words PREVIEW_SIZE=720x480 PREVIEW_SCROLL=200"
+  "settings-least|settings held Sync|PREVIEW_ACCOUNT=signed-in PREVIEW_SIZE=720x480 PREVIEW_SCROLL=200"
   "translate-hover-dark|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=dark|translate mark drawn at"
   "translate-hover-light|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=light|translate mark drawn at"
   "foot-bar|foot bar shown|PREVIEW_FOOT_BAR=point"

@@ -24,11 +24,13 @@ on:
         description: Build the app, even if a check of this commit kept one
         type: boolean
         default: false
-      image:
+      runner:
         description: >-
-          The hosted runner's image, such as windows-2025, whose desktop is Windows 11's, which
-          rounds a window's corners where 2022's doesn't (#2988); empty for windows-2022
-        default: ''
+          The hosted runner: windows-2025's desktop is Windows 11's, which rounds a window's corners
+          where windows-2022's doesn't (#2988). A choice, so a typo can't send a check elsewhere
+        type: choice
+        options: [windows-2022, windows-2025]
+        default: windows-2022
       trace:
         description: >-
           The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
@@ -115,7 +117,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || inputs.runs == '' && '[1, 2]' || '[0]') }}
-    runs-on: ${{ inputs.image || 'windows-2022' }}
+    runs-on: ${{ inputs.runner || 'windows-2022' }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -143,7 +145,7 @@ jobs:
         battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
         pictures boosts arrange-card foot-bar peek-motion rules overlays safe-start update-checks shots sidebar-right alt-click mini-bar
-        panel-shadows
+        page-menu arrange arrange-trade panel-shadows
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
