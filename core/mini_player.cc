@@ -15,6 +15,7 @@
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -127,8 +128,15 @@ class MiniPlayerWatch : public views::WidgetObserver {
     LogHandover("mini player shows", size);
     if (ui::Compositor* compositor = widget->GetCompositor()) {
       compositor->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
-          [](const std::string& size, const viz::FrameTimingDetails&) {
-            LogHandover("mini player on screen", size);
+          [](const std::string& size, const viz::FrameTimingDetails& timing) {
+            // The time is when this ran on the UI thread. Beside it, when the frame was
+            // presented, so a UI thread late to run it shows apart from a late frame (#3181).
+            std::string detail = size;
+            if (const std::optional<base::TimeDelta> presented =
+                    SinceHandoverClicked(timing.presentation_feedback.timestamp)) {
+              detail += base::StringPrintf(", presented at %.1f ms", presented->InMillisecondsF());
+            }
+            LogHandover("mini player on screen", detail);
           },
           size));
     }
