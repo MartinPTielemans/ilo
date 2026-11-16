@@ -160,7 +160,7 @@ jobs:
       - if: ${{ steps.server.outcome == 'success' }}
         uses: ./.github/actions/apt-install
         with:
-          packages: xdotool openbox xauth
+          packages: xdotool openbox xauth xclip
 
       - name: Sign in
         if: ${{ steps.server.outcome == 'success' }}
