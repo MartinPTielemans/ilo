@@ -385,11 +385,14 @@ capture_look() {
   expect '^browser: capture chose 300 200 200 100$' \
     "a click on the box didn't take it in the $1 look"
   expect "^browser: capture menu drawn $1\$" "capture's menu didn't draw in the $1 look"
-  # The click leaves the pointer on Save to Library's row, which lights, as ilo's menus' rows do,
-  # once the pointer moves: its title and glyph in the label solved on the accent (#3137).
+  # The click leaves the pointer on Save to Library's row, which lights, as ilo's menus' rows do, at
+  # the next pointer event, the click's own on X11: its title and glyph in the label solved on the
+  # accent (#3137). Through Copy's row and back, it's lit whether or not the click lit it.
+  send move $(in_page 406 269)
+  expect '^browser: capture menu lit copy$' "the pointer on Copy's row didn't light it in the $1 look"
   send move $(in_page 406 245)
   expect '^browser: capture menu lit save-to-library$' \
-    "the pointer on Save to Library's row didn't light it in the $1 look"
+    "the pointer back on Save to Library's row didn't light it in the $1 look"
   ../tools/window-screenshot.sh "$pid" "$out/capture-menu-$1.png" || fail "no window to capture"
   send key escape
   expect '^browser: capture left (escape)$' "escape didn't leave capture mode in the $1 look"
