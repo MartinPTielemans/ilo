@@ -85,11 +85,11 @@ page=$(base64 << 'HTML' | tr -d '\n'
   addEventListener("resize", () => {
     document.title = `resized ${++resizes} times, to ${innerWidth}x${innerHeight}`;
   });
-  // After an n, the page goes to another site when its window loses the keyboard, so a new page
-  // commits while the command bar is open.
+  // After an n, the page goes to another site, the check server's one.html, when its window loses
+  // the keyboard, so a new page commits while the command bar is open.
   let leave = false;
   addEventListener("keydown", e => leave ||= e.key == "n");
-  addEventListener("blur", () => leave && (location = "https://example.com/"));
+  addEventListener("blur", () => leave && (location = location.hash.slice(1).replace(/wait$/, "one.html")));
   // A w opens the page the fragment names in a tab.
   addEventListener("keydown", e => e.key == "w" && window.open(location.hash.slice(1)));
   // A g opens gap.html from the check server in a tab.
@@ -847,7 +847,7 @@ escape_ms=$(full_screen_times "$timed_escape" "$timed_to" exit)
 send key n
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar"
-expect '^browser: loaded [0-9]* https://example.com/$' "the page didn't leave when the command bar opened"
+expect "^browser: loaded [0-9]* ${site}one.html\$" "the page didn't leave when the command bar opened"
 send state
 [ "$key" = GPUIPanel ] || fail "a page that committed under the command bar took the keyboard, $key has it"
 send key escape
@@ -1272,14 +1272,14 @@ toggle page shown "⌘S from the page with the sidebar out by ⌥"
 send key s cmd
 toggle page hidden "⌘S from the page before opening a tab"
 record new-tab-toast 6
-for site_name in example.org example.com; do
+for site_name in two.html one.html; do
   before=$(today)
   send key t cmd
   expect '^browser: command bar shown$' "⌘T with the sidebar hidden didn't open the command bar"
-  send type $site_name
+  send type "http://localhost:$port/$site_name"
   send key return
   # The plate is told once, at the first toast's rest: the second keeps it where it is.
-  [ "$site_name" = example.org ] && toast_step=$step
+  [ "$site_name" = two.html ] && toast_step=$step
   expect "^browser: today [0-9][0-9]* $before\$" \
     "the tab for $site_name didn't open at the top of Today"
   expect '^browser: toast shown New Tab Created \[show\]$' \
