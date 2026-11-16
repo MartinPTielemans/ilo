@@ -3,3 +3,4 @@
 //! the page as no user would (bc_tab_link_card); what's read from it is `page`'s.
 
 pub mod page;
+pub mod picture;
