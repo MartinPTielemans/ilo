@@ -385,6 +385,19 @@ else
     "the page that kept ⌘L lost or doubled the composition typed while it was held: $(grep '^browser: title' "$log" | tail -1)"
   ! sed -n "/^browser: drive $kept done/,\$p" "$log" | grep -q '^browser: command bar shown$' ||
     fail "the page kept ⌘L, but the command bar opened"
+  # A composition the page has open as it keeps ⌘F stays the page's, committed once. The core
+  # moves the input method during a hold under Wayland alone.
+  if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    send $ime
+    send type nihongo
+    expect "^browser: title [0-9]* value keep${preedit}x$preedit\$" "the page didn't show the composition"
+    post key f cmd
+    send key return
+    send ime off
+    send type z
+    expect "^browser: title [0-9]* value keep${preedit}x${preedit}z\$" \
+      "the page that kept ⌘F lost or doubled the composition it had open: $(grep '^browser: title' "$log" | tail -1)"
+  fi
   send key a cmd
   send type y
   expect '^browser: title [0-9]* value y$' "⌘A in the page didn't select all"

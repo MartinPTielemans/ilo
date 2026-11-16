@@ -58,8 +58,11 @@ void UITextInput::HoldForPage(bool hold, bool claimed) {
   if (hold) {
     ui::InputMethod* ime = widget_->GetInputMethod();
     ui::TextInputClient* page = ime ? ime->GetTextInputClient() : nullptr;
-    // A page with no field focused gets the keys themselves, which the hold has.
-    if (attached_ || !page || page->GetTextInputType() == ui::TEXT_INPUT_TYPE_NONE) {
+    // A page with no field focused gets the keys themselves, which the hold has. One composing
+    // keeps the input method too: the page would commit its composition as it lost it, which v3
+    // can't reset, so the composition would carry on here and the page would get it twice.
+    if (attached_ || !page || page->GetTextInputType() == ui::TEXT_INPUT_TYPE_NONE ||
+        page->HasCompositionText()) {
       return;
     }
     hold_ = Hold::kAnswer;
@@ -210,7 +213,9 @@ void UITextInput::SetCompositionText(const ui::CompositionText& composition) {
 size_t UITextInput::ConfirmCompositionText(bool) {
   const size_t length = composition_.size();
   if (length) {
-    InsertText(composition_, InsertTextCursorBehavior::kMoveCursorAfterText);
+    // InsertText clears composition_ first, so it gets the text by value.
+    InsertText(std::exchange(composition_, std::u16string()),
+               InsertTextCursorBehavior::kMoveCursorAfterText);
   }
   return length;
 }
