@@ -4,8 +4,9 @@
 # Zap hides what the user clicks, now and in the file, until escape in the page ends it; its
 # Customize… opens the editor, whose changes show at once in each window on the site and ⌘Z takes
 # back, and whose Advanced grows the card for its sliders, which the arrow keys move and Reset puts
-# back; a Boost that names the Space's colours reads them with var(), and one that names none gives
-# the site none; and with the file gone the page is its own again, as with a Boost turned off.
+# back; a Boost that names the Space's colours reads them with var(), in a private window too,
+# with no theme's, and one that names none gives the site none; and with the file gone the page is
+# its own again, as with a Boost turned off.
 
 serve
 # The page says in its title how #ad and its body look, each time that changes, so the run reads
@@ -83,6 +84,28 @@ for look in $other $system; do
   ../tools/window-screenshot.sh "$pid" "$out/boost-space-colors-$look.png" ||
     fail "no window to capture"
 done
+# A private window shows its original's Boosts, and its pages get the colours the app gives its
+# Space, which carry nothing of the user's: no theme and dark, the same for everyone.
+send key n cmd shift
+expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
+private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+expect '^browser: boost colors [0-9]* dark ' "the private window gave its Boosts no colours"
+new_window_bar
+send window 2
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+send insert "${site}boost.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}boost.html\$" \
+  "the private window didn't load the boosted page"
+private_tab=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}boost.html\$|\1|p" "$log" | tail -1)
+expect "^browser: title $private_tab ad block $(space_background dark) ilo-space\$" \
+  "the private page took no Space colours: $(grep "^browser: title $private_tab " "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/boost-space-colors-private.png" all ||
+  fail "no window to capture"
+send key w cmd shift
+expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
+send window 1
 printf '%s\n' 'body { background: rgb(0, 128, 0) !important; }' > "$file"
 expect "^browser: title $tab ad block rgb(0, 128, 0)\$" \
   "the Boost's file kept the Space's colour, or a Boost that names none kept them on the page"
@@ -249,7 +272,7 @@ exec 3>&-
 quit
 echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed;" \
   "its var(--ilo-space-background) took the Space's colour, dark and light, and a Boost that" \
-  "named none left the page none; Edit" \
+  "named none left the page none, and a private window's page took no theme's, dark; Edit" \
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
   "the tab's menu and the +'s offered Edit Boost…, which opened the card; Customize… opened the" \
   "editor, whose field coloured the page in both windows, ⌘Z took it back and escape closed it;" \
@@ -257,6 +280,7 @@ echo "ok: a site's Boost showed on its page as it loaded and at once as its file
   "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
   "Windows: $out/boosted.png, $out/boost-space-colors-dark.png," \
-  "$out/boost-space-colors-light.png, $out/boost-card.png, $out/zapped.png," \
+  "$out/boost-space-colors-light.png, $out/boost-space-colors-private.png," \
+  "$out/boost-card.png, $out/zapped.png," \
   "$out/boost-tab-menu.png, $out/boost-plus-menu.png, $out/boost-editor.png," \
   "$out/boost-edited.png, $out/boost-advanced.png"

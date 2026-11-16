@@ -536,3 +536,22 @@ fn boosts_take_a_space_s_colours_as_they_change(cx: &mut TestAppContext) {
     let back = boost_colors(&Palette::of(Some(&theme), system), Some(&theme));
     assert_eq!(boost_colors_given(&host), [(1, back)]);
 }
+
+/// A private window's pages get nothing of the user's: whatever its Space's theme, its Boosts take
+/// the colours of no theme and dark, the same for everyone.
+#[gpui::test]
+fn a_private_window_s_boosts_take_no_theme_dark(cx: &mut TestAppContext) {
+    let theme = Theme::at(0.5, 0.);
+    let (shell, host, cx) = recorded(Some(theme.main_color()), Some(theme), cx);
+    shell.update(cx, |shell, cx| {
+        shell.private = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let everyone = boost_colors(&Palette::of(None, Tone::Dark), None);
+    assert_ne!(
+        boost_colors(&Palette::of(Some(&theme), Tone::Dark), Some(&theme)),
+        everyone
+    );
+    assert_eq!(boost_colors_given(&host).last(), Some(&(1, everyone)));
+}
