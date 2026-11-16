@@ -159,7 +159,6 @@ impl LinkTarget {
         }
         let Some(state) = page_state(outcome, asked) else {
             self.card = None;
-            // check.sh reads this line.
             log!("browser: link card gone");
             cx.notify();
             return;
