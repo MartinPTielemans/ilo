@@ -53,9 +53,9 @@ MICROSOFT = {
     "third_party/microsoft_multimedia_redirection",
 }
 # The directories of Microsoft's toolchain and SDK, as the toolchain's zip lays them out, and the
-# vs_files and win_sdk Chromium's own scripts unpack them into. A packed name with one as a part is a
-# copy of Microsoft's files inside the tree, so it stops the Windows pack, as does a name under any
-# third_party/microsoft_* dir. Matched without case, as the toolchain's mount is case-insensitive.
+# vs_files and win_sdk Chromium's own scripts unpack them into. A packed name with one as a part is
+# a copy of Microsoft's files inside the tree, so it stops the Windows pack, as does a name under
+# any third_party/microsoft_* dir. Matched without case, as the toolchain's mount is case-insensitive.
 # Chromium's own checked-in files of Microsoft origin elsewhere in its public tree, such as
 # third_party/win_build_output and third_party/wtl, are Chromium's to ship and stay: this is the
 # toolchain's layout, not a list of every Microsoft file, so it isn't widened by guess. MSVC counts
