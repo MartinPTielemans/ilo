@@ -1859,8 +1859,10 @@ pub struct Shell {
     hang_noted: Option<u64>,
     /// The dialogs the tabs' pages ask, such as an alert(): the tab shown's goes over its card.
     page_dialogs: HashMap<u64, PageDialog>,
-    /// The page dialog asked over the card last, by its tab and id, and where.
-    page_dialog_shown: Option<(u64, u64, (Bounds<Pixels>, f32))>,
+    /// What the window told last of its page's dialog: the one asked over the card, by its tab
+    /// and id, and where, or none. Untold once it comes to the front, when the dialog shown may
+    /// be another window's.
+    page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32))>>,
     /// The tab or Space the user asked for and when, until it's shown.
     switching: Option<(Switch, Instant)>,
     /// Where the window's background was pressed, until the pointer moves past DRAG_START and it
@@ -2240,7 +2242,7 @@ impl Shell {
             crash_reload_drawn: Rc::default(),
             hang_noted: None,
             page_dialogs: HashMap::new(),
-            page_dialog_shown: None,
+            page_dialog_shown: Some(None),
             picker_pending: None,
             theme_preview: None,
             name_row_drawn: Rc::default(),
@@ -3399,8 +3401,9 @@ impl Shell {
         }
         cx.set_global(ShellHandle(cx.weak_entity()));
         commands::heard_key(&cx.weak_entity());
-        // Its tab's dialog goes over its card again, as another window's may have shown since, and
-        // its hung page's note shows, which waited while it was behind.
+        // Its tab's dialog goes over its card again, or another window's leaves, as that window may
+        // have closed before its draw took it back (#3108). Its hung page's note shows, which
+        // waited while it was behind.
         self.page_dialog_shown = None;
         self.note_hang(cx);
         cx.notify();
