@@ -144,3 +144,12 @@ Where a page's web platform default differs from Chrome's, it's listed here, eac
 |---|---|---|---|---|
 | Screen sharing needs a gesture | A page calls `getDisplayMedia()` whenever it likes, and the picker comes up unasked | Only within a click's or a key's activation, as the spec and the other two engines have it. Otherwise the page's promise is refused with `InvalidStateError`, and ilo shows nothing. An administrator's `ScreenCaptureWithoutGestureAllowedForOrigins` exempts an origin (the orchestrator's call, listed for the owner, 2026-11-12, #2456) | No page can put a share picker in front of the user they didn't ask for | Chrome turns `GetDisplayMediaRequiresUserActivation` on, or a named site breaks on it |
 | WebRTC addresses | `default` | `default_public_interface_only` | Decision 10 | Decision 10 |
+
+## 13. Boards: a page of the browser's own, in the tab's native view
+
+A Board (#3073) is `chrome://board/<id>`, a page whose canvas is the app's own code (`app/board/`) and whose cards are in the profile's `Boards/<id>/` (`core/board.cc`), not a surface GPUI draws in the page's place. What decides it is what a page has and GPUI would need built, per OS: a tab with no page on every tab path (pin, split, Peek, archive, restore, hover card, ⌘W); a multi-line editor with IME, spell check and accessibility; copy, paste and drag across the page's edge; and, for live captures later, native views GPUI can't draw over (decision 4).
+
+- **Its walls.** The page reads with GETs from its host and writes through `chrome.send`, in slices the core takes off the UI thread. Its messages name no Board: the core writes only the one its frame's committed address names. A stored file is a PNG, JPEG, GIF or WebP by its bytes, served as that type, so it's never a document. Its CSP allows only its own scripts, with no inline script or eval, and trusted types. A private window has no Boards.
+- **Its bound.** The four hot paths and all chrome stay native, and a Board's page draws only its canvas. No other surface becomes a page by this precedent; another needs its own entry.
+
+Revisit if GPUI gets a multi-line editor with IME and accessibility on each OS, and a tab with no page costs less than this page does.
