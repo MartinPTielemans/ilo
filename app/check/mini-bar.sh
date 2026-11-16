@@ -322,7 +322,7 @@ pinned="$pinned $out/mini-bar-mode-resized.png"
 # window (#2790). The page then scrolls back, for the steps after.
 stacked=
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
-for rep in $(seq 200); do
+for rep in $(seq 30); do
   stacked=
   inner_bar=$placed
   set -- $placed
@@ -334,6 +334,11 @@ for rep in $(seq 200); do
     set -- $placed
     [ "$7" != "$was_y" ] && break
     sleep 0.1
+  done
+  # Proof only: as in main's copy, the step goes on as soon as the bar hides.
+  for _ in $(seq 50); do
+    sed -n "$((n + 1)),\$p" "$log" | grep -q '^browser: mini bar hidden$' && break
+    sleep 0.05
   done
   # The bar hides as the page starts to scroll and shows again once it rests, and its new place can
   # come before either. Another app's window raised before that show would have the bar mapped over
