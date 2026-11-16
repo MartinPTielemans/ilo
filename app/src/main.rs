@@ -707,8 +707,11 @@ unsafe extern "C" fn agent_request_done(
 }
 
 unsafe extern "C" fn launching(_: *mut c_void) {
+    log!("browser: proof mark launching at {:.1} ms", unsafe { platform::host_since_launch() });
     safe_start_host::launching();
+    log!("browser: proof mark safe start done at {:.1} ms", unsafe { platform::host_since_launch() });
     ad_block_host::launching();
+    log!("browser: proof mark ad block done at {:.1} ms", unsafe { platform::host_since_launch() });
     // While Chromium starts, about 280 ms before the first window opens (#2384). Not in a launch
     // that hands its links to the running ilo: it exits while the drivers load, which crashes it.
     #[cfg(target_os = "linux")]
@@ -719,7 +722,9 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     if !browser::launch::exits_at_lock(std::path::Path::new(&profile_dir())) {
         gpui_windows::make_early();
     }
+    log!("browser: proof mark wgpu thread started at {:.1} ms", unsafe { platform::host_since_launch() });
     unsafe { platform::host_watch_finished_launching(finished_launching) };
+    log!("browser: proof mark watch done at {:.1} ms", unsafe { platform::host_since_launch() });
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
     };
@@ -769,6 +774,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             false,
         )
     });
+    log!("browser: proof mark frame read at {:.1} ms", unsafe { platform::host_since_launch() });
     // The sidebar's picture, taken in a window near enough this one's size to show in it. A
     // maximized one is another size, kept by none.
     let taken = std::fs::read_to_string(launch_layout_path())
@@ -782,6 +788,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken.height
         );
     }
+    log!("browser: proof mark picture read at {:.1} ms", unsafe { platform::host_since_launch() });
     // A picture of the column on one side, from before the sidebar moved, is none of this
     // window's (settings::set_sidebar_right).
     let right = settings::sidebar_right_kept();
@@ -791,6 +798,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
         (taken.width, taken.height, taken.foot_top)
     });
     unsafe {
+    log!("browser: proof mark launch window asked at {:.1} ms", platform::host_since_launch());
         platform::host_show_launch_window(
             profile.as_ptr(),
             x,
@@ -1202,6 +1210,7 @@ pub extern "C" fn bc_app_host(
     argc: *mut c_int,
     argv: *mut *const *const c_char,
 ) -> *const bc::bc_host {
+    log!("browser: proof mark host asked at {:.1} ms", unsafe { platform::host_since_launch() });
     // The arguments the process was given, from the core: Chromium on Linux has written its process
     // title over the ones std::env::args reads, joining each to the next (#605).
     let given = match unsafe { (*argc, *argv) } {
@@ -1219,11 +1228,13 @@ pub extern "C" fn bc_app_host(
         let desktop = format!("{}.desktop", include_str!("../branding/id").trim());
         unsafe { std::env::set_var("CHROME_DESKTOP", desktop) };
     }
+    log!("browser: proof mark host switches at {:.1} ms", unsafe { platform::host_since_launch() });
     let (args, host) = switches_and_host(given.collect());
     let pointers: Vec<*const c_char> = args.leak().iter().map(|arg| arg.as_ptr()).collect();
     unsafe {
         *argc = pointers.len() as c_int;
         *argv = pointers.leak().as_ptr();
     }
+    log!("browser: proof mark host done at {:.1} ms", unsafe { platform::host_since_launch() });
     Box::leak(Box::new(host))
 }
