@@ -270,36 +270,35 @@ send window 1
 check_layout "back in the first window"
 ../tools/window-screenshot.sh "$pid" "$out/windows-closed.png" || fail "no window to capture"
 
-# ⇧↩ in the command bar opens example.com in a new window, and the first keeps its page.
+# ⇧↩ in the command bar opens one.html in a new window, and the first keeps its page.
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type example.com
+send type "http://localhost:$port/one.html"
 send key return shift
-# The bar sends what it suggested first, http:// while the https:// probe is out; the page upgrades.
-expect '^browser: command bar window https*://example.com/' "⇧↩ didn't open example.com in a window"
+expect "^browser: command bar window http://localhost:$port/one.html" "⇧↩ didn't open one.html in a window"
 expect '^browser: window opened [0-9]' "⇧↩ didn't open a window"
 third=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: window $third shows [1-9][0-9]*\$" "⇧↩'s window didn't show a tab"
 c=$(grep "^browser: window $third shows [1-9]" "$log" | tail -1 | cut -d' ' -f5)
-expect "^browser: loaded $c https://example.com/\$" "example.com didn't load in ⇧↩'s window"
+expect "^browser: loaded $c http://localhost:$port/one.html\$" "one.html didn't load in ⇧↩'s window"
 none_since "^browser: window $first shows" || fail "⇧↩ changed what the first window shows"
 ../tools/window-screenshot.sh "$pid" "$out/windows-shift-return.png" all ||
   fail "no window to capture"
 
 # From the first window, the Switch to Tab row for that page brings its window forward, and the
-# first window keeps its own page. "example" is the start of the page's title and its URL.
+# first window keeps its own page. "localh" is the start of the page's URL.
 send window 1
 send key t cmd
 expect '^browser: command bar shown$' "⌘T in the first window didn't open the command bar"
-send type example
-expect '^browser: command bar completes "example" with "\.' \
-  "the command bar didn't complete \"example\""
+send type localh
+expect '^browser: command bar completes "localh" with "ost' \
+  "the command bar didn't complete \"localh\""
 send key backspace
-suggested="^browser: command bar suggestions \"example\" in .* ms: .*https://example.com/ tab $c"
+suggested="^browser: command bar suggestions \"localh\" in .* ms: .*http://localhost:$port/one.html tab $c"
 expect "$suggested" "the command bar didn't suggest the tab ⇧↩'s window shows"
 for _ in 1 2 3 4 5 6 7 8; do
   send key down
-  grep '^browser: command bar selected' "$log" | tail -1 | grep -q ' https://example.com/$' && break
+  grep '^browser: command bar selected' "$log" | tail -1 | grep -q " http://localhost:$port/one.html\$" && break
 done
 send key return
 expect "^browser: command bar switch to tab $c in window $third\$" \
