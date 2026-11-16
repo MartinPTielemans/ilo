@@ -98,8 +98,11 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   position: fixed; inset: 0; display: grid; place-items: center; color: var(--ink-soft);
   font-size: 15px; background: var(--canvas)
 }
-#note[hidden], #toast[hidden] { display: none }
-#toast {
+#note[hidden], #toast[hidden], #unsaved[hidden] { display: none }
+#toast, #unsaved {
   position: fixed; left: 50%; top: 16px; transform: translateX(-50%); padding: 8px 14px;
   border-radius: var(--bar-radius); background: var(--bar); box-shadow: 0 0 0 1px var(--rim), var(--lift)
 }
+/* A refused save stays said; a passing note goes under it. */
+#unsaved { max-width: min(560px, calc(100vw - 32px)); text-align: center }
+#unsaved:not([hidden]) ~ #toast { top: 64px }

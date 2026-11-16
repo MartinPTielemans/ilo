@@ -543,8 +543,8 @@ impl Shell {
         self.url_words(self.field_tab(), url, shown)
     }
 
-    /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, its whole
-    /// URL in Developer Mode, as Chrome's Always Show Full URLs has it, or with no tab, the command
+    /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, "Board" for
+    /// a Board's, its whole URL in Developer Mode, as Chrome's Always Show Full URLs has it, or with no tab, the command
     /// bar's placeholder, `shown` of the way in.
     pub(super) fn url_words(&self, tab: u64, url: &str, shown: f32) -> (SharedString, Hsla) {
         if tab == 0 {
@@ -554,6 +554,8 @@ impl Shell {
         }
         let words = match self.extension_name(url) {
             Some(name) => name,
+            // A Board's address is an id, which says nothing; the row has its name.
+            None if crate::boards::id_in(url).is_some() => "Board".into(),
             None if self.page(tab).developer_mode => url.to_string().into(),
             None => host(url).to_string().into(),
         };

@@ -112,13 +112,13 @@ async function save() {
   }
   const bytes = new TextEncoder().encode(JSON.stringify({ version: 1, camera, cards }));
   if (bytes.byteLength > MAX_BOARD) {
-    say("This Board is full: its notes and ink are over 4 MB, so the last change isn't saved.", true);
+    unsaved("This Board is too large to save: its notes and ink are over 4 MB. What's here stays on screen, but it isn't saved until it's smaller.");
     return;
   }
   saving = write("board", bytes);
   const done = await saving;
   saving = null;
-  if (done === false) say("This Board couldn't be saved.", true);
+  unsaved(done === false ? "This Board couldn't be saved. What's here stays on screen, but it isn't saved." : null);
   if (again) {
     again = false;
     return save();
@@ -764,6 +764,14 @@ view.addEventListener("drop", (e) => {
 });
 
 // --- Opening ---
+
+// A save that didn't go through stays said over the Board until one does: what's on screen is
+// kept, and nothing reads as saved that isn't.
+function unsaved(text) {
+  const bar = $("#unsaved");
+  bar.textContent = text ?? "";
+  bar.hidden = !text;
+}
 
 // |text| in place of the Board, or for a moment over it.
 let toastTimer = 0;
