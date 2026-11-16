@@ -257,11 +257,7 @@ impl Shell {
         let lit = self.app_menu && self.menu_open;
         div()
             .id(MENU_CONTROL)
-            .when(self.a11y, |button| {
-                button
-                    .button_named(MENU_CONTROL_NAME)
-                    .pressed_by_mouse_down(true, false)
-            })
+            .when(self.a11y, |button| button.button_named(MENU_CONTROL_NAME))
             .absolute()
             .right(px(PLUS_INSET + NAV_PITCH))
             .bottom(px((FOOTER_HEIGHT - NAV_SIZE) / 2.))
@@ -276,14 +272,14 @@ impl Shell {
             .on_hover(
                 cx.listener(|shell, hovered: &bool, _, cx| shell.hover_menu_control(*hovered, cx)),
             )
-            // On the press, as a pop-up button opens, as the + does.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|shell, _, _, cx| {
-                    shell.browser.tooltip(None, cx);
-                    shell.app_menu(cx)
-                }),
+                cx.listener(|shell, _, _, cx| shell.browser.tooltip(None, cx)),
             )
+            // On the click, as the actions' overflow opens its menu: the menu opens above the
+            // control, away from the pointer, so a release after it opened would read as a drag
+            // that let go outside it and close it, as Windows' did.
+            .on_click(cx.listener(|shell, _, _, cx| shell.app_menu(cx)))
             .child(self.button_frame(MENU_CONTROL))
             .child(
                 svg()

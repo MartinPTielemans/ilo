@@ -3,7 +3,9 @@
 
 use std::rc::Rc;
 
-use gpui::{Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    Entity, Modifiers, MouseButton, Pixels, Point, TestAppContext, VisualTestContext, point, px,
+};
 
 use crate::shell::{FOOTER_HEIGHT, PLUS_INSET, SWITCHER_INSET, Shell, recorder::Recorder};
 use crate::tokens::shell::{NAV_PITCH, NAV_SIZE, SPACE_PITCH};
@@ -98,6 +100,21 @@ fn the_menu_control_opens_ilos_menu_above_itself(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(host.app_asks.borrow().is_empty());
     assert!(shell.read_with(cx, |shell, _| !shell.app_menu && !shell.menu_open));
+}
+
+/// The menu opens on the click's release, not its press: it opens above the control, away from
+/// the pointer, so a release it saw after opening would read as a drag let go outside it and
+/// close it, as Windows' did.
+#[gpui::test]
+fn the_menu_control_opens_its_menu_on_the_release(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx, true);
+    let middle = plate(&shell, cx) + point(px(NAV_SIZE / 2.), px(NAV_SIZE / 2.));
+    cx.simulate_mouse_down(middle, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(host.menus.borrow().is_empty(), "the press opened the menu");
+    cx.simulate_mouse_up(middle, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(last_menu(&host), TITLES);
 }
 
 /// Each item does what the menu bar's does.
