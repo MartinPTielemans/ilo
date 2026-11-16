@@ -152,6 +152,10 @@ for l in 1 2 3 4 5 6 7 8 9; do
   pid=$!
   await "^browser: title [0-9]* l$l fcp " || fail "launch $l's page didn't paint"
   fcp=$(sed -n "s/^browser: title [0-9]* l$l fcp //p" "$log" | tail -1)
+  # The last stale launch stays up until its own engine has compiled, to see the swap.
+  if [ "$l" = 9 ]; then
+    await "^browser: ad block engine compiled in " || fail "launch 9's own engine didn't compile"
+  fi
   nr_engine=$(grep '^browser: ad block engine \(compiled\|loaded\) in ' "$log" |
     sed 's/^browser: ad block engine //' | tr '\n' ';')
   echo "$l $way $((fcp - t0)) $nr_engine" >> "$nr_dir/launches"
