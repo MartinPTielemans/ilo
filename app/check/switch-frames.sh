@@ -32,12 +32,17 @@ await '^browser: title [0-9]* ready$' || fail "the striped page didn't draw"
 first=$(space)
 a=$(today)
 # Whether the engine keeps the pages let go, from the line its core logs as they leave, in the
-# engine the app runs: a check VM's guest has the app but no core. The core is in the framework's
-# library, or with the dev engine in the component library build.sh links beside the app.
+# library the running app mapped: a dev engine's dylibs can stay in build/ after a Release build,
+# which the app doesn't load, and a check VM's guest has the app but no core. With the dev engine
+# the core is in libchrome_dll.dylib, else in the framework's own library.
 held=
-engine_library=build/libchrome_dll.dylib
-[ -e "$engine_library" ] ||
-  engine_library=$(echo "$app"/Contents/Frameworks/*Framework.framework/Versions/Current/*Framework)
+if [ "$(uname)" = Darwin ]; then
+  mapped=$(lsof -p "$pid" -Fn 2> /dev/null | sed -n 's/^n//p')
+  engine_library=$(printf '%s\n' "$mapped" | grep -m1 '/libchrome_dll\.dylib$') ||
+    engine_library=$(printf '%s\n' "$mapped" |
+      grep -m1 -E '/Contents/Frameworks/[^/]*Framework\.framework/Versions/[^/]*/[^/]*Framework$') ||
+    fail "the app ($pid) has mapped neither libchrome_dll.dylib nor its framework's library, so whether its engine keeps the pages let go is unknown"
+fi
 if [ "$(uname)" = Darwin ] &&
   LC_ALL=C grep -qaF "switch's pages let go left the window" "$engine_library"; then
   held=1
