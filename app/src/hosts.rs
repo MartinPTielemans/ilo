@@ -14,8 +14,10 @@ pub(crate) const FOLDER_PREVIEW: c_int = 3;
 
 pub(crate) const BOOST_EDITOR: c_int = 4;
 
+pub(crate) const TAB_SWITCHER: c_int = 5;
+
 /// The Site Controls aren't one of the host's overlays, but its elevation call takes them too.
-pub(crate) const SITE_CONTROLS: c_int = 5;
+pub(crate) const SITE_CONTROLS: c_int = 6;
 
 /// Shows ilo's menu of `items` at `at` in the content of `ui_view`'s window, any of the app's, or
 /// of its reveal's panel if `in_reveal`, in `look`, and calls `chosen` once it closes.
@@ -179,6 +181,14 @@ impl site_controls::Host for SiteControlsHost {
         update_app_later(move |cx| {
             if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
                 shell.update(cx, |shell, cx| shell.set_tab_boost_on(tab, on, cx));
+            }
+        });
+    }
+
+    fn turn_on_arrangement(&self, tab: u64) {
+        update_app_later(move |cx| {
+            if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+                shell.update(cx, |shell, cx| shell.turn_on_arrangement(tab, cx));
             }
         });
     }
@@ -365,6 +375,24 @@ thread_local! {
     pub(crate) static TOAST_VIEW: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
 }
 
+/// Arrange's mini bar's requests, to the host's mini bar window, over the browser window it names.
+pub(crate) struct MiniBarHost;
+
+impl browser::mini_bar::Host for MiniBarHost {
+    fn show(&self, window: u64, place: Bounds<Pixels>) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (x, y) = (place.origin.x.into(), place.origin.y.into());
+        let (width, height) = (place.size.width.into(), place.size.height.into());
+        unsafe { platform::host_show_mini_bar(view, x, y, width, height) };
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_mini_bar() };
+    }
+}
+
 /// The toast's requests, to the host's toast window.
 pub(crate) struct ToastHost {
     /// The toast's view, for the share menu its Share button shows, once its window is open.
@@ -528,6 +556,38 @@ impl folder_preview::Host for FolderPreviewHost {
 
 pub(crate) extern "C" fn folder_preview_dismissed() {
     update_app(folder_preview::dismissed);
+}
+
+/// The ⌃Tab switcher's requests, to the host's overlay window, where ⌘T's panel shows.
+pub(crate) struct TabSwitcherHost;
+
+impl tab_switcher::Host for TabSwitcherHost {
+    fn show(&self, window: u64, height: f32) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (top, width) = (
+            tab_switcher::ABOVE_MIDDLE.into(),
+            tab_switcher::WIDTH.into(),
+        );
+        // Under Wayland it has the keys only once it has drawn, and a ⌃Tab typed before then is
+        // its, not lost (a walk shows it once).
+        #[cfg(target_os = "linux")]
+        crate::keys::hold_keys_for_overlay();
+        unsafe {
+            platform::host_set_overlay_height(TAB_SWITCHER, height.into());
+            platform::host_show_overlay(TAB_SWITCHER, view, true, 0., top, width);
+        }
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_overlay(TAB_SWITCHER) };
+    }
+}
+
+/// The user left the switcher: a click outside it, or another app.
+pub(crate) extern "C" fn tab_switcher_dismissed() {
+    update_app(tab_switcher::dismissed);
 }
 
 /// The theme picker's requests, to the host's overlay window, over the window that asked.

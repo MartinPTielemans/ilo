@@ -58,10 +58,10 @@ impl link_preview::Host for LinkPreviewHost {
         WAYLAND.get()
     }
 
-    fn close_waits(&self) -> bool {
-        // Wayland's and X11's runs on main showed Peek's page round the shrinking card; Windows'
-        // did only under a probe sampling the screen every millisecond, so it closes as it did.
-        cfg!(target_os = "linux")
+    fn shown_at_once(&self) -> bool {
+        // Windows' core lays the page's child window out as it's asked, and has no word for when
+        // it's on screen (ShowPageIn).
+        cfg!(target_os = "windows")
     }
 
     fn release(&self) {
@@ -92,9 +92,11 @@ impl link_preview::Host for LinkPreviewHost {
         }
     }
 
-    fn kept_archived(&self, window: u64, archived: u64, cx: &mut App) {
-        // check.sh waits for this line.
-        log!("browser: restore archived {archived} from preview");
+    fn kept(&self, window: u64, archived: Option<u64>, cx: &mut App) {
+        if let Some(archived) = archived {
+            // check.sh waits for this line.
+            log!("browser: restore archived {archived} from preview");
+        }
         let shell = WINDOWS.with_borrow(|windows| {
             windows
                 .iter()
@@ -103,7 +105,7 @@ impl link_preview::Host for LinkPreviewHost {
         });
         if let Some(shell) = shell {
             shell
-                .update(cx, |shell, cx| shell.restored_from_preview(cx))
+                .update(cx, |shell, cx| shell.kept_from_preview(cx))
                 .ok();
         }
     }

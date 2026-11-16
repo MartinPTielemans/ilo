@@ -86,6 +86,56 @@ answer return accept "confirm true"
 ask p Prompt prompt
 send type grace
 answer return accept "prompt grace"
+# Asked again once answered, the prompt is drawn again: on X11 a managed one shown again has to
+# come out of its wait for its place (#2800).
+ask p Prompt prompt-again
+send type ada
+answer return accept "prompt ada"
+
+# On X11, another app's window raised over ilo's while the page's alert shows: the window manager
+# stacks the alert under that window with ilo's, where KWin drew an override-redirect one over every
+# window it manages (#2790). Back in ilo's window, the alert has the keys again for ↩. While the
+# alert holds the input focus ilo hears each button press on the display, and only counts them
+# (#2943); with another app active it hears none.
+raised_over=
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+  heard() { grep '^browser: x11 hears ' "$log" | tail -1 | cut -d' ' -f4-; }
+  ask a Alert alert-raised-over
+  for _ in $(seq 50); do [ "$(heard)" = "button presses" ] && break; sleep 0.1; done
+  [ "$(heard)" = "button presses" ] ||
+    fail "the alert holding the input focus, ilo didn't hear the presses on the display: $(heard)"
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other_app=$!
+  exec 7> "$out/other-in"
+  for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+  cover=$(head -1 "$out/other-window.log")
+  xdotool windowactivate --sync "$cover" 2> /dev/null ||
+    fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+  # The manager restacks as it activates, so its list is read until it settles, a second at most.
+  under=
+  for _ in $(seq 10); do
+    stacking=$(python3 -I check/x11-stacking.py "$cover" "$pid" 2>&1) && under=1 && break
+    sleep 0.1
+  done
+  [ -n "$under" ] || fail "the alert isn't under another app's window raised over ilo's: $stacking"
+  for _ in $(seq 50); do [ "$(heard)" = "no button presses" ] && break; sleep 0.1; done
+  [ "$(heard)" = "no button presses" ] ||
+    fail "with another app active, ilo still hears every button press on the display: $(heard)"
+  # The manager's stacking, bottom first, for whoever reads the run.
+  printf '%s\n' "$stacking" > "$out/alert-raised-over-stacking.json"
+  exec 7>&-
+  wait "$other_app" 2> /dev/null || true
+  send window 1
+  answer return accept alerted
+  # A tiling manager, as i3, tiles the other app's window beside ilo's, so the alert is beside it.
+  # Elsewhere the other app's window overlaps ilo's.
+  case $stacking in
+    *'"beside"'*) raised_over="beside the other app's window a tiling manager put beside" ;;
+    *) raised_over="under another app's window raised over" ;;
+  esac
+fi
 
 # Another tab takes the alert down, and its own brings it back.
 open_from_bar example.com
@@ -501,6 +551,8 @@ echo "  and hides 20 times, between the command bar and a tab's menu, with no pa
   "link target and the hover card show under it, and the link target over ilo's window once it's" \
   "gone. Windows: $out/link-target-covered-ilo.png, $out/link-target-covered-away.png," \
   "$out/link-target-uncovered.png"
+[ -z "$raised_over" ] || echo "  On X11 an alert stays $raised_over ilo's, in the window" \
+  "manager's stacking, and has the keys again back in ilo's window."
 [ -z "$background_dialog" ] || echo "  An alert that came with another app in front of ilo's" \
   "window ($background_dialog) went under that app's window and over ilo's, and took the keyboard" \
   "as ilo's window came to the front, with no caption of Windows' behind the window buttons there" \

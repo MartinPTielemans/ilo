@@ -131,6 +131,8 @@ unsafe extern "C" {
     pub fn host_reduce_motion() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_watch_reduce_motion(changed: extern "C" fn());
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_twelve_hour_clock() -> bool;
     pub fn host_is_default_browser() -> bool;
     pub fn host_make_default_browser(answered: extern "C" fn());
     pub fn host_since_launch() -> f64;
@@ -149,6 +151,9 @@ unsafe extern "C" {
         shadow_radius: f64,
         shadow_drop: f64,
     );
+    // Windows' alone, as the Mac's and Linux's hosts draw a panel's shadow under it.
+    #[cfg(target_os = "windows")]
+    pub fn host_set_shadow_margin(view: *mut c_void, above: f64, sides: f64, below: f64);
     pub fn host_set_overlay_shape(overlay: c_int, corners: *const f64, count: usize);
     pub fn host_set_overlay_radius(overlay: c_int, radius: f64);
     pub fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64);
@@ -410,6 +415,9 @@ unsafe extern "C" {
         height: f64,
     );
     pub fn host_hide_foot_bar();
+    pub fn host_add_mini_bar(mini_bar_view: *mut c_void, margin: f64);
+    pub fn host_show_mini_bar(ui_view: *mut c_void, x: f64, y: f64, width: f64, height: f64);
+    pub fn host_hide_mini_bar();
     pub fn host_add_tooltip(tooltip_view: *mut c_void, margin: f64, away: extern "C" fn());
     pub fn host_show_tooltip(ui_view: *mut c_void, overlay: c_int, left: f64, top: f64, fade: f64);
     pub fn host_hide_tooltip(fade: f64);

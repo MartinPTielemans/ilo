@@ -700,7 +700,7 @@ fn list_tabs_lists_only_the_agents_own_tabs(cx: &mut TestAppContext) {
         [("claude-code".to_string(), "Claude Code".to_string())]
     );
     assert!(!answer.error);
-    assert!(answer.text.starts_with("Your Space has no tabs yet."));
+    assert!(answer.text.starts_with("You have no tabs yet."));
 
     browser
         .tabs
@@ -1618,6 +1618,55 @@ fn an_agent_never_reaches_chromes_password_manager(cx: &mut TestAppContext) {
     assert!(browser.pages.borrow().is_empty());
 }
 
+/// Library › History lists the profile's pages, so an agent can't reach the history page Chrome
+/// keeps them in either, by a tab of its own or its tab's way, each try in the activity log with
+/// why, and it has no tool that lists or removes them (#2337).
+#[gpui::test]
+fn an_agent_never_reaches_the_history(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let tabs = browser.tabs.borrow().len();
+    let refused = ToolResult::error("Agents may open only http and https pages.");
+    for url in [
+        "chrome://history",
+        "chrome://history/?q=bank",
+        "CHROME://HISTORY",
+    ] {
+        let answer = call(
+            &agents,
+            "claude-code",
+            "open_tab",
+            json!({ "url": url }),
+            cx,
+        );
+        assert_eq!(answer.recv().unwrap(), refused, "{url}");
+        let going = json!({ "tab": 20, "url": url });
+        let answer = call(&agents, "claude-code", "navigate", going, cx);
+        assert_eq!(answer.recv().unwrap(), refused, "{url}");
+        let (action, _, why) = log(&agents, "claude-code", cx)[0].clone();
+        assert_eq!(
+            (action.as_str(), why.as_str()),
+            ("navigate", "Agents may open only http and https pages."),
+            "{url}'s refusal isn't in the activity log"
+        );
+    }
+    assert_eq!(
+        browser.tabs.borrow().len(),
+        tabs,
+        "an agent opened the history"
+    );
+    assert!(
+        browser.navigated.borrow().is_empty(),
+        "an agent went to the history"
+    );
+    for tool in ["history", "list_history", "remove_history"] {
+        let answer = call(&agents, "claude-code", tool, json!({}), cx);
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error(format!("There's no tool {tool}."))
+        );
+    }
+}
+
 /// A tab the page opens as the agent clicks, which the core puts in the agent's Space, behind, is
 /// named in the click's answer, so the agent can work in it (#1470). One another tab's page opens
 /// isn't.
@@ -1642,7 +1691,7 @@ fn a_tab_the_agents_click_opens_is_named(cx: &mut TestAppContext) {
     let said = clicked.text.split("\n\n").next().unwrap();
     assert_eq!(
         said,
-        "Clicked textbox “Coupon”. It opened tab 26 in your Space."
+        "Clicked textbox “Coupon”. It opened tab 26 among your tabs."
     );
 
     let answer = call(
@@ -3259,6 +3308,37 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
     }
 }
 
+/// A Boost and Arrange are the user's own view of their pages (#695, #2347): no tool, for an agent
+/// from outside or a task, and no run_steps step names them, and the agents' code reaches neither
+/// the Boosts nor an arrangement's file.
+#[test]
+fn no_agent_path_reaches_arrange_or_a_boost() {
+    let named = |text: &str| {
+        let text = text.to_lowercase();
+        ["arrange", "boost", "zap"]
+            .iter()
+            .any(|word| text.contains(word))
+    };
+    for agent in ["claude-code", "task-1"] {
+        let tools = tools::list(agent).to_string();
+        assert!(!named(&tools), "{agent}'s tools name one");
+    }
+    assert!(!tools::STEPS.iter().any(|step| named(step)));
+    let sources = [
+        include_str!("../agents.rs"),
+        include_str!("tools.rs"),
+        include_str!("task.rs"),
+        include_str!("server.rs"),
+        include_str!("page.rs"),
+        include_str!("request.rs"),
+        include_str!("runner.rs"),
+    ];
+    for source in sources {
+        assert!(!source.contains("boosts::"), "the agents reach the Boosts");
+        assert!(!source.contains("arrange"), "the agents reach Arrange");
+    }
+}
+
 /// The request tool (#1439): HTTP requests from a tab's page to its own site.
 mod requests {
     use super::*;
@@ -4148,8 +4228,7 @@ mod tasks {
             json!({ "result": "Two museums.", "tabs": [30, 50] }),
             cx,
         );
-        let theirs =
-            "Tab 50 isn't one of yours: give the ids of tabs in your Space, from list_tabs.";
+        let theirs = "Tab 50 isn't one of yours: give the ids of your own tabs, from list_tabs.";
         assert_eq!(refused.recv().unwrap(), ToolResult::error(theirs));
         // A result with its other arguments written into it, as Haiku wrote one, calls again.
         let garbled = "MAAT opens at 10:00.</result>\n<parameter name=\"summary\">MAAT 10–19h";

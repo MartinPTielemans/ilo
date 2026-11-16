@@ -534,6 +534,28 @@ impl Browser for Engine {
         unsafe { bc::bc_archive_clear() }
     }
 
+    fn list_history(
+        &self,
+        profile: u64,
+        request: u64,
+        before: i64,
+        text: &str,
+        max: usize,
+        _: &mut App,
+    ) -> bool {
+        let Ok(text) = CString::new(text) else {
+            return false;
+        };
+        unsafe { bc::bc_profile_list_history(profile, request, before, text.as_ptr(), max) }
+    }
+
+    fn remove_history(&self, profile: u64, url: &str, begin: i64, end: i64, _: &mut App) -> bool {
+        let Ok(url) = CString::new(url) else {
+            return false;
+        };
+        unsafe { bc::bc_window_remove_history(self.window, profile, url.as_ptr(), begin, end) != 0 }
+    }
+
     fn page_favicon(&self, url: &str, _: &mut App) {
         if let Ok(url) = CString::new(url) {
             unsafe { bc::bc_page_favicon(url.as_ptr()) };
@@ -1015,6 +1037,111 @@ impl Browser for Engine {
         // check.sh reads this line.
         log!("browser: zap {tab} {}", if on { "on" } else { "off" });
         unsafe { bc::bc_tab_boost_zap(tab, on) };
+    }
+
+    fn arrange(
+        &self,
+        tab: u64,
+        look: Option<&browser::boosts::arrange::Look>,
+        _: &mut App,
+    ) -> bool {
+        let Some(look) = look else {
+            // check.sh reads this line.
+            log!("browser: arrange {tab} off");
+            unsafe { bc::bc_tab_arrange(tab, false, std::ptr::null()) };
+            return false;
+        };
+        let words: Vec<(CString, CString)> = (browser::boosts::arrange::KINDS.iter())
+            .filter_map(|&(kind, word)| Some((CString::new(kind).ok()?, CString::new(word).ok()?)))
+            .collect();
+        let kinds: Vec<bc::bc_arrange_kind> = (words.iter())
+            .map(|(kind, word)| bc::bc_arrange_kind {
+                kind: kind.as_ptr(),
+                word: word.as_ptr(),
+            })
+            .collect();
+        let other = CString::new(browser::boosts::arrange::OTHER).unwrap_or_default();
+        let look = bc::bc_arrange_look {
+            accent: look.accent,
+            label: look.label,
+            ink: look.ink,
+            line: look.line.into(),
+            radius: look.radius.into(),
+            kinds: kinds.as_ptr(),
+            count: kinds.len(),
+            other: other.as_ptr(),
+            rest: look.rest.into(),
+            room_omega: look.room_omega.into(),
+            land_response: look.land_response.into(),
+            land_damping: look.land_damping.into(),
+        };
+        let on = unsafe { bc::bc_tab_arrange(tab, true, &look) };
+        // check.sh reads this line.
+        log!(
+            "browser: arrange {tab} {}",
+            if on { "on" } else { "refused" }
+        );
+        on
+    }
+
+    fn arrange_do(&self, tab: u64, ask: browser::boosts::arrange::Ask, _: &mut App) {
+        use browser::boosts::arrange::Ask;
+        let action = match ask {
+            Ask::Outer => bc::BC_ARRANGE_DO_OUTER,
+            Ask::Inner => bc::BC_ARRANGE_DO_INNER,
+            Ask::Undo => bc::BC_ARRANGE_DO_UNDO,
+            Ask::Hide => bc::BC_ARRANGE_DO_HIDE,
+            Ask::PutBack => bc::BC_ARRANGE_DO_PUT_BACK,
+            Ask::StaysOnScreen => bc::BC_ARRANGE_DO_STAYS_ON_SCREEN,
+            Ask::ScrollsWithPage => bc::BC_ARRANGE_DO_SCROLLS_WITH_PAGE,
+            Ask::Reset => bc::BC_ARRANGE_DO_RESET,
+        };
+        // check.sh reads this line.
+        log!("browser: arrange {tab} {ask:?}");
+        unsafe { bc::bc_tab_arrange_do(tab, action as std::os::raw::c_int) };
+    }
+
+    fn show_mini_bar(
+        &self,
+        shown: Option<(browser::mini_bar::Shown, browser::mini_bar::OnPress)>,
+        cx: &mut App,
+    ) {
+        let window = self.window;
+        // The shell asks from its render, and the bar's window is made the first time it shows: a
+        // window made while another draws left that one drawing nothing more on Linux and Windows.
+        cx.defer(move |cx| with_overlays(move |cx| browser::mini_bar::show(window, shown, cx), cx));
+    }
+
+    fn show_foot_bar(
+        &self,
+        bar: Option<(Bounds<Pixels>, Size<Pixels>, browser::foot_bar::Bar)>,
+        cx: &mut App,
+    ) {
+        let window = self.window;
+        // As the mini bar's: asked from the shell's render, and its window made at first show.
+        cx.defer(move |cx| {
+            with_overlays(
+                move |cx| match bar {
+                    Some((page, content, bar)) => {
+                        browser::foot_bar::show(window, page, content, bar, cx)
+                    }
+                    // Another window's mode may have it.
+                    None if browser::foot_bar::shown_over(cx) == Some(window) => {
+                        browser::foot_bar::hide(cx)
+                    }
+                    None => {}
+                },
+                cx,
+            )
+        });
+    }
+
+    fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> browser::boosts::Arranged {
+        boosts_host::set_arrangement(profile, site, bytes)
+    }
+
+    fn keep_arrangement(&self, profile: u64, site: &str, bytes: &str) -> bool {
+        boosts_host::keep_arrangement(profile, site, bytes)
     }
 
     fn edit_file(&self, path: &std::path::Path, _: &mut App) {
@@ -1769,6 +1896,10 @@ impl Browser for Engine {
         folder_preview::ask(ask, cx);
     }
 
+    fn tab_switcher(&self, ask: browser::tab_switcher::Ask, cx: &mut App) {
+        browser::tab_switcher::ask(ask, cx);
+    }
+
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {
         let request = hover_card::asking(tab, cx);
         // check.sh reads this line: a hidden page draws for its picture from here.
@@ -1855,6 +1986,14 @@ impl Browser for Engine {
         if let Some(agents) = browser::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.set_on(on, cx));
         }
+    }
+
+    fn daily_count(&self, _: &App) -> Option<bool> {
+        crate::daily_count_host::named().then(crate::daily_count_host::on)
+    }
+
+    fn set_daily_count(&self, on: bool, cx: &mut App) {
+        crate::daily_count_host::set_on(on, cx);
     }
 
     fn new_window(&self, cx: &mut App) {

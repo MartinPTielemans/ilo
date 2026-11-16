@@ -74,8 +74,8 @@ struct Shown {
 }
 
 thread_local! {
-    static OVERLAYS: RefCell<[Option<Overlay>; 5]> =
-        const { RefCell::new([None, None, None, None, None]) };
+    static OVERLAYS: RefCell<[Option<Overlay>; 6]> =
+        const { RefCell::new([None, None, None, None, None, None]) };
     /// The app's overlays that have each browser window's keyboard, by their views.
     static LENT: RefCell<Vec<(bc::bc_id, usize)>> = const { RefCell::new(Vec::new()) };
     /// Reduce Motion, under which they grow and shrink no more, and only fade.
@@ -128,12 +128,13 @@ pub(crate) fn keyboard_lent_to_another(window: bc::bc_id, view: *mut c_void) -> 
 /// and HOST_BOOST_EDITOR.
 const PICKERS: [c_int; 3] = [1, 2, 4];
 
-const NAMES: [&str; 5] = [
+const NAMES: [&str; 6] = [
     "command bar",
     "icon picker",
     "theme picker",
     "folder preview",
     "boost editor",
+    "tab switcher",
 ];
 
 fn with_overlay<R>(overlay: c_int, f: impl FnOnce(&mut Overlay) -> R) -> Option<R> {
@@ -641,6 +642,8 @@ fn dialog_bounds(ui_view: *mut c_void, insets: [f64; 4]) -> Option<(Bounds<Pixel
 #[unsafe(no_mangle)]
 pub extern "C" fn host_add_dialog(dialog_view: *mut c_void) {
     DIALOG.with_borrow_mut(|dialog| dialog.view = dialog_view);
+    // A question waits for its answer while the user is in another app.
+    gpui_linux::set_overlay_managed(dialog_view);
 }
 
 /// Shows the dialog over all of the browser window of `ui_view`, or over the tab's card at `x`,

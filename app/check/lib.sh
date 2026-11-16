@@ -759,12 +759,17 @@ last() { grep "^browser: $1 " "$log" | tail -1 | sed 's/.* //'; }
 # takes its stills after recorded. A recording that doesn't start is tried once more, then the
 # run goes on without it, saying why: the video is the motion's proof, never a step's.
 record() {
-  # tools/window-record.sh records with the Mac's ScreenCaptureKit alone.
-  if [ "$(uname)" != Darwin ]; then
+  # tools/window-record.sh records the Mac's windows with ScreenCaptureKit, and on Linux check.sh's
+  # Xvfb, which holds nothing but the app. Wayland's sessions and Windows have no recorder yet.
+  case "$(uname):${BROWSER_HEADLESS:-}" in
+  Darwin:* | Linux:xvfb) ;;
+  *)
     recording=""
-    echo "skip: recording $1, as tools/window-record.sh records only the Mac's windows so far."
+    echo "skip: recording $1, as tools/window-record.sh records only the Mac's windows and" \
+      "Linux's Xvfb so far."
     return 0
-  fi
+    ;;
+  esac
   recording="$out/$1.mp4"
   for try in 1 2; do
     ../tools/window-record.sh "$pid" "$2" "$recording" > "$out/$1-record.log" 2>&1 &

@@ -31,7 +31,7 @@ index a91818acd0..2d1de9aa21 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..525dab60a8 100644
+index a5390e77f8..ef6b8af668 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
 @@ -1,4 +1,26 @@
@@ -51,7 +51,7 @@ index a5390e77f8..525dab60a8 100644
 +    linux_platform, move_overlay, new_host_window, overlay_first_frame_scale, overlay_size, overlays_blend, overlays_blur,
 +    pointer_pressed,
 +    set_overlay_blur, set_overlay_cursor, set_overlay_keyboard,
-+    set_overlay_menu, set_overlay_outline, set_overlay_outlines, set_overlay_panel,
++    set_overlay_managed, set_overlay_menu, set_overlay_outline, set_overlay_outlines, set_overlay_panel,
 +    set_overlay_pointer, set_overlay_under,
 +    show_overlay, show_window, shown_keyboard_overlay, DragEnd, set_drag_icon, start_drag, start_file_drag, sync_display,
 +    take_overlay_keyboard, watch_control,
@@ -63,7 +63,7 @@ index a5390e77f8..525dab60a8 100644
 +    held_key, marked_range_in, open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..1ebee4c83e 100644
+index e4da54b52b..570af76b01 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -100,7 +100,7 @@ index e4da54b52b..1ebee4c83e 100644
 +pub use overlay::{
 +    Corner, CursorPicture, answered_key, embedder_scale, embedder_size, embedder_windows_going, give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
 +    move_overlay, overlay_first_frame_scale, overlay_size, overlays_blend, overlays_blur,
-+    pointer_pressed, set_overlay_blur, set_overlay_cursor, set_overlay_keyboard, set_overlay_menu, set_overlay_outline,
++    pointer_pressed, set_overlay_blur, set_overlay_cursor, set_overlay_keyboard, set_overlay_managed, set_overlay_menu, set_overlay_outline,
 +    set_overlay_outlines,
 +    set_overlay_panel, set_overlay_pointer, set_overlay_under, show_overlay, show_window,
 +    shown_keyboard_overlay,
@@ -244,10 +244,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..5c32450ea7
+index 0000000000..af8dd2f992
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1383 @@
+@@ -0,0 +1,1977 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -300,6 +300,32 @@ index 0000000000..5c32450ea7
 +    away: bool,
 +}
 +
++/// An overlay's ask for the keys on X11, in one of its showings (`ASKED`).
++#[allow(dead_code)]
++struct Asked {
++    view: usize,
++    showing: u64,
++    /// The presses, and the buttons pressed outside the overlays (`OUTSIDE`), as it last took the
++    /// keys.
++    presses: u64,
++    outside: u64,
++    /// It took them back since, with no input after.
++    again: bool,
++}
++
++/// Where the input focus went as it left an overlay that has the keys, as the display says.
++#[allow(dead_code)]
++#[derive(Clone, Copy, Debug)]
++pub(crate) struct Taken {
++    /// To a window of this app's own that isn't an overlay, such as the one it shows over.
++    pub to_own: bool,
++    /// A mouse button is down, as when a press on the embedder's window, which GPUI doesn't hear,
++    /// moved the focus.
++    pub pressed: bool,
++    /// The app is still the window manager's active one, or no window manager says.
++    pub active: bool,
++}
++
 +#[allow(dead_code)]
 +enum Op {
 +    Show {
@@ -334,6 +360,9 @@ index 0000000000..5c32450ea7
 +    },
 +    /// A press in a panel that shows without the keys.
 +    Pressed(usize),
++    /// On X11, the input focus left an overlay that has the keys, as it showed then: it asks for
++    /// them again if `asks_again` says so, and otherwise the user left it.
++    TakenBack(usize, u64),
 +    /// A window of the embedder's own shows, centred over `over` the first time (`show_window`).
 +    ShowWindow {
 +        view: usize,
@@ -343,6 +372,8 @@ index 0000000000..5c32450ea7
 +    /// The keyboard left the embedder's window, unless it's back by the time this runs, as a
 +    /// compositor sends a leave and an enter together when the keyboard's keymap changes.
 +    KeyboardLeft,
++    /// On X11, GPUI starts or stops hearing every button press, as `hears_presses` says now.
++    Hear,
 +    /// An overlay that shows takes the pointer where `set_overlay_pointer` last said.
 +    Pointer(usize),
 +    /// Whether Control is held, for `watch_control`.
@@ -362,6 +393,26 @@ index 0000000000..5c32450ea7
 +    /// On X11, where each overlay that let the keyboard go had it from, for an overlay that took it
 +    /// from that one (`holder`).
 +    static LET_GO: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
++    /// On X11, the presses so far, keys and buttons (`pressed_key_or_button`).
++    static PRESSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
++    /// On X11, the buttons heard pressed anywhere on the display (`pressed_button_anywhere`) that
++    /// no overlay heard pressed in it: each its count, and its time. A press has the same time as
++    /// both, so the two are paired by it, and heard in either order.
++    static OUTSIDE: RefCell<Vec<(u64, u32)>> = const { RefCell::new(Vec::new()) };
++    static OUTSIDE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
++    /// On X11, the times of the presses an overlay heard in it that weren't heard anywhere yet,
++    /// which an overlay hears whether or not it holds the focus.
++    static IN_OVERLAYS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
++    /// On X11, whether GPUI hears every button press on the display (`hears_presses`).
++    static HEARING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
++    /// On X11, the overlays that hold the input focus: from their ask for it to the focus leaving
++    /// them, or their hiding, or going off screen (`holds`).
++    static HOLDING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
++    /// On X11, whether this app is the window manager's active one, or no window manager says.
++    static ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
++    /// On X11, each overlay that was given the keys in a showing: the presses there had been as it
++    /// asked for them, and whether it asked again after the focus was taken back (`asks_again`).
++    static ASKED: RefCell<Vec<Asked>> = const { RefCell::new(Vec::new()) };
 +    /// On X11, the window each overlay shows over.
 +    static PARENTS: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
 +    /// The outlines overlays have that aren't rounded rectangles (`set_overlay_outlines`).
@@ -370,6 +421,8 @@ index 0000000000..5c32450ea7
 +    static BLURS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 +    /// The menus (`set_overlay_menu`).
 +    static MENUS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
++    /// The overlays a window manager manages on X11 (`set_overlay_managed`).
++    static MANAGED: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 +    /// The panels (`set_overlay_panel`), with what a press in each runs.
 +    static PANELS: RefCell<Vec<(usize, fn(*mut c_void))>> = const { RefCell::new(Vec::new()) };
 +    /// Where the overlays that don't take the pointer all over take it (`set_overlay_pointer`).
@@ -442,6 +495,32 @@ index 0000000000..5c32450ea7
 +    })
 +}
 +
++/// Makes the overlay `view` one the window manager manages on X11, from its next show on: a
++/// dialog with no frame, transient for the browser's window, rather than an override-redirect
++/// window. It's for an overlay that stays while the user is in another app, such as Peek or a
++/// toast: a manager keeps it with that window, under the other app's, minimises it with it and
++/// takes it to another desktop. A compositor such as KWin's draws an override-redirect window over
++/// every managed one, wherever X stacks it (#2790). Panels needn't be, as they're in the window.
++pub fn set_overlay_managed(view: *mut c_void) {
++    let view = view as usize;
++    MANAGED.with_borrow_mut(|all| {
++        if !all.contains(&view) {
++            all.push(view);
++        }
++    });
++}
++
++/// Leaves `view` to show unmanaged, as a window manager that can't place it would place it itself.
++#[cfg(feature = "x11")]
++pub(crate) fn set_unmanaged(view: usize) {
++    MANAGED.with_borrow_mut(|all| all.retain(|&each| each != view));
++}
++
++/// Whether the window manager manages `view` (`set_overlay_managed`).
++pub(crate) fn is_managed(view: usize) -> bool {
++    MANAGED.with_borrow(|all| all.contains(&view))
++}
++
 +/// Whether `view` is a menu (`set_overlay_menu`).
 +pub(crate) fn is_menu(view: usize) -> bool {
 +    MENUS.with_borrow(|all| all.contains(&view))
@@ -505,6 +584,201 @@ index 0000000000..5c32450ea7
 +        Some(true) => later(Op::Retake { view, pressed: true }),
 +        _ => {}
 +    }
++}
++
++/// The input focus left the overlay `view`, for a window it's in if `to_ancestor`. That's the user
++/// leaving it, unless it's a panel with the keys that a press where the pointer is would land in
++/// (`pressed_on`): a window manager that focuses the window clicked, as Openbox does, gives the
++/// focus to the one a panel is in as the user presses the panel, before GPUI hears the press or
++/// after, and the panel keeps the keys (#2684). A panel that gave them back hears the focus it
++/// gave leave as before, and a focus event never tells it of a press.
++#[cfg(feature = "x11")]
++pub(crate) fn focus_left(view: usize, to_ancestor: bool, pressed_on: impl FnOnce() -> bool) {
++    holds(view, false);
++    let shown = SHOWN.with_borrow(|all| {
++        (all.iter())
++            .find(|shown| shown.view == view)
++            .map(|shown| (shown.keyboard, shown.showing))
++    });
++    let keyboard = shown.map(|(keyboard, _)| keyboard);
++    if keyboard == Some(true) && to_ancestor && is_panel(view) && pressed_on() {
++        later(Op::Retake { view, pressed: true });
++    } else if let Some((true, showing)) = shown {
++        later(Op::TakenBack(view, showing));
++    } else {
++        left(view);
++    }
++}
++
++/// A key or a button pressed on one of GPUI's windows, on X11, or anywhere on the display while
++/// an overlay has the keys.
++#[allow(dead_code)]
++pub(crate) fn pressed_key_or_button() {
++    PRESSES.set(PRESSES.get() + 1);
++}
++
++/// On X11, a press at `time` in GPUI's window `view` (`pressed_in`), which is no press outside
++/// the overlays if `view` is one, as the same press heard anywhere says, before or after.
++#[allow(dead_code)]
++pub(crate) fn pressed_in_at(view: usize, time: u32) {
++    if is_shown(view) {
++        let heard = OUTSIDE.with_borrow_mut(|all| {
++            let at = all.iter().position(|&(_, each)| each == time);
++            at.map(|at| all.remove(at)).is_some()
++        });
++        if !heard {
++            IN_OVERLAYS.with_borrow_mut(|all| kept(all, time));
++        }
++    }
++    pressed_in(view);
++}
++
++/// A button pressed anywhere on the display at `time`, heard while an overlay holds the input
++/// focus (`hears_presses`): in an overlay, GPUI hears it there too (`pressed_in`), before or after.
++#[allow(dead_code)]
++pub(crate) fn pressed_button_anywhere(time: u32) {
++    pressed_key_or_button();
++    let in_overlay = IN_OVERLAYS.with_borrow_mut(|all| {
++        let at = all.iter().position(|&each| each == time);
++        at.map(|at| all.remove(at)).is_some()
++    });
++    if !in_overlay {
++        OUTSIDE_COUNT.set(OUTSIDE_COUNT.get() + 1);
++        let count = OUTSIDE_COUNT.get();
++        OUTSIDE.with_borrow_mut(|all| kept(all, (count, time)));
++    }
++}
++
++/// Adds `each` to the presses not paired yet, keeping the last 16: a press's two events come
++/// within a few of each other, and of the unpaired presses outside, the last says enough.
++fn kept<T>(all: &mut Vec<T>, each: T) {
++    if all.len() == 16 {
++        all.remove(0);
++    }
++    all.push(each);
++}
++
++/// The count of the last press outside the overlays not since heard in one, or 0.
++fn last_outside() -> u64 {
++    OUTSIDE.with_borrow(|all| all.last().map_or(0, |&(count, _)| count))
++}
++
++/// Whether the window manager last named this app's window the active one, or named none since
++/// the app started. KWin and Openbox name none while an overlay of the app's holds the focus, which
++/// leaves it as it was.
++#[allow(dead_code)]
++pub(crate) fn app_was_active() -> bool {
++    ACTIVE.get()
++}
++
++/// Whether GPUI should hear every button press on the display: only while this app is the active
++/// one and an overlay with the keys holds the input focus, as a press on the embedder's page then
++/// moves the focus from the overlay to the page's window, which is the user leaving it, and GPUI
++/// has to know of the press to tell that from the focus taken back with no input (`asks_again`).
++#[allow(dead_code)]
++fn hears_presses() -> bool {
++    ACTIVE.get()
++        && HOLDING.with_borrow(|holding| {
++            SHOWN.with_borrow(|all| {
++                (all.iter())
++                    .any(|shown| shown.keyboard && !shown.away && holding.contains(&shown.view))
++            })
++        })
++}
++
++/// The overlay `view` asked for the input focus (`on`), or the focus left it, or it's no longer
++/// shown on screen: GPUI hears presses only while one holds it.
++#[allow(dead_code)]
++fn holds(view: usize, on: bool) {
++    HOLDING.with_borrow_mut(|all| {
++        all.retain(|&each| each != view);
++        if on {
++            all.push(view);
++        }
++    });
++    if hears_presses() != HEARING.get() {
++        later(Op::Hear);
++    }
++}
++
++/// On X11, whether this app is the window manager's active one now, as the window manager names
++/// one; `None` when it names none, which changes nothing.
++#[allow(dead_code)]
++pub(crate) fn app_activated(active: Option<bool>) {
++    let Some(active) = active else {
++        return;
++    };
++    ACTIVE.set(active);
++    if hears_presses() != HEARING.get() {
++        later(Op::Hear);
++    }
++}
++
++/// The overlay `view` asked for the keys in the showing it's in now.
++#[allow(dead_code)]
++fn asked(view: usize) {
++    let Some(showing) = SHOWN.with_borrow(|all| {
++        all.iter().find(|shown| shown.view == view).map(|shown| shown.showing)
++    }) else {
++        return;
++    };
++    ASKED.with_borrow_mut(|all| {
++        all.retain(|asked| asked.view != view);
++        all.push(Asked {
++            view,
++            showing,
++            presses: PRESSES.get(),
++            outside: OUTSIDE_COUNT.get(),
++            again: false,
++        });
++    });
++    holds(view, true);
++}
++
++/// Whether the overlay `view`, whose keys the input focus just left as `taken` says, takes them
++/// back rather than taking that for the user leaving it. Something other than the user can put the
++/// focus on the window the overlay shows over while it has the keys: wlroots' Xwayland does as an
++/// overlay first maps, before it knows the window is this app's (#2943), and sway as it activates
++/// that window again, raising it over the overlay (#3044). So the overlay takes them back if the
++/// focus went to one of the app's own windows with no button down or pressed outside an overlay
++/// since it last took them, and the app still active. It does once a loss: taken again with no
++/// input from the user in between, it's left, as a window manager that keeps taking them won't
++/// give them up and a second take would fight it. Any other way, the user left it.
++#[allow(dead_code)]
++pub(crate) fn asks_again(view: usize, showing: u64, taken: Taken) -> bool {
++    let shown = SHOWN.with_borrow(|all| {
++        all.iter().any(|shown| {
++            shown.view == view
++                && shown.showing == showing
++                && shown.keyboard
++                && shown.ready
++                && !shown.away
++        })
++    });
++    if !shown {
++        return false;
++    }
++    ASKED.with_borrow_mut(|all| {
++        let Some(asked) = (all.iter_mut()).find(|asked| asked.view == view && asked.showing == showing)
++        else {
++            return false;
++        };
++        // A press outside the overlays, as on the page, is heard anywhere and in no overlay. Paired
++        // by time, a press in one heard while it didn't hold the focus can't hide a later one.
++        let outside = last_outside() > asked.outside;
++        if (asked.again && asked.presses == PRESSES.get())
++            || outside
++            || taken.pressed
++            || !taken.to_own
++            || !taken.active
++        {
++            return false;
++        }
++        asked.presses = PRESSES.get();
++        asked.outside = OUTSIDE_COUNT.get();
++        asked.again = true;
++        true
++    })
 +}
 +
 +/// A corner of an overlay's outline: x and y in logical pixels from its top left, and the radius
@@ -703,7 +977,7 @@ index 0000000000..5c32450ea7
 +
 +/// Where the overlay `view` takes the pointer, if not all over.
 +#[allow(dead_code)]
-+fn pointer_areas(view: usize) -> Option<Vec<Bounds<Pixels>>> {
++pub(crate) fn pointer_areas(view: usize) -> Option<Vec<Bounds<Pixels>>> {
 +    POINTERS.with_borrow(|all| {
 +        let (_, areas) = all.iter().find(|(each, _)| *each == view)?;
 +        Some(areas.clone())
@@ -794,6 +1068,7 @@ index 0000000000..5c32450ea7
 +    }) else {
 +        return;
 +    };
++    holds(view, false);
 +    #[allow(unused_mut)]
 +    let mut keyboard = shown.keyboard;
 +    // Under Wayland nothing the overlay still has to do touches its parent's surface, which the
@@ -813,6 +1088,21 @@ index 0000000000..5c32450ea7
 +        });
 +        super::wayland::overlay_hiding(view as _);
 +        // One that never showed never had the keys.
++        keyboard &= showed;
++    }
++    // A managed one on X11 isn't mapped only to be hidden in the same pass: its window manager
++    // takes the map as a request it handles after the hide, whose unmap does nothing to a window
++    // that isn't mapped yet.
++    #[cfg(feature = "x11")]
++    if is_managed(view) {
++        let showed = OPS.with_borrow_mut(|ops| {
++            let to_show = |op: &Op| matches!(op, Op::Show { view: each, .. } if *each == view);
++            let showed = !ops.iter().any(to_show);
++            ops.retain(|op| {
++                !matches!(op, Op::Show { view: each, .. } | Op::Move { view: each, .. } if *each == view)
++            });
++            showed
++        });
 +        keyboard &= showed;
 +    }
 +    later(Op::Hide {
@@ -967,14 +1257,18 @@ index 0000000000..5c32450ea7
 +/// manager hid, or says it's back (`away`). It says whether the overlay had the keys.
 +#[cfg(feature = "x11")]
 +pub(crate) fn set_away(view: usize, away: bool) -> bool {
-+    SHOWN.with_borrow_mut(|all| {
++    let had = SHOWN.with_borrow_mut(|all| {
 +        all.iter_mut()
 +            .find(|shown| shown.view == view)
 +            .is_some_and(|shown| {
 +                shown.away = away;
 +                shown.keyboard && shown.ready
 +            })
-+    })
++    });
++    if away {
++        holds(view, false);
++    }
++    had
 +}
 +
 +/// Whether the overlay `view` is off screen with the window it shows over (`set_away`).
@@ -1056,6 +1350,7 @@ index 0000000000..5c32450ea7
 +
 +/// The user left the overlay `view`.
 +pub(crate) fn left(view: usize) {
++    holds(view, false);
 +    let showing = SHOWN.with_borrow(|all| {
 +        all.iter().find(|shown| shown.view == view).map(|shown| shown.showing)
 +    });
@@ -1294,6 +1589,37 @@ index 0000000000..5c32450ea7
 +            }
 +            false
 +        }
++        #[cfg(feature = "x11")]
++        Op::TakenBack(view, showing) => {
++            let asked_again = super::platform::with_embedded_connection(|connection| {
++                let DisplayConnection::X11(x11) = connection else {
++                    return false;
++                };
++                let x11 = x11.0.borrow();
++                let Some(taken) = x11.focus_taken(view as _).log_err() else {
++                    return false;
++                };
++                if !asks_again(view, showing, taken) {
++                    return false;
++                }
++                log::info!("overlay {view:#x} takes back the input focus taken from it");
++                let asked = x11.overlay_takes_focus(view as _, None).log_err().is_some();
++                if asked {
++                    x11.overlay_raised(view as _).log_err();
++                    holds(view, true);
++                }
++                asked
++            });
++            // Only the showing the focus left is left: one shown since under the same view, as
++            // the menu a right-click on the next row shows in place of the last, isn't (#2993).
++            let still = SHOWN.with_borrow(|all| {
++                all.iter().any(|shown| shown.view == view && shown.showing == showing)
++            });
++            if asked_again != Some(true) && still {
++                left(view);
++            }
++            false
++        }
 +        Op::Pressed(view) => {
 +            let pressed = PANELS.with_borrow(|all| {
 +                all.iter().find(|(each, _)| *each == view).map(|&(_, pressed)| pressed)
@@ -1490,7 +1816,12 @@ index 0000000000..5c32450ea7
 +                super::wayland::show_window(view as _).log_err();
 +            }
 +            Op::HideWindow(view) => super::wayland::hide_window(view as _),
-+            Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft | Op::Control => {}
++            Op::Left(..)
++            | Op::Pressed(_)
++            | Op::TakenBack(..)
++            | Op::KeyboardLeft
++            | Op::Control
++            | Op::Hear => {}
 +        },
 +        #[cfg(feature = "x11")]
 +        DisplayConnection::X11(x11) => {
@@ -1516,6 +1847,9 @@ index 0000000000..5c32450ea7
 +                        x11.show_overlay(view as _, parent as _, bounds, &outline, keyboard, panel);
 +                    if let Some(from) = from.log_err() {
 +                        focus_from(view, from);
++                    }
++                    if keyboard {
++                        asked(view);
 +                    }
 +                }
 +                Op::Pointer(view) => {
@@ -1563,6 +1897,7 @@ index 0000000000..5c32450ea7
 +                    if let Some(from) = x11.overlay_takes_focus(view as _, None).log_err() {
 +                        focus_from(view, from);
 +                    }
++                    asked(view);
 +                }
 +                Op::Retake { view, pressed } => {
 +                    let parent = PARENTS.with_borrow(|all| {
@@ -1571,6 +1906,7 @@ index 0000000000..5c32450ea7
 +                    let within = parent.filter(|_| !pressed);
 +                    if let Some(from) = x11.overlay_takes_focus(view as _, within).log_err() {
 +                        focus_from(view, from);
++                        holds(view, true);
 +                    }
 +                }
 +                Op::Keyboard { view, keyboard: false } => {
@@ -1583,7 +1919,21 @@ index 0000000000..5c32450ea7
 +                Op::HideWindow(view) => {
 +                    x11.hide_window(view as _).log_err();
 +                }
-+                Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft | Op::Control => {}
++                Op::Left(..)
++                | Op::Pressed(_)
++                | Op::TakenBack(..)
++                | Op::KeyboardLeft
++                | Op::Control
++                | Op::Hear => {}
++            }
++            let hears = hears_presses();
++            if HEARING.get() != hears && x11.hear_presses(hears).log_err().is_some() {
++                HEARING.set(hears);
++                // For the checks, as the other X11 state lines.
++                match hears {
++                    true => eprintln!("browser: x11 hears button presses"),
++                    false => eprintln!("browser: x11 hears no button presses"),
++                }
 +            }
 +        }
 +        #[allow(unreachable_patterns)]
@@ -1629,6 +1979,250 @@ index 0000000000..5c32450ea7
 +        run_op(Op::Left(view, showing));
 +        run_op(Op::Left(view, showing));
 +        assert_eq!(TOLD.get(), 1);
++    }
++
++    #[cfg(feature = "x11")]
++    #[test]
++    fn a_panel_pressed_keeps_the_keys_as_the_window_manager_focuses_its_window() {
++        let (panel, overlay) = (11, 12);
++        for view in [panel, overlay] {
++            SHOWN.with_borrow_mut(|all| {
++                all.push(Shown {
++                    view,
++                    keyboard: true,
++                    ready: true,
++                    left: Some(told),
++                    showing: 1,
++                    away: false,
++                })
++            });
++        }
++        PANELS.with_borrow_mut(|all| all.push((panel, told)));
++        let retakes = |view| {
++            OPS.with_borrow(|ops| {
++                (ops.iter()).any(|op| matches!(op, Op::Retake { view: each, .. } if *each == view))
++            })
++        };
++        // The display's ops aside, as no display runs here.
++        let run_ops = || {
++            while let Some(op) = OPS.with_borrow_mut(|ops| ops.pop_front()) {
++                if !matches!(op, Op::Retake { .. }) {
++                    run_op(op);
++                }
++            }
++        };
++        // Openbox gives the window the panel is in the focus at a press in the panel (#2684).
++        focus_left(panel, true, || true);
++        assert!(retakes(panel), "the panel pressed didn't take the focus back");
++        run_ops();
++        assert_eq!(TOLD.get(), 0, "the panel pressed gave its keys back");
++        // A press in the page, where the core gives its window the focus, leaves it.
++        focus_left(panel, true, || false);
++        run_ops();
++        assert_eq!(TOLD.get(), 1);
++        // An overlay that isn't a panel is in no window of the embedder's, so it's left.
++        focus_left(overlay, true, || true);
++        run_ops();
++        assert_eq!(TOLD.get(), 2);
++        // The panel giving its keys back moves the focus to the window it's in, with the pointer
++        // resting on it: that's no press, and it doesn't take them again.
++        SHOWN.with_borrow_mut(|all| {
++            (all.iter_mut())
++                .filter(|shown| shown.view == panel)
++                .for_each(|shown| shown.keyboard = false)
++        });
++        focus_left(panel, true, || true);
++        assert!(!retakes(panel), "the panel took back the keys it gave");
++        let pressed = OPS.with_borrow(|ops| {
++            (ops.iter()).any(|op| matches!(op, Op::Pressed(each) if *each == panel))
++        });
++        assert!(!pressed, "a focus event told the panel of a press");
++    }
++
++    #[cfg(feature = "x11")]
++    #[test]
++    fn an_overlay_whose_focus_is_taken_back_with_no_input_takes_it_once_a_loss() {
++        let view = 21;
++        let show = |showing| {
++            SHOWN.with_borrow_mut(|all| {
++                all.retain(|shown| shown.view != view);
++                all.push(Shown {
++                    view,
++                    keyboard: true,
++                    ready: true,
++                    left: Some(told),
++                    showing,
++                    away: false,
++                })
++            });
++            asked(view);
++        };
++        let taken = Taken { to_own: true, pressed: false, active: true };
++        // Put back on the browser window with no input, as wlroots' Xwayland does at a first map
++        // (#2943): it takes the keys back, and taken again with no input between, it's left.
++        show(1);
++        assert!(asks_again(view, 1, taken), "taken back with no input, it didn't take them again");
++        assert!(!asks_again(view, 1, taken), "taken twice with no input between, it fought for them");
++        // The user typing and clicking in it between, then sway activating the browser window
++        // again (#3044): it takes them back each time.
++        show(2);
++        assert!(asks_again(view, 2, taken));
++        pressed_key_or_button();
++        assert!(asks_again(view, 2, taken), "taken again after a key in it, and it was left");
++        pressed_in_at(view, 10);
++        pressed_button_anywhere(10);
++        assert!(asks_again(view, 2, taken), "taken again after a click in it, and it was left");
++        // The same press heard anywhere first, then in the overlay.
++        pressed_button_anywhere(11);
++        pressed_in_at(view, 11);
++        assert!(asks_again(view, 2, taken), "taken again after a click in it, and it was left");
++        assert!(!asks_again(view, 2, taken), "taken twice with no input between, it fought for them");
++        // A button pressed outside the overlays, as on the page: the user left.
++        show(3);
++        pressed_button_anywhere(20);
++        assert!(!asks_again(view, 3, taken), "a click outside it, and it took the keys back");
++        // A click in the overlay heard only there, as it didn't hold the focus the manager had just
++        // taken, then one on the page heard only anywhere: the page's is still outside.
++        show(7);
++        assert!(asks_again(view, 7, taken));
++        pressed_in_at(view, 30);
++        pressed_button_anywhere(31);
++        assert!(
++            !asks_again(view, 7, taken),
++            "a click on the page after one in it heard only there, and it took the keys back"
++        );
++        // A button down where GPUI doesn't hear it, as a press on the embedder's window.
++        show(6);
++        let pressed = Taken { pressed: true, ..taken };
++        assert!(!asks_again(view, 6, pressed), "a button down, and it asked again");
++        // The app deactivated.
++        show(4);
++        let inactive = Taken { active: false, ..taken };
++        assert!(!asks_again(view, 4, inactive), "the app deactivated, and it asked again");
++        // The focus gone to another app's window, or to none.
++        show(5);
++        let elsewhere = Taken { to_own: false, ..taken };
++        assert!(!asks_again(view, 5, elsewhere), "the focus went to another app, and it asked again");
++        // Each of those left it, so with no input the showing asks again once.
++        assert!(asks_again(view, 5, taken));
++        // Through the focus leaving it: with no display to say where the focus went, it's left.
++        focus_left(view, false, || false);
++        while let Some(op) = OPS.with_borrow_mut(|ops| ops.pop_front()) {
++            run_op(op);
++        }
++        assert_eq!(TOLD.get(), 1, "the focus left with no display to say where, and it wasn't left");
++    }
++
++    #[cfg(feature = "x11")]
++    #[test]
++    fn the_focus_leaving_an_overlays_last_showing_never_leaves_the_next() {
++        let view = 41;
++        let show = |showing, ready| {
++            SHOWN.with_borrow_mut(|all| {
++                all.retain(|shown| shown.view != view);
++                all.push(Shown {
++                    view,
++                    keyboard: true,
++                    ready,
++                    left: Some(told),
++                    showing,
++                    away: false,
++                })
++            });
++        };
++        let run_ops = || {
++            while let Some(op) = OPS.with_borrow_mut(|ops| ops.pop_front()) {
++                run_op(op);
++            }
++        };
++        // A menu with the keys.
++        show(1, true);
++        asked(view);
++        // Openbox moves the focus to the browser window as the user right-clicks the next row,
++        // before GPUI hears the press, which shows that row's menu in place of this one under the
++        // same view (#2993).
++        focus_left(view, false, || false);
++        show(2, false);
++        run_ops();
++        show(2, true);
++        asked(view);
++        run_ops();
++        assert_eq!(TOLD.get(), 0, "the last menu's focus going left the next menu as it showed");
++        // The next menu's own focus going leaves it.
++        focus_left(view, false, || false);
++        run_ops();
++        assert_eq!(TOLD.get(), 1, "the next menu's focus went and it wasn't left");
++    }
++
++    #[cfg(feature = "x11")]
++    #[test]
++    fn presses_are_heard_only_while_an_overlay_holds_the_focus_and_the_app_is_active() {
++        let view = 31;
++        SHOWN.with_borrow_mut(|all| {
++            all.push(Shown {
++                view,
++                keyboard: true,
++                ready: true,
++                left: Some(told),
++                showing: 1,
++                away: false,
++            })
++        });
++        // Whether the display was asked to start or stop hearing them, as the X11 ops do, which
++        // then say what's heard.
++        let asked_display = || {
++            let hear = OPS.with_borrow_mut(|ops| {
++                let hear = ops.iter().any(|op| matches!(op, Op::Hear));
++                ops.clear();
++                hear
++            });
++            HEARING.set(hears_presses());
++            hear
++        };
++        let edge = |on: bool, what: &str| {
++            assert_eq!(hears_presses(), on, "{what}: presses heard is {}", !on);
++            assert!(asked_display(), "{what}: the display wasn't asked");
++        };
++        assert!(!hears_presses(), "presses heard before the overlay asked for the focus");
++        asked(view);
++        edge(true, "the overlay asked for the focus");
++        focus_left(view, false, || false);
++        edge(false, "the focus left the overlay");
++        asked(view);
++        edge(true, "the overlay asked again");
++        left(view);
++        edge(false, "the user left the overlay");
++        asked(view);
++        asked_display();
++        set_away(view, true);
++        edge(false, "the overlay went off screen with its window");
++        set_away(view, false);
++        assert!(!hears_presses(), "back on screen, it heard presses before it asked for the focus");
++        asked(view);
++        asked_display();
++        // KWin and Openbox name no active window while the focus is in the overlay, which they
++        // don't manage.
++        app_activated(None);
++        assert!(hears_presses(), "with no active window named, presses went unheard");
++        app_activated(Some(false));
++        edge(false, "another app became the active one");
++        app_activated(Some(true));
++        edge(true, "the app became the active one again, the overlay still holding the focus");
++        hide_overlay(view as _, || {});
++        edge(false, "the overlay hid");
++        // An overlay that shows without the keys, as a toast, never hears them.
++        SHOWN.with_borrow_mut(|all| {
++            all.push(Shown {
++                view,
++                keyboard: false,
++                ready: true,
++                left: Some(told),
++                showing: 2,
++                away: false,
++            })
++        });
++        holds(view, true);
++        assert!(!hears_presses(), "an overlay without the keys heard presses");
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/platform.rs b/crates/gpui_linux/src/linux/platform.rs
@@ -4951,7 +5545,7 @@ index f9b9727330..e1e2214d9d 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..41e1b3bdb1 100644
+index e21f019c64..9320b04b22 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -4970,7 +5564,7 @@ index e21f019c64..41e1b3bdb1 100644
      protocol::xinput::ConnectionExt,
      protocol::xkb::ConnectionExt as _,
      protocol::xproto::{
-@@ -58,12 +60,40 @@ use crate::linux::{
+@@ -58,12 +60,87 @@ use crate::linux::{
  };
  use crate::linux::{LinuxCommon, LinuxKeyboardLayout, X11Window, modifiers_from_xinput_info};
  
@@ -4985,14 +5579,61 @@ index e21f019c64..41e1b3bdb1 100644
 +    /// The overlays off screen with the top-level they show over, which the window manager hid, as
 +    /// it does to show the desktop, minimize or change workspace (`overlays_away`).
 +    static AWAY: RefCell<Vec<Away>> = const { RefCell::new(Vec::new()) };
++    /// Each panel that shows, with the window it's a child of (`show_overlay`).
++    static PANEL_IN: RefCell<Vec<(xproto::Window, xproto::Window)>> =
++        const { RefCell::new(Vec::new()) };
++    /// Each overlay the window manager manages (`set_overlay_managed`) with the place and size it
++    /// was last given across the root, which it's checked against as it maps.
++    static PLACED: RefCell<Vec<(xproto::Window, i32, i32, u32, u32)>> =
++        const { RefCell::new(Vec::new()) };
++    /// The managed overlays that take the input focus once their window manager has mapped them,
++    /// as a window that isn't viewable can't have it.
++    static FOCUS_ON_MAP: RefCell<Vec<xproto::Window>> = const { RefCell::new(Vec::new()) };
++    /// The managed overlays mapped elsewhere than they were put, which asked the manager for that
++    /// place again and then for their frame extents, which it answers once it has handled the ask
++    /// (`managed_overlay_answered`), unless a ConfigureNotify puts them in place before.
++    static ASKED_AGAIN: RefCell<Vec<xproto::Window>> = const { RefCell::new(Vec::new()) };
++    /// The managed overlays shown and not yet where they were put, each with the bounding shape it
++    /// takes once it is. Until then it has none, so a manager that maps it elsewhere first and moves
++    /// it after, as i3 does, shows nothing there: with no compositor the move would carry along
++    /// whatever was on the screen under it (`managed_overlay_seen`).
++    static UNPLACED: RefCell<Vec<(xproto::Window, Vec<xproto::Rectangle>)>> =
++        const { RefCell::new(Vec::new()) };
++    /// The sizes each managed overlay asked for while it waited for its place (`UNPLACED`), as it
++    /// may be resized on its way there, and the size it had when last hidden: a manager that sizes
++    /// it as none of them, nor as it is now, refused it the place (`managed_overlay_refused`).
++    static ASKED_SIZES: RefCell<Vec<(xproto::Window, u32, u32)>> =
++        const { RefCell::new(Vec::new()) };
++    /// Each managed overlay waiting for its place (`UNPLACED`), or to be seen once it has it, with
++    /// the timer that ends the wait (`bound_place`, `bound_seen`), as nothing else does with a
++    /// manager that never moves it or never takes its shape.
++    static PLACE_BOUNDS: RefCell<Vec<(xproto::Window, calloop::RegistrationToken)>> =
++        const { RefCell::new(Vec::new()) };
++    /// The managed overlays shown and not yet mapped since, whose place is checked as they map.
++    static CHECK_ON_MAP: RefCell<Vec<xproto::Window>> = const { RefCell::new(Vec::new()) };
++    /// The managed overlays the manager let go of while they showed, as it does one hidden and shown
++    /// again before it handled the hide, erasing its states: they're set again as it maps them.
++    static RESTATE: RefCell<Vec<xproto::Window>> = const { RefCell::new(Vec::new()) };
++    /// Each managed overlay with the browser's window it's transient for, whose desktop it follows.
++    static CLIENTS: RefCell<Vec<(xproto::Window, xproto::Window)>> = const { RefCell::new(Vec::new()) };
++    /// Whether the window manager takes `_NET_MOVERESIZE_WINDOW` and `_NET_REQUEST_FRAME_EXTENTS`,
++    /// once asked, until it lists what it takes again, as another manager starting does.
++    static MANAGER_TAKES: std::cell::Cell<Option<(bool, bool)>> =
++        const { std::cell::Cell::new(None) };
 +}
++
++/// The longest a managed overlay waits for its place before it shows where it is. Every manager
++/// tried answers in a frame or two, but one that has nothing to move, or waits on something it
++/// never gets, sends nothing, and the overlay, a page's prompt say, would never be seen (#2800).
++const PLACE_BOUND: Duration = Duration::from_millis(300);
 +
 +/// Whether `window` is a top-level an overlay with the keys is off screen with (`overlays_away`).
 +fn is_away_top(window: xproto::Window) -> bool {
 +    AWAY.with_borrow(|all| all.iter().any(|each| each.top == window && each.keyboard))
 +}
 +
-+/// An overlay the window manager hid with its top-level, whose own window no window manager takes.
++/// An overlay the window manager hid with its top-level, whose own window no window manager takes,
++/// or a managed one that waits for the keys the manager took to another desktop or app.
 +struct Away {
 +    view: xproto::Window,
 +    top: xproto::Window,
@@ -5012,7 +5653,7 @@ index e21f019c64..41e1b3bdb1 100644
  };
  use gpui_wgpu::{CompositorGpuHint, GpuContext};
  
-@@ -163,8 +193,106 @@ pub struct Xdnd {
+@@ -163,8 +240,106 @@ pub struct Xdnd {
  struct PointerDeviceState {
      horizontal: ScrollAxisState,
      vertical: ScrollAxisState,
@@ -5038,8 +5679,8 @@ index e21f019c64..41e1b3bdb1 100644
 +    position: Point<Pixels>,
 +    modifiers: Modifiers,
 +    last: Instant,
- }
- 
++}
++
 +/// A finger scroll's event, with the window it goes to.
 +type FingerEvent = (xproto::Window, gpui::ScrollEvent);
 +
@@ -5103,8 +5744,8 @@ index e21f019c64..41e1b3bdb1 100644
 +        );
 +        Some((fingers.window, event))
 +    }
-+}
-+
+ }
+ 
 +/// A finger scroll's pixels for each of XInput's lines, as on Wayland: Xwayland moves the
 +/// valuator a tenth of a click for each of Wayland's pixels, which GPUI triples there as it does
 +/// lines here.
@@ -5119,7 +5760,7 @@ index e21f019c64..41e1b3bdb1 100644
  #[derive(Debug, Default)]
  struct ScrollAxisState {
      /// Valuator number for looking up this axis's scroll value.
-@@ -176,7 +304,7 @@ struct ScrollAxisState {
+@@ -176,7 +351,7 @@ struct ScrollAxisState {
      /// This gets set to `None` whenever it might be invalid - when devices change or when window focus changes.
      /// The logic errs on the side of invalidating this, since the consequence is just skipping the delta of one scroll event.
      /// The consequence of not invalidating it can be large invalid deltas, which are much more user visible.
@@ -5128,7 +5769,7 @@ index e21f019c64..41e1b3bdb1 100644
  }
  
  pub struct X11ClientState {
-@@ -204,12 +332,19 @@ pub struct X11ClientState {
+@@ -204,12 +379,19 @@ pub struct X11ClientState {
      pub(crate) xcb_connection: Rc<XCBConnection>,
      xkb_device_id: i32,
      client_side_decorations_supported: bool,
@@ -5148,7 +5789,7 @@ index e21f019c64..41e1b3bdb1 100644
      pub(crate) xkb: xkbc::State,
      keyboard_layout: LinuxKeyboardLayout,
      pub(crate) ximc: Option<X11rbClient<Rc<XCBConnection>>>,
-@@ -228,10 +363,16 @@ pub struct X11ClientState {
+@@ -228,10 +410,16 @@ pub struct X11ClientState {
      pub(crate) cursor_handle: cursor::Handle,
      pub(crate) cursor_styles: HashMap<xproto::Window, CursorStyle>,
      pub(crate) cursor_cache: HashMap<CursorStyle, Option<xproto::Cursor>>,
@@ -5165,7 +5806,7 @@ index e21f019c64..41e1b3bdb1 100644
  
      pub(crate) supports_xinput_gestures: bool,
  
-@@ -239,6 +380,9 @@ pub struct X11ClientState {
+@@ -239,6 +427,9 @@ pub struct X11ClientState {
      pub(crate) clipboard: Clipboard,
      pub(crate) clipboard_item: Option<ClipboardItem>,
      pub(crate) xdnd_state: Xdnd,
@@ -5175,7 +5816,19 @@ index e21f019c64..41e1b3bdb1 100644
  }
  
  #[derive(Clone)]
-@@ -416,7 +560,12 @@ impl X11Connection {
+@@ -272,6 +463,11 @@ impl X11ClientStatePtr {
+             state.cursor_hidden_window = None;
+         }
+         state.cursor_styles.remove(&x_window);
++        state.unbound_place(x_window);
++        drop(state);
++        // X reuses a destroyed window's id, so nothing of an overlay's outlives its window, as the
++        // size it had when last hidden would (`hide_overlay`).
++        forget_overlay(x_window);
+     }
+ 
+     pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
+@@ -416,7 +612,12 @@ impl X11Connection {
              .context("Failed to get XCB atoms")?;
  
          let root = xcb_connection.setup().roots[0].root;
@@ -5189,7 +5842,7 @@ index e21f019c64..41e1b3bdb1 100644
          let gtk_frame_extents_supported =
              check_gtk_frame_extents_supported(&xcb_connection, &atoms, root);
          let client_side_decorations_supported = compositor_present && gtk_frame_extents_supported;
-@@ -487,6 +636,19 @@ impl X11Connection {
+@@ -487,6 +688,21 @@ impl X11Connection {
  
          let screen = &xcb_connection.setup().roots[x_root_index];
          let compositor_gpu = detect_compositor_gpu(&xcb_connection, screen);
@@ -5206,10 +5859,12 @@ index e21f019c64..41e1b3bdb1 100644
 +            )
 +            .ok();
 +        let app_active = app_active(&xcb_connection, &atoms, active_root, &HashMap::default());
++        let named = names_active_window(&xcb_connection, &atoms, active_root);
++        crate::linux::overlay::app_activated(named.then_some(app_active != Some(false)));
  
          let xcb_connection = Rc::new(xcb_connection);
  
-@@ -525,12 +687,16 @@ impl X11Connection {
+@@ -525,12 +741,16 @@ impl X11Connection {
                  xcb_connection,
                  xkb_device_id,
                  client_side_decorations_supported,
@@ -5226,7 +5881,7 @@ index e21f019c64..41e1b3bdb1 100644
                  xkb: xkb_state,
                  keyboard_layout,
                  ximc,
-@@ -544,16 +710,21 @@ impl X11Connection {
+@@ -544,16 +764,21 @@ impl X11Connection {
                  cursor_handle,
                  cursor_styles: HashMap::default(),
                  cursor_cache: HashMap::default(),
@@ -5248,7 +5903,31 @@ index e21f019c64..41e1b3bdb1 100644
              })
          })));
          // From here on, `Drop` removes whatever was registered if a later step fails.
-@@ -745,6 +916,10 @@ impl X11Client {
+@@ -568,6 +793,23 @@ impl X11Connection {
+ pub(crate) struct X11Client(pub(crate) Rc<RefCell<X11ClientState>>);
+ 
+ impl X11Client {
++    /// Whether the pointer is over `window`, as while the user presses it.
++    /// Whether a press where the pointer is would land in the panel `view`: whether it's the child
++    /// of the window it's in that the X server finds the pointer in, which it finds by each window's
++    /// bounding and input shapes, as it finds the window a press goes to.
++    fn pressed_on_panel(&self, view: xproto::Window) -> bool {
++        let within = PANEL_IN.with_borrow(|all| {
++            (all.iter()).find(|&&(each, _)| each == view).map(|&(_, within)| within)
++        });
++        let Some(within) = within else { return false };
++        let xcb = self.0.borrow().xcb_connection.clone();
++        let pointer = || -> anyhow::Result<bool> {
++            let pointer = xcb.query_pointer(within)?.reply()?;
++            Ok(pointer.same_screen && pointer.child == view)
++        };
++        pointer().log_err().unwrap_or(false)
++    }
++
+     fn register_sources(
+         &self,
+         handle: &LoopHandle<'static, ()>,
+@@ -745,6 +987,10 @@ impl X11Client {
              }
  
              for event in events.into_iter() {
@@ -5259,7 +5938,7 @@ index e21f019c64..41e1b3bdb1 100644
                  let mut state = self.0.borrow_mut();
                  if !state.has_xim() {
                      drop(state);
-@@ -879,9 +1054,202 @@ impl X11Client {
+@@ -879,9 +1125,206 @@ impl X11Client {
              .map(|window_reference| window_reference.window.clone())
      }
  
@@ -5369,6 +6048,10 @@ index e21f019c64..41e1b3bdb1 100644
 +
      fn handle_event(&self, event: Event) -> Option<()> {
          match event {
++            // A button pressed anywhere on the display, heard while an overlay holds the focus.
++            Event::XinputRawButtonPress(event) => {
++                crate::linux::overlay::pressed_button_anywhere(event.time);
++            }
 +            // A file's drag has the pointer until it's let go (drag.rs).
 +            Event::XinputMotion(event) if self.file_drag_held() => {
 +                let (x, y) = ((event.root_x >> 16) as i16, (event.root_y >> 16) as i16);
@@ -5462,11 +6145,12 @@ index e21f019c64..41e1b3bdb1 100644
                  let mut state = self.0.borrow_mut();
                  if let Some(window_ref) = state.windows.get_mut(&event.window) {
                      window_ref.is_mapped = false;
-@@ -889,11 +1257,23 @@ impl X11Client {
+@@ -889,13 +1332,34 @@ impl X11Client {
                  handle_visibility_changed(state, event.window);
              }
              Event::MapNotify(event) => {
 +                self.0.borrow().overlays_back(event.window).log_err();
++                self.0.borrow().managed_overlay_mapped(event.window).log_err();
                  let mut state = self.0.borrow_mut();
 -                if let Some(window_ref) = state.windows.get_mut(&event.window) {
 +                let window = (state.windows.get_mut(&event.window)).map(|window_ref| {
@@ -5487,8 +6171,34 @@ index e21f019c64..41e1b3bdb1 100644
 +                }
              }
              Event::VisibilityNotify(event) => {
++                // Shown again in a frame the manager mapped again, as i3 shows a workspace,
++                // with no map of its own: a managed overlay waiting for the keys takes them.
++                if event.state != xproto::Visibility::FULLY_OBSCURED {
++                    self.0.borrow().managed_focus_on_map(event.window).log_err();
++                }
++                if event.state != xproto::Visibility::FULLY_OBSCURED {
++                    self.0.borrow().unbound_seen(event.window);
++                }
                  let mut state = self.0.borrow_mut();
-@@ -1044,12 +1424,71 @@ impl X11Client {
+                 if let Some(window_ref) = state.windows.get_mut(&event.window) {
+                     window_ref.last_visibility = event.state;
+@@ -1033,7 +1497,15 @@ impl X11Client {
+                     self.0.borrow_mut().xdnd_state.retrieved = true;
+                 }
+             }
++            // The window manager let go of a managed overlay, which it takes again if it shows.
++            Event::ReparentNotify(event) => {
++                let state = self.0.borrow();
++                if event.parent == state.xcb_connection.setup().roots[state.x_root_index].root {
++                    state.managed_overlay_released(event.window).log_err();
++                }
++            }
+             Event::ConfigureNotify(event) => {
++                self.0.borrow().managed_overlay_moved(event.window).log_err();
+                 let bounds = Bounds {
+                     origin: Point {
+                         x: event.x.into(),
+@@ -1044,13 +1516,114 @@ impl X11Client {
                          height: event.height.into(),
                      },
                  };
@@ -5505,19 +6215,43 @@ index e21f019c64..41e1b3bdb1 100644
 +                        let state = self.0.borrow();
 +                        (state.xcb_connection.clone(), state.kwin_support)
 +                    };
++                    let above = match kwin_support {
++                        Some(_) => event.window,
++                        None => (self.0.borrow().above_managed(event.window).log_err())
++                            .unwrap_or(event.window),
++                    };
 +                    for &(view, dx, dy) in &over {
-+                        let mut aux = (xproto::ConfigureWindowAux::new())
-+                            .x(i32::from(event.x) + i32::from(dx))
-+                            .y(i32::from(event.y) + i32::from(dy));
-+                        // Over KWin's support window, where no raise of the top-level reaches.
++                        let (x, y) =
++                            (i32::from(event.x) + i32::from(dx), i32::from(event.y) + i32::from(dy));
++                        // A managed one the window manager keeps over it, and moves only if it
++                        // isn't there already, as a raise leaves it.
++                        if crate::linux::overlay::is_managed(view as usize) {
++                            let moved = PLACED.with_borrow_mut(|all| {
++                                let each = all.iter_mut().find(|each| each.0 == view)?;
++                                let moved = (each.1, each.2) != (x, y);
++                                (each.1, each.2) = (x, y);
++                                Some(moved)
++                            });
++                            if moved == Some(true) {
++                                let aux = xproto::ConfigureWindowAux::new().x(x).y(y);
++                                xcb.configure_window(view, &aux).log_err();
++                                self.0.borrow().managed_move(view, x, y, None).log_err();
++                            }
++                            continue;
++                        }
++                        let mut aux = xproto::ConfigureWindowAux::new().x(x).y(y);
++                        // Over KWin's support window, where no raise of the top-level reaches;
++                        // else over the top-level and the managed overlays the manager keeps there.
 +                        if kwin_support.is_none() {
-+                            aux = aux.sibling(event.window).stack_mode(xproto::StackMode::ABOVE);
++                            aux = aux.sibling(above).stack_mode(xproto::StackMode::ABOVE);
 +                        }
 +                        xcb.configure_window(view, &aux).log_err();
 +                    }
 +                    // One that shows under another goes back under it, which over KWin's support
 +                    // window it still is.
-+                    for &(view, ..) in over.iter().filter(|_| kwin_support.is_none()) {
++                    for &(view, ..) in over.iter().filter(|&&(view, ..)| {
++                        kwin_support.is_none() && !crate::linux::overlay::is_managed(view as usize)
++                    }) {
 +                        if let Some(above) = crate::linux::overlay::under(view as usize)
 +                            .filter(|&above| crate::linux::overlay::is_shown(above))
 +                        {
@@ -5556,11 +6290,30 @@ index e21f019c64..41e1b3bdb1 100644
 +                let mut state = self.0.borrow_mut();
 +                state.app_active =
 +                    app_active(&state.xcb_connection, &state.atoms, event.window, &state.windows);
++                let named = names_active_window(&state.xcb_connection, &state.atoms, event.window);
++                crate::linux::overlay::app_activated(
++                    named.then_some(state.app_active != Some(false)),
++                );
 +            }
              Event::PropertyNotify(event) => {
++                {
++                    let state = self.0.borrow();
++                    if event.atom == state.atoms._NET_SUPPORTED {
++                        MANAGER_TAKES.set(None);
++                    } else if event.atom == state.atoms._NET_FRAME_EXTENTS {
++                        state.managed_overlay_answered(event.window).log_err();
++                    }
++                }
++                if CLIENTS.with_borrow(|all| all.iter().any(|&(_, each)| each == event.window)) {
++                    let state = self.0.borrow();
++                    if event.atom == state.atoms._NET_WM_DESKTOP {
++                        state.managed_follow_desktop(event.window).log_err();
++                    }
++                }
                  let window = self.get_window(event.window)?;
                  window
-@@ -1069,6 +1508,20 @@ impl X11Client {
+                     .property_notify(event)
+@@ -1069,6 +1642,24 @@ impl X11Client {
                  self.enable_ime();
              }
              Event::FocusOut(event) => {
@@ -5576,12 +6329,16 @@ index e21f019c64..41e1b3bdb1 100644
 +                ) && !crate::linux::overlay::to_show(event.event as usize)
 +                    && !crate::linux::overlay::is_away(event.event as usize)
 +                {
-+                    crate::linux::overlay::left(event.event as usize);
++                    crate::linux::overlay::focus_left(
++                        event.event as usize,
++                        event.detail == xproto::NotifyDetail::ANCESTOR,
++                        || self.pressed_on_panel(event.event),
++                    );
 +                }
                  let window = self.get_window(event.event)?;
                  window.set_active(false);
                  let mut state = self.0.borrow_mut();
-@@ -1117,6 +1570,12 @@ impl X11Client {
+@@ -1117,6 +1708,12 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xkb(&state.xkb);
                  let capslock = capslock_from_xkb(&state.xkb);
@@ -5594,7 +6351,15 @@ index e21f019c64..41e1b3bdb1 100644
                  if state.last_modifiers_changed_event == modifiers
                      && state.last_capslock_changed_event == capslock
                  {
-@@ -1156,7 +1615,17 @@ impl X11Client {
+@@ -1143,6 +1740,7 @@ impl X11Client {
+                 }
+             }
+             Event::KeyPress(event) => {
++                crate::linux::overlay::pressed_key_or_button();
+                 let window = self.get_window(event.event)?;
+                 let mut state = self.0.borrow_mut();
+ 
+@@ -1156,7 +1754,17 @@ impl X11Client {
                      let mut keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
                      let keysym = key_event_state.key_get_one_sym(code);
  
@@ -5612,7 +6377,7 @@ index e21f019c64..41e1b3bdb1 100644
                          return Some(());
                      }
  
-@@ -1200,6 +1669,7 @@ impl X11Client {
+@@ -1200,6 +1808,7 @@ impl X11Client {
                      keystroke
                  };
                  drop(state);
@@ -5620,7 +6385,7 @@ index e21f019c64..41e1b3bdb1 100644
                  window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
                      keystroke,
                      is_held: false,
-@@ -1220,6 +1690,9 @@ impl X11Client {
+@@ -1220,6 +1829,9 @@ impl X11Client {
                      let keysym = key_event_state.key_get_one_sym(code);
  
                      if keysym.is_modifier_key() {
@@ -5630,14 +6395,16 @@ index e21f019c64..41e1b3bdb1 100644
                          return Some(());
                      }
  
-@@ -1230,7 +1703,24 @@ impl X11Client {
+@@ -1229,8 +1841,26 @@ impl X11Client {
+                 window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
              }
              Event::XinputButtonPress(event) => {
++                crate::linux::overlay::pressed_key_or_button();
                  let window = self.get_window(event.event)?;
 +                // The wheel's buttons too, which come with its smooth scrolling.
 +                crate::linux::overlay::alt_interrupted();
 +                let hosted = window.focus_if_hosted();
-+                crate::linux::overlay::pressed_in(event.event as usize);
++                crate::linux::overlay::pressed_in_at(event.event as usize, event.time);
 +                // A click, not the wheel's buttons, ends the embedder's watch on Control, as a ⌃Tab
 +                // walk ends at a click on the Mac, and takes the keyboard into the embedder's window.
 +                if !(4..=7).contains(&event.detail) {
@@ -5655,7 +6422,7 @@ index e21f019c64..41e1b3bdb1 100644
  
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
-@@ -1307,7 +1797,12 @@ impl X11Client {
+@@ -1307,7 +1937,12 @@ impl X11Client {
                      }
                  }
              }
@@ -5669,7 +6436,7 @@ index e21f019c64..41e1b3bdb1 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  let modifiers = modifiers_from_xinput_info(event.mods);
-@@ -1332,7 +1827,26 @@ impl X11Client {
+@@ -1332,7 +1967,26 @@ impl X11Client {
                      None => {}
                  }
              }
@@ -5697,7 +6464,7 @@ index e21f019c64..41e1b3bdb1 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  state.restore_cursor_after_hide();
-@@ -1384,12 +1898,8 @@ impl X11Client {
+@@ -1384,12 +2038,8 @@ impl X11Client {
                  if let Some(pointer) = state.pointer_device_states.get_mut(&event.sourceid) {
                      let scroll_delta = get_scroll_delta_and_update_state(pointer, &event);
                      drop(state);
@@ -5712,7 +6479,7 @@ index e21f019c64..41e1b3bdb1 100644
                      }
                  }
              }
-@@ -1400,7 +1910,21 @@ impl X11Client {
+@@ -1400,7 +2050,21 @@ impl X11Client {
                  state.mouse_focused_window = Some(event.event);
                  state.restore_cursor_after_hide();
              }
@@ -5735,7 +6502,7 @@ index e21f019c64..41e1b3bdb1 100644
                  let mut state = self.0.borrow_mut();
  
                  // Set last scroll values to `None` so that a large delta isn't created if scrolling is done outside the window (the valuator is global)
-@@ -1413,9 +1937,15 @@ impl X11Client {
+@@ -1413,9 +2077,15 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
@@ -5751,7 +6518,7 @@ index e21f019c64..41e1b3bdb1 100644
                  window.handle_input(PlatformInput::MouseExited(gpui::MouseExitEvent {
                      pressed_button,
                      position,
-@@ -1523,6 +2053,35 @@ impl X11Client {
+@@ -1523,6 +2193,35 @@ impl X11Client {
          };
      }
  
@@ -5787,7 +6554,7 @@ index e21f019c64..41e1b3bdb1 100644
      fn xim_handle_event(&self, event: Event) -> Option<()> {
          match event {
              Event::KeyPress(event) | Event::KeyRelease(event) => {
-@@ -1781,7 +2340,7 @@ impl X11Client {
+@@ -1781,7 +2480,7 @@ impl X11Client {
              return;
          }
  
@@ -5796,7 +6563,7 @@ index e21f019c64..41e1b3bdb1 100644
              return;
          };
  
-@@ -1842,8 +2401,9 @@ impl X11Client {
+@@ -1842,8 +2541,9 @@ impl X11Client {
          let mut state = self.0.borrow_mut();
          state
              .clipboard
@@ -5807,7 +6574,7 @@ index e21f019c64..41e1b3bdb1 100644
                  clipboard::ClipboardKind::Clipboard,
                  clipboard::WaitConfig::None,
              )
-@@ -1888,6 +2448,11 @@ impl X11Client {
+@@ -1888,6 +2588,11 @@ impl X11Client {
          })
      }
  
@@ -5819,7 +6586,7 @@ index e21f019c64..41e1b3bdb1 100644
      pub(crate) fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
          let state = self.0.borrow();
          let root = state.xcb_connection.setup().roots[state.x_root_index].root;
-@@ -2052,6 +2617,9 @@ impl X11ClientState {
+@@ -2052,6 +2757,9 @@ impl X11ClientState {
          x_window: xproto::Window,
          refresh_rate: Duration,
      ) -> RegistrationToken {
@@ -5829,10 +6596,13 @@ index e21f019c64..41e1b3bdb1 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,6 +2655,760 @@ impl X11ClientState {
+@@ -2087,90 +2795,1738 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
+-    fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
+-        if let Some(cursor) = self.cursor_cache.get(&style) {
+-            return *cursor;
 +    /// The refresh loop on a one-shot timerfd, which wakes the event loop's file descriptor, as an
 +    /// embedder that dispatches GPUI's loop when that's readable never sees calloop's own timers.
 +    /// It runs only while GPUI wants a frame (`EmbeddedTick`).
@@ -5846,7 +6616,44 @@ index e21f019c64..41e1b3bdb1 100644
 +            .expect("Failed to initialize window refresh timer");
 +        if let Some(window) = self.windows.get(&x_window) {
 +            *window.window.embedded_tick.borrow_mut() = Some(tick.clone());
-+        }
+         }
+-
+-        let result = 'outer: {
+-            let mut errors = String::new();
+-            let cursor_icon_names = cursor_style_to_icon_names(style);
+-            for cursor_icon_name in cursor_icon_names {
+-                match self
+-                    .cursor_handle
+-                    .load_cursor(&self.xcb_connection, cursor_icon_name)
+-                {
+-                    Ok(loaded_cursor) => {
+-                        if loaded_cursor != x11rb::NONE {
+-                            break 'outer Ok(loaded_cursor);
+-                        }
+-                    }
+-                    Err(err) => {
+-                        errors.push_str(&err.to_string());
+-                        errors.push('\n');
+-                    }
+-                }
+-            }
+-            if errors.is_empty() {
+-                Err(anyhow!(
+-                    "errors while loading cursor icons {:?}:\n{}",
+-                    cursor_icon_names,
+-                    errors
+-                ))
+-            } else {
+-                Err(anyhow!("did not find cursor icons {:?}", cursor_icon_names))
+-            }
+-        };
+-
+-        let cursor = match result {
+-            Ok(cursor) => Some(cursor),
+-            Err(err) => {
+-                match self
+-                    .cursor_handle
+-                    .load_cursor(&self.xcb_connection, DEFAULT_CURSOR_ICON_NAME)
 +        self.loop_handle
 +            .insert_source(
 +                Generic::new(
@@ -5854,7 +6661,20 @@ index e21f019c64..41e1b3bdb1 100644
 +                    calloop::Interest::READ,
 +                    calloop::Mode::Level,
 +                ),
-+                {
+                 {
+-                    Ok(default) => {
+-                        log_cursor_icon_warning(err.context(format!(
+-                            "X11: error loading cursor icon, falling back on default icon '{}'",
+-                            DEFAULT_CURSOR_ICON_NAME
+-                        )));
+-                        Some(default)
+-                    }
+-                    Err(default_err) => {
+-                        log_cursor_icon_warning(err.context(default_err).context(format!(
+-                            "X11: error loading default cursor fallback '{}'",
+-                            DEFAULT_CURSOR_ICON_NAME
+-                        )));
+-                        None
 +                    let this = self.this.clone();
 +                    move |_, tick, _| {
 +                        tick.0.fired();
@@ -5877,14 +6697,24 @@ index e21f019c64..41e1b3bdb1 100644
 +                            }
 +                            xcb_connection
 +                        };
++                        tick.0.ended();
 +                        client.process_x11_events(&xcb_connection).log_err();
 +                        Ok(calloop::PostAction::Continue)
-+                    }
+                     }
+-                }
+-            }
+-        };
+-
+-        self.cursor_cache.insert(style, cursor);
+-        cursor
 +                },
 +            )
 +            .expect("Failed to initialize window refresh timer")
-+    }
-+
+     }
+ 
+-    fn get_or_create_invisible_cursor(&mut self) -> Option<xproto::Cursor> {
+-        if let Some(cursor) = self.invisible_cursor_cache {
+-            return Some(cursor);
 +    /// An unmapped window for an embedder to hold GPUI's next window in
 +    /// (`crate::linux::new_host_window`). Not on the root, where a window manager hears of each new
 +    /// window as one of its own: wlroots 0.17's Xwayland goes on taking it for one once the embedder
@@ -5912,7 +6742,12 @@ index e21f019c64..41e1b3bdb1 100644
 +            )?
 +            .check()?;
 +            HOST_PARENT.set(parent);
-+        }
+         }
+-        let cursor = create_invisible_cursor(&self.xcb_connection)
+-            .context("X11: error while creating invisible cursor")
+-            .log_err()?;
+-        self.invisible_cursor_cache = Some(cursor);
+-        Some(cursor)
 +        let window = xcb.generate_id()?;
 +        xcb.create_window(
 +            x11rb::COPY_DEPTH_FROM_PARENT,
@@ -5929,15 +6764,19 @@ index e21f019c64..41e1b3bdb1 100644
 +        )?
 +        .check()?;
 +        Ok(window)
-+    }
-+
+     }
+ 
+-    fn hide_cursor_until_mouse_moves(&mut self) {
+-        if self.cursor_hidden_window.is_some() {
+-            return;
 +    /// Shows GPUI's unmapped window `view` over the embedder's `parent` (`crate::linux::overlay`):
 +    /// a window of its own, which no window manager takes, in the shape of `outline`. Not a child of
 +    /// `parent`, as an X server doesn't blend a child window with what's under it, where a
 +    /// compositor blends a window's edges with whatever is. A `panel` is a child of the window
 +    /// `parent` is in instead, over `parent`, so it moves with that window and stays under other
-+    /// windows, with its edges unblended. With `keyboard` it takes the input focus, and this
-+    /// returns the window that had it.
++    /// windows, with its edges unblended. A managed one (`set_overlay_managed`) is a window the
++    /// window manager takes, transient for `parent`'s (`manage_overlay`). With `keyboard` it takes
++    /// the input focus, and this returns the window that had it.
 +    pub(crate) fn show_overlay(
 +        &self,
 +        view: xproto::Window,
@@ -5948,10 +6787,37 @@ index e21f019c64..41e1b3bdb1 100644
 +        panel: bool,
 +    ) -> anyhow::Result<xproto::Window> {
 +        let xcb = &self.xcb_connection;
++        // A manager that takes no tool's move places a window it manages itself, as sway's
++        // Xwayland centres a dialog, so the overlay stays one no manager takes, as with no manager.
++        if crate::linux::overlay::is_managed(view as usize) && !self.manager_takes()?.0 {
++            crate::linux::overlay::set_unmanaged(view as usize);
+         }
+-        let Some(focused_window) = self.mouse_focused_window else {
+-            // No window to apply the per-window invisible cursor to.
+-            return;
+-        };
+-        let Some(invisible_cursor) = self.get_or_create_invisible_cursor() else {
 +        if panel {
 +            // Not `parent` itself, whose shape has holes where the embedder's pages show.
 +            let within = xcb.query_tree(parent)?.reply()?.parent;
 +            xcb.reparent_window(view, within, 0, 0)?;
++            PANEL_IN.with_borrow_mut(|all| {
++                all.retain(|&(each, _)| each != view);
++                all.push((view, within));
++            });
++        } else if crate::linux::overlay::is_managed(view as usize) {
++            let top = self.top_level(parent)?;
++            self.manage_overlay(view, parent, top)?;
++            self.watch_top(top)?;
++            CHECK_ON_MAP.with_borrow_mut(|all| {
++                all.retain(|&each| each != view);
++                all.push(view);
++            });
++            UNPLACED.with_borrow_mut(|all| {
++                all.retain(|(each, _)| *each != view);
++                all.push((view, Vec::new()));
++            });
++            self.bound_place(view);
 +        } else {
 +            xcb.change_window_attributes(
 +                view,
@@ -6014,18 +6880,51 @@ index e21f019c64..41e1b3bdb1 100644
 +            .width(width.max(1.) as u32)
 +            .height(height.max(1.) as u32)
 +            .stack_mode(xproto::StackMode::ABOVE);
++        // A managed one is asked for a place only when it changes, as each step of Peek's motion
++        // moves it.
++        let mut ask = true;
 +        if !panel {
 +            // Directly over the top-level, under any other app's window over that, or under KWin
-+            // over its support window.
-+            let top = self.top_level(parent)?;
++            // over its support window. The one it was shown over, as it moves.
++            let shown_over = OVER.with_borrow(|all| {
++                all.iter().find(|&&(each, ..)| each == view).map(|&(_, top, ..)| top)
++            });
++            let top = match shown_over {
++                Some(top) => top,
++                None => self.top_level(parent)?,
++            };
 +            let corner = xcb.translate_coordinates(top, within, 0, 0)?.reply()?;
 +            OVER.with_borrow_mut(|all| {
 +                all.retain(|&(each, ..)| each != view);
 +                all.push((view, top, x - corner.dst_x, y - corner.dst_y));
 +            });
-+            place = place.sibling(self.kwin_support.unwrap_or(top));
++            place = match crate::linux::overlay::is_managed(view as usize) {
++                true => {
++                    let (width, height) = (width.max(1.) as u32, height.max(1.) as u32);
++                    ask = record_placed(view, x as i32, y as i32, width, height);
++                    if ask {
++                        self.managed_place_hints(view, x as i32, y as i32, width, height)?;
++                    }
++                    // The window manager stacks it over the window it's transient for.
++                    (xproto::ConfigureWindowAux::new())
++                        .x(x as i32)
++                        .y(y as i32)
++                        .width(width)
++                        .height(height)
++                }
++                false => match self.kwin_support {
++                    Some(support) => place.sibling(support),
++                    None => place.sibling(self.above_managed(top)?),
++                },
++            };
 +        }
-+        xcb.configure_window(view, &place)?;
++        if ask {
++            xcb.configure_window(view, &place)?;
++        }
++        if ask && !panel && crate::linux::overlay::is_managed(view as usize) {
++            let size = (width.max(1.) as u32, height.max(1.) as u32);
++            self.managed_move(view, x as i32, y as i32, Some(size))?;
++        }
 +        // In its outline by its own shape: with the pixels its edges touch where a compositor
 +        // blends them, else those its edges mostly cover, which the X server draws opaque.
 +        let blended = self.compositor_present && !panel;
@@ -6037,6 +6936,13 @@ index e21f019c64..41e1b3bdb1 100644
 +                outline_rows(&polygon, height as i16, blended)
 +            })
 +            .collect();
++        // A managed one not yet in place keeps its shape for then.
++        let unplaced = UNPLACED.with_borrow_mut(|all| {
++            let each = all.iter_mut().find(|(each, _)| *each == view)?;
++            each.1 = rows.clone();
++            Some(())
++        });
++        let shown = if unplaced.is_some() { &[][..] } else { &rows[..] };
 +        xcb.shape_rectangles(
 +            shape::SO::SET,
 +            shape::SK::BOUNDING,
@@ -6044,10 +6950,228 @@ index e21f019c64..41e1b3bdb1 100644
 +            view,
 +            0,
 +            0,
++            shown,
++        )?;
++        // No blur either, where an empty region would blur the whole window.
++        match unplaced {
++            Some(()) => {
++                xcb.delete_property(view, self.atoms._KDE_NET_WM_BLUR_BEHIND_REGION)?;
++            }
++            None => self.blur_under(view, &rows, panel)?,
++        }
++        xcb.flush()?;
++        Ok(())
++    }
++
++    /// Ends the managed overlay `window`'s wait for its place in `PLACE_BOUND` at most, from now:
++    /// whatever its manager does or doesn't do, it's then seen where it is.
++    fn bound_place(&self, window: xproto::Window) {
++        self.unbound_place(window);
++        let this = self.this.clone();
++        let timer = crate::linux::platform::insert_timer(&self.loop_handle, PLACE_BOUND, move |_| {
++            PLACE_BOUNDS.with_borrow_mut(|all| all.retain(|&(each, _)| each != window));
++            let Some(client) = this.get_client() else {
++                return calloop::timer::TimeoutAction::Drop;
++            };
++            let state = client.0.borrow();
++            if UNPLACED.with_borrow(|all| all.iter().any(|(each, _)| *each == window)) {
++                eprintln!(
++                    "browser: x11 managed overlay {window:#x} not placed in {} ms, so it shows where it is",
++                    PLACE_BOUND.as_millis()
++                );
++                ASKED_AGAIN.with_borrow_mut(|all| all.retain(|&each| each != window));
++                state.managed_overlay_seen(window).log_err();
++                state.xcb_connection.flush().log_err();
++            }
++            calloop::timer::TimeoutAction::Drop
++        });
++        if let Some(timer) = timer.log_err() {
++            PLACE_BOUNDS.with_borrow_mut(|all| all.push((window, timer)));
++        }
++    }
++
++    /// Drops the timer that would end the managed overlay `window`'s wait to be seen, now it is.
++    fn unbound_seen(&self, window: xproto::Window) {
++        if !UNPLACED.with_borrow(|all| all.iter().any(|(each, _)| *each == window)) {
++            self.unbound_place(window);
++        }
++    }
++
++    /// Drops the timer that would end the managed overlay `window`'s wait for its place, or to be
++    /// seen.
++    fn unbound_place(&self, window: xproto::Window) {
++        // A window dropped as the thread ends, as GPUI's app is at exit, may outlive the table.
++        let timers: Vec<_> = (PLACE_BOUNDS.try_with(|all| {
++            let mut all = all.borrow_mut();
++            let timers = all.iter().filter(|&&(each, _)| each == window).map(|e| e.1).collect();
++            all.retain(|&(each, _)| each != window);
++            timers
++        }))
++        .unwrap_or_default();
++        for timer in timers {
++            self.loop_handle.remove(timer);
++        }
++    }
++
++    /// Ends the managed overlay `window`'s wait to be seen, now it has its shape, in `PLACE_BOUND`
++    /// at most. The X server says it's seen once the manager's frame round it has the shape too,
++    /// which the manager copies on hearing of it (KWin's `X11Window::updateShape`). On KWin a
++    /// run's first prompt once heard nothing more, so it never drew (#2800). Then the manager is
++    /// told of the shape again, and the overlay draws.
++    fn bound_seen(&self, window: xproto::Window) {
++        let this = self.this.clone();
++        let timer = crate::linux::platform::insert_timer(&self.loop_handle, PLACE_BOUND, move |_| {
++            PLACE_BOUNDS.with_borrow_mut(|all| all.retain(|&(each, _)| each != window));
++            let Some(client) = this.get_client() else {
++                return calloop::timer::TimeoutAction::Drop;
++            };
++            let mut state = client.0.borrow_mut();
++            let xcb = state.xcb_connection.clone();
++            let frame = (state.top_level(window).ok())
++                .and_then(|frame| xcb.shape_query_extents(frame).ok()?.reply().ok());
++            let frame = frame.map(|e| {
++                let (w, h) = (e.bounding_shape_extents_width, e.bounding_shape_extents_height);
++                format!("shaped {} {w}x{h}", e.bounding_shaped)
++            });
++            eprintln!(
++                "browser: x11 managed overlay {window:#x} not seen {} ms after its shape, frame {}",
++                PLACE_BOUND.as_millis(),
++                frame.as_deref().unwrap_or("unknown")
++            );
++            // An offset of nothing changes nothing but tells the manager of the shape again.
++            xcb.shape_offset(shape::SK::BOUNDING, window, 0, 0).log_err();
++            xcb.flush().log_err();
++            if let Some(window_ref) = state.windows.get_mut(&window) {
++                window_ref.last_visibility = xproto::Visibility::UNOBSCURED;
++            }
++            handle_visibility_changed(state, window);
++            calloop::timer::TimeoutAction::Drop
++        });
++        if let Some(timer) = timer.log_err() {
++            PLACE_BOUNDS.with_borrow_mut(|all| all.push((window, timer)));
++        }
++    }
++
++    /// The managed overlay `window` is where it was put, or shows unmanaged there: it takes the
++    /// shape it had none of until then (`UNPLACED`).
++    fn managed_overlay_seen(&self, window: xproto::Window) -> anyhow::Result<()> {
++        let Some(rows) = UNPLACED.with_borrow_mut(|all| {
++            let at = all.iter().position(|(each, _)| *each == window)?;
++            Some(all.remove(at).1)
++        }) else {
++            return Ok(());
++        };
++        ASKED_SIZES.with_borrow_mut(|all| all.retain(|&(each, ..)| each != window));
++        self.unbound_place(window);
++        self.xcb_connection.shape_rectangles(
++            shape::SO::SET,
++            shape::SK::BOUNDING,
++            xproto::ClipOrdering::UNSORTED,
++            window,
++            0,
++            0,
 +            &rows,
 +        )?;
-+        self.blur_under(view, &rows, panel)?;
-+        xcb.flush()?;
++        self.blur_under(window, &rows, false)?;
++        let unseen = (self.windows.get(&window))
++            .is_some_and(|w| w.last_visibility == xproto::Visibility::FULLY_OBSCURED);
++        if unseen && crate::linux::overlay::is_managed(window as usize) {
++            self.bound_seen(window);
++        }
++        Ok(())
++    }
++
++    /// What an unmanaged overlay over the top-level `top` goes directly above: the highest frame of
++    /// a managed overlay that shows over it, which the window manager keeps over `top`, else `top`.
++    pub(crate) fn above_managed(&self, top: xproto::Window) -> anyhow::Result<xproto::Window> {
++        let managed: Vec<_> = OVER.with_borrow(|all| {
++            (all.iter())
++                .filter(|&&(view, each, ..)| {
++                    each == top
++                        && crate::linux::overlay::is_managed(view as usize)
++                        && crate::linux::overlay::is_shown(view as usize)
++                })
++                .map(|&(view, ..)| view)
++                .collect()
++        });
++        if managed.is_empty() {
++            return Ok(top);
++        }
++        let frames = (managed.iter())
++            .map(|&view| self.top_level(view))
++            .collect::<anyhow::Result<Vec<_>>>()?;
++        let root = self.xcb_connection.setup().roots[self.x_root_index].root;
++        let stack = self.xcb_connection.query_tree(root)?.reply()?.children;
++        Ok((stack.iter().rev().copied())
++            .find(|each| *each == top || frames.contains(each))
++            .unwrap_or(top))
++    }
++
++    /// Puts the unmanaged overlays over `top` back over it and the managed ones over it, as one of
++    /// those the manager maps goes over them, in their order.
++    fn restack_unmanaged(&self, top: xproto::Window) -> anyhow::Result<()> {
++        if self.kwin_support.is_some() {
++            return Ok(());
++        }
++        let views: Vec<_> = OVER.with_borrow(|all| {
++            (all.iter())
++                .filter(|&&(view, each, ..)| {
++                    each == top
++                        && !crate::linux::overlay::is_managed(view as usize)
++                        && crate::linux::overlay::is_shown(view as usize)
++                })
++                .map(|&(view, ..)| view)
++                .collect()
++        });
++        if views.is_empty() {
++            return Ok(());
++        }
++        let xcb = &self.xcb_connection;
++        let above = self.above_managed(top)?;
++        for &view in &views {
++            let over = (xproto::ConfigureWindowAux::new())
++                .sibling(above)
++                .stack_mode(xproto::StackMode::ABOVE);
++            xcb.configure_window(view, &over)?;
++        }
++        for &view in &views {
++            if let Some(over) = crate::linux::overlay::under(view as usize)
++                .filter(|&over| crate::linux::overlay::is_shown(over))
++            {
++                let under = (xproto::ConfigureWindowAux::new())
++                    .sibling(over as xproto::Window)
++                    .stack_mode(xproto::StackMode::BELOW);
++                xcb.configure_window(view, &under)?;
++            }
++        }
++        Ok(())
++    }
++
++    /// A ConfigureNotify of the managed overlay `window`, mapped and not yet seen: if the manager
++    /// put it in place, as one may without the answer `managed_overlay_answered` waits for, or gave
++    /// it another size, it shows.
++    fn managed_overlay_moved(&self, window: xproto::Window) -> anyhow::Result<()> {
++        let waits = UNPLACED.with_borrow(|all| all.iter().any(|(each, _)| *each == window))
++            && !CHECK_ON_MAP.with_borrow(|all| all.contains(&window));
++        let Some((_, x, y, width, height)) = waits
++            .then(|| PLACED.with_borrow(|all| all.iter().copied().find(|&(each, ..)| each == window)))
++            .flatten()
++        else {
++            return Ok(());
++        };
++        let xcb = &self.xcb_connection;
++        let root = xcb.setup().roots[self.x_root_index].root;
++        let at = xcb.translate_coordinates(window, root, 0, 0)?.reply()?;
++        let size = xcb.get_geometry(window)?.reply()?;
++        let (w, h) = (u32::from(size.width), u32::from(size.height));
++        let in_place = (w, h) == (width, height)
++            && (i32::from(at.dst_x) - x).abs() <= 1
++            && (i32::from(at.dst_y) - y).abs() <= 1;
++        // Or refused, as by a manager that tiles it after the map: it shows where it is.
++        if in_place || managed_overlay_refused(window, (width, height), (w, h)) {
++            self.managed_overlay_seen(window)?;
++            xcb.flush()?;
++        }
 +        Ok(())
 +    }
 +
@@ -6195,29 +7319,494 @@ index e21f019c64..41e1b3bdb1 100644
 +        if let Some(within) = within
 +            && !self.has_focus(from, within)?
 +        {
-+            // It takes them once the window manager gives them to its top-level again, as after
-+            // another app, or after none had them as sway's Xwayland moved the window to another
-+            // workspace (#2894).
-+            let top = self.top_level(within)?;
-+            AWAY.with_borrow_mut(|all| {
-+                all.retain(|each| each.view != view);
-+                all.push(Away {
-+                    view,
-+                    top,
-+                    keyboard: true,
-+                    back: true,
++            // A managed one takes them once the window manager gives them to its top-level again,
++            // as after another desktop or app: the manager never gives them to the overlay itself.
++            // So does one sway's Xwayland moved to another workspace while none had them (#2894).
++            if crate::linux::overlay::is_managed(view as usize) {
++                let top = self.top_level(within)?;
++                AWAY.with_borrow_mut(|all| {
++                    all.retain(|each| each.view != view);
++                    all.push(Away {
++                        view,
++                        top,
++                        keyboard: true,
++                        back: true,
++                    });
 +                });
-+            });
-+            self.watch_top(top)?;
-+            // The manager may have given them before the watch began.
-+            if self.has_focus(xcb.get_input_focus()?.reply()?.focus, within)? {
-+                self.overlay_keys_back(top)?;
++                self.watch_top(top)?;
++                // The manager may have given them before the watch began.
++                if self.has_focus(xcb.get_input_focus()?.reply()?.focus, within)? {
++                    self.overlay_keys_back(top)?;
++                }
 +            }
 +            return Ok(x11rb::NONE);
++        }
++        // A window manager maps a managed one once it has taken it, until when it can't have the
++        // focus.
++        if crate::linux::overlay::is_managed(view as usize)
++            && xcb.get_window_attributes(view)?.reply()?.map_state != xproto::MapState::VIEWABLE
++        {
++            FOCUS_ON_MAP.with_borrow_mut(|all| {
++                if !all.contains(&view) {
++                    all.push(view);
++                }
++            });
++            return Ok(from);
 +        }
 +        xcb.set_input_focus(xproto::InputFocus::PARENT, view, x11rb::CURRENT_TIME)?;
 +        xcb.flush()?;
 +        Ok(from)
++    }
++
++    /// Has the window manager take the overlay `view` over `parent`'s window: no frame, transient
++    /// for the browser's window, which a manager keeps it over and with, a dialog, which a tiling
++    /// one floats and KWin doesn't hide while its app is inactive as it does a utility, but not
++    /// modal, out of the taskbar, pager and switcher, never given the keyboard by the manager.
++    fn manage_overlay(
++        &self,
++        view: xproto::Window,
++        parent: xproto::Window,
++        top: xproto::Window,
++    ) -> anyhow::Result<()> {
++        let xcb = &self.xcb_connection;
++        let root = xcb.setup().roots[self.x_root_index].root;
++        // The browser's window, the one the manager holds: the first with WM_STATE from `parent`
++        // up, as KWin has a wrapper between its frame and the window.
++        let wm_state = self.atoms.WM_STATE;
++        let mut client = parent;
++        loop {
++            let state = xcb.get_property(false, client, wm_state, AtomEnum::ANY, 0, 1)?.reply()?;
++            let up = xcb.query_tree(client)?.reply()?.parent;
++            if state.type_ != x11rb::NONE || up == root || up == x11rb::NONE {
++                break;
++            }
++            client = up;
++        }
++        CLIENTS.with_borrow_mut(|all| {
++            all.retain(|&(each, _)| each != view);
++            all.push((view, client));
++        });
++        // On the browser's desktop from its first map, and on whichever it goes to after.
++        let desktop = (xcb.get_property(
++            false,
++            client,
++            self.atoms._NET_WM_DESKTOP,
++            AtomEnum::CARDINAL,
++            0,
++            1,
++        )?)
++        .reply()?;
++        match desktop.value32().and_then(|mut each| each.next()) {
++            Some(desktop) => xcb.change_property32(
++                xproto::PropMode::REPLACE,
++                view,
++                self.atoms._NET_WM_DESKTOP,
++                AtomEnum::CARDINAL,
++                &[desktop],
++            )?,
++            None => xcb.delete_property(view, self.atoms._NET_WM_DESKTOP)?,
++        };
++        // Its desktop's changes, heard while a managed overlay over it shows (`hide_overlay`). A
++        // top-level is watched as one (`watch_top`).
++        if client != top && !self.windows.contains_key(&client) {
++            xcb.change_window_attributes(
++                client,
++                &xproto::ChangeWindowAttributesAux::new()
++                    .event_mask(xproto::EventMask::PROPERTY_CHANGE),
++            )?;
++        }
++        // A background, clear under a compositor and black without one, as GPUI's clear pixels
++        // are: the X server fills the overlay with it as its shape opens once it's in place, over
++        // what a manager's frame carried from where it was mapped first, as i3's does, until GPUI
++        // draws.
++        xcb.change_window_attributes(
++            view,
++            &xproto::ChangeWindowAttributesAux::new().override_redirect(0).background_pixel(0),
++        )?;
++        xcb.change_property32(
++            xproto::PropMode::REPLACE,
++            view,
++            self.atoms.WM_TRANSIENT_FOR,
++            AtomEnum::WINDOW,
++            &[client],
++        )?;
++        xcb.change_property32(
++            xproto::PropMode::REPLACE,
++            view,
++            self.atoms._NET_WM_WINDOW_TYPE,
++            AtomEnum::ATOM,
++            &[self.atoms._NET_WM_WINDOW_TYPE_DIALOG],
++        )?;
++        // Decorations named, and none.
++        xcb.change_property32(
++            xproto::PropMode::REPLACE,
++            view,
++            self.atoms._MOTIF_WM_HINTS,
++            self.atoms._MOTIF_WM_HINTS,
++            &[1 << 1, 0, 0, 0, 0],
++        )?;
++        let states = [
++            self.atoms._NET_WM_STATE_SKIP_TASKBAR,
++            self.atoms._NET_WM_STATE_SKIP_PAGER,
++            self.atoms._KDE_NET_WM_STATE_SKIP_SWITCHER,
++        ];
++        xcb.change_property32(
++            xproto::PropMode::REPLACE,
++            view,
++            self.atoms._NET_WM_STATE,
++            AtomEnum::ATOM,
++            &states,
++        )?;
++        // WM_HINTS with the input hint, and no input: GPUI gives it the keyboard itself.
++        xcb.change_property32(
++            xproto::PropMode::REPLACE,
++            view,
++            AtomEnum::WM_HINTS,
++            AtomEnum::WM_HINTS,
++            &[1, 0, 0, 0, 0, 0, 0, 0, 0],
++        )?;
++        // It moves as the UI draws it, with no open or close animation of KWin's.
++        let skip = self.atoms._KDE_NET_WM_SKIP_CLOSE_ANIMATION;
++        xcb.change_property32(xproto::PropMode::REPLACE, view, skip, AtomEnum::CARDINAL, &[1])?;
++        Ok(())
++    }
++
++    /// WM_NORMAL_HINTS for the managed overlay `view` at `x`, `y`, `w` by `h` across the root: a
++    /// place and size the user chose, which a manager keeps rather than placing it, and its size as
++    /// the least and most, which a tiling manager floats.
++    fn managed_place_hints(
++        &self,
++        view: xproto::Window,
++        x: i32,
++        y: i32,
++        w: u32,
++        h: u32,
++    ) -> anyhow::Result<()> {
++        // USPosition, USSize, PPosition, PSize, PMinSize, PMaxSize.
++        let mut hints = [0u32; 18];
++        hints[..9].copy_from_slice(&[1 | 2 | 4 | 8 | 16 | 32, x as u32, y as u32, w, h, w, h, w, h]);
++        self.xcb_connection.change_property32(
++            xproto::PropMode::REPLACE,
++            view,
++            AtomEnum::WM_NORMAL_HINTS,
++            AtomEnum::WM_SIZE_HINTS,
++            &hints,
++        )?;
++        Ok(())
++    }
++
++    /// Moves the managed overlay `view` to `x`, `y` across the root, and sizes it, as a tool, which
++    /// the manager does as asked, where KWin keeps a client's own move inside the screen's work
++    /// area, so a transient as large as the browser window wouldn't follow it partly off screen.
++    fn managed_move(
++        &self,
++        view: xproto::Window,
++        x: i32,
++        y: i32,
++        size: Option<(u32, u32)>,
++    ) -> anyhow::Result<bool> {
++        let xcb = &self.xcb_connection;
++        let root = xcb.setup().roots[self.x_root_index].root;
++        if !self.manager_takes()?.0 {
++            return Ok(false);
++        }
++        // Static gravity, the window's own place; x and y, and the size if given; from a tool.
++        let flags = 10 | 1 << 8 | 1 << 9 | u32::from(size.is_some()) * (1 << 10 | 1 << 11) | 2 << 12;
++        let (width, height) = size.unwrap_or_default();
++        let data = [flags, x as u32, y as u32, width, height];
++        let message = xproto::ClientMessageEvent::new(
++            32,
++            view,
++            self.atoms._NET_MOVERESIZE_WINDOW,
++            data,
++        );
++        xcb.send_event(
++            false,
++            root,
++            xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
++            message,
++        )?;
++        Ok(true)
++    }
++
++    /// Whether the window manager takes `_NET_MOVERESIZE_WINDOW` and `_NET_REQUEST_FRAME_EXTENTS`.
++    fn manager_takes(&self) -> anyhow::Result<(bool, bool)> {
++        if let Some(takes) = MANAGER_TAKES.get() {
++            return Ok(takes);
++        }
++        let xcb = &self.xcb_connection;
++        let root = xcb.setup().roots[self.x_root_index].root;
++        let reply = (xcb.get_property(false, root, self.atoms._NET_SUPPORTED, AtomEnum::ATOM, 0, 1024)?)
++            .reply()?;
++        let listed: Vec<u32> = reply.value32().into_iter().flatten().collect();
++        let takes = (
++            listed.contains(&self.atoms._NET_MOVERESIZE_WINDOW),
++            listed.contains(&self.atoms._NET_REQUEST_FRAME_EXTENTS),
++        );
++        MANAGER_TAKES.set(Some(takes));
++        Ok(takes)
++    }
++
++    /// The manager set the frame extents of the managed overlay `window` that asked again for its
++    /// place, having handled that ask: it shows, kept there or where the manager put it, as a tiling
++    /// one that tiles dialogs does.
++    fn managed_overlay_answered(&self, window: xproto::Window) -> anyhow::Result<()> {
++        let asked = ASKED_AGAIN.with_borrow_mut(|all| {
++            let asked = all.contains(&window);
++            all.retain(|&each| each != window);
++            asked
++        });
++        if asked {
++            self.managed_overlay_seen(window)?;
++            self.xcb_connection.flush()?;
++        }
++        Ok(())
++    }
++
++    /// The window manager gave the managed overlay `window` back to the root. One that shows was
++    /// shown again before the manager handled its hide, and the manager takes it again as it maps
++    /// it, having erased its states: it waits for that map as at its show, its shape put by.
++    fn managed_overlay_released(&self, window: xproto::Window) -> anyhow::Result<()> {
++        if !crate::linux::overlay::is_managed(window as usize)
++            || !crate::linux::overlay::is_shown(window as usize)
++            || !PLACED.with_borrow(|all| all.iter().any(|&(each, ..)| each == window))
++        {
++            return Ok(());
++        }
++        let xcb = &self.xcb_connection;
++        let root = xcb.setup().roots[self.x_root_index].root;
++        // No manager now, as one that quit leaves its windows mapped: it shows where it is.
++        let managed = xcb.get_window_attributes(root)?.reply()?.all_event_masks
++            & xproto::EventMask::SUBSTRUCTURE_REDIRECT
++            != xproto::EventMask::NO_EVENT;
++        ASKED_AGAIN.with_borrow_mut(|all| all.retain(|&each| each != window));
++        if !managed {
++            self.managed_overlay_seen(window)?;
++            xcb.flush()?;
++            return Ok(());
++        }
++        for each in [&CHECK_ON_MAP, &RESTATE] {
++            each.with_borrow_mut(|all| {
++                all.retain(|&each| each != window);
++                all.push(window);
++            });
++        }
++        if crate::linux::overlay::keyboard_overlay_asked() == Some(window as usize) {
++            FOCUS_ON_MAP.with_borrow_mut(|all| {
++                all.retain(|&each| each != window);
++                all.push(window);
++            });
++        }
++        if !UNPLACED.with_borrow(|all| all.iter().any(|(each, _)| *each == window)) {
++            let rows = (xcb.shape_get_rectangles(window, shape::SK::BOUNDING)?.reply()?).rectangles;
++            UNPLACED.with_borrow_mut(|all| all.push((window, rows)));
++            xcb.shape_rectangles(
++                shape::SO::SET,
++                shape::SK::BOUNDING,
++                xproto::ClipOrdering::UNSORTED,
++                window,
++                0,
++                0,
++                &[],
++            )?;
++            xcb.delete_property(window, self.atoms._KDE_NET_WM_BLUR_BEHIND_REGION)?;
++        }
++        self.bound_place(window);
++        xcb.flush()?;
++        Ok(())
++    }
++
++    /// Asks the manager for the managed overlay `window`'s states and desktop again, by message, as
++    /// it erased them as it let go of the window it now maps again.
++    fn managed_restate(&self, window: xproto::Window) -> anyhow::Result<()> {
++        let xcb = &self.xcb_connection;
++        let root = xcb.setup().roots[self.x_root_index].root;
++        let atoms = &self.atoms;
++        // Add, two states, from a tool.
++        for data in [
++            [1, atoms._NET_WM_STATE_SKIP_TASKBAR, atoms._NET_WM_STATE_SKIP_PAGER, 2, 0],
++            [1, atoms._KDE_NET_WM_STATE_SKIP_SWITCHER, 0, 2, 0],
++        ] {
++            let message = xproto::ClientMessageEvent::new(32, window, atoms._NET_WM_STATE, data);
++            xcb.send_event(
++                false,
++                root,
++                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
++                message,
++            )?;
++        }
++        let client =
++            CLIENTS.with_borrow(|all| all.iter().find(|&&(each, _)| each == window).map(|e| e.1));
++        if let Some(client) = client {
++            self.managed_follow_desktop(client)?;
++        }
++        Ok(())
++    }
++
++    /// The window manager mapped `window`: a managed overlay that waits for the keys takes them,
++    /// and one the manager put elsewhere than it was given, or at another size, asks again.
++    fn managed_overlay_mapped(&self, window: xproto::Window) -> anyhow::Result<()> {
++        let Some((_, x, y, width, height)) =
++            PLACED.with_borrow(|all| all.iter().copied().find(|&(each, ..)| each == window))
++        else {
++            return Ok(());
++        };
++        let xcb = &self.xcb_connection;
++        let root = xcb.setup().roots[self.x_root_index].root;
++        // Where it lets the pointer through, set again: Openbox gives its frame the input shape
++        // of a window it's mapped, as it changes, not the one it had as it was mapped.
++        if crate::linux::overlay::is_managed(window as usize) {
++            let areas = crate::linux::overlay::pointer_areas(window as usize);
++            self.overlay_pointer(window, areas.as_deref())?;
++        }
++        // The manager maps it over the unmanaged ones over the same window, such as a menu.
++        let top = OVER.with_borrow(|all| {
++            all.iter().find(|&&(each, ..)| each == window).map(|&(_, top, ..)| top)
++        });
++        if let Some(top) = top {
++            self.restack_unmanaged(top)?;
++        }
++        // Checked at its first map after it shows, not as the manager maps it again after a
++        // minimise or a desktop's change.
++        if !CHECK_ON_MAP.with_borrow_mut(|all| {
++            let first = all.contains(&window);
++            all.retain(|&each| each != window);
++            first
++        }) {
++            xcb.flush()?;
++            return self.managed_focus_on_map(window);
++        }
++        if RESTATE.with_borrow_mut(|all| {
++            let restate = all.contains(&window);
++            all.retain(|&each| each != window);
++            restate
++        }) {
++            self.managed_restate(window)?;
++        }
++        let at = xcb.translate_coordinates(window, root, 0, 0)?.reply()?;
++        let size = xcb.get_geometry(window)?.reply()?;
++        let (w, h) = (u32::from(size.width), u32::from(size.height));
++        let kept = (w, h) == (width, height)
++            && (i32::from(at.dst_x) - x).abs() <= 1
++            && (i32::from(at.dst_y) - y).abs() <= 1;
++        // A tiling manager maps it at the tile's size, which none of its least and most asked for,
++        // and no ask moves it, so it shows where the manager put it (#2859).
++        if kept || managed_overlay_refused(window, (width, height), (w, h)) {
++            self.managed_overlay_seen(window)?;
++        } else {
++            // A manager may map it before it puts it in place, as KWin does a dialog it hasn't
++            // placed yet, so it's asked again: as a tool, or as a client by one that takes no
++            // tool's move.
++            if !self.managed_move(window, x, y, Some((width, height)))? {
++                let place = (xproto::ConfigureWindowAux::new())
++                    .x(x)
++                    .y(y)
++                    .width(width)
++                    .height(height);
++                xcb.configure_window(window, &place)?;
++            }
++            // It handles the frame extents asked next once it has handled that, whether it kept
++            // the place or not, so the overlay waits no longer than that (`ASKED_AGAIN`). One that
++            // can't say, as KWin and i3, stays empty until the configure that puts it in place or
++            // sizes it otherwise (`managed_overlay_moved`), and both send one for a changed move,
++            // so it's never drawn where it was mapped.
++            if self.manager_takes()?.1 {
++                let message = xproto::ClientMessageEvent::new(
++                    32,
++                    window,
++                    self.atoms._NET_REQUEST_FRAME_EXTENTS,
++                    [0; 5],
++                );
++                xcb.send_event(
++                    false,
++                    root,
++                    xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
++                    message,
++                )?;
++                ASKED_AGAIN.with_borrow_mut(|all| {
++                    all.retain(|&each| each != window);
++                    all.push(window);
++                });
++            }
++        }
++        xcb.flush()?;
++        self.managed_focus_on_map(window)
++    }
++
++    /// A managed overlay mapped by its manager takes the input focus if it waits for it.
++    fn managed_focus_on_map(&self, window: xproto::Window) -> anyhow::Result<()> {
++        let xcb = &self.xcb_connection;
++        let waits = FOCUS_ON_MAP.with_borrow_mut(|all| {
++            let waits = all.contains(&window);
++            all.retain(|&each| each != window);
++            waits
++        });
++        if !waits || !crate::linux::overlay::is_shown(window as usize) {
++            return Ok(());
++        }
++        // Mapped inside a frame the manager hasn't mapped yet, it waits for that.
++        if xcb.get_window_attributes(window)?.reply()?.map_state != xproto::MapState::VIEWABLE {
++            FOCUS_ON_MAP.with_borrow_mut(|all| all.push(window));
++            return Ok(());
++        }
++        xcb.set_input_focus(xproto::InputFocus::PARENT, window, x11rb::CURRENT_TIME)?;
++        xcb.flush()?;
++        Ok(())
++    }
++
++    /// The browser's window `client` is on another desktop: each managed overlay over it goes
++    /// there too, as a manager that keeps a dialog with its window does already and i3 doesn't.
++    fn managed_follow_desktop(&self, client: xproto::Window) -> anyhow::Result<()> {
++        let views: Vec<_> = CLIENTS.with_borrow(|all| {
++            (all.iter())
++                .filter(|&&(view, each)| {
++                    each == client
++                        && crate::linux::overlay::is_managed(view as usize)
++                        && crate::linux::overlay::is_shown(view as usize)
++                })
++                .map(|&(view, _)| view)
++                .collect()
++        });
++        if views.is_empty() {
++            return Ok(());
++        }
++        let xcb = &self.xcb_connection;
++        let desktop = |window| -> anyhow::Result<Option<u32>> {
++            let reply = (xcb.get_property(
++                false,
++                window,
++                self.atoms._NET_WM_DESKTOP,
++                AtomEnum::CARDINAL,
++                0,
++                1,
++            )?)
++            .reply()?;
++            Ok(reply.value32().and_then(|mut each| each.next()))
++        };
++        let Some(to) = desktop(client)? else {
++            return Ok(());
++        };
++        let root = xcb.setup().roots[self.x_root_index].root;
++        for view in views {
++            if desktop(view)? == Some(to) {
++                continue;
++            }
++            // From a tool, as the move isn't the user's own.
++            let message = xproto::ClientMessageEvent::new(
++                32,
++                view,
++                self.atoms._NET_WM_DESKTOP,
++                [to, 2, 0, 0, 0],
++            );
++            xcb.send_event(
++                false,
++                root,
++                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
++                message,
++            )?;
++        }
++        xcb.flush()?;
++        Ok(())
 +    }
 +
 +    /// The child of the root `window` is in, such as a window manager's frame around it.
@@ -6254,6 +7843,81 @@ index e21f019c64..41e1b3bdb1 100644
 +        Ok(true)
 +    }
 +
++    /// Hears every button press on the display while `on`, for `overlay::asks_again`, which only
++    /// counts them and reads nothing of them: not the button, the window or the place. They're raw
++    /// events because those come before the FocusOut a press causes, and a press on the embedder's
++    /// window, its own X client's, reaches GPUI no other way. Keys need none: one typed while an
++    /// overlay holds the focus goes to the overlay.
++    pub(crate) fn hear_presses(&self, on: bool) -> anyhow::Result<()> {
++        let root = self.xcb_connection.setup().roots[self.x_root_index].root;
++        let mask = match on {
++            true => xinput::XIEventMask::RAW_BUTTON_PRESS,
++            false => xinput::XIEventMask::from(0u32),
++        };
++        let masks = [xinput::EventMask { deviceid: XINPUT_ALL_DEVICE_GROUPS, mask: vec![mask] }];
++        self.xcb_connection.xinput_xi_select_events(root, &masks)?;
++        self.xcb_connection.flush()?;
++        Ok(())
++    }
++
++    /// Where the input focus is now that it left the overlay `view`, for `overlay::asks_again`.
++    pub(crate) fn focus_taken(
++        &self,
++        view: xproto::Window,
++    ) -> anyhow::Result<crate::linux::overlay::Taken> {
++        let xcb = &self.xcb_connection;
++        let root = xcb.setup().roots[self.x_root_index].root;
++        let focus = xcb.get_input_focus()?.reply()?.focus;
++        // None and PointerRoot are no window's, and another overlay took the keys from this one.
++        let to_own = focus != x11rb::NONE
++            && focus != 1
++            && focus != view
++            && !crate::linux::overlay::is_shown(focus as usize)
++            && self.is_own(focus, root)?;
++        let buttons = xproto::KeyButMask::BUTTON1
++            | xproto::KeyButMask::BUTTON2
++            | xproto::KeyButMask::BUTTON3;
++        let pressed = xcb.query_pointer(root)?.reply()?.mask.intersects(buttons);
++        // A manager naming no active window, as KWin and Openbox do as they focus the browser
++        // window again while an overlay had the keys, leaves the app as active as it was (#3044).
++        let active = if names_active_window(xcb, &self.atoms, root) {
++            app_active(xcb, &self.atoms, root, &self.windows) != Some(false)
++        } else {
++            crate::linux::overlay::app_was_active()
++        };
++        Ok(crate::linux::overlay::Taken { to_own, pressed, active })
++    }
++
++    /// Puts the overlay `view` over the app's other windows again, as it takes back the keys a
++    /// window manager gave the window it shows over, raising that window over it (#3044). sway's
++    /// Xwayland ignores a client's restack, and raises only the window it activates.
++    pub(crate) fn overlay_raised(&self, view: xproto::Window) -> anyhow::Result<()> {
++        let above = xproto::ConfigureWindowAux::new().stack_mode(xproto::StackMode::ABOVE);
++        self.xcb_connection.configure_window(view, &above)?;
++        self.xcb_connection.flush()?;
++        Ok(())
++    }
++
++    /// Whether `window`, or a window it's in below the root, such as a window manager's frame, is
++    /// one of GPUI's or the embedder's, whose `_NET_WM_PID` is this process's.
++    fn is_own(&self, window: xproto::Window, root: xproto::Window) -> anyhow::Result<bool> {
++        let xcb = &self.xcb_connection;
++        let mut each = window;
++        while each != root && each != x11rb::NONE {
++            if self.windows.contains_key(&each) {
++                return Ok(true);
++            }
++            let pid = xcb
++                .get_property(false, each, self.atoms._NET_WM_PID, AtomEnum::CARDINAL, 0, 1)?
++                .reply()?;
++            if pid.value32().and_then(|mut values| values.next()) == Some(std::process::id()) {
++                return Ok(true);
++            }
++            each = xcb.query_tree(each)?.reply()?.parent;
++        }
++        Ok(false)
++    }
++
 +    /// Gives the input focus back to `from` if the overlay `view` still has it, and says whether
 +    /// it did.
 +    pub(crate) fn overlay_gives_focus(
@@ -6280,7 +7944,23 @@ index e21f019c64..41e1b3bdb1 100644
 +        let gave = self.overlay_gives_focus(view, from)?;
 +        let focus = self.xcb_connection.get_input_focus()?.reply()?.focus;
 +        let elsewhere = !gave && from != x11rb::NONE && focus != view && focus != from;
-+        OVER.with_borrow_mut(|all| all.retain(|&(each, ..)| each != view));
++        let top = OVER.with_borrow_mut(|all| {
++            let top = all.iter().find(|&&(each, ..)| each == view).map(|&(_, top, ..)| top);
++            all.retain(|&(each, ..)| each != view);
++            top
++        });
++        PANEL_IN.with_borrow_mut(|all| all.retain(|&(each, _)| each != view));
++        record_hidden(view);
++        FOCUS_ON_MAP.with_borrow_mut(|all| all.retain(|&each| each != view));
++        CHECK_ON_MAP.with_borrow_mut(|all| all.retain(|&each| each != view));
++        RESTATE.with_borrow_mut(|all| all.retain(|&each| each != view));
++        ASKED_AGAIN.with_borrow_mut(|all| all.retain(|&each| each != view));
++        UNPLACED.with_borrow_mut(|all| all.retain(|(each, _)| *each != view));
++        self.unbound_place(view);
++        let client = CLIENTS.with_borrow_mut(|all| {
++            let at = all.iter().position(|&(each, _)| each == view)?;
++            Some(all.remove(at).1)
++        });
 +        let away = AWAY.with_borrow_mut(|all| {
 +            let top = all
 +                .iter()
@@ -6294,6 +7974,41 @@ index e21f019c64..41e1b3bdb1 100644
 +        }
 +        let xcb = &self.xcb_connection;
 +        xcb.unmap_window(view)?;
++        if crate::linux::overlay::is_managed(view as usize) {
++            // Withdrawn as ICCCM 4.1.4 says, so a manager that hasn't mapped it yet lets go of it
++            // too, rather than mapping it after an unmap that did nothing.
++            let root = xcb.setup().roots[self.x_root_index].root;
++            let unmap = xproto::UnmapNotifyEvent {
++                response_type: xproto::UNMAP_NOTIFY_EVENT,
++                sequence: 0,
++                event: root,
++                window: view,
++                from_configure: false,
++            };
++            xcb.send_event(
++                false,
++                root,
++                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
++                unmap,
++            )?;
++        }
++        // The browser's window, with no managed overlay over it now, is no longer heard for its
++        // desktop, so its title's changes don't wake GPUI.
++        if let Some(client) =
++            client.filter(|&client| !CLIENTS.with_borrow(|all| all.iter().any(|e| e.1 == client)))
++        {
++            match top == Some(client) {
++                true => self.watch_top(client)?,
++                false if !self.windows.contains_key(&client) => {
++                    xcb.change_window_attributes(
++                        client,
++                        &xproto::ChangeWindowAttributesAux::new()
++                            .event_mask(xproto::EventMask::NO_EVENT),
++                    )?;
++                }
++                false => {}
++            }
++        }
 +        xcb.flush()?;
 +        Ok(elsewhere)
 +    }
@@ -6331,7 +8046,11 @@ index e21f019c64..41e1b3bdb1 100644
 +                    back: false,
 +                })
 +            });
-+            xcb.unmap_window(view)?;
++            // The manager hides a managed one with the window it's transient for, and would take
++            // the overlay unmapping itself as it letting go of the window.
++            if !crate::linux::overlay::is_managed(view as usize) {
++                xcb.unmap_window(view)?;
++            }
 +        }
 +        self.watch_top(top)?;
 +        xcb.flush()?;
@@ -6356,9 +8075,22 @@ index e21f019c64..41e1b3bdb1 100644
 +        }
 +        let xcb = &self.xcb_connection;
 +        for &(view, keyboard) in &back {
++            // The window manager shows a managed one again, so it takes the keys as it maps
++            // (`overlay_takes_focus`).
++            if crate::linux::overlay::is_managed(view as usize) {
++                if !keyboard {
++                    crate::linux::overlay::set_away(view as usize, false);
++                    AWAY.with_borrow_mut(|all| all.retain(|each| each.view != view));
++                }
++                continue;
++            }
 +            xcb.map_window(view)?;
++            let above = match self.kwin_support {
++                Some(support) => support,
++                None => self.above_managed(top)?,
++            };
 +            let over = (xproto::ConfigureWindowAux::new())
-+                .sibling(self.kwin_support.unwrap_or(top))
++                .sibling(above)
 +                .stack_mode(xproto::StackMode::ABOVE);
 +            xcb.configure_window(view, &over)?;
 +            if !keyboard {
@@ -6411,6 +8143,10 @@ index e21f019c64..41e1b3bdb1 100644
 +        let mut watch = xproto::EventMask::STRUCTURE_NOTIFY;
 +        if AWAY.with_borrow(|all| all.iter().any(|each| each.top == top && each.keyboard)) {
 +            watch |= xproto::EventMask::FOCUS_CHANGE;
++        }
++        // The browser's window with no frame, whose desktop managed overlays follow.
++        if CLIENTS.with_borrow(|all| all.iter().any(|&(_, each)| each == top)) {
++            watch |= xproto::EventMask::PROPERTY_CHANGE;
 +        }
 +        let xcb = &self.xcb_connection;
 +        xcb.change_window_attributes(
@@ -6587,10 +8323,94 @@ index e21f019c64..41e1b3bdb1 100644
 +        Ok(cursor)
 +    }
 +
-     fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
-         if let Some(cursor) = self.cursor_cache.get(&style) {
-             return *cursor;
-@@ -2197,7 +3519,7 @@ impl X11ClientState {
++    fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
++        if let Some(cursor) = self.cursor_cache.get(&style) {
++            return *cursor;
++        }
++
++        let result = 'outer: {
++            let mut errors = String::new();
++            let cursor_icon_names = cursor_style_to_icon_names(style);
++            for cursor_icon_name in cursor_icon_names {
++                match self
++                    .cursor_handle
++                    .load_cursor(&self.xcb_connection, cursor_icon_name)
++                {
++                    Ok(loaded_cursor) => {
++                        if loaded_cursor != x11rb::NONE {
++                            break 'outer Ok(loaded_cursor);
++                        }
++                    }
++                    Err(err) => {
++                        errors.push_str(&err.to_string());
++                        errors.push('\n');
++                    }
++                }
++            }
++            if errors.is_empty() {
++                Err(anyhow!(
++                    "errors while loading cursor icons {:?}:\n{}",
++                    cursor_icon_names,
++                    errors
++                ))
++            } else {
++                Err(anyhow!("did not find cursor icons {:?}", cursor_icon_names))
++            }
++        };
++
++        let cursor = match result {
++            Ok(cursor) => Some(cursor),
++            Err(err) => {
++                match self
++                    .cursor_handle
++                    .load_cursor(&self.xcb_connection, DEFAULT_CURSOR_ICON_NAME)
++                {
++                    Ok(default) => {
++                        log_cursor_icon_warning(err.context(format!(
++                            "X11: error loading cursor icon, falling back on default icon '{}'",
++                            DEFAULT_CURSOR_ICON_NAME
++                        )));
++                        Some(default)
++                    }
++                    Err(default_err) => {
++                        log_cursor_icon_warning(err.context(default_err).context(format!(
++                            "X11: error loading default cursor fallback '{}'",
++                            DEFAULT_CURSOR_ICON_NAME
++                        )));
++                        None
++                    }
++                }
++            }
++        };
++
++        self.cursor_cache.insert(style, cursor);
++        cursor
++    }
++
++    fn get_or_create_invisible_cursor(&mut self) -> Option<xproto::Cursor> {
++        if let Some(cursor) = self.invisible_cursor_cache {
++            return Some(cursor);
++        }
++        let cursor = create_invisible_cursor(&self.xcb_connection)
++            .context("X11: error while creating invisible cursor")
++            .log_err()?;
++        self.invisible_cursor_cache = Some(cursor);
++        Some(cursor)
++    }
++
++    fn hide_cursor_until_mouse_moves(&mut self) {
++        if self.cursor_hidden_window.is_some() {
++            return;
++        }
++        let Some(focused_window) = self.mouse_focused_window else {
++            // No window to apply the per-window invisible cursor to.
++            return;
++        };
++        let Some(invisible_cursor) = self.get_or_create_invisible_cursor() else {
+             return;
+         };
+         check_reply(
+@@ -2197,7 +4553,7 @@ impl X11ClientState {
              .get(&hidden_window)
              .copied()
              .unwrap_or(CursorStyle::Arrow);
@@ -6599,7 +8419,71 @@ index e21f019c64..41e1b3bdb1 100644
              log::warn!(
                  "X11: no cursor icon available to restore {:?} after hide; cursor may stay invisible",
                  style
-@@ -2232,6 +3554,40 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+@@ -2219,6 +4575,63 @@ impl X11ClientState {
+     }
+ }
+ 
++/// Drops what's kept of the overlay `window`, shown or between its shows, as its window goes:
++/// nothing once the thread is ending, as GPUI's app drops its windows at exit, after the tables.
++fn forget_overlay(window: xproto::Window) {
++    let _ = OVER.try_with(|all| all.borrow_mut().retain(|&(each, ..)| each != window));
++    let _ = AWAY.try_with(|all| all.borrow_mut().retain(|each| each.view != window));
++    let _ = PLACED.try_with(|all| all.borrow_mut().retain(|&(each, ..)| each != window));
++    let _ = ASKED_SIZES.try_with(|all| all.borrow_mut().retain(|&(each, ..)| each != window));
++    let _ = UNPLACED.try_with(|all| all.borrow_mut().retain(|(each, _)| *each != window));
++    let _ = CLIENTS.try_with(|all| all.borrow_mut().retain(|&(each, _)| each != window));
++    for each in [&FOCUS_ON_MAP, &ASKED_AGAIN, &CHECK_ON_MAP, &RESTATE] {
++        let _ = each.try_with(|all| all.borrow_mut().retain(|&each| each != window));
++    }
++}
++
++/// Keeps the managed overlay `view` put at `x`, `y`, `width` by `height` across the root, and says
++/// whether that's a new place, which the manager is then asked for: its size is then one asked.
++fn record_placed(view: xproto::Window, x: i32, y: i32, width: u32, height: u32) -> bool {
++    let placed = (view, x, y, width, height);
++    let ask = PLACED.with_borrow_mut(|all| {
++        let had = all.contains(&placed);
++        all.retain(|&(each, ..)| each != view);
++        all.push(placed);
++        !had
++    });
++    if ask {
++        ASKED_SIZES.with_borrow_mut(|all| {
++            if !all.contains(&(view, width, height)) {
++                all.push((view, width, height));
++            }
++        });
++    }
++    ask
++}
++
++/// Forgets the managed overlay `view`'s place as it's hidden, and the sizes it asked for, but the
++/// size it had stays asked: KWin maps one hidden and shown again in the same turn at the size it
++/// had, before it takes the next, which isn't a refusal.
++fn record_hidden(view: xproto::Window) {
++    let had = PLACED.with_borrow_mut(|all| {
++        let at = all.iter().position(|&(each, ..)| each == view)?;
++        let (.., width, height) = all.remove(at);
++        Some((width, height))
++    });
++    ASKED_SIZES.with_borrow_mut(|all| {
++        all.retain(|&(each, ..)| each != view);
++        all.extend(had.map(|(width, height)| (view, width, height)));
++    });
++}
++
++/// Whether the manager sized the managed overlay `window`, which is to be `asked` now, as `got`:
++/// none of the sizes it asked for since it was last seen, nor the one it had when last hidden, so
++/// it refused the place too.
++fn managed_overlay_refused(window: xproto::Window, asked: (u32, u32), got: (u32, u32)) -> bool {
++    got != asked
++        && !ASKED_SIZES.with_borrow(|all| all.contains(&(window, got.0, got.1)))
++}
++
+ // Adapted from:
+ // https://docs.rs/winit/0.29.11/src/winit/platform_impl/linux/x11/monitor.rs.html#103-111
+ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+@@ -2232,6 +4645,51 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
      Duration::from_micros(micros)
  }
  
@@ -6637,10 +8521,21 @@ index e21f019c64..41e1b3bdb1 100644
 +    Some(pid == Some(std::process::id()))
 +}
 +
++/// Whether the window manager names a window as the active one on `root`. KWin and Openbox name
++/// none while the input focus is in a window they don't manage, such as an overlay of this app's,
++/// which doesn't make another app the active one.
++fn names_active_window(xcb: &XCBConnection, atoms: &XcbAtoms, root: xproto::Window) -> bool {
++    xcb.get_property(false, root, atoms._NET_ACTIVE_WINDOW, AtomEnum::WINDOW, 0, 1)
++        .ok()
++        .and_then(|asked| asked.reply().ok())
++        .and_then(|reply| reply.value32().and_then(|mut values| values.next()))
++        .is_some_and(|window| window != x11rb::NONE)
++}
++
  /// Applies a mapped/obscured change to the refresh loop and reports the
  /// resulting visibility to the window. Consumes the client borrow because the
  /// visibility callback re-enters GPUI.
-@@ -2246,10 +3602,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +4704,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -6695,7 +8590,7 @@ index e21f019c64..41e1b3bdb1 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +3673,77 @@ fn detect_compositor_gpu(
+@@ -2273,73 +4775,77 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -6703,8 +8598,15 @@ index e21f019c64..41e1b3bdb1 100644
 -    // Method 1: Check for _NET_WM_CM_S{root}
 -    let atom_name = format!("_NET_WM_CM_S{}", root);
 -    let atom1 = get_reply(
--        || format!("Failed to intern {atom_name}"),
--        xcb_connection.intern_atom(false, atom_name.as_bytes()),
++/// Whether a compositor runs on the screen `screen`: one owns its `_NET_WM_CM_S<screen>` selection,
++/// as EWMH has a compositing manager do. A window manager that only says it's one, such as openbox
++/// under Xvfb, sets `_NET_SUPPORTING_WM_CHECK` but composites nothing, and the X server then draws
++/// a window's transparent pixels opaque.
++fn check_compositor_present(xcb_connection: &XCBConnection, screen: usize) -> bool {
++    let atom_name = format!("_NET_WM_CM_S{screen}");
++    let owner = get_reply(
+         || format!("Failed to intern {atom_name}"),
+         xcb_connection.intern_atom(false, atom_name.as_bytes()),
 -    );
 -    let method1 = match atom1.log_with_level(Level::Debug) {
 -        Some(reply) if reply.atom != x11rb::NONE => {
@@ -6742,15 +8644,8 @@ index e21f019c64..41e1b3bdb1 100644
 -    // Method 3: Check for _NET_SUPPORTING_WM_CHECK
 -    let atom_name = "_NET_SUPPORTING_WM_CHECK";
 -    let atom3 = get_reply(
-+/// Whether a compositor runs on the screen `screen`: one owns its `_NET_WM_CM_S<screen>` selection,
-+/// as EWMH has a compositing manager do. A window manager that only says it's one, such as openbox
-+/// under Xvfb, sets `_NET_SUPPORTING_WM_CHECK` but composites nothing, and the X server then draws
-+/// a window's transparent pixels opaque.
-+fn check_compositor_present(xcb_connection: &XCBConnection, screen: usize) -> bool {
-+    let atom_name = format!("_NET_WM_CM_S{screen}");
-+    let owner = get_reply(
-         || format!("Failed to intern {atom_name}"),
-         xcb_connection.intern_atom(false, atom_name.as_bytes()),
+-        || format!("Failed to intern {atom_name}"),
+-        xcb_connection.intern_atom(false, atom_name.as_bytes()),
 -    );
 -    let method3 = match atom3.log_with_level(Level::Debug) {
 -        Some(reply) if reply.atom != x11rb::NONE => {
@@ -6836,7 +8731,7 @@ index e21f019c64..41e1b3bdb1 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +3869,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +4971,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -6857,7 +8752,7 @@ index e21f019c64..41e1b3bdb1 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +3916,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +5018,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -6866,7 +8761,7 @@ index e21f019c64..41e1b3bdb1 100644
                          },
                      ))
                  }
-@@ -2539,10 +3959,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +5061,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -6880,7 +8775,7 @@ index e21f019c64..41e1b3bdb1 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +3977,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +5079,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -6897,7 +8792,7 @@ index e21f019c64..41e1b3bdb1 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +3992,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +5094,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -6933,7 +8828,7 @@ index e21f019c64..41e1b3bdb1 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +4071,11 @@ fn get_scale_factor(
+@@ -2620,6 +5173,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -6945,10 +8840,40 @@ index e21f019c64..41e1b3bdb1 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +4354,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +5456,160 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
++    /// A managed overlay mapped at the size it asked for, at one it asked for on its way there, or
++    /// at the one it had when last hidden was given its place; at a tile's, or at a size asked only
++    /// before it was last hidden, it was refused.
++    #[test]
++    fn a_managed_overlay_is_refused_only_at_a_size_it_never_asked() {
++        let view = 0x60_0001;
++        let (card, grown, next) = ((320, 180), (320, 240), (400, 240));
++        let tile = (640, 1080);
++        assert!(record_placed(view, 100, 80, card.0, card.1));
++        assert!(!managed_overlay_refused(view, card, card), "the size asked");
++        assert!(!record_placed(view, 100, 80, card.0, card.1), "the same place is asked again");
++        assert!(record_placed(view, 100, 80, grown.0, grown.1));
++        assert!(!managed_overlay_refused(view, grown, card), "a size asked earlier");
++        assert!(managed_overlay_refused(view, grown, tile), "a tile's size");
++
++        record_hidden(view);
++        assert!(record_placed(view, 100, 80, next.0, next.1));
++        assert!(
++            !managed_overlay_refused(view, next, grown),
++            "the size it had when last hidden"
++        );
++        assert!(
++            managed_overlay_refused(view, next, card),
++            "a size asked only before it was hidden"
++        );
++        assert!(managed_overlay_refused(view, next, tile), "a tile's size after a hide");
++        forget_overlay(view);
++        assert!(managed_overlay_refused(view, next, grown), "a window gone keeps nothing");
++    }
++
 +    /// Two fingers a third of the way across Xwayland's pointer, resting 300 ms, then lifting:
 +    /// each scroll's time in ms, a tick of 0.53 lines, and the lift.
 +    const RESTING: [f64; 29] = [
@@ -7076,7 +9001,7 @@ index e21f019c64..41e1b3bdb1 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +4793,101 @@ mod tests {
+@@ -3213,3 +5925,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }
@@ -7769,26 +9694,37 @@ index 0000000000..704677746c
 +        .log_err();
 +}
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
-index f6ee76ae8c..dc7c39efb3 100644
+index f6ee76ae8c..3f1bbad491 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs
-@@ -75,6 +75,7 @@ x11rb::atom_manager! {
+@@ -73,8 +73,11 @@ x11rb::atom_manager! {
+         _NET_WM_SYNC_REQUEST_COUNTER,
+         _NET_WM_BYPASS_COMPOSITOR,
          _NET_WM_MOVERESIZE,
++        _NET_MOVERESIZE_WINDOW,
++        _NET_WM_DESKTOP,
          _NET_WM_WINDOW_TYPE,
          _NET_WM_WINDOW_TYPE_NOTIFICATION,
 +        _NET_WM_WINDOW_TYPE_POPUP_MENU,
          _NET_WM_WINDOW_TYPE_DIALOG,
          _NET_WM_STATE_MODAL,
          _NET_WM_SYNC,
-@@ -84,6 +85,7 @@ x11rb::atom_manager! {
+@@ -84,6 +87,14 @@ x11rb::atom_manager! {
          _GTK_FRAME_EXTENTS,
          _GTK_EDGE_CONSTRAINTS,
          _NET_CLIENT_LIST_STACKING,
 +        _KDE_NET_WM_BLUR_BEHIND_REGION,
++        WM_STATE,
++        _NET_WM_STATE_SKIP_TASKBAR,
++        _NET_WM_STATE_SKIP_PAGER,
++        _KDE_NET_WM_STATE_SKIP_SWITCHER,
++        _KDE_NET_WM_SKIP_CLOSE_ANIMATION,
++        _NET_REQUEST_FRAME_EXTENTS,
++        _NET_FRAME_EXTENTS,
      }
  }
  
-@@ -258,6 +260,11 @@ pub struct Callbacks {
+@@ -258,6 +269,11 @@ pub struct Callbacks {
  
  pub struct X11WindowState {
      parent: Option<X11WindowStatePtr>,
@@ -7800,7 +9736,7 @@ index f6ee76ae8c..dc7c39efb3 100644
      children: FxHashSet<xproto::Window>,
      client: X11ClientStatePtr,
      executor: ForegroundExecutor,
-@@ -284,6 +291,10 @@ pub struct X11WindowState {
+@@ -284,6 +300,10 @@ pub struct X11WindowState {
      /// `VisibilityNotify`; this is the last value it reported.
      visibility: WindowVisibility,
      hovered: bool,
@@ -7811,7 +9747,7 @@ index f6ee76ae8c..dc7c39efb3 100644
      force_render_after_recovery: bool,
      fullscreen: bool,
      client_side_decorations_supported: bool,
-@@ -307,12 +318,163 @@ impl X11WindowState {
+@@ -307,12 +327,237 @@ impl X11WindowState {
      }
  }
  
@@ -7902,8 +9838,68 @@ index f6ee76ae8c..dc7c39efb3 100644
 +pub(crate) struct EmbeddedTick {
 +    fd: std::os::fd::OwnedFd,
 +    period: std::time::Duration,
-+    last: std::cell::Cell<std::time::Instant>,
++    pace: std::cell::Cell<TickPace>,
 +    armed: std::cell::Cell<bool>,
++}
++
++/// When the next tick is due: a period after the last frame's tick fired, so a burst of asks draws
++/// once a period and an animation, which asks for its next frame while it paints, keeps the
++/// display's rate however long its frames take to draw. A tick that drew nothing, as for a frame
++/// request with nothing dirty, gives its period back, so it doesn't put the next frame off; only
++/// one does until a frame draws, so wakes that never draw tick once a period at most, after one
++/// free tick (#2377). A frame drawn outside a tick, as for an expose, paces from when it drew.
++#[derive(Clone, Copy, Debug)]
++pub(crate) struct TickPace {
++    last: std::time::Instant,
++    /// While a tick runs: the time the pace had before it, to give back if it draws nothing.
++    before: Option<std::time::Instant>,
++    drew: bool,
++    freed: bool,
++}
++
++impl TickPace {
++    pub(crate) fn new(now: std::time::Instant, period: std::time::Duration) -> Self {
++        Self {
++            last: now - period,
++            before: None,
++            drew: false,
++            freed: false,
++        }
++    }
++
++    pub(crate) fn due(
++        &self,
++        now: std::time::Instant,
++        period: std::time::Duration,
++    ) -> std::time::Duration {
++        (self.last + period)
++            .saturating_duration_since(now)
++            .max(std::time::Duration::from_nanos(1))
++    }
++
++    pub(crate) fn fired(&mut self, now: std::time::Instant) {
++        self.before = Some(self.last);
++        self.last = now;
++        self.drew = false;
++    }
++
++    pub(crate) fn drew(&mut self, now: std::time::Instant) {
++        if self.before.is_none() {
++            self.last = now;
++        }
++        self.drew = true;
++        self.freed = false;
++    }
++
++    pub(crate) fn ended(&mut self) {
++        if let Some(before) = self.before.take()
++            && !self.drew
++            && !self.freed
++        {
++            self.last = before;
++            self.freed = true;
++        }
++    }
 +}
 +
 +impl EmbeddedTick {
@@ -7921,7 +9917,7 @@ index f6ee76ae8c..dc7c39efb3 100644
 +            // SAFETY: as above.
 +            fd: unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) },
 +            period,
-+            last: std::cell::Cell::new(std::time::Instant::now() - period),
++            pace: std::cell::Cell::new(TickPace::new(std::time::Instant::now(), period)),
 +            armed: std::cell::Cell::new(false),
 +        });
 +        // The first frame.
@@ -7929,15 +9925,13 @@ index f6ee76ae8c..dc7c39efb3 100644
 +        Ok(tick)
 +    }
 +
-+    /// Fires a period after the last tick, or now if that's passed.
++    /// Fires as `TickPace` says, or now if that's passed.
 +    pub(crate) fn wake(&self) {
 +        use std::os::fd::AsRawFd as _;
 +        if self.armed.replace(true) {
 +            return;
 +        }
-+        let due = (self.last.get() + self.period)
-+            .saturating_duration_since(std::time::Instant::now())
-+            .max(std::time::Duration::from_nanos(1));
++        let due = self.pace.get().due(std::time::Instant::now(), self.period);
 +        let spec = libc::itimerspec {
 +            it_interval: libc::timespec {
 +                tv_sec: 0,
@@ -7961,7 +9955,23 @@ index f6ee76ae8c..dc7c39efb3 100644
 +            libc::read(self.fd.as_raw_fd(), (&raw mut expirations).cast(), 8);
 +        }
 +        self.armed.set(false);
-+        self.last.set(std::time::Instant::now());
++        let mut pace = self.pace.get();
++        pace.fired(std::time::Instant::now());
++        self.pace.set(pace);
++    }
++
++    /// A frame reached the renderer, in a tick or not.
++    pub(crate) fn drew(&self) {
++        let mut pace = self.pace.get();
++        pace.drew(std::time::Instant::now());
++        self.pace.set(pace);
++    }
++
++    /// The tick's refresh has returned.
++    pub(crate) fn ended(&self) {
++        let mut pace = self.pace.get();
++        pace.ended();
++        self.pace.set(pace);
 +    }
 +}
 +
@@ -7975,7 +9985,7 @@ index f6ee76ae8c..dc7c39efb3 100644
  }
  
  impl rwh::HasWindowHandle for RawWindow {
-@@ -522,7 +684,22 @@ impl X11WindowState {
+@@ -522,7 +767,22 @@ impl X11WindowState {
                      | xproto::EventMask::VISIBILITY_CHANGE,
              );
  
@@ -7998,7 +10008,7 @@ index f6ee76ae8c..dc7c39efb3 100644
          if bounds.size.width.0 == 0 || bounds.size.height.0 == 0 {
              log::warn!(
                  "Window bounds contain a zero value. height={}, width={}. Falling back to defaults.",
-@@ -540,7 +717,7 @@ impl X11WindowState {
+@@ -540,7 +800,7 @@ impl X11WindowState {
                      visual.depth,
                      x_window,
                      visual_set.root,
@@ -8007,7 +10017,7 @@ index f6ee76ae8c..dc7c39efb3 100644
                      bounds.origin.y.0,
                      bounds.size.width.0,
                      bounds.size.height.0
-@@ -549,8 +726,8 @@ impl X11WindowState {
+@@ -549,8 +809,8 @@ impl X11WindowState {
              xcb.create_window(
                  visual.depth,
                  x_window,
@@ -8018,7 +10028,7 @@ index f6ee76ae8c..dc7c39efb3 100644
                  bounds.origin.y.0 as i16,
                  bounds.size.width.0 as u16,
                  bounds.size.height.0 as u16,
-@@ -576,7 +753,7 @@ impl X11WindowState {
+@@ -576,7 +836,7 @@ impl X11WindowState {
              )?;
  
              let reply = get_reply(|| "X11 GetGeometry failed.", xcb.get_geometry(x_window))?;
@@ -8027,7 +10037,7 @@ index f6ee76ae8c..dc7c39efb3 100644
                  bounds.origin.x.0 += 2;
                  // Work around a bug where our rendered content appears
                  // outside the window bounds when opened at the default position
-@@ -769,11 +946,10 @@ impl X11WindowState {
+@@ -769,11 +1029,10 @@ impl X11WindowState {
                      // Note: this has to be done after the GPU init, or otherwise
                      // the sizes are immediately invalidated.
                      size: query_render_extent(xcb, x_window)?,
@@ -8043,7 +10053,7 @@ index f6ee76ae8c..dc7c39efb3 100644
                      preferred_present_mode: None,
                  };
                  WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?
-@@ -790,6 +966,12 @@ impl X11WindowState {
+@@ -790,6 +1049,12 @@ impl X11WindowState {
                      Some((f32::from(size.width) as i32, f32::from(size.height) as i32));
              }
              size_hints.max_size = Some((max_texture_size as i32, max_texture_size as i32));
@@ -8056,7 +10066,7 @@ index f6ee76ae8c..dc7c39efb3 100644
              check_reply(
                  || {
                      format!(
-@@ -827,6 +1009,8 @@ impl X11WindowState {
+@@ -827,6 +1092,8 @@ impl X11WindowState {
  
              Ok(Self {
                  parent,
@@ -8065,7 +10075,7 @@ index f6ee76ae8c..dc7c39efb3 100644
                  children: FxHashSet::default(),
                  client,
                  executor,
-@@ -843,6 +1027,7 @@ impl X11WindowState {
+@@ -843,6 +1110,7 @@ impl X11WindowState {
                  // The window is not mapped until the client sees `MapNotify`.
                  visibility: WindowVisibility::Hidden,
                  hovered: false,
@@ -8073,7 +10083,7 @@ index f6ee76ae8c..dc7c39efb3 100644
                  force_render_after_recovery: false,
                  fullscreen: false,
                  maximized_vertical: false,
-@@ -850,7 +1035,10 @@ impl X11WindowState {
+@@ -850,7 +1118,10 @@ impl X11WindowState {
                  hidden: false,
                  appearance,
                  handle,
@@ -8085,7 +10095,7 @@ index f6ee76ae8c..dc7c39efb3 100644
                  client_side_decorations_supported,
                  decorations: WindowDecorations::Server,
                  last_insets: [0, 0, 0, 0],
-@@ -958,6 +1146,7 @@ impl X11Window {
+@@ -958,6 +1229,7 @@ impl X11Window {
              callbacks: Rc::new(RefCell::new(Callbacks::default())),
              xcb: xcb.clone(),
              x_window,
@@ -8093,7 +10103,7 @@ index f6ee76ae8c..dc7c39efb3 100644
          };
  
          let state = ptr.state.borrow_mut();
-@@ -1049,6 +1238,23 @@ impl X11Window {
+@@ -1049,6 +1321,23 @@ impl X11Window {
  }
  
  impl X11WindowStatePtr {
@@ -8117,7 +10127,7 @@ index f6ee76ae8c..dc7c39efb3 100644
      pub fn should_close(&self) -> bool {
          let mut cb = self.callbacks.borrow_mut();
          if let Some(mut should_close) = cb.should_close.take() {
-@@ -1194,6 +1400,15 @@ impl X11WindowStatePtr {
+@@ -1194,6 +1483,15 @@ impl X11WindowStatePtr {
      }
  
      pub fn handle_input(&self, input: PlatformInput) {
@@ -8133,7 +10143,7 @@ index f6ee76ae8c..dc7c39efb3 100644
          if self.is_blocked() {
              return;
          }
-@@ -1221,6 +1436,14 @@ impl X11WindowStatePtr {
+@@ -1221,6 +1519,14 @@ impl X11WindowStatePtr {
          }
      }
  
@@ -8148,7 +10158,7 @@ index f6ee76ae8c..dc7c39efb3 100644
      pub fn handle_ime_commit(&self, text: String) {
          if self.is_blocked() {
              return;
-@@ -1384,7 +1607,30 @@ impl X11WindowStatePtr {
+@@ -1384,7 +1690,30 @@ impl X11WindowStatePtr {
      }
  }
  
@@ -8179,7 +10189,7 @@ index f6ee76ae8c..dc7c39efb3 100644
      fn bounds(&self) -> Bounds<Pixels> {
          self.0.state.borrow().bounds
      }
-@@ -1473,6 +1719,9 @@ impl PlatformWindow for X11Window {
+@@ -1473,6 +1802,9 @@ impl PlatformWindow for X11Window {
      }
  
      fn mouse_position(&self) -> Point<Pixels> {
@@ -8189,7 +10199,7 @@ index f6ee76ae8c..dc7c39efb3 100644
          get_reply(
              || "X11 QueryPointer failed.",
              self.0.xcb.query_pointer(self.0.x_window),
-@@ -1528,6 +1777,10 @@ impl PlatformWindow for X11Window {
+@@ -1528,6 +1860,10 @@ impl PlatformWindow for X11Window {
      }
  
      fn activate(&self) {
@@ -8200,7 +10210,7 @@ index f6ee76ae8c..dc7c39efb3 100644
          let data = [1, xproto::Time::CURRENT_TIME.into(), 0, 0, 0];
          let message = xproto::ClientMessageEvent::new(
              32,
-@@ -1615,6 +1868,9 @@ impl PlatformWindow for X11Window {
+@@ -1615,6 +1951,9 @@ impl PlatformWindow for X11Window {
      }
  
      fn map_window(&mut self) -> anyhow::Result<()> {
@@ -8210,7 +10220,7 @@ index f6ee76ae8c..dc7c39efb3 100644
          check_reply(
              || "X11 MapWindow failed.",
              self.0.xcb.map_window(self.0.x_window),
-@@ -1772,6 +2028,7 @@ impl PlatformWindow for X11Window {
+@@ -1772,13 +2111,18 @@ impl PlatformWindow for X11Window {
              }
  
              inner.force_render_after_recovery = true;
@@ -8218,7 +10228,10 @@ index f6ee76ae8c..dc7c39efb3 100644
              return;
          }
  
-@@ -1779,6 +2036,7 @@ impl PlatformWindow for X11Window {
+         renderer.draw(scene);
++        if let Some(tick) = self.0.embedded_tick.borrow().as_ref() {
++            tick.drew();
++        }
  
          if renderer.needs_redraw() {
              inner.force_render_after_recovery = true;
@@ -8226,7 +10239,7 @@ index f6ee76ae8c..dc7c39efb3 100644
          }
      }
  
-@@ -1842,11 +2100,6 @@ impl PlatformWindow for X11Window {
+@@ -1842,11 +2186,6 @@ impl PlatformWindow for X11Window {
      fn window_decorations(&self) -> gpui::Decorations {
          let state = self.0.state.borrow();
  
@@ -8238,7 +10251,7 @@ index f6ee76ae8c..dc7c39efb3 100644
          match state.decorations {
              WindowDecorations::Server => Decorations::Server,
              WindowDecorations::Client => {
-@@ -1915,16 +2168,16 @@ impl PlatformWindow for X11Window {
+@@ -1915,16 +2254,16 @@ impl PlatformWindow for X11Window {
          }
      }
  
@@ -8260,7 +10273,7 @@ index f6ee76ae8c..dc7c39efb3 100644
          }
  
          // https://github.com/rust-windowing/winit/blob/master/src/platform_impl/linux/x11/util/hint.rs#L53-L87
-@@ -1976,6 +2229,13 @@ impl PlatformWindow for X11Window {
+@@ -1976,6 +2315,13 @@ impl PlatformWindow for X11Window {
          client.update_ime_position(bounds);
      }
  
@@ -8274,3 +10287,168 @@ index f6ee76ae8c..dc7c39efb3 100644
      fn gpu_specs(&self) -> Option<GpuSpecs> {
          self.0.state.borrow().renderer.as_ref()?.gpu_specs()
      }
+@@ -2065,3 +2411,164 @@ impl accesskit::DeactivationHandler for TrivialDeactivationHandler {
+         (self.callback)();
+     }
+ }
++
++#[cfg(test)]
++mod tick_pace_tests {
++    use super::TickPace;
++    use std::time::{Duration, Instant};
++
++    const PERIOD: Duration = Duration::from_micros(16_667);
++
++    /// The embedded tick on a made-up clock: asks at the given times, each wanting a frame drawn
++    /// or not, and asks that a tick's own refresh makes (`again`). Returns each tick's time and
++    /// whether it drew.
++    fn run(
++        asks: &[(Duration, bool)],
++        again: Option<bool>,
++        until: Duration,
++    ) -> Vec<(Duration, bool)> {
++        run_drawing(asks, again, until, Duration::ZERO)
++    }
++
++    /// As `run`, with frames that take `draw` from the tick to the renderer. As in GPUI, a tick's
++    /// own ask comes while it paints, before its frame reaches the renderer, and asks or ticks due
++    /// while it draws wait for it.
++    fn run_drawing(
++        asks: &[(Duration, bool)],
++        again: Option<bool>,
++        until: Duration,
++        draw: Duration,
++    ) -> Vec<(Duration, bool)> {
++        let start = Instant::now();
++        let mut pace = TickPace::new(start, PERIOD);
++        let mut due: Option<Duration> = None;
++        let mut dirty = false;
++        let mut free = Duration::ZERO;
++        let mut ticks = Vec::new();
++        let mut asks = asks.iter().copied().peekable();
++        let wake = |pace: &TickPace, due: &mut Option<Duration>, now: Duration| {
++            if due.is_none() {
++                *due = Some(now + pace.due(start + now, PERIOD));
++            }
++        };
++        loop {
++            let ask = asks.peek().map(|&(at, _)| at.max(free));
++            let tick = due.map(|at| at.max(free));
++            let now = match (ask, tick) {
++                (Some(ask), Some(tick)) => ask.min(tick),
++                (Some(ask), None) => ask,
++                (None, Some(tick)) => tick,
++                (None, None) => break,
++            };
++            if now > until {
++                break;
++            }
++            if ask == Some(now) {
++                let (_, draws) = asks.next().unwrap();
++                dirty |= draws;
++                wake(&pace, &mut due, now);
++                continue;
++            }
++            due = None;
++            pace.fired(start + now);
++            let drew = std::mem::take(&mut dirty);
++            if let Some(draws) = again {
++                dirty |= draws;
++                wake(&pace, &mut due, now);
++            }
++            free = if drew { now + draw } else { now };
++            if drew {
++                pace.drew(start + free);
++            }
++            pace.ended();
++            ticks.push((now, drew));
++        }
++        ticks
++    }
++
++    fn ms(ms: f64) -> Duration {
++        Duration::from_secs_f64(ms / 1000.0)
++    }
++
++    #[test]
++    fn a_tick_that_drew_nothing_does_not_put_the_next_frame_off() {
++        // A frame, a driver's frame request with nothing dirty 4 ms before the switch, the switch.
++        let ticks = run(
++            &[(ms(0.0), true), (ms(20.0), false), (ms(24.0), true)],
++            None,
++            ms(100.0),
++        );
++        assert_eq!(ticks.len(), 3);
++        assert!(ticks[2].0 - ms(24.0) < ms(0.01), "{ticks:?}");
++        assert!(ticks[2].1);
++    }
++
++    #[test]
++    fn a_frame_drawn_still_paces_the_next_by_a_period() {
++        let ticks = run(&[(ms(0.0), true), (ms(4.0), true)], None, ms(100.0));
++        assert_eq!(ticks.len(), 2);
++        assert_eq!(ticks[1].0 - ticks[0].0, PERIOD);
++    }
++
++    #[test]
++    fn a_burst_of_asks_draws_once_a_period() {
++        let asks: Vec<_> = (0..200).map(|n| (ms(n as f64 * 0.5), true)).collect();
++        let ticks = run(&asks, None, ms(100.0));
++        let drawn = ticks.iter().filter(|&&(_, drew)| drew).count();
++        assert!(drawn <= 7, "{drawn} frames in 100 ms");
++        for pair in ticks.windows(2) {
++            assert!(pair[1].0 - pair[0].0 >= PERIOD, "{ticks:?}");
++        }
++    }
++
++    #[test]
++    fn wakes_that_never_draw_tick_once_a_period_after_one_free_tick() {
++        let ticks = run(&[(ms(0.0), false)], Some(false), ms(1000.0));
++        assert!(ticks.len() <= 62, "{} ticks in a second", ticks.len());
++        for pair in ticks[1..].windows(2) {
++            assert!(pair[1].0 - pair[0].0 >= PERIOD, "{ticks:?}");
++        }
++    }
++
++    #[test]
++    fn an_animation_draws_once_a_period() {
++        let ticks = run(&[(ms(0.0), true)], Some(true), ms(1000.0));
++        assert!(
++            (59..=61).contains(&ticks.len()),
++            "{} frames in a second",
++            ticks.len()
++        );
++    }
++
++    #[test]
++    fn an_animation_whose_frames_take_6_ms_still_draws_once_a_period() {
++        let ticks = run_drawing(&[(ms(0.0), true)], Some(true), ms(1000.0), ms(6.0));
++        assert!(
++            (59..=61).contains(&ticks.len()),
++            "{} frames in a second",
++            ticks.len()
++        );
++    }
++
++    #[test]
++    fn an_animation_whose_frames_take_longer_than_a_period_draws_back_to_back() {
++        let ticks = run_drawing(&[(ms(0.0), true)], Some(true), ms(1000.0), ms(20.0));
++        for pair in ticks.windows(2) {
++            assert_eq!(pair[1].0 - pair[0].0, ms(20.0), "{ticks:?}");
++        }
++        assert_eq!(ticks.len(), 50);
++    }
++
++    #[test]
++    fn a_frame_drawn_outside_a_tick_paces_from_when_it_drew() {
++        let start = Instant::now();
++        let mut pace = TickPace::new(start, PERIOD);
++        pace.drew(start + ms(10.0));
++        assert_eq!(pace.due(start + ms(12.0), PERIOD), PERIOD - ms(2.0));
++    }
++
++    #[test]
++    fn nothing_asked_never_ticks() {
++        assert!(run(&[], Some(true), ms(1000.0)).is_empty());
++    }
++}
