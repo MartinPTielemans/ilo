@@ -326,6 +326,16 @@ source_set("mini_player_place") {
   ]
 }
 
+# The sheet a Boost's page takes with its Space's colours, apart so browser_core_unittests tests it
+# alone.
+source_set("boost_colors") {
+  sources = [
+    "boost_colors.cc",
+    "boost_colors.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # Whether a Boost's script runs: the record of the one the user turned on, and its copy, apart so
 # browser_core_unittests tests the rule alone.
 source_set("boost_script") {
@@ -604,6 +614,7 @@ source_set("browser_core") {
     ":pinned_url",
     ":arrangement",
     ":ax_text",
+    ":boost_colors",
     ":boost_script",
     ":drm_request",
     ":history_removal",
@@ -912,6 +923,7 @@ test("browser_core_unittests") {
     "arrangement_unittest.cc",
     "ax_text_unittest.cc",
     "agent_download_hold_unittest.cc",
+    "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
     # The removals the Library's History and the command bar undo on ⌘Z, on a history service.
     "history_removal_unittest.cc",
@@ -955,6 +967,7 @@ test("browser_core_unittests") {
     ":arrangement",
     ":ax_text",
     ":agent_download_hold",
+    ":boost_colors",
     ":boost_script",
     ":history_removal",
     ":idle_check",

@@ -26,6 +26,7 @@
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/boost_colors.h"
 #include "browser_core/browser_window_stand_in.h"
 #include "browser_core/dialog_keys.h"
 #include "browser_core/extensions.h"
@@ -1994,6 +1995,8 @@ void Window::ShowSpace(bc_id space, bool page) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<Window> window, bc_id space) {
+                       // The window's favorites are in the Space it shows now.
+                       BoostSpacesChanged();
                        if (window && Host().window_space_shown) {
                          Host().window_space_shown(Host().context, window->id(), space);
                        }

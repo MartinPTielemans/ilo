@@ -12,11 +12,13 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "browser_core/arrange.h"
+#include "browser_core/boost_colors.h"
 #include "browser_core/host.h"
 #include "browser_core/point.h"
 #include "browser_core/profiles.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
+#include "browser_core/window.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
@@ -130,6 +132,20 @@ constexpr char16_t kScript[] =
 std::map<bc_id, std::map<std::string, std::string, std::less<>>>& Store() {
   static base::NoDestructor<std::map<bc_id, std::map<std::string, std::string, std::less<>>>> store;
   return *store;
+}
+
+// Each Space's colours for its tabs' Boosts, by Space.
+std::map<bc_id, bc_boost_colors>& SpaceColorStore() {
+  static base::NoDestructor<std::map<bc_id, bc_boost_colors>> store;
+  return *store;
+}
+
+bool Same(const std::optional<bc_boost_colors>& a, const std::optional<bc_boost_colors>& b) {
+  if (!a || !b) {
+    return !a == !b;
+  }
+  return a->background == b->background && a->text == b->text && a->accent == b->accent &&
+         a->accent_text == b->accent_text;
 }
 
 // The profile whose Boosts |contents| takes: a private window's takes its original's.
@@ -266,6 +282,40 @@ void Boosts::Set(bc_id profile, std::string_view site, std::string_view css) {
 }
 
 // static
+void Boosts::SetSpaceColors(bc_id space, const bc_boost_colors* colors) {
+  auto& store = SpaceColorStore();
+  auto it = store.find(space);
+  const std::optional<bc_boost_colors> had =
+      it == store.end() ? std::nullopt : std::optional<bc_boost_colors>(it->second);
+  const std::optional<bc_boost_colors> now =
+      colors ? std::optional<bc_boost_colors>(*colors) : std::nullopt;
+  if (Same(had, now)) {
+    return;
+  }
+  if (now) {
+    store.insert_or_assign(space, *now);
+  } else {
+    store.erase(it);
+  }
+  SpacesChanged();
+}
+
+// static
+void Boosts::SpacesChanged() {
+  for (Tab* tab : Tab::All()) {
+    content::WebContents* contents = tab->web_contents();
+    Boosts* each = contents ? Boosts::FromWebContents(contents) : nullptr;
+    if (each && each->boosted_ && !Same(each->SpaceColors(), each->colors_)) {
+      each->Reapply();
+    }
+  }
+}
+
+void BoostSpacesChanged() {
+  Boosts::SpacesChanged();
+}
+
+// static
 boost_script::State Boosts::SetScript(bc_id profile,
                                       std::string_view site,
                                       std::optional<std::string_view> script) {
@@ -344,9 +394,38 @@ void Boosts::RunScript(content::RenderFrameHost* frame) {
 }
 
 void Boosts::Apply(content::RenderFrameHost* frame) {
-  const std::string_view css =
-      CssFor(ProfileIdOf(web_contents()), SiteOf(frame->GetLastCommittedURL()));
-  Run(frame, "css", css, 0, 0, content::RenderFrameHost::JavaScriptResultCallback());
+  const std::string site = SiteOf(frame->GetLastCommittedURL());
+  const std::string_view css = CssFor(ProfileIdOf(web_contents()), site);
+  if (css.empty()) {
+    Run(frame, "css", css, 0, 0, content::RenderFrameHost::JavaScriptResultCallback());
+    return;
+  }
+  boosted_ = true;
+  colors_ = SpaceColors();
+  // A frame another site's page holds takes its own Boost, but not the colours of the Space the
+  // page is in.
+  const bc_boost_colors* colors = colors_ && AllOf(frame, site) ? &*colors_ : nullptr;
+  Run(frame, "css", BoostSheet(colors, css), 0, 0,
+      content::RenderFrameHost::JavaScriptResultCallback());
+}
+
+std::optional<bc_boost_colors> Boosts::SpaceColors() const {
+  // An agent's tab acts in the user's sessions, and its pages get nothing of the user's theme.
+  const Space* space = Window::SpaceOf(web_contents());
+  if (!space || space->agent()) {
+    return std::nullopt;
+  }
+  auto it = SpaceColorStore().find(space->id());
+  return it == SpaceColorStore().end() ? std::nullopt : std::optional<bc_boost_colors>(it->second);
+}
+
+void Boosts::Reapply() {
+  const bc_id profile = ProfileIdOf(web_contents());
+  web_contents()->ForEachRenderFrameHost([&](content::RenderFrameHost* frame) {
+    if (!CssFor(profile, SiteOf(frame->GetLastCommittedURL())).empty()) {
+      Apply(frame);
+    }
+  });
 }
 
 void Boosts::Zap(bool on) {
