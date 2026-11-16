@@ -117,7 +117,9 @@ fn the_spaces_menu_makes_one_and_unticking_deletes_it(cx: &mut TestAppContext) {
     report(&shell, cx, true, &[]);
     assert_eq!(
         fetches(&host),
-        [format!("fetch live folder {FOLDER} PullRequests refresh true")]
+        [format!(
+            "fetch live folder {FOLDER} PullRequests refresh true"
+        )]
     );
     shell.update(cx, |shell, cx| {
         shell.space_menu(1, point(px(10.), px(10.)), cx)
@@ -181,7 +183,7 @@ fn only_what_the_user_does_asks_and_only_refresh_skips_the_cores_two_minutes(
     let asked = fetches(&host);
     assert_eq!(
         asked,
-        [format!("fetch live folder {FOLDER} PullRequests refresh false"); 3]
+        vec![format!("fetch live folder {FOLDER} PullRequests refresh false"); 3]
     );
     // Refresh asks the site inside them.
     shell.update(cx, |shell, cx| {
@@ -201,7 +203,9 @@ fn only_what_the_user_does_asks_and_only_refresh_skips_the_cores_two_minutes(
     cx.update(|_, cx| host.choose("Refresh", cx));
     assert_eq!(
         fetches(&host),
-        [format!("fetch live folder {FOLDER} PullRequests refresh true")]
+        [format!(
+            "fetch live folder {FOLDER} PullRequests refresh true"
+        )]
     );
 }
 
@@ -239,7 +243,9 @@ fn a_space_shown_asks_once_its_switch_is_drawn(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.simulate_next_frame(cx));
     assert_eq!(
         fetches(&host),
-        [format!("fetch live folder {FOLDER} PullRequests refresh false")]
+        [format!(
+            "fetch live folder {FOLDER} PullRequests refresh false"
+        )]
     );
 }
 

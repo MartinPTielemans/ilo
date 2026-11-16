@@ -19,9 +19,7 @@ use super::{
     FAVICON_DRAWN, FOLDER_INDENT, HOVERED, PLATE_INSET, ROW_PITCH, SECONDARY, Shell, Slot, Space,
     TITLE_END_INSET, plate, row_box, rows::with_host, title,
 };
-use crate::tokens::shell::live_folder::{
-    DRAFT, FAILED_MARK, HEADING_HEIGHT, HEADING_X,
-};
+use crate::tokens::shell::live_folder::{DRAFT, FAILED_MARK, HEADING_HEIGHT, HEADING_X};
 use crate::tokens::text;
 
 /// What fills a Live Folder. A Space has at most one of each.
@@ -201,7 +199,9 @@ pub struct LiveFolder {
 /// When the site gave an answer the core says it gave at `answered`, in milliseconds since the Unix
 /// epoch: an answer the core kept from inside its two minutes is that old, not new.
 pub fn answered_at(answered: i64) -> Instant {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     let age = now.saturating_sub(Duration::from_millis(answered.max(0) as u64));
     let now = Instant::now();
     now.checked_sub(age).unwrap_or(now)
