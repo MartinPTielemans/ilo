@@ -441,6 +441,40 @@ fn a_launch_answers_with_the_last_engine_only_for_the_same_lists_and_filters() {
     }
 }
 
+/// A kept engine in another layout, such as one laid out under the COMPILED before this one's, is
+/// never read as the last for the same lists: only a list's new copy is bridged, and the launch
+/// waits for its own engine, which then takes the folder's place alone.
+#[test]
+fn a_launch_never_answers_with_an_engine_kept_in_another_layout() {
+    let folder = folder("layout");
+    let cache = folder.join("cache");
+    let page = "https://news.example/";
+    let chosen = setup(&folder, "||mine.example^");
+    let list = folder.join("assets/ublock/filters.txt");
+    load(&chosen, Some(&cache));
+    // Named as the build before this one's COMPILED kept it.
+    let name = cache_name(&chosen);
+    let (_, copies) = name.rsplit_once('-').unwrap();
+    let old = format!("engine-{:016x}-{copies}", kind(&chosen, COMPILED - 1));
+    fs::rename(cache.join(&name), cache.join(old)).unwrap();
+    fs::write(&list, "||ads.example^\n||new.example^\n").unwrap();
+    let blocker = Arc::new(Blocker::new());
+    let _held = blocker.current.lock().unwrap();
+    blocker.use_setup(chosen.clone(), Some(cache.clone()));
+    let engine = blocker.engine().expect("its own engine, compiled");
+    assert_eq!(
+        check(&engine, "https://new.example/x.js", page, "script"),
+        Verdict::Block,
+        "the list's new copy"
+    );
+    let names: Vec<_> = fs::read_dir(&cache)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, [cache_name(&chosen)]);
+}
+
 #[test]
 fn a_page_hides_its_own_and_generic_selectors_and_runs_its_scriptlets() {
     let folder = folder("page");
