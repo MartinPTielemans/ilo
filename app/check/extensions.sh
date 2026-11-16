@@ -896,6 +896,8 @@ crash_launch() {
   pid=$!
   exec 3> "$out/drive"
   await_load
+  # Its own page, not just any: while site.sh took $page, this launch opened about:blank and passed.
+  await '^browser: title [0-9]* ready$' || fail "the crash launch's page didn't draw"
   await "^browser: extensions menu [a-p]*\$" ||
     fail "the Extensions menu didn't list Check Crash: $(grep '^browser: extensions menu' "$log")"
   crashing_id=$(grep -m1 "^browser: extensions menu [a-p]*\$" "$log" | cut -d' ' -f4)

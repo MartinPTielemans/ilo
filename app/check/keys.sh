@@ -149,11 +149,21 @@ sed -n "/^browser: drive $held: /,\$p" "$log" | grep -q '^browser: title [0-9]* 
   fail "a held escape's repeats went on to the page after it closed the command bar"
 send key f cmd
 expect '^browser: title [0-9]* page saw cmd-f$' "⌘F with the page focused didn't reach the page"
+# One ⌘N opens one window: since step $1, which $2 names, new-window ran once. Under Wayland GPUI
+# holds the keys after a ⌘F the page kept, for a find bar, and the ⌘N the app answered would run
+# again in the new window's command bar, which takes them (#3135). Read once escape has closed
+# that bar, which comes after the keys held.
+one_window_since() {
+  ran=$(since "$1" | grep -c '^browser: command new-window via ')
+  [ "$ran" = 1 ] || fail "$2 ran new-window $ran times"
+}
 # ⌘N from the page opens a window with no page and its command bar, which escape closes, leaving
-# its UI the keyboard, and ⇧⌘W there closes it.
+# its UI the keyboard, and ⇧⌘W there closes it. ⌘F's hold is on as it comes.
 page_shortcut n new-window
+pressed=$step
 expect '^browser: window opened [0-9]' "⌘N with the page focused didn't open a window"
 new_window_bar
+one_window_since $pressed "⌘N with the page focused, after ⌘F"
 send state
 in_browser AccessKitSubclassOfGPUIView "in the window ⌘N opened"
 send key w cmd shift
@@ -164,8 +174,10 @@ send window 1
 send click $page_point
 in_browser RenderWidgetHostViewCocoa "before ⌘N opened a window for ⌘W"
 page_shortcut n new-window
+pressed=$step
 expect '^browser: window opened [0-9]' "⌘N with the page focused didn't open a window"
 new_window_bar
+one_window_since $pressed "⌘N with the page focused"
 send key w cmd
 expect '^browser: command close-tab via ui$' "⌘W with the UI focused didn't reach the UI"
 expect '^browser: window closed [0-9]' "⌘W in a window with no page didn't close it"
@@ -192,11 +204,13 @@ expect '^browser: title [0-9]* value abcd$' "the page got keys meant for the UI:
 tab=$(today)
 send click $sidebar_point
 send key n cmd
+pressed=$step
 expect '^browser: command new-window via ui$' "⌘N with the UI focused didn't reach the UI"
 expect '^browser: window opened [0-9]' "⌘N with the UI focused didn't open a window"
 first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 new_window_bar
+one_window_since $pressed "⌘N with the UI focused"
 # The driver counts windows in the order they opened, closed ones too.
 send window "$(grep -c '^browser: window opened ' "$log")"
 send click $(row 0)
