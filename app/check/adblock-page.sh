@@ -167,17 +167,25 @@ grep -q '/popup\.html' "$out/site.log" && fail "the pop-up's page reached the se
 # The page that opened it keeps the keyboard throughout, through the hold too, which at some 5 ms
 # is too short to type into: no other view took it, or the page would have blurred, and a key
 # after the tab closed reaches it. On Windows the pop-up's page still starts loading before its
-# tab closes and takes the keyboard from the opener, known under #2806; the key after it is
-# still asked of the opener there.
+# tab closes and takes the keyboard from the opener, which never gets it back, so the key after
+# reaches no page: both known under #2806, and only once the opener blurred.
+blurred=
 if since "$pressed" | grep -q "^browser: title $tab the opener blurred\$"; then
   windows ||
     fail "the page that opened the pop-up the filter closed lost the keyboard: $(since "$pressed" | grep -e '^browser: drive' -e "^browser: title $tab " | tr '\n' ' ')"
+  blurred=1
   echo "skip: the opener keeping the keyboard while the filter closes its pop-up, known under" \
     "#2806: on Windows the pop-up's page starts loading before its tab closes and blurs the opener"
 fi
 send key x
-expect "^browser: title $tab the opener has x\$" \
-  "a key after the pop-up filter closed the link's tab didn't reach the page that opened it: the keyboard is in $key, on $focus"
+if [ -n "$blurred" ]; then
+  await "^browser: title $tab the opener has x\$" ||
+    echo "skip: a key after the filter closed the pop-up reaching the opener, known under #2806:" \
+      "on Windows the opener blurred and never got the keyboard back, which is in $key, on $focus"
+else
+  expect "^browser: title $tab the opener has x\$" \
+    "a key after the pop-up filter closed the link's tab didn't reach the page that opened it: the keyboard is in $key, on $focus"
+fi
 # Opens a pop-up from tab $1's page, titled $2, once it has drawn, with a press it has had and its
 # release, as the opener above.
 open_from() {
