@@ -839,21 +839,24 @@ expect_tabs() {
   expect "^browser: today $1\$" "$3: Today is \"$(today)\", not \"$1\""
   expect "^browser: selected $2\( in .*\)\{0,1\}\$" "$3: tab $2 isn't shown"
 }
-# Opens a tab from the command bar, to https://$1. The scheme is typed: a bare host goes to http
+# Opens a tab from the command bar, to https://$1, or to $1 as it is when it's an http:// address,
+# a page of the check's own site (#3144). The scheme is typed: a bare host goes to http
 # and Chrome's HTTPS-Upgrades takes it to https, falling back to http when the runner's https is
 # slow or fails (#1261), and the runs that follow expect https. history checks the upgrade itself.
 open_from_bar() {
+  local typed=https://$1 url=https://$1/
+  case $1 in http://*) typed=$1 url=$1 ;; esac
   before=$(today)
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
   expect '^browser: new tab plate 1$' "⌘T didn't give New Tab the selected plate"
-  send type "https://$1"
+  send type "$typed"
   send key return
   expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for $1 didn't open at the top of Today"
   tab=$(today | cut -d' ' -f1)
   expect "^browser: selected $tab\$" "the tab for $1 wasn't shown"
   expect '^browser: new tab plate 0$' "the tab for $1 didn't take the selected plate"
-  expect "^browser: loaded $tab https://$1/\$" "$1 didn't load in its tab"
+  expect "^browser: loaded $tab $url\$" "$1 didn't load in its tab"
 }
 # The driver's key $1 shows tab $2, as a switch the app times.
 switch() {
@@ -920,10 +923,12 @@ check_layout() {
   [ "$ui" = "0,0 $content" ] || fail "$1: GPUI's view is at $ui in a $content window"
 }
 
-# Waits for the tab's page to be at https://$1/, done loading, with back and forward as $2 and $3
-# (1 or 0). $4 says when.
+# Waits for the tab's page to be at https://$1/, or at $1 when it's an http:// address, done
+# loading, with back and forward as $2 and $3 (1 or 0). $4 says when.
 expect_page() {
-  expect "^browser: page $tab back $2 forward $3 loading 0 https://$1/\$" "$4: the tab isn't at $1 with back $2 and forward $3: $(grep "^browser: page $tab" "$log" | tail -1)"
+  local url=https://$1/
+  case $1 in http://*) url=$1 ;; esac
+  expect "^browser: page $tab back $2 forward $3 loading 0 $url\$" "$4: the tab isn't at $1 with back $2 and forward $3: $(grep "^browser: page $tab" "$log" | tail -1)"
 }
 # Loads https://$1 in the tab from the command bar.
 go_from_bar() {
