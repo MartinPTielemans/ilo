@@ -1418,8 +1418,8 @@ typedef struct bc_host {
   // nothing was asked. For a page, |bytes| are its first |size| up to the end of its head or a
   // mebibyte; for its picture, all of it. None for a refusal, an answer outside 200–299, or one
   // that isn't a page or an image the app decodes, whose |mime| says what it was. |mime| is the
-  // answer's type, with ";charset=" and its charset when the server named one. They last only for
-  // the call.
+  // answer's type, with ";charset=" and its charset when the server named one, or "" when no answer
+  // started. They last only for the call.
   void (*link_card_fetched)(void* context,
                             uint64_t card,
                             int status,
@@ -3841,9 +3841,9 @@ BC_EXPORT void bc_folder_move_to_space(bc_id folder, bc_id space);
 // net::ERR_ABORTED. Then it asks the link's page once, on the profile's network, as no page and no
 // user: without cookies, a client certificate, a sign-in or a referrer, sharing no cache or
 // connection with the user's browsing, keeping nothing but HSTS and Alt-Svc, http(s) only on every
-// hop and at most 5 redirects, never through a proxy and never to an address on a private network. Returns the card's id, then link_card_fetched with it;
-// or 0, asking nothing, while the pointer is on no http(s) link in |tab|, or |tab| is in an
-// agent's Space. A new card cancels the one before.
+// hop and at most 5 redirects, never through a proxy and never to an address on a private network.
+// Returns the card's id, then link_card_fetched with it; or 0, asking nothing, while the pointer is
+// on no http(s) link in |tab|, or |tab| is in an agent's Space. A new card cancels the one before.
 BC_EXPORT uint64_t bc_tab_link_card(bc_id tab);
 
 // Asks |url|, the picture |card|'s page named, under the same rules, then link_card_fetched with
