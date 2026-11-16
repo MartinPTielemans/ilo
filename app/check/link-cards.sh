@@ -10,15 +10,14 @@
 # link to it, nor for a redirect from the public server to it. Each card's look is captured as
 # link-card-<case>.png.
 # Needs the core's link card (#3085), which a checkout without core/link_card.cc doesn't have, and
-# a bare ⇧ from the driver, which Linux's and Windows' post and the Mac's doesn't yet: its flags
-# post left ⌃'s key with the flags changed, which Chromium reads as ⌃.
+# a bare ⇧ from the driver, which Linux's and Windows' post and the Mac's doesn't yet (#3097).
 
 if [ ! -f ../core/link_card.cc ]; then
   echo "skip: link cards. This checkout has no link card core (#3085) yet."
   exit 0
 fi
 if [ "$(uname)" = Darwin ]; then
-  echo "skip: link cards. The Mac's driver posts no bare ⇧ yet."
+  echo "skip: link cards on the Mac, under #3097: its driver posts no bare ⇧ yet."
   exit 0
 fi
 log="$out/link-cards.log"
