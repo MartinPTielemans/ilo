@@ -29,6 +29,14 @@ pub fn read(bytes: &[u8], mime: &str, url: &str) -> Page {
     let text = decode(bytes, mime);
     let mut found = Found::default();
     scan(&text, &mut found);
+    // As a browser does, a <base> that doesn't resolve leaves the page's own address.
+    let base = Url::parse(url).ok().map(|url| {
+        found
+            .base
+            .as_deref()
+            .and_then(|base| url.join(clean(base, PICTURE_URL_MAX).as_str()).ok())
+            .unwrap_or(url)
+    });
     let pick = |a: Option<String>, b: Option<String>, c: Option<String>, max: usize| {
         [a, b, c]
             .into_iter()
@@ -47,7 +55,7 @@ pub fn read(bytes: &[u8], mime: &str, url: &str) -> Page {
         picture: [found.og_image, found.twitter_image]
             .into_iter()
             .flatten()
-            .find_map(|address| picture(&address, url)),
+            .find_map(|address| picture(&address, base.as_ref()?)),
     }
 }
 
@@ -116,6 +124,8 @@ struct Found {
     twitter_title: Option<String>,
     twitter_description: Option<String>,
     twitter_image: Option<String>,
+    /// The first <base>'s href, which relative addresses resolve against.
+    base: Option<String>,
 }
 
 fn scan(text: &str, found: &mut Found) {
@@ -123,6 +133,9 @@ fn scan(text: &str, found: &mut Found) {
     each_tag(text, |name, attributes| {
         if name == "title" && title_at.is_none() {
             title_at = Some(attributes.as_ptr() as usize - text.as_ptr() as usize);
+        }
+        if name == "base" && found.base.is_none() {
+            found.base = attribute(attributes, "href").map(|href| entities(&href));
         }
         if name != "meta" {
             return;
@@ -450,12 +463,12 @@ pub fn clean(text: &str, max: usize) -> String {
 }
 
 /// |address| resolved against the page's |url|, if it's http(s) and short enough to ask.
-fn picture(address: &str, url: &str) -> Option<String> {
+fn picture(address: &str, base: &Url) -> Option<String> {
     let address = clean(address, PICTURE_URL_MAX);
     if address.is_empty() {
         return None;
     }
-    let resolved = Url::parse(url).ok()?.join(&address).ok()?;
+    let resolved = base.join(&address).ok()?;
     let resolved_text = resolved.as_str();
     (matches!(resolved.scheme(), "http" | "https")
         && resolved.host_str().is_some_and(|host| !host.is_empty())
@@ -585,6 +598,28 @@ mod tests {
         assert_eq!(at("data:image/png;base64,AAAA"), None);
         assert_eq!(at("file:///etc/passwd"), None);
         assert_eq!(at(""), None);
+    }
+
+    #[test]
+    fn a_base_moves_where_the_picture_resolves() {
+        let at = |head: &str| read(head.as_bytes(), "text/html", AT).picture;
+        assert_eq!(
+            at("<base href='/media/'><meta property='og:image' content='i.png'>").as_deref(),
+            Some("https://example.com/media/i.png")
+        );
+        assert_eq!(
+            at(
+                "<base href='https://cdn.example.net/a/'><meta property='og:image' content='i.png'>"
+            )
+            .as_deref(),
+            Some("https://cdn.example.net/a/i.png")
+        );
+        // Only the first <base> counts, as in a browser.
+        assert_eq!(
+            at("<base href='/x/'><base href='/y/'><meta property='og:image' content='i.png'>")
+                .as_deref(),
+            Some("https://example.com/x/i.png")
+        );
     }
 
     #[test]
