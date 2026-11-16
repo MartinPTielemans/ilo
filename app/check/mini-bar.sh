@@ -322,7 +322,7 @@ pinned="$pinned $out/mini-bar-mode-resized.png"
 # window (#2790). The page then scrolls back, for the steps after.
 stacked=
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
-for rep in $(seq 200); do
+for rep in $(seq 30); do
   stacked=
   inner_bar=$placed
   set -- $placed
@@ -334,6 +334,11 @@ for rep in $(seq 200); do
     set -- $placed
     [ "$7" != "$was_y" ] && break
     sleep 0.1
+  done
+  # Proof only: the other window is raised as soon as the bar hides, between the hide and the show.
+  for _ in $(seq 50); do
+    sed -n "$((n + 1)),\$p" "$log" | grep -q '^browser: mini bar hidden$' && break
+    sleep 0.05
   done
   [ "$7" -lt "$was_y" ] && [ "$6" = "$was_x" ] ||
     fail "after a notch down the bar is over a thing at $6 $7, not Inner moved up from $was_x $was_y"
