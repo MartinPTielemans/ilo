@@ -42,7 +42,6 @@
 #include "browser_core/public/browser_core.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
-#include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
