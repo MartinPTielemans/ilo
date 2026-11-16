@@ -29,7 +29,10 @@ open_store() {
   exec 3> "$out/drive"
   await '^browser: loaded [0-9]* https://[a-z]*\.google\.com/' ||
     fail "neither the store nor Google's consent page loaded: $(grep '^browser: loaded' "$log")"
-  send state
+  # A press on the sidebar's empty foot, which presses nothing on the store's page. On Windows a
+  # relaunch finds the runner's console in front, and the driver brings the app in front only for
+  # input, as a hand's first press does, so asking where it is alone skipped the update launch.
+  send click $sidebar_point
   if [ "$active" != 1 ]; then
     exec 3>&-
     quit
