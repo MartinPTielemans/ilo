@@ -664,6 +664,15 @@ fn replace<T: PartialEq>(kept: &mut T, value: T) -> bool {
     changed
 }
 
+/// Whether `tab` is a favorite or in one of the Spaces, so not closed.
+fn open_in(spaces: &[Space], task_spaces: &[Space], favorites: &[u64], tab: u64) -> bool {
+    favorites.contains(&tab)
+        || spaces
+            .iter()
+            .chain(task_spaces)
+            .any(|space| space.pinned.contains(&tab) || space.today.contains(&tab))
+}
+
 /// A Space as the core reports it: its id, name, colour (0xRRGGBB), profile, icon, the name of the
 /// agent it belongs to, and its theme as `Theme` writes it.
 pub type SpaceEntry = (
@@ -1487,6 +1496,9 @@ pub struct Shell {
     /// The window shows another Space, whose tab the core says next, for the command bar to follow
     /// once it has.
     bar_follows: bool,
+    /// ⌘L, from where it came, pressed after the tab shown closed and before the core said which
+    /// shows next, which the bar then opens on (#2953).
+    edit_url_waits: Option<String>,
     drag: Option<Drag>,
     /// A tab's row dragged out of the window, as the system drags it, until it's let go.
     window_drag: Option<drag::WindowDrag>,
@@ -1865,8 +1877,10 @@ pub struct Shell {
     hang_noted: Option<u64>,
     /// The dialogs the tabs' pages ask, such as an alert(): the tab shown's goes over its card.
     page_dialogs: HashMap<u64, PageDialog>,
-    /// The page dialog asked over the card last, by its tab and id, and where.
-    page_dialog_shown: Option<(u64, u64, (Bounds<Pixels>, f32))>,
+    /// What the window told last of its page's dialog: the one asked over the card, by its tab
+    /// and id, and where, or none. Untold once it comes to the front, when the dialog shown may
+    /// be another window's.
+    page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32))>>,
     /// The tab or Space the user asked for and when, until it's shown.
     switching: Option<(Switch, Instant)>,
     /// Where the window's background was pressed, until the pointer moves past DRAG_START and it
@@ -2057,6 +2071,7 @@ impl Shell {
             in_hint: false,
             press_closed_bar: false,
             bar_follows: false,
+            edit_url_waits: None,
             drag: None,
             window_drag: None,
             dragged: false,
@@ -2249,7 +2264,7 @@ impl Shell {
             crash_reload_drawn: Rc::default(),
             hang_noted: None,
             page_dialogs: HashMap::new(),
-            page_dialog_shown: None,
+            page_dialog_shown: Some(None),
             picker_pending: None,
             theme_preview: None,
             name_row_drawn: Rc::default(),
@@ -3252,18 +3267,16 @@ impl Shell {
         log!("browser: favorite splits {}", splits.join(" "));
     }
 
+    fn tab_open(&self, tab: u64) -> bool {
+        open_in(&self.spaces, &self.task_spaces, &self.all_favorites, tab)
+    }
+
     /// What the shell knew of a closed tab goes with it. The core reports a tab in its new place
     /// before it leaves the old, so one moving between a Space and the favorites stays.
     fn forget_closed(&mut self, cx: &mut App) {
         let (spaces, favorites) = (&self.spaces, &self.all_favorites);
         let task_spaces = &self.task_spaces;
-        let open = |tab: &u64| {
-            favorites.contains(tab)
-                || spaces
-                    .iter()
-                    .chain(task_spaces)
-                    .any(|space| space.pinned.contains(tab) || space.today.contains(tab))
-        };
+        let open = |tab: &u64| open_in(spaces, task_spaces, favorites, *tab);
         // A closed tab's hover card picture goes with it.
         let closed: Vec<u64> = self.tabs.keys().copied().filter(|tab| !open(tab)).collect();
         for tab in closed {
@@ -3394,6 +3407,9 @@ impl Shell {
         if self.split_pending.take() == Some(tab) {
             self.add_pane(cx);
         }
+        if let Some(from) = self.edit_url_waits.take() {
+            self.edit_url(&from, cx);
+        }
         self.update_title(cx);
         self.update_menus(cx);
         cx.notify();
@@ -3408,8 +3424,9 @@ impl Shell {
         }
         cx.set_global(ShellHandle(cx.weak_entity()));
         commands::heard_key(&cx.weak_entity());
-        // Its tab's dialog goes over its card again, as another window's may have shown since, and
-        // its hung page's note shows, which waited while it was behind.
+        // Its tab's dialog goes over its card again, or another window's leaves, as that window may
+        // have closed before its draw took it back (#3108). Its hung page's note shows, which
+        // waited while it was behind.
         self.page_dialog_shown = None;
         self.note_hang(cx);
         cx.notify();
@@ -3562,9 +3579,13 @@ impl Shell {
         // Asked here, once a report, as the row drawn each frame needs only the answer.
         let left_pinned_host =
             page.away_from_pinned_url && host(&page.url) != host(&self.browser.pinned_url(tab));
-        // Arrange ends as Safari's engine takes the tab's page, the core's being Chromium's, hidden.
+        // Arrange ends and the Boost's card closes as Safari's engine takes the tab's page, the
+        // core's being Chromium's, hidden.
         if page.system_engine && self.arranging == Some(tab) {
             self.stop_arrange(cx);
+        }
+        if page.system_engine && self.boost_card == Some(tab) {
+            self.close_boost_card(cx);
         }
         let entry = self.tabs.entry(tab).or_default();
         if page.unloaded != entry.page.unloaded {
