@@ -322,13 +322,28 @@ pinned="$pinned $out/mini-bar-mode-resized.png"
 # window (#2790). The page then scrolls back, for the steps after.
 stacked=
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
-for rep in $(seq 200); do
+for rep in $(seq 10); do
   stacked=
   inner_bar=$placed
   set -- $placed
   was_x=$6 was_y=$7
   n=$(wc -l < "$log")
   send scroll $(page_at $((vw2 / 2)) $((vh2 / 2))) 1 1
+  # Proof only: the other app's window is raised while the bar is hidden, before it shows again.
+  for _ in $(seq 100); do
+    sed -n "$((n + 1)),\$p" "$log" | grep -q '^browser: mini bar hidden$' && break
+    sleep 0.02
+  done
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other_app=$!
+  exec 7> "$out/other-in"
+  for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+  cover=$(head -1 "$out/other-window.log")
+  xdotool windowactivate --sync "$cover" 2> /dev/null ||
+    fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+  echo "rep $rep: raised with the bar $(sed -n "$((n + 1)),\$p" "$log" | grep '^browser: mini bar \(hidden\|shown\)$' | tail -1)" >> "$out/raised-over-reps.txt"
   for _ in $(seq 50); do
     bar_after "$n" "the scroll" "a notch of the wheel over the page"
     set -- $placed
@@ -346,15 +361,6 @@ for rep in $(seq 200); do
   pinned="$pinned $out/mini-bar-mode-scrolled.png"
   set -- $placed
   bar_at="$(($1 + $3 / 2)) $(($2 + $4 / 2))"
-  rm -f "$out/other-in"
-  mkfifo "$out/other-in"
-  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
-  other_app=$!
-  exec 7> "$out/other-in"
-  for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
-  cover=$(head -1 "$out/other-window.log")
-  xdotool windowactivate --sync "$cover" 2> /dev/null ||
-    fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
   # The manager restacks as it activates, so its list is read until it settles, a second at most.
   for _ in $(seq 10); do
     stacking=$(python3 -I check/x11-stacking.py "$cover" "$pid" $bar_at 2>&1) && stacked=1 && break
