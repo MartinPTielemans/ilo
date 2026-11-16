@@ -322,7 +322,7 @@ pinned="$pinned $out/mini-bar-mode-resized.png"
 # window (#2790). The page then scrolls back, for the steps after.
 stacked=
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
-for rep in $(seq 30); do
+for rep in $(seq 200); do
   stacked=
   inner_bar=$placed
   set -- $placed
