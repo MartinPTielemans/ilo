@@ -411,6 +411,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
 }
 
 unsafe extern "C" fn started(_: *mut c_void) {
+    log!("browser: proof mark started callback at {:.1} ms", unsafe { platform::host_since_launch() });
     // Before the first page, which Arrange may lift an element of.
     boosts_host::set_arrange_lift();
     // Chromium's message loop dispatches GPUI's messages, as its run loop does on the Mac.
@@ -472,6 +473,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 }
             },
         };
+        log!("browser: proof mark wayland display asking at {:.1} ms", unsafe { platform::host_since_launch() });
         let display = unsafe { bc::bc_wayland_display(Some(dispatched)) };
         match display.is_null() {
             // GPUI's X11 scale is its own guess otherwise, from Xft.dpi, where Chromium also
@@ -492,6 +494,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
                         unsafe { bc::bc_window_ui_takes_keyboard(window) };
                     }
                 }
+                log!("browser: proof mark embed_x11 at {:.1} ms", unsafe { platform::host_since_launch() });
                 gpui_linux::embed_x11(unsafe { bc::bc_display_scale() } as f32, pressed);
                 // The clipboard's owner can be Chromium, which answers on this thread, so the UI's
                 // read has it answer while it waits (#999).
@@ -509,7 +512,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         WAYLAND.set(!display.is_null());
         !display.is_null()
     };
+    log!("browser: proof mark platform making at {:.1} ms", unsafe { platform::host_since_launch() });
     let application = gpui_platform::application().with_assets(shell::Assets);
+    log!("browser: proof mark platform made at {:.1} ms", unsafe { platform::host_since_launch() });
     // On X11, as Chromium is, even with a Wayland display in the environment.
     #[cfg(target_os = "linux")]
     let application = match wayland {
@@ -522,6 +527,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         )),
     };
     let app = application.run_embedded(move |cx| {
+        log!("browser: proof mark run_embedded closure at {:.1} ms", unsafe { platform::host_since_launch() });
         browser::face::register(cx);
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);

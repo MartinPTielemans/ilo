@@ -367,6 +367,8 @@ perf_row launch-restore "Launch, restored page painted${selfied:-}" \
 perf_row launch-held "Launch, the page held for uBlock Origin${selfied:-}" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
 
+echo "ok: proof only (#2384): the launches' marks are in $perf_dir; the session skipped"
+return 0
 log="$perf_dir/session.log"
 step=0
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
