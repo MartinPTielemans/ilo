@@ -317,6 +317,18 @@ ms=$(grep '^browser: command bar suggestions "" in ' "$log" | tail -1 |
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 in_browser RenderWidgetHostViewCocoa "after the command bar closed"
+# Probe (#3154): five goes of Ctrl+L with the page's textarea focused, timing the bar's text input
+# taking the input method.
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  for _ in 1 2 3 4 5; do
+    send probegap
+    expect '^browser: command bar shown$' "probegap's Ctrl+L didn't open the command bar"
+    send key escape
+    expect '^browser: command bar hidden$' "escape didn't close the command bar"
+    in_browser RenderWidgetHostViewCocoa "after the command bar closed"
+  done
+  grep '^browser: probe gap' "$log" | sed 's/^/probe: /'
+fi
 for shortcut in t l; do
   typed_after $shortcut abc
   expect '^browser: command bar drew "abc"$' \

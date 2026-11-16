@@ -117,8 +117,14 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            zwp_input_method_v2::Event::Activate => IM_PENDING.set(Some(true)),
-            zwp_input_method_v2::Event::Deactivate => IM_PENDING.set(Some(false)),
+            zwp_input_method_v2::Event::Activate => {
+                PROBE_EVENTS.with_borrow_mut(|all| all.push((Instant::now(), "activate")));
+                IM_PENDING.set(Some(true))
+            }
+            zwp_input_method_v2::Event::Deactivate => {
+                PROBE_EVENTS.with_borrow_mut(|all| all.push((Instant::now(), "deactivate")));
+                IM_PENDING.set(Some(false))
+            }
             zwp_input_method_v2::Event::Done => {
                 IM_FRESH.set(false);
                 if let Some(active) = IM_PENDING.take() {
@@ -162,6 +168,37 @@ thread_local! {
     static IM_UNAVAILABLE: Cell<bool> = const { Cell::new(false) };
     /// Whether the input method is new and sway hasn't told it its state yet.
     static IM_FRESH: Cell<bool> = const { Cell::new(false) };
+    static PROBE_EVENTS: RefCell<Vec<(Instant, &'static str)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Probe: Ctrl+L through the virtual keyboard, then the input method's activations as sway sends
+/// them, polled each ms, logged in ms from the key, until one comes or 2 s pass.
+fn probe_gap() -> Option<()> {
+    input_method()?;
+    PROBE_EVENTS.with_borrow_mut(Vec::clear);
+    let began = Instant::now();
+    key_events("l", CONTROL, &[true, false])?;
+    drive::go_on(Box::new(move |done| probe_watch(began, done)));
+    Some(())
+}
+
+fn probe_watch(began: Instant, done: Box<dyn FnOnce()>) {
+    SESSION.with_borrow_mut(|session| {
+        if let Some(session) = session {
+            _ = session.queue.roundtrip(&mut State);
+        }
+    });
+    let events = PROBE_EVENTS.with_borrow(Clone::clone);
+    let activated = events.iter().any(|(_, kind)| *kind == "activate");
+    if activated || began.elapsed() > Duration::from_secs(2) {
+        let said: Vec<String> = (events.iter())
+            .map(|(at, kind)| format!("{kind} +{:.1}", (*at - began).as_secs_f64() * 1000.))
+            .collect();
+        log!("browser: probe gap after ctrl+l: {}", said.join(", "));
+        done();
+        return;
+    }
+    drive::after(1, Box::new(move || probe_watch(began, done)));
 }
 
 /// Makes the driver's pointer and keyboard under Wayland, before the app's windows, so Chromium
@@ -1519,6 +1556,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
         "keyup" => (|| key_events(words.next()?, 0, &[false]))(),
         "type" => rest.chars().try_for_each(|c| key(&c.to_string(), 0)),
         "insert" => insert(rest),
+        "probegap" => probe_gap(),
         "resize" | "place" => (|| {
             let numbers: Vec<f64> = words.map(|w| w.parse().ok()).collect::<Option<_>>()?;
             match numbers[..] {

@@ -140,6 +140,22 @@ if [ "${1:-}" = --steps ]; then
     await "title [0-9]* value abc$" "$at"
   fi
 
+  # Probe (#3154): under Wayland, fcitx5's composition typed right after Ctrl+L, with no wait.
+  if [ "$mode" = wayland ]; then
+    at=$(mark); key '^l'; compose xyz
+    went=neither
+    for _ in $(seq 100); do
+      if tail -n "+$((at + 1))" "$LOG" | grep -q 'command bar drew "[^"]*xyz"'; then went=bar; break; fi
+      if tail -n "+$((at + 1))" "$LOG" | grep -q "title [0-9]* composing abcx"; then went=page; break; fi
+      sleep 0.1
+    done
+    echo "probe (#3154): fcitx5's composition typed right after Ctrl+L went to the $went" |
+      tee "$out/$mode.probe" >&2
+    tail -n "+$((at + 1))" "$LOG" | grep -E 'command bar (shown|drew)|title [0-9]* ' | head -20 >> "$out/$mode.probe"
+    key $'\e'; key $'\e'
+    await "command bar hidden" "$at"
+  fi
+
   # The bar, with the page composing as it opens: the page keeps what it composed.
   at=$(mark); compose de
   await "title [0-9]* composing abcde$" "$at"
