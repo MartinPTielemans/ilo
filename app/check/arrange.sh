@@ -26,8 +26,8 @@
 serve
 # The page says in its title where its things are, each time that changes: the column's and the
 # side's in their order down the page, those hidden, those floating off both with their position,
-# where the last click before the mode landed in the page, and the column as its first frame drew
-# it. Six things: four sections in the column, 120 tall and 20 apart from 40 down, the last too
+# where the last click before the mode landed in the page, the column as its first frame drew it,
+# and the space between each two things in the column. Six things: four sections in the column, 120 tall and 20 apart from 40 down, the last too
 # wide for the side, which holds two boxes, from 600 across.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
@@ -60,6 +60,12 @@ const down = (list) =>
   list.sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top)
     .map((thing) => thing.id).join(",") || "-";
 const column = (main) => down(shown().filter((thing) => on(thing, main ? "col" : "side")));
+// The space between each two things in the column, down the page, as its gap keeps it (#3030).
+const gaps = () => {
+  const rs = shown().filter((thing) => on(thing, "col")).map((thing) => thing.getBoundingClientRect())
+    .sort((x, y) => x.top - y.top);
+  return rs.slice(1).map((r, i) => Math.round(r.top - rs[i].bottom)).join(",") || "-";
+};
 let at = "-";
 let first = "-";
 let said;
@@ -70,7 +76,7 @@ setInterval(() => {
   const floating = shown().filter(floats)
     .map((thing) => thing.id + ":" + getComputedStyle(thing).position).join(",") || "-";
   const now = "col " + column(true) + " side " + column(false) + " hidden " + hidden +
-    " float " + floating + " at " + at + " first " + first;
+    " float " + floating + " at " + at + " first " + first + " gaps " + gaps();
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/arrange.html"
@@ -262,6 +268,12 @@ landed_bar $(slot 1) "the mini bar wasn't first placed over Alpha where it settl
 expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle"
 shows 'b,a,c,w side s,n hidden - float -' "the settle didn't move the thing under the second"
 kept 1 "the settle wasn't saved"
+# Each gap as the column had it, under the settled thing too (#3030).
+for _ in $(seq 100); do
+  case "$(said)" in *" gaps 20,20,20") break ;; esac
+  sleep 0.1
+done
+case "$(said)" in *" gaps 20,20,20") ;; *) fail "the settle didn't keep the column's 20 pt gaps: the page says $(said)" ;; esac
 ../tools/window-screenshot.sh "$pid" "$out/arrange-settled.png" || fail "no window to capture"
 
 # Put back, the mini bar's last button on a thing with a change, takes that change back: Alpha,
@@ -502,7 +514,7 @@ case "$(said)" in
   "col $kept_column side s,n hidden - float - at - first "*) ;;
   *) fail "the reloaded page didn't place the arrangement: $(said)" ;;
 esac
-first=$(said | sed 's/.* first //')
+first=$(said | sed 's/.* first \([^ ]*\) gaps .*/\1/')
 if [ "$first" = "$kept_column" ]; then
   first_frame="its first frame already showed it"
 else
