@@ -25,6 +25,8 @@
 //! desktop on and off, Linux's own, shows the desktop and the windows again as a pager asks,
 //! desktop shell maps a desktop window as a desktop shell does and desktop shell off takes it away, and
 //! onscreen logs what the X server shows of the driven window and the app's overlays over it.
+//! refocus, X11's own, gives the driven browser window the input focus and asks it raised, as a
+//! window manager activating it again does.
 //! The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
 //! and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt
 //! with Alt. flags presses and lets go of those keys, the last key's among them, and the keys after
