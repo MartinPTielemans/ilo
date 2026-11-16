@@ -428,8 +428,13 @@ LRESULT CALLBACK Sent(int code, WPARAM own, LPARAM sent) {
   return CallNextHookEx(nullptr, code, own, sent);
 }
 
-// A browser window went to the back.
-void Wait() {
+// |root|, a browser window, went to the back. A press in it the hook heard while another window
+// was in the back is forgotten: it came while |root| was in front, so it brought nothing forward,
+// and |root| coming back by the keyboard or the taskbar would read it as its own.
+void Wait(HWND root) {
+  if (g_pressed && GetAncestor(g_pressed, GA_ROOT) == root) {
+    g_pressed = nullptr;
+  }
   if (g_waiting++ == 0) {
     g_pressed = nullptr;
     g_hook = SetWindowsHookExW(WH_CALLWNDPROC, Sent, nullptr, GetCurrentThreadId());
@@ -884,7 +889,7 @@ class WindowViews : public views::WidgetObserver,
       had_keyboard_ = focus && IsChild(hwnd, focus) ? focus : nullptr;
       pressed_ = nullptr;
       if (!std::exchange(in_back_, true)) {
-        presses::Wait();
+        presses::Wait(hwnd);
       }
     } else if (message == WM_ACTIVATE) {
       // By a press, on the UI or a pane, or by the keyboard or the taskbar. Not always

@@ -369,22 +369,11 @@ if [ "$major" -ge 157 ]; then
   expect '^browser: command close-tab via ' "⌘W on Chrome's warning before http didn't reach the UI"
   expect_tabs "$kept" "$kept" "after one ⌘W on Chrome's warning before http"
   ran_on_warning close-tab "one ⌘W"
-  # Coming back from another app: the warning, which had the keyboard, has it again unless a press
-  # on the UI brought the window forward. On Windows the window gives the page's pane the keyboard
-  # back first, which the warning takes from it only then (#2910). Each starts with the warning's
-  # keys and another app's small window beside ilo's in front, the pointer at $2, and brings ilo's
-  # window forward by $1: "taskbar", as its taskbar button does, where no press activates it, or
-  # "press", a real press there. $3 says where the keyboard goes: "warning" or "ui".
-  back_from_another_app() {
-    send click $((warning_x + warning_width / 2)) $((warning_y + warning_height + 40))
-    clicked=$step
-    for _ in $(seq 50); do
-      [ "$key" = NativeWidgetMacNSWindow ] && break
-      sleep 0.1
-      send state
-    done
-    [ "$key" = NativeWidgetMacNSWindow ] ||
-      fail "a click on the page beside Chrome's warning before http left the keyboard in $key, on $focus, not in the warning: $(since "$clicked" | grep '^browser: drive' | tail -3 | tr '\n' ' ')"
+  # Another app's small window beside ilo's takes the foreground, and gives it back to ilo's
+  # window in front with the pointer at $2, by $1: "taskbar", as its taskbar button or Alt+Tab do,
+  # where no press activates it, or "press", a real press there. Sets $how, and $back to the step
+  # after.
+  away_and_back() {
     rm -f "$out/cover-front"
     python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" aside \
       "$(cygpath -w "$out/cover-front")" > "$out/other-window.log" 2>&1 &
@@ -397,7 +386,7 @@ if [ "$major" -ge 157 ]; then
       sleep 0.1
     done
     grep -q '^cover .*, foreground away$' "$out/other-window.log" 2> /dev/null ||
-      fail "another app's window didn't open and take the foreground from $kept's warning before http, in $((SECONDS - started)) s: $(cat "$out/other-window.log" 2>&1)"
+      fail "another app's window didn't open and take the foreground from ilo's, in $((SECONDS - started)) s: $(cat "$out/other-window.log" 2>&1)"
     send move $2
     case $1 in
       taskbar) how="coming back from another app with the pointer at $2" && touch "$out/cover-front" ;;
@@ -406,6 +395,23 @@ if [ "$major" -ge 157 ]; then
     wait "$other" ||
       fail "another app's window didn't give ilo's back the foreground: $(cat "$out/other-window.log")"
     back=$step
+  }
+  # Coming back from another app: the warning, which had the keyboard, has it again unless a press
+  # on the UI brought the window forward. On Windows the window gives the page's pane the keyboard
+  # back first, which the warning takes from it only then (#2910). Each starts with the warning's
+  # keys, then goes away and back by $1 with the pointer at $2, as away_and_back's. $3 says where
+  # the keyboard goes: "warning" or "ui".
+  back_from_another_app() {
+    send click $((warning_x + warning_width / 2)) $((warning_y + warning_height + 40))
+    clicked=$step
+    for _ in $(seq 50); do
+      [ "$key" = NativeWidgetMacNSWindow ] && break
+      sleep 0.1
+      send state
+    done
+    [ "$key" = NativeWidgetMacNSWindow ] ||
+      fail "a click on the page beside Chrome's warning before http left the keyboard in $key, on $focus, not in the warning: $(since "$clicked" | grep '^browser: drive' | tail -3 | tr '\n' ' ')"
+    away_and_back "$1" "$2"
     case $3 in
       warning) wanted=NativeWidgetMacNSWindow ;;
       ui) wanted=BrowserCoreNSWindow ;;
@@ -432,6 +438,48 @@ if [ "$major" -ge 157 ]; then
     back_from_another_app taskbar "$sidebar_point" warning
     back_from_another_app press "$((warning_x + warning_width / 2)) $((warning_y + warning_height + 40))" warning
     back_from_another_app press "$sidebar_point" ui
+    # With a second window in front and the first in the back, the core hears the second's presses
+    # too, though they bring nothing forward. The second coming back by the taskbar has the
+    # keyboard where a key last moved it, not where the press before the key was (#2910): a press
+    # on its page and F6 to the sidebar, then a press on its sidebar, F6 and escape to the page.
+    send key n cmd
+    expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+    new_window_bar
+    send window "$(grep -c '^browser: window opened ' "$log")"
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+    send insert "${site}notes.txt"
+    send key return
+    expect "^browser: loaded [0-9]* ${site}notes.txt\$" "the second window didn't load ${site}notes.txt"
+    # back_in_second <view> <where>: away and back by the taskbar, where the keyboard was in <view>,
+    # which <where> names.
+    back_in_second() {
+      away_and_back taskbar "$sidebar_point"
+      for _ in $(seq 50); do
+        send state
+        [ "$active" = 1 ] && [ "$key" = BrowserCoreNSWindow ] && [ "$focus" = "$1" ] && break
+        sleep 0.1
+      done
+      [ "$active" = 1 ] && [ "$key" = BrowserCoreNSWindow ] && [ "$focus" = "$1" ] ||
+        fail "the second window coming back from another app by the taskbar left the keyboard in $key, on $focus (active $active), where the $2 had it: $(since "$back" | grep '^browser: drive' | tail -3 | tr '\n' ' ')"
+    }
+    send click $page_point
+    in_browser RenderWidgetHostViewCocoa "after a press on the second window's page"
+    send key f6
+    expect '^browser: sidebar keyed ' "F6 with the second window's page focused didn't give the sidebar the keyboard"
+    in_browser AccessKitSubclassOfGPUIView "after F6 from the second window's page"
+    back_in_second AccessKitSubclassOfGPUIView "sidebar, after a press on the page and F6,"
+    send click $sidebar_point
+    in_browser AccessKitSubclassOfGPUIView "after a press on the second window's sidebar"
+    send key f6
+    expect '^browser: sidebar keyed ' "F6 with the second window's sidebar focused didn't ring a row"
+    send key escape
+    expect '^browser: sidebar keys left by escape$' "escape didn't take F6's sidebar keyboard away in the second window"
+    in_browser RenderWidgetHostViewCocoa "after escape left the second window's sidebar"
+    back_in_second RenderWidgetHostViewCocoa "page, after a press on the sidebar, F6 and escape,"
+    send key w cmd shift
+    expect '^browser: window closed [0-9]' "⇧⌘W didn't close the second window"
+    send window 1
   fi
   # A click on the page beside the warning while the UI has the keyboard, the browser window
   # active: on Windows the page's pane takes the keyboard, with no window activated for aura to
