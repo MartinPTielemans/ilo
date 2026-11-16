@@ -21,6 +21,8 @@ namespace network {
 class URLLoaderFactoryBuilder;
 }  // namespace network
 
+class GURL;
+
 namespace browser_core {
 
 // The browser's own ad blocker (#2111), which blocks in place of uBlock Origin with
@@ -38,6 +40,20 @@ bool NativeAdBlock();
 void UseNativeAdBlock(const base::FilePath& folder,
                       const std::vector<base::FilePath>& lists,
                       const std::string& filters);
+
+// The tab |popup|, which content made for |opener|'s page to show |url| in, |in_front| as a page's
+// own tab or pop-up comes, from a page in an agent's Space if |agent|: as its tab strip gets it,
+// it waits for the pop-up filters' answer about |url| if HoldsPopup says so (popup_hold.h, #2806).
+void HoldPopup(content::WebContents* popup,
+               content::WebContents* opener,
+               const GURL& url,
+               bool in_front,
+               bool agent);
+
+// Whether the tab |contents|'s report to the app, |report|, waits. A held tab's runs, posted, once
+// the filters let its first address load or warn, or once no answer can come, and never if they
+// close the tab: a pop-up they block is never listed or shown.
+bool HoldPopupReport(content::WebContents* contents, base::OnceClosure report);
 
 // Whether it blocks at all, as Settings' Ad blocking says. Off, the pages already open stop
 // blocking at their next request, as uBlock Origin turned off does.
