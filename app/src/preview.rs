@@ -2710,6 +2710,10 @@ fn main() {
                         _ => Shell::new(browser, cx),
                     };
                     shell.force_tone(preview_tone());
+                    // The app's UI there lies over the core's window, which is black under the
+                    // tint; the preview's would show the desktop through it (#3033).
+                    #[cfg(any(target_os = "windows", target_os = "linux"))]
+                    shell.set_ground(gpui::black().into());
                     shell.set_profiles(preview_profiles(), cx);
                     shell.set_spaces(spaces, cx);
                     shell.set_space(first_space, cx);
