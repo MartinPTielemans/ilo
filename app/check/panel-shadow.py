@@ -86,7 +86,21 @@ if not counts:
     print(f"the panel at {px},{py} {pw}x{ph} is outside the {width}x{height} capture")
     sys.exit(1)
 page = max(counts, key=counts.get)
-inside = lambda x, y: 0 <= x < width and 0 <= y < height
+# The page itself, in BEFORE: from the panel's middle out, as far as the page's colour goes. Only
+# there is a pixel of the page's colour the page's, as the sidebar's selected row, which can be as
+# white, changes as the panel opens: ⌘T selects a new tab's row. Its corners are rounded, so a few
+# pixels in from its edges.
+middle_x, middle_y = px + pw // 2, py + ph // 2
+def reach(step_x, step_y):
+    x, y = middle_x, middle_y
+    while (0 <= x + step_x < width and 0 <= y + step_y < height
+           and at(before, x + step_x, y + step_y) == page):
+        x, y = x + step_x, y + step_y
+    return x, y
+CORNER = 8
+page_left, page_right = reach(-1, 0)[0] + CORNER, reach(1, 0)[0] - CORNER
+page_top, page_bottom = reach(0, -1)[1] + CORNER, reach(0, 1)[1] - CORNER
+inside = lambda x, y: page_left <= x <= page_right and page_top <= y <= page_bottom
 differ = lambda x, y: max(abs(a - b) for a, b in zip(at(before, x, y), at(after, x, y)))
 
 if mode == "shown":
@@ -103,7 +117,8 @@ if mode == "shown":
     luma = lambda c: 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
     darken = (sum(luma(at(before, x, y)) - luma(at(after, x, y)) for x, y in band) / len(band)
               if band else 0)
-    said = (f"page {page}; window's edge: {len(edge)} pixels over the page, "
+    said = (f"page {page} at {page_left},{page_top} to {page_right},{page_bottom}; "
+            f"window's edge: {len(edge)} pixels over the page, "
             + (f"most changed {differ(*worst)} at {worst[0]},{worst[1]}, {at(before, *worst)} to "
                f"{at(after, *worst)}" if worst else "none over the page")
             + f"; under the panel: {len(band)} pixels darker by {darken:.1f}")
@@ -115,7 +130,7 @@ if mode == "gone":
     area = [(x, y) for y in range(py, wy + wh) for x in range(px, px + pw)]
     area = [(x, y) for x, y in area if inside(x, y) and at(before, x, y) == page]
     changed = [(x, y) for x, y in area if differ(x, y) > SAME]
-    print(f"page {page}; under where the panel and its shadow were: {len(area)} pixels, "
+    print(f"page {page} at {page_left},{page_top} to {page_right},{page_bottom}; under where the panel and its shadow were: {len(area)} pixels, "
           f"{len(changed)} changed" + (f", the first at {changed[0][0]},{changed[0][1]}, "
                                          f"{at(before, *changed[0])} to {at(after, *changed[0])}"
                                          if changed else ""))

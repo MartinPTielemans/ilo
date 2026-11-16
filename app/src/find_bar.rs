@@ -433,7 +433,11 @@ impl FindBar {
                     .into_iter()
                     .map(Into::into)
                     .collect();
-                let anchor = Anchor::under(Bounds::new(origin + frame.origin, frame.size), window);
+                // The frame is in the bar's window, which has the margin round the bar that its
+                // shadow draws in on Windows; the bar's place is the bar's own.
+                let margin = Level::Popover.panel_margin();
+                let in_bar = frame.origin - point(px(margin.sides), px(margin.above));
+                let anchor = Anchor::under(Bounds::new(origin + in_bar, frame.size), window);
                 self.tipped = Some(button);
                 tooltip::hover(
                     self.browser,
