@@ -11,7 +11,8 @@ use crate::tokens::menu::{MAX_WIDTH, OVERLAP};
 pub(super) const LISTED: usize = 10;
 /// The safe triangle ends after the pointer rests this long in it, as menu.rs's does.
 const SAFE_TIMEOUT: Duration = Duration::from_millis(300);
-const REFUSED: &str = "Open it and place what's waiting there, then add this again.";
+/// A Board takes no more while this many captures wait to land on it, which they do when it opens.
+const REFUSED: &str = "has too many captures waiting. Open it, then add this again.";
 /// What the log says of the toasts that name a Board, in place of their words.
 const ADDED: &str = "Added to a Board";
 const NO_ROOM: &str = "A Board has no room";
@@ -456,7 +457,7 @@ impl Capture {
                 }),
             }
         };
-        let text = format!("{} has no room for this yet. {REFUSED}", board.name);
+        let text = format!("{} {REFUSED}", board.name);
         let buttons = vec![open, copy];
         cx.defer(move |cx| toast::show_logged_as(&text, NO_ROOM, buttons, TOAST_TIME, cx));
     }
