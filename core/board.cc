@@ -286,7 +286,7 @@ std::set<BoardHandler*>& Waiting() {
 
 // The Board's id in |url|, chrome://board/<id>, or empty.
 std::string_view IdIn(const GURL& url) {
-  std::string_view path = url.path_piece();
+  std::string_view path = url.path();
   if (path.starts_with('/')) {
     path.remove_prefix(1);
   }
