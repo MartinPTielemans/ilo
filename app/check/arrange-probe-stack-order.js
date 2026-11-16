@@ -527,6 +527,7 @@
       const moved = ls.flatMap((l) => l.items.filter((e) => e.moved));
       // Each one's overrun where the site lays it out, before any width of ours is on it.
       const was = new Map(moved.map((e) => [e.el, over(e.el)]));
+      for (const l of ls) l.lead = leadOf(l, moved.map((e) => e.el));
       // Each moved thing out of flow at its place's width before any is measured: widths go in and
       // lengths come out, and a place may be in another moved thing.
       for (const e of moved) {
@@ -539,7 +540,9 @@
       if (bad.size) return [...bad];
       // Rooms from the innermost out, as a list's room is its parent's length; places from the
       // outermost in, as a place is measured in its parent where it rests.
-      ls.sort((x, y) => y.depth - x.depth);
+      // A list's room moves the lists after it, which are measured from their leads once it's made.
+      ls.sort((x, y) => y.depth - x.depth ||
+        (x.parent.compareDocumentPosition(y.parent) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
       for (const l of ls) room(l);
       for (const l of ls.reverse()) pin(l);
       for (const s of p.floats.values()) float(s);
@@ -552,6 +555,26 @@
       const sides = row ? ['Left', 'Right'] : ['Top', 'Bottom'];
       return sides.reduce((t, k) => t + (parseFloat(cs['padding' + k]) || 0) + (parseFloat(cs[`border${k}Width`]) || 0), 0);
     };
+    // The box |l|'s parent follows along its axis, with where it ended as the site lays it out: the
+    // last in flow before the parent, its own sibling or else an ancestor's: a sibling beside it, as
+    // a column in a row is, doesn't place it, and the row's own lead does. Another list's room moves
+    // it, and the list with it. A margin collapsing through the parent can't, nor can its things
+    // leaving it, which move the parent's own edge.
+    function leadOf(l, skip) {
+      const row = l.axis === 'row';
+      const start = (r) => (row ? r.left : r.top), end = (r) => (row ? r.right : r.bottom);
+      for (let p = l.parent; p && p !== document.body; p = p.parentElement) {
+        if (/absolute|fixed/.test(getComputedStyle(p).position)) return null;
+        const at = start(rect(p));
+        for (let q = p.previousElementSibling; q; q = q.previousElementSibling) {
+          if (skip.includes(q) || lifted.has(q) || !drawn(q) ||
+            /absolute|fixed/.test(getComputedStyle(q).position)) continue;
+          if (end(rect(q)) > at + 0.5) break;
+          return { el: q, end: end(rect(q)) };
+        }
+      }
+      return null;
+    }
     // The room each place in |l| takes, in its order, each at the gap the page had at that place:
     // kept by a margin on each thing that didn't move, where flow puts it elsewhere, and by the
     // parent's least length where its last thing moved; a row's height too, for a thing taller than
@@ -569,26 +592,32 @@
       const lengths = l.shown.map((e) => length(rect(e.el)));
       let at = S.length ? start(S[0]) - start(l.pr) : 0;
       l.offs = lengths.map((n, i) => { const o = at; at += n + gapAt(i); return o; });
-      const from = start(rect(l.parent)), keeper = carry && carry.keeper;
+      // Where the parent starts: as far from where it did as its lead has moved, or as the parent
+      // itself has where it has none. Fixed before any margin of ours, as one collapsing through the
+      // parent moves the parent with the thing.
+      const base = start(l.pr) + (l.lead ? end(rect(l.lead.el)) - l.lead.end : start(rect(l.parent)) - start(l.pr));
+      const keeper = carry && carry.keeper;
       const prop = row ? 'margin-left' : 'margin-top';
       l.shown.forEach((e, i) => {
         if (e.moved || e.el === keeper) return;
         // A margin that collapses with its neighbour's moves the thing by less, so it's measured
         // until the thing is at its place.
-        let d = from + l.offs[i] - start(rect(e.el));
+        let d = base + l.offs[i] - start(rect(e.el));
         if (Math.abs(d) < 0.5) return;
         let m = parseFloat(getComputedStyle(e.el)[row ? 'marginLeft' : 'marginTop']) || 0;
         for (let k = 0; k < 3 && Math.abs(d) >= 0.5; k++) {
           m += d;
           put(e.el, prop, px(m));
-          d = from + l.offs[i] - start(rect(e.el));
+          d = base + l.offs[i] - start(rect(e.el));
         }
       });
       const n = l.shown.length - 1, pr = rect(l.parent);
       if (n >= 0 && l.shown[n].moved) {
-        const need = l.offs[n] + lengths[n] + (S.length ? end(l.pr) - end(S[S.length - 1]) : 0);
+        const need = base - start(pr) + l.offs[n] + lengths[n] + (S.length ? end(l.pr) - end(S[S.length - 1]) : 0);
         if (need > length(pr) + 0.5) put(l.parent, row ? 'min-width' : 'min-height', px(need - edgeOf(l.parent, row)));
       }
+      // The places from the parent's start as it is now, which an outer list's pin may move.
+      l.from = base - start(rect(l.parent));
       if (row) {
         const need = Math.max(0, ...l.shown.filter((e) => e.moved).map((e) => l.pr.height + rect(e.el).height - e.geo.h));
         if (need > pr.height + 0.5) put(l.parent, 'min-height', px(need - edgeOf(l.parent, false)));
@@ -601,8 +630,8 @@
         if (!e.moved) return;
         if (e.kind === 'settle') lift(e.el, e.by, put);
         const o = origin(e.el);
-        put(e.el, 'left', px(pr.left + (row ? l.offs[i] : e.geo.x) - o.x));
-        put(e.el, 'top', px(pr.top + (row ? e.geo.y : l.offs[i]) - o.y));
+        put(e.el, 'left', px(pr.left + (row ? l.from + l.offs[i] : e.geo.x) - o.x));
+        put(e.el, 'top', px(pr.top + (row ? e.geo.y : l.from + l.offs[i]) - o.y));
       });
     }
 
@@ -869,12 +898,15 @@
         t = t.parentElement;
       }
       // Where the page has no block of its own, there's no place: only the free key floats it.
-      if (!t || t === document.body || t === document.documentElement || t.contains(el) || el.contains(t)) {
+      if (!t || t === document.body || t === document.documentElement || el.contains(t)) {
         return { change: CHANGE.NONE };
       }
       // A track, such as the gap between two of its things, is no thing to trade with: the drop is
       // at its nearest thing's edge (#3003). A card is a thing, with its own words and gaps.
       const near = trackFor(t, el) ? nearest(t, x, y) : null;
+      // A block holding the carried thing is a place only as a track beside another of its things:
+      // a card moves up or down its own column by a gap, but not out of its own wrapper by one.
+      if (t.contains(el) && (!near || near.ref.contains(el))) return { change: CHANGE.NONE };
       if (near) {
         const slot = slotOf(near.ref, [el]);
         if (roomless(slot.axis)) return { change: CHANGE.REFUSED, why: WHY.DOESNT_FIT, ref: near.ref };
