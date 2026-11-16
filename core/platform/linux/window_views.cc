@@ -67,6 +67,7 @@
 #include "ui/gfx/x/window_event_manager.h"
 #include "ui/gfx/x/xproto.h"
 #include "ui/base/hit_test.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/wm/wm_move_resize_handler.h"
 #include "ui/views/focus/focus_manager.h"
@@ -951,6 +952,7 @@ class WindowViews : public views::WidgetObserver,
   // restore the focus, which here would leave it with the window, where no page hears the keys.
   void OnWindowFocused(aura::Window* gained_focus, aura::Window* lost_focus) override {
     if (gained_focus && gained_focus != content()) {
+      PostFocusDialogView(gained_focus);
       if (InSlot(gained_focus)) {
         ui_lent_ = false;
         page_lent_.RemoveAll();
@@ -968,6 +970,41 @@ class WindowViews : public views::WidgetObserver,
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(&WindowViews::PageTakesBackKeyboard, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  // A tab's dialog shown again with its tab, as the tab in front of it closes, has aura's focus
+  // with none of its views focused: Chrome focuses the view it stored as the tab went behind
+  // (WebContents::RestoreFocus), which the core doesn't. The dialog is a child widget, which shares
+  // the window's focus manager, and views gives a key only to the focused view, so every key was
+  // lost, ilo's shortcuts too (#3167). Its first view takes the focus, as the dialog's keys give it
+  // back after a click on the page beside it (dialog_keys.cc). Posted, not while the focus client
+  // tells of the change.
+  void PostFocusDialogView(aura::Window* focused) {
+    views::Widget* dialog = views::Widget::GetWidgetForNativeView(focused);
+    if (!dialog || dialog == widget_.get() || dialog->GetTopLevelWidget() != widget_.get() ||
+        !dialog->widget_delegate() ||
+        dialog->widget_delegate()->GetModalType() != ui::mojom::ModalType::kChild) {
+      return;
+    }
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WindowViews::FocusDialogView, weak_factory_.GetWeakPtr(),
+                                  dialog->GetWeakPtr()));
+  }
+
+  // Only while the dialog still has aura's focus and no view: the UI or a page may have taken it.
+  void FocusDialogView(base::WeakPtr<views::Widget> dialog) {
+    if (!dialog || dialog->IsClosed() || !dialog->IsVisible() || !dialog->widget_delegate()) {
+      return;
+    }
+    views::FocusManager* focus = dialog->GetFocusManager();
+    aura::client::FocusClient* client = aura::client::GetFocusClient(dialog->GetNativeView());
+    if (!focus || focus->GetFocusedView() || !client ||
+        client->GetFocusedWindow() != dialog->GetNativeView()) {
+      return;
+    }
+    if (views::View* first = dialog->widget_delegate()->GetInitiallyFocusedView()) {
+      first->RequestFocus();
     }
   }
 
