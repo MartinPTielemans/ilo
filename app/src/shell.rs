@@ -3326,6 +3326,7 @@ impl Shell {
         if let Some(lead) = self.favorite_split(tab).map(|split| split.tabs[0]) {
             self.favorite_focus.insert(lead, tab);
         }
+        eprintln!("browser: proof t selected {}", { let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 }; unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) }; ts.tv_sec as i64 * 1_000_000 + ts.tv_nsec as i64 / 1000 });
         // A Space's switch can report a tab, even none, before the Space itself (#1332), so only a
         // tab's switch ends here.
         match self.switching {
@@ -3936,6 +3937,7 @@ impl Shell {
         if self.tab_asked() == tab && !self.pictured(tab) && !core_away {
             return;
         }
+        eprintln!("browser: proof t asked {}", { let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 }; unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) }; ts.tv_sec as i64 * 1_000_000 + ts.tv_nsec as i64 / 1000 });
         self.switching = Some((Switch::Tab(tab), Instant::now()));
         self.browser.select(tab, cx);
     }
