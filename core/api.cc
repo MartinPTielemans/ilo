@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -28,6 +30,7 @@
 #include "browser_core/arrangement.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
+#include "browser_core/board.h"
 #include "browser_core/boosts.h"
 #include "browser_core/autofill_data.h"
 #include "browser_core/autofill_offer.h"
@@ -2228,6 +2231,29 @@ void bc_tab_capture_end(bc_id id) {
           contents ? browser_core::PageCapture::FromWebContents(contents) : nullptr) {
     capture->End();
   }
+}
+
+bool bc_board_add_capture(bc_id profile, const char* id, const uint8_t* png, size_t size) {
+  if (!id || !png || size == 0) {
+    return false;
+  }
+  // Only a loaded profile's: ProfileFor gives the start profile for one that isn't.
+  const std::string dir = browser_core::ProfileDir(profile);
+  Profile* loaded = dir.empty() ? nullptr : browser_core::ProfileFor(dir);
+  if (!loaded || browser_core::DirOf(loaded) != dir) {
+    return false;
+  }
+  auto added = base::BindOnce(
+      [](bc_id profile, std::string id, bool arrived) {
+        if (browser_core::Host().board_capture_added) {
+          browser_core::Host().board_capture_added(browser_core::Host().context, profile,
+                                                   id.c_str(), arrived);
+        }
+      },
+      profile, std::string(id));
+  // SAFETY: the app passes the PNG tab_captured gave it, |size| bytes.
+  return browser_core::AddCapture(loaded, id, UNSAFE_BUFFERS(base::span<const uint8_t>(png, size)),
+                                  std::move(added));
 }
 
 void bc_tab_answer_permission(bc_id id, int answer) {
