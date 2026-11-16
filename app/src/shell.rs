@@ -664,6 +664,15 @@ fn replace<T: PartialEq>(kept: &mut T, value: T) -> bool {
     changed
 }
 
+/// Whether `tab` is a favorite or in one of the Spaces, so not closed.
+fn open_in(spaces: &[Space], task_spaces: &[Space], favorites: &[u64], tab: u64) -> bool {
+    favorites.contains(&tab)
+        || spaces
+            .iter()
+            .chain(task_spaces)
+            .any(|space| space.pinned.contains(&tab) || space.today.contains(&tab))
+}
+
 /// A Space as the core reports it: its id, name, colour (0xRRGGBB), profile, icon, the name of the
 /// agent it belongs to, and its theme as `Theme` writes it.
 pub type SpaceEntry = (
@@ -1487,6 +1496,9 @@ pub struct Shell {
     /// The window shows another Space, whose tab the core says next, for the command bar to follow
     /// once it has.
     bar_follows: bool,
+    /// ⌘L, from where it came, pressed after the tab shown closed and before the core said which
+    /// shows next, which the bar then opens on (#2953).
+    edit_url_waits: Option<String>,
     drag: Option<Drag>,
     /// A tab's row dragged out of the window, as the system drags it, until it's let go.
     window_drag: Option<drag::WindowDrag>,
@@ -2051,6 +2063,7 @@ impl Shell {
             in_hint: false,
             press_closed_bar: false,
             bar_follows: false,
+            edit_url_waits: None,
             drag: None,
             window_drag: None,
             dragged: false,
@@ -3245,16 +3258,14 @@ impl Shell {
 
     /// What the shell knew of a closed tab goes with it. The core reports a tab in its new place
     /// before it leaves the old, so one moving between a Space and the favorites stays.
+    fn tab_open(&self, tab: u64) -> bool {
+        open_in(&self.spaces, &self.task_spaces, &self.all_favorites, tab)
+    }
+
     fn forget_closed(&mut self, cx: &mut App) {
         let (spaces, favorites) = (&self.spaces, &self.all_favorites);
         let task_spaces = &self.task_spaces;
-        let open = |tab: &u64| {
-            favorites.contains(tab)
-                || spaces
-                    .iter()
-                    .chain(task_spaces)
-                    .any(|space| space.pinned.contains(tab) || space.today.contains(tab))
-        };
+        let open = |tab: &u64| open_in(spaces, task_spaces, favorites, *tab);
         // A closed tab's hover card picture goes with it.
         let closed: Vec<u64> = self.tabs.keys().copied().filter(|tab| !open(tab)).collect();
         for tab in closed {
@@ -3384,6 +3395,9 @@ impl Shell {
         }
         if self.split_pending.take() == Some(tab) {
             self.add_pane(cx);
+        }
+        if let Some(from) = self.edit_url_waits.take() {
+            self.edit_url(&from, cx);
         }
         self.update_title(cx);
         self.update_menus(cx);
