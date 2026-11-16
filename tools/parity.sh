@@ -91,4 +91,18 @@ for gap in "${missing[@]}"; do
   echo "No capture of $gap: its log is $out/$gap.log." >&2
   [ -z "${GITHUB_ACTIONS:-}" ] || echo "::warning title=Parity captures::No capture of $gap"
 done
+# #3073's spike (never merged): the Board mocks, drawn in this VM over this run's own captures.
+mocks=$here/../spikes/easel-3073/mocks
+if [ -f "$mocks/make.py" ] && [ -f "$out/wayland/sidebar-light.png" ]; then
+  fc-list :lang=ja | grep -q . || sudo apt-get install -y -q fonts-noto-cjk > /dev/null 2>&1 || echo "mocks: no Japanese font" >&2
+  mkdir -p "$out/mocks"
+  python3 "$mocks/make.py" "$out/wayland" "$out/mocks"
+  for html in "$out"/mocks/*.html; do
+    profile=$(mktemp -d)
+    timeout 120 firefox --headless --screenshot "${html%.html}.png" --window-size=1280,800 -profile "$profile" \
+      --no-remote "file://$html" > "${html%.html}.log" 2>&1 || echo "mocks: no picture of $html" >&2
+    rm -rf "$profile"
+  done
+  ls "$out"/mocks/*.png
+fi
 exit 0
