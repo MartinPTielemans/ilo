@@ -503,6 +503,9 @@ void Adopt(Floating& floating,
   floating.dismissed = dismissed;
   ShowWindow(floating.hwnd, SW_HIDE);
   OffTaskbar(floating.hwnd);
+  // GPUI makes a pop-up window topmost, over every app's. Owned by no browser window yet, it's in
+  // the band of the rest; it's shown in its browser window's (SameBand).
+  SetWindowPos(floating.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   if (mouse_through) {
     SetWindowLongPtrW(floating.hwnd, GWL_EXSTYLE,
                       GetWindowLongPtrW(floating.hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
@@ -552,6 +555,10 @@ HWND TopOwner(HWND hwnd) {
   return hwnd;
 }
 
+bool Topmost(HWND hwnd) {
+  return GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST;
+}
+
 // Where |hwnd|, owned by a browser window, goes in the z-order: over that window and the others it
 // owns, but under any other window over them, as the Mac's child windows are while the app isn't
 // the active one, and Linux's overlays are always. HWND_TOP would put it over every app's windows,
@@ -564,10 +571,24 @@ HWND InsertAfter(HWND hwnd) {
   for (HWND above = GetWindow(root, GW_HWNDPREV); above; above = GetWindow(above, GW_HWNDPREV)) {
     if (IsWindowVisible(above) && TopOwner(above) != root) {
       // A non-topmost window can't go between topmost ones; under them all is the top of the rest.
-      return (GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) ? HWND_TOP : above;
+      // A topmost one, over a browser window that stays on top, goes under the taskbar.
+      return Topmost(above) && !Topmost(hwnd) ? HWND_TOP : above;
     }
   }
   return HWND_TOP;
+}
+
+// |hwnd| is topmost as the browser window that owns it is: over every app's with one that stays on
+// top, and not otherwise. GPUI makes a pop-up topmost, and Windows makes a window topmost with its
+// owner only if it owned it then, where the sidebar's panel out is owned only once it shows: over
+// every app's, a menu from it went under it (#2989), and under a window on top, it didn't show.
+void SameBand(HWND hwnd) {
+  HWND root = TopOwner(hwnd);
+  const bool on_top = root != hwnd && Topmost(root);
+  if (Topmost(hwnd) != on_top) {
+    SetWindowPos(hwnd, on_top ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
 }
 
 // With the keyboard, a window takes the pointer too, from a press held in another window. GPUI
@@ -594,6 +615,7 @@ void TellScale(HWND hwnd) {
 // the keyboard if it takes them. PutAway carries out a hide's.
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, uint16_t actions) {
   TakePointer(hwnd, actions);
+  SameBand(hwnd);
   const HWND after = InsertAfter(hwnd);
   if (actions & kPlace) {
     SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
