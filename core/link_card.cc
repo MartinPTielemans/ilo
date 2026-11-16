@@ -448,7 +448,7 @@ uint64_t StartLinkCard(bc_id tab) {
   // A new card cancels the one before, told of no more.
   Current().reset();
   content::WebContents* contents = UsersPage(tab);
-  const GURL url = contents ? Tab::LinkTarget(tab) : GURL();
+  const GURL url = contents ? Tab::PointerLink(tab) : GURL();
   if (!LinkCardAsks(url)) {
     return 0;
   }

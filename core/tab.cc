@@ -475,7 +475,7 @@ std::vector<content::WebContents*> Tab::Pages() {
 }
 
 // static
-GURL Tab::LinkTarget(bc_id id) {
+GURL Tab::PointerLink(bc_id id) {
   const Tab* tab = Get(id);
   return tab ? tab->link_target_ : GURL();
 }
