@@ -447,6 +447,22 @@ void bc_window_ui_text_input(bc_id id, bool focused, double x, double y, double 
 #endif
 }
 
+// Declared in browser_core.h by the header batch that takes it.
+extern "C" BC_EXPORT void bc_app_window_text_input(void* surface, bc_id window, bool focused,
+                                                   double x, double y, double height) {
+#if BUILDFLAG(IS_LINUX)
+  if (!surface) {
+    return;
+  }
+  views::Widget* widget = window ? OpenWidget(window) : nullptr;
+  std::optional<gfx::Rect> caret;
+  if (widget && focused) {
+    caret = gfx::ToEnclosingRect(gfx::RectF(x, y, 0, height));
+  }
+  browser_core::platform::SetAppWindowTextInput(surface, widget, caret);
+#endif
+}
+
 void bc_hold_keys(bool in_core) {
   browser_core::held_keys::Hold(in_core);
 }

@@ -24,7 +24,9 @@ namespace browser_core::platform {
 
 class UITextInput : public ui::TextInputClient {
  public:
-  explicit UITextInput(views::Widget* widget);
+  // With |app_window|, the field is in a window of the app's own that composes through |widget|'s
+  // input method (bc_app_window_text_input), and what it composes goes to window 0.
+  explicit UITextInput(views::Widget* widget, bool app_window = false);
   UITextInput(const UITextInput&) = delete;
   UITextInput& operator=(const UITextInput&) = delete;
   ~UITextInput() override;
@@ -81,6 +83,7 @@ class UITextInput : public ui::TextInputClient {
   void Committed(const std::u16string& text);
 
   raw_ptr<views::Widget> widget_;
+  const bool app_window_;
   std::optional<gfx::Rect> caret_;
   bool keyboard_ = false;
   bool attached_ = false;

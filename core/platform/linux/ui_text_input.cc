@@ -27,9 +27,18 @@ aura::Window* FocusedWindowIn(views::Widget* widget) {
   return client ? client->GetFocusedWindow() : nullptr;
 }
 
+// What an app's window composed, to window 0 (bc_app_window_text_input): it needs no UITextInput,
+// which may be gone by the time it's told.
+void CommitToAppWindow(const std::u16string& text) {
+  if (Host().ui_committed) {
+    Host().ui_committed(Host().context, 0, base::UTF16ToUTF8(text).c_str());
+  }
+}
+
 }  // namespace
 
-UITextInput::UITextInput(views::Widget* widget) : widget_(widget) {}
+UITextInput::UITextInput(views::Widget* widget, bool app_window)
+    : widget_(widget), app_window_(app_window) {}
 
 // The window detached it as its widget went (SetKeyboard(false)).
 UITextInput::~UITextInput() = default;
@@ -84,9 +93,11 @@ void UITextInput::Detach() {
   // What the UI's field composed stays in it, as a page's field keeps it losing the focus. Told
   // after the call that detached it, which may be the app's own.
   if (!composition_.empty()) {
+    std::u16string text = std::exchange(composition_, std::u16string());
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&UITextInput::Committed, weak_factory_.GetWeakPtr(),
-                                  std::exchange(composition_, std::u16string())));
+        FROM_HERE, app_window_ ? base::BindOnce(&CommitToAppWindow, std::move(text))
+                               : base::BindOnce(&UITextInput::Committed,
+                                                weak_factory_.GetWeakPtr(), std::move(text)));
   }
   ui::InputMethod* ime = widget_->GetInputMethod();
   // A page that took the focus took the input method already.
@@ -105,6 +116,10 @@ void UITextInput::Composed(const std::u16string& text) {
     return;
   }
   const std::string utf8 = base::UTF16ToUTF8(text);
+  if (app_window_) {
+    Host().ui_composed(Host().context, 0, utf8.c_str());
+    return;
+  }
   for (Window* window : Window::All()) {
     if (window->widget() == widget_) {
       Host().ui_composed(Host().context, window->id(), utf8.c_str());
@@ -114,6 +129,10 @@ void UITextInput::Composed(const std::u16string& text) {
 }
 
 void UITextInput::Committed(const std::u16string& text) {
+  if (app_window_) {
+    CommitToAppWindow(text);
+    return;
+  }
   if (!Host().ui_committed) {
     return;
   }

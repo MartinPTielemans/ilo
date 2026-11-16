@@ -92,6 +92,16 @@ void OverlayTakesKeyboard(views::Widget* widget, bool takes);
 // caret at |caret|, in DIPs from the window's top left, or none is (bc_window_ui_text_input).
 void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret);
 
+// A window of the app's own on |surface|, a toplevel on Chromium's connection such as Settings,
+// composes through |widget|'s input method, its focused field's caret at |caret|, in DIPs from the
+// surface's top left, or none is focused. A null |widget| ends it (bc_app_window_text_input). In
+// window_views.cc. Nothing off Wayland.
+void SetAppWindowTextInput(void* surface, views::Widget* widget, std::optional<gfx::Rect> caret);
+
+// Chromium's text input, entering |surface|, gives |widget|'s window its focus, without the window
+// becoming active, or with a null |widget| no longer. Nothing off Wayland.
+void ComposeThroughWindow(void* surface, views::Widget* widget);
+
 // Answers on X11 the clipboard requests in Chromium's queue, and nothing else in it
 // (bc_answer_clipboard_requests). In window_views.cc.
 void AnswerClipboardRequests();
