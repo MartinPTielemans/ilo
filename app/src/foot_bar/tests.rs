@@ -333,3 +333,42 @@ fn a_bar_replaced_before_it_drew_draws_when_its_window_fits_it(cx: &mut TestAppC
     press(last);
     assert_eq!(*ran.borrow(), ["first", "between", "last"]);
 }
+
+/// A tiling manager on X11 can refuse the bar's window its size and give it a tile (#2900): the
+/// bar keeps its size, centred over the tile's bottom, and in a tile narrower than it, its words
+/// give way so its buttons stay in the tile.
+#[gpui::test]
+fn in_a_tile_it_didnt_ask_for_it_shows_whole_and_centred(cx: &mut TestAppContext) {
+    let (host, window) = open_bar(cx);
+    let ran = Rc::new(Cell::new(0));
+    let mut bar = arrange();
+    bar.words = "Inner scrolls with the page, over it".into();
+    let counting = ran.clone();
+    bar.buttons.last_mut().unwrap().run = Rc::new(move |_| counting.set(counting.get() + 1));
+    show_bar(cx, &host, window, bar);
+    let asked = host.1.borrow().last().unwrap().size;
+    // Its last button's right end, in a tile `width` wide and 800 tall with the bar centred over
+    // its bottom.
+    let mut press_in = |width: Pixels, bar_width: Pixels| {
+        let tile = size(width, px(800.));
+        let mut window = VisualTestContext::from_window(window.into(), cx);
+        window.simulate_resize(tile);
+        window.run_until_parked();
+        let right = (width + bar_width) / 2.;
+        let at = point(
+            right - px(RIGHT + 4.),
+            px(800. - BOTTOM) - asked.height / 2.,
+        );
+        window.simulate_click(at, Modifiers::none());
+        window.run_until_parked();
+    };
+    press_in(asked.width * 2., asked.width);
+    assert_eq!(
+        ran.get(),
+        1,
+        "the bar is its own size, over the bottom of a wider tile"
+    );
+    let narrow = asked.width - px(60.);
+    press_in(narrow, narrow - px(BOTTOM * 2.));
+    assert_eq!(ran.get(), 2, "its words give way in a narrower tile");
+}

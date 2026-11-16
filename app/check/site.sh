@@ -286,6 +286,13 @@ for clear_page in one two three; do
   printf '<title>Clear %s</title><p style="font:24px system-ui">%s</p>' \
     "$clear_page" "$clear_page" > "$out/site/clear-$clear_page.html"
 done
+# Three plain pages for the runs that need only a page to be there, which they once loaded from live
+# sites that a runner can't always reach (#3144). Their text is well inside the page, where a run
+# that tells a page from an empty page area looks (switch-frames).
+for plain_page in One Two Three; do
+  printf '<title>%s</title><h1 style="font:bold 64px system-ui;margin:80px">%s</h1>' \
+    "$plain_page" "$plain_page" > "$out/site/$(echo "$plain_page" | tr A-Z a-z).html"
+done
 # Pages that ask for a key system as soon as they load, Widevine, which ilo can't play, and ClearKey,
 # which it can. Each puts "asked" in its title once the request is answered, either way. Widevine's
 # is asked from a promise, so the title comes in an engine with no request, as Safari's may have none
