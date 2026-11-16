@@ -209,6 +209,38 @@ jobs:
           path: app/build/check
           if-no-files-found: ignore
 
+      # What another app copies pastes into the UI's fields in the sandbox (#2463), by check.sh's
+      # paste run: under Xvfb on X11, and in a headless sway session on Wayland, where the sandbox
+      # gives the app no X11. Each leg's files are moved aside, as each run starts build/check anew.
+      - if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: xdotool openbox xauth xclip sway grim xwayland wl-clipboard
+      - name: Paste
+        id: paste
+        if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        working-directory: app
+        env:
+          LANG: en_US.UTF-8
+        run: |
+          status=0
+          XDG_RUNTIME_DIR=$(mktemp -d) BROWSER_FLATPAK=1 BROWSER_XVFB=1 \
+            dbus-run-session -- ./check.sh paste || status=1
+          [ ! -d build/check ] || mv build/check build/paste-x11
+          XDG_RUNTIME_DIR=$(mktemp -d) BROWSER_FLATPAK=1 BROWSER_WAYLAND=1 \
+            dbus-run-session -- ./check.sh paste || status=1
+          [ ! -d build/check ] || mv build/check build/paste-wayland
+          exit $status
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.paste.outcome != 'skipped' }}
+        with:
+          name: ilo-flatpak-paste
+          path: |
+            app/build/paste-x11
+            app/build/paste-wayland
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v4
         if: ${{ always() && steps.engine.outputs.found == 'true' }}
         with:
