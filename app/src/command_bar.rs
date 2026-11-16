@@ -84,6 +84,10 @@ const FIELD_INPUT: f32 = ROW_HEIGHT;
 /// There it hangs from the field as the Site Controls do. The modal shadow, 24 down at a 64 blur,
 /// fell mostly below a panel only 50 tall, a grey bar under it over a light page (#1306).
 const FIELD_LEVEL: Level = Level::Popover;
+/// The level whose shadow the bar's window keeps room for round the bar where it draws its own
+/// shadow (#2988): the modal's, which reaches past the popover's, so the bar keeps one margin as it
+/// moves between the centre and the field.
+pub const ROOM: Level = Level::Modal;
 use crate::elevation::Level;
 use crate::tokens::command_bar::ARROW;
 use crate::tokens::command_bar::ARROW_TILE;
@@ -181,6 +185,17 @@ pub struct Suggestion {
     /// The account's other computer the page is open on, which the row names at its end, or
     /// empty (#1234).
     pub computer: SharedString,
+    /// When the profile's history last saw a visit to the page, in microseconds since 1970, as
+    /// the core gives it, or 0 (#2337).
+    pub last_visit: i64,
+    /// The archived tab at the page, which ↩ reopens as the tab it was rather than loading the
+    /// page afresh, or 0, and what its row says at its end, such as "Closed today · Reopen"
+    /// (#2337).
+    pub archived: u64,
+    pub closed: SharedString,
+    /// What the row of a page the profile's history has says at its end, such as "Visited
+    /// yesterday", or empty (#2337).
+    pub visited: SharedString,
 }
 
 /// A tab open on one of the account's other computers, as sync last brought it (#1234).
@@ -254,6 +269,17 @@ const SET_UP: &str = "Set up Claude or Codex";
 /// size, as the chip's text is the rows' body size.
 const CHIP_MAX: f32 = 180.;
 const CHIP_FAVICON: f32 = 12.;
+/// The tile after a row's end, as Switch to Tab's: its margin from the row's end, and its glyph's
+/// box.
+const END_TILE_RIGHT: f32 = 3.;
+const END_GLYPH: f32 = 14.;
+
+/// How far from the row's end its end ends with no tile after it, as a visited page's day: at the
+/// tile's glyph's right edge, so it lines up with a closed tab's ↺ over or under it, the tile's
+/// plate hanging past (the orchestrator, 11-14).
+fn bare_end() -> f32 {
+    END_TILE_RIGHT + (ICON_BOX - END_GLYPH) / 2.
+}
 
 /// A task ⇥ is making of what's typed: the page that goes with it, as its address and title, which
 /// ⌫ at the field's start takes off.
@@ -328,7 +354,10 @@ impl Suggestion {
             return Icon::Glyph(section.glyph());
         }
         match self.kind() {
-            Kind::Page if self.tab == 0 && self.removable => Icon::Glyph("icons/clock.svg"),
+            // An archived tab comes back as itself, so it has its favicon as an open tab does.
+            Kind::Page if self.tab == 0 && self.removable && self.archived == 0 => {
+                Icon::Glyph("icons/clock.svg")
+            }
             Kind::Page => Icon::Favicon,
             Kind::Search => Icon::Glyph("icons/search.svg"),
             Kind::Command => Icon::Glyph(self.command.map_or(COMMAND_GLYPH, command_glyph)),
@@ -544,6 +573,38 @@ pub trait Host {
     fn other_tabs(&self, _: &App) -> Rc<Vec<OtherTab>> {
         Rc::default()
     }
+    /// The newest tab in the archive at `url`, as the Library lists it: its id and when it
+    /// closed, in milliseconds since 1970. None over a private window, whose pages the archive
+    /// keeps apart. It only reads.
+    fn archived(&self, url: &str, cx: &App) -> Option<(u64, f64)>;
+    /// Reopens the archived tab `archived` at the top of the Today tabs of the Space shown, with
+    /// its history, name and icon, and shows it, as the Library's Reopen does. Whether it did:
+    /// not once it has left the archive. The user's: agents get no path to the bar.
+    fn restore_archived(&self, archived: u64, cx: &mut App) -> bool;
+    /// Now, in milliseconds since 1970, which a row counts the days since its page's visit from.
+    fn now(&self) -> f64 {
+        // web_time's: std's panics in the web preview.
+        web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .map_or(0., |since| since.as_secs_f64() * 1000.)
+    }
+}
+
+/// The day `at`, in milliseconds since 1970, as a row's end says it from `now` in the user's time
+/// zone: today, yesterday, the weekday for the five days before, then the date, such as 3 Nov, so
+/// a weekday is never last week's (#2337). A time after now, from a clock set back, is today.
+fn day_said(at: f64, now: f64) -> String {
+    use chrono::{Local, TimeZone};
+    let local = |ms: f64| Local.timestamp_millis_opt(ms as i64).single();
+    let (Some(at), Some(now)) = (local(at), local(now)) else {
+        return String::new();
+    };
+    match (now.date_naive() - at.date_naive()).num_days() {
+        ..=0 => "today".into(),
+        1 => "yesterday".into(),
+        2..=6 => at.format("%A").to_string(),
+        _ => at.format("%-d %b").to_string(),
+    }
 }
 
 /// A search engine's site search, which the bar's searches stay in until the user leaves it, as in
@@ -679,7 +740,8 @@ impl CommandBarWindow {
 /// Opens the command bar's window, hidden, for `host` to show over the browser window. Opening it
 /// ahead of time keeps window setup off the path from the shortcut to the bar on screen.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<CommandBar>> {
-    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(HEIGHT)));
+    let window = ROOM.panel_margin().around(size(px(WIDTH), px(HEIGHT)));
+    let bounds = Bounds::new(point(px(0.), px(0.)), window);
     open_at(host, bounds, false, cx)
 }
 
@@ -1243,8 +1305,14 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                 bar.asked_at.elapsed().as_secs_f64() * 1000.,
                 urls.join(", ")
             );
+            // An address typed, which ↩ loads where it goes even if it was a tab that closed, as
+            // it does if it's an open tab's page.
+            let address = (rows.first())
+                .filter(|row| row.completion.is_empty() && text.contains(['.', ':', '/']))
+                .map(|row| row.url.clone());
             // A site search lists only the search for what's typed, as Arc's does, and nothing
             // typed lists the Space's tabs. The core's first search is it, by its relevance.
+            let places = bar.site.is_none() && !text.is_empty();
             let mut rows = match &bar.site {
                 Some(site) => rows
                     .into_iter()
@@ -1286,6 +1354,9 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                         .search_url(site, &row.text)
                         .is_some_and(|url| url == row.url);
             }
+            if places {
+                bar.place(&mut rows, address.as_deref(), cx);
+            }
             bar.set_rows(bar.asked.clone(), rows, window, cx);
             // What the rows cost the frame they come in.
             log!(
@@ -1307,6 +1378,17 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                 "browser: command bar lists \"{text}\": {}",
                 listed.join(", ")
             );
+            // ranking.sh reads this line: what a closed tab's or a visited page's row says at its end.
+            let said: Vec<String> = (bar.rows.iter())
+                .filter(|row| row.tab == 0 && !row.named())
+                .filter_map(|row| match row.archived {
+                    0 => (!row.visited.is_empty()).then(|| format!("{} {}", row.url, row.visited)),
+                    _ => Some(format!("{} {}", row.url, row.closed)),
+                })
+                .collect();
+            if !said.is_empty() {
+                log!("browser: command bar says \"{text}\": {}", said.join("; "));
+            }
         })
         .ok();
 }
@@ -2136,6 +2218,57 @@ impl CommandBar {
         merged
     }
 
+    /// Says on each page's row where its result is, besides an open tab's (#2337): a tab in the
+    /// archive, which ↩ reopens as the tab it was, unless the page is open here, as an open tab is
+    /// the better row, or it's the `address` typed, which loads where ↩ goes; else the day the
+    /// profile's history last saw a visit to it. Once for each list the core gives, over the rows
+    /// shown alone, never as the bar draws.
+    fn place(&self, rows: &mut [Suggestion], address: Option<&str>, cx: &App) {
+        let now = self.host.now();
+        // Over a split's pane, ↩ puts the page beside it, which a reopened tab wouldn't be.
+        let reopens = !matches!(self.target, Target::Beside(_));
+        for row in rows {
+            if row.named() || row.search || row.task.is_some() || row.tab != 0 {
+                continue;
+            }
+            let here = |url: &SharedString| **url == *row.url;
+            let open = self.tabs.iter().any(|tab| here(&tab.url)) || self.shown.iter().any(here);
+            let reopenable = reopens
+                && !open
+                && !row.new_document
+                && row.computer.is_empty()
+                && address != Some(row.url.as_str());
+            let archived = reopenable
+                .then(|| self.host.archived(&row.url, cx))
+                .flatten();
+            if let Some((id, closed)) = archived {
+                row.archived = id;
+                row.closed = format!("Closed {} · Reopen", day_said(closed, now)).into();
+            } else if row.last_visit > 0 {
+                let visited = day_said(row.last_visit as f64 / 1000., now);
+                row.visited = format!("Visited {visited}").into();
+            }
+        }
+    }
+
+    /// What a page's row says at its end about where its result is, and the glyph on the tile
+    /// after it, if it has one: Switch to Tab and its arrow for an open tab, the day it closed
+    /// and Reopen with ↺ for a closed one, and the day in words alone for a page only in the
+    /// history, as ↩ only loads it (#2337).
+    fn end(&self, row: &Suggestion) -> Option<(SharedString, Option<&'static str>)> {
+        if row.tab != 0 {
+            let action = match self.target {
+                Target::Beside(_) => "Add to Split View",
+                _ => "Switch to Tab",
+            };
+            return Some((action.into(), Some("icons/arrow-right.svg")));
+        }
+        if row.archived != 0 {
+            return Some((row.closed.clone(), Some("icons/rotate-ccw.svg")));
+        }
+        (!row.visited.is_empty()).then(|| (row.visited.clone(), None))
+    }
+
     /// Takes out of `rows` the open tabs that go above the rest with Switch to Tab, as Arc's bar is
     /// first of all a tab switcher: the one for the top, and those for right after the core's
     /// first row. They're those whose title or site has a word that two letters or more typed
@@ -2707,6 +2840,16 @@ impl CommandBar {
             });
             return;
         }
+        // A closed tab comes back as it was, with its history, as the Library's Reopen brings it,
+        // unless it has left the archive since, when its page loads as any page's.
+        if row.archived != 0 && !matches!(self.target, Target::Beside(_)) {
+            let (archived, url) = (row.archived, row.url.clone());
+            if !self.host.restore_archived(archived, cx) {
+                return self.go_to(&url, cx);
+            }
+            self.close();
+            return;
+        }
         match (row.tab, self.target) {
             (0, Target::Tab(_)) if row.new_document => {
                 // check.sh reads this line.
@@ -2979,12 +3122,8 @@ impl CommandBar {
         if !row.detail.is_empty() && !self.over_field {
             spoken = format!("{spoken}, {}", row.detail);
         }
-        if row.tab != 0 {
-            let action = match self.target {
-                Target::Beside(_) => "Add to Split View",
-                _ => "Switch to Tab",
-            };
-            spoken = format!("{spoken}, {action}");
+        if let Some((said, _)) = self.end(row) {
+            spoken = format!("{spoken}, {}", said.replace(" · ", ", "));
         }
         if !row.computer.is_empty() {
             spoken = format!("{spoken}, open on {}", row.computer);
@@ -3006,6 +3145,7 @@ impl CommandBar {
 
     fn row(&self, index: usize, row: &Suggestion, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = index == self.selected;
+        let end = self.end(row);
         // The selected row keeps its accent under the pointer.
         let hovered = !selected && self.hovered == Some(index);
         let palette = palette::current(cx);
@@ -3100,39 +3240,41 @@ impl CommandBar {
                         line.child(div().min_w_0().truncate().text_color(dim).child(detail))
                     }),
             )
-            .when(row.tab != 0, |line| {
-                let action = match self.target {
-                    Target::Beside(_) => "Add to Split View",
-                    _ => "Switch to Tab",
-                };
-                let arrow = div()
-                    .size(px(ICON_BOX))
-                    .flex_none()
-                    .mr(px(3.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(CHIP_RADIUS))
-                    .bg(if selected {
-                        label
-                    } else {
-                        palette.plate(ARROW_TILE)
-                    })
-                    .child(
-                        svg()
-                            .path("icons/arrow-right.svg")
-                            .size(px(14.))
-                            .text_color(if selected {
-                                accent
-                            } else {
-                                palette.on_overlay(ARROW)
-                            }),
-                    );
+            // Where its result is: an open tab's Switch to Tab on a tile with its arrow, a closed
+            // tab's day and Reopen on one with ↺, as ↩ brings it back as it was, and a visited
+            // page's day in words alone, as ↩ only loads it (#2337).
+            .when_some(end.clone(), |line, (said, glyph)| {
+                let tile = glyph.map(|glyph| {
+                    div()
+                        .size(px(ICON_BOX))
+                        .flex_none()
+                        .mr(px(END_TILE_RIGHT))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(CHIP_RADIUS))
+                        .bg(if selected {
+                            label
+                        } else {
+                            palette.plate(ARROW_TILE)
+                        })
+                        .child(
+                            svg()
+                                .path(glyph)
+                                .size(px(END_GLYPH))
+                                .text_color(if selected {
+                                    accent
+                                } else {
+                                    palette.on_overlay(ARROW)
+                                }),
+                        )
+                });
                 let tint = if selected { label } else { dim };
-                let label = div().flex_none().mr(px(7.)).text_color(tint);
+                let end = if tile.is_some() { 7. } else { bare_end() };
+                let label = div().flex_none().mr(px(end)).text_color(tint);
                 line.child(div().flex_1())
-                    .child(label.child(action))
-                    .child(arrow)
+                    .child(label.child(said))
+                    .children(tile)
             })
             .when_some(row.shortcut.clone(), |line, shortcut| {
                 line.child(div().flex_1()).child(chip(shortcut))
@@ -3156,7 +3298,7 @@ impl CommandBar {
             })
             // Under the pointer, the selected row too, as Arc's.
             .when(row.removable && self.hovered == Some(index), |line| {
-                line.when(row.tab == 0, |line| line.child(div().flex_1()))
+                line.when(end.is_none(), |line| line.child(div().flex_1()))
                     .child(self.remove_button(index, selected, cx))
             })
     }
@@ -3222,9 +3364,9 @@ impl Render for CommandBar {
             .map(|(index, row)| self.row(index, row, cx).into_any_element())
             .collect();
         let shown = rows.len().min(ROWS_SHOWN) as f32;
-        let (radius, input_height, list_top) = match self.over_field {
-            true => (FIELD_RADIUS, FIELD_INPUT, 0.),
-            false => (RADIUS, HEIGHT, LIST_TOP),
+        let (radius, input_height, list_top, level) = match self.over_field {
+            true => (FIELD_RADIUS, FIELD_INPUT, 0., FIELD_LEVEL),
+            false => (RADIUS, HEIGHT, LIST_TOP, Level::Modal),
         };
         // Over the field the input's icon and text are in the rows' columns.
         let (icon_x, icon, text_x, text_size) = match self.over_field {
@@ -3263,135 +3405,142 @@ impl Render for CommandBar {
             .size_full()
             .font_family(crate::face::UI)
             .child(
-                div()
-                    .key_context("CommandBar")
-                    .on_action(cx.listener(Self::go))
-                    .on_action(cx.listener(Self::go_beside))
-                    .on_action(cx.listener(Self::go_behind))
-                    .on_action(cx.listener(Self::go_dot_com))
-                    .on_action(cx.listener(Self::go_window))
-                    .on_action(cx.listener(Self::go_dot_com_window))
-                    .on_action(cx.listener(Self::search))
-                    .on_action(cx.listener(Self::paste_and_go))
-                    .on_action(cx.listener(Self::paste_and_search))
-                    .on_action(cx.listener(Self::remove))
-                    .on_action(cx.listener(Self::dismiss))
-                    .on_action(cx.listener(Self::shortcut))
-                    .on_action(cx.listener(Self::enter_site_or_next))
-                    .on_action(cx.listener(Self::leave_site_or_previous))
-                    .capture_action(
-                        cx.listener(|bar, _: &text_input::Undo, _, cx| bar.step_removal(false, cx)),
-                    )
-                    .capture_action(
-                        cx.listener(|bar, _: &text_input::Redo, _, cx| bar.step_removal(true, cx)),
-                    )
-                    .capture_action(cx.listener(|bar, _: &text_input::Backspace, window, cx| {
-                        bar.leave_at_start(window, cx)
-                    }))
-                    .capture_action(cx.listener(
-                        |bar, _: &text_input::DeleteToStart, window, cx| {
-                            bar.leave_at_start(window, cx)
-                        },
-                    ))
-                    .capture_action(cx.listener(
-                        |bar, _: &text_input::DeleteWordBack, window, cx| {
-                            bar.leave_at_start(window, cx)
-                        },
-                    ))
-                    .on_action(
-                        cx.listener(|bar, _: &Next, window, cx| bar.select_next(true, window, cx)),
-                    )
-                    .on_action(cx.listener(|bar, _: &Previous, window, cx| {
-                        bar.select_next(false, window, cx)
-                    }))
-                    .on_action(cx.listener(|bar, _: &First, window, cx| bar.select(0, window, cx)))
-                    .on_action(cx.listener(|bar, _: &Last, window, cx| {
-                        bar.select(bar.rows.len().saturating_sub(1), window, cx)
-                    }))
-                    .relative()
-                    .size_full()
-                    .overflow_hidden()
-                    .rounded(px(radius))
-                    .bg(palette.overlay)
-                    .text_color(palette.ink)
-                    // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_size(px(text::BODY))
-                    .child(
-                        div()
-                            .h(px(input_height))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .pl(px(icon_x))
-                            .pr(px(HINT_END))
-                            .gap(px(text_x - icon_x - icon))
-                            .text_size(px(text_size))
-                            .line_height(px(23.))
-                            .child(self.input_icon(cx))
-                            .when_some(self.mode_name(), |line, name| {
-                                let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
-                                let favicon = page.map(|(url, _)| {
-                                    self.favicon(url, CHIP_FAVICON, palette.ink.into())
-                                });
-                                // A site search with a colour of its own is in it.
-                                let colored =
-                                    self.site.as_ref().is_some_and(|site| site.color.is_some());
-                                let (fill, label) = match colored {
-                                    true => self.accent(&palette),
-                                    false => (palette.plate(CHIP), palette.ink.into()),
-                                };
-                                line.child(
-                                    div()
-                                        .flex_none()
-                                        .max_w(px(CHIP_MAX))
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(5.))
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .rounded(px(CHIP_RADIUS))
-                                        .bg(fill)
-                                        .text_color(label)
-                                        .text_size(px(text::BODY))
-                                        .children(favicon)
-                                        .child(div().min_w_0().truncate().child(name)),
-                                )
-                            })
-                            .child(div().flex_1().min_w_0().child(self.input.clone()))
-                            .children(self.site_hint(cx)),
-                    )
-                    .when(!rows.is_empty() && !self.over_field, |bar| {
-                        bar.child(
-                            div()
-                                .h(px(hairline))
-                                .mx(px(LINE_INSET))
-                                .flex_none()
-                                .bg(palette.faint(LINE_COLOR)),
+                level.in_room_of(
+                    ROOM,
+                    div()
+                        .key_context("CommandBar")
+                        .on_action(cx.listener(Self::go))
+                        .on_action(cx.listener(Self::go_beside))
+                        .on_action(cx.listener(Self::go_behind))
+                        .on_action(cx.listener(Self::go_dot_com))
+                        .on_action(cx.listener(Self::go_window))
+                        .on_action(cx.listener(Self::go_dot_com_window))
+                        .on_action(cx.listener(Self::search))
+                        .on_action(cx.listener(Self::paste_and_go))
+                        .on_action(cx.listener(Self::paste_and_search))
+                        .on_action(cx.listener(Self::remove))
+                        .on_action(cx.listener(Self::dismiss))
+                        .on_action(cx.listener(Self::shortcut))
+                        .on_action(cx.listener(Self::enter_site_or_next))
+                        .on_action(cx.listener(Self::leave_site_or_previous))
+                        .capture_action(cx.listener(|bar, _: &text_input::Undo, _, cx| {
+                            bar.step_removal(false, cx)
+                        }))
+                        .capture_action(cx.listener(|bar, _: &text_input::Redo, _, cx| {
+                            bar.step_removal(true, cx)
+                        }))
+                        .capture_action(cx.listener(
+                            |bar, _: &text_input::Backspace, window, cx| {
+                                bar.leave_at_start(window, cx)
+                            },
+                        ))
+                        .capture_action(cx.listener(
+                            |bar, _: &text_input::DeleteToStart, window, cx| {
+                                bar.leave_at_start(window, cx)
+                            },
+                        ))
+                        .capture_action(cx.listener(
+                            |bar, _: &text_input::DeleteWordBack, window, cx| {
+                                bar.leave_at_start(window, cx)
+                            },
+                        ))
+                        .on_action(cx.listener(|bar, _: &Next, window, cx| {
+                            bar.select_next(true, window, cx)
+                        }))
+                        .on_action(cx.listener(|bar, _: &Previous, window, cx| {
+                            bar.select_next(false, window, cx)
+                        }))
+                        .on_action(
+                            cx.listener(|bar, _: &First, window, cx| bar.select(0, window, cx)),
                         )
-                    })
-                    .when(!rows.is_empty(), |bar| {
-                        bar.child(
+                        .on_action(cx.listener(|bar, _: &Last, window, cx| {
+                            bar.select(bar.rows.len().saturating_sub(1), window, cx)
+                        }))
+                        .relative()
+                        .size_full()
+                        .overflow_hidden()
+                        .rounded(px(radius))
+                        .bg(palette.overlay)
+                        .text_color(palette.ink)
+                        // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_size(px(text::BODY))
+                        .child(
                             div()
-                                .id("suggestions")
-                                .when(self.a11y, |list| {
-                                    list.role(Role::ListBox).aria_label("Suggestions")
-                                })
-                                .mt(px(list_top))
-                                .mx(px(LIST_X))
-                                .h(px(shown * ROW_HEIGHT))
+                                .h(px(input_height))
                                 .flex_none()
                                 .flex()
-                                .flex_col()
-                                .overflow_y_scroll()
-                                .track_scroll(&self.scroll)
-                                .children(rows),
+                                .items_center()
+                                .pl(px(icon_x))
+                                .pr(px(HINT_END))
+                                .gap(px(text_x - icon_x - icon))
+                                .text_size(px(text_size))
+                                .line_height(px(23.))
+                                .child(self.input_icon(cx))
+                                .when_some(self.mode_name(), |line, name| {
+                                    let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
+                                    let favicon = page.map(|(url, _)| {
+                                        self.favicon(url, CHIP_FAVICON, palette.ink.into())
+                                    });
+                                    // A site search with a colour of its own is in it.
+                                    let colored =
+                                        self.site.as_ref().is_some_and(|site| site.color.is_some());
+                                    let (fill, label) = match colored {
+                                        true => self.accent(&palette),
+                                        false => (palette.plate(CHIP), palette.ink.into()),
+                                    };
+                                    line.child(
+                                        div()
+                                            .flex_none()
+                                            .max_w(px(CHIP_MAX))
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(5.))
+                                            .px(px(6.))
+                                            .py(px(2.))
+                                            .rounded(px(CHIP_RADIUS))
+                                            .bg(fill)
+                                            .text_color(label)
+                                            .text_size(px(text::BODY))
+                                            .children(favicon)
+                                            .child(div().min_w_0().truncate().child(name)),
+                                    )
+                                })
+                                .child(div().flex_1().min_w_0().child(self.input.clone()))
+                                .children(self.site_hint(cx)),
                         )
-                    })
-                    .children(self.a11y.then(|| self.announcer()))
-                    // The modal level's rim in the palette's ink; its outline and shadow are the
-                    // host's, round the window.
-                    .child(edge(0., 1., Level::Modal.rim_in(&palette))),
+                        .when(!rows.is_empty() && !self.over_field, |bar| {
+                            bar.child(
+                                div()
+                                    .h(px(hairline))
+                                    .mx(px(LINE_INSET))
+                                    .flex_none()
+                                    .bg(palette.faint(LINE_COLOR)),
+                            )
+                        })
+                        .when(!rows.is_empty(), |bar| {
+                            bar.child(
+                                div()
+                                    .id("suggestions")
+                                    .when(self.a11y, |list| {
+                                        list.role(Role::ListBox).aria_label("Suggestions")
+                                    })
+                                    .mt(px(list_top))
+                                    .mx(px(LIST_X))
+                                    .h(px(shown * ROW_HEIGHT))
+                                    .flex_none()
+                                    .flex()
+                                    .flex_col()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.scroll)
+                                    .children(rows),
+                            )
+                        })
+                        .children(self.a11y.then(|| self.announcer()))
+                        // The modal level's rim in the palette's ink; its outline and shadow are the
+                        // host's, round the window, or on Windows round it in the window.
+                        .child(edge(0., 1., Level::Modal.rim_in(&palette))),
+                ),
             )
     }
 }

@@ -267,8 +267,8 @@ allowed=${ids% *}
 not_allowed=${ids#* }
 exec 3>&-
 quit
-# Off Linux, Chrome keeps the extensions' settings in Secure Preferences, under a MAC a check can't
-# sign, so there only chrome://extensions' switch allows one in Incognito.
+# On the Mac, Chrome keeps the extensions' settings in Secure Preferences, under a MAC a check can't
+# sign, so there chrome://extensions' switch allows one in Incognito, as the user does.
 status=0
 python3 -I -c '
 import json, sys
@@ -281,8 +281,53 @@ settings[sys.argv[2]]["incognito"] = True
 settings[sys.argv[3]]["incognito"] = False
 json.dump(prefs, open(path, "w"))' "$incognito/profile" "$allowed" "$not_allowed" || status=$?
 if [ "$status" = 3 ]; then
-  echo "skip: private's extensions allowed in Incognito: Chrome keeps the extensions' settings in Secure Preferences, under a MAC, so only chrome://extensions' switch allows one."
-  exit 0
+  # Check Allowed's details page, and Tab to its Allow in Incognito switch, which cdp.py says has the
+  # keyboard, then Space. Check Not Allowed stays off, as Chrome has it at first.
+  log="$out/private-extensions-switch.log"
+  cdp_log="$out/private-extensions-cdp.log"
+  step=0
+  scratch=$(mktemp -d)
+  start_with_cdp "$regular_url" "$incognito/profile" "" \
+    --load-extension="$(app_path "$incognito/allowed"),$(app_path "$incognito/not")"
+  await_load
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type "chrome://extensions/?id=$allowed"
+  send key return
+  expect "^browser: loaded [0-9]* chrome://extensions/?id=$allowed\$" \
+    "Chrome's extensions page didn't open on Check Allowed"
+  on_switch() {
+    asked=$(grep -c '^cdp: focus-within ' "$cdp_log" || true)
+    echo "focus-within chrome://extensions/ #allow-incognito" >&5
+    for _ in $(seq 50); do
+      [ "$(grep -c '^cdp: focus-within ' "$cdp_log" || true)" -gt "$asked" ] && break
+      sleep 0.1
+    done
+    grep '^cdp: focus-within ' "$cdp_log" | tail -1 | grep -q ' yes$'
+  }
+  # The page focuses its back arrow as it shows, so the first Tabs may land before or after it.
+  for _ in $(seq 30); do
+    on_switch && break
+    send key tab
+  done
+  on_switch || fail "Tab didn't reach Check Allowed's Allow in Incognito switch in 30 presses: $(grep '^cdp: focus-within ' "$cdp_log" | tail -1)"
+  send key space
+  # Chrome turns the extension off to reload it with the switch's setting, and lists the extensions
+  # again once the reload has installed it. A quit before then saves it off for a reload, which the
+  # next launch keeps (#3052). Installed, it's an unpacked one, which Chrome keeps off with
+  # developer mode off; the next launch's --load-extension turns it on.
+  reloaded() { [ "$(since | grep -c '^browser: extensions [0-9]* ')" -ge 2 ]; }
+  for _ in $(seq 100); do
+    reloaded && break
+    sleep 0.1
+  done
+  reloaded || fail "Chrome didn't reload Check Allowed after its Allow in Incognito switch"
+  exec 3>&-
+  quit
+  exec 5>&-
+  wait "$helper" 2>/dev/null || true
+  helper=
+  status=0
 fi
 [ "$status" = 0 ] || fail "couldn't allow Check Allowed in Incognito"
 incognito_launch private-extensions

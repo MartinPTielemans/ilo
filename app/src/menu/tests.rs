@@ -10,8 +10,8 @@ use gpui::{
 };
 
 use super::{
-    CHECK, Closed, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X, Request,
-    Swatch, Tracking, as_held, described, described_held, key_of, lay_out, lay_out_over,
+    CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X,
+    Request, Swatch, Tracking, as_held, described, described_held, key_of, lay_out, lay_out_over,
 };
 use crate::elevation::Level as Elevation;
 use crate::shell::MenuEntry;
@@ -125,7 +125,7 @@ fn return_picks_the_highlighted_item_and_escape_closes() {
     );
     menu.key(Key::Down, now);
     assert_eq!(menu.key(Key::Choose, now), Outcome::Pick(0));
-    assert_eq!(menu.key(Key::Escape, now), Outcome::Close);
+    assert_eq!(menu.key(Key::Escape, now), Outcome::Escape);
 }
 
 #[test]
@@ -446,10 +446,60 @@ fn a_release_on_what_cant_be_chosen_leaves_the_menu_open() {
     assert_eq!(menu.released(space), Outcome::Pick(7), "in the submenu");
 }
 
+/// The log tells apart each way a menu closes, the ones its answer calls `Otherwise` too, and says
+/// which menu by where it opened, naming none of its items, which can be a page's title (#2873).
+#[test]
+fn the_log_tells_how_a_menu_closed_and_names_none_of_its_items() {
+    let all = [
+        Closing::Chose(0),
+        Closing::PressedAt(at(600., 400.)),
+        Closing::Left,
+        Closing::Escape,
+        Closing::Shortcut,
+        Closing::ScrolledOutside,
+        Closing::ReleasedOutside,
+        Closing::Replaced,
+    ];
+    let lines: Vec<String> = all
+        .iter()
+        .map(|closing| closing.line(at(100., 210.)))
+        .collect();
+    let told: std::collections::HashSet<&String> = lines.iter().collect();
+    assert_eq!(
+        told.len(),
+        all.len(),
+        "two ways of closing read the same: {lines:?}"
+    );
+    for line in &lines {
+        assert!(
+            line.contains(" 100 210 "),
+            "the line doesn't say where the menu opened: {line}"
+        );
+        let named = (tab_menu().into_iter())
+            .map(|entry| entry.title)
+            .find(|title| !title.is_empty() && line.contains(title.as_ref() as &str));
+        assert_eq!(named, None, "the line names an item: {line}");
+    }
+    let answers: Vec<Closed> = all.iter().map(|closing| closing.closed()).collect();
+    assert_eq!(
+        answers[..3],
+        [
+            Closed::Chose(0),
+            Closed::PressedAt(at(600., 400.)),
+            Closed::Left
+        ]
+    );
+    assert!(
+        answers[3..]
+            .iter()
+            .all(|closed| *closed == Closed::Otherwise)
+    );
+}
+
 #[test]
 fn a_drag_released_outside_closes_the_menu_and_a_press_outside_is_not_on_it() {
     let mut menu = opened(tab_menu(), 100., 100.);
-    assert_eq!(menu.released(at(60., 60.)), Outcome::Close);
+    assert_eq!(menu.released(at(60., 60.)), Outcome::ReleasedOutside);
     let mut menu = opened(tab_menu(), 100., 100.);
     menu.released(at(100., 100.));
     assert!(!menu.pressed(at(600., 600.)));

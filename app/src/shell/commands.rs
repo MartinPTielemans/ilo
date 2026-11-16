@@ -102,6 +102,9 @@ pub enum Command {
     Exit,
     /// Closes the Today tabs of the Space shown, but the one shown.
     Clear,
+    /// Brings each site's Today tabs in the Space shown together, at its first tab's place
+    /// (`crate::sort_by_site`).
+    SortBySite,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
     Undo,
     /// Does again what Undo undid.
@@ -472,6 +475,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ),
     ("Archive Tab", Command::CloseTab, &["close tab"]),
     ("Clear Today", Command::Clear, &["unpinned tabs"]),
+    (
+        "Sort Today Tabs by Site",
+        Command::SortBySite,
+        &["group tabs by site", "tidy tabs"],
+    ),
     (
         "Clear Cache and Refresh",
         Command::ClearCacheAndRefresh,
@@ -1224,6 +1232,7 @@ impl Command {
             Command::ToggleFullScreen => "toggle-full-screen",
             Command::Exit => "exit",
             Command::Clear => "clear",
+            Command::SortBySite => "sort-by-site",
             Command::Undo => "undo",
             Command::Redo => "redo",
             Command::CopyUrl => "copy-url",
@@ -1649,6 +1658,9 @@ impl Shell {
             Command::ToggleFullScreen => return self.browser.toggle_full_screen(cx),
             Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
+            Command::SortBySite => return self.sort_by_site(cx),
+            // While Arrange is on, ⌘Z and the Edit menu's Undo take back its steps (shell/arrange.rs).
+            Command::Undo if self.undo_arrange(self.field_tab(), cx) => return,
             Command::Undo => {
                 self.undo(cx);
                 return;
@@ -1882,47 +1894,6 @@ impl Shell {
             false => index + self.favorites.len(),
         };
         (index < count).then_some(index)
-    }
-
-    /// ⌃Tab, as in Arc: shows the Space's tab shown before this one at once, with no switcher.
-    /// While ⌃ is held, each ⌃Tab goes on to the one shown before that, and ⌃⇧Tab back. A split's
-    /// row counts once.
-    fn walk(&mut self, rows: Vec<u64>, forward: bool, cx: &mut Context<Self>) {
-        // Then the rows not shown yet, in the sidebar's order.
-        let mut order: Vec<u64> = Vec::new();
-        for row in self
-            .recent
-            .iter()
-            .map(|&tab| self.row_of(tab))
-            .chain(rows.iter().copied())
-        {
-            if rows.contains(&row) && !order.contains(&row) {
-                order.push(row);
-            }
-        }
-        let count = order.len();
-        let next = match order
-            .iter()
-            .position(|&row| row == self.row_of(self.selected))
-        {
-            Some(at) if forward => (at + 1) % count,
-            Some(at) => (at + count - 1) % count,
-            // With no tab shown, the tab shown last (Arc).
-            None if forward && count > 0 => 0,
-            None => match count.checked_sub(1) {
-                Some(last) => last,
-                None => return,
-            },
-        };
-        let tab = self.row_tab(order[next]);
-        if tab == self.selected {
-            return;
-        }
-        if self.walked.is_none() {
-            self.browser.watch_control(cx);
-        }
-        self.walked = Some(tab);
-        self.select(tab, cx);
     }
 
     /// Clears the Space shown, but the tab shown, unless that's all there is to clear. Its rows go
@@ -2297,6 +2268,8 @@ impl Shell {
                     .any(|&folder| !space.is_open(folder))
             }),
             Command::Clear => !self.today().is_empty(),
+            // With every site's tabs together already, it would change nothing.
+            Command::SortBySite => self.sorted_by_site(self.space).is_some(),
             Command::FavoriteTab => {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)

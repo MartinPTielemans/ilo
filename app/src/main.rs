@@ -34,8 +34,8 @@ use browser::window_frames::{self, Frame};
 use browser::{
     account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
     folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
-    log, log_in, menu, offer, passwords, site_controls, theme_picker, toast, tooltip, updates,
-    zoom_hud,
+    log, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker, toast, tooltip,
+    updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -51,6 +51,9 @@ mod active_window;
 mod agents_core;
 mod bar_picks_host;
 mod browser_windows;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/clock.rs"]
+mod clock;
 mod daily_count_host;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]
@@ -211,6 +214,8 @@ thread_local! {
     static MENUS: RefCell<Menus> = RefCell::default();
     // Whether a menu bar built from MENUS waits for the menu open to close.
     static MENUS_HELD: Cell<bool> = const { Cell::new(false) };
+    // Whether the UI runs on Wayland, which it learns as it starts; never off Linux.
+    static WAYLAND: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The keys area's line for `key`, which a page had, `when` the page sees it or after, gone to
@@ -233,6 +238,11 @@ fn log_key(key: *const bc::bc_key, when: &str, route: &str) {
 
 /// Whether ilo keeps `key` from the page that has it, and where it went.
 fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static str) {
+    // Read at each of the page's keys, whichever way it goes, so the next knows the one before.
+    #[cfg(target_os = "linux")]
+    let repeated_here = held_escape::page_key_repeated(&keystroke(unsafe { &*key }));
+    #[cfg(not(target_os = "linux"))]
+    let repeated_here = false;
     #[cfg(target_os = "linux")]
     if held_escape::keeps_from_page(unsafe { &*key }) {
         return (true, "held escape");
@@ -255,14 +265,20 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     {
         return (true, "agent bar");
     }
-    // Escape ends Zap on the page, which the page doesn't see (shell/boost.rs).
+    // Escape ends Zap or Arrange on the page, which the page doesn't see (shell/boost.rs).
     if keystroke == "escape"
         && update_tab_window(tab, |shell, cx| {
-            shell.zapping(tab) && shell.escape_boost(cx)
+            (shell.zapping(tab) || shell.arranging(tab)) && shell.escape_boost(cx)
         })
         .unwrap_or(false)
     {
-        return (true, "zap");
+        return (true, "zap or arrange");
+    }
+    // Arrange's keys, ↑ ↓ ⌘Z and escape, are the mode's while it's on, not the page's.
+    if update_tab_window(tab, |shell, cx| shell.run_arrange_key(tab, &keystroke, cx))
+        .unwrap_or(false)
+    {
+        return (true, "arrange");
     }
     if update_tab_window(tab, |shell, cx| {
         shell.run_extension_key(&keystroke, "page", cx)
@@ -276,7 +292,7 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     let shortcut = cx.as_ref().and_then(|cx| {
         cx.try_read_global(|keys: &shell::UserKeys, _| keys.command_for(&keystroke, false))
     });
-    let repeat = unsafe { platform::host_key_repeated() };
+    let repeat = repeated_here || unsafe { platform::host_key_repeated() };
     let now = Instant::now();
     // Esc in full screen, pressed twice or held, leaves even when the page keeps it (Arc's).
     if keystroke == "escape"
@@ -285,6 +301,8 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
         })
         .unwrap_or(false)
     {
+        // ilo took this Esc, so the next is a first press again, not a second to the page's.
+        SECOND_PRESS.with_borrow_mut(|second| second.declined(&keystroke));
         return (true, "escape in full screen");
     }
     let shortcut = shortcut.flatten().is_some();
@@ -393,6 +411,8 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
 }
 
 unsafe extern "C" fn started(_: *mut c_void) {
+    // Before the first page, which Arrange may lift an element of.
+    boosts_host::set_arrange_lift();
     // Chromium's message loop dispatches GPUI's messages, as its run loop does on the Mac.
     #[cfg(target_os = "windows")]
     gpui_windows::embed();
@@ -486,6 +506,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 browser::clipboard::held_through(gpui_linux::held_clipboard_text);
             }
         }
+        WAYLAND.set(!display.is_null());
         !display.is_null()
     };
     let application = gpui_platform::application().with_assets(shell::Assets);
@@ -761,11 +782,11 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken.height
         );
     }
-    // A picture of the column on the left, from before the sidebar moved right, is none of this
+    // A picture of the column on one side, from before the sidebar moved, is none of this
     // window's (settings::set_sidebar_right).
     let right = settings::sidebar_right_kept();
     let picture =
-        taken.filter(|taken| !maximized && !right && launch_picture::shows(taken, width, height));
+        taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height, right));
     let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
         (taken.width, taken.height, taken.foot_top)
     });
@@ -780,6 +801,7 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken_width,
             taken_height,
             foot_top,
+            right,
         )
     };
     // check.sh reads this line.
@@ -804,7 +826,18 @@ extern "C" fn became_active() {
         // GTK's settings file, Linux's last word, says nothing as it changes.
         #[cfg(target_os = "linux")]
         follow_reduce_motion(cx);
+        follow_clock(cx);
     });
+}
+
+/// Reads the system's 12- or 24-hour clock, which History's times follow, as the app comes back
+/// from another app, where the user may have changed it, and once after launch (window_opening).
+fn follow_clock(cx: &mut App) {
+    #[cfg(not(target_os = "linux"))]
+    browser::clock::set_twelve_hour(unsafe { platform::host_twelve_hour_clock() });
+    #[cfg(target_os = "linux")]
+    clock::read(cx);
+    let _ = cx;
 }
 
 /// Reads the system's Reduce Motion as the first window opens, before its first frame, and again
@@ -881,8 +914,17 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // Chrome would copy the app bundle to check its signature against, which an
         // ad-hoc-signed build doesn't need. And off the Mac, every switch would copy and encode
         // the tab it leaves for the hover cards of Chrome's tab strip, which ilo never shows: its
-        // own hover card takes its own picture (core/capture.cc, #2377).
-        "--disable-features=MacAppCodeSignClone,TabHoverCardImages".into(),
+        // own hover card takes its own picture (core/capture.cc, #2377). And Settings' user
+        // journeys, metrics nobody receives, tell Chrome's BrowserView of a change such as Make
+        // default in the search engines page, CHECKing it's there: ilo's windows have none (#2907).
+        // Chrome's toasts too, such as Link copied after a page menu's Copy Link Address: one
+        // anchors to the BrowserView, and with none Chrome CHECKs and ends the browser (#2950).
+        concat!(
+            "--disable-features=MacAppCodeSignClone,TabHoverCardImages,SettingsGlowupJourneys,",
+            "LinkCopiedToast,ImageCopiedToast,VideoFrameCopiedToast,LinkToHighlightCopiedToast,",
+            "ReadingListToast,TranslateToast"
+        )
+        .into(),
         // An idle browser shouldn't wake: Chrome's stack sampling feeds metrics nobody receives,
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
@@ -943,7 +985,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     }
     // Where the daily usage count goes, which only the prod build names, unless the process was
     // given it, as a check is. The user's sync server doesn't change it.
-    if let Some(switch) = daily_count_host::prepare(&given, &profile) {
+    if let Some(switch) = daily_count_host::prepare(&given) {
         args.push(switch);
     }
     // The sync server the account signs in to until the user names another, a default service URL
@@ -1041,6 +1083,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_press_released: Some(tab_press_released),
         tab_boost_zapped: Some(tab_boost_zapped),
         tab_boost_zap_ended: Some(tab_boost_zap_ended),
+        tab_arrange_state: Some(boosts_host::tab_arrange_state),
+        tab_arrange_ended: Some(boosts_host::tab_arrange_ended),
+        tab_arrange_saved: Some(boosts_host::tab_arrange_saved),
+        tab_arrangement_fits: Some(boosts_host::tab_arrangement_fits),
         held_keys_unclaimed: Some(held_keys_unclaimed),
         tab_media_unsupported: Some(tab_media_unsupported),
         widevine_changed: Some(widevine_changed),
@@ -1068,6 +1114,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         ui_committed: Some(ui_committed),
         history_added: Some(history_added),
         history_deleted: Some(history_deleted),
+        history_listed: Some(history_listed),
         sync_changed: Some(sync_changed),
         sync_pairing_asked: Some(sync_pairing_asked),
         sync_devices_changed: Some(sync_devices_changed),
@@ -1092,8 +1139,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         app_new_window: Some(app_new_window),
         ad_block_use: Some(ad_block_host::ad_block_use),
         ad_block_request: Some(ad_block_host::ad_block_request),
+        ad_block_response: Some(ad_block_host::ad_block_response),
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
+        tab_shown_in: Some(tab_shown_in),
         ..Default::default()
     };
     (args, host)

@@ -104,6 +104,7 @@ bool host_drive_pointer(unsigned message, long x, long y);
 bool host_drive_key(unsigned vk, long lparam);
 uint64_t host_browser_window_id(size_t index);
 const char* host_floating_name(void* hwnd);
+bool host_floating_panel(void* hwnd, RECT* panel);
 void host_floating_lives(void (*each)(void* context, const char* name, void* hwnd, int life),
                          void* context);
 bool host_save_dialog_answer(const char* path);
@@ -368,13 +369,25 @@ bool TargetAt(double x, double y, Target* target) {
   return true;
 }
 
+// |x|, |y| in the window with the keyboard |key|, on the screen: from its panel's top left where
+// the panel draws its shadow round it in the window, as a check names a point in the panel the
+// Mac's window is the size of.
+POINT InKey(HWND key, double x, double y) {
+  RECT panel{};
+  if (!host_floating_panel(key, &panel)) {
+    return OnScreen(key, x, y);
+  }
+  const double scale = Scale(key);
+  return POINT{panel.left + std::lround(x * scale), panel.top + std::lround(y * scale)};
+}
+
 // The point in the window with the keyboard, as clickkey names it.
 bool TargetInKey(double x, double y, Target* target) {
   HWND key = GetActiveWindow();
   if (!key) {
     return false;
   }
-  const POINT screen = OnScreen(key, x, y);
+  const POINT screen = InKey(key, x, y);
   *target = At(Descend(key, screen), screen);
   return true;
 }
@@ -1155,8 +1168,11 @@ void LogLayout(HWND root) {
     if (!Ours(top) || GetWindow(top, GW_OWNER) != root || !IsWindowVisible(top)) {
       continue;
     }
+    // A panel that draws its shadow round it in its window is where the panel is in it.
     RECT rect;
-    GetWindowRect(top, &rect);
+    if (!host_floating_panel(top, &rect)) {
+      GetWindowRect(top, &rect);
+    }
     const double x = (rect.left - origin.x) / scale, y = (rect.top - origin.y) / scale;
     const double across = (rect.right - rect.left) / scale;
     const double down = (rect.bottom - rect.top) / scale;
@@ -1890,6 +1906,11 @@ bool Run(const std::string& line) {
   // top-left corner, logs "browser: pip hit <part>", what Windows' hit test says is there: caption
   // for a part a press moves the window by, bottomright for a corner it sizes it from, client for
   // the page. Windows moves and sizes it with the desktop's pointer, which the driver never moves.
+  // pip doubleclick <x> <y> and pip wheel <x> <y> <notches> [cmd] click twice and turn the wheel
+  // there, a notch down for each of a positive <notches>, as Linux's driver does, each notch where
+  // the window is by then, as a scroll moves it. With real input, pip press, pip dragto and pip
+  // release <x> <y>, at points where the window was at the press, hold the desktop's pointer down
+  // on it, move it and let it go, as a hand does, so Windows' move loop moves the window.
   if (action == "pip") {
     HWND pip = PictureInPicture();
     if (!pip) {
@@ -1907,11 +1928,64 @@ bool Run(const std::string& line) {
       return true;
     }
     double x, y;
-    if (step != "hit" || !(words >> x >> y)) {
+    const bool hold = step == "press" || step == "dragto" || step == "release";
+    if ((step != "hit" && step != "doubleclick" && step != "wheel" && !hold) ||
+        !(words >> x >> y) || (hold && !g_real)) {
       return false;
     }
-    const LONG at_x = rect.left + std::lround(x * scale);
-    const LONG at_y = rect.top + std::lround(y * scale);
+    // Where the window was at the press, which the hold's points are from as it moves.
+    static RECT pressed;
+    if (step == "press") {
+      pressed = rect;
+    }
+    const RECT& from = hold ? pressed : rect;
+    const LONG at_x = from.left + std::lround(x * scale);
+    const LONG at_y = from.top + std::lround(y * scale);
+    if (hold) {
+      const Target target = At(pip, POINT{at_x, at_y});
+      if (step == "press") {
+        AddPress(target, MK_LBUTTON, 0);
+      } else if (step == "dragto") {
+        g_steps.push_back({[=] { Move(target, 0, MK_LBUTTON); }});
+      } else {
+        g_steps.push_back({[=] { Release(target, MK_LBUTTON, 0); }});
+      }
+      return true;
+    }
+    if (step == "doubleclick") {
+      AddClick(At(pip, POINT{at_x, at_y}), MK_LBUTTON, 0, true);
+      return true;
+    }
+    if (step == "wheel") {
+      int notches;
+      if (!(words >> notches) || !notches) {
+        return false;
+      }
+      const int modifiers = PointerModifiers(words);
+      // Windows' positive delta is a notch up, away from the user.
+      const int along = notches > 0 ? -WHEEL_DELTA : WHEEL_DELTA;
+      // The point in the window as it is by the notch, which the notch before may have moved.
+      const auto aim = [pip, x, y, scale] {
+        RECT now;
+        GetWindowRect(pip, &now);
+        return At(pip, POINT{now.left + std::lround(x * scale), now.top + std::lround(y * scale)});
+      };
+      for (int notch = 0; notch < std::abs(notches); notch++) {
+        g_steps.push_back({[=] { Move(aim(), modifiers, 0); }});
+        g_steps.push_back({[=] {
+          HoldKeys(modifiers);
+          if (g_real) {
+            RealPointer(MOUSEEVENTF_WHEEL, static_cast<DWORD>(along));
+            return;
+          }
+          const Target target = aim();
+          PostMessageW(target.hwnd, WM_MOUSEWHEEL, MAKEWPARAM(MouseKeys(modifiers, 0), along),
+                       MAKELPARAM(target.screen.x, target.screen.y));
+        }});
+      }
+      g_steps.push_back({[] { HoldKeys(0); }});
+      return true;
+    }
     const LRESULT hit = SendMessageW(pip, WM_NCHITTEST, 0, MAKELPARAM(at_x, at_y));
     fprintf(stderr, "browser: pip hit %s\n", HitName(hit));
     return true;
@@ -2141,8 +2215,8 @@ bool Run(const std::string& line) {
       return false;
     }
     HWND key = GetActiveWindow();
-    const Target half = At(from.hwnd, OnScreen(key, (x + x2) / 2, (y + y2) / 2));
-    const Target to = At(from.hwnd, OnScreen(key, x2, y2));
+    const Target half = At(from.hwnd, InKey(key, (x + x2) / 2, (y + y2) / 2));
+    const Target to = At(from.hwnd, InKey(key, x2, y2));
     AddPress(from, MK_LBUTTON, 0);
     g_steps.push_back({[=] { Move(half, 0, MK_LBUTTON); }});
     g_steps.push_back({[=] { Move(to, 0, MK_LBUTTON); }});

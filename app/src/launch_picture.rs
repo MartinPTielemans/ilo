@@ -10,7 +10,8 @@
 //! shorter window takes the difference out of the room, and a taller one repeats a band of it.
 //! The shell says how far that leaves every control where it draws it ([`Taken::shorter`] and
 //! [`Taken::taller`]). Nothing in the column moves with the window's width, as the sidebar keeps
-//! its own and the page starts after it.
+//! its own and the page starts after it. With the sidebar on the right (#2375) the column is the
+//! window's right edge, taken and shown there, so a picture shows only on the side it was taken.
 //!
 //! What does move with the window's size is the colour behind the column, which runs down the
 //! window and along its diagonal, so the picture shows only within [`TOLERANCE`] of its size.
@@ -25,8 +26,9 @@
 pub const TOLERANCE: f64 = 0.01;
 
 /// The picture as the app took it: the window's frame then, in the host's points, where the
-/// foot starts, in points from the window's top, and how much shorter and taller the window may
-/// get with the column drawn the same around the room under its rows.
+/// foot starts, in points from the window's top, how much shorter and taller the window may
+/// get with the column drawn the same around the room under its rows, and whether the column was
+/// at the window's right edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Taken {
     pub width: f64,
@@ -34,14 +36,17 @@ pub struct Taken {
     pub foot_top: f64,
     pub shorter: f64,
     pub taller: f64,
+    pub right: bool,
 }
 
-/// Whether a window `width` by `height` shows the picture `taken`, with its top at the window's
-/// top and its foot `height - taken.height` points lower than it was.
-pub fn shows(taken: &Taken, width: f64, height: f64) -> bool {
+/// Whether a window `width` by `height`, with its sidebar on the right or not, shows the picture
+/// `taken`, with its top at the window's top and its foot `height - taken.height` points lower
+/// than it was.
+pub fn shows(taken: &Taken, width: f64, height: f64, right: bool) -> bool {
     let near = |now: f64, then: f64| (now - then).abs() <= TOLERANCE * then;
     let grows = height - taken.height;
-    near(width, taken.width)
+    taken.right == right
+        && near(width, taken.width)
         && near(height, taken.height)
         && -taken.shorter <= grows
         && grows <= taken.taller
@@ -55,26 +60,40 @@ pub fn line(taken: &Taken) -> String {
         foot_top,
         shorter,
         taller,
+        right,
     } = taken;
-    format!("{width} {height} {foot_top} {shorter} {taller}\n")
+    let right = u8::from(*right);
+    format!("{width} {height} {foot_top} {shorter} {taller} {right}\n")
 }
 
-/// The picture `line` wrote, if it's one.
+/// The picture `line` wrote, if it's one. One kept before the side was, with five numbers, was
+/// taken on the left.
 pub fn read(line: &str) -> Option<Taken> {
     let numbers: Vec<f64> = line
         .split_whitespace()
         .map(|word| word.parse().ok())
         .collect::<Option<_>>()?;
-    let &[width, height, foot_top, shorter, taller] = numbers.as_slice() else {
-        return None;
+    let (width, height, foot_top, shorter, taller, side) = match *numbers.as_slice() {
+        [width, height, foot_top, shorter, taller] => {
+            (width, height, foot_top, shorter, taller, 0.)
+        }
+        [width, height, foot_top, shorter, taller, side] => {
+            (width, height, foot_top, shorter, taller, side)
+        }
+        _ => return None,
     };
-    let fits = width > 0. && (0. ..=height).contains(&foot_top) && shorter >= 0. && taller >= 0.;
+    let fits = width > 0.
+        && (0. ..=height).contains(&foot_top)
+        && shorter >= 0.
+        && taller >= 0.
+        && (side == 0. || side == 1.);
     fits.then_some(Taken {
         width,
         height,
         foot_top,
         shorter,
         taller,
+        right: side == 1.,
     })
 }
 
@@ -90,69 +109,94 @@ mod tests {
         foot_top: 627.,
         shorter: 120.,
         taller: 120.,
+        right: false,
     };
+
+    fn shows_left(taken: &Taken, width: f64, height: f64) -> bool {
+        shows(taken, width, height, false)
+    }
 
     #[test]
     fn at_its_own_size_the_picture_shows() {
-        assert!(shows(&TAKEN, 1024., 677.));
+        assert!(shows_left(&TAKEN, 1024., 677.));
         // However full the list was: nothing moves.
         let full = Taken {
             shorter: 0.,
             taller: 0.,
             ..TAKEN
         };
-        assert!(shows(&full, 1024., 677.));
+        assert!(shows_left(&full, 1024., 677.));
     }
 
     #[test]
     fn three_points_shorter_it_shows_while_the_room_under_the_rows_gives_them() {
-        assert!(shows(&TAKEN, 1024., 674.));
+        assert!(shows_left(&TAKEN, 1024., 674.));
         // Rows reaching under the foot would be cut 3 points higher.
         let full = Taken {
             shorter: 0.,
             ..TAKEN
         };
-        assert!(!shows(&full, 1024., 674.));
+        assert!(!shows_left(&full, 1024., 674.));
         let tight = Taken {
             shorter: 2.,
             ..TAKEN
         };
-        assert!(!shows(&tight, 1024., 674.));
+        assert!(!shows_left(&tight, 1024., 674.));
     }
 
     #[test]
     fn taller_it_shows_while_the_room_can_grow() {
-        assert!(shows(&TAKEN, 1024., 680.));
+        assert!(shows_left(&TAKEN, 1024., 680.));
         // A taller list would show rows the picture doesn't have.
         let full = Taken {
             taller: 0.,
             ..TAKEN
         };
-        assert!(!shows(&full, 1024., 680.));
+        assert!(!shows_left(&full, 1024., 680.));
     }
 
     #[test]
     fn past_the_tolerance_no_picture_shows_however_much_room() {
         // 1 % of 677 is 6.77 points.
-        assert!(shows(&TAKEN, 1024., 671.));
-        assert!(!shows(&TAKEN, 1024., 670.));
-        assert!(shows(&TAKEN, 1024., 683.));
-        assert!(!shows(&TAKEN, 1024., 684.));
+        assert!(shows_left(&TAKEN, 1024., 671.));
+        assert!(!shows_left(&TAKEN, 1024., 670.));
+        assert!(shows_left(&TAKEN, 1024., 683.));
+        assert!(!shows_left(&TAKEN, 1024., 684.));
     }
 
     #[test]
     fn a_different_width_shows_within_the_tolerance_only() {
         // The sidebar keeps its width and the page starts after it, so nothing in the column
         // moves; the colour behind it does, with the window's diagonal.
-        assert!(shows(&TAKEN, 1014., 677.));
-        assert!(shows(&TAKEN, 1034., 674.));
-        assert!(!shows(&TAKEN, 1000., 677.));
-        assert!(!shows(&TAKEN, 1280., 677.));
+        assert!(shows_left(&TAKEN, 1014., 677.));
+        assert!(shows_left(&TAKEN, 1034., 674.));
+        assert!(!shows_left(&TAKEN, 1000., 677.));
+        assert!(!shows_left(&TAKEN, 1280., 677.));
+    }
+
+    /// A picture of the column on one side is none of a window with it on the other (#2375).
+    #[test]
+    fn a_picture_shows_only_on_the_side_it_was_taken() {
+        let right = Taken {
+            right: true,
+            ..TAKEN
+        };
+        assert!(shows(&right, 1024., 677., true));
+        assert!(!shows(&right, 1024., 677., false));
+        assert!(!shows(&TAKEN, 1024., 677., true));
     }
 
     #[test]
     fn the_line_kept_beside_the_picture_reads_back() {
         assert_eq!(read(&line(&TAKEN)), Some(TAKEN));
+        let right = Taken {
+            right: true,
+            ..TAKEN
+        };
+        assert_eq!(read(&line(&right)), Some(right));
+        // A line kept before the side was is the left's.
+        assert_eq!(read("1024 677 627 120 120"), Some(TAKEN));
+        assert_eq!(read("1024 677 627 120 120 2"), None);
         assert_eq!(read("1024 677 627 120"), None);
         assert_eq!(read("1024 677 700 0 0"), None);
         assert_eq!(read("1024 677 627 -1 0"), None);

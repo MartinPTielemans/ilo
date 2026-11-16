@@ -454,7 +454,8 @@ EOF
       sed 's/$/\r/'
   }
   # Every console window Windows shows, from a WinEvent hook, written to $2 once $1 is there. It
-  # first opens one of its own and writes "ready" to $3 once it has seen it.
+  # first opens one of its own and writes "ready" to $3 once it has seen it. Conhost's, or Windows
+  # Terminal's where that's the default terminal, as on Windows 11 and Server 2025 (#3023).
   cat > "$out/consoles.py" << 'EOF'
 import ctypes, ctypes.wintypes as w, os, subprocess, sys, time
 stop, report, ready = sys.argv[1:]
@@ -477,7 +478,7 @@ def shows(hook, event, hwnd, object, child, thread, when):
         return
     kind = ctypes.create_unicode_buffer(64)
     user32.GetClassNameW(hwnd, kind, 64)
-    if kind.value == "ConsoleWindowClass":
+    if kind.value in ("ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS"):
         pid = w.DWORD()
         user32.GetWindowThreadProcessId(w.HWND(hwnd), ctypes.byref(pid))
         shown.append(f"{hwnd} {pid.value} {name_of(pid.value)}")

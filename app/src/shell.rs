@@ -35,6 +35,7 @@ mod access;
 mod agent_bar;
 mod agent_pointer;
 mod agent_question;
+mod arrange;
 mod assets;
 #[cfg(test)]
 mod autofill_tests;
@@ -49,6 +50,9 @@ mod beside;
 mod blank_tests;
 mod boost;
 mod browser;
+mod by_site;
+#[cfg(test)]
+mod by_site_tests;
 mod card_strip;
 mod cast;
 mod chooser;
@@ -122,6 +126,9 @@ mod window_move_tests;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
 mod picture;
 mod recent_downloads;
+mod recent_tabs;
+#[cfg(test)]
+mod recent_tabs_tests;
 #[cfg(test)]
 mod recorder;
 mod return_mark;
@@ -185,7 +192,7 @@ pub use keys::{
     web_keystroke, written_as,
 };
 pub(crate) use library::bytes;
-pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
+pub use library::{Archived, Captured, Download, DownloadAction, DownloadState, Visited};
 use library::{MediaVideo, RECEDE_X, Section};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
@@ -1308,6 +1315,8 @@ pub struct Shell {
     /// ⌃ is held after a ⌃Tab, which showed this tab. The tabs a walk shows don't count as shown
     /// until ⌃ goes up, and then its last one does, though a click may have shown another since.
     walked: Option<u64>,
+    /// That walk, and its switcher (recent_tabs).
+    held: Option<recent_tabs::Held>,
     hovered: Option<Row>,
     /// The pinned row the pointer is on, whose − or middle press just unloaded it. Its remove
     /// button waits until the pointer has left the row or pressed it, so a second click meant for
@@ -1817,6 +1826,14 @@ pub struct Shell {
     /// The tab whose row's menu asked for its Boost's card, which opens once the tab shows.
     boost_pending: Option<u64>,
     zapping: Option<u64>,
+    /// The tab whose page Arrange is on (#2347), one at a time, as Zap.
+    arranging: Option<u64>,
+    /// What the core last said of the mode, and its ⌘Z history.
+    arrange_mode: arrange::Mode,
+    /// What Arrange's mini bar was last asked to show, so it's asked again only on a change.
+    mini_bar_shown: Option<crate::mini_bar::Shown>,
+    /// What Arrange's foot bar last showed (shell/arrange.rs).
+    foot_bar_shown: Option<arrange::FootShown>,
     boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Library › Boosts' list, the window's profile's, read as it's shown.
     boost_list: Vec<crate::boosts::Boost>,
@@ -1876,6 +1893,9 @@ pub struct Shell {
     /// drew (`Shell::right`).
     right: bool,
     forced_tone: Option<Tone>,
+    /// What lies under the tint where nothing else does: the preview's, whose window has no
+    /// material and shows the desktop through the tint, as the app's never does (#3033).
+    ground: Option<Rgba>,
     window_active: bool,
     window_watches: Vec<Subscription>,
     /// Whether the window is the one the user is in, as the host says (host_watch_window_main):
@@ -1957,6 +1977,7 @@ impl Shell {
             agents_at: HashMap::new(),
             recent: Vec::new(),
             walked: None,
+            held: None,
             selected: 0,
             hovered: None,
             remove_held: None,
@@ -2204,6 +2225,10 @@ impl Shell {
             boost_card: None,
             boost_pending: None,
             zapping: None,
+            arranging: None,
+            arrange_mode: arrange::Mode::default(),
+            mini_bar_shown: None,
+            foot_bar_shown: None,
             boost_card_drawn: Rc::default(),
             boost_list: Vec::new(),
             battery_saver: None,
@@ -2237,6 +2262,7 @@ impl Shell {
             lone_header: false,
             right: false,
             forced_tone: None,
+            ground: None,
             window_active: true,
             window_main: true,
             nav_dimmed_drawn: Cell::new(None),
@@ -3004,6 +3030,7 @@ impl Shell {
         self.follow_dock(cx);
         self.update_menus(cx);
         self.update_title(cx);
+        self.history_space_shown(cx);
         cx.notify();
     }
 
@@ -3475,15 +3502,6 @@ impl Shell {
         }
     }
 
-    /// ⌃ went up, which ends a ⌃Tab walk on the tab it shows. A click ends it too, and the core
-    /// may report the tab the click showed before this runs, so the walk's tab counts first.
-    pub fn control_released(&mut self, cx: &mut Context<Self>) {
-        if let Some(walked) = self.walked.take().filter(|tab| self.tabs.contains_key(tab)) {
-            self.shown(walked, cx);
-        }
-        self.shown(self.selected, cx);
-    }
-
     // The core reports a tab's title, favicon and state whenever Chromium touches them, often with
     // what it already has, and for tabs nobody sees. Each is kept, but only a change that shows
     // draws a frame.
@@ -3535,6 +3553,10 @@ impl Shell {
         // Asked here, once a report, as the row drawn each frame needs only the answer.
         let left_pinned_host =
             page.away_from_pinned_url && host(&page.url) != host(&self.browser.pinned_url(tab));
+        // Arrange ends as Safari's engine takes the tab's page, the core's being Chromium's, hidden.
+        if page.system_engine && self.arranging == Some(tab) {
+            self.stop_arrange(cx);
+        }
         let entry = self.tabs.entry(tab).or_default();
         if page.unloaded != entry.page.unloaded {
             log!("browser: page {tab} unloaded {}", flag(page.unloaded));
@@ -3631,6 +3653,7 @@ impl Shell {
         // A load that finished, or a URL that changed with none under way, as a same-page one does:
         // the page differs from its picture in the window it left.
         let page_changed = !page.loading && (entry.page.loading || page.url != entry.page.url);
+        let url_changed = page.url != entry.page.url;
         let changed =
             entry.keep_page(page) | replace(&mut entry.left_pinned_host, left_pinned_host);
         if card_changed {
@@ -3653,8 +3676,10 @@ impl Shell {
         if let Some(trouble) = trouble {
             self.trouble_changed(tab, trouble, cx);
         }
-        // View › Developer names it, so only its change rebuilds the menus, not each load.
-        if tab == self.selected && self.developer_mode(tab) != developer_mode {
+        // View › Developer names it, and Tabs › Sort Today Tabs by Site is dimmed while each site's
+        // tabs are together, which a Today tab's new URL can change; not each load.
+        let developer_changed = tab == self.selected && self.developer_mode(tab) != developer_mode;
+        if developer_changed || (url_changed && self.today().contains(&tab)) {
             self.update_menus(cx);
         }
         // A task's Pages draw its pages' speakers (#1080).
@@ -4467,6 +4492,8 @@ impl Render for Shell {
             log!("{line}");
         }
         self.show_page_dialog(cx);
+        self.show_mini_bar(cx);
+        self.show_foot_bar(cx);
         let card_left = self.card_left();
         self.update_palette(cx);
         let focus_color = packed(self.palette.accent.into());
@@ -4577,7 +4604,7 @@ impl Render for Shell {
             .size_full()
             .relative()
             .font_family(crate::face::UI)
-            .when(!WEB, |shell| shell.bg(self.palette.tint))
+            .when(!WEB, |shell| shell.bg(self.window_tint()))
             .capture_any_mouse_down(cx.listener(|shell, _, _, cx| shell.leave_keys("press", cx)))
             // The rows, buttons and fields keep their presses. Everywhere else is the window's
             // background, which moves the window as a title bar does.

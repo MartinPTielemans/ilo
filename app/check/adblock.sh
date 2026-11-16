@@ -279,6 +279,10 @@ send menu Settings…
 expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking for My filters"
 settings_drew "Ad Blocking"
 send clickkey $(drawn "filter field")
+# Text gets into a field only from the frame that draws it with the keyboard, after the press, and
+# the driver's insert waits for nothing: one sent before that frame was lost (#2847).
+expect '^browser: field New filter has the keyboard$' \
+  "a click on My filters' field didn't give it the keyboard in a frame drawn"
 send insert "127.0.0.1##.check-filtered"
 send key return
 expect '^browser: ad block filter added 127\.0\.0\.1##\.check-filtered$' \
@@ -311,6 +315,8 @@ send menu Settings…
 expect '^browser: settings shown Ad Blocking$' "Settings… didn't show Ad Blocking for its lists"
 settings_drew "Ad Blocking"
 send clickkey $(drawn "search")
+expect '^browser: field Search has the keyboard$' \
+  "a click on Settings' search didn't give it the keyboard in a frame drawn"
 send type ublock annoyances
 expect '^browser: settings search "ublock annoyances" finds uBlock filters – Annoyances$' \
   "Settings' search didn't find uBlock filters – Annoyances alone"

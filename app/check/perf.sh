@@ -27,7 +27,8 @@
 #   the minute after, and again 2 minutes after the page loaded (settled); 19 new tabs opened from
 #   ⌘T's bar, ↩ to their page painted; memory at 10 and 20 tabs, 10 s and 15 s after; idle at 20
 #   tabs and settled at 20; 16 switches by ⌘1–⌘8, the key to the page shown; 3 new windows, ⌘N to
-#   their first frame; and memory back at 1 tab, 30 s after closing the others.
+#   their first frame; 5 opens of the Library, ⇧⌘L to its first frame; and memory back at 1 tab,
+#   30 s after closing the others.
 # - Then Google Chrome, where the runner has it, on the same page on the same machine, through
 #   DevTools, as it has no driver: 5 launches with a link, to the page painted and the window on
 #   screen, then the same session, its tabs opened and shown by DevTools, and the run says how far
@@ -324,6 +325,22 @@ if [ -n "$held" ]; then
     "the launches below are on it"
   selfied=", on uBlock Origin's selfie"
 fi
+# ilo's warm launch, not measured: it checks for updates 10 s in and stays until its CRLSet is in, so
+# the launches and the session after are on it, as a user's are. The updater's first check is a
+# minute into a launch otherwise, which only the selfie's launch above lasts, so with no selfie,
+# under the browser's own ad blocker, the set came a minute into the session, after its 1-tab
+# sample (#2111).
+rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+perf_launch "$page?warm" warm warm
+# Which urlhaus copy the launches below take their filters from: uBlock Origin fetched it from one
+# of the list's mirrors at random, whose copies have been a month and 2.5 against 12 MB apart and
+# put these rows in two modes 200 ms or more apart, so a comparison pairs goes on the same (#2906).
+if [ -n "${selfied:-}" ]; then
+  urlhaus=$(python3 -I check/ublock_urlhaus.py \
+    "$profile_dir/Default/Local Extension Settings/oghkpboejbohceocapipmnjifoklonij") ||
+    urlhaus=unread
+  selfied="$selfied, urlhaus $urlhaus"
+fi
 for n in 1 2 3 4 5; do
   rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
   perf_launch "$page?link$n" "link$n" "link$n"
@@ -469,6 +486,21 @@ perf_session() {
   done
   perf_row newwindow "New window, ⌘N to first frame" \
     "$(perf_stats '%.1f' < "$perf_dir/newwindow") ms" "Ardia 79.9 ms, Chrome 100 ms"
+
+  # The Library opens on History, with the session's pages in it, which it asks for after its
+  # first frame (#2337).
+  : > "$perf_dir/library"
+  for _ in 1 2 3 4 5; do
+    send key l cmd shift
+    expect_late '^browser: library [a-z]* first frame at [0-9.]* ms$' "⇧⌘L's Library drew no frame"
+    sed -n "/^browser: drive $step: /,\$p" "$log" |
+      sed -n 's/^browser: library [a-z]* first frame at \([0-9.]*\) ms$/\1/p' | head -1 >> "$perf_dir/library"
+    expect '^browser: library shown$' "⇧⌘L didn't open the Library"
+    send key l cmd shift
+    expect '^browser: library hidden$' "⇧⌘L didn't close the Library"
+  done
+  perf_row library "Library, ⇧⌘L to first frame" \
+    "$(perf_stats '%.1f' < "$perf_dir/library") ms" "none of its own"
 
   for _ in $(seq 19); do
     send key w cmd
@@ -832,6 +864,15 @@ else
       [ -n "$shown" ] || fail "Chrome's launch $n timed no window shown"
       main=$(chrome_histogram Startup.LoadTime.ProcessCreateToApplicationStart)
       [ -n "$main" ] || fail "Chrome's launch $n timed no start to its main"
+      # On Linux, Chrome dates its process's start from /proc/stat's boot time, which is in whole
+      # seconds, so that histogram is long by the boot time's fraction, 0–999 ms on each runner.
+      if [ "$(uname)" = Linux ]; then
+        fraction=$(python3 -I -c 'import time
+boot = next(int(l.split()[1]) for l in open("/proc/stat") if l.startswith("btime "))
+print(int((time.clock_gettime(time.CLOCK_REALTIME) - time.clock_gettime(time.CLOCK_BOOTTIME) - boot) * 1000))')
+        echo "$main $fraction" >> "$perf_dir/chrome-start-to-main"
+        main=$((main - fraction))
+      fi
       echo $((main + shown)) >> "$perf_dir/chrome-on-screen"
       chrome_quit
     done

@@ -44,6 +44,10 @@ struct Recorder {
     settings_read: std::cell::Cell<usize>,
     /// The tabs open on the account's other computers.
     others: Vec<OtherTab>,
+    /// The archive, newest first: each tab's id, page and when it closed, in milliseconds.
+    archive: RefCell<Vec<(u64, String, f64)>>,
+    /// Now, in milliseconds since 1970.
+    now: f64,
 }
 
 impl Recorder {
@@ -183,6 +187,24 @@ impl Host for Recorder {
 
     fn other_tabs(&self, _: &App) -> Rc<Vec<OtherTab>> {
         Rc::new(self.others.clone())
+    }
+
+    fn archived(&self, url: &str, _: &App) -> Option<(u64, f64)> {
+        (self.archive.borrow().iter())
+            .find(|(_, page, _)| page == url)
+            .map(|&(id, _, closed)| (id, closed))
+    }
+
+    fn restore_archived(&self, archived: u64, _: &mut App) -> bool {
+        let kept = (self.archive.borrow().iter()).any(|&(id, _, _)| id == archived);
+        if kept {
+            self.record(format!("restore archived {archived}"));
+        }
+        kept
+    }
+
+    fn now(&self) -> f64 {
+        self.now
     }
 
     fn settings_index(&self, _: &App) -> Option<Rc<Vec<settings_search::Entry>>> {
@@ -385,6 +407,27 @@ impl Bar {
             .unwrap()
     }
 
+    /// What each row says at its end about where its result is, and the glyph on its tile.
+    fn ends(&mut self) -> Vec<(String, Option<&'static str>)> {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                (bar.rows.iter())
+                    .filter_map(|row| bar.end(row))
+                    .map(|(said, glyph)| (said.to_string(), glyph))
+                    .collect()
+            })
+            .unwrap()
+    }
+
+    /// Each row's icon.
+    fn icons(&mut self) -> Vec<Icon> {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                bar.rows.iter().map(Suggestion::icon).collect()
+            })
+            .unwrap()
+    }
+
     /// The rows listed: each one's page, and its tab if it has one.
     fn rows(&mut self) -> Vec<(String, u64)> {
         self.window
@@ -482,12 +525,12 @@ impl Bar {
     /// the host makes it: the input row, and with rows, to the list's foot and the space under it.
     fn drawn_over_field(&mut self) -> f32 {
         let asked = self.asked_height();
-        self.cx.simulate_resize(size(px(FIELD_WIDTH), px(asked)));
+        self.cx.simulate_resize(window(FIELD_WIDTH, asked));
         self.cx.run_until_parked();
         (self.window)
             .read_with(&self.cx.cx, |bar, _| match bar.rows.is_empty() {
                 true => FIELD_INPUT,
-                false => f32::from(bar.scroll.bounds().bottom()) + LIST_END,
+                false => f32::from(bar.scroll.bounds().bottom()) - room().above + LIST_END,
             })
             .unwrap()
     }
@@ -518,7 +561,7 @@ impl Bar {
                 *menu.borrow_mut() = Some((items, chosen));
             })))
         });
-        let at = point(px(200.), px(HEIGHT / 2.));
+        let at = at(200., HEIGHT / 2.);
         self.cx
             .simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
         self.cx
@@ -549,11 +592,10 @@ impl Bar {
     /// Moves the pointer onto row `index`, with the window at its height for five rows, as the
     /// host makes it.
     fn point_at(&mut self, index: usize) {
-        self.cx
-            .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN))));
+        self.cx.simulate_resize(window(WIDTH, height(ROWS_SHOWN)));
         let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
         self.cx
-            .simulate_mouse_move(point(px(200.), px(y)), None, Modifiers::none());
+            .simulate_mouse_move(at(200., y), None, Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -588,7 +630,23 @@ impl Bar {
 fn remove_button(index: usize) -> gpui::Point<gpui::Pixels> {
     let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
     let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
-    point(px(x), px(y))
+    at(x, y)
+}
+
+/// The room the bar's window keeps round it, where it draws its own shadow (#2988), and none where
+/// it doesn't.
+fn room() -> crate::elevation::Reach {
+    ROOM.panel_margin()
+}
+
+/// The point `x`, `y` in the bar, in its window.
+fn at(x: f32, y: f32) -> gpui::Point<gpui::Pixels> {
+    point(px(x + room().sides), px(y + room().above))
+}
+
+/// The bar's window, as the host makes it, round a bar `width` by `height`.
+fn window(width: f32, height: f32) -> gpui::Size<gpui::Pixels> {
+    room().around(size(px(width), px(height)))
 }
 
 /// A row for a page from the profile's history, which ⇧⌦ can take out.
@@ -1024,10 +1082,11 @@ fn the_remove_button_names_itself_and_its_key(cx: &mut TestAppContext) {
     );
     let (top, bottom) = (row - ICON_BOX / 2., row + ICON_BOX / 2.);
     assert!((anchor.top - top).abs() < 1. && (anchor.bottom - bottom).abs() < 1.);
+    let shown = window(WIDTH, height(ROWS_SHOWN));
     assert_eq!(
         anchor.window,
-        (WIDTH, height(ROWS_SHOWN)),
-        "it isn't kept inside the bar"
+        (f32::from(shown.width), f32::from(shown.height)),
+        "it isn't kept inside the bar's window"
     );
 
     // Off the button onto its row, the tooltip goes.
@@ -2839,8 +2898,7 @@ fn a_site_completing_puts_every_command_after_the_suggestions(cx: &mut TestAppCo
 #[gpui::test]
 fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
-    bar.cx
-        .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN))));
+    bar.cx.simulate_resize(window(WIDTH, height(ROWS_SHOWN)));
     type_and_suggest(
         &mut bar,
         "c",
@@ -2864,7 +2922,7 @@ fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     assert_eq!(bar.plates().0, 8);
     // A frame, for the list to scroll.
     bar.cx
-        .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN) + 1.)));
+        .simulate_resize(window(WIDTH, height(ROWS_SHOWN) + 1.));
     bar.cx.run_until_parked();
     assert!(in_view(&mut bar, 8));
     assert!(!in_view(&mut bar, 0));
@@ -2964,7 +3022,7 @@ fn the_inputs_menu_is_ilos_and_pastes_and_goes(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("something else");
     let right_click = |bar: &mut Bar| {
-        let at = point(px(200.), px(HEIGHT / 2.));
+        let at = at(200., HEIGHT / 2.);
         bar.cx
             .simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
         bar.cx
@@ -3682,4 +3740,213 @@ fn another_computers_tabs_wait_for_two_letters_of_a_name(cx: &mut TestAppContext
         bar.suggest(typed, vec![searching(typed)]);
         assert_eq!(bar.rows(), [(search(typed), 0)], "{typed}");
     }
+}
+
+/// Midnight at the start of `day` November 2026 in the user's time zone, in milliseconds since
+/// 1970: the 10th is a Tuesday.
+fn november(day: u32) -> f64 {
+    use chrono::{Local, TimeZone};
+    let midnight = Local.with_ymd_and_hms(2026, 11, day, 0, 0, 0).earliest();
+    midnight
+        .expect("a time zone with that midnight")
+        .timestamp_millis() as f64
+}
+
+const HOUR: f64 = 3_600_000.;
+
+/// A page from the profile's history, last visited at `at`, in milliseconds since 1970.
+fn visited(url: &str, at: f64) -> Suggestion {
+    Suggestion {
+        last_visit: (at * 1000.) as i64,
+        ..page(url)
+    }
+}
+
+/// The bar, opened for a new tab at noon on Tuesday 10 November, over a Space with `tabs`, with
+/// `archive` in the archive: each tab's id, page and when it closed.
+fn with_archive(
+    cx: &mut TestAppContext,
+    tabs: Vec<shell::BarTab>,
+    archive: &[(u64, &str, f64)],
+) -> Bar {
+    let archive = (archive.iter())
+        .map(|&(id, url, closed)| (id, url.to_string(), closed))
+        .collect();
+    let host = Recorder {
+        archive: RefCell::new(archive),
+        now: november(10) + 12. * HOUR,
+        ..Recorder::default()
+    };
+    Bar::open(cx, tabs, host)
+}
+
+/// A page's row says where its result is (#2337): an open tab's Switch to Tab on the arrow's
+/// tile, a closed tab's day and Reopen on ↺'s, with its favicon for the clock, and a visited
+/// page's day in words alone, keeping the clock. A page with no visit known says nothing.
+#[gpui::test]
+fn each_row_says_where_its_result_is(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("pa");
+    let rows = vec![
+        searching("pa"),
+        Suggestion {
+            tab: 7,
+            ..page("https://open.test/")
+        },
+        visited("https://closed.test/", now - 2. * HOUR),
+        visited("https://visited.test/", november(9) + 8. * HOUR),
+        page("https://unknown.test/"),
+    ];
+    bar.suggest("pa", rows);
+    assert_eq!(
+        bar.ends(),
+        [
+            ("Switch to Tab".into(), Some("icons/arrow-right.svg")),
+            ("Closed today · Reopen".into(), Some("icons/rotate-ccw.svg")),
+            ("Visited yesterday".into(), None),
+        ]
+    );
+    assert_eq!(
+        bar.icons()[1..],
+        [
+            Icon::Favicon,
+            Icon::Favicon,
+            Icon::Glyph("icons/clock.svg"),
+            Icon::Glyph("icons/clock.svg"),
+        ]
+    );
+}
+
+/// ↩ on a closed tab's row brings the tab back as it was, with its history, rather than loading
+/// its page afresh.
+#[gpui::test]
+fn return_on_a_closed_row_reopens_its_tab(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("pa");
+    bar.suggest("pa", vec![searching("pa"), page("https://closed.test/")]);
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["restore archived 5", "hide"]);
+}
+
+/// A closed tab's row whose tab has left the archive since it was listed loads its page, as any
+/// page's row does.
+#[gpui::test]
+fn a_closed_row_gone_from_the_archive_loads_its_page(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("pa");
+    bar.suggest("pa", vec![searching("pa"), page("https://closed.test/")]);
+    bar.host.archive.borrow_mut().clear();
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["open https://closed.test/", "hide"]);
+}
+
+/// A row says the day in words: today from midnight, yesterday from the midnight before, then
+/// the weekday for the five days before that, so it's never last week's, then the date. A visit
+/// after now, from a clock set back, is today's.
+#[gpui::test]
+fn a_row_says_its_day_in_words_at_each_boundary(cx: &mut TestAppContext) {
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", november(8))]);
+    let days = [
+        (november(10) + 13. * HOUR, "today"),
+        (november(10), "today"),
+        (november(10) - 1., "yesterday"),
+        (november(9), "yesterday"),
+        (november(9) - 1., "Sunday"),
+        (november(4), "Wednesday"),
+        (november(4) - 1., "3 Nov"),
+        (november(1), "1 Nov"),
+    ];
+    bar.type_text("pa");
+    for (at, day) in days {
+        bar.suggest(
+            "pa",
+            vec![searching("pa"), visited("https://visited.test/", at)],
+        );
+        assert_eq!(bar.ends(), [(format!("Visited {day}"), None)], "{day}");
+    }
+    bar.suggest("pa", vec![searching("pa"), page("https://closed.test/")]);
+    assert_eq!(
+        bar.ends(),
+        [(
+            "Closed Sunday · Reopen".into(),
+            Some("icons/rotate-ccw.svg")
+        )]
+    );
+}
+
+/// A page that's both open and in the archive shows as open: a tab elsewhere's row switches to
+/// it, and one open in the Space or shown is never offered back from the archive.
+#[gpui::test]
+fn a_page_both_open_and_closed_shows_as_open(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let archive = [
+        (5, "https://elsewhere.test/", now - HOUR),
+        (6, "https://here.test/", now - HOUR),
+    ];
+    let mut bar = with_archive(cx, vec![tab(3, "https://here.test/")], &archive);
+    bar.type_text("pa");
+    let rows = vec![
+        searching("pa"),
+        Suggestion {
+            tab: 7,
+            ..page("https://elsewhere.test/")
+        },
+        visited("https://here.test/", now - HOUR),
+    ];
+    bar.suggest("pa", rows);
+    assert_eq!(
+        bar.ends(),
+        [
+            ("Switch to Tab".into(), Some("icons/arrow-right.svg")),
+            ("Visited today".into(), None),
+        ]
+    );
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["select 7", "hide"]);
+}
+
+/// An address typed loads where ↩ goes, as it does when it's an open tab's page, though a tab at
+/// it closed.
+#[gpui::test]
+fn an_address_typed_loads_though_its_tab_closed(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("closed.test");
+    bar.suggest("closed.test", vec![page("https://closed.test/")]);
+    assert_eq!(bar.ends(), []);
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://closed.test/", "hide"]);
+}
+
+/// A page completed from what's typed reopens its closed tab, as a completion to an open tab's
+/// page switches to it.
+#[gpui::test]
+fn a_completion_to_a_closed_tab_reopens_it(cx: &mut TestAppContext) {
+    let now = november(10) + 12. * HOUR;
+    let mut bar = with_archive(cx, Vec::new(), &[(5, "https://closed.test/", now - HOUR)]);
+    bar.type_text("closed.t");
+    bar.suggest("closed.t", vec![completing("https://closed.test/", "est")]);
+    assert_eq!(
+        bar.ends(),
+        [("Closed today · Reopen".into(), Some("icons/rotate-ccw.svg"))]
+    );
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["restore archived 5", "hide"]);
+}
+
+/// A visited page's day, with no tile after it, ends at the right edge of the glyph a closed tab's
+/// ↺ tile draws, inside the tile's plate, whatever the tile's size (the orchestrator, 11-14).
+#[test]
+fn a_day_alone_ends_where_the_tiles_glyph_does() {
+    let end = super::bare_end();
+    let plate = (super::END_TILE_RIGHT, super::END_TILE_RIGHT + ICON_BOX);
+    assert!(
+        plate.0 < end && end < plate.1,
+        "the day ends {end} from the row's end, outside the tile's plate, {plate:?}"
+    );
+    // The glyph's box is centred on the plate, so its right edge is as far inside it as its left.
+    assert_eq!(end - plate.0, plate.1 - (end + super::END_GLYPH));
 }

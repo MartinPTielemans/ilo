@@ -83,15 +83,27 @@ pub(crate) fn restart_browser(cx: &mut App) {
 // Nothing of a private window is kept.
 pub(crate) extern "C" fn launch_picture_on_resigning() {
     // Later: AppKit can say so from inside an update of ours, such as one that hides the app.
-    update_app_later(save_launch_picture);
+    update_app_later(|cx| {
+        // Not as the quit's own closing windows resign the app: the window is hidden by then, and
+        // the host deletes the picture the Quit took before finding it can't take one (#3021).
+        if !shell::quit_gone_ahead() {
+            save_launch_picture(cx);
+        }
+    });
 }
 
-// The left |width| points of the frame |window| last drew, its sidebar, top-down BGRA, with how many
-// pixels across: only the sidebar, as the page could be anything and shouldn't be kept on disk.
+// The |width| points at the left of the frame |window| last drew, or at its right with the sidebar
+// there, its sidebar, top-down BGRA, with how many pixels across: only the sidebar, as the page could
+// be anything and shouldn't be kept on disk.
 // From GPUI's own frame, as Windows' picture of the window has it repaint its frame, where the
 // theme paints the caption under the UI, on screen too (#1262).
 #[cfg(target_os = "windows")]
-fn sidebar_pixels(window: AnyWindowHandle, width: f64, cx: &mut App) -> Option<(Vec<u8>, usize)> {
+fn sidebar_pixels(
+    window: AnyWindowHandle,
+    width: f64,
+    right: bool,
+    cx: &mut App,
+) -> Option<(Vec<u8>, usize)> {
     let (image, scale) = cx
         .update_window(window, |_, window, _| {
             (window.render_to_image(), window.scale_factor())
@@ -103,9 +115,10 @@ fn sidebar_pixels(window: AnyWindowHandle, width: f64, cx: &mut App) -> Option<(
     if columns == 0 || rows == 0 {
         return None;
     }
+    let from = if right { across - columns } else { 0 };
     let mut pixels = Vec::with_capacity(columns * rows * 4);
     for row in image.as_raw().chunks_exact(across * 4) {
-        for pixel in row[..columns * 4].chunks_exact(4) {
+        for pixel in row[from * 4..(from + columns) * 4].chunks_exact(4) {
             pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
         }
     }
@@ -122,9 +135,7 @@ pub(crate) fn save_launch_picture(cx: &mut App) {
     // A launch that doesn't bring the windows back shows their Spaces without Today tabs, so a
     // picture of this sidebar would show tabs that aren't there. Without one it shows the plain
     // window, as a new profile's first launch does.
-    // The hosts take and show the column at the window's left, so with the sidebar on the right
-    // the launch shows the plain window too.
-    if !unsafe { bc::bc_restore_windows() } || browser::shell::sidebar_right(cx) {
+    if !unsafe { bc::bc_restore_windows() } {
         forget_launch_pictures();
         log!("browser: launch picture not taken");
         return;
@@ -151,22 +162,25 @@ pub(crate) fn save_launch_picture(cx: &mut App) {
         return;
     };
     let profile = profile.as_ptr();
+    // The side the window last drew its column on, which the picture's line records.
+    let right = layout.is_some_and(|layout| layout.right);
     #[cfg(not(target_os = "windows"))]
     let taken =
-        unsafe { platform::host_save_launch_picture(window.ui_view, profile, width.into()) };
+        unsafe { platform::host_save_launch_picture(window.ui_view, profile, width.into(), right) };
     #[cfg(target_os = "windows")]
-    let taken = sidebar_pixels(window.handle, width.into(), cx).is_some_and(|(pixels, columns)| {
-        let rows = pixels.len() / 4 / columns;
-        unsafe {
-            platform::host_save_launch_pixels(
-                window.ui_view,
-                profile,
-                pixels.as_ptr(),
-                columns,
-                rows,
-            )
-        }
-    });
+    let taken =
+        sidebar_pixels(window.handle, width.into(), right, cx).is_some_and(|(pixels, columns)| {
+            let rows = pixels.len() / 4 / columns;
+            unsafe {
+                platform::host_save_launch_pixels(
+                    window.ui_view,
+                    profile,
+                    pixels.as_ptr(),
+                    columns,
+                    rows,
+                )
+            }
+        });
     // Once the host has deleted the pictures before, and only for one it took.
     if let Some(layout) = layout.filter(|_| taken) {
         _ = std::fs::write(launch_layout_path(), launch_picture::line(&layout));

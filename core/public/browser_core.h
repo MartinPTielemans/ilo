@@ -1,6 +1,6 @@
 // The core's API: what the app calls in Chrome's framework. Plain C, so the app binds it without
 // sharing a C++ toolchain with Chromium. Everything runs on the main thread, callbacks included,
-// but the three of bc_host's that ask the ad blocker about a page (ad_block_request).
+// but the four of bc_host's that ask the ad blocker about a page (ad_block_request).
 
 #ifndef BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
 #define BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
@@ -816,6 +816,10 @@ typedef struct bc_history_page {
 // Sends it to another address instead: its own, with the tracking parameters a $removeparam
 // filter names taken out.
 #define BC_AD_BLOCK_REWRITE 3
+// Lets it go ahead for now, and asks ad_block_response about each of its responses, a redirect's
+// too, before any of it reaches the page: uBlock Origin's filters on a response's headers. It
+// writes the names of the headers whose values the question gives, one a line.
+#define BC_AD_BLOCK_AT_RESPONSE 4
 
 // Hands the core |size| bytes of UTF-8 a callback answers with, into |out|, which the callback
 // passes back as it was given. It may be called more than once, each adding to what came before.
@@ -1333,7 +1337,7 @@ typedef struct bc_host {
   // |lists| is the files of the filter lists turned on (bc_ad_block_lists), one a line, and
   // |filters| the user's own (bc_ad_block_filters). The engine is ready for the next call to ask.
   void (*ad_block_use)(void* context, const char* folder, const char* lists, const char* filters);
-  // The three that ask, alone of every callback, come on a sequence of the core's own, never the
+  // The four that ask, alone of every callback, come on a sequence of the core's own, never the
   // main thread, and at the same time as the main thread's: a page's requests never wait on the
   // UI, nor the UI on matching. Each answers at once from the engine it has, never waiting for
   // the main thread. The one ad_block_use asked for may still be loading, which the call waits
@@ -1343,9 +1347,16 @@ typedef struct bc_host {
   // "subdocument", "script", "stylesheet", "image", "font", "media", "object", "xmlhttprequest",
   // "ping" or "other"), from the page at |source_url|: a BC_AD_BLOCK_ value. For
   // BC_AD_BLOCK_REDIRECT it writes the stand-in's data: URL, for BC_AD_BLOCK_REWRITE the address
-  // the request goes to instead.
+  // the request goes to instead, and for BC_AD_BLOCK_AT_RESPONSE the header names to ask with.
   int (*ad_block_request)(void* context, const char* url, const char* source_url, const char* type,
                           bc_writer write, void* out);
+  // Whether a response to the request for |url| that ad_block_request answered
+  // BC_AD_BLOCK_AT_RESPONSE, a redirect's or the last, is blocked: BC_AD_BLOCK_BLOCK or
+  // BC_AD_BLOCK_ALLOW. |url| is where the response came from, |method| the request's, and
+  // |headers| lines of "name: value", the first of each header the answer named that the response
+  // has, and none of the others. Nothing of them is kept.
+  int (*ad_block_response)(void* context, const char* url, const char* source_url,
+                           const char* type, const char* method, const char* headers);
   // What the page at |url| hides and runs from the start, written as a JSON object: "hide", the
   // CSS selectors of what it hides; "procedural", the filters that hide or style by more than a
   // selector, each a JSON string as adblock-rust gives it; "exceptions", the generic selectors it
@@ -1394,6 +1405,13 @@ typedef struct bc_host {
   // Point ended on the tab without the app asking: a new page, the tab moved into another agent's
   // Space or a private window, or it closed.
   void (*tab_point_ended)(void* context, bc_id tab);
+  // Linux, where the page bc_tab_show_in shows is under the app's window, which shows it through a
+  // hole: the first frame with the tab's page at the place bc_tab_show_in last gave is on screen.
+  // |frame| is the frame that call passed, bit for bit, never the bounds laid out from it, so the
+  // app can match it to the call. Once a call, unless the tab's next call comes first; then only
+  // that one's. Never on Windows, where the app opens and closes the hole without waiting for it,
+  // nor on the Mac, where the page is in the app's view, over what it draws.
+  void (*tab_shown_in)(void* context, bc_id tab, bc_rect frame);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1896,12 +1914,6 @@ BC_EXPORT bool bc_profile_add_history(bc_id profile, const bc_history_page* page
 // loaded.
 BC_EXPORT bool bc_profile_list_history(bc_id profile, uint64_t request, int64_t before,
                                        const char* text, size_t max);
-
-// Deletes |profile|'s visits to |url| from |begin| to |end|, microseconds since 1970, as the
-// Library's History removes one row, a page on one day. Chrome's observers hear it as any deletion,
-// and history_deleted follows. Returns whether it will, as bc_profile_list_history.
-BC_EXPORT bool bc_profile_remove_history(bc_id profile, const char* url, int64_t begin,
-                                         int64_t end);
 
 // A field of another browser's saved address, for bc_profile_add_addresses, as a Chromium-based
 // browser's Web Data keeps it: Chromium's FieldType and VerificationStatus numbers, and the value,
@@ -2593,12 +2605,23 @@ BC_EXPORT void bc_window_suggest(bc_id window, const char* keyword, const char* 
 // out, as while the last removal of |url| is still being taken out.
 BC_EXPORT bc_id bc_window_remove_suggestion(bc_id window, const char* url);
 
+// Deletes |profile|'s visits to |url| from |begin| to |end|, microseconds since 1970, as the
+// Library's History removes one row, a page on one day. They're deleted at once, so no list, search
+// or suggestion shows them after, and nothing keeps them but the removal, in memory, for
+// bc_window_undo_remove_suggestion to put back, as the window's other removals. Chrome's observers
+// hear it as any deletion, and history_deleted follows. Returns the removal's id, or 0 if it can't
+// remove: a private profile, whose history nothing keeps, one whose history hasn't loaded, a URL
+// that isn't valid or a span that's empty.
+BC_EXPORT bc_id bc_window_remove_history(bc_id window, bc_id profile, const char* url,
+                                         int64_t begin, int64_t end);
+
 // Puts back what the window's removal |removal| took out of the profile's history, as it was: a
-// page with each of its visits, and so its visit and typed counts, or a search with its term and
-// the pages it searched. Then window_suggestions with it, for the text last asked, if any. One
-// still being taken out, as while history loads, comes back once it's out. Whether it could: false
-// while it's back, once ten other removals have come after it in the window, and once the window's
-// suggestions have been for another profile since.
+// page with each of its visits, or those in bc_window_remove_history's span, and so its visit and
+// typed counts, or a search with its term and the pages it searched. Then window_suggestions with
+// it, for the text last asked, if any; a list or search of the profile's history asked after this
+// returns has it. One still being taken out, as while history loads, comes back once it's out.
+// Whether it could: false while it's back, once ten other removals have come after it in the
+// window, and once the window's removals have been for another profile since.
 BC_EXPORT bool bc_window_undo_remove_suggestion(bc_id window, bc_id removal);
 
 // Takes out again what bc_window_undo_remove_suggestion put back for |removal|, as the removal
@@ -2649,7 +2672,7 @@ BC_EXPORT bc_id bc_tab_open_preview(bc_id opener, const char* url, bc_rect frame
 // Shows the page of |tab|, which no window shows, such as bc_tab_open_preview's, in |view|, an
 // NSView of the app's on the Mac, which keeps it from then on: at |frame| in points from the view's
 // top-left, over what the view draws, with corners of |corner_radius|, and with the keyboard. Call
-// it again as the frame changes.
+// it again as the frame changes. tab_shown_in says when the page is on screen there.
 BC_EXPORT void bc_tab_show_in(bc_id tab, void* view, bc_rect frame, double corner_radius);
 
 // Draws the page bc_tab_show_in shows of |tab| at |scale| of its frame's size about (|about_x|,
@@ -3109,6 +3132,23 @@ typedef struct bc_arrange_look {
 // tab_boost_zap_ended, and bc_tab_boost_zap ends it, with tab_arrange_ended, as both take the
 // page's presses. A new page ends it, with tab_arrange_ended.
 BC_EXPORT bool bc_tab_arrange(bc_id tab, bool on, const bc_arrange_look* look);
+
+// How an element Arrange lifts off the page stands over it, while it's carried and while it floats,
+// with Arrange on or off: the app's popover elevation from tokens.toml, colours as 0xRRGGBBAA as
+// the tokens have them. |rim| is a line inside the element's edge, |outline| one round its outside
+// blurred |outline_blur|, and |shadow| falls |shadow_y| down blurred |shadow_blur|, in CSS pixels
+// from 0 to 64, else 0. A colour with no alpha draws nothing. The page's own box-shadow on the
+// element stays, over ours. The app gives it once, before the first page loads, and for every
+// profile; until then a lifted element stands off the page by nothing.
+typedef struct bc_arrange_lift {
+  uint32_t rim;
+  uint32_t outline;
+  uint32_t shadow;
+  double outline_blur;
+  double shadow_y;
+  double shadow_blur;
+} bc_arrange_lift;
+BC_EXPORT void bc_arrange_set_lift(const bc_arrange_lift* lift);
 
 // What the user asks of Arrange, by the keys the app takes before the page and the bars' buttons:
 // point at the box around the one pointed at (↑) or inside it (↓); undo the last change of the

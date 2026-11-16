@@ -19,6 +19,7 @@ use base64::prelude::BASE64_STANDARD;
 use web_time::Instant;
 
 pub mod choice;
+mod responses;
 mod scriptlets;
 
 /// What the engine blocks with, as the core gives it (bc_host's ad_block_use).
@@ -38,6 +39,10 @@ pub struct Setup {
 pub struct Engine {
     rules: Rules,
     popups: Rules,
+    /// uBlock Origin's response-time filters, which adblock-rust doesn't read.
+    responses: responses::Responses,
+    /// The stand-ins' data: URLs by name, for those filters' `$redirect`.
+    stand_ins: std::collections::HashMap<String, String>,
 }
 
 /// What to do with a request (BC_AD_BLOCK_).
@@ -49,6 +54,9 @@ pub enum Verdict {
     Redirect(String),
     /// Sent to this address instead.
     Rewrite(String),
+    /// Allowed now, and asked about again at each of its responses, a redirect's too, with the
+    /// values of these headers: `at_response` says then.
+    AtResponse(Vec<String>),
 }
 
 /// The bit of adblock-rust's permission mask uBlock Origin's own lists carry, which its trusted
@@ -336,9 +344,14 @@ fn popups_apart(text: String) -> (String, String) {
 /// on, and gives it uBlock Origin's stand-ins and scriptlets. A list that can't be read is left out.
 pub fn compile(setup: &Setup) -> Engine {
     let (mut set, mut popups) = (FilterSet::new(false), FilterSet::new(false));
+    let mut response_lines = String::new();
     let mut add = |text: String, options: ParseOptions| {
         let (text, popup_text) = match options.format {
-            FilterFormat::Standard => popups_apart(text),
+            FilterFormat::Standard => {
+                let (text, lines) = responses::apart(text);
+                response_lines.push_str(&lines);
+                popups_apart(text)
+            }
             FilterFormat::Hosts => (text, String::new()),
         };
         set.add_filter_list(hostnames_anchored(text), options.clone());
@@ -362,7 +375,21 @@ pub fn compile(setup: &Setup) -> Engine {
     Engine {
         rules,
         popups: Rules::new_with_filter_set(popups),
+        responses: responses_of(&response_lines),
+        stand_ins: responses::stand_in_urls(&stand_ins(&setup.folder)),
     }
+}
+
+/// The response-time filters of `lines`; those it can't honour are named in its unit tests.
+fn responses_of(lines: &str) -> responses::Responses {
+    let (responses, not_honoured) = responses::Responses::of(lines);
+    if !not_honoured.is_empty() {
+        crate::log!(
+            "browser: ad block: {} response-time filters not honoured",
+            not_honoured.len()
+        );
+    }
+    responses
 }
 
 /// What filters name in uBlock Origin's `folder`: its stand-ins and its scriptlets.
@@ -447,10 +474,71 @@ pub fn check(engine: &Engine, url: &str, source: &str, kind: &str) -> Verdict {
             None => Verdict::Block,
         };
     }
-    match result.rewritten_url {
-        Some(url) => Verdict::Rewrite(url),
-        None => Verdict::Allow,
+    if let Some(url) = result.rewritten_url {
+        return Verdict::Rewrite(url);
     }
+    if engine.responses.is_empty() {
+        return Verdict::Allow;
+    }
+    let excepted = || {
+        (engine.rules)
+            .check_network_request_subset(&request, true, false)
+            .exception
+            .is_some()
+    };
+    match engine
+        .responses
+        .at_request(&asked(&request, url, source, kind), excepted)
+    {
+        None => Verdict::Allow,
+        Some(responses::AtRequest::Ask(names)) => Verdict::AtResponse(names),
+        Some(responses::AtRequest::Block(stand_in)) => {
+            match stand_in.and_then(|name| engine.stand_ins.get(&name)) {
+                Some(data) => Verdict::Redirect(data.clone()),
+                None => Verdict::Block,
+            }
+        }
+    }
+}
+
+/// The request for `url` as the response-time filters read it.
+fn asked<'a>(request: &Request, url: &'a str, source: &str, kind: &'a str) -> responses::Asked<'a> {
+    let host = responses::host_of(url);
+    responses::Asked {
+        address: responses::address_of(url, &host),
+        url,
+        kind,
+        host,
+        source_host: responses::host_of(source),
+        third_party: request.is_third_party,
+    }
+}
+
+/// Whether a response to the request for `url`, which `check` said to ask about, is blocked:
+/// one sent for `method` with `headers`, lines of "name: value" of those `check` named.
+pub fn at_response(
+    engine: &Engine,
+    url: &str,
+    source: &str,
+    kind: &str,
+    method: &str,
+    headers: &str,
+) -> bool {
+    let Ok(request) = Request::new(url, source, kind, method) else {
+        return false;
+    };
+    let excepted = || {
+        (engine.rules)
+            .check_network_request_subset(&request, true, false)
+            .exception
+            .is_some()
+    };
+    (engine.responses).at_response(
+        &asked(&request, url, source, kind),
+        method,
+        headers,
+        excepted,
+    )
 }
 
 /// What the page at `url` hides and runs from the start, as bc_host's ad_block_page writes it: a
@@ -585,16 +673,27 @@ pub fn hide(engine: &Engine, classes: &[String], ids: &[String], exceptions: &[S
 /// What `compile` makes of the same lists: one more each time it reads them differently, so an
 /// engine the last compile made isn't loaded. 2: bare hostnames anchored. 3: pop-ups' filters apart,
 /// the file the two engines, the first's length before it. 4: procedural filters read as such.
-/// 5: `!#if` conditions evaluated as uBlock Origin on Chromium does.
-const COMPILED: u32 = 5;
+/// 5: `!#if` conditions evaluated as uBlock Origin on Chromium does. 6: response-time filters apart,
+/// their lines after the two engines, the second's length first.
+const COMPILED: u32 = 6;
 
-/// The compiled engine's name in the cache folder, for `setup` as its files are now: a change to
-/// a list, the filters, adblock-rust's version or COMPILED names another.
-fn cache_name(setup: &Setup) -> String {
+/// What an engine must have been compiled for and laid out as to answer for `setup` at all, even
+/// for a moment at launch (#2513): the user's choices (the folder, the lists turned on and My
+/// filters) and the file's layout (this build's version, adblock-rust's, whose serialisation it
+/// holds, and `compiled`, our own's). Only a list's new copy is left out, for `cache_name`.
+fn kind(setup: &Setup, compiled: u32) -> u64 {
     let mut hasher = DefaultHasher::new();
     setup.hash(&mut hasher);
     env!("CARGO_PKG_VERSION").hash(&mut hasher);
-    COMPILED.hash(&mut hasher);
+    env!("ADBLOCK_VERSION").hash(&mut hasher);
+    compiled.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The compiled engine's name in the cache folder, for `setup` as its files are now: its kind,
+/// then each list's copy: a list's new copy changes only the second part.
+fn cache_name(setup: &Setup) -> String {
+    let mut hasher = DefaultHasher::new();
     for list in &setup.lists {
         let meta = fs::metadata(list).ok();
         meta.as_ref().map(|meta| meta.len()).hash(&mut hasher);
@@ -603,58 +702,130 @@ fn cache_name(setup: &Setup) -> String {
             .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
             .hash(&mut hasher);
     }
-    format!("engine-{:016x}.dat", hasher.finish())
+    format!(
+        "engine-{:016x}-{:016x}.dat",
+        kind(setup, COMPILED),
+        hasher.finish()
+    )
 }
 
-/// `setup`'s engine, from the cache in `cache` when it has one, in about 20 ms, else compiled and
-/// kept there, in place of the last, for the next launch.
-pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
+/// What the cache in `cache` has for `setup`.
+enum Cached {
+    /// Its engine, as its files are now.
+    Current(Engine),
+    /// The engine a launch before compiled for the same choices, in the same layout, from older
+    /// copies of the lists: it answers while the current one compiles.
+    Last(Engine),
+    None,
+}
+
+/// The engine in `file`, for `setup`'s stand-ins.
+fn read_file(file: &Path, setup: &Setup) -> Option<Engine> {
+    let mut engine = read(&fs::read(file).ok()?)?;
+    engine.rules.use_resources(resources(&setup.folder));
+    engine.stand_ins = responses::stand_in_urls(&stand_ins(&setup.folder));
+    Some(engine)
+}
+
+fn cached(setup: &Setup, cache: Option<&Path>) -> Cached {
+    let Some(cache) = cache else {
+        return Cached::None;
+    };
     let start = Instant::now();
-    let file = cache.map(|cache| cache.join(cache_name(setup)));
-    if let Some(mut engine) = file.as_ref().and_then(|file| read(&fs::read(file).ok()?)) {
-        engine.rules.use_resources(resources(&setup.folder));
+    let name = cache_name(setup);
+    if let Some(engine) = read_file(&cache.join(&name), setup) {
         crate::log!(
             "browser: ad block engine loaded in {} ms",
             start.elapsed().as_millis()
         );
-        return engine;
+        return Cached::Current(engine);
     }
+    let same = format!("engine-{:016x}-", kind(setup, COMPILED));
+    let last = (fs::read_dir(cache).into_iter().flatten().flatten()).find_map(|entry| {
+        let file = entry.file_name();
+        let file = file.to_string_lossy();
+        (file.starts_with(&same) && file.ends_with(".dat"))
+            .then(|| read_file(&entry.path(), setup))
+            .flatten()
+    });
+    match last {
+        Some(engine) => {
+            crate::log!(
+                "browser: ad block engine loaded in {} ms, the last for these lists",
+                start.elapsed().as_millis()
+            );
+            Cached::Last(engine)
+        }
+        None => Cached::None,
+    }
+}
+
+/// `setup`'s engine compiled, and kept in `cache` for the next launch. The last one there goes
+/// only once this one is whole there, so a quit while it compiles or writes leaves the last.
+fn compile_and_keep(setup: &Setup, cache: Option<&Path>) -> Engine {
+    let start = Instant::now();
     let engine = compile(setup);
     crate::log!(
         "browser: ad block engine compiled in {} ms",
         start.elapsed().as_millis()
     );
-    if let (Some(cache), Some(file)) = (cache, file) {
-        // The last launch's goes, so the folder keeps one.
-        if let Ok(entries) = fs::read_dir(cache) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                if name.to_string_lossy().starts_with("engine-") {
-                    _ = fs::remove_file(entry.path());
-                }
+    let Some(cache) = cache else {
+        return engine;
+    };
+    let name = cache_name(setup);
+    let part = cache.join(format!("{name}.part"));
+    let (rules, popups) = (engine.rules.serialize(), engine.popups.serialize());
+    let lines = engine.responses.lines().as_bytes();
+    let mut bytes = Vec::with_capacity(16 + rules.len() + popups.len() + lines.len());
+    bytes.extend_from_slice(&(rules.len() as u64).to_le_bytes());
+    bytes.extend(rules);
+    bytes.extend_from_slice(&(popups.len() as u64).to_le_bytes());
+    bytes.extend(popups);
+    bytes.extend_from_slice(lines);
+    let kept = fs::create_dir_all(cache).is_ok()
+        && fs::write(&part, bytes).is_ok()
+        && fs::rename(&part, cache.join(&name)).is_ok();
+    if kept {
+        // The folder keeps one: this.
+        for entry in fs::read_dir(cache).into_iter().flatten().flatten() {
+            let file = entry.file_name();
+            let file = file.to_string_lossy();
+            if file.starts_with("engine-") && file != name {
+                _ = fs::remove_file(entry.path());
             }
         }
-        if fs::create_dir_all(cache).is_ok() {
-            let (rules, popups) = (engine.rules.serialize(), engine.popups.serialize());
-            let mut bytes = Vec::with_capacity(8 + rules.len() + popups.len());
-            bytes.extend_from_slice(&(rules.len() as u64).to_le_bytes());
-            bytes.extend(rules);
-            bytes.extend(popups);
-            _ = fs::write(&file, bytes);
-        }
+    } else {
+        _ = fs::remove_file(&part);
     }
     engine
 }
 
+/// `setup`'s engine, from the cache in `cache` when it has one, in about 20 ms, else compiled and
+/// kept there, in place of the last, for the next launch.
+pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
+    match cached(setup, cache) {
+        Cached::Current(engine) => engine,
+        _ => compile_and_keep(setup, cache),
+    }
+}
+
 /// The engines `load` kept in `bytes`, or None for a file it didn't write.
 fn read(bytes: &[u8]) -> Option<Engine> {
-    let (length, rest) = bytes.split_first_chunk::<8>()?;
-    let (rules_bytes, popups_bytes) =
-        rest.split_at_checked(usize::try_from(u64::from_le_bytes(*length)).ok()?)?;
+    fn part(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+        let (length, rest) = bytes.split_first_chunk::<8>()?;
+        rest.split_at_checked(usize::try_from(u64::from_le_bytes(*length)).ok()?)
+    }
+    let (rules_bytes, rest) = part(bytes)?;
+    let (popups_bytes, lines) = part(rest)?;
     let (mut rules, mut popups) = (Rules::default(), Rules::default());
     rules.deserialize(rules_bytes).ok()?;
     popups.deserialize(popups_bytes).ok()?;
-    Some(Engine { rules, popups })
+    Some(Engine {
+        rules,
+        popups,
+        responses: responses_of(std::str::from_utf8(lines).ok()?),
+        stand_ins: Default::default(),
+    })
 }
 
 /// The engine the core asks, swapped whole as the setup changes, as a page's requests keep asking
@@ -666,6 +837,9 @@ pub struct Blocker {
     /// Held by a test to keep a loaded engine from coming in.
     #[cfg(test)]
     swap: Mutex<()>,
+    /// Held by a test to keep the engine compiled after the last one from starting.
+    #[cfg(test)]
+    current: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -691,12 +865,16 @@ impl Blocker {
             ready: Condvar::new(),
             #[cfg(test)]
             swap: Mutex::new(()),
+            #[cfg(test)]
+            current: Mutex::new(()),
         }
     }
 
     /// Blocks with `setup` once it's loaded, on a thread of its own. The engine before it answers
     /// until then, so a list change holds no page's requests (#2826): only a launch's first engine
-    /// is waited for. The same setup again changes nothing.
+    /// is waited for, and not even that once a launch before compiled one for the same lists and
+    /// filters, which answers until this one has compiled, then gives way to it once (#2513). The
+    /// same setup again changes nothing.
     pub fn use_setup(self: &Arc<Self>, setup: Setup, cache: Option<PathBuf>) {
         {
             let mut state = self.state.lock().unwrap();
@@ -707,17 +885,36 @@ impl Blocker {
         }
         let blocker = self.clone();
         std::thread::spawn(move || {
-            let engine = Arc::new(load(&setup, cache.as_deref()));
-            #[cfg(test)]
-            let _swap = blocker.swap.lock().unwrap();
-            let mut state = blocker.state.lock().unwrap();
-            // A later setup replaced this one while it loaded.
-            if state.wanted.as_ref() == Some(&setup) {
-                state.engine = Some(engine);
-                state.waits = true;
-                blocker.ready.notify_all();
-            }
+            let cache = cache.as_deref();
+            let engine = match cached(&setup, cache) {
+                Cached::Current(engine) => engine,
+                Cached::Last(last) => {
+                    if !blocker.swap_in(&setup, last) {
+                        return;
+                    }
+                    #[cfg(test)]
+                    let _current = blocker.current.lock().unwrap();
+                    compile_and_keep(&setup, cache)
+                }
+                Cached::None => compile_and_keep(&setup, cache),
+            };
+            blocker.swap_in(&setup, engine);
         });
+    }
+
+    /// Answers with `engine` from the next request, unless a later setup replaced `setup` while
+    /// it loaded. Whether it did.
+    fn swap_in(&self, setup: &Setup, engine: Engine) -> bool {
+        #[cfg(test)]
+        let _swap = self.swap.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        let wanted = state.wanted.as_ref() == Some(setup);
+        if wanted {
+            state.engine = Some(Arc::new(engine));
+            state.waits = true;
+            self.ready.notify_all();
+        }
+        wanted
     }
 
     /// The engine to ask now: the last one loaded, or after launch, the first, waited for up to

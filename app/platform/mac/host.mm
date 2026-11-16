@@ -450,7 +450,7 @@ struct Overlay {
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
-                        Overlay("folder preview"), Overlay("boost editor")};
+                        Overlay("folder preview"), Overlay("boost editor"), Overlay("tab switcher")};
 
 // The Site Controls: an overlay for its blur and shadow alone, outside g_overlays, so the tooltip
 // shows over it.
@@ -547,6 +547,38 @@ void PlaceFootBar() {
                                   NSMinY(content) + g_foot_bar_bottom, g_foot_bar_size.width,
                                   g_foot_bar_size.height)
                display:NO];
+}
+
+// Arrange's mini bar, the browser window it shows over, and where: the bar's frame in points from
+// the top left of that window's content (host_show_mini_bar), and how far its window reaches past
+// the bar, for the shadow the bar draws, where the mouse goes through. A window is all or nothing
+// for the mouse, so a monitor hears the pointer move on and off the bar while it shows.
+Browser* g_mini_bar_over;
+NSWindow* g_mini_bar;
+NSView* g_mini_bar_view;
+bool g_mini_bar_shown = false;
+unsigned g_mini_bar_changes = 0;
+NSRect g_mini_bar_place;
+double g_mini_bar_margin = 0;
+id g_mini_bar_monitor;
+
+void PlaceMiniBar() {
+  NSWindow* window = g_mini_bar_over->window;
+  NSRect content = [window contentRectForFrameRect:window.frame];
+  const NSRect frame = NSInsetRect(g_mini_bar_place, -g_mini_bar_margin, -g_mini_bar_margin);
+  [g_mini_bar setFrame:NSMakeRect(NSMinX(content) + NSMinX(frame),
+                                  NSMaxY(content) - NSMinY(frame) - NSHeight(frame),
+                                  NSWidth(frame), NSHeight(frame))
+               display:NO];
+}
+
+// Lets the mouse through the mini bar's window but on the bar, with the pointer at |screen|.
+void PlaceMiniBarClicks(NSPoint screen) {
+  NSPoint at = [g_mini_bar convertPointFromScreen:screen];
+  at.y = NSHeight(g_mini_bar.frame) - at.y;
+  const NSRect bar = NSMakeRect(g_mini_bar_margin, g_mini_bar_margin, NSWidth(g_mini_bar_place),
+                                NSHeight(g_mini_bar_place));
+  g_mini_bar.ignoresMouseEvents = !NSPointInRect(at, bar);
 }
 // Whether the toast has buttons, so its plate takes clicks; its window's margin, where its shadow
 // falls, never does. The plate, from the window's top left, and the monitor that hears the pointer
@@ -1455,7 +1487,7 @@ void CaptureLaunchWindow() {
 // Never maximized, which is Windows' alone: a zoomed window's frame is the one it has.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
                              double height, bool, double picture_width, double picture_height,
-                             double foot_top) {
+                             double foot_top, bool right) {
   // The core's y runs down from the main display's top, AppKit's up from its bottom.
   const NSRect frame =
       NSMakeRect(x, NSHeight(NSScreen.screens.firstObject.frame) - y - height, width, height);
@@ -1486,14 +1518,17 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   // A picture taken on a screen of another scale is left out.
   if ([pixels isKindOfClass:NSBitmapImageRep.class] && pixels.CGImage &&
       pixels.pixelsHigh == lround(picture_height * scale)) {
-    // The sidebar's right edge, halfway down, is the material with nothing on it.
-    NSColor* edge = [pixels colorAtX:pixels.pixelsWide - 1 y:pixels.pixelsHigh / 2];
+    // The sidebar's edge toward the page, halfway down, is the material with nothing on it.
+    NSColor* edge = [pixels colorAtX:right ? 0 : pixels.pixelsWide - 1 y:pixels.pixelsHigh / 2];
     window.backgroundColor = [edge colorWithAlphaComponent:1];
     const long rows = pixels.pixelsHigh;
     const long columns = pixels.pixelsWide;
     const long foot = std::clamp(lround(foot_top * scale), 0L, rows);
     const long grows = lround(height * scale) - rows;
-    NSView* shown = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, columns / scale, height)];
+    NSView* shown = [[NSView alloc]
+        initWithFrame:NSMakeRect(right ? width - columns / scale : 0, 0, columns / scale, height)];
+    // At its edge of the window, should the browser window's view be another width.
+    shown.autoresizingMask = right ? NSViewMinXMargin : NSViewMaxXMargin;
     // Puts the picture's rows |from| to |to| |at| rows down from the window's top.
     auto place = [&](long from, long to, long at) {
       if (to <= from) {
@@ -1613,7 +1648,7 @@ void host_watch_finished_launching(void (*finished)(void)) {
               }];
 }
 
-bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width) {
+bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width, bool right) {
   NSWindow* window = ((__bridge NSView*)ui_view).window;
   const NSSize size = window.frame.size;
   NSString* path = LaunchPicturePath(profile_dir, size.width, size.height);
@@ -1641,8 +1676,10 @@ bool host_save_launch_picture(void* ui_view, const char* profile_dir, double wid
     return false;
   }
   const CGFloat scale = (CGFloat)CGImageGetWidth(whole) / size.width;
+  const CGFloat columns = round(width * scale);
   CGImageRef sidebar = CGImageCreateWithImageInRect(
-      whole, CGRectMake(0, 0, round(width * scale), CGImageGetHeight(whole)));
+      whole, CGRectMake(right ? CGImageGetWidth(whole) - columns : 0, 0, columns,
+                        CGImageGetHeight(whole)));
   CGImageRelease(whole);
   if (!sidebar) {
     return false;
@@ -1937,6 +1974,8 @@ static void WatchLittleOrderingOut(NSWindow* window) {
   }
 }
 
+static void PlaceTitlebarSide(Browser* browser);
+
 void host_show_window(void* ui_view) {
   host_show_window_behind(ui_view, nullptr);
 }
@@ -1950,6 +1989,10 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
   browser->window = window;
+  // As the sidebar's side was told before there was a window (host_set_sidebar_right).
+  if (browser->sidebar_right) {
+    PlaceTitlebarSide(browser);
+  }
   if (browser->little) {
     ToShownDesktop(browser, window);
     // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
@@ -2103,6 +2146,10 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                                 if (g_foot_bar_shown &&
                                                     g_foot_bar_over == browser) {
                                                   PlaceFootBar();
+                                                }
+                                                if (g_mini_bar_shown &&
+                                                    g_mini_bar_over == browser) {
+                                                  PlaceMiniBar();
                                                 }
                                                 if (g_site_controls_shown &&
                                                     g_site_controls_over == browser) {
@@ -2594,6 +2641,14 @@ void host_watch_reduce_motion(void (*changed)(void)) {
               }];
 }
 
+bool host_twelve_hour_clock(void) {
+  // "j" is the locale's preferred hour, which follows the user's 24-hour switch; "a" is AM/PM.
+  NSString* format = [NSDateFormatter dateFormatFromTemplate:@"j"
+                                                     options:0
+                                                      locale:NSLocale.autoupdatingCurrentLocale];
+  return [format containsString:@"a"];
+}
+
 bool host_is_default_browser(void) {
   NSString* mine = NSBundle.mainBundle.bundleIdentifier;
   for (NSString* link in @[ @"http://", @"https://" ]) {
@@ -2675,6 +2730,9 @@ void host_forget_window(void* ui_view) {
   }
   if (g_foot_bar_shown && g_foot_bar_over == browser) {
     host_hide_foot_bar();
+  }
+  if (g_mini_bar_shown && g_mini_bar_over == browser) {
+    host_hide_mini_bar();
   }
   if (g_tooltip_over == browser) {
     host_hide_tooltip(0);
@@ -3160,7 +3218,13 @@ void host_hide_overlay(int index) {
     [overlay->window orderOut:nil];
     overlay->shadow.alphaValue = 0;
   }
-  [KeyWindowAfter(*overlay, browser) makeKeyWindow];
+  // Not when another browser window has the keyboard: the user went there, and taking it back
+  // would leave that window main with the keys going to this one.
+  NSWindow* back = KeyWindowAfter(*overlay, browser);
+  Browser* key_browser = BrowserOf(NSApp.keyWindow);
+  if (!key_browser || key_browser == browser) {
+    [back makeKeyWindow];
+  }
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
   if (overlay->key_at_hide) {
     overlay->key_at_hide = false;
@@ -4412,6 +4476,64 @@ void host_show_foot_bar(void* ui_view,
   });
 }
 
+void host_add_mini_bar(void* mini_bar_view, double margin) {
+  g_mini_bar_view = (__bridge NSView*)mini_bar_view;
+  g_mini_bar = g_mini_bar_view.window;
+  g_mini_bar_margin = margin;
+  MakeOverlay(g_mini_bar);
+  // The UI draws the bar and its shadow, in the margin round it, as the hover card's.
+  g_mini_bar.styleMask = NSWindowStyleMaskBorderless;
+  g_mini_bar.hasShadow = NO;
+  g_mini_bar.ignoresMouseEvents = YES;
+  // Its buttons take clicks, and the keyboard stays with the browser window, where the page has
+  // the mode's keys.
+  NeverKey(g_mini_bar);
+}
+
+void host_show_mini_bar(void* ui_view, double x, double y, double width, double height) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!g_mini_bar || !browser || !browser->window) {
+    return;
+  }
+  if (g_mini_bar_shown && g_mini_bar_over != browser) {
+    host_hide_mini_bar();
+  }
+  g_mini_bar_shown = true;
+  g_mini_bar_over = browser;
+  g_mini_bar_place = NSMakeRect(x, y, width, height);
+  const unsigned change = ++g_mini_bar_changes;
+  // After the UI's update that asked, as the find bar does: it goes on screen once it has drawn
+  // what it shows now, since a hidden window keeps the last frame it drew.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (change != g_mini_bar_changes) {
+      return;
+    }
+    PlaceMiniBar();
+    [g_mini_bar_view.layer setNeedsDisplay];
+    [g_mini_bar_view.layer displayIfNeeded];
+    // The page's view takes the pointer's moves while it's over the page, so the bar's window
+    // doesn't hear them. Only while it shows, so an idle browser is never woken.
+    if (!g_mini_bar_monitor) {
+      g_mini_bar_monitor =
+          [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved
+                                                handler:^NSEvent*(NSEvent* event) {
+                                                  NSPoint at = event.locationInWindow;
+                                                  if (event.window) {
+                                                    at = [event.window convertPointToScreen:at];
+                                                  }
+                                                  PlaceMiniBarClicks(at);
+                                                  return event;
+                                                }];
+    }
+    PlaceMiniBarClicks(NSEvent.mouseLocation);
+    if (g_mini_bar.parentWindow != browser->window) {
+      AddOver(browser->window, g_mini_bar);
+      RaiseOverlays(browser, g_mini_bar);
+      fprintf(stderr, "browser: mini bar shown\n");
+    }
+  });
+}
+
 void host_hide_foot_bar(void) {
   if (!g_foot_bar_shown) {
     return;
@@ -4422,6 +4544,24 @@ void host_hide_foot_bar(void) {
   [g_foot_bar.parentWindow removeChildWindow:g_foot_bar];
   [g_foot_bar orderOut:nil];
   fprintf(stderr, "browser: foot bar hidden\n");
+}
+
+void host_hide_mini_bar(void) {
+  if (!g_mini_bar_shown) {
+    return;
+  }
+  g_mini_bar_shown = false;
+  // Cancels a show still waiting for the bar to draw.
+  ++g_mini_bar_changes;
+  // A show still waiting hasn't added it.
+  if (g_mini_bar_monitor) {
+    [NSEvent removeMonitor:g_mini_bar_monitor];
+    g_mini_bar_monitor = nil;
+  }
+  g_mini_bar.ignoresMouseEvents = YES;
+  [g_mini_bar.parentWindow removeChildWindow:g_mini_bar];
+  [g_mini_bar orderOut:nil];
+  fprintf(stderr, "browser: mini bar hidden\n");
 }
 
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
@@ -4881,18 +5021,14 @@ static bool AnswerTitlebarDirection(NSWindow* window) {
   return true;
 }
 
-void host_set_sidebar_right(void* ui_view, bool right) {
-  Browser* browser = BrowserWithView(ui_view);
-  if (!browser || browser->sidebar_right == right) {
-    return;
-  }
-  browser->sidebar_right = right;
+// Lays |browser|'s title bar out for the side its sidebar is on.
+static void PlaceTitlebarSide(Browser* browser) {
   NSWindow* window = browser->window;
   if (!AnswerTitlebarDirection(window)) {
     fprintf(stderr, "browser: the title bar's direction can't be answered\n");
     return;
   }
-  objc_setAssociatedObject(window, &kSidebarRight, right ? @YES : nil,
+  objc_setAssociatedObject(window, &kSidebarRight, browser->sidebar_right ? @YES : nil,
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
   // AppKit places the buttons as the window's frame view changes size, and not when its layout is
   // only marked or the style mask set again (check/titlebar-right.sh on a hosted Mac, run
@@ -4901,6 +5037,19 @@ void host_set_sidebar_right(void* ui_view, bool right) {
   const NSSize size = frame.frame.size;
   [frame setFrameSize:NSMakeSize(size.width + 1, size.height)];
   [frame setFrameSize:size];
+}
+
+void host_set_sidebar_right(void* ui_view, bool right) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || browser->sidebar_right == right) {
+    return;
+  }
+  browser->sidebar_right = right;
+  // A window the UI is made in hears its side before it's shown, and so before it's the browser's
+  // window: host_show_window lays its title bar out then.
+  if (browser->window) {
+    PlaceTitlebarSide(browser);
+  }
   if (browser->reveal_monitor) {
     PlaceReveal(browser);
   }
