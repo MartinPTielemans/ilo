@@ -1972,6 +1972,30 @@ BC_EXPORT size_t bc_space_theme(bc_id space, char* theme, size_t capacity);
 // comes; empty takes the theme away. Then spaces_changed.
 BC_EXPORT void bc_space_set_theme(bc_id space, const char* theme);
 
+// The colours of a Space that its tabs' Boosts read (bc_space_set_boost_colors), each 0xRRGGBB in
+// sRGB.
+typedef struct bc_boost_colors {
+  // --ilo-space-background: the window's colour at its top left, opaque.
+  uint32_t background;
+  // --ilo-space-text: the window's text.
+  uint32_t text;
+  // --ilo-space-accent: the Space's accent.
+  uint32_t accent;
+  // --ilo-space-accent-text: the text that reads on the accent.
+  uint32_t accent_text;
+} bc_boost_colors;
+
+// Gives the Space's colours to Boosts (docs/ux-spec.md › Boosts), so a Boost's CSS can match a
+// site to the sidebar with var(). The core writes them as ilo's own custom properties, values
+// only, at the root of the Boost's own sheet, and only for a Boost whose CSS names one of them
+// (--ilo-space-): the site's own scripts can read them there, so a page with no Boost, or a Boost
+// that doesn't use them, tells its site nothing. A frame another site's page holds gets none. A tab
+// moved to another Space, or a favorite whose window shows another, takes that Space's with no
+// reload. A tab in an agent's Space gets none. The core doesn't keep them across a relaunch: the
+// app gives them again at launch and as the theme or the appearance changes. Null takes them
+// away. The user's: agents get no path to them, as to a Boost.
+BC_EXPORT void bc_space_set_boost_colors(bc_id space, const bc_boost_colors* colors);
+
 // Deletes the Space, unless it's the last, and returns whether it will. A window showing it shows
 // the Space before it, else the one after it. Its tabs close, and it goes with the last of them; a
 // page that keeps its tab open keeps the Space until it closes. Its Today tabs reopen with
