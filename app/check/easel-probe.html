@@ -179,11 +179,13 @@ document.addEventListener("click", (e) => e.target.closest("a") && e.preventDefa
 // typing in the first note, whose keys are timed from each event to the start of the frame that
 // draws it.
 const keyGaps = [];
+let measured = 0;
 document.addEventListener("keydown", async (e) => {
   if (document.activeElement == typing) return;
-  if (e.key == "p") say(`pan ${await frames(quiet(400))}`);
-  if (e.key == "z") say(`zoom crisp ${await zoom(false)}`);
-  if (e.key == "x") say(`zoom hinted ${await zoom(true)}`);
+  // Each measure is numbered, as a title the same as the one before it would log nothing.
+  if (e.key == "p") say(`pan ${++measured} ${await frames(quiet(400))}`);
+  if (e.key == "z") say(`zoom ${++measured} crisp ${await zoom(false)}`);
+  if (e.key == "x") say(`zoom ${++measured} hinted ${await zoom(true)}`);
   if (e.key == "t") {
     e.preventDefault();
     typing.contentEditable = "true";

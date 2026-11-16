@@ -76,14 +76,14 @@ row "memory, two plain pages and the Easel: $m3"
 
 send key p
 send scroll $page_point 30 60
-row "pan down, 60 trackpad events of 30 pt: $(await_title easel pan)"
+row "pan down, 60 trackpad events of 30 pt: $(await_title easel "pan 1")"
 send key p
 send scroll $page_point -30 60
-row "pan back up: $(await_title easel pan)"
+row "pan back up: $(await_title easel "pan 2")"
 send key z
-row "zoom to 0.25 and back in 2 s, re-rastered: $(await_title easel 'zoom crisp')"
+row "zoom to 0.25 and back in 2 s, re-rastered: $(await_title easel 'zoom 3 crisp')"
 send key x
-row "zoom to 0.25 and back in 2 s, one scaled layer: $(await_title easel 'zoom hinted')"
+row "zoom to 0.25 and back in 2 s, one scaled layer: $(await_title easel 'zoom 4 hinted')"
 send key t
 await_title easel typing > /dev/null
 send type abcdefghijklmnopqrst
