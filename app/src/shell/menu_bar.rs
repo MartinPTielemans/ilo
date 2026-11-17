@@ -14,6 +14,8 @@ pub struct MenuBar {
     /// The shown Space's profile's extensions that run in the window, for the Extensions menu.
     pub extensions: Vec<Extension>,
     pub sidebar_hidden: bool,
+    /// Whether Top bar is on, for View's Show Top Bar or Hide Top Bar.
+    pub top_bar: bool,
     /// Whether the tab shown is pinned, or None with none shown.
     pub pinned: Option<bool>,
     /// Whether the Space shown has its pinned rows collapsed.
@@ -64,6 +66,10 @@ pub struct ProfileChoice {
 
 impl MenuBar {
     /// View's item for ⌘S, by what it does now, as Arc's.
+    pub fn top_bar_title(&self) -> &'static str {
+        super::commands::top_bar_title(self.top_bar)
+    }
+
     pub fn sidebar_title(&self) -> &'static str {
         if self.sidebar_hidden {
             "Show Sidebar"
@@ -136,6 +142,7 @@ impl Shell {
             spaces,
             extensions,
             sidebar_hidden: self.sidebar_hidden,
+            top_bar: self.top_bar,
             pinned,
             pinned_shut: self
                 .shown_space()

@@ -2804,7 +2804,8 @@ fn space_puts_new_space_first(cx: &mut TestAppContext) {
 }
 
 /// The hidden words: "duplicate" finds New Window after Duplicate Current Tab, as Arc's does with
-/// a page, and "hide" Collapse Pinned Tabs and Toggle Sidebar after Hide Sidebar.
+/// a page, and "hide" Collapse Pinned Tabs and Toggle Sidebar after Hide Sidebar and Hide Top Bar,
+/// which this host lists whether the bar is on or not.
 #[gpui::test]
 fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
@@ -2820,6 +2821,7 @@ fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let expected = [
         "Hide Sidebar ⌘S".to_string(),
         search("hide"),
+        "Hide Top Bar ⇧⌘D".into(),
         "Collapse Pinned Tabs".into(),
         "Toggle Sidebar ⌘S".into(),
     ];
@@ -2928,11 +2930,12 @@ fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     assert!(!in_view(&mut bar, 0));
 }
 
-/// VoiceOver finds the keyboard in a text field called what its placeholder says, and the rows in
-/// a list of suggestions with the selected one marked. As the keys move the selection while the
-/// field keeps the keyboard, a polite live region says the row and where it stands.
+/// A screen reader finds the keyboard in a text field called what its placeholder says, and the
+/// rows in a list of suggestions with the selected one marked. As the keys move the selection while
+/// the field keeps the keyboard, a polite live region says the row and where it stands, as its
+/// value for VoiceOver and as its name for NVDA and Orca (#3236).
 #[gpui::test]
-fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext) {
+fn a_screen_reader_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext) {
     use gpui::accesskit::{Live, Role};
     let mut bar = Bar::new(cx);
     bar.cx.simulate_a11y_activation();
@@ -2981,8 +2984,8 @@ fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext)
     );
     let status = &nodes(Role::Status)[0].1;
     assert_eq!(
-        (status.live(), status.value()),
-        (Some(Live::Polite), Some("do, 1 of 2"))
+        (status.live(), status.value(), status.label()),
+        (Some(Live::Polite), Some("do, 1 of 2"), Some("do, 1 of 2"))
     );
 
     bar.keys("down");
@@ -2992,10 +2995,8 @@ fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext)
         .iter()
         .find(|(_, node)| node.role() == Role::Status)
         .unwrap();
-    assert_eq!(
-        status.1.value(),
-        Some("Docs, docs.test, Switch to Tab, 2 of 2")
-    );
+    let said = Some("Docs, docs.test, Switch to Tab, 2 of 2");
+    assert_eq!((status.1.value(), status.1.label()), (said, said));
 }
 
 /// ilo's menu's window, which shows nothing in a test.
