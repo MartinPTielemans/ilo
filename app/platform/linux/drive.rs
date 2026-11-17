@@ -1337,6 +1337,14 @@ pub(super) fn ime_key(key: &str, state: u16) -> Option<bool> {
     if !IME_ON.get() || (state | FLAGS.get()) & shortcut != 0 || !(composing || letter) {
         return Some(false);
     }
+    // Under Wayland, the activates and deactivates sway sent since the last key come first: the
+    // composition may have gone with them, and then Return and Escape are plain keys.
+    if crate::drive_wayland::on() {
+        crate::drive_wayland::sync();
+        if COMPOSITION.with_borrow(Option::is_none) && !letter {
+            return Some(false);
+        }
+    }
     let field = Field::with_keys()?;
     let composition = COMPOSITION.take();
     let mark = |text: &str, selected: std::ops::Range<usize>| {
