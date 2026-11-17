@@ -12,7 +12,8 @@
 
 serve
 # The title says, for each column, the things drawn in it from the top by name, once nothing
-# moves, and where a press landed.
+# moves, where the pointer last moved and where a press landed. The page hears a move only while no
+# button is down, so a move after letting go marks a title written once the drop has settled.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
 <style>
 body { margin: 0; height: 100vh; font: 12px/14px sans-serif; background: rgb(243, 245, 246) }
@@ -68,7 +69,8 @@ section { box-sizing: border-box; background: rgb(217, 226, 230) }
 </div>
 </div>
 <script>
-let at = "-";
+let over = "-", at = "-";
+addEventListener("mousemove", (event) => { over = Math.round(event.clientX) + "," + Math.round(event.clientY); });
 addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," + Math.round(event.clientY); });
 const cols = ["dl", "dr", "dn", "dj", "dc", "dk"].map((id) => document.getElementById(id));
 // Where the things of each column start, from the top: the code and class-less columns are under
@@ -88,7 +90,7 @@ let said;
 setInterval(() => {
   // Not while the things move: only where they come to rest.
   if (document.getAnimations().some((x) => x.playState === "running")) return;
-  const now = cols.map((col) => col.id + " " + column(col)).join(" ") + " at " + at;
+  const now = cols.map((col) => col.id + " " + column(col)).join(" ") + " over " + over + " at " + at;
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/arrange-drop.html"
@@ -110,7 +112,7 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 await "^browser: boost shown $host " || fail "the app didn't give the core the site's Boost"
-await "^browser: title [0-9]* ${before}at -\$" || fail "the fixture page didn't draw"
+await "^browser: title [0-9]* ${before}over [0-9,-]* at -\$" || fail "the fixture page didn't draw"
 tab=$(grep '^browser: title [0-9]* dl ' "$log" | tail -1 | cut -d' ' -f3)
 said() { grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f4-; }
 # Waits for the page to say $1, as a pattern over its title, and fails with $2.
@@ -157,8 +159,15 @@ expect "browser: tab $tab arrange on\$" "the card's Arrange didn't turn the mode
 # (Trades or Settles), or be refused there (Refused), and lets go there. What the page then says
 # matches $7: for a refusal, the page as it was. $8 says the case, for the messages. A refusal
 # shows no preview: the rest finds the drop doesn't fit, and the step stays Carrying, Refused.
+# While the card is carried the page already titles where it would go (#3273), so the page has to
+# say it after a move that came once the drop's answer did: a title written before the release
+# can't name that move, and the page titles only once the settle's motion has ended. The move to
+# where it's pressed first makes sure the page didn't already say the release's place.
 drop() {
+  pressed="$2,$3" let_go="$4,$5"
   set -- "$1" $(page_at $2 $3) $(page_at $4 $5) "$6" "$7" "$8" "$9"
+  send move $2 $3
+  page_says " over $pressed at " "$8: the page didn't hear the pointer move to $1"
   send press $2 $3
   send dragto $2 $(($3 + 6))
   expect "^browser: arrange $tab Carrying .* $1\$" "$8: a press on $1 and 6 pt didn't lift it"
@@ -186,7 +195,8 @@ drop() {
     page_says "^$before" "$8: ⌘Z didn't take back what letting go landed after the refusal"
     dropped="$dropped $8, but letting go there landed it all the same (#3003), which ⌘Z took back,"
   else
-    page_says "^$7" "$8: letting go didn't leave what it previewed"
+    send move $4 $5
+    page_says "^$7.* over $let_go at " "$8: letting go didn't leave what it previewed"
     ../tools/window-screenshot.sh "$pid" "$out/arrange-drop-$9.png" || fail "no window to capture"
     dropped="$dropped $8,"
     if [ "$6" != Refused ]; then
