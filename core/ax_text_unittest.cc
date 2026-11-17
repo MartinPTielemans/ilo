@@ -160,5 +160,32 @@ TEST(AxTextTest, ThePagesTextLeavesOutAFrameAnAgentMayNotRead) {
   EXPECT_EQ(TextOf(update, {kPage}), "");
 }
 
+// Unicode's white space, each of the code points Rust's split_whitespace splits at: the app's
+// outline test (names_lose_unicode_white_space_as_select_does in app/src/agents/page.rs) has the
+// same list.
+constexpr char16_t kUnicodeWhiteSpace[] = {0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x0020, 0x0085,
+                                           0x00A0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004,
+                                           0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028,
+                                           0x2029, 0x202F, 0x205F, 0x3000};
+
+TEST(AxTextTest, ANameIsOneSpacedAsTheOutlineShowsItWhateverItsSpaces) {
+  for (const char16_t space : kUnicodeWhiteSpace) {
+    SCOPED_TRACE(static_cast<int>(space));
+    const std::u16string one(1, space);
+    // Beside a space, as "1234&nbsp; (closed)" is, alone, and at either end.
+    EXPECT_EQ(OneSpaced(u"Bravo 5678" + one + u" (closed)"), u"Bravo 5678 (closed)");
+    EXPECT_EQ(OneSpaced(u"Bravo" + one + u"5678"), u"Bravo 5678");
+    EXPECT_EQ(OneSpaced(one + u"Bravo" + one + one), u"Bravo");
+  }
+  // A run with a line break is a space too, never nothing.
+  EXPECT_EQ(OneSpaced(u"Open\r\n  now"), u"Open now");
+  // What isn't white space stays, a zero-width space and a word joiner among it.
+  EXPECT_EQ(OneSpaced(u"a\u200Bb\u2060c"), u"a\u200Bb\u2060c");
+  // UTF-8, as a request and the tree's names are.
+  EXPECT_EQ(OneSpaced("Bravo 5678\u00A0 (closed)"), "Bravo 5678 (closed)");
+  EXPECT_EQ(OneSpaced("\u3000Tokyo\u202F\u2003Osaka\u205F"), "Tokyo Osaka");
+  EXPECT_EQ(OneSpaced(" \u00A0 "), "");
+}
+
 }  // namespace
 }  // namespace browser_core
