@@ -8,7 +8,8 @@
 # without a cookie, though the page set one, without a referrer, and without a certificate. A
 # second server on 127.0.0.1, which the run leaves private, gets no request from a card: not for a
 # link to it, nor for a redirect from the public server to it. Each card's look is captured as
-# link-card-<case>.png.
+# link-card-<case>.png: a page with its picture, with none, with nothing in its head, still
+# loading, and refused; and the plate growing into it as link-card.mp4 where the OS records.
 # Needs the core's link card (#3085), which a checkout without core/link_card.cc doesn't have.
 
 if [ ! -f ../core/link_card.cc ]; then
@@ -58,10 +59,11 @@ spki=$(openssl x509 -in "$out/link-cards.pem" -pubkey -noout | openssl pkey -pub
 # to a redirect to the private server. It sets a cookie for its host, and its title says each key
 # it gets, so the run sees the ⇧ reach it and the Esc not.
 : > "$out/link-cards-public.log"
+rm -f "$out/link-cards-slow.go"
 rm -f "$out/link-cards-public.port"
 mkfifo "$out/link-cards-public.port"
 python3 -I -u -c '
-import http.server, socketserver, ssl, struct, sys, zlib
+import http.server, os, socketserver, ssl, struct, sys, time, zlib
 private = int(sys.argv[2])
 def png(width, height):
     row = b"\0" + b"\x2a\x6f\xd8" * width
@@ -69,12 +71,15 @@ def png(width, height):
                                 + struct.pack(">I", zlib.crc32(kind + data)))
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(row * height)) + chunk(b"IEND", b""))
-band = "display:block;height:200px;font:24px system-ui"
+band = "display:block;height:80px;font:24px system-ui"
 pages = {
     "/index.html": ("text/html", f"""<title>loading</title>
 <a href="https://cards.test/page.html" style="{band}">The card&#39;s page</a>
 <a href="http://127.0.0.1:{private}/direct" style="{band}">A private server</a>
 <a href="https://cards.test/hop" style="{band}">A redirect to it</a>
+<a href="https://cards.test/plain.html" style="{band}">A page with no picture</a>
+<a href="https://cards.test/bare.html" style="{band}">A page that says nothing</a>
+<a href="https://cards.test/slow.html" style="{band}">A slow page</a>
 <script>
 onkeydown = (event) => document.title = "key " + event.key;
 requestAnimationFrame(() => requestAnimationFrame(() =>
@@ -86,6 +91,10 @@ requestAnimationFrame(() => requestAnimationFrame(() =>
 <meta property="og:image" content="/share.png">
 </head><body>Its body.</body></html>"""),
     "/share.png": ("image/png", png(120, 63)),
+    "/plain.html": ("text/html", b"""<title>A page with no picture</title>
+<meta name="description" content="Only words.">"""),
+    "/bare.html": ("text/html", b"<p>Nothing in its head."),
+    "/slow.html": ("text/html", b"<title>A slow page</title>"),
 }
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -101,6 +110,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Location", "http://127.0.0.1:%d/hop" % private)
             self.end_headers()
             return
+        # The slow page answers once the run says so, so the card stays loading till then.
+        while path == "/slow.html" and not os.path.exists(sys.argv[5]):
+            time.sleep(0.05)
         if path not in pages:
             self.send_response(404)
             self.end_headers()
@@ -125,6 +137,7 @@ sys.stdout.buffer.write(b"%d\n" % server.server_address[1])
 sys.stdout.close()
 server.serve_forever()
 ' "$out/link-cards-public.log" "$private_port" "$out/link-cards.pem" "$out/link-cards.key" \
+  "$out/link-cards-slow.go" \
   > "$out/link-cards-public.port" 2> "$out/link-cards-public.err" 3>&- 4>&- 5>&- &
 public_server=$!
 read -r public_port < "$out/link-cards-public.port" || true
@@ -142,7 +155,8 @@ await '^browser: title [0-9]* \(ready\|no cookie\)$' || fail "the page with the 
 grep -q '^browser: title [0-9]* ready$' "$log" ||
   fail "the page didn't keep its cookie, which the card's requests must go without"
 tab=$(grep -m1 '^browser: title [0-9]* ready$' "$log" | cut -d' ' -f3)
-send click $page_point
+# Below the links, which a click would follow.
+send click 600 560
 if [ "$active" != 1 ]; then
   exec 3>&-
   quit
@@ -150,10 +164,13 @@ if [ "$active" != 1 ]; then
   exit 0
 fi
 
-# The window's points of the three bands, below the page's top inset.
-page_link="600 100"
-private_link="600 300"
-hop_link="600 500"
+# The window's points of the links' bands, each 80 tall, below the page's top inset.
+page_link="600 50"
+private_link="600 130"
+hop_link="600 210"
+plain_link="600 290"
+bare_link="600 370"
+slow_link="600 450"
 # card <point> <url> <case>: rests on the link at <point> until its plate shows, then ⇧ alone.
 card() {
   send move $1
@@ -164,9 +181,12 @@ card() {
   send flags
 }
 
+# The plate growing into the card, the motion's proof where the OS has a recorder.
+record link-card 3
 card "$page_link" "https://cards.test/page.html" "a page"
 shift_step=$step
 expect '^browser: link card page with picture$' "a page: ⇧ on its link showed no card with its picture"
+recorded
 grep -q "^/page.html " "$out/link-cards-public.log" || fail "a page: the server logged no request for the card's page"
 grep -q "^/share.png " "$out/link-cards-public.log" || fail "a page: the server logged no request for its picture"
 asked=$(grep -E '^/(page.html|share.png) ' "$out/link-cards-public.log")
@@ -199,6 +219,25 @@ grep -q '^/hop ' "$out/link-cards-public.log" || fail "a redirect: the public se
 [ ! -s "$out/link-cards-private.log" ] ||
   fail "a redirect: the private server got a card's request: $(tr '\n' ' ' < "$out/link-cards-private.log")"
 
+
+card "$plain_link" "https://cards.test/plain.html" "a page with no picture"
+expect '^browser: link card page$' \
+  "a page with no picture: ⇧ on its link showed no card of its words"
+../tools/window-screenshot.sh "$pid" "$out/link-card-plain.png" > /dev/null 2>&1 || true
+
+card "$bare_link" "https://cards.test/bare.html" "a page that says nothing"
+expect '^browser: link card page$' \
+  "a page that says nothing: ⇧ on its link showed no card of its address"
+../tools/window-screenshot.sh "$pid" "$out/link-card-bare.png" > /dev/null 2>&1 || true
+
+# The slow page answers only once link-cards-slow.go is there, so the card waits, loading.
+card "$slow_link" "https://cards.test/slow.html" "a slow page"
+expect '^browser: link card loading$' \
+  "a slow page: ⇧ on its link showed no loading card while its page hadn't come"
+../tools/window-screenshot.sh "$pid" "$out/link-card-loading.png" > /dev/null 2>&1 || true
+touch "$out/link-cards-slow.go"
+expect '^browser: link card page$' "a slow page: its card didn't show the page once it came"
+
 exec 3>&-
 quit
-echo "link cards: a page's card with its picture, asked without cookie, referrer or certificate; a private address and a redirect to one refused unasked"
+echo "link cards: a page's card with its picture, asked without cookie, referrer or certificate; a private address and a redirect to one refused unasked; a page with no picture, one that says nothing, and one loading"
