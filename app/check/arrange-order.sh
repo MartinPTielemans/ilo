@@ -245,12 +245,16 @@ EOF
   fail "$3: $(grep '^browser: mini bar at ' "$log" | tail -1)"
 }
 # Presses the mini bar's last button, Put back, with the pointer on the bar first, as the Mac's
-# bar window takes the mouse only where the pointer is.
+# bar window takes the mouse only where the pointer is. The Mac's host moves a bar already shown
+# from the main queue after the UI's update, and the driver's commands run as the run loop's blocks,
+# so a move can come before the bar is there; the second comes after a turn of the run loop, which
+# drains that queue (a click on Gamma's moved bar went to the page).
 put_back() {
   read -r mx my mw mh << EOF
 $(grep '^browser: mini bar at ' "$log" | tail -1 | cut -d' ' -f5-8)
 EOF
   [ -n "$mh" ] || fail "$1: the UI placed no mini bar"
+  send move $((mx + mw - 13)) $((my + mh / 2))
   send move $((mx + mw - 13)) $((my + mh / 2))
   send click $((mx + mw - 13)) $((my + mh / 2))
   expect '^browser: mini bar put back pressed$' "$1: a click on the mini bar's Put back didn't press it"
