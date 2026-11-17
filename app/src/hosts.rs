@@ -185,6 +185,13 @@ impl site_controls::Host for SiteControlsHost {
         });
     }
 
+    fn set_recent(&self, tab: u64, on: bool, cx: &mut App) {
+        let shell = tab_window(tab, cx).and_then(|window| window.shell.upgrade());
+        if let Some(site) = shell.and_then(|shell| shell.read(cx).recent_site(tab)) {
+            crate::settings::set_recent_site(site, on, cx);
+        }
+    }
+
     fn turn_on_arrangement(&self, tab: u64) {
         update_app_later(move |cx| {
             if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
