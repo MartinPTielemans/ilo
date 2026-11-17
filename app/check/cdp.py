@@ -1,8 +1,9 @@
-"""The passkeys, passwords and sync-account runs' DevTools client (check/passkeys.sh,
-check/passwords.sh, check/sync-account.sh), over the pipe --remote-debugging-pipe gives the
-browser: the browser reads from IN and writes to OUT, each message JSON ending in NUL. Or, with
---socket, over the WebSocket at URL that --remote-debugging-port has the browser listen on: on
-Windows the pipe is handles, which Git Bash can't give the browser.
+"""The calls, passkeys, passwords and sync-account runs' DevTools client (check/calls.sh,
+check/passkeys.sh, check/passwords.sh, check/sync-account.sh), over the pipe
+--remote-debugging-pipe gives the browser: the browser reads from IN and writes to OUT, each
+message JSON ending in NUL. Or, with --socket, over the WebSocket at URL that
+--remote-debugging-port has the browser listen on: on Windows the pipe is handles, which Git Bash
+can't give the browser.
 
 It attaches to the page whose address ends in PAGE, if one is named, logging "cdp: attached", then
 takes a command a line on its standard input:
@@ -19,6 +20,9 @@ takes a command a line on its standard input:
                     cdp: authenticator ready
                     cdp: credential added | credential asserted   as the page registers, signs in
   presence 0|1    stops or starts the key's touches, then logs "cdp: presence 0|1"
+  pressure moderate|critical
+                  says memory is short to the browser process, as the system does, through
+                  DevTools' Memory domain on the page attached, then logs "cdp: pressure LEVEL"
   reveal ID       logs "cdp: reveal shown|hidden|none": whether the eye Blink draws in the
                   password field with the id ID shows, from the field's user-agent shadow tree,
                   which the page's script can't see
@@ -632,6 +636,9 @@ for line in sys.stdin:
         call("WebAuthn.setAutomaticPresenceSimulation",
              {"authenticatorId": authenticator, "enabled": words[1] == "1"}, session)
         log("presence " + words[1])
+    elif words[:1] == ["pressure"] and words[1:] in (["moderate"], ["critical"]) and session:
+        call("Memory.simulatePressureNotification", {"level": words[1]}, session)
+        log("pressure " + words[1])
     elif words[:1] == ["reveal"] and len(words) == 2:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:

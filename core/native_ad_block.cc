@@ -78,6 +78,10 @@
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "url/gurl.h"
 
+#if defined(USE_AURA)
+#include "ui/aura/window.h"
+#endif
+
 namespace browser_core {
 
 namespace {
@@ -892,18 +896,22 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
         content::WebContentsObserver(contents) {}
 
   // Holds the tab, as its tab strip gets it, until the answer, and watches |opener| till then.
-  // Its page takes no input till then, the keyboard among it. Content focuses a page it opens for
-  // a link with a target or window.open() (WebContentsImpl::CreateNewWindow, chrome::Navigate),
-  // and on Windows that took the keyboard from the page that opened it, for a tab never listed or
-  // shown: keys went nowhere the user could see, and on after the filters closed it (#2806). The
-  // Mac's and Linux's runs show the opener keeping the keyboard as the pop-up opens, so this
-  // changes nothing there. A page ignoring input is one WebContentsViewAura won't focus. Once the
-  // filters let it load, the app lists it and gives it the keyboard as any tab it shows.
+  // Content focuses a page it opens for a link with a target or window.open() just after the tab
+  // strip gets it (WebContentsImpl::CreateNewWindow, chrome::Navigate), and with aura the page's
+  // view is already in the opener's window, made there with it as context. That focus took the
+  // keyboard from the opener for a tab never listed or shown (#2806). A page refusing the focus
+  // doesn't keep it with the opener: aura gives it to the nearest window that takes it, the
+  // browser window's own. So the held page leaves the window, which a page no window shows does
+  // anyway, and the focus finds no window to move in. Once the filters let it load, the app shows
+  // it, which puts it back, and gives it the keyboard as any tab it shows.
   void Hold(content::WebContents* opener) {
     hold.Hold();
-    if (hold.holding()) {
-      no_input_.emplace(web_contents()->IgnoreInputEvents(std::nullopt));
+#if defined(USE_AURA)
+    aura::Window* page = web_contents()->GetNativeView();
+    if (hold.holding() && page && page->parent()) {
+      page->parent()->RemoveChild(page);
     }
+#endif
     if (hold.holding() && opener) {
       opener_ = std::make_unique<GoneWatch>(
           opener, base::BindOnce(&PopupHeld::OpenerGone, base::Unretained(this)));
@@ -939,7 +947,6 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
     if (hold.holding()) {
       return;
     }
-    no_input_.reset();
     Observe(nullptr);
     if (opener_) {
       // Deleted after, as this may be inside its call.
@@ -950,7 +957,6 @@ class PopupHeld : public content::WebContentsUserData<PopupHeld>,
 
   friend class content::WebContentsUserData<PopupHeld>;
   std::unique_ptr<GoneWatch> opener_;
-  std::optional<content::WebContents::ScopedIgnoreInputEvents> no_input_;
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
