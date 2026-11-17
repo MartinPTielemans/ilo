@@ -588,13 +588,20 @@ def renderer(prefix):
     with open(path, encoding="utf-8") as f:
         trace = json.load(f)
     shutil.rmtree(os.path.dirname(path))
-    found = []
+    found, started, frames = [], 0, 0
     for event in trace.get("traceEvents", trace if isinstance(trace, list) else []):
         if event.get("name") == "TracingStartedInBrowser":
+            started += 1
             for frame in event.get("args", {}).get("data", {}).get("frames", []):
+                frames += 1
                 if not frame.get("parent") and frame.get("url", "").startswith(prefix):
                     found.append(str(frame.get("processId")))
-    return ",".join(found) or "unknown"
+    # The renderers alive now, by pid only, for when the trace names no frame: a pid the home
+    # page's list hadn't is a new process.
+    info = call("SystemInfo.getProcessInfo", quiet=True) or {}
+    renderers = sorted(str(p["id"]) for p in info.get("processInfo", []) if p.get("type") == "renderer")
+    return "%s (trace: %d starts, %d frames; renderers now %s)" % (
+        ",".join(found) or "unknown", started, frames, ",".join(renderers) or "none listed")
 
 
 def content():
