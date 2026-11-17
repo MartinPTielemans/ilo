@@ -19,7 +19,6 @@ exec 3> "$out/drive"
 await_load
 
 # New Board, from its key.
-record board-new 8
 send key e ctrl shift
 expect '^browser: command new-board via ' "⌃⇧E didn't run New Board"
 expect '^browser: new board [0-9a-f]\{32\} tab [0-9]*$' \
@@ -52,7 +51,6 @@ grep -q 'shelves over the sink' "$folder/board.json" ||
 # Nothing of what the user wrote is logged, past the driver's own echo of the keys it typed.
 written=$(grep -v '^browser: drive [0-9]*: ' "$log" | grep 'shelves\|kitchen' | head -1)
 [ -z "$written" ] || fail "the log says what the Board holds: $written"
-recorded
 ../tools/window-screenshot.sh "$pid" "$out/board.png" || fail "no window to capture"
 
 # Library › Boards lists it.
