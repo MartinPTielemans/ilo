@@ -123,6 +123,15 @@ pub trait Browser {
     fn over_page_blends(&self) -> bool;
     /// Loads a pinned tab's pinned URL, unless it's there already.
     fn back_to_pinned_url(&self, tab: u64, cx: &mut App);
+    /// Loads `url` in `tab`, as a row of what's recent on its card does (#3074).
+    fn navigate(&self, _tab: u64, _url: &str, _cx: &mut App) {}
+    /// Whether the core can ask a site what's recent for a tab's card (#3074).
+    fn recent_reached(&self) -> bool {
+        crate::recent::REACHED
+    }
+    /// Asks the core what's recent on `tab`'s site, which it answers to `Shell::recent_answered`
+    /// once, at most once each two minutes per profile from the site, else from what it kept.
+    fn fetch_recent(&self, _tab: u64, _cx: &mut App) {}
     /// Mutes `tab`, or unmutes it.
     fn set_muted(&self, tab: u64, muted: bool, cx: &mut App);
     /// Has the page sharing a tab share `tab` in its place.
