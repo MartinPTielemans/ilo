@@ -2157,17 +2157,6 @@ if [ "$driven" = 1 ]; then
   # nor takes the keyboard (#3183), and the download is in the downloads area and the activity log
   # all the same. Under Wayland sway marks a window that asks to come forward urgent, and says so.
   if [ -n "$background" ]; then
-    sway_events=
-    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
-      swaymsg -r -m -t subscribe '["window"]' > "$out/agent-download-sway.log" 2>&1 &
-      sway_events=$!
-      for _ in $(seq 50); do
-        grep -q '"success": *true' "$out/agent-download-sway.log" && break
-        sleep 0.1
-      done
-      grep -q '"success": *true' "$out/agent-download-sway.log" ||
-        fail "sway didn't take the subscription to its windows' events: $(cat "$out/agent-download-sway.log")"
-    fi
     logged='^browser: agent logged mcp-client download saved\.localhost$'
     logs=$(grep -c "$logged" "$log" || true)
     lists=$(grep -c '^browser: downloads [0-9]*$' "$log" || true)
@@ -2191,23 +2180,14 @@ if [ "$driven" = 1 ]; then
       fail "the agent's download took the keyboard from the other app's window: it's in $key, on $focus"
     [ "$(grep -c '^browser: window [0-9]* urgent on$' "$log")" = "$marked" ] ||
       fail "the agent's download marked ilo's window urgent"
-    if [ -n "$sway_events" ]; then
-      kill "$sway_events" 2> /dev/null
-      wait "$sway_events" 2> /dev/null || true
-      asked=$(python3 -I -c '
-import json, sys
-for line in open(sys.argv[1], encoding="utf-8"):
-    try:
-        event = json.loads(line)
-    except ValueError:
-        continue
-    window = event.get("container") or {}
-    if window.get("pid") == int(sys.argv[2]) and (
-            event.get("change") == "focus" or window.get("urgent")):
-        print(event.get("change"), window.get("app_id"), "urgent" if window.get("urgent") else "")' \
-        "$out/agent-download-sway.log" "$(app_pid)")
+    # Sway marks a window urgent when it asks to come forward while another has the keyboard, and
+    # keeps the mark until the window has the keyboard, so its tree says whether ilo's asked.
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+      asked=$(swaymsg -t get_tree | jq -r --argjson pid "$(app_pid)" \
+        '.. | objects | select(.pid? == $pid and ((.urgent // false) or (.focused // false)))
+          | "\(.app_id) \(.name) urgent \(.urgent) focused \(.focused)"')
       [ -z "$asked" ] ||
-        fail "the agent's download asked for ilo's window to come forward, as sway says: $(printf '%s' "$asked" | tr '\n' ' ')"
+        fail "the agent's download asked for ilo's window to come forward, as sway's tree says: $(printf '%s' "$asked" | tr '\n' ' ')"
     fi
   fi
   counted() { grep -c "$1" "$log" || true; }
