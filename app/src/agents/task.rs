@@ -2744,12 +2744,11 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
     // A page that asked to stay answered the agent: its tab is open, and nothing failed.
     let close = step.close.filter(|_| step.ended.is_some());
     if let Some(close) = close {
-        let kept = close == tools::Close::Kept;
         return TraceStep {
             key,
             glyph: tools::step_glyph(&step.did.tool),
             title: tools::close_title(&step.did, close).into(),
-            description: kept.then_some(tools::KEPT).unwrap_or_default().into(),
+            description: "".into(),
             running: false,
             failed: false,
             opens: Opens::Nothing,
@@ -2812,12 +2811,11 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
             site: format!("{count} tabs"),
             ..first.did.clone()
         };
-        let kept = close == tools::Close::Kept;
         return TraceStep {
             key,
             glyph: tools::step_glyph(&did.tool),
             title: tools::close_title(&did, close).into(),
-            description: kept.then_some(tools::KEPT).unwrap_or_default().into(),
+            description: "".into(),
             running: false,
             failed: false,
             opens: Opens::Steps(tabs),
