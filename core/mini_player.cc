@@ -169,67 +169,50 @@ MiniPlayerWatch& Watching() {
   return *watch;
 }
 
-// How far back from a release its speed is taken, as the Space pages' swipe takes it
-// (app/src/shell.rs).
-constexpr base::TimeDelta kReleaseHistory = base::Milliseconds(100);
-
 // Where a Mini Player was each time its move loop moved it, for the speed it's let go at. Where the
-// loop moves only its outline, and the window at the release, it's where the outline was (#3062).
+// loop moves only its outline, and the window at the release, it's where the outline was, at the
+// time of the input each move and the release answered, which the loop can hear late (#3062).
 class MoveWatch : public views::WidgetObserver {
  public:
   explicit MoveWatch(views::Widget* widget)
       : outline_(platform::WatchOutlineMoves(
             widget,
-            base::BindRepeating(&MoveWatch::Moved, base::Unretained(this)))) {
-    Moved(widget->GetWindowBoundsInScreen().origin());
+            base::BindRepeating(&MoveWatch::Moved, base::Unretained(this)),
+            base::BindOnce(&MoveWatch::LetGoAt, base::Unretained(this)))) {
+    Moved(widget->GetWindowBoundsInScreen().origin(), base::TimeTicks::Now());
     observation_.Observe(widget);
   }
 
-  // Its speed in points a second as it's let go at |released|, over the last kReleaseHistory, so a
-  // pause before the release slows it.
-  gfx::Vector2dF Velocity(base::TimeTicks released) const {
-    const Move* from = &moves_.front();
-    for (const Move& move : moves_) {
-      if (move.when <= released - kReleaseHistory) {
-        from = &move;
-      }
-    }
-    const double seconds = (released - from->when).InSecondsF();
-    if (seconds <= 0) {
-      return gfx::Vector2dF();
-    }
-    const gfx::Vector2d moved = moves_.back().at - from->at;
-    return gfx::Vector2dF(moved.x() / seconds, moved.y() / seconds);
-  }
+  // When it was let go: at the release the outline's move loop ended on, on its moves' clock, or
+  // else now, as the loop returns.
+  base::TimeTicks Released() const { return released_.value_or(base::TimeTicks::Now()); }
 
-  // Its last move, if it came within kReleaseHistory of the release.
+  gfx::Vector2dF Velocity(base::TimeTicks released) const {
+    return MiniPlayerReleaseVelocity(moves_, released);
+  }
   gfx::Vector2dF LastMove(base::TimeTicks released) const {
-    if (moves_.size() < 2 || moves_.back().when < released - kReleaseHistory) {
-      return gfx::Vector2dF();
-    }
-    const gfx::Vector2d moved = moves_.back().at - moves_[moves_.size() - 2].at;
-    return gfx::Vector2dF(moved.x(), moved.y());
+    return MiniPlayerLastMove(moves_, released);
   }
 
   // views::WidgetObserver:
   void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override {
-    Moved(bounds.origin());
+    Moved(bounds.origin(), base::TimeTicks::Now());
   }
   void OnWidgetDestroying(views::Widget* widget) override { observation_.Reset(); }
 
  private:
-  struct Move {
-    base::TimeTicks when;
-    gfx::Point at;
-  };
-
-  void Moved(const gfx::Point& at) {
-    if (moves_.empty() || moves_.back().at != at) {
-      moves_.push_back({base::TimeTicks::Now(), at});
+  void Moved(const gfx::Point& at, base::TimeTicks when) {
+    if (moves_.empty()) {
+      moves_.push_back({when, at});
+    } else if (moves_.back().at != at) {
+      // Never before the last: an input older than the loop's start counts from the start.
+      moves_.push_back({std::max(when, moves_.back().when), at});
     }
   }
+  void LetGoAt(base::TimeTicks when) { released_ = when; }
 
-  std::vector<Move> moves_;
+  std::vector<MiniPlayerMove> moves_;
+  std::optional<base::TimeTicks> released_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
   base::ScopedClosureRunner outline_;
 };
@@ -507,7 +490,7 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
                             views::Widget::MoveLoopEscapeBehavior::kDontHide);
         // The loop returns as the button comes up.
         if (moved) {
-          LetGo(moved.get(), watch, base::TimeTicks::Now());
+          LetGo(moved.get(), watch, watch.Released());
 #if BUILDFLAG(IS_MAC)
           GiveKeyboardBack(moved.get());
 #endif

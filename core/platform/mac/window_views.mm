@@ -589,8 +589,10 @@ void PassPointerThrough(views::Widget*) {
   // Views' accept_events makes the window ignore mouse events.
 }
 
-base::ScopedClosureRunner WatchOutlineMoves(views::Widget*,
-                                            base::RepeatingCallback<void(const gfx::Point&)>) {
+base::ScopedClosureRunner WatchOutlineMoves(
+    views::Widget*,
+    base::RepeatingCallback<void(const gfx::Point&, base::TimeTicks)>,
+    base::OnceCallback<void(base::TimeTicks)>) {
   // The Mac moves the window itself as it's dragged.
   return base::ScopedClosureRunner();
 }

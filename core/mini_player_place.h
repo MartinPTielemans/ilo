@@ -4,7 +4,10 @@
 #define BROWSER_CORE_MINI_PLAYER_PLACE_H_
 
 #include <optional>
+#include <vector>
 
+#include "base/time/time.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/vector2d_f.h"
@@ -19,6 +22,27 @@ inline constexpr int kMiniPlayerInset = 10;
 // move went further than kMiniPlayerThrowMove points (Dia 1.53.0 bin).
 inline constexpr float kMiniPlayerThrowSpeed = 350;
 inline constexpr float kMiniPlayerThrowMove = 6;
+
+// How far back from a release its speed is taken, as the Space pages' swipe takes it
+// (app/src/shell.rs).
+inline constexpr base::TimeDelta kMiniPlayerReleaseHistory = base::Milliseconds(100);
+
+// Where a Mini Player's move loop put it, and when: at the time of the input the move answered
+// where the system says it, as Windows' outline move does, since the loop can hear one late.
+struct MiniPlayerMove {
+  base::TimeTicks when;
+  gfx::Point at;
+};
+
+// Its speed in points a second as it's let go at |released| after |moves|, oldest first: its travel
+// since the last move older than kMiniPlayerReleaseHistory, over the time since, so a rest before
+// the release slows it. With no move that old, since the first.
+gfx::Vector2dF MiniPlayerReleaseVelocity(const std::vector<MiniPlayerMove>& moves,
+                                         base::TimeTicks released);
+
+// Its last move, if it came within kMiniPlayerReleaseHistory of the release.
+gfx::Vector2dF MiniPlayerLastMove(const std::vector<MiniPlayerMove>& moves,
+                                  base::TimeTicks released);
 
 // A release this near its place along a side, kMiniPlayerInset in, catches it there (ours, #2099).
 inline constexpr int kMiniPlayerCatch = 40;
