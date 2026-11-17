@@ -35,6 +35,8 @@
 #include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/eye_dropper.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
+#include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/content_accelerators/accelerator_util.h"
@@ -55,6 +57,18 @@ bool AskApp(bool (*callback)(void*, bc_id, const bc_key*),
             const input::NativeWebKeyboardEvent& event) {
   content::WebContents* contents =
       browser ? browser->GetTabStripModel()->GetActiveWebContents() : nullptr;
+  // For #2248's proof runs only: whether Chromium takes the page asked about as shown. Hidden or
+  // occluded, it drops the keys the page leaves rather than handing them on.
+  if (contents && event.GetType() == blink::WebInputEvent::Type::kRawKeyDown) {
+    const content::Visibility visibility = contents->GetVisibility();
+    content::RenderWidgetHostView* view = contents->GetRenderWidgetHostView();
+    fprintf(stderr, "browser: tab %llu to Chromium is %s, its page's view %s\n",
+            static_cast<unsigned long long>(Tab::IdOf(contents)),
+            visibility == content::Visibility::VISIBLE    ? "visible"
+            : visibility == content::Visibility::OCCLUDED ? "occluded"
+                                                          : "hidden",
+            !view ? "gone" : view->IsShowing() ? "showing" : "not showing");
+  }
   return contents && Tab::AskAppAboutKey(callback, Tab::IdOf(contents), event,
                                          contents->IsFocusedElementEditable());
 }

@@ -1601,6 +1601,12 @@ void Tab::DidUpdateAudioMutingState(bool muted) {
 }
 
 void Tab::OnVisibilityChanged(content::Visibility visibility) {
+  // For #2248's proof runs only: each change of whether Chromium takes the page as shown.
+  fprintf(stderr, "browser: tab %llu to Chromium became %s\n",
+          static_cast<unsigned long long>(id_),
+          visibility == content::Visibility::VISIBLE    ? "visible"
+          : visibility == content::Visibility::OCCLUDED ? "occluded"
+                                                        : "hidden");
   // As Chrome loads a restored tab once it's shown. Posted: the page view is being shown now.
   if (visibility == content::Visibility::VISIBLE && waiting_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
