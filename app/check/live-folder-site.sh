@@ -46,6 +46,7 @@ fi
 # through to the site once each two minutes, so a poll would show by then: the run waits past them.
 if [ "$answer" = "signed out" ]; then
   asks=$(grep -c "^browser: live folder $folder fetch on " "$log")
+  # The core's two minutes, and 10 s more.
   sleep 130
   again=$(grep "^browser: live folder $folder fetch on " "$log" | tail -n +$((asks + 1)) | head -3)
   [ -z "$again" ] || fail "the idle app asked for the folder's lists again: $again"
