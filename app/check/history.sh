@@ -18,6 +18,8 @@
 # https. The profile remembers a host that fell back to http, so each run names a new one, and
 # $written is another such host, typed with http://, and $agent_opened, $agent_moved and $linked
 # three more, which an agent and a link go to, and $barred one a link goes to under the command bar.
+# Each leads to the check's server, so none waits on the machine's DNS, which has no address for
+# them: https fails at the handshake, and Chrome's warning before http comes as it would.
 # $nearby is a local name for the check's server that no run typed before: Chrome's bar fills in a
 # page typed once under the host and port typed, such as tabs' back.html under 127.0.0.1:$port, as
 # one check.sh's runs share its server (#1148).
@@ -53,7 +55,8 @@ BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
   --host-resolver-rules="MAP stuck.test 127.0.0.1:$(cat "$out/port"), \
 MAP $plain 127.0.0.1:$port, MAP $nearby 127.0.0.1:$port, \
 MAP $written 127.0.0.1:$port, MAP $agent_opened 127.0.0.1:$port, \
-MAP $agent_moved 127.0.0.1:$port, MAP $linked 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
+MAP $agent_moved 127.0.0.1:$port, MAP $linked 127.0.0.1:$port, \
+MAP $barred 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -585,21 +588,33 @@ if [ "$major" -ge 157 ]; then
   upgraded "$tab" "$barred" "the link followed with the command bar open"
   expect "^browser: loaded $tab chrome-error://chromewebdata/\$" \
     "Chrome's warning before http for $barred didn't load under the command bar"
-  send state
-  none_since '^browser: command bar hidden$' "$opened" ||
-    fail "the command bar closed as Chrome's warning before http first showed under it: $(since "$opened" | grep -e '^browser: drive' -e '^browser: command bar' | tr '\n' ' ')"
-  send type "$nearby:$port"
-  send key return
-  returned=$step
-  expect "^browser: command bar go http://$nearby:$port/\$" \
-    "Return in the command bar, over the warning that first showed under it, didn't go from the bar: $(since "$returned" | grep -e '^browser: drive' -e '^browser: command ' -e "^browser: page $tab " | tr '\n' ' ')"
-  expect '^browser: command bar hidden$' "going to $nearby:$port from the bar over the warning didn't close it"
-  expect "^browser: loaded $tab http://$nearby:$port/\$" \
-    "$nearby:$port, typed in the bar over the warning, didn't load: $(grep "^browser: loaded $tab " "$log" | tail -1)"
-  # The warning's buttons: Go back loads the page with the link again, Continue $barred over http.
-  if since "$returned" | grep -q -e "^browser: loaded $tab http://$barred/\$" \
-    -e "^browser: page $tab back [0-9]* forward [0-9]* loading [01] http://$nearby:$port/held-link.html\$"; then
-    fail "Return in the command bar also pressed a button of the warning under it: $(since "$returned" | grep "^browser: \(page\|loaded\) $tab " | tr '\n' ' ')"
+  if [ "$(uname)" = Darwin ]; then
+    echo "skip: the command bar keeping every key as Chrome's warning before http first shows under it: on the Mac the warning's own window takes the keyboard and the bar closes (#3209)."
+    # The warning's window takes the keyboard just after it loads; the next ⌘L waits for that.
+    for _ in $(seq 50); do
+      send state
+      [ "$key" = NativeWidgetMacNSWindow ] && break
+      sleep 0.1
+    done
+    [ "$key" = NativeWidgetMacNSWindow ] ||
+      fail "Chrome's warning before http, shown under the command bar, didn't take the keyboard as the bar closed: it's in $key, on $focus"
+  else
+    send state
+    none_since '^browser: command bar hidden$' "$opened" ||
+      fail "the command bar closed as Chrome's warning before http first showed under it: $(since "$opened" | grep -e '^browser: drive' -e '^browser: command bar' | tr '\n' ' ')"
+    send type "$nearby:$port"
+    send key return
+    returned=$step
+    expect "^browser: command bar go http://$nearby:$port/\$" \
+      "Return in the command bar, over the warning that first showed under it, didn't go from the bar: $(since "$returned" | grep -e '^browser: drive' -e '^browser: command ' -e "^browser: page $tab " | tr '\n' ' ')"
+    expect '^browser: command bar hidden$' "going to $nearby:$port from the bar over the warning didn't close it"
+    expect "^browser: loaded $tab http://$nearby:$port/\$" \
+      "$nearby:$port, typed in the bar over the warning, didn't load: $(grep "^browser: loaded $tab " "$log" | tail -1)"
+    # The warning's buttons: Go back loads the page with the link again, Continue $barred over http.
+    if since "$returned" | grep -q -e "^browser: loaded $tab http://$barred/\$" \
+      -e "^browser: page $tab back [0-9]* forward [0-9]* loading [01] http://$nearby:$port/held-link.html\$"; then
+      fail "Return in the command bar also pressed a button of the warning under it: $(since "$returned" | grep "^browser: \(page\|loaded\) $tab " | tr '\n' ' ')"
+    fi
   fi
 fi
 
