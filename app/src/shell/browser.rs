@@ -633,6 +633,9 @@ pub trait Browser {
     /// Puts the window's own buttons, and the reveal's window and edge, on the window's right, or
     /// back on its left (Sidebar position, #2375).
     fn set_sidebar_right(&self, _right: bool, _cx: &mut App) {}
+    /// Windows': puts the window's buttons at its right though the sidebar is on the left, as the
+    /// top bar has them, or back with the sidebar (#3160).
+    fn set_window_buttons_right(&self, _right: bool, _cx: &mut App) {}
     /// The user moved the sidebar from the command bar: Sidebar position keeps it on this device,
     /// and every window follows.
     fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
