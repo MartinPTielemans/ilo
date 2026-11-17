@@ -28,8 +28,9 @@ prod = []
 gpui = { path = ".deps/zed/crates/gpui" }
 # Without threads, which on the web need nightly Rust and a cross-origin-isolated page.
 gpui_platform = { path = ".deps/zed/crates/gpui_platform", default-features = false, features = ["font-kit", "runtime_shaders"] }
-# The version GPUI decodes with, for a favicon's pixels and the images drawn from them.
-image = { version = "0.25", default-features = false, features = ["png"] }
+# The version GPUI decodes with, for a favicon's pixels and the images drawn from them, and a link
+# card's picture (src/link_card/picture.rs). GPUI's workspace has the other three already.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 raw-window-handle = "0.6"
 unicode-segmentation = "1.10"
 # Which characters make a word for a field's word moves, as AppKit's: letters, numbers, marks
@@ -56,6 +57,10 @@ adblock = { version = "0.13.5", default-features = false, features = ["embedded-
 # uBlock Origin's response-time filters (src/ad_block/responses.rs), whose regular expressions are
 # JavaScript's and some look ahead or behind, which the regex crate doesn't. MIT.
 fancy-regex = "0.14"
+# A link card's page (src/link_card/page.rs): its charset, as browsers decode it, and its picture's
+# address resolved against it. GPUI's dependencies bring both already.
+encoding_rs = "0.8"
+url = "2"
 # The screenshots a task's trace shows, which the core hands over in base64. GPUI's dependencies
 # bring it already.
 base64 = "0.22"

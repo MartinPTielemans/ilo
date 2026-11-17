@@ -36,8 +36,10 @@ if [ "$(uname -s)" = Linux ]; then
   mkdir -p build
   cp -al "$(cd .deps/engine && pwd -P)" build/Browser
   cp target/release/libBrowser.so target/release/mcp-bridge build/Browser/
-  # uBlock Origin goes beside chrome, Chromium's assets folder off the Mac, where the core loads it.
+  # uBlock Origin and a Board's page go beside chrome, Chromium's assets folder off the Mac, where
+  # the core loads them.
   cp -R "$(./fetch-ublock.sh)" build/Browser/ublock
+  ./copy-board.sh build/Browser/board
   # shellcheck disable=SC2086
   ../tools/licences.sh build/Browser linux/Cargo.toml "$(rustc -vV | sed -n 's/^host: //p')" $features
   exit 0
@@ -87,6 +89,7 @@ case "$(uname -s)" in
     cp -al .deps/engine build/Browser
     cp target/release/Browser.dll target/release/mcp-bridge.exe build/Browser/
     cp -R "$(./fetch-ublock.sh)" build/Browser/ublock
+    ./copy-board.sh build/Browser/board
     # shellcheck disable=SC2086
     ../tools/licences.sh build/Browser windows/Cargo.toml "$(rustc -vV | sed -n 's/^host: //p')" $features
     exit 0
@@ -191,9 +194,10 @@ cp -cR "$(cd .deps/Chromium.app && pwd -P)" "$app"
 rm "$app/Contents/MacOS/Chromium"
 # The bridge goes beside it, where Settings › Agents points an agent's MCP client.
 cp target/release/Browser target/release/mcp-bridge "$app/Contents/MacOS/"
-# uBlock Origin goes in the framework's resources, where the core loads it into every profile.
+# uBlock Origin and a Board's page go in the framework's resources, where the core loads them.
 framework=$(echo "$app"/Contents/Frameworks/*Framework.framework)
 cp -R "$(./fetch-ublock.sh)" "$framework/Resources/ublock"
+./copy-board.sh "$framework/Resources/board"
 # The dev engine's framework and helpers load its component libraries from beside the app. These
 # are links, so a rebuilt dev engine's core reaches the built app at once.
 rm -f build/*.dylib

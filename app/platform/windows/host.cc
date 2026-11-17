@@ -135,6 +135,13 @@ std::string ClassName(HWND hwnd) {
   return name;
 }
 
+// Whether |hwnd| is a tab's dialog of browser window |root|: a window of Chromium's own that
+// |root| owns (PageDialogsInOwnWindow in the core), not one of the app's.
+bool TabDialogOf(HWND hwnd, HWND root) {
+  return hwnd && root && GetWindow(hwnd, GW_OWNER) == root && !host_floating_name(hwnd) &&
+         ClassName(hwnd).rfind("Chrome_WidgetWin_", 0) == 0;
+}
+
 // What check.sh calls the floating window |hwnd|, for the focus area's lines.
 const char* FloatingName(HWND hwnd) {
   const char* name = host_floating_name(hwnd);
@@ -526,6 +533,19 @@ LRESULT CALLBACK FloatingProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpa
         // on it, so this one takes the keyboard back as the window has it (#1363).
         if (floating->keyboard && to && to == GetWindow(hwnd, GW_OWNER) && !Pressed()) {
           LogIn("focus", "%s takes the keyboard back", FloatingName(hwnd));
+          break;
+        }
+        // Chromium activates a tab's dialog, a window of its own, as it first shows: nor is that the
+        // user leaving, and it takes the keyboard back from the dialog, as the Mac's overlays do.
+        // A dialog never gets the keyboard from this, an agent's tab's included (#3242).
+        if (floating->keyboard && !Pressed() && TabDialogOf(to, GetWindow(hwnd, GW_OWNER))) {
+          LogIn("focus", "%s takes the keyboard back from a tab's dialog", FloatingName(hwnd));
+          Later([hwnd, to] {
+            if (IsWindowVisible(hwnd) && GetForegroundWindow() == to) {
+              SetForegroundWindow(hwnd);
+              SetFocus(hwnd);
+            }
+          });
           break;
         }
         floating->keyboard = false;
@@ -2854,6 +2874,13 @@ std::map<HWND, bool>& WindowButtonsShown() {
   return shown;
 }
 
+// The browser windows whose buttons are at the right with the sidebar on the left
+// (host_set_window_buttons_right).
+std::set<HWND>& ButtonsRight() {
+  static std::set<HWND> right;
+  return right;
+}
+
 // How far down the top edge resizes, as thick as Windows' resize border on the other edges.
 int TopEdge(HWND root) {
   const UINT dpi = GetDpiForWindow(root);
@@ -2902,11 +2929,11 @@ int FrameHit(HWND root, POINT at) {
   }
   // Maximize, the second of shell.rs's WINDOW_BUTTONS in Windows' order (windows_buttons), 43
   // from the left and window-button-y (24) down, its plate windows-button-plate (22) across
-  // (design/tokens.toml): kept in step with them. With the sidebar on the right the group is
-  // there, close at the corner, and maximize 43 from the right.
+  // (design/tokens.toml): kept in step with them. With the sidebar on the right, or the top bar
+  // on, the group is at the right, close at the corner, and maximize 43 from the right.
   const double scale = Scale(root);
-  const double across = SidebarRight().count(root) ? client.right / scale - at.x / scale
-                                                   : at.x / scale;
+  const bool right = SidebarRight().count(root) || ButtonsRight().count(root);
+  const double across = right ? client.right / scale - at.x / scale : at.x / scale;
   auto shown = WindowButtonsShown().find(root);
   if (shown != WindowButtonsShown().end() && shown->second && std::abs(across - 43) <= 11 &&
       std::abs(at.y / scale - 24) <= 11) {
@@ -3139,6 +3166,7 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       }
       WindowButtonsShown().erase(hwnd);
       SidebarRight().erase(hwnd);
+      ButtonsRight().erase(hwnd);
       FrameUi().erase(hwnd);
       std::erase_if(LittleViews(), [hwnd](HWND view) {
         return !IsWindow(view) || GetAncestor(view, GA_ROOT) == hwnd;
@@ -4845,6 +4873,9 @@ void host_hide_link_target(double fade) {
   FadeOut(g_link_target, fade, MaybeStopWatchingPointer);
 }
 
+// Windows blend with what's under them, so the room round an overlay's outline shows through.
+void host_outline_overlay(void*, double, double, double, double, double) {}
+
 bool host_mouse_down(void) {
   return Pressed();
 }
@@ -5137,6 +5168,18 @@ void host_set_sidebar_right(void* ui_view, bool right) {
     SidebarRight().insert(root);
   } else {
     SidebarRight().erase(root);
+  }
+}
+
+void host_set_window_buttons_right(void* ui_view, bool right) {
+  HWND root = Root(ui_view);
+  if (!root) {
+    return;
+  }
+  if (right) {
+    ButtonsRight().insert(root);
+  } else {
+    ButtonsRight().erase(root);
   }
 }
 

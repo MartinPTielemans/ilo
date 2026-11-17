@@ -9,6 +9,7 @@ use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, point, p
 use crate::theme::Appearance;
 use crate::tokens::shell::{WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y};
 
+use super::live_folders::LiveSource;
 use super::{
     Answer, BarSpace, BarTab, DownloadAction, MenuBar, MenuEntry, PageReply, ShownPageDialog,
 };
@@ -81,6 +82,15 @@ pub trait Browser {
     fn move_folder(&self, folder: u64, to: u64, index: usize, cx: &mut App);
     /// Deletes `folder`, leaving what was in it where it was.
     fn delete_folder(&self, folder: u64, cx: &mut App);
+    /// Makes a Live Folder named `name`, filled from `source` on `space`'s profile's session, at
+    /// the bottom of its pinned tabs, and returns it, or 0 if it can't (#2979).
+    fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, cx: &mut App) -> u64;
+    /// Makes the Live Folder a plain one. The tabs opened from it stay in it.
+    fn end_live_folder(&self, folder: u64, cx: &mut App);
+    /// Asks for `folder`'s lists from `source`, on its Space's profile's session, at most once in
+    /// two minutes for the profile but for a `refresh`. The browser answers with
+    /// `Shell::set_live_answer`.
+    fn fetch_live_folder(&self, folder: u64, source: LiveSource, refresh: bool, cx: &mut App);
     /// Takes `tab` out of its split view.
     fn separate(&self, tab: u64, cx: &mut App);
     /// Moves `tab` to `index` in its split view, counted from the left or the top.
@@ -113,6 +123,15 @@ pub trait Browser {
     fn over_page_blends(&self) -> bool;
     /// Loads a pinned tab's pinned URL, unless it's there already.
     fn back_to_pinned_url(&self, tab: u64, cx: &mut App);
+    /// Loads `url` in `tab`, as a row of what's recent on its card does (#3074).
+    fn navigate(&self, _tab: u64, _url: &str, _cx: &mut App) {}
+    /// Whether the core can ask a site what's recent for a tab's card (#3074).
+    fn recent_reached(&self) -> bool {
+        crate::recent::REACHED
+    }
+    /// Asks the core what's recent on `tab`'s site, which it answers to `Shell::recent_answered`
+    /// once, at most once each two minutes per profile from the site, else from what it kept.
+    fn fetch_recent(&self, _tab: u64, _cx: &mut App) {}
     /// Mutes `tab`, or unmutes it.
     fn set_muted(&self, tab: u64, muted: bool, cx: &mut App);
     /// Has the page sharing a tab share `tab` in its place.
@@ -403,6 +422,10 @@ pub trait Browser {
     /// Opens a new document in the notes service `space`'s profile picks, in a tab at the top of
     /// its Today tabs, as a new tab opens, or in a split view with `beside`, on its right.
     fn new_note(&self, space: u64, beside: Option<u64>, cx: &mut App);
+    /// Makes a Board in `space`'s profile (`crate::boards`): its folder, off the main thread, then
+    /// a pinned tab of `space` at its page, which `opened` gets to name. Nothing where the profile
+    /// keeps no folder.
+    fn new_board(&self, space: u64, opened: Box<dyn FnOnce(u64, &mut App)>, cx: &mut App);
     /// Opens Chromium's search engines page in a tab of the Space shown, for its profile's site
     /// searches. The user's: agents open no pages outside http(s) (AGENTS.md).
     fn site_search_settings(&self, cx: &mut App);
@@ -623,10 +646,19 @@ pub trait Browser {
     /// Puts the window's own buttons, and the reveal's window and edge, on the window's right, or
     /// back on its left (Sidebar position, #2375).
     fn set_sidebar_right(&self, _right: bool, _cx: &mut App) {}
+    /// Windows': puts the window's buttons at its right though the sidebar is on the left, as the
+    /// top bar has them, or back with the sidebar (#3160).
+    fn set_window_buttons_right(&self, _right: bool, _cx: &mut App) {}
     /// The user moved the sidebar from the command bar: Sidebar position keeps it on this device,
     /// and every window follows.
     fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
         cx.set_global(super::SidebarRight(right));
+        cx.refresh_windows();
+    }
+    /// The user turned Top bar on or off from a menu, the command bar or its key: kept on this
+    /// device, and every window follows.
+    fn keep_top_bar(&self, on: bool, cx: &mut App) {
+        cx.set_global(super::TopBar(on));
         cx.refresh_windows();
     }
     /// A Little ilo window's UI has drawn its first frame on screen, where its opening grows from
@@ -811,6 +843,15 @@ pub trait Browser {
     /// the browser keeps for it, at the window's `scale`. The user's: agents get none, as with the
     /// page's picture.
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App);
+    /// Settings › Links' Link cards: whether ⇧ on a link shows what its page says about itself.
+    fn link_cards(&self) -> bool {
+        false
+    }
+    /// Asks for the card of the link the pointer is on in `tab`'s page (bc_tab_link_card): its
+    /// id, or 0 where there's none to ask, as in an agent's tab.
+    fn link_card(&self, _tab: u64) -> u64 {
+        0
+    }
     /// Shows `plate`, the address of the link the pointer is on, at `frame` in the window, in
     /// `side` of the card, after its delay or at once if one shows or just went; or moves it there
     /// if it shows. `None` ends it.
@@ -980,6 +1021,14 @@ pub trait Browser {
     fn os(&self) -> crate::default_browser::Os {
         crate::default_browser::Os::current()
     }
+    /// The search engines `space`'s profile's default is picked from, each its keyword and name, in
+    /// the core's order, and the default's keyword: none until they've loaded, or while a policy or
+    /// an extension picks the default.
+    fn search_engines(&self, _space: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        Default::default()
+    }
+    /// Makes the engine of `keyword`, one of `search_engines`, `space`'s profile's default.
+    fn set_search_engine(&self, _space: u64, _keyword: &str, _name: &str, _cx: &mut App) {}
 
     /// Whether crash reports are sent, as Settings' switch has it, or None while there's no
     /// collector to send them to, when neither Settings nor the first launch offers it.
@@ -1209,4 +1258,6 @@ pub struct Folders {
     /// Each folder's icon, an emoji, which the sidebar draws in place of the folder; those without
     /// one aren't here.
     pub icons: HashMap<u64, SharedString>,
+    /// What fills each Live Folder; plain folders aren't here.
+    pub live: HashMap<u64, LiveSource>,
 }

@@ -50,6 +50,8 @@ mod battery;
 mod beside;
 #[cfg(test)]
 mod blank_tests;
+#[cfg(test)]
+mod board_title_tests;
 mod boost;
 mod browser;
 mod by_site;
@@ -102,6 +104,7 @@ mod link_target;
 mod little;
 #[cfg(test)]
 mod little_tests;
+mod live_folders;
 mod media_player;
 mod menu_bar;
 mod menus;
@@ -121,6 +124,8 @@ mod side_tests;
 #[cfg(test)]
 mod space_order_tests;
 mod task_cards;
+#[cfg(test)]
+mod top_bar_tests;
 #[cfg(test)]
 mod undo_tests;
 #[cfg(test)]
@@ -155,6 +160,7 @@ mod swipe;
 mod task_area;
 mod themes;
 mod tile_theme;
+mod top_bar;
 mod trace;
 mod translate;
 mod trouble;
@@ -196,6 +202,7 @@ pub use keys::{
 pub(crate) use library::bytes;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState, Visited};
 use library::{MediaVideo, RECEDE_X, Section};
+pub use live_folders::{LiveAnswer, LiveItem, LiveList, LiveSource, PullState};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
 pub use menus::profile_goes_with;
@@ -215,7 +222,7 @@ pub use rows::LoneSpaceHeader;
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
-pub use sidebar::{SidebarEdge, SidebarRight, edge_reveals, sidebar_right};
+pub use sidebar::{SidebarEdge, SidebarRight, TopBar, edge_reveals, sidebar_right, top_bar};
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
@@ -718,6 +725,9 @@ struct Space {
     /// Tabs shown in closed folders before, which stay listed there after another tab shows,
     /// until a click on their folder closes it for good, as Arc keeps them, per window (#1405).
     peeked: Vec<u64>,
+    /// How each of its Live Folders' rows are drawn under its other tabs, which the rows after
+    /// them make room for, and the tabs drawn in their items' places (#2979).
+    live_rooms: HashMap<u64, live_folders::LiveLayout>,
 }
 
 impl Space {
@@ -737,8 +747,42 @@ impl Space {
         let shown = self.panes(self.shown)[0];
         let folded = move |row| collapsed || self.holders(row).any(|folder| !self.is_open(folder));
         let listed = move |row| row == shown || (!collapsed && self.peeked.contains(&row));
-        (self.pinned.iter().copied())
+        let drawn = self.drawn_pinned();
+        (0..drawn.len())
+            .map(move |at| drawn[at])
             .filter(move |&row| !self.later(row) && (listed(row) || !folded(row)))
+    }
+
+    /// Its pinned tabs in the order they're drawn: a tab opened from a Live Folder's item still
+    /// listed goes in its item's place, after the folder's other rows, in the lists' order. The
+    /// core keeps them in the order they were opened, which next and previous tab don't follow.
+    /// With none in their items' places, as in a Space with no Live Folder, it's the pinned tabs.
+    fn drawn_pinned(&self) -> std::borrow::Cow<'_, [u64]> {
+        if self
+            .live_rooms
+            .values()
+            .all(|layout| layout.tabs.is_empty())
+        {
+            return std::borrow::Cow::Borrowed(&self.pinned);
+        }
+        let mut pinned = self.pinned.clone();
+        for (&folder, layout) in &self.live_rooms {
+            if layout.tabs.is_empty() {
+                continue;
+            }
+            pinned.retain(|row| !layout.tabs.contains(row));
+            let own = |row: u64| row == folder || self.holders(row).any(|each| each == folder);
+            let Some(at) = pinned.iter().rposition(|&row| own(row)) else {
+                continue;
+            };
+            pinned.splice(at + 1..at + 1, layout.tabs.iter().copied());
+        }
+        std::borrow::Cow::Owned(pinned)
+    }
+
+    /// Whether `tab` is drawn in a Live Folder's item's place.
+    fn listed(&self, tab: u64) -> bool {
+        (self.live_rooms.values()).any(|layout| layout.tabs.contains(&tab))
     }
 
     /// Whether `tab` is in a split after its first, which stands for the split's row.
@@ -904,7 +948,35 @@ impl Space {
     /// Where its rows are in the list, from its top, under a head `head` tall.
     fn slots(&self, head: f32) -> HashMap<Slot, f32> {
         let (pinned, today) = self.rows();
-        slots(head, &pinned, &today)
+        slots(head, &pinned, &self.live_blocks(&pinned), &today)
+    }
+
+    /// Where each open Live Folder's runs of rows go among `pinned`, its pinned rows listed: the
+    /// first after the last of the folder's other rows, each other after the tab drawn above it,
+    /// by its index there, with the folder, the run and its height.
+    fn live_blocks(&self, pinned: &[u64]) -> Vec<(usize, u64, usize, f32)> {
+        let mut blocks = Vec::new();
+        for (&folder, layout) in &self.live_rooms {
+            if !self.is_open(folder) || self.shut(folder) {
+                continue;
+            }
+            let own = |row: u64| row == folder || self.holders(row).any(|each| each == folder);
+            let other = |row: u64| own(row) && !layout.tabs.contains(&row);
+            let Some(first) = pinned.iter().rposition(|&row| other(row)) else {
+                continue;
+            };
+            for (run, &room) in layout.runs.iter().enumerate() {
+                let above = match run {
+                    0 => Some(first),
+                    _ => pinned.iter().position(|&row| row == layout.tabs[run - 1]),
+                };
+                if let Some(at) = above.filter(|_| room > 0.) {
+                    blocks.push((at, folder, run, room));
+                }
+            }
+        }
+        blocks.sort_by_key(|&(at, folder, run, _)| (at, folder, run));
+        blocks
     }
 }
 
@@ -983,6 +1055,8 @@ enum Slot {
     Tab(u64),
     Divider,
     NewTab,
+    /// A run of an open Live Folder's rows, by its folder and its place among the runs (#2979).
+    Live(u64, usize),
 }
 
 /// The list on its way to a row, from `from` down its top at `start` to `to`, last set at `set`.
@@ -1520,6 +1594,14 @@ pub struct Shell {
     putting_back: bool,
     swipe: Option<Swipe>,
     settle: Option<Settle>,
+    /// Each Live Folder's lists as the core last answered them (#2979).
+    live: HashMap<u64, live_folders::LiveFolder>,
+    /// Live Folders whose Space was given another profile: the core drops an ask while one is
+    /// waiting and fails that one, so a failure next asks once more.
+    live_reask: HashSet<u64>,
+    /// A Space was shown, and its Live Folders ask for their lists once its switch's frames are
+    /// drawn, so the fetch never holds the switch.
+    live_after_switch: bool,
     /// The last swipe paged, so its momentum, which comes without a touch, doesn't scroll the list.
     swiped: bool,
     /// A wheel's ticks across the sidebar: their sum and the last one's time, and when they last
@@ -1578,6 +1660,8 @@ pub struct Shell {
     sidebar_hidden: bool,
     /// Whether the window's own buttons show (`window_buttons_shown`).
     window_buttons: bool,
+    /// Whether the host has them at the bar's end (`buttons_at_bar_end`).
+    buttons_at_bar_end: bool,
     /// The window's own buttons as the system draws them, once it has said, which the copies
     /// drawn in their place match.
     window_button_geometry: Option<WindowButtonGeometry>,
@@ -1694,6 +1778,9 @@ pub struct Shell {
     downloads_seen: HashSet<u64>,
     /// Every tab a Space has listed, so a tab a Space lists that none did is new, not moved.
     listed: HashSet<u64>,
+    /// The Spaces whose tabs the core has reported, so a Live Folder new in a later report was
+    /// made, not brought back at launch, in a Space with no tabs too.
+    spaces_filled: HashSet<u64>,
     /// Every Space listed, so one ⌘Z brings back isn't new; and the new ones the toast tells of,
     /// and when it last did, so Spaces made one after another are told of together.
     spaces_listed: HashSet<u64>,
@@ -1855,6 +1942,12 @@ pub struct Shell {
     boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Library › Boosts' list, the window's profile's, read as it's shown.
     boost_list: Vec<crate::boosts::Boost>,
+    /// The window's profile's Boards, as Library › Boards last read them, and how many reads it
+    /// has asked for, off the main thread, of which only the last one's list is kept.
+    board_list: Vec<crate::boards::Listed>,
+    boards_asked: u64,
+    /// The tab whose name field New Board opened, which gives its page the keyboard as it closes.
+    board_named: Option<u64>,
     /// The tab Portrait Mode's card is open over, with the background chosen on it, and where the
     /// card and its swatches were drawn last (portrait.rs).
     portrait_card: Option<(u64, crate::capture::portrait::Background)>,
@@ -1912,6 +2005,8 @@ pub struct Shell {
     /// Whether the sidebar is on the window's right, as `SidebarRight` said as the window last
     /// drew (`Shell::right`).
     right: bool,
+    /// Whether Top bar is on, as `TopBar` said as the window last drew (`Shell::bar_on`).
+    top_bar: bool,
     forced_tone: Option<Tone>,
     /// What lies under the tint where nothing else does: the preview's, whose window has no
     /// material and shows the desktop through the tint, as the app's never does (#3033).
@@ -2085,6 +2180,9 @@ impl Shell {
             putting_back: false,
             swipe: None,
             settle: None,
+            live: HashMap::new(),
+            live_reask: HashSet::new(),
+            live_after_switch: false,
             swiped: false,
             wheel: None,
             wheel_paged: None,
@@ -2111,6 +2209,7 @@ impl Shell {
             full_screen_timing: None,
             sidebar_hidden: false,
             window_buttons: true,
+            buttons_at_bar_end: false,
             window_button_geometry: None,
             sidebar_width,
             resize: None,
@@ -2165,6 +2264,7 @@ impl Shell {
             recent_downloads: RecentDownloads::default(),
             downloads_seen: HashSet::new(),
             listed: HashSet::new(),
+            spaces_filled: HashSet::new(),
             spaces_listed: HashSet::new(),
             spaces_toasted: (Vec::new(), None),
             downloads_read: false,
@@ -2256,6 +2356,9 @@ impl Shell {
             foot_bar_shown: None,
             boost_card_drawn: Rc::default(),
             boost_list: Vec::new(),
+            board_list: Vec::new(),
+            boards_asked: 0,
+            board_named: None,
             battery_saver: None,
             battery_leaf_drawn: Rc::default(),
             frozen: HashSet::new(),
@@ -2287,6 +2390,7 @@ impl Shell {
             clean_links: cx.try_global::<CleanLinksOn>().is_none_or(|on| on.0),
             lone_header: false,
             right: false,
+            top_bar: false,
             forced_tone: None,
             ground: None,
             window_active: true,
@@ -2329,6 +2433,7 @@ impl Shell {
             folders: Folders::default(),
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }];
         shell
     }
@@ -2380,6 +2485,7 @@ impl Shell {
             folders: Folders::default(),
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }];
         shell
     }
@@ -2480,7 +2586,7 @@ impl Shell {
     fn layout(&self) -> HashMap<Slot, f32> {
         let head = self.list_head();
         self.shown_space()
-            .map_or_else(|| slots(head, &[], &[]), |space| space.slots(head))
+            .map_or_else(|| slots(head, &[], &[], &[]), |space| space.slots(head))
     }
 
     /// The favorite split holding `tab`, if it's in one.
@@ -2707,7 +2813,7 @@ impl Shell {
 
     /// The focused page's left edge, and how far its right and top edges are in from the card's,
     /// as the host takes them.
-    fn focused_pane_corner(&self) -> (f32, f32, f32) {
+    pub(super) fn focused_pane_corner(&self) -> (f32, f32, f32) {
         let (frame, _) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
         let focused = panes
@@ -2719,7 +2825,7 @@ impl Shell {
         (
             f32::from(pane.left()),
             f32::from(frame.right() - pane.right()),
-            f32::from(pane.top() - frame.top()),
+            f32::from(pane.top() - frame.top()) + self.bar_drop(),
         )
     }
 
@@ -2839,7 +2945,13 @@ impl Shell {
             .map(|&(id, ..)| id)
             .filter(|&id| listed.insert(id))
             .collect();
+        // A Space new after the window's first report is made empty, and the core reports no tabs
+        // for it until something is in it: what it reports first was made, not brought back.
+        if filled {
+            self.spaces_filled.extend(made.iter().copied());
+        }
         let mut old = std::mem::take(&mut self.spaces);
+        let mut reprofiled = Vec::new();
         self.spaces = spaces
             .into_iter()
             .map(|(id, name, color, profile, icon, agent, theme)| {
@@ -2872,6 +2984,7 @@ impl Shell {
                         folders: Folders::default(),
                         shown: 0,
                         peeked: Vec::new(),
+                        live_rooms: Default::default(),
                     };
                 };
                 if space.name != name {
@@ -2891,6 +3004,7 @@ impl Shell {
                 }
                 if space.profile != profile {
                     log!("browser: profiled space {id} {profile}");
+                    reprofiled.push(id);
                 }
                 let theme = Theme::parse(&theme);
                 if space.theme != theme {
@@ -2911,6 +3025,7 @@ impl Shell {
                     folders: std::mem::take(&mut space.folders),
                     shown: space.shown,
                     peeked: std::mem::take(&mut space.peeked),
+                    live_rooms: std::mem::take(&mut space.live_rooms),
                 }
             })
             .collect();
@@ -2920,6 +3035,7 @@ impl Shell {
             of.iter().copied().filter(|id| with.contains(id)).collect()
         };
         self.glide_spaces(places, kept(&order, &now) != kept(&now, &order));
+        self.live_profiles_changed(&reprofiled, cx);
         self.settle_theme_preview();
         if let Some(form) = &self.form
             && !self.spaces.iter().any(|space| space.id == form.space)
@@ -2988,6 +3104,7 @@ impl Shell {
         self.end_hovers(cx);
         let before = std::mem::replace(&mut self.space, space);
         self.bar_follows |= before != space;
+        self.live_after_switch |= before != space;
         if before != space {
             self.unchoose(cx);
         }
@@ -3133,6 +3250,11 @@ impl Shell {
         for folder in toggled {
             entry.drop_peeks(folder);
         }
+        // A Space with no Live Folder, the usual one, builds no rows for them.
+        if !entry.folders.live.is_empty() || !entry.live_rooms.is_empty() {
+            entry.live_rooms =
+                live_folders::rooms(entry, &self.live, |tab| self.browser.pinned_url(tab));
+        }
         if space == self.space {
             let eliding = (eliding, dotted(entry));
             (self.swaps).folders_changed(&before_folders, &entry.folders, eliding, Instant::now());
@@ -3189,6 +3311,10 @@ impl Shell {
         if space == self.space {
             self.keep_chosen(cx);
         }
+        let filled = !self.spaces_filled.insert(space);
+        self.live_folders_changed(space, &before_folders, filled, cx);
+        // Its rows were built and moved above; only the lists of folders gone are let go here.
+        self.forget_live();
         // Pinning or unpinning the tab shown renames Tabs › Pin Tab.
         self.update_menus(cx);
         cx.notify();
@@ -3686,6 +3812,7 @@ impl Shell {
         // the page differs from its picture in the window it left.
         let page_changed = !page.loading && (entry.page.loading || page.url != entry.page.url);
         let url_changed = page.url != entry.page.url;
+        let committed = url_changed.then(|| page.url.clone());
         let changed =
             entry.keep_page(page) | replace(&mut entry.left_pinned_host, left_pinned_host);
         if card_changed {
@@ -3717,6 +3844,9 @@ impl Shell {
         // A task's Pages draw its pages' speakers (#1080).
         if sounded {
             self.talk_redraw(cx);
+        }
+        if let Some(url) = committed {
+            self.live_page_committed(tab, &url, cx);
         }
     }
 
@@ -4305,6 +4435,15 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
+        // A Space shown with a Live Folder asks for their lists once its switch is drawn, so the
+        // fetch never holds a frame of it. Deferred, as the window's ask is: a next-frame callback
+        // asks for a frame of its own (#3004).
+        if self.live_after_switch && self.settle.is_none() {
+            self.live_after_switch = false;
+            if self.shows_live() {
+                cx.defer_in(window, |shell, _, cx| shell.live_space_shown(cx));
+            }
+        }
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);
@@ -4312,6 +4451,10 @@ impl Render for Shell {
         let right = sidebar::sidebar_right(cx) && self.little.is_none();
         if right != self.right {
             self.set_sidebar_right(right, cx);
+        }
+        let top_bar = sidebar::top_bar(cx) && self.little.is_none();
+        if top_bar != self.top_bar {
+            self.set_top_bar(top_bar, cx);
         }
         self.full_screen_step("drawn", window.viewport_size());
         self.shape_safe_start(cx);
@@ -4555,6 +4698,11 @@ impl Render for Shell {
             self.window_buttons = window_buttons;
             self.browser.show_window_buttons(window_buttons, cx);
         }
+        let at_bar_end = self.buttons_at_bar_end();
+        if at_bar_end != self.buttons_at_bar_end {
+            self.buttons_at_bar_end = at_bar_end;
+            self.browser.set_window_buttons_right(at_bar_end, cx);
+        }
         // AppKit's say how they're drawn once they show, out of full screen, as at rest.
         if self.window_button_geometry.is_none() && window_buttons {
             self.window_button_geometry = self.browser.window_button_geometry(cx);
@@ -4629,6 +4777,7 @@ impl Render for Shell {
             })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::tab_in))
             // The Edit menu's Undo and Redo, which a field of ours takes for itself first.
             .on_action(cx.listener(|shell, _: &crate::text_input::Undo, _, cx| {
                 shell.undo(cx);
@@ -4703,6 +4852,7 @@ impl Render for Shell {
             .children(self.side_panel(cx))
             .children(under)
             .children(sidebar)
+            .children(self.top_bar_row(cx))
             .children(over)
             .children(edge)
             .children(own_buttons)
@@ -4849,7 +4999,12 @@ impl Shell {
             .top_0()
             .bottom_0()
             .w(px(self.width()))
-            .children(self.nav_buttons(cx));
+            .children(
+                (!self.bar_on())
+                    .then(|| self.nav_buttons(cx))
+                    .into_iter()
+                    .flatten(),
+            );
         let leaving = self
             .leaving_form
             .as_ref()
@@ -4888,7 +5043,7 @@ impl Shell {
                     .left_0()
                     .w(px(self.width()));
                 sidebar
-                    .child(self.with_page(self.url_field(cx)))
+                    .children((!self.bar_on()).then(|| self.with_page(self.url_field(cx))))
                     .children(self.scroll_edge_line().map(|line| self.with_page(line)))
                     .children(self.foot_edge_line().map(|line| self.with_page(line)))
                     .child(self.space_pages(cx))
@@ -5136,8 +5291,15 @@ impl Shell {
                 _ => None,
             });
         self.drawn_rows.replace(drawn.collect());
-        for tab in pinned {
+        let blocks = self
+            .shown_space()
+            .map(|space| space.live_blocks(&pinned))
+            .unwrap_or_default();
+        for (at, tab) in pinned.into_iter().enumerate() {
             rows.push((Some(tab), self.list_row(tab, cx)));
+            for &(_, folder, run, _) in blocks.iter().filter(|block| block.0 == at) {
+                rows.push((None, self.live_block(folder, run, cx)));
+            }
         }
         if !today.is_empty() {
             rows.push((None, self.divider(cx).into_any_element()));
@@ -5332,17 +5494,39 @@ impl Shell {
                 div()
                     .absolute()
                     .left(px(left))
-                    .top(px(REVEAL_INSET))
+                    .top(px(match self.bar_on() {
+                        true => crate::tokens::shell::TOP_BAR,
+                        false => REVEAL_INSET,
+                    }))
                     .bottom(px(REVEAL_INSET))
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
                     .border(px(0.5))
                     .border_color(self.palette.faint(REVEAL_BORDER))
                     .bg(self.gradient(Some(self.palette.underlay.into())))
-                    .child(self.window_buttons(px(self.width()), cx))
+                    .children((!self.bar_on()).then(|| self.window_buttons(px(self.width()), cx)))
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
+            // Its window spans the bar's end over the sidebar's column, so it draws the bar's
+            // buttons and the window's where the bar has them, and they take its clicks.
+            .children(self.bar_on().then(|| {
+                let column = match self.right {
+                    true => span - self.width(),
+                    false => 0.,
+                };
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(px(column))
+                    .w(px(self.width()))
+                    .h(px(crate::tokens::shell::TOP_BAR))
+                    .children(
+                        (!self.buttons_at_bar_end())
+                            .then(|| self.window_buttons(px(self.width()), cx)),
+                    )
+                    .children(self.nav_buttons(cx))
+            }))
             .child(self.reveal_listener(cx))
             .into_any_element();
         self.breath.arm(cx);
@@ -5366,7 +5550,7 @@ impl Shell {
     fn window_buttons(&self, across: Pixels, cx: &mut Context<Self>) -> AnyElement {
         let right = self.right;
         if cfg!(target_os = "windows") {
-            return self.windows_buttons(right, cx);
+            return self.windows_buttons(right || self.buttons_at_bar_end(), cx);
         }
         let zoom = if self.maximized {
             "icons/window-restore.svg"
@@ -5585,10 +5769,19 @@ pub(crate) fn spring(t: f32, response: f32, damping: f32) -> Option<f32> {
 
 /// Where the list's rows are from its top, under a head `head` tall (`Shell::list_head`), by the
 /// heights they're drawn at in `list`.
-fn slots(head: f32, pinned: &[u64], today: &[u64]) -> HashMap<Slot, f32> {
-    let rows = pinned
-        .iter()
-        .map(|&tab| (Slot::Tab(tab), ROW_PITCH))
+fn slots(
+    head: f32,
+    pinned: &[u64],
+    blocks: &[(usize, u64, usize, f32)],
+    today: &[u64],
+) -> HashMap<Slot, f32> {
+    let rows = (pinned.iter().enumerate())
+        .flat_map(|(at, &tab)| {
+            let live = (blocks.iter())
+                .filter(move |block| block.0 == at)
+                .map(|&(_, folder, run, room)| (Slot::Live(folder, run), room));
+            std::iter::once((Slot::Tab(tab), ROW_PITCH)).chain(live)
+        })
         .chain((!today.is_empty()).then_some((Slot::Divider, DIVIDER_HEIGHT)))
         .chain([(Slot::NewTab, ROW_PITCH)])
         .chain(today.iter().map(|&tab| (Slot::Tab(tab), ROW_PITCH)));
@@ -6135,6 +6328,7 @@ mod tests {
             folders: Folders::default(),
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }
     }
 

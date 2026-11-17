@@ -1979,12 +1979,13 @@ else
   expect '^browser: command bar suggestions "dog" in ' "the command bar didn't list its rows again after $removed"
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar"
-  # And back: Search engine picks DuckDuckGo again, which the next search goes to.
+  # And back: Search engine picks DuckDuckGo again, which the next search goes to. Its item is
+  # named as the default, as Page zoom's 100% is.
   settings_general
   in_sight "search engine $profile" || fail "Settings didn't draw the profile's Search engine again"
   post clickkey $at
   expect "^browser: menu shown .*$engine (checked)" "the profile's Search engine didn't keep the run's site search"
-  send choose DuckDuckGo
+  send choose "DuckDuckGo (default)"
   expect "^browser: profile $profile searches with DuckDuckGo\$" "choosing DuckDuckGo didn't set the profile's engine"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"

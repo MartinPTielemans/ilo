@@ -164,7 +164,7 @@ impl Shell {
             .left(px(x))
             .w(px(self.width()));
         let page = page
-            .child(self.url_field(cx))
+            .children((!self.bar_on()).then(|| self.url_field(cx)))
             .children(self.scroll_edge_line())
             .children(self.tiles(cx));
         Some(div().absolute().size_full().overflow_hidden().child(page))

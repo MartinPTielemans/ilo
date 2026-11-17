@@ -133,6 +133,7 @@ impl Shell {
             folders: Default::default(),
             shown: 0,
             peeked: Vec::new(),
+            live_rooms: Default::default(),
         }];
         if let Some(look) = look {
             shell.take_look(look.name, look.color, look.theme, look.icon);
@@ -795,6 +796,7 @@ pub(super) fn little_runs(command: Command) -> bool {
                     | Command::SortBySite
                     | Command::ToggleSidebar
                     | Command::MoveSidebar
+                    | Command::ToggleTopBar
                     | Command::AddSplit
                     // A private window's Library has its session's downloads; a Little ilo
                     // window has no Library at all.
