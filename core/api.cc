@@ -76,6 +76,7 @@
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/tab_recent.h"
 #include "browser_core/typed_http.h"
 #include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
@@ -1200,6 +1201,10 @@ void bc_folder_live_end(bc_id folder) {
 
 void bc_folder_live_fetch(bc_id folder, bool refresh) {
   browser_core::FetchLiveFolder(folder, refresh);
+}
+
+void bc_tab_recent_fetch(bc_id tab) {
+  browser_core::FetchTabRecent(tab);
 }
 
 void bc_tab_forget_page(bc_id id) {

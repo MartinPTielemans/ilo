@@ -1454,6 +1454,14 @@ typedef struct bc_host {
   // of them. The user's alone: agents get none.
   void (*folder_live_answered)(void* context, bc_id folder, int answer, int64_t answered,
                                const bc_live_item* items, size_t count);
+  // The answer to bc_tab_recent_fetch, in folder_live_answered's order: a BC_LIVE_ answer, with
+  // |items|, review requests first, only with BC_LIVE_ANSWERED. |answered| is when the site gave
+  // it, in milliseconds since the Unix epoch: up to two minutes ago for an answer the core kept.
+  // Once an ask, never for one the core refused, nor for a tab that closed, stopped being pinned
+  // or a favorite, or left the site while it waited. The items last only for the call, and the
+  // core logs none of them. The user's alone: agents get none.
+  void (*tab_recent_answered)(void* context, bc_id tab, int answer, int64_t answered,
+                              const bc_live_item* items, size_t count);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2103,6 +2111,17 @@ BC_EXPORT void bc_folder_live_end(bc_id folder);
 // inside that answers what the site last gave. A |refresh|, the user's Refresh alone, asks inside
 // the two minutes too, but joins a fetch under way (#3074).
 BC_EXPORT void bc_folder_live_fetch(bc_id folder, bool refresh);
+
+// Asks what's recent on the site of a pinned tab or a favorite, for its hover card, on its
+// profile's own session, as bc_folder_live_fetch asks for a Live Folder: today the open pull
+// requests of the user signed in to GitHub, for a tab whose committed page is on
+// https://github.com. The site and what's asked of it are the core's; the app gives the tab alone.
+// Answers with tab_recent_answered, once, never inside this call. Does nothing for a tab that isn't
+// pinned or a favorite, one on another site, one in an agent's Space or a private window, or one
+// waiting on an answer. The core never asks on its own; the app asks as the user rests on the tab.
+// It asks the site at most once each two minutes for a profile, with that profile's Live Folder,
+// and inside that answers what the site last gave. No agent tool reaches it (#3074).
+BC_EXPORT void bc_tab_recent_fetch(bc_id tab);
 
 // Where the favorites are kept, as the user chose: who shows the same ones above their own tabs. A
 // favorite is a site, and each profile that shows it has a tab of its own for it, in no Space,

@@ -40,24 +40,29 @@ namespace {
 constexpr net::NetworkTrafficAnnotationTag kLiveFolder =
     net::DefineNetworkTrafficAnnotation("browser_core_live_folder", R"(
       semantics {
-        sender: "Live Folders"
+        sender: "Live Folders and hover cards"
         description:
-          "A Live Folder's lists: the GitHub pull requests waiting on the review of the user "
-          "signed in to GitHub in the Space's profile, and their own open ones, from GitHub's "
-          "search, as the user's own visit to it would ask."
+          "A Live Folder's lists, and a pinned tab's or favorite's hover card's: the GitHub pull "
+          "requests waiting on the review of the user signed in to GitHub in the profile, and "
+          "their own open ones, from GitHub's search, as the user's own visit to it would ask."
         trigger:
           "Only what the user does with a Live Folder in a Space: the window coming back, its "
           "Space shown, the folder made or opened, a GitHub page loaded in its Space, or Refresh. "
-          "At most once in two minutes for each profile, however many ask, but for Refresh. "
-          "Never on a timer, never again after a failure."
+          "Or the user resting the pointer on a pinned tab or favorite whose page is on "
+          "https://github.com, for its hover card, in a Space of their own, never an agent's or a "
+          "private window's. At most once in two minutes for each profile, however many ask, but "
+          "for a Live Folder's Refresh. Never on a timer, never again after a failure."
         data: "Two fixed searches, with the profile's GitHub cookies."
         destination: WEBSITE
       }
       policy {
         cookies_allowed: YES
         cookies_store: "user"
-        setting: "Delete the Live Folder, or Convert to Folder, from its menu or the Space's."
-        policy_exception_justification: "Only for a Live Folder the user made."
+        setting:
+          "Delete the Live Folder, or Convert to Folder, from its menu or the Space's. For hover "
+          "cards, What's recent in hover cards in Settings, or the site's switch in Site Controls."
+        policy_exception_justification:
+          "Only for a Live Folder the user made, or a hover card the user rests on."
       })");
 
 // How long a list is waited for. Not a timer that asks again: a request that hangs ends, failed,
