@@ -53,14 +53,17 @@ cat > "$nvda_config/nvda.ini" << 'INI'
 INI
 nvda_log="$out/screen-reader-nvda.log"
 rm -f "$nvda_log"
-# Input/output, 12, logs each key NVDA hears and each thing it says.
-"$nvda_dir/nvda.exe" -m --disable-addons -l 12 -c "$(cygpath -w "$nvda_config")" \
-  -f "$(cygpath -w "$nvda_log")" &
+# Input/output, 12, logs each key NVDA hears and each thing it says. Its paths are absolute, as
+# NVDA starts in its own folder.
+"$nvda_dir/nvda.exe" -m --disable-addons -l 12 -c "$(cygpath -aw "$nvda_config")" \
+  -f "$(cygpath -aw "$nvda_log")" &
 for _ in $(seq 300); do
   grep -q 'NVDA initialized' "$nvda_log" 2> /dev/null && break
   sleep 0.1
 done
-grep -q 'NVDA initialized' "$nvda_log" 2> /dev/null || fail "NVDA didn't start: $(tail -3 "$nvda_log" 2> /dev/null)"
+# Without its own log, NVDA's default one, in the temporary folder, says why.
+grep -q 'NVDA initialized' "$nvda_log" 2> /dev/null ||
+  fail "NVDA didn't start: $(tail -5 "$nvda_log" "$(cygpath -u "${TEMP:-/tmp}")/nvda.log" 2> /dev/null)"
 nvda_quit() {
   "$nvda_dir/nvda.exe" -q > /dev/null 2>&1 || true
 }
@@ -157,7 +160,7 @@ step=0
 rm -f "$saved" "$profile_dir/Account"
 # An empty home for the import step, as a new user's may be, and never the runner's own browsers.
 mkdir -p "$out/screen-reader-home"
-BROWSER_IMPORT_HOME=$(cygpath -w "$out/screen-reader-home") BROWSER_DRIVE=1 BROWSER_ONBOARDING=light \
+BROWSER_IMPORT_HOME=$(cygpath -aw "$out/screen-reader-home") BROWSER_DRIVE=1 BROWSER_ONBOARDING=light \
   "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
