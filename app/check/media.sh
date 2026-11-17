@@ -1059,7 +1059,7 @@ else
       send pip dragto $((pw / 8 - x)) $((ph / 2))
       sleep 0.05
     done
-    sleep 0.2
+    sleep 0.2 # the rest, past the 100 ms of moves a release is read from
     send pip release $((pw / 8 - 200)) $((ph / 2))
     drag_full_windows "${drag_full:-1}"
     expect 'browser: mini player let go at ' "the Mini Player wasn't let go from the outline drag"
