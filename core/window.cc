@@ -26,6 +26,7 @@
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/boost_colors.h"
 #include "browser_core/browser_window_stand_in.h"
 #include "browser_core/dialog_keys.h"
 #include "browser_core/extensions.h"
@@ -949,6 +950,9 @@ void Window::AdjustNavigate(NavigateParams& params) {
                     params.disposition == WindowOpenDisposition::NEW_WINDOW ||
                     params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW)) {
     params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+    // Nor is its window shown, as Chrome shows it for each tab a page opens (AddNewContents): on
+    // Windows, showing a window already on screen gives the window itself the user's keyboard.
+    params.window_action = NavigateParams::WindowAction::kNoAction;
     window->agent_opener_ = source_id;
   }
   // ⌥⌘-click on a link opens it in a Little ilo window, as Arc's does in Little Arc (the owner's
@@ -1795,8 +1799,9 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener,
     return nullptr;
   }
   // The app shows it in its card until it draws, so it shows the window's page colour until then,
-  // as the panes do, not Chromium's white (#2742).
-  if (Tab* tab = Tab::FromWebContents(preview); tab && page_color_) {
+  // as the panes do, not Chromium's white (#2742). Nothing has asked for its id yet, so its tab is
+  // made here, which keeps the colour for the page's view once that's made.
+  if (Tab* tab = Tab::Get(Tab::IdOf(preview)); tab && page_color_) {
     tab->SetPageColor(
         SkColorSetRGB(*page_color_ >> 16, *page_color_ >> 8 & 0xff, *page_color_ & 0xff));
   }
@@ -2005,6 +2010,8 @@ void Window::ShowSpace(bc_id space, bool page) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<Window> window, bc_id space) {
+                       // The window's favorites are in the Space it shows now.
+                       BoostSpacesChanged();
                        if (window && Host().window_space_shown) {
                          Host().window_space_shown(Host().context, window->id(), space);
                        }
