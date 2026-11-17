@@ -2020,6 +2020,15 @@ void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret) {
   }
 }
 
+void HoldPageComposition(views::Widget* widget, bool hold, bool claimed) {
+  if (!OnWayland()) {
+    return;
+  }
+  if (WindowViews* views = ViewsOf(widget)) {
+    views->ui_text_input().HoldForPage(hold, claimed);
+  }
+}
+
 std::optional<gfx::Rect> DialogFrame(views::Widget* widget) {
   // A tab's dialog is a widget the window owns, an aura window in it, which the X server and the
   // compositor don't see.
