@@ -383,7 +383,7 @@ ran_on_warning() {
 # A page beside the warning in a split keeps a click into it and the typing after. On X11 a tab's
 # dialog takes the keyboard back after a focus change that leaves no view focused (#2926), and a
 # page is no view: the click into the page beside it was at risk of sending its keys to the warning
-# in the other pane. The warning's pane is clicked first, so the warning has had the keyboard.
+# in the other pane. The warning is clicked first, so it has had the keyboard.
 if [ "$major" -ge 157 ]; then
   printf '%s' '<title>beside</title>
 <input id=field style="position:fixed;inset:0;font-size:40px" oninput="document.title = `beside has ${field.value}`">
@@ -391,40 +391,36 @@ if [ "$major" -ge 157 ]; then
 onblur = () => document.title = "beside blurred";
 requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside ready"));
 </script>' > "$out/site/beside.html"
-  warned
-  warned_tab=$tab
+  go_from_bar "$nearby:$port/beside.html"
+  expect "^browser: title $tab beside ready\$" "$nearby:$port/beside.html didn't draw"
+  beside=$tab
+  # The warning goes in the new pane, focused as it opens, since a tab's warning shows only while
+  # its pane is the focused one.
   send menu Add Split View
-  expect '^browser: command add-split via ' "Add Split View didn't run over Chrome's warning before http"
-  expect '^browser: command bar shown$' "Add Split View didn't open the command bar over Chrome's warning before http"
-  send type "$nearby:$port/beside.html"
+  expect '^browser: command add-split via ' "Add Split View didn't run"
+  expect '^browser: command bar shown$' "Add Split View didn't open the command bar"
+  send type "$plain"
   send key return
-  expect "^browser: splits .*$warned_tab+[0-9][0-9]*" \
-    "$nearby:$port/beside.html didn't open beside $warned_tab's warning before http: $(grep '^browser: splits' "$log" | tail -1)"
-  beside=$(grep '^browser: splits' "$log" | tail -1 | grep -o "$warned_tab+[0-9]*" | cut -d+ -f2)
-  expect "^browser: title $beside beside ready\$" "the page beside $warned_tab's warning before http didn't draw"
-  # The panes, left and right. A warning shows only while its pane is the focused one, so a click
-  # on the warned pane's page, below its warning, focuses it first.
-  send layout
-  panes=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
-    grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' | sed 's/^WebContentsViewCocoa //')
-  [ "$(echo "$panes" | wc -l)" -eq 2 ] ||
-    fail "the layout didn't show two pages beside each other: $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')"
-  pane=$(echo "$panes" | sed -n 1p)
-  pane_x=${pane%%,*} pane_y=${pane#*,}
-  pane_y=${pane_y%% *} pane_h=${pane#*x}
-  send click $((pane_x + 100)) $((pane_y + pane_h - 60))
-  expect "^browser: selected $warned_tab\$" "a click on $warned_tab's page below its warning before http didn't focus its pane"
+  expect "^browser: splits .*$beside+[0-9][0-9]*" \
+    "$plain didn't open beside $nearby:$port/beside.html: $(grep '^browser: splits' "$log" | tail -1)"
+  warned_tab=$(grep '^browser: splits' "$log" | tail -1 | grep -o "$beside+[0-9]*" | cut -d+ -f2)
+  expect "^browser: loaded $warned_tab chrome-error://chromewebdata/\$" "$plain's warning before http didn't load in the new pane"
   for _ in $(seq 50); do
     send layout
     sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: layout child ' && break
     sleep 0.1
   done
   warning_box
+  panes=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+    grep -o 'WebContentsViewCocoa [0-9,]* [0-9x]*' | sed 's/^WebContentsViewCocoa //')
+  [ "$(echo "$panes" | wc -l)" -eq 2 ] ||
+    fail "the layout didn't show two pages beside each other: $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')"
   send click $((warning_x + warning_width / 2)) $((warning_y + 8))
   send state
   [ "$key" = NativeWidgetMacNSWindow ] ||
     fail "a click on Chrome's warning before http at $warning, beside a page in a split, didn't give it the keyboard: $key, $focus"
-  pane=$(echo "$panes" | sed -n 2p)
+  # The page beside it, on the left.
+  pane=$(echo "$panes" | sed -n 1p)
   pane_x=${pane%%,*} pane_y=${pane#*,}
   pane_y=${pane_y%% *}
   send click $((pane_x + 100)) $((pane_y + 100))
