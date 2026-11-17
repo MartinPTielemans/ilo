@@ -198,7 +198,8 @@ drop() {
     dropped="$dropped $8, but letting go there landed it all the same (#3003), which ⌘Z took back,"
   else
     send move $(page_at 600 600)
-    page_says "^$7.* over 600,600 at " "$8: letting go didn't leave what it previewed"
+    # $7 ends in a space, as the page's columns are followed by " over".
+    page_says "^$7.*over 600,600 at " "$8: letting go didn't leave what it previewed"
     ../tools/window-screenshot.sh "$pid" "$out/arrange-drop-$9.png" || fail "no window to capture"
     dropped="$dropped $8,"
     if [ "$6" != Refused ]; then
