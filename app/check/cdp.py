@@ -63,9 +63,11 @@ takes a command a line on its standard input:
                   writes to FILE, as JSON, the attached page's elements at display: none from a
                   style sheet, as the ad blocker's hiding would be, each as the selector its tag,
                   id and classes make, with the elements that selector takes in the page and
-                  those of them shown; and with BASE, an earlier run's FILE for the same site, its
-                  selectors none of whose elements were shown then and some are now.
-                  Logs "cdp: hidden SELECTORS ELEMENTS SHOWN missed SELECTORS ELEMENTS in MS ms"
+                  those of them shown, and those a blocker's injected style sheet hides, not the
+                  page's own (#3268); and with BASE, an earlier run's FILE for the same site, the
+                  selectors its blocker hid none of whose elements were shown then and some are
+                  now. Logs "cdp: hidden SELECTORS ELEMENTS SHOWN blocker SELECTORS missed
+                  SELECTORS ELEMENTS in MS ms"
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, and
                   "redirect": true where it's a redirect of the request before it, "failed"
@@ -205,7 +207,8 @@ def log_title(info):
         log("title %s %s" % (info["targetId"], info["title"]))
 
 
-def call(method, params=None, session=None):
+def call(method, params=None, session=None, quiet=False):
+    """METHOD's result; with QUIET, None where it fails, as a node gone from the page since."""
     global sent
     with lock:
         sent += 1
@@ -219,6 +222,8 @@ def call(method, params=None, session=None):
         answered.wait_for(lambda: number in replies)
         reply = replies.pop(number)
     if "error" in reply:
+        if quiet:
+            return None
         raise SystemExit("cdp: %s failed: %s" % (method, reply["error"]))
     return reply["result"]
 
@@ -593,20 +598,55 @@ def count(selectors):
     return json.loads(evaluate("%s(%s)" % (COUNT, json.dumps(selectors))) or "{}")
 
 
+def hides_none(rule):
+    return any(p["name"] == "display" and p["value"].replace("!important", "").strip() == "none"
+               and not p.get("disabled") and p.get("parsedOk", True)
+               for p in rule["style"].get("cssProperties", []))
+
+
+def blocker_hid(selectors):
+    """Those of SELECTORS with an element a stylesheet the page didn't load hides, one DevTools
+    calls injected: the browser's own engine's (core/ad_block_page_agent.cc) and uBlock Origin's,
+    its procedural filters' too, which hide by an attribute and a rule. A part the page hides
+    itself, as a player's controls before it plays, is the page's (#3268)."""
+    call("DOM.enable", {}, session)
+    call("CSS.enable", {}, session)
+    root = call("DOM.getDocument", {"depth": 0}, session)["root"]["nodeId"]
+    hid = []
+    for selector in selectors:
+        found = call("DOM.querySelectorAll", {"nodeId": root, "selector": selector}, session,
+                     quiet=True)
+        # The first few, as a selector's elements are hidden alike and some pages have hundreds.
+        for node in (found or {}).get("nodeIds", [])[:10]:
+            styles = call("CSS.getMatchedStylesForNode", {"nodeId": node}, session, quiet=True)
+            if any(m["rule"].get("origin") == "injected" and hides_none(m["rule"])
+                   for m in (styles or {}).get("matchedCSSRules", [])):
+                hid.append(selector)
+                break
+    # Each would send an event a change of the page's from here on.
+    call("CSS.disable", {}, session)
+    call("DOM.disable", {}, session)
+    return hid
+
+
 def hidden(path, base):
     began = time.monotonic()
-    found = {"hidden": count(evaluate(HIDDEN_NOW) or [])}
-    before = json.load(open(base, encoding="utf-8"))["hidden"] if base else {}
-    # What the earlier run hid all of and this one shows some of. A selector whose elements were
-    # partly shown then, as a column's, is the page's own layout, which changes from load to load.
-    found["missed"] = {selector: shown for selector, (_, shown) in count(list(before)).items()
-                       if shown and not before[selector][1]}
+    now = evaluate(HIDDEN_NOW) or []
+    found = {"hidden": count(now), "blocker": blocker_hid(now)}
+    before = json.load(open(base, encoding="utf-8")) if base else {"hidden": {}}
+    # What the earlier run's blocker hid all of and this one shows some of. A selector whose
+    # elements were partly shown then, as a column's, is the page's own layout, which changes from
+    # load to load; and one the page hid itself, its own (#3268). An earlier run's file from
+    # before blockers were told apart says nothing of whose, so all it hid counts.
+    theirs = set(before.get("blocker", before["hidden"]))
+    found["missed"] = {selector: shown for selector, (_, shown) in count(list(theirs)).items()
+                       if shown and before["hidden"].get(selector, [0, 1])[1] == 0}
     found["ms"] = int((time.monotonic() - began) * 1000)
     with open(path, "w", encoding="utf-8") as out:
         json.dump(found, out)
-    return "%d %d %d missed %d %d in %d ms" % (
+    return "%d %d %d blocker %d missed %d %d in %d ms" % (
         len(found["hidden"]), sum(n for n, _ in found["hidden"].values()),
-        sum(shown for _, shown in found["hidden"].values()),
+        sum(shown for _, shown in found["hidden"].values()), len(found["blocker"]),
         len(found["missed"]), sum(found["missed"].values()), found["ms"])
 
 
