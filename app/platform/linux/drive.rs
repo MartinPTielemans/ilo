@@ -14,31 +14,49 @@
 //! to the window the server would pick, which its client handles as the device's.
 //!
 //! Under Wayland no client can hand another's surfaces input, so there the pointer and keys are
-//! sway's virtual devices, in tools/headless.sh's session alone (drive_wayland.rs).
+//! sway's virtual devices, and ime on's typing and insert are sway's input method, in
+//! tools/headless.sh's session alone (drive_wayland.rs).
+//!
+//! Four things still don't come as a hand's, each for its reason (#2721):
+//! - On X11, ime on's typing and insert post into GPUI's field (`gpui_linux::drive_compose`,
+//!   `drive_commit`, a keystroke with the text). XTEST types only what the keymap has, never
+//!   日本語, and X11's real input method is an fcitx5, which check/ime.sh runs: one in every run
+//!   would cost each run its start.
+//! - On X11, scroll by points in GPUI's windows (`gpui_linux::drive_scroll`): XTEST has the wheel's
+//!   notches and no smooth amounts. A page's scroll is the notches, through XTEST.
+//! - window, on both: it asks the window manager or sway to activate the window, as a taskbar or
+//!   Alt+Tab does. Steps about a click making a window active use click, which is a hand's.
+//! - On X11, a held key's repeat, as above: the server makes one only of a key held past its
+//!   delay, which would be a wait on time.
 //!
 //! The commands are drive.mm's, with what Linux has: click, doubleclick, rightclick, middleclick,
 //! sideclick, clickkey, doubleclickkey, rightclickkey, handclick (X11's own), drag, dragkey, press, dragto,
 //! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, warp (Linux's), scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
-//! agentopen, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
+//! agentopen, agentnavigate, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
 //! desktop on and off, Linux's own, shows the desktop and the windows again as a pager asks,
 //! desktop shell maps a desktop window as a desktop shell does and desktop shell off takes it away, and
 //! onscreen logs what the X server shows of the driven window and the app's overlays over it.
+//! refocus, X11's own, gives the driven browser window the input focus and asks it raised, as a
+//! window manager activating it again does.
 //! The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
 //! and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt
 //! with Alt. flags presses and lets go of those keys, the last key's among them, and the keys after
 //! it go with what it holds. key's again, Linux's alone, presses the key again as the app answers
-//! the first press in a page, and logs "browser: drive pressed again". insert commits its text to a
-//! field of the UI's, not a page's. Linux's own keyonreturn sends a key as key does, the moment
+//! the first press in a page, and logs "browser: drive pressed again". insert commits its text to
+//! the field with the keys: on X11 the UI's, a page's getting plain keys; under Wayland through
+//! the input method, a page's too. Linux's own keyonreturn sends a key as key does, the moment
 //! the X input focus is back in a browser window from one of the app's own, such as a dialog that
 //! closes, as a key typed as it goes reaches the window, before Chromium has run what it posts on
 //! reading the focus come back (#1711). scroll turns the wheel a notch for each event,
 //! where the Mac's moves the content by points. choose works on ilo's menu and on ilo's dialog,
 //! whose buttons it presses by their labels as drive.mm does an alert's, and dismiss on the menu;
 //! Linux shows no alerts yet. fullscreen toggles the window's full screen through the core. ime on types as
-//! drive.mm's scripted input method does, in the UI's fields alone, as a page's input method is
-//! Chromium's, and it can't compose in a page. dragover and dragdrop are XDND's source, as
+//! drive.mm's scripted input method does: on X11 in the UI's fields alone, as a page's input method
+//! is Chromium's, out of the driver's reach; under Wayland in the field sway gives the input
+//! method, a page's too, and ime on fails, saying why, if the seat has another. dragover and
+//! dragdrop are XDND's source, as
 //! another app's drag is, to the browser window's top-level window or its proxy, and wait for its
 //! answer; under Wayland, the data device's, from a client of the driver's own (drive_drags.rs). swipe is Wayland's alone, as X11 sends no touchpad's phases. display add and remove
 //! are Wayland's alone too: an output of sway's headless backend, beside the others, as the
@@ -282,7 +300,7 @@ fn settle(n: u64) {
             // Past here no press of the command's is still to be answered.
             PRESS_AGAIN.take();
             let (key, focus, active) = keyboard();
-            let marked = Field::with_keys().and_then(Field::marked);
+            let marked = marked();
             let marked = marked.map_or("none".into(), |at| format!("{},{}", at.start, at.len()));
             log!(
                 "browser: drive {n} done, key {key}, focus {focus}, active {}, marked {marked}",
@@ -1259,19 +1277,19 @@ fn input_focus() -> Option<xproto::Window> {
     Some(x.0.get_input_focus().ok()?.reply().ok()?.focus)
 }
 
-/// The UI's field the scripted input method composes in: GPUI's in the X window with the input
-/// focus, or under Wayland in the browser window's surface while its UI or an overlay over it has
-/// the keys, which the compositor gives the surface.
+/// Where the scripted input method composes: GPUI's field in the X window with the input focus,
+/// posted into, or under Wayland the field sway gives the driver's input method to
+/// (drive_wayland.rs), a page's or the UI's.
 #[derive(Clone, Copy)]
 enum Field {
     X(xproto::Window),
-    Wayland(*mut c_void),
+    Wayland,
 }
 
 impl Field {
     fn with_keys() -> Option<Field> {
         match crate::drive_wayland::on() {
-            true => crate::drive_wayland::ime_surface().map(Field::Wayland),
+            true => Some(Field::Wayland),
             false => input_focus().map(Field::X),
         }
     }
@@ -1279,30 +1297,33 @@ impl Field {
     fn compose(self, text: &str, selected: Option<std::ops::Range<usize>>) -> bool {
         match self {
             Field::X(window) => gpui_linux::drive_compose(window, text, selected),
-            Field::Wayland(surface) => gpui_linux::drive_compose_in(surface, text, selected),
+            Field::Wayland => crate::drive_wayland::compose(text, selected),
         }
     }
 
     fn commit(self, text: &str) -> bool {
         match self {
             Field::X(window) => gpui_linux::drive_commit(window, text),
-            Field::Wayland(surface) => gpui_linux::drive_commit_in(surface, text),
-        }
-    }
-
-    fn marked(self) -> Option<std::ops::Range<usize>> {
-        match self {
-            Field::X(window) => gpui_linux::marked_range(window),
-            Field::Wayland(surface) => gpui_linux::marked_range_in(surface),
+            Field::Wayland => crate::drive_wayland::commit(text),
         }
     }
 }
 
+/// What the UI's field with the keys has marked, for the done line: GPUI's in the X window with
+/// the input focus, or in the surface drive_wayland.rs's `ime_surface` names.
+fn marked() -> Option<std::ops::Range<usize>> {
+    match crate::drive_wayland::on() {
+        true => gpui_linux::marked_range_in(crate::drive_wayland::ime_surface()?),
+        false => gpui_linux::marked_range(input_focus()?),
+    }
+}
+
 /// Handles `key` as drive.mm's scripted input method does, with the calls a Japanese one makes in
-/// the UI's field with the keys: letters compose, space converts them all, return commits and
-/// escape cancels. Returns false for a key it leaves to the window, as one with a shortcut's
-/// modifiers, and None for one it would compose in a page, whose input method is Chromium's,
-/// which the driver can't type through: as plain keys it would pass for a composition.
+/// the field with the keys: letters compose, space converts them all, return commits and escape
+/// cancels. Returns false for a key it leaves to the window, as one with a shortcut's modifiers,
+/// and None for one no field took: on X11 one it would compose in a page, whose input method is
+/// Chromium's, which the driver can't type through, as plain keys would pass for a composition;
+/// under Wayland one where sway gave the input method no text input.
 pub(super) fn ime_key(key: &str, state: u16) -> Option<bool> {
     let shortcut = u16::from(KeyButMask::CONTROL | KeyButMask::MOD1);
     let letter = key.len() == 1 && key.bytes().all(|b| b.is_ascii_lowercase());
@@ -1366,33 +1387,6 @@ fn held_modifiers() -> u16 {
     FLAGS.get() | KEY_FLAGS.get() & u16::from(KeyButMask::CONTROL)
 }
 
-/// Unlocks the Control and Alt of the X server's keyboard, which the driver locked for `flags`
-/// before it held them through XTEST (#2721): the server keeps a lock its client leaves. Only a
-/// server a build from before then drove can have one, so this goes a release on (#2899). Only
-/// on a display XTEST may drive, as the driver leaves anyone else's keyboard alone.
-fn unlock_modifiers() -> Option<()> {
-    use x11rb::protocol::xkb::{self, ConnectionExt as _};
-    xtest()?;
-    let x = server()?;
-    let (connection, _) = &*x;
-    // The server takes no other XKB request from a client before this one.
-    connection.xkb_use_extension(1, 0).ok()?.reply().ok()?;
-    let affected = xproto::ModMask::CONTROL | xproto::ModMask::M1;
-    let none = xproto::ModMask::from(0u16);
-    (connection.xkb_latch_lock_state(
-        xkb::ID::USE_CORE_KBD.into(),
-        affected,
-        none,
-        false,
-        xkb::Group::M1,
-        none,
-        false,
-        0,
-    ))
-    .ok()?;
-    connection.flush().ok()
-}
-
 /// Lets go of the keys and buttons an earlier launch's driver left down through XTEST. The server
 /// keeps a key or button XTEST pressed, so a launch that quit or crashed after a key with ⌘ or ⌃
 /// left the next launch on the same server reading every key typed as a shortcut, in its UI and
@@ -1401,7 +1395,6 @@ fn release_held_modifiers() {
     if crate::drive_wayland::on() {
         return;
     }
-    unlock_modifiers();
     let release = || -> Option<()> {
         let x = server()?;
         let (connection, root) = &*x;
@@ -2864,11 +2857,16 @@ fn run_command(line: &str) -> Option<()> {
         "type" => rest.chars().try_for_each(|c| key(&c.to_string(), none)),
         "insert" => insert(rest),
         "ime" => {
-            IME_ON.set(match words.next()? {
+            let on = match words.next()? {
                 "on" => true,
                 "off" => false,
                 _ => return None,
-            });
+            };
+            // Under Wayland the driver is sway's input method from here, or refuses to be.
+            if on && crate::drive_wayland::on() {
+                crate::drive_wayland::input_method()?;
+            }
+            IME_ON.set(on);
             COMPOSITION.set(None);
             Some(())
         }
@@ -3016,6 +3014,23 @@ fn run_command(line: &str) -> Option<()> {
             Some(())
         }
         "stack" => stack(),
+        // The window manager focusing the driven browser window again with no input, as sway does
+        // as it activates it while an overlay over it maps (#3044): the X focus to its window, and
+        // a raise asked of the manager, which sway's leaves to its own activations.
+        "refocus" => {
+            let browser = driven()?;
+            let x = server()?;
+            let (connection, _) = &*x;
+            let focus = xproto::InputFocus::POINTER_ROOT;
+            connection
+                .set_input_focus(focus, browser.window, x11rb::CURRENT_TIME)
+                .ok()?;
+            let above = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
+            connection.configure_window(browser.window, &above).ok()?;
+            sync();
+            log!("browser: drive refocused the browser window");
+            Some(())
+        }
         "front" => {
             let driven = driven().map(|b| b.id);
             let describe = |browser: Option<Browser>| match browser {
@@ -3189,6 +3204,15 @@ fn run_command(line: &str) -> Option<()> {
             let tab = unsafe { bc::bc_agent_open_tab(agent_c.as_ptr(), url_c.as_ptr()) };
             (tab != 0).then_some(())?;
             log!("browser: agent {agent} opened {tab}");
+            Some(())
+        }
+        "agentnavigate" => {
+            let agent = words.next()?;
+            let tab: bc::bc_id = words.next()?.parse().ok()?;
+            let url = words.next()?;
+            let (agent_c, url_c) = (CString::new(agent).ok()?, CString::new(url).ok()?);
+            let went = unsafe { bc::bc_agent_navigate(agent_c.as_ptr(), tab, url_c.as_ptr()) };
+            log!("browser: agent {agent} navigated {tab}: {}", went as u8);
             Some(())
         }
         "agentrelease" => {

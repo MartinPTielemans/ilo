@@ -386,6 +386,9 @@ shows 'c,b,a,w side s,n hidden - float -' "letting go on the bare page with no k
 
 # A float: the note carried with ⌘ held stays where it's let go, over the page, and the mini bar's
 # pin, its first button, turns it between staying on screen and scrolling with the page.
+# ⌘ stays down from the press to the release, as a hand's does: Windows' real input lets a
+# command's keys go as it ends (#3109), and the page then reads the carry with no key held.
+send flags cmd
 carry $(side_slot 1) $(page_at 300 760) cmd
 # A float shows no preview, as the thing carried is already where it lands: the core says Floats
 # from the lift on.
@@ -415,6 +418,8 @@ pin_said "the foot bar didn't say how the float is pinned"
 pinned=$pin pinned_words=$words
 shows "c,b,a,w side s hidden - float n:$pinned" "the page doesn't draw the float as the core pins it"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-floats.png" || fail "no window to capture"
+# ⌘ goes once the float's lines since its release are read, before the mini bar is pressed.
+send flags
 # The pin pressed: the UI asks the core to turn it, the core's answer comes, then the page.
 turn_pin() {
   local ask=$turn

@@ -294,6 +294,14 @@ EOF
   done
   fail "$2"
 }
+# drag_full_windows <0 or 1>: Windows' "Show window contents while dragging", for this user.
+drag_full_windows() {
+  local user32='[DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint action, uint value, System.IntPtr unused, uint save);'
+  powershell -NoProfile -Command "Add-Type -Name Desktop -Namespace Check -MemberDefinition '$user32';
+    if ([Check.Desktop]::SystemParametersInfo(0x25, $1, [System.IntPtr]::Zero, 3)) { exit 0 };
+    exit 1" > "$out/drag-full-windows.log" 2>&1 ||
+    fail "Windows didn't set Show window contents while dragging to $1: $(cat "$out/drag-full-windows.log")"
+}
 # pip_driven: whether the driver presses and drags in a Picture in Picture window, which it does
 # through X11 or sway's tree. Windows' and the Mac's leave the drag to the desktop's pointer.
 pip_driven() {
@@ -986,12 +994,46 @@ elif [ "$(uname)" = Darwin ]; then
   mini_player_at "x >= px - 200 && x <= px - 190 && y == py && w == pw && h == ph" \
     "a drag didn't move the Mini Player: $(cat "$out/pointer.txt")"
 else
+  if windows; then
+    # Windows 11 shows a window's contents while it's dragged, as the core's throw expects: with
+    # that off, as on GitHub's runners, Windows moves the window once, at the release, which the
+    # core reads as a throw (#3062). So the drag has it on, and puts back what was set after.
+    drag_full=$(reg query 'HKCU\Control Panel\Desktop' //v DragFullWindows 2> /dev/null |
+      awk '/DragFullWindows/ { print $3 }')
+    drag_full_windows 1
+  fi
   send pip press $((pw / 8)) $((ph / 2))
   expect 'browser: mini player pressed at ' "a press off its controls didn't reach the Mini Player"
   send pip dragto $((pw / 8 - 10)) $((ph / 2))
   expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
   send pip dragto $((pw / 8 - 200)) $((ph / 2))
+  if windows; then
+    # Windows' move loop moves the window a moment after the pointer, and a release within 100 ms
+    # of a move longer than 6 points throws it to a corner (core/mini_player_place.h). So once it's
+    # there, the pointer rests a moment before it lets go, as a hand meaning to leave it there does.
+    # The release goes regardless, so the setting is put back before a failure.
+    for _ in $(seq 50); do
+      send pip
+      dragged=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: pip at ' | tail -1 |
+        cut -d' ' -f4)
+      [ -n "$dragged" ] && [ "$dragged" -le $((px - 190)) ] && break
+      sleep 0.1
+    done
+    # Twice the core's 100 ms release history, so the release comes after the move, not with it.
+    sleep 0.2
+  fi
   send pip release $((pw / 8 - 200)) $((ph / 2))
+  if windows; then
+    drag_full_windows "${drag_full:-1}"
+    [ -n "$dragged" ] && [ "$dragged" -le $((px - 190)) ] ||
+      fail "the Mini Player didn't follow the pointer as it was dragged: it stayed at ${dragged:-none}"
+    expect 'browser: mini player let go at ' "the Mini Player wasn't let go"
+    let_go=$(grep 'browser: mini player let go at ' "$log" | tail -1 | sed 's/.*browser: //')
+    case $let_go in
+    *", staying") ;;
+    *) fail "the Mini Player let go after a rest was thrown: $let_go" ;;
+    esac
+  fi
   moved="x == px - 200"
   ! windows || moved="x >= px - 200 && x <= px - 190"
   ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
@@ -1069,11 +1111,19 @@ second=$(grep -c '^browser: window opened ' "$log")
 opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: window $opened main true\$" "the window ⌘N opened didn't become the main one"
 send window 1
+back=$step
 expect 'browser: mini player back in its tab$' \
   "coming back to the video's window didn't put the Mini Player back in its tab"
 expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
 # The new window's command bar closes as the video's window takes the keyboard, which stays there:
-# the Mac's host gave it back to the bar's window (#2179).
+# the Mac's host gave it back to the bar's window (#2179). On X11 the bar is a window over all of
+# the app's, so one left open stays over the video's, and it took the keyboard back as another of
+# the app's windows took it (#3082). Under Wayland the keys the video's window gets went to the bar
+# over the other (#3116).
+if [ "$(uname)" = Linux ]; then
+  expect '^browser: command bar hidden$' \
+    "the new window's command bar didn't close as the video's window took the keyboard" "$back"
+fi
 if [ "$(uname)" = Darwin ]; then
   first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
   keys=$(grep '^browser: key window [0-9]*$' "$log" | tail -2 | tr '\n' ' ')
@@ -1265,6 +1315,11 @@ document.title = "ready";
   w=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
   send click $page_point
   expect "^browser: title $w playing\$" "a click didn't play the switch's video"
+  # Chromium floats a page on a hide only once it's audible and its media session plays
+  # (AutoPictureInPictureTabHelper), which the browser learns a moment after it plays, so the switch
+  # waits for both: one sooner floats nothing, in Chrome too.
+  expect "^browser: page $w audible 1 " "the switch's video didn't become audible"
+  expect "^browser: page $w media 1 playing 1 " "the switch's video's media session didn't play"
   shown "$v"
   expect "^browser: title $w floating\$" "the video playing with sound didn't float as a switch hid it"
   expect '^browser: handover mini player on screen ' \

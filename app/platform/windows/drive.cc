@@ -23,7 +23,7 @@
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, resizekey, place, minimize, window, order, layout, state, title, pasteboard, front, menu,
-// menubar, choose, dismiss, agentspace, agentopen, agentmayact, agentrelease, agentdisconnect,
+// menubar, choose, dismiss, agentspace, agentopen, agentnavigate, agentmayact, agentrelease, agentdisconnect,
 // takeback and age, pip, as Linux's finds Chromium's Picture in Picture window but with hit
 // tests in place of drags, and Windows' own maximize, which the Mac's has no command for,
 // dpi <percent>, which tells the browser window it moved to a display of that scale as Windows does
@@ -104,6 +104,7 @@ bool host_drive_pointer(unsigned message, long x, long y);
 bool host_drive_key(unsigned vk, long lparam);
 uint64_t host_browser_window_id(size_t index);
 const char* host_floating_name(void* hwnd);
+bool host_floating_panel(void* hwnd, RECT* panel);
 void host_floating_lives(void (*each)(void* context, const char* name, void* hwnd, int life),
                          void* context);
 bool host_save_dialog_answer(const char* path);
@@ -162,6 +163,10 @@ int g_flags = 0;
 // takes ⌃ to be until the flags change, so a ⌃Tab walk goes on to the next ⌃Tab, as Linux's driver
 // holds it (KEY_FLAGS).
 bool g_key_ctrl = false;
+// With real input, the keys the button the driver holds went down or last moved with. They stay
+// down past the command, as a hand holds a drag's ⌘ from its press to its release, and as
+// platform/linux/drive.rs holds them (#3109).
+int g_button_keys = 0;
 // The window a press went to, which hears the drag until the release, as capture does.
 HWND g_pressed = nullptr;
 // The window the pointer is in, which hears it leave.
@@ -368,13 +373,25 @@ bool TargetAt(double x, double y, Target* target) {
   return true;
 }
 
+// |x|, |y| in the window with the keyboard |key|, on the screen: from its panel's top left where
+// the panel draws its shadow round it in the window, as a check names a point in the panel the
+// Mac's window is the size of.
+POINT InKey(HWND key, double x, double y) {
+  RECT panel{};
+  if (!host_floating_panel(key, &panel)) {
+    return OnScreen(key, x, y);
+  }
+  const double scale = Scale(key);
+  return POINT{panel.left + std::lround(x * scale), panel.top + std::lround(y * scale)};
+}
+
 // The point in the window with the keyboard, as clickkey names it.
 bool TargetInKey(double x, double y, Target* target) {
   HWND key = GetActiveWindow();
   if (!key) {
     return false;
   }
-  const POINT screen = OnScreen(key, x, y);
+  const POINT screen = InKey(key, x, y);
   *target = At(Descend(key, screen), screen);
   return true;
 }
@@ -739,6 +756,9 @@ void Move(const Target& to, int modifiers, UINT buttons) {
   g_real_aim = to.hwnd;
   HoldKeys(modifiers, buttons);
   if (g_real) {
+    if (buttons) {
+      g_button_keys = modifiers;
+    }
     RealPointerTo(to.screen);
     return;
   }
@@ -792,6 +812,7 @@ void Press(const Target& at, UINT button, int modifiers, bool second) {
   g_real_aim = at.hwnd;
   HoldKeys(modifiers, button);
   if (g_real) {
+    g_button_keys = modifiers;
     // Windows activates the window, tells its parents and makes a second press a double click.
     RealPointerTo(at.screen);
     RealPointer(RealFlags(button, false), XButton(button));
@@ -844,6 +865,7 @@ void Release(const Target& at, UINT button, int modifiers) {
   g_real_aim = at.hwnd;
   HoldKeys(modifiers);
   if (g_real) {
+    g_button_keys = 0;
     RealPointerTo(at.screen);
     RealPointer(RealFlags(button, true), XButton(button));
     // Its keys stay held past the button, as a hand's do, until the next step's.
@@ -1155,8 +1177,11 @@ void LogLayout(HWND root) {
     if (!Ours(top) || GetWindow(top, GW_OWNER) != root || !IsWindowVisible(top)) {
       continue;
     }
+    // A panel that draws its shadow round it in its window is where the panel is in it.
     RECT rect;
-    GetWindowRect(top, &rect);
+    if (!host_floating_panel(top, &rect)) {
+      GetWindowRect(top, &rect);
+    }
     const double x = (rect.left - origin.x) / scale, y = (rect.top - origin.y) / scale;
     const double across = (rect.right - rect.left) / scale;
     const double down = (rect.bottom - rect.top) / scale;
@@ -1645,6 +1670,7 @@ bool AppDragLetGo(double x, double y, int modifiers) {
   g_app_drag->held = false;
   // The real button that started it comes up where the drag went.
   if (g_real) {
+    g_button_keys = 0;
     RealPointerTo(g_app_drag->at);
     RealPointer(MOUSEEVENTF_LEFTUP);
   }
@@ -2199,8 +2225,8 @@ bool Run(const std::string& line) {
       return false;
     }
     HWND key = GetActiveWindow();
-    const Target half = At(from.hwnd, OnScreen(key, (x + x2) / 2, (y + y2) / 2));
-    const Target to = At(from.hwnd, OnScreen(key, x2, y2));
+    const Target half = At(from.hwnd, InKey(key, (x + x2) / 2, (y + y2) / 2));
+    const Target to = At(from.hwnd, InKey(key, x2, y2));
     AddPress(from, MK_LBUTTON, 0);
     g_steps.push_back({[=] { Move(half, 0, MK_LBUTTON); }});
     g_steps.push_back({[=] { Move(to, 0, MK_LBUTTON); }});
@@ -2522,6 +2548,17 @@ bool Run(const std::string& line) {
     fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
     return true;
   }
+  if (action == "agentnavigate") {
+    std::string agent, url;
+    bc_id tab;
+    if (!(words >> agent >> tab >> url)) {
+      return false;
+    }
+    const bool went = bc_agent_navigate(agent.c_str(), tab, url.c_str());
+    fprintf(stderr, "browser: agent %s navigated %llu: %d\n", agent.c_str(),
+            (unsigned long long)tab, went ? 1 : 0);
+    return true;
+  }
   if (action == "agentmayact") {
     std::string agent;
     bc_id tab;
@@ -2783,9 +2820,11 @@ void Next() {
       fprintf(stderr, "browser: drive %ld: can't do that\n", number);
     }
     // A click's real keys, held past its button as a hand's are, are let go as the command ends,
-    // so none is still down for the next, such as Win+D's (realkey). flags' and ⌃Tab's stay.
+    // so none is still down for the next, such as Win+D's (realkey). flags' and ⌃Tab's stay, and
+    // a held button's until it's let go.
     if (g_real) {
-      g_steps.push_back({[] { RealModifiers(g_flags | (g_key_ctrl ? kCtrl : 0)); }});
+      g_steps.push_back(
+          {[] { RealModifiers(g_flags | g_button_keys | (g_key_ctrl ? kCtrl : 0)); }});
     }
     // Done once the messages posted are handled, and what handling them posted. Twice, as GPUI
     // and Chromium post more as they handle some, such as the characters a key types.
