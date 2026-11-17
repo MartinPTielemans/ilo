@@ -1,10 +1,35 @@
 #include "browser_core/idle_check.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/functional/bind.h"
 
 namespace browser_core {
+
+bool MayUnload(const UnloadFacts& tab) {
+  if (tab.closing || tab.shown || tab.private_window || tab.agents || tab.system_page) {
+    return false;
+  }
+  if (!tab.has_page) {
+    return true;
+  }
+  return !tab.devtools_open && !tab.asks_before_leaving && !tab.in_call && !tab.chrome_keeps;
+}
+
+std::optional<uint64_t> PickUnderPressure(
+    std::vector<std::pair<uint64_t, base::Time>> tabs,
+    base::FunctionRef<UnloadFacts(uint64_t)> facts) {
+  std::stable_sort(tabs.begin(), tabs.end(),
+                   [](const auto& a, const auto& b) { return a.second < b.second; });
+  for (const auto& [tab, last_seen] : tabs) {
+    const UnloadFacts known = facts(tab);
+    if (known.has_page && MayUnload(known)) {
+      return tab;
+    }
+  }
+  return std::nullopt;
+}
 
 IdleCheck::IdleCheck(Host& host, base::TimeDelta after) : host_(host), after_(after) {}
 

@@ -128,6 +128,13 @@ void DrawPageIn(views::Widget* widget,
 // accept_events does it on the Mac and Wayland, but not on X11 or Windows.
 void PassPointerThrough(views::Widget* widget);
 
+// Runs |moved| with each origin, in DIPs, that a move loop on |widget| proposes while the system
+// moves only an outline of the window and the window itself only at the release: Windows does so
+// with "Show window contents while dragging" off. Until the runner it returns goes. Where the
+// window moves as it's dragged, as with that setting on and on the Mac, it never runs.
+base::ScopedClosureRunner WatchOutlineMoves(views::Widget* widget,
+                                            base::RepeatingCallback<void(const gfx::Point&)> moved);
+
 // Whether a page's dialog, such as Chrome's passkey dialog, needs a native window of its own to
 // show over the pages, rather than being drawn in the window's own.
 bool PageDialogsInOwnWindow();

@@ -170,3 +170,27 @@ jobs:
           gh release upload "$tag" -R "$repo" --clobber "$RUNNER_TEMP"/Chromium-windows-x64.zip "$RUNNER_TEMP"/Chromium-windows-x64.zip.sha256 \
             "$RUNNER_TEMP"/Chromium-windows-x64-symbols.zip "$RUNNER_TEMP"/Chromium-windows-x64-symbols.zip.sha256
           rm "$RUNNER_TEMP"/Chromium-windows-x64*.zip*
+
+      # What a compile of the core reads besides the core and Microsoft's toolchain and SDK, for a
+      # check of any branch's Windows files on GitHub's Windows runner until the next build, as
+      # engine-mac.yml packs for the Mac (#3105). It's public: none of Microsoft's files go in, and
+      # the machine's paths are rewritten (engine/core_syntax.py). A failure here costs only the
+      # check, never the engine.
+      - id: core
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/core"
+          (cd "$ILO_ENGINE_ROOT/windows" && python3 -I "$GITHUB_WORKSPACE/engine/core_syntax.py" pack \
+            src "$RUNNER_TEMP/core/core-syntax.tar.zst" out/Default "$ILO_ENGINE_ROOT/windows-toolchain")
+          echo "name=engine-windows-core-$(git config -f engine/pins.ini chromium.version)" >> "$GITHUB_OUTPUT"
+      - if: steps.core.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.core.outputs.name }}
+          path: ${{ runner.temp }}/core/core-syntax.tar.zst
+          retention-days: 90
+          compression-level: 0
+      # The runner keeps its disk between jobs.
+      - if: always()
+        run: rm -rf "$RUNNER_TEMP/core"
