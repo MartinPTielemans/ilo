@@ -16,11 +16,12 @@
 # Player, 10 in from the top right of the screen, with Dia's corners and rim, and its flat scrim
 # under the pointer, on the Mac in mini-player-rest.png and mini-player-hover.png. A scroll or a
 # drag moves it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab,
-# shown. On the Mac a throw settles it 10 in at a corner, and a slow release near a side 10 in along
-# it. The next shows where it was left, after a relaunch too, and coming back to its tab's window
-# from another window, or from another app with a menu open, puts it back in the tab. A video
-# playing with sound floats as a tab switch hides it, its Mini Player on screen within 250 ms of the
-# switch.
+# shown. On Windows a drag let go after a rest leaves it there, with window contents shown while
+# dragging or not. On the Mac a throw settles it 10 in at a corner, and a slow release near a side
+# 10 in along it. The next shows where it was left, after a relaunch too, and coming back to its
+# tab's window from another window, or from another app with a menu open, puts it back in the tab. A
+# video playing with sound floats as a tab switch hides it, its Mini Player on screen within 250 ms
+# of the switch.
 # A page asks to share the screen only from a click or a key: asked with neither, its promise is
 # refused, and nothing is shared (decision 12).
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
@@ -997,7 +998,8 @@ else
   if windows; then
     # Windows 11 shows a window's contents while it's dragged, as the core's throw expects: with
     # that off, as on GitHub's runners, Windows moves the window once, at the release, which the
-    # core reads as a throw (#3062). So the drag has it on, and puts back what was set after.
+    # core read as a throw (#3062). So this drag has it on, the next has it off, and each puts back
+    # what was set after.
     drag_full=$(reg query 'HKCU\Control Panel\Desktop' //v DragFullWindows 2> /dev/null |
       awk '/DragFullWindows/ { print $3 }')
     drag_full_windows 1
@@ -1038,6 +1040,28 @@ else
   ! windows || moved="x >= px - 200 && x <= px - 190"
   ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
   mini_player_at "$moved && y == py && w == pw && h == ph" "a drag didn't move the Mini Player"
+  if windows; then
+    # With the setting off, as "Adjust for best performance" leaves it, Windows draws an outline
+    # and moves the window once, at the release, which still isn't a throw when the pointer rested
+    # first (#3062). The window stays put until then, so there's nothing to wait for but the rest.
+    drag_full_windows 0
+    send pip press $((pw / 8)) $((ph / 2))
+    expect 'browser: mini player pressed at ' \
+      "a press off its controls didn't reach the Mini Player with the outline drag"
+    send pip dragto $((pw / 8 - 10)) $((ph / 2))
+    send pip dragto $((pw / 8 - 200)) $((ph / 2))
+    sleep 0.2
+    send pip release $((pw / 8 - 200)) $((ph / 2))
+    drag_full_windows "${drag_full:-1}"
+    expect 'browser: mini player let go at ' "the Mini Player wasn't let go from the outline drag"
+    let_go=$(grep 'browser: mini player let go at ' "$log" | tail -1 | sed 's/.*browser: //')
+    case $let_go in
+    *", staying") ;;
+    *) fail "with contents off while dragging, a rest before the release still threw it: $let_go" ;;
+    esac
+    mini_player_at "$moved && y == py && w == pw && h == ph" \
+      "a drag with window contents off while dragging didn't move the Mini Player"
+  fi
 fi
 send pip wheel $((pw / 2)) $((ph / 3)) -2 cmd
 mini_player_at "w > pw * 1.15 && h > ph * 1.15 && $grown" \
