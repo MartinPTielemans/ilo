@@ -92,11 +92,6 @@ void OverlayTakesKeyboard(views::Widget* widget, bool takes);
 // caret at |caret|, in DIPs from the window's top left, or none is (bc_window_ui_text_input).
 void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret);
 
-// Under Wayland, the input method composes for the field of the app's that the keys typed in
-// |widget|'s page are held for (held_keys), from |hold| until the hold ends, |claimed| by the field
-// or not (UITextInput::HoldForPage). On X11 the hold has the keys the input method gets.
-void HoldPageComposition(views::Widget* widget, bool hold, bool claimed);
-
 // Answers on X11 the clipboard requests in Chromium's queue, and nothing else in it
 // (bc_answer_clipboard_requests). In window_views.cc.
 void AnswerClipboardRequests();
