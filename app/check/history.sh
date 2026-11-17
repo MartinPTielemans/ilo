@@ -420,13 +420,10 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
   [ "$key" = NativeWidgetMacNSWindow ] ||
     fail "a click on Chrome's warning before http at $warning, beside a page in a split, didn't give it the keyboard: $key, $focus"
   if [ "$(uname)" = Darwin ]; then
-    echo "skip: a click on the page beside a warning in a split focusing its pane, and the typing after: on the Mac the click that makes the window key is lost to the page, and the warning keeps the keyboard (#3210)."
-    # ⌘W closes the focused pane, there still the warning's, and the steps after go on in the page
-    # that was beside it, which shows the warning again from them.
-    send key w cmd
-    expect "^browser: tab $warned_tab closed\$" "⌘W on $warned_tab's warning before http, in a split, didn't close it"
-    expect "^browser: panes $beside\$" "⌘W on the warning's pane didn't leave $beside alone"
-    tab=$beside
+    echo "skip: a click on the page beside a warning in a split focusing its pane, and the typing after: on the Mac the click that makes the window key is lost to the page, and the warning keeps the keyboard (#3210). Go to Pane 1 focuses it instead."
+    send key 1 ctrl shift
+    expect "^browser: selected $beside\$" \
+      "Go to Pane 1 (⌃⇧1) on $warned_tab's warning before http, in a split, didn't focus the pane beside it: $(grep -e '^browser: drive' -e '^browser: command ' "$log" | tail -3 | tr '\n' ' ')"
   else
     # The page beside it, on the left.
     pane=$(echo "$panes" | sed -n 1p)
@@ -443,11 +440,11 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
       "typing after a click on the page beside $warned_tab's warning before http didn't reach that page: the keyboard is in $key, on $focus: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
     since "$clicked" | grep -q "^browser: title $beside beside blurred\$" &&
       fail "the page beside $warned_tab's warning before http lost the keyboard after the click into it: $(since "$clicked" | grep -e '^browser: drive' -e "^browser: title $beside " | tail -6 | tr '\n' ' ')"
-    send key w cmd
-    expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
-    expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
-    tab=$warned_tab
   fi
+  send key w cmd
+  expect "^browser: tab $beside closed\$" "⌘W didn't close the pane beside $warned_tab's warning before http"
+  expect "^browser: panes $warned_tab\$" "⌘W on the pane beside the warning didn't leave $warned_tab alone"
+  tab=$warned_tab
 fi
 if [ "$major" -ge 157 ]; then
   warned
