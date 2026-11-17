@@ -46,8 +46,15 @@ const send = (message, ...args) =>
   });
 
 // Writes |bytes| as |kind| ("board", "thumb" or "file"), a slice at a time: the stored file's name
-// for a picture, "" for the others, or false.
-async function write(kind, bytes) {
+// for a picture, "" for the others, or false. The core takes one write at a time, so each waits for
+// the one before: a thumbnail still being written as the tab shows again would fail a landing's save.
+let writing = Promise.resolve();
+function write(kind, bytes) {
+  const now = writing.then(() => writeNow(kind, bytes));
+  writing = now.catch(() => {});
+  return now;
+}
+async function writeNow(kind, bytes) {
   if (!(await send("write", kind, bytes.byteLength))) return false;
   for (let at = 0; at < bytes.byteLength; at += SLICE) {
     // ArrayBuffer, which chrome.send carries as binary.
@@ -103,17 +110,18 @@ function changed() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(save, SAVE_AFTER);
 }
+// Returns whether the Board as it is now was written.
 async function save() {
   clearTimeout(saveTimer);
-  if (!writable) return;
+  if (!writable) return false;
   if (saving) {
     again = true;
-    return saving;
+    return saving.then((done) => done !== false);
   }
   const bytes = new TextEncoder().encode(JSON.stringify({ version: 1, camera, cards }));
   if (bytes.byteLength > MAX_BOARD) {
     unsaved("This Board is too large to save. What's here stays on screen: remove some notes or ink, and it saves again.");
-    return;
+    return false;
   }
   saving = write("board", bytes);
   const done = await saving;
@@ -123,6 +131,7 @@ async function save() {
     again = false;
     return save();
   }
+  return done !== false;
 }
 
 // The Library's picture, 268 × 188 at twice that, of what's in view.
@@ -403,6 +412,14 @@ async function addPicture(blob, x, y) {
   } catch {
     return say("That picture can't be read.", true);
   }
+  const card = { ...(await picture(file, bitmap)), x, y };
+  edit(() => cards.push(card));
+  make(card);
+}
+
+// A picture card of the stored |file|, drawn from |bitmap|, at most 480 wide, with a small copy
+// stored beside a big one; it's placed by the caller.
+async function picture(file, bitmap) {
   let small = "";
   const long = Math.max(bitmap.width, bitmap.height);
   if (long > SMALL) {
@@ -414,9 +431,87 @@ async function addPicture(blob, x, y) {
   }
   const w = Math.min(480, bitmap.width), h = Math.round((w * bitmap.height) / bitmap.width);
   bitmap.close();
-  const card = { id: newId(), kind: "picture", x, y, w, h, z: top(), file, small };
-  edit(() => cards.push(card));
-  make(card);
+  return { id: newId(), kind: "picture", x: 0, y: 0, w, h, z: top(), file, small };
+}
+
+// --- Arrivals ---
+
+// A capture the browser put into this Board waits in its arrivals, a stored file's name a line
+// (core/board.cc), until the page takes it. Each lands as a picture card at the centre of what's
+// in view, a step down and right of any card already there so none hides another, and leaves the
+// selection as a drop does. A landing is an edit, as a paste is, so ⌘Z takes it back. A Board whose
+// tab isn't showing lands nothing until it's shown, so its arrivals land in the view the user sees.
+// The arrivals are taken only once the save holding their cards is written: a crash between lands
+// one again rather than losing it.
+const STEP = 24, RUN = 8; // A run of 8 steps starts again a step across.
+let landing = null, landAgain = false;
+// Arrivals landed whose taking the core hasn't answered yet, which a landing passes over.
+let held = [];
+async function land() {
+  if (!writable || document.visibilityState === "hidden") return;
+  if (landing) {
+    landAgain = true;
+    return;
+  }
+  landing = landArrivals();
+  await landing;
+  landing = null;
+  if (landAgain) {
+    landAgain = false;
+    return land();
+  }
+}
+async function landArrivals() {
+  const names = ((await read(`/${id}/arrived`)) || "").split("\n").filter(Boolean);
+  if (!names.length) return;
+  const fresh = names.slice();
+  for (const name of held) {
+    const at = fresh.indexOf(name);
+    if (at >= 0) fresh.splice(at, 1);
+  }
+  held.push(...fresh);
+  const landed = [];
+  for (const file of fresh) {
+    const blob = await read(`/${id}/files/${file}`, "blob");
+    let bitmap;
+    try {
+      bitmap = blob && (await createImageBitmap(blob));
+    } catch {
+      bitmap = null;
+    }
+    // One that can't be read is taken all the same, as it can never land.
+    if (bitmap) landed.push(await picture(file, bitmap));
+  }
+  if (landed.length) {
+    edit(() => {
+      for (const card of landed) {
+        [card.x, card.y] = spot(card);
+        card.z = top();
+        cards.push(card);
+      }
+    });
+    for (const card of landed) make(card);
+  }
+  // A save already under way doesn't hold the cards just landed.
+  while (saving) await saving;
+  if ((await save()) && (await send("taken", names))) held = [];
+}
+// Where |card| lands: centred in the view, or the first free place down a run of steps from there,
+// each run a step across from the last, so a long list of arrivals stays in view.
+function spot(card) {
+  const [cx, cy] = toWorld(innerWidth / 2, innerHeight / 2);
+  const step = STEP / camera.zoom;
+  const x0 = cx - card.w / 2, y0 = cy - card.h / 2;
+  const free = (x, y) => !cards.some((other) => other.kind !== "stroke" &&
+    Math.abs(other.x - x) < step && Math.abs(other.y - y) < step);
+  // Each place is rounded before it's tried, as a card is kept at whole pixels: a view an odd
+  // number of pixels across would otherwise find a step from a card's place a half pixel short.
+  for (let k = 0; k < RUN * RUN; k++) {
+    const down = k % RUN;
+    const x = Math.round(x0 + (down + Math.floor(k / RUN)) * step), y = Math.round(y0 + down * step);
+    if (free(x, y)) return [x, y];
+  }
+  return [Math.round(x0), Math.round(y0)];
 }
 
 // What's pasted or dropped: a picture's bytes, a web address, or text as a note.
@@ -820,13 +915,14 @@ function say(text, briefly = false) {
   }
 }
 
-// |path|'s text from the host, or null. Blink's fetch() takes no chrome: address, so it's a GET
-// the old way.
-function read(path) {
+// |path| from the host as |type| ("text" or "blob"), or null. Blink's fetch() takes no chrome:
+// address, so it's a GET the old way.
+function read(path, type = "text") {
   return new Promise((done) => {
     const request = new XMLHttpRequest();
     request.open("GET", path);
-    request.onload = () => done(request.status === 200 ? request.responseText : null);
+    request.responseType = type;
+    request.onload = () => done(request.status === 200 ? request.response : null);
     request.onerror = () => done(null);
     request.send();
   });
@@ -858,11 +954,16 @@ async function open_() {
   $("#note").hidden = true;
   moveCamera(false);
   renderAll();
+  // What came while it was closed lands now, and what comes while it's open lands as it comes.
+  listeners.set("board-arrived", land);
+  await land();
   offerFirstNote();
 }
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && writable) save().then(saveThumb);
+  // What came while its tab wasn't showing lands now, at the centre of the view shown.
+  else land();
 });
 
 open_();
