@@ -7,9 +7,9 @@
 # unpinned, archived and reopened, it's still only "(a Board)" in the log, never its name, and the
 # reopened page reads its file: a change keeps the note. A Board whose file holds markup in a
 # note's text and a javascript: link runs neither. A Board's file over 4 MiB, which the host
-# doesn't read, says so and is never written over, captured. A private window has no New Board,
-# and a Board's address there shows "This Board isn't here.", captured. Japanese input as the
-# first keys is the hosted Mac's.
+# doesn't read, says so and is never written over, captured, as is one holding [] rather than a
+# Board. A private window has no New Board, and a Board's address there shows "This Board isn't
+# here.", captured. Japanese input as the first keys is the hosted Mac's.
 
 log="$out/board.log"
 step=0
@@ -164,6 +164,22 @@ done
 [ "$(cksum < "$boards/$large/board.json")" = "$before" ] ||
   fail "the Board's file over 4 MiB was written over: $(wc -c < "$boards/$large/board.json") bytes"
 ../tools/window-screenshot.sh "$pid" "$out/board-unread.png" || fail "no window to capture"
+# A file that parses but isn't an object isn't a Board, and isn't written over either.
+other=$(printf 'd%.0s' $(seq 32))
+mkdir -p "$boards/$other"
+printf '[]' > "$boards/$other/board.json"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send insert "chrome://board/$other"
+send key return
+expect "^browser: loaded [0-9]* chrome://board/$other\$" "the Board whose file holds [] didn't load"
+send scroll 640 400 40 5
+for _ in $(seq 30); do
+  # The window a save would come in, as above.
+  sleep 0.1
+done
+[ "$(cat "$boards/$other/board.json")" = '[]' ] ||
+  fail "the Board whose file holds [] was written over: $(head -c 200 "$boards/$other/board.json")"
 
 # 4: a private window has no New Board, and a Board's address there finds no Board.
 send key n cmd shift
@@ -187,5 +203,6 @@ quit
 echo "ok: New Board made $id, its name kept and its note saved in its folder alone, unlogged;" \
   "Library › Boards listed it; renamed, found by the bar, archived and reopened, the log said" \
   "only \"(a Board)\", and its next save kept the note; markup and a javascript: link ran" \
-  "nothing; a Board over 4 MiB wasn't written over; a private window had no New Board." \
+  "nothing; a Board over 4 MiB and one holding [] weren't written over; a private window" \
+  "had no New Board." \
   "Windows: $out/board.png $out/board-markup.png $out/board-unread.png $out/board-private.png"
