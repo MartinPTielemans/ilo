@@ -450,7 +450,9 @@ if [ -z "$standin" ]; then
     "computer's own handlers; a runner or a check VM registers one."
 else
   for context in little tab; do
-    for case in delay click popup popup-closes newtab; do
+    # popup-closes thrice: its window is activated as it closes, which on X11 once crashed the
+    # browser in a focus posted for the window and run once it had gone (#3088).
+    for case in delay click popup popup-closes popup-closes popup-closes newtab; do
       [ "$context $case" != "little newtab" ] || continue
       by_scheme "$context" "$case"
     done

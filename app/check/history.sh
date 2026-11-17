@@ -6,14 +6,17 @@
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
 # warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
 # and a local one over http. One typed with http:// loads over http as written, with no https try
-# and no warning, as in Chrome's address bar. A right-click on reload lists Reload, Hard Reload
-# and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache, not
-# another site's, before the page loads again.
+# and no warning, as in Chrome's address bar. Only what the user typed counts: an agent's open_tab
+# and navigate, and a link, to an http:// address, are tried over https first, and the agent's tab
+# at its warning leaves the user's window the keyboard. A right-click on reload lists Reload, Hard
+# Reload and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache,
+# not another site's, before the page loads again.
 
 # Back, forward, reload and stop. stuck.test leads to a server that takes connections and never
 # answers, so its page keeps loading until it's stopped, and $plain to the check's own, which has no
 # https. The profile remembers a host that fell back to http, so each run names a new one, and
-# $written is another such host, typed with http://.
+# $written is another such host, typed with http://, and $agent_opened, $agent_moved and $linked
+# three more, which an agent and a link go to.
 # $nearby is a local name for the check's server that no run typed before: Chrome's bar fills in a
 # page typed once under the host and port typed, such as tabs' back.html under 127.0.0.1:$port, as
 # one check.sh's runs share its server (#1148).
@@ -21,6 +24,9 @@ serve
 plain="plain-$(date +%s).example.com"
 nearby="history-$(date +%s).localhost"
 written="written-$(date +%s).example.com"
+agent_opened="agent-opened-$(date +%s).example.com"
+agent_moved="agent-moved-$(date +%s).example.com"
+linked="linked-$(date +%s).example.com"
 python3 -I -c '
 import socket, time
 server = socket.socket()
@@ -44,7 +50,8 @@ rm -f "$saved" "$launch_frame"
 BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
   --host-resolver-rules="MAP stuck.test 127.0.0.1:$(cat "$out/port"), \
 MAP $plain 127.0.0.1:$port, MAP $nearby 127.0.0.1:$port, \
-MAP $written 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
+MAP $written 127.0.0.1:$port, MAP $agent_opened 127.0.0.1:$port, \
+MAP $agent_moved 127.0.0.1:$port, MAP $linked 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -189,6 +196,35 @@ expect "^browser: loaded $tab http://$written/\$" \
 $(grep "^browser: loaded $tab" "$log" | tail -1)"
 [ "$(tls)" = "$before" ] || fail "http://$written was tried over https"
 
+# Only an address the user typed counts (#2417): a link, and later an agent's open_tab and
+# navigate, to an http:// address go as a bare host does, over https first, then to 156's http or
+# 157's warning.
+# Each goes to a host of its own, never $written: Chromium lets a host's later loads through once
+# the user typed it with http://, or once 156 fell back to http for it.
+# Waits for the tab $1 to come to http://$2/ after an https try, as $plain did, for $3.
+upgraded() {
+  expect "^browser: page $1 back [0-9]* forward 0 loading 0 http://$2/\$" \
+    "$3 didn't come to http://$2/: $(grep "^browser: page $1 " "$log" | tail -1)"
+  if [ "$major" -ge 157 ]; then
+    # The core's line, which comes at each warning: the app's trouble line comes only when the
+    # tab's trouble changes, and the agent's navigate goes from one warning to the next.
+    expect "browser: tab $1 error -20\$" \
+      "$3 to http://$2/ had no warning before http: $(grep "^browser: loaded $1 " "$log" | tail -1)"
+  else
+    expect "^browser: loaded $1 http://$2/\$" \
+      "$3 to http://$2/ didn't load over http: $(grep "^browser: loaded $1 " "$log" | tail -1)"
+  fi
+  [ "$(tls)" -gt "$before" ] || fail "$3 came to http://$2/ without trying https first"
+}
+# The link clicks itself once its page has loaded: a page's own click on a link loads as a link.
+printf '%s' "<title>link</title><a id=go href=\"http://$linked/\">$linked</a>
+<script>onload = () => setTimeout(() => go.click());</script>" > "$out/site/link.html"
+before=$(tls)
+go_from_bar "$nearby:$port/link.html"
+expect "^browser: loaded $tab http://$nearby:$port/link.html\$" \
+  "the page with the link didn't load: $(grep "^browser: loaded $tab " "$log" | tail -1)"
+upgraded "$tab" "$linked" "a link"
+
 # A right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload (#1959), shown
 # light and dark. stored.html says whether its site has the cookie, the localStorage value and the
 # IndexedDB entry named by its query, then stores them: $nearby's first, another site that keeps
@@ -271,6 +307,36 @@ expect '^browser: command clear-site-data via sidebar$' "Clear Site Data and Rel
 stored 127.0.0.1 "0 0 0" "Clear Site Data and Reload kept 127.0.0.1's cookie, localStorage or IndexedDB"
 go_from_bar "http://$nearby:$port/stored.html?$stored_key"
 stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's data"
+# The agent's open_tab and navigate, in a Space of its own that isn't shown, with the user's tab on
+# a page of the check's own. Then, with the agent's tab at its last load, ⌘L still opens the command
+# bar in the user's window: an agent's tab never takes the user's keyboard, as its warning took it
+# on Windows (#3164).
+agent_steps() {
+  send agentspace claude-code Claude Code
+  expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
+  before=$(tls)
+  send agentopen claude-code "http://$agent_opened/"
+  expect '^browser: agent claude-code opened [1-9][0-9]*$' "the agent didn't open http://$agent_opened/"
+  agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
+  upgraded "$agent_tab" "$agent_opened" "the agent's open_tab"
+  before=$(tls)
+  send agentnavigate claude-code "$agent_tab" "http://$agent_moved/"
+  expect "^browser: agent claude-code navigated $agent_tab: 1\$" \
+    "the core didn't take the agent's navigate to http://$agent_moved/"
+  upgraded "$agent_tab" "$agent_moved" "the agent's navigate"
+  agent_at="at Chrome's warning before http"
+  [ "$major" -ge 157 ] || agent_at="loaded over http"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L in the user's window, with the agent's tab $agent_at, didn't open the command bar"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘L opened in the user's window"
+}
+# Under Wayland they come here, before Chrome's warning, and the run ends on the warning's ⌘W, as
+# a ⌘L after it reaches nothing there (#3167). Elsewhere they come last, so Windows runs the
+# warning's keys before #3164's row stops it.
+wayland=
+[ "$(uname)" != Linux ] || [ -z "${WAYLAND_DISPLAY:-}" ] || wayland=1
+[ -z "$wayland" ] || agent_steps
 # Where Chrome's warning before http is, from the window's top-left corner, and the window's height.
 warning_box() {
   send layout
@@ -369,8 +435,99 @@ if [ "$major" -ge 157 ]; then
   expect '^browser: command close-tab via ' "⌘W on Chrome's warning before http didn't reach the UI"
   expect_tabs "$kept" "$kept" "after one ⌘W on Chrome's warning before http"
   ran_on_warning close-tab "one ⌘W"
+  # Coming back from another app: the warning, which had the keyboard, has it again unless a press
+  # on the UI brought the window forward. On Windows the window gives the page's pane the keyboard
+  # back first, which the warning takes from it only then (#2910). Each starts with the warning's
+  # keys and another app's small window beside ilo's in front, the pointer at $2, and brings ilo's
+  # window forward by $1: "taskbar", as its taskbar button does, where no press activates it, or
+  # "press", a real press there. $3 says where the keyboard goes: "warning" or "ui".
+  back_from_another_app() {
+    send click $((warning_x + warning_width / 2)) $((warning_y + warning_height + 40))
+    clicked=$step
+    for _ in $(seq 50); do
+      [ "$key" = NativeWidgetMacNSWindow ] && break
+      sleep 0.1
+      send state
+    done
+    [ "$key" = NativeWidgetMacNSWindow ] ||
+      fail "a click on the page beside Chrome's warning before http left the keyboard in $key, on $focus, not in the warning: $(since "$clicked" | grep '^browser: drive' | tail -3 | tr '\n' ' ')"
+    rm -f "$out/cover-front"
+    python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" aside \
+      "$(cygpath -w "$out/cover-front")" > "$out/other-window.log" 2>&1 &
+    other=$!
+    # Until it says so, for 30 s by the clock: Git Bash's kill -0 can find a native process just
+    # started gone, and a hundred 0.1 s sleeps there ended before its first line came.
+    started=$SECONDS
+    while [ $((SECONDS - started)) -lt 30 ]; do
+      grep -q '^cover ' "$out/other-window.log" 2> /dev/null && break
+      sleep 0.1
+    done
+    grep -q '^cover .*, foreground away$' "$out/other-window.log" 2> /dev/null ||
+      fail "another app's window didn't open and take the foreground from $kept's warning before http, in $((SECONDS - started)) s: $(cat "$out/other-window.log" 2>&1)"
+    send move $2
+    case $1 in
+      taskbar) how="coming back from another app with the pointer at $2" && touch "$out/cover-front" ;;
+      press) how="a press at $2 from another app" && echo press > "$out/cover-front" ;;
+    esac
+    wait "$other" ||
+      fail "another app's window didn't give ilo's back the foreground: $(cat "$out/other-window.log")"
+    back=$step
+    case $3 in
+      warning) wanted=NativeWidgetMacNSWindow ;;
+      ui) wanted=BrowserCoreNSWindow ;;
+    esac
+    for _ in $(seq 50); do
+      send state
+      [ "$active" = 1 ] && [ "$key" = "$wanted" ] && break
+      sleep 0.1
+    done
+    # The warning takes the keyboard in a task posted as the pane gets it, which has run once a
+    # step after it has.
+    send state
+    [ "$active" = 1 ] && [ "$key" = "$wanted" ] ||
+      fail "$how left the keyboard in $key, on $focus (active $active), where $kept's warning before http had it, not in the $3: $(since "$back" | grep '^browser: drive' | tail -3 | tr '\n' ' ')"
+    [ "$3" = warning ] ||
+      in_browser AccessKitSubclassOfGPUIView "$how, beside $kept's warning before http"
+    send key t cmd
+    expect '^browser: command bar shown$' \
+      "⌘T after $how, beside Chrome's warning before http, didn't open the command bar"
+    send key escape
+    expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened after $how"
+  }
+  if windows; then
+    back_from_another_app taskbar "$sidebar_point" warning
+    back_from_another_app press "$((warning_x + warning_width / 2)) $((warning_y + warning_height + 40))" warning
+    back_from_another_app press "$sidebar_point" ui
+  fi
+  # A click on the page beside the warning while the UI has the keyboard, the browser window
+  # active: on Windows the page's pane takes the keyboard, with no window activated for aura to
+  # give the warning, and drops every key while the warning's up (#2910). The UI's sidebar, clicked
+  # first, has the keyboard there. On Linux the warning takes the keyboard, but ⌘T after it reaches
+  # nothing (#2926).
+  send click $sidebar_point
+  in_browser AccessKitSubclassOfGPUIView "a click on the sidebar beside $kept's warning before http"
+  warning_box
+  send click $((warning_x + warning_width / 2)) $((warning_y + warning_height + 40))
+  clicked=$step
+  send key t cmd
+  expect '^browser: command bar shown$' \
+    "⌘T after a click on the sidebar, then the page beside Chrome's warning before http, didn't open the command bar: $(since "$clicked" | grep -e '^browser: drive' -e '^browser: command ' | tr '\n' ' ')"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened beside the warning"
+fi
+
+if [ -n "$wayland" ]; then
+  [ "$major" -lt 157 ] ||
+    echo "skip: under Wayland the agent's steps come before Chrome's warning before http and the run ends on its ⌘W: a ⌘L after ⌘W closed a tab on its warning reaches nothing there, even after a click on a tab's row (#3167)"
+else
+  # With the user's tab back on a page of the check's own.
+  [ -z "${kept:-}" ] || tab=$kept
+  go_from_bar "$nearby:$port"
+  expect "^browser: loaded $tab http://$nearby:$port/\$" \
+    "$nearby:$port didn't load before the agent's steps: $(grep "^browser: loaded $tab " "$log" | tail -1)"
+  agent_steps
 fi
 exec 3>&-
 quit
 kill "$stuck"
-echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, where ⌘L, ⌘T and ⌘W reach the UI and escape closes the command bar alone, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
+echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, where ⌘L, ⌘T and ⌘W reach the UI and escape closes the command bar alone, and a local one goes over http at once; a link and an agent's open_tab and navigate to http:// go over https first, and ⌘L still opens the command bar with the agent's tab at its last load; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
