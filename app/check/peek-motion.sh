@@ -180,7 +180,13 @@ case $status in
    fi
    echo "skip: peek-motion, as the frames can't say where the card is here: $(grep -v '^open-\|^close-' "$out/peek-motion.txt" | tail -1)"
    exit 0 ;;
-*) fail "a frame shows Peek's resting frame outside its card, or the window's page undimmed inside it: $(grep 'FAIL' "$out/peek-motion.txt" | tr '\n' ' ')" ;;
+*) # Named by what the wrong frames show, as each has its own issue: the window's page in the card
+   # is #2640's, Peek's page outside it #3319's.
+   wrong=$(grep 'FAIL' "$out/peek-motion.txt" | tr '\n' ' ')
+   if grep -q "WRONG: the window's page shows undimmed inside the card" "$out/peek-motion.txt"; then
+     fail "a frame shows the window's page undimmed inside Peek's card: $wrong"
+   fi
+   fail "a frame shows Peek's resting frame outside its card: $wrong" ;;
 esac
 [ -z "$resized" ] || fail "Peek's page was resized more than once, or not to its resting size: it $resized"
 # How long each close held Peek's page for the frame covering it, where the host says (Wayland's).
