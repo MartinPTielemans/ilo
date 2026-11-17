@@ -1625,9 +1625,9 @@ input, textarea { position: absolute; box-sizing: border-box; width: 40%; height
 <script src="painted.js"></script>
 <script>document.querySelector("[aria-label=\"Frame filled\"]").value = "██████";
 painted(() => parent.postMessage("painted", "*"));</script>' > "$out/site/withheld-inner.html"
-  # The fields keep some of their background inside their border, as most pages' do: a withheld
-  # field's hatch takes the colour its corners show, and text filling a field to its corners, as
-  # Linux's full blocks do, made the hatch red, which reads as the text shown.
+  # The fields keep some of their background inside their border, as most pages' do, and the
+  # one-time code's has none, so its text reaches its edges: a withheld field's hatch is the same
+  # greys whatever the field holds, and a hatch taken from the field's pixels went red there (#3277).
   printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><style>
 body { margin: 0; background: #fff }
 input, textarea { position: absolute; box-sizing: border-box; width: 20vw; height: 12vh; margin: 0;
@@ -1644,7 +1644,7 @@ button { position: absolute; left: 70vw; top: 50vh }
 <input aria-label='Shown password' type=password value='██████' style='left: 26vw; top: 20vh'>
 <input aria-label=Card autocomplete=cc-number value='██████' style='left: 50vw; top: 20vh'>
 <textarea aria-label=Note style='left: 74vw; top: 20vh'>██████</textarea>
-<input aria-label='One-time code' autocomplete=one-time-code style='left: 2vw; top: 33vh; height: 5vh; font-size: 4vh'>
+<input aria-label='One-time code' autocomplete=one-time-code style='left: 2vw; top: 33vh; height: 5vh; padding: 0; font-size: 4vh'>
 <input aria-label='Card typed' autocomplete='cc-number' style='left: 26vw; top: 33vh; height: 5vh; font-size: 4vh'>
 <input aria-label='Extension changed' style='left: 50vw; top: 33vh; height: 5vh; font-size: 4vh'>
 <select aria-label='Moved select' style='position: absolute; left: 74vw; top: 33vh'><option selected>First<option>Second</select>
