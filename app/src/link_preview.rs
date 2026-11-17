@@ -77,6 +77,11 @@ pub trait Host {
     fn shown_at_once(&self) -> bool {
         false
     }
+    /// Has `cover_shown` say so for the preview of `tab` once the frame its window draws now is on
+    /// screen, where the OS says when one is: Wayland's. False, and nothing to come, elsewhere.
+    fn when_drawn(&self, _tab: u64) -> bool {
+        false
+    }
     /// It stops taking the keyboard and clicks, which the browser window gets back, as it leaves.
     fn release(&self);
     /// Hides its window, once it has left.
@@ -519,8 +524,12 @@ struct Preview {
     /// left, as it's closing.
     releasing: bool,
     /// Whether the hole has closed over a page under the window that's leaving, which it leaves
-    /// the frame after.
+    /// the frame after, or once that frame is on screen where the host can say.
     covered: bool,
+    /// Whether the page waits for the frame that closed the hole over it to be on screen, and
+    /// that wait's limit, a one-shot dropped as the host says.
+    covering: bool,
+    _covering: Option<Task<()>>,
     /// Whether the card holds at rest as it closes, until a page under the window has left.
     held: bool,
     /// The frame check.sh last read the card holds the page at, in pixels, and the scale.
@@ -587,6 +596,33 @@ impl Preview {
                 })
                 .ok();
         }));
+    }
+
+    /// Has a page under the window wait to leave until the frame drawn now, which closes the hole
+    /// over it, is on screen, where the host can say when, for SHOWN_WAIT at most. False where it
+    /// can't, where the page leaves the frame after.
+    fn wait_for_cover(&mut self, host: &dyn Host, cx: &mut Context<LinkPreview>) -> bool {
+        if !host.when_drawn(self.tab) {
+            return false;
+        }
+        let tab = self.tab;
+        self.covering = true;
+        self._covering = Some(cx.spawn(async move |preview, cx| {
+            cx.background_executor().timer(SHOWN_WAIT).await;
+            preview
+                .update(cx, |preview, cx| {
+                    let waited = preview.preview.as_mut();
+                    let Some(shown) = waited.filter(|shown| shown.tab == tab && shown.covering)
+                    else {
+                        return;
+                    };
+                    log!("browser: link preview cover not shown in 150 ms");
+                    shown.covering = false;
+                    cx.notify();
+                })
+                .ok();
+        }));
+        true
     }
 
     fn moving(&self) -> bool {
@@ -741,6 +777,8 @@ pub fn show(
             _wait: None,
             releasing: false,
             covered: false,
+            covering: false,
+            _covering: None,
             held: false,
             logged: None,
             leaving: None,
@@ -790,6 +828,19 @@ pub fn page_shown(tab: u64, page: Bounds<Pixels>, cx: &mut App) {
         if let Some(shown) = shown.filter(|shown| (shown.tab, shown.placed) == (tab, page)) {
             shown.there = true;
             shown._wait = None;
+            cx.notify();
+        }
+    });
+}
+
+/// The frame the preview of `tab` drew as the hole closed over its page is on screen, where its
+/// host said it would say (`Host::when_drawn`).
+pub fn cover_shown(tab: u64, cx: &mut App) {
+    update(cx, |preview, _, cx| {
+        let shown = preview.preview.as_mut();
+        if let Some(shown) = shown.filter(|shown| shown.tab == tab && shown.covering) {
+            shown.covering = false;
+            shown._covering = None;
             cx.notify();
         }
     });
@@ -1117,11 +1168,17 @@ impl Render for LinkPreview {
                     // The page leaves the frame after the hole has closed over it: the hole closes
                     // at once, and until the frame with the plate in it is on screen, the one
                     // before shows there, clear where the page showed.
+                    // Where the host says when that frame is on screen (Wayland's), the page
+                    // leaves then, as one the compositor waits for the GPU to finish could come
+                    // after the window's frame without the page in it (#2640).
                     (Some(Leave::Close), false) if shown.held && !shown.covered => {
                         shown.covered = true;
-                        window.request_animation_frame();
+                        if !shown.wait_for_cover(&*self.host, cx) {
+                            window.request_animation_frame();
+                        }
                         (none, false)
                     }
+                    (Some(Leave::Close), false) if shown.covering => (none, false),
                     _ => {
                         if how.is_none() || shown.releasing {
                             leave_to = Some(out_of_sight(rest));
