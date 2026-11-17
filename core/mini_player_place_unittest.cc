@@ -1,7 +1,10 @@
 #include "browser_core/mini_player_place.h"
 
 #include <cmath>
+#include <optional>
+#include <vector>
 
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/geometry/point.h"
 
@@ -71,6 +74,65 @@ TEST(MiniPlayerRestTest, AReleaseNearASideOrTwoCatchesItThere) {
 TEST(MiniPlayerRestTest, ASlowReleaseAwayFromTheSidesStays) {
   EXPECT_EQ(MiniPlayerRest(At(700, 480), gfx::Vector2dF(300, 0), gfx::Vector2dF(5, 0), kWorkArea),
             std::nullopt);
+}
+
+// A drag 190 points left in steps 50 ms apart, from the time |start|, each move stamped by the time
+// of its input, as Windows' outline move stamps them, however late the loop heard them (#3062).
+std::vector<MiniPlayerMove> DragLeft(base::TimeTicks start) {
+  return {{start, gfx::Point(1350, 250)},
+          {start + base::Milliseconds(50), gfx::Point(1300, 250)},
+          {start + base::Milliseconds(100), gfx::Point(1250, 250)},
+          {start + base::Milliseconds(150), gfx::Point(1200, 250)},
+          {start + base::Milliseconds(200), gfx::Point(1160, 250)}};
+}
+
+TEST(MiniPlayerReleaseTest, ARestBeforeTheReleaseReadsAsOne) {
+  const base::TimeTicks start = base::TimeTicks() + base::Seconds(10);
+  // Let go 200 ms after the last move: none in the last 100 ms, so it's let go still and stays.
+  const base::TimeTicks released = start + base::Milliseconds(400);
+  EXPECT_EQ(MiniPlayerReleaseVelocity(DragLeft(start), released), gfx::Vector2dF());
+  EXPECT_EQ(MiniPlayerLastMove(DragLeft(start), released), gfx::Vector2dF());
+  EXPECT_EQ(MiniPlayerRest(gfx::Rect(1160, 250, 345, 194),
+                           MiniPlayerReleaseVelocity(DragLeft(start), released),
+                           MiniPlayerLastMove(DragLeft(start), released), kWorkArea),
+            std::nullopt);
+}
+
+TEST(MiniPlayerReleaseTest, AThrowStillReadsAsOne) {
+  const base::TimeTicks start = base::TimeTicks() + base::Seconds(10);
+  // Let go 10 ms after the last move: 90 points in the last 110 ms, a throw.
+  const base::TimeTicks released = start + base::Milliseconds(210);
+  const gfx::Vector2dF velocity = MiniPlayerReleaseVelocity(DragLeft(start), released);
+  EXPECT_NEAR(velocity.x(), -90 / 0.11, 0.01);
+  EXPECT_EQ(velocity.y(), 0);
+  EXPECT_GT(velocity.Length(), kMiniPlayerThrowSpeed);
+  EXPECT_EQ(MiniPlayerLastMove(DragLeft(start), released), gfx::Vector2dF(-40, 0));
+}
+
+TEST(MiniPlayerReleaseTest, TheWindowLandingAfterTheReleaseDoesntThrowIt) {
+  // With window contents off, the window moves once as the loop ends, heard after the release's
+  // input time. Where its DIPs round a point off the outline's, it's a move newer than the release.
+  const base::TimeTicks start = base::TimeTicks() + base::Seconds(10);
+  const base::TimeTicks released = start + base::Milliseconds(400);
+  std::vector<MiniPlayerMove> moves = DragLeft(start);
+  moves.push_back({released + base::Milliseconds(5), gfx::Point(1161, 250)});
+  // It counts, over the time since the last move older than the window: a point in 200 ms.
+  EXPECT_NEAR(MiniPlayerReleaseVelocity(moves, released).x(), 1 / 0.2, 0.01);
+  EXPECT_EQ(MiniPlayerLastMove(moves, released), gfx::Vector2dF(1, 0));
+  EXPECT_EQ(MiniPlayerRest(gfx::Rect(1161, 250, 345, 194),
+                           MiniPlayerReleaseVelocity(moves, released),
+                           MiniPlayerLastMove(moves, released), kWorkArea),
+            std::nullopt);
+}
+
+TEST(MiniPlayerReleaseTest, WithNoMoveThatOldItsFromTheFirst) {
+  const base::TimeTicks start = base::TimeTicks() + base::Seconds(10);
+  const std::vector<MiniPlayerMove> flick = {
+      {start, gfx::Point(700, 480)}, {start + base::Milliseconds(40), gfx::Point(600, 480)}};
+  EXPECT_NEAR(MiniPlayerReleaseVelocity(flick, start + base::Milliseconds(50)).x(), -2000, 0.01);
+  // A release stamped no later than the first move, and no moves, read as still.
+  EXPECT_EQ(MiniPlayerReleaseVelocity(flick, start), gfx::Vector2dF());
+  EXPECT_EQ(MiniPlayerReleaseVelocity({}, start), gfx::Vector2dF());
 }
 
 TEST(MiniPlayerSpringTest, ItStartsAtTheReleasesSpeedAndSettles) {

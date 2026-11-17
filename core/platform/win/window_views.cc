@@ -24,6 +24,7 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "browser_core/dialog_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/focus_ring_aura.h"
@@ -1313,12 +1314,26 @@ class PassThrough : public ui::HWNDMessageFilter, public views::WidgetObserver {
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
 };
 
+// The time of the input a move loop is answering, the mouse message it last took from the queue,
+// on TimeTicks' clock. GetMessageTime is GetTickCount's milliseconds, which wrap every 49.7 days;
+// the age, an unsigned difference, is right across the wrap. One older than a minute is no input of
+// this loop's and reads as now.
+base::TimeTicks InputTime() {
+  const DWORD age = ::GetTickCount() - static_cast<DWORD>(::GetMessageTime());
+  const base::TimeTicks now = base::TimeTicks::Now();
+  return age > 60'000 ? now : now - base::Milliseconds(age);
+}
+
 // Hears the origins a move loop proposes for a window it moves as an outline, which WM_MOVING gives
-// it whether or not it shows the window's contents.
+// it whether or not it shows the window's contents, and the release it ends on, each at the time
+// of its input: the loop can take a move from the queue late, at the release, which then reads as
+// a throw though the pointer rested (#3062).
 class OutlineMoves : public ui::HWNDMessageFilter {
  public:
-  OutlineMoves(HWND window, base::RepeatingCallback<void(const gfx::Point&)> moved)
-      : moved_(std::move(moved)) {
+  OutlineMoves(HWND window,
+               base::RepeatingCallback<void(const gfx::Point&, base::TimeTicks)> moved,
+               base::OnceCallback<void(base::TimeTicks)> let_go)
+      : moved_(std::move(moved)), let_go_(std::move(let_go)) {
     ui::HWNDSubclass::AddFilterToTarget(window, this);
   }
   ~OutlineMoves() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
@@ -1330,24 +1345,33 @@ class OutlineMoves : public ui::HWNDMessageFilter {
       // (DesktopWindowTreeHostWin::GetWindowBoundsInScreen) once it's there: by the display
       // nearest it, where the window isn't yet.
       proposed_ = gfx::Rect(*reinterpret_cast<const RECT*>(l_param));
-      moved_.Run(display::win::GetScreenWin()->ScreenToDIPRect(nullptr, *proposed_).origin());
-    } else if (message == WM_EXITSIZEMOVE && proposed_) {
-      // Where the window landed beside the outline's last place, in pixels and in the DIPs each
-      // gives the move watch, which counts a move only where they differ. check.sh reads this line.
-      RECT landed;
-      ::GetWindowRect(window, &landed);
-      display::win::ScreenWin* screen = display::win::GetScreenWin();
-      LOG(ERROR) << "browser: outline move ended at " << proposed_->origin().ToString() << " ("
-                 << screen->ScreenToDIPRect(nullptr, *proposed_).origin().ToString()
-                 << " DIPs), the window at " << gfx::Rect(landed).origin().ToString() << " ("
-                 << screen->ScreenToDIPRect(window, gfx::Rect(landed)).origin().ToString()
-                 << " DIPs)";
+      moved_.Run(display::win::GetScreenWin()->ScreenToDIPRect(nullptr, *proposed_).origin(),
+                 InputTime());
+    } else if (message == WM_EXITSIZEMOVE) {
+      // The loop took the button's release from the queue last.
+      if (let_go_) {
+        std::move(let_go_).Run(InputTime());
+      }
+      if (proposed_) {
+        // Where the window landed beside the outline's last place, in pixels and in the DIPs
+        // each gives the move watch, which counts a move only where they differ. check.sh reads
+        // this line.
+        RECT landed;
+        ::GetWindowRect(window, &landed);
+        display::win::ScreenWin* screen = display::win::GetScreenWin();
+        LOG(ERROR) << "browser: outline move ended at " << proposed_->origin().ToString() << " ("
+                   << screen->ScreenToDIPRect(nullptr, *proposed_).origin().ToString()
+                   << " DIPs), the window at " << gfx::Rect(landed).origin().ToString() << " ("
+                   << screen->ScreenToDIPRect(window, gfx::Rect(landed)).origin().ToString()
+                   << " DIPs)";
+      }
     }
     return false;
   }
 
  private:
-  base::RepeatingCallback<void(const gfx::Point&)> moved_;
+  base::RepeatingCallback<void(const gfx::Point&, base::TimeTicks)> moved_;
+  base::OnceCallback<void(base::TimeTicks)> let_go_;
   // The outline's last place, in pixels.
   std::optional<gfx::Rect> proposed_;
 };
@@ -1356,13 +1380,15 @@ class OutlineMoves : public ui::HWNDMessageFilter {
 
 base::ScopedClosureRunner WatchOutlineMoves(
     views::Widget* widget,
-    base::RepeatingCallback<void(const gfx::Point&)> moved) {
+    base::RepeatingCallback<void(const gfx::Point&, base::TimeTicks)> moved,
+    base::OnceCallback<void(base::TimeTicks)> let_go) {
   BOOL contents = TRUE;
   if (!SystemParametersInfo(SPI_GETDRAGFULLWINDOWS, 0, &contents, 0) || contents) {
     return base::ScopedClosureRunner();
   }
   return base::ScopedClosureRunner(base::DoNothingWithBoundArgs(
-      std::make_unique<OutlineMoves>(views::HWNDForWidget(widget), std::move(moved))));
+      std::make_unique<OutlineMoves>(views::HWNDForWidget(widget), std::move(moved),
+                                     std::move(let_go))));
 }
 
 void PassPointerThrough(views::Widget* widget) {
