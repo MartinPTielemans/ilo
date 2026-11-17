@@ -68,9 +68,8 @@ pub enum Answer {
     Failed,
 }
 
-/// Whether this build's core can ask a site: not until its call lands with #3009's fetch, so until
-/// then no card has rows or says it's loading, and neither switch shows.
-pub const REACHED: bool = false;
+/// Whether this build's core can ask a site, which the preview, without one, answers for itself.
+pub const REACHED: bool = true;
 
 /// How many rows the card shows under the lists' headings, in the picture's box at its tallest with
 /// the stale line under the third.

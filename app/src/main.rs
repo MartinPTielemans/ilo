@@ -117,6 +117,7 @@ mod popovers;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/previews.rs"]
 mod previews;
+mod recent_host;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/reduce_motion.rs"]
 mod reduce_motion;
@@ -1153,6 +1154,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         ad_block_page: Some(ad_block_host::ad_block_page),
         ad_block_hide: Some(ad_block_host::ad_block_hide),
         tab_shown_in: Some(tab_shown_in),
+        tab_recent_answered: Some(recent_host::tab_recent_answered),
         ..Default::default()
     };
     (args, host)
