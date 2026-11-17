@@ -134,6 +134,23 @@ std::optional<gfx::Rect> MiniPlayerRest(const gfx::Rect& let_go,
   return rest;
 }
 
+void MiniPlayerMoves::Window(const gfx::Point& at, base::TimeTicks when) {
+  if (!outline_) {
+    Add(at, when);
+  }
+}
+
+void MiniPlayerMoves::Outline(const gfx::Point& at, base::TimeTicks when) {
+  outline_ = true;
+  Add(at, when);
+}
+
+void MiniPlayerMoves::Add(const gfx::Point& at, base::TimeTicks when) {
+  if (moves_.empty() || moves_.back().at != at) {
+    moves_.push_back({when, at});
+  }
+}
+
 gfx::Vector2dF MiniPlayerReleaseVelocity(const std::vector<MiniPlayerMove>& moves,
                                          base::TimeTicks released) {
   if (moves.empty()) {

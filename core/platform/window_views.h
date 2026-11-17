@@ -11,7 +11,6 @@
 #include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
-#include "base/time/time.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
@@ -130,14 +129,11 @@ void DrawPageIn(views::Widget* widget,
 void PassPointerThrough(views::Widget* widget);
 
 // Runs |moved| with each origin, in DIPs, that a move loop on |widget| proposes while the system
-// moves only an outline of the window and the window itself only at the release, and |let_go| as
-// the loop ends: Windows does so with "Show window contents while dragging" off. Each gets the time
-// of the input it answers, which the loop can hear late. Until the runner it returns goes. Where
-// the window moves as it's dragged, as with that setting on and on the Mac, neither runs.
-base::ScopedClosureRunner WatchOutlineMoves(
-    views::Widget* widget,
-    base::RepeatingCallback<void(const gfx::Point&, base::TimeTicks)> moved,
-    base::OnceCallback<void(base::TimeTicks)> let_go);
+// moves only an outline of the window and the window itself only at the release: Windows does so
+// with "Show window contents while dragging" off. Until the runner it returns goes. Where the
+// window moves as it's dragged, as with that setting on and on the Mac, it never runs.
+base::ScopedClosureRunner WatchOutlineMoves(views::Widget* widget,
+                                            base::RepeatingCallback<void(const gfx::Point&)> moved);
 
 // Whether a page's dialog, such as Chrome's passkey dialog, needs a native window of its own to
 // show over the pages, rather than being drawn in the window's own.

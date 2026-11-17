@@ -170,49 +170,34 @@ MiniPlayerWatch& Watching() {
 }
 
 // Where a Mini Player was each time its move loop moved it, for the speed it's let go at. Where the
-// loop moves only its outline, and the window at the release, it's where the outline was, at the
-// time of the input each move and the release answered, which the loop can hear late (#3062).
+// loop moves only its outline, and the window at the release, it's where the outline was (#3062).
 class MoveWatch : public views::WidgetObserver {
  public:
   explicit MoveWatch(views::Widget* widget)
       : outline_(platform::WatchOutlineMoves(
             widget,
-            base::BindRepeating(&MoveWatch::Moved, base::Unretained(this)),
-            base::BindOnce(&MoveWatch::LetGoAt, base::Unretained(this)))) {
-    Moved(widget->GetWindowBoundsInScreen().origin(), base::TimeTicks::Now());
+            base::BindRepeating(&MoveWatch::OutlineMoved, base::Unretained(this)))) {
+    moves_.Window(widget->GetWindowBoundsInScreen().origin(), base::TimeTicks::Now());
     observation_.Observe(widget);
   }
 
-  // When it was let go: at the release the outline's move loop ended on, on its moves' clock, or
-  // else now, as the loop returns.
-  base::TimeTicks Released() const { return released_.value_or(base::TimeTicks::Now()); }
-
   gfx::Vector2dF Velocity(base::TimeTicks released) const {
-    return MiniPlayerReleaseVelocity(moves_, released);
+    return MiniPlayerReleaseVelocity(moves_.moves(), released);
   }
   gfx::Vector2dF LastMove(base::TimeTicks released) const {
-    return MiniPlayerLastMove(moves_, released);
+    return MiniPlayerLastMove(moves_.moves(), released);
   }
 
   // views::WidgetObserver:
   void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override {
-    Moved(bounds.origin(), base::TimeTicks::Now());
+    moves_.Window(bounds.origin(), base::TimeTicks::Now());
   }
   void OnWidgetDestroying(views::Widget* widget) override { observation_.Reset(); }
 
  private:
-  void Moved(const gfx::Point& at, base::TimeTicks when) {
-    if (moves_.empty()) {
-      moves_.push_back({when, at});
-    } else if (moves_.back().at != at) {
-      // Never before the last: an input older than the loop's start counts from the start.
-      moves_.push_back({std::max(when, moves_.back().when), at});
-    }
-  }
-  void LetGoAt(base::TimeTicks when) { released_ = when; }
+  void OutlineMoved(const gfx::Point& at) { moves_.Outline(at, base::TimeTicks::Now()); }
 
-  std::vector<MiniPlayerMove> moves_;
-  std::optional<base::TimeTicks> released_;
+  MiniPlayerMoves moves_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
   base::ScopedClosureRunner outline_;
 };
@@ -490,7 +475,7 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
                             views::Widget::MoveLoopEscapeBehavior::kDontHide);
         // The loop returns as the button comes up.
         if (moved) {
-          LetGo(moved.get(), watch, watch.Released());
+          LetGo(moved.get(), watch, base::TimeTicks::Now());
 #if BUILDFLAG(IS_MAC)
           GiveKeyboardBack(moved.get());
 #endif

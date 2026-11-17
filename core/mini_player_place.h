@@ -27,11 +27,29 @@ inline constexpr float kMiniPlayerThrowMove = 6;
 // (app/src/shell.rs).
 inline constexpr base::TimeDelta kMiniPlayerReleaseHistory = base::Milliseconds(100);
 
-// Where a Mini Player's move loop put it, and when: at the time of the input the move answered
-// where the system says it, as Windows' outline move does, since the loop can hear one late.
+// Where a Mini Player's move loop put it, and when.
 struct MiniPlayerMove {
   base::TimeTicks when;
   gfx::Point at;
+
+  friend bool operator==(const MiniPlayerMove&, const MiniPlayerMove&) = default;
+};
+
+// A Mini Player's moves in its move loop, oldest first, from the window's own bounds or, where the
+// loop moves only an outline of the window, the outline's. That loop leaves the window where it
+// was until the release, and Windows tells its bounds again at each of the outline's moves, so
+// once the outline is heard the window's are no longer where the user has it (#3062).
+class MiniPlayerMoves {
+ public:
+  void Window(const gfx::Point& at, base::TimeTicks when);
+  void Outline(const gfx::Point& at, base::TimeTicks when);
+  const std::vector<MiniPlayerMove>& moves() const { return moves_; }
+
+ private:
+  void Add(const gfx::Point& at, base::TimeTicks when);
+
+  std::vector<MiniPlayerMove> moves_;
+  bool outline_ = false;
 };
 
 // Its speed in points a second as it's let go at |released| after |moves|, oldest first: its travel

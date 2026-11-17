@@ -76,8 +76,7 @@ TEST(MiniPlayerRestTest, ASlowReleaseAwayFromTheSidesStays) {
             std::nullopt);
 }
 
-// A drag 190 points left in steps 50 ms apart, from the time |start|, each move stamped by the time
-// of its input, as Windows' outline move stamps them, however late the loop heard them (#3062).
+// A drag 190 points left in steps 50 ms apart, from the time |start|.
 std::vector<MiniPlayerMove> DragLeft(base::TimeTicks start) {
   return {{start, gfx::Point(1350, 250)},
           {start + base::Milliseconds(50), gfx::Point(1300, 250)},
@@ -109,20 +108,53 @@ TEST(MiniPlayerReleaseTest, AThrowStillReadsAsOne) {
   EXPECT_EQ(MiniPlayerLastMove(DragLeft(start), released), gfx::Vector2dF(-40, 0));
 }
 
-TEST(MiniPlayerReleaseTest, TheWindowLandingAfterTheReleaseDoesntThrowIt) {
-  // With window contents off, the window moves once as the loop ends, heard after the release's
-  // input time. Where its DIPs round a point off the outline's, it's a move newer than the release.
+// The same drag as Windows' outline move tells it, with window contents off while dragging: the
+// window's bounds again at the outline's every move, where the window stays until the release, then
+// the outline's last place at the release, the window's old bounds once more, and where it lands.
+MiniPlayerMoves OutlineDragLeft(base::TimeTicks start, base::TimeTicks released) {
+  MiniPlayerMoves moves;
+  const gfx::Point window(1350, 250);
+  moves.Window(window, start);
+  for (const MiniPlayerMove& move : DragLeft(start)) {
+    moves.Outline(move.at, move.when);
+    moves.Window(window, move.when);
+  }
+  moves.Outline(gfx::Point(1160, 250), released);
+  moves.Window(window, released);
+  moves.Window(gfx::Point(1160, 250), released);
+  return moves;
+}
+
+TEST(MiniPlayerReleaseTest, AnOutlineLetGoAfterARestStays) {
+  // Read with the window's bounds, its 190 points from 1350 came in the last 100 ms (#3062).
   const base::TimeTicks start = base::TimeTicks() + base::Seconds(10);
-  const base::TimeTicks released = start + base::Milliseconds(400);
-  std::vector<MiniPlayerMove> moves = DragLeft(start);
-  moves.push_back({released + base::Milliseconds(5), gfx::Point(1161, 250)});
-  // It counts, over the time since the last move older than the window: a point in 200 ms.
-  EXPECT_NEAR(MiniPlayerReleaseVelocity(moves, released).x(), 1 / 0.2, 0.01);
-  EXPECT_EQ(MiniPlayerLastMove(moves, released), gfx::Vector2dF(1, 0));
-  EXPECT_EQ(MiniPlayerRest(gfx::Rect(1161, 250, 345, 194),
-                           MiniPlayerReleaseVelocity(moves, released),
-                           MiniPlayerLastMove(moves, released), kWorkArea),
+  const base::TimeTicks released = start + base::Milliseconds(700);
+  const MiniPlayerMoves moves = OutlineDragLeft(start, released);
+  EXPECT_EQ(moves.moves(), DragLeft(start));
+  EXPECT_EQ(MiniPlayerReleaseVelocity(moves.moves(), released), gfx::Vector2dF());
+  EXPECT_EQ(MiniPlayerRest(gfx::Rect(1160, 250, 345, 194),
+                           MiniPlayerReleaseVelocity(moves.moves(), released),
+                           MiniPlayerLastMove(moves.moves(), released), kWorkArea),
             std::nullopt);
+}
+
+TEST(MiniPlayerReleaseTest, AnOutlineThrownStillReadsAsOne) {
+  const base::TimeTicks start = base::TimeTicks() + base::Seconds(10);
+  const base::TimeTicks released = start + base::Milliseconds(210);
+  const MiniPlayerMoves moves = OutlineDragLeft(start, released);
+  EXPECT_NEAR(MiniPlayerReleaseVelocity(moves.moves(), released).x(), -90 / 0.11, 0.01);
+  EXPECT_EQ(MiniPlayerLastMove(moves.moves(), released), gfx::Vector2dF(-40, 0));
+}
+
+TEST(MiniPlayerReleaseTest, WithTheWindowMovingItsBoundsAreTheMoves) {
+  // With contents shown, as on the Mac, no outline is heard, and the window's bounds read the same.
+  const base::TimeTicks start = base::TimeTicks() + base::Seconds(10);
+  MiniPlayerMoves moves;
+  for (const MiniPlayerMove& move : DragLeft(start)) {
+    moves.Window(move.at, move.when);
+    moves.Window(move.at, move.when + base::Milliseconds(5));
+  }
+  EXPECT_EQ(moves.moves(), DragLeft(start));
 }
 
 TEST(MiniPlayerReleaseTest, WithNoMoveThatOldItsFromTheFirst) {
