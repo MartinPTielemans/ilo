@@ -145,10 +145,12 @@ def main():
         # The dim's progress at D, from its green: 0 is the page as it is, 1 the dim at rest.
         g0 = base[1]
         dims = [max(0.0, min(1.0, (g0 - dd[1]) / ((g0 - DIM) * DIM_OPACITY))) for _, _, dd, _ in rows]
+        # Left out, rather than leaving the run unread: on Wayland the screen can trail the app's
+        # word that the card has settled, which stops an open's filming, most on a first open. The
+        # motion is still unread if no other filming of it caught the card moving, below.
         if max(dims) < 0.8:
             print("%s: the dim never reached its rest at D (%.2f at most), so this filming can't say "
-                  "where the motion is" % (filming, max(dims)))
-            unreadable = True
+                  "where the motion is and is left out" % (filming, max(dims)))
             continue
         blended = True
         caught = wrong = 0
