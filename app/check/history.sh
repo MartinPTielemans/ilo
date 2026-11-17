@@ -447,7 +447,9 @@ if [ "$major" -ge 157 ]; then
   # where no press activates it, or "press", a real press there. Sets $how, and $back to the step
   # after.
   away_and_back() {
-    rm -f "$out/cover-front"
+    # The log goes first: Git Bash's fork can empty it after the wait below has read the last
+    # call's line, which ended the wait at once on an empty log.
+    rm -f "$out/cover-front" "$out/other-window.log"
     python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" aside \
       "$(cygpath -w "$out/cover-front")" > "$out/other-window.log" 2>&1 &
     other=$!
