@@ -28,9 +28,14 @@ rim = 0x0000002E
 rim-dark = 0xFFFFFF1A
 shadow = 0x00000033
 shadow-dark = 0x00000066
-# The selection's ring and the chosen tool.
-ring = 0x5B5BD6
-ring-dark = 0x8B8BF0
+# The chosen tool's, size's and width's plate: the ink at 9 %, as the mocks', with its glyph in
+# ilo's accent, [palette]'s no-theme-accent, which copy-board.sh writes as --accent for it and the
+# selection's ring.
+chosen = 0x16140F17
+chosen-dark = 0xF3F0E817
+# A button's plate under the pointer, the ink at 6 %, lighter than the chosen one's, as the mocks'.
+hover = 0x16140F0F
+hover-dark = 0xF3F0E80F
 # The tools' and the zoom's bars, over the canvas.
 bar = 0xF3F0E8
 bar-dark = 0x1F1D17
@@ -596,6 +601,24 @@ glyph = 16.0
 glyph-alpha = 0.7
 # The popover level's rim, as the tooltip's.
 rim = 0.5
+# A pinned tab's or favorite's card on a site with rows (#3074) has them in the picture's box, as
+# tall as the lists' headings and three rows in every state, and one heading taller with the line
+# saying they're stale: the folder preview's rows, the box's padding in from its sides
+# at the radius concentric with it, 12 - 4, under the lists' headings this tall, in small semibold
+# type at the host's alpha. The headings and the rows' glyphs' ink are on the card's text column.
+# A draft's ink is at this share of its row's. Loading, each row's places are bars at this alpha of
+# the ink, the title's over the detail's, these long and tall.
+recent-heading = 22.0
+# A heading's text sits this far over its rows.
+recent-heading-under = 3.0
+recent-row-radius = 8.0
+recent-draft = 0.55
+recent-bar = 0.08
+recent-title-bar = 150.0
+recent-detail-bar = 90.0
+recent-title-bar-height = 9.0
+recent-detail-bar-height = 7.0
+recent-bar-gap = 6.0
 
 [folder-preview]
 # Resting on a closed folder shows a searchable list of its tabs beside its row (Arc's Folder

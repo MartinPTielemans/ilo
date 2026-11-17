@@ -87,6 +87,8 @@ const DEVELOPER_MODE_NAME: &str = "Developer Mode";
 /// The site's Boost (#695), with the tile's glyph.
 const BOOST: &str = "icons/paintbrush.svg";
 const BOOST_NAME: &str = "Boost";
+const RECENT: &str = "icons/git-pull-request.svg";
+const RECENT_NAME: &str = "Hover Card";
 const ARRANGEMENT: &str = "icons/grid-2x2.svg";
 const ARRANGEMENT_NAME: &str = "Arrangement";
 const PASSWORDS_NAME: &str = "Passwords";
@@ -224,6 +226,9 @@ pub struct Site {
     /// Turn On. Each none where there's nothing to say.
     pub arrangement_misfits: Option<SharedString>,
     pub arrangement_off: Option<SharedString>,
+    /// Whether a pinned tab's or favorite's card on the site shows what's recent there (#3074), on
+    /// or not, none where it shows none: another site, or with Settings' switch off.
+    pub recent: Option<bool>,
 }
 
 /// A turned-on extension, as its action is for the tab's page.
@@ -518,6 +523,8 @@ pub trait Host {
     /// Turn On, for the site's arrangement the core keeps off as it changed outside ilo: the
     /// user keeps it as it is. The user's alone, as a Boost is.
     fn turn_on_arrangement(&self, tab: u64);
+    /// Whether the cards of the site of `tab`'s page show what's recent there (#3074).
+    fn set_recent(&self, tab: u64, on: bool, cx: &mut App);
     fn run(&self, run: Run, tab: u64, cx: &mut App);
     /// Shows ilo's menu of `items` at `position` in the panel's window, and calls `chosen` once it
     /// closes, with the index of the one chosen, if any.
@@ -621,6 +628,7 @@ enum Stop {
     AdBlocking,
     DeveloperMode,
     Boost,
+    Recent,
     Arrangement,
     Passwords,
     /// By Chrome's ContentSettingsType.
@@ -711,6 +719,8 @@ enum Switch {
     Engine(bool),
     /// The site's Boost, where it has one, on or not.
     Boost(bool),
+    /// What's recent in its pinned tabs' and favorites' cards, where it has some, on or not.
+    Recent(bool),
 }
 
 impl Switch {
@@ -719,13 +729,14 @@ impl Switch {
             Switch::DeveloperMode => Stop::DeveloperMode,
             Switch::Engine(_) => Stop::Engine,
             Switch::Boost(_) => Stop::Boost,
+            Switch::Recent(_) => Stop::Recent,
         }
     }
 
     fn on(self) -> bool {
         match self {
             Switch::DeveloperMode => true,
-            Switch::Engine(on) | Switch::Boost(on) => on,
+            Switch::Engine(on) | Switch::Boost(on) | Switch::Recent(on) => on,
         }
     }
 
@@ -734,6 +745,7 @@ impl Switch {
             Switch::DeveloperMode => DEVELOPER_MODE,
             Switch::Engine(_) => ENGINE,
             Switch::Boost(_) => BOOST,
+            Switch::Recent(_) => RECENT,
         }
     }
 
@@ -743,6 +755,7 @@ impl Switch {
             Switch::DeveloperMode => DEVELOPER_MODE_NAME,
             Switch::Engine(_) => ENGINE_NAME,
             Switch::Boost(_) => BOOST_NAME,
+            Switch::Recent(_) => RECENT_NAME,
         }
     }
 
@@ -758,17 +771,21 @@ impl Switch {
             Switch::Engine(false) => "Safari's engine off",
             Switch::Boost(true) => "Boost on",
             Switch::Boost(false) => "Boost off",
+            Switch::Recent(true) => "Pull requests in hover cards",
+            Switch::Recent(false) => "No pull requests in hover cards",
         };
         words.into()
     }
 }
 
-/// The site's switches, in their order: Developer Mode while on, Safari's engine, the Boost.
+/// The site's switches, in their order: Developer Mode while on, Safari's engine, the Boost, what's
+/// recent in its cards.
 fn switches_of(site: &Site) -> Vec<Switch> {
     let developer_mode = (site.developer_mode == Some(true)).then_some(Switch::DeveloperMode);
     let engine = site.system_engine.map(Switch::Engine);
     let boost = site.boost.map(Switch::Boost);
-    [developer_mode, engine, boost]
+    let recent = site.recent.map(Switch::Recent);
+    [developer_mode, engine, boost, recent]
         .into_iter()
         .flatten()
         .collect()
@@ -1583,6 +1600,23 @@ impl SiteControls {
         cx.notify();
     }
 
+    /// What's recent in the site's cards, on this device (#3074).
+    fn toggle_recent(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(open) = self.open.as_mut().filter(|open| open.closing.is_none()) else {
+            return;
+        };
+        let Some(site) = open.site.as_mut().filter(|site| site.recent.is_some()) else {
+            return;
+        };
+        log!(
+            "browser: site controls set recent {}",
+            if on { "on" } else { "off" }
+        );
+        site.recent = Some(on);
+        self.host.set_recent(open.tab, on, cx);
+        cx.notify();
+    }
+
     /// The arrangement's row: Turn On. The app keeps it, so the row goes at once.
     fn turn_on_arrangement(&mut self, cx: &mut Context<Self>) {
         let Some(open) = self.open.as_mut().filter(|open| open.closing.is_none()) else {
@@ -1868,6 +1902,7 @@ impl SiteControls {
                 self.toggle_developer_mode(site.developer_mode != Some(true), cx)
             }
             Stop::Boost => self.toggle_boost(site.boost != Some(true), cx),
+            Stop::Recent => self.toggle_recent(site.recent != Some(true), cx),
             Stop::Arrangement => self.turn_on_arrangement(cx),
             Stop::Passwords => self.choose_login(site.logins.clone(), under, cx),
             Stop::Permission(kind) => {
@@ -2271,6 +2306,7 @@ impl SiteControls {
                         Switch::DeveloperMode => panel.toggle_developer_mode(false, cx),
                         Switch::Engine(on) => panel.choose_engine(on, event.position(), cx),
                         Switch::Boost(on) => panel.toggle_boost(!on, cx),
+                        Switch::Recent(on) => panel.toggle_recent(!on, cx),
                     }),
                 );
             let tile = tile.children(self.ring(&switch.stop(), TILE_RADIUS, cx));

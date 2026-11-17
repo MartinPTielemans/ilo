@@ -9,9 +9,11 @@ dest=$1
 rm -rf "$dest"
 mkdir -p "$dest"
 cp "$here"/board/*.html "$here"/board/*.js "$here"/board/*.css "$dest/"
-# tokens.toml's [board] table as custom properties, as its header says.
+# tokens.toml's [board] table as custom properties, as its header says, and ilo's accent, the one
+# a Space without a theme takes, as --accent in both modes, as the app's own fields take it.
 awk '
-  /^\[/ { inside = ($0 == "[board]"); next }
+  /^\[/ { table = $0; inside = (table == "[board]"); next }
+  table == "[palette]" && $1 == "no-theme-accent" { accent = "#" tolower(substr($3, 3)); next }
   !inside || /^#/ || !/=/ { next }
   {
     key = $1; value = $3
@@ -23,11 +25,11 @@ awk '
   }
   END {
     printf "/* Written by copy-board.sh from app/design/tokens.toml [board]. */\n"
-    printf ":root {\n%s}\n@media (prefers-color-scheme: dark) {\n  :root {\n%s  }\n}\n", light, dark
+    printf ":root {\n%s  --accent: %s;\n}\n@media (prefers-color-scheme: dark) {\n  :root {\n%s  }\n}\n", light, accent, dark
   }
 ' "$here/design/tokens.toml" > "$dest/tokens.css"
-grep -q -- "--canvas:" "$dest/tokens.css" || {
-  echo "copy-board: tokens.toml has no [board] table with a canvas" >&2
+grep -q -- "--canvas:" "$dest/tokens.css" && grep -q -- "--accent: #" "$dest/tokens.css" || {
+  echo "copy-board: tokens.toml has no [board] table with a canvas, or no [palette] no-theme-accent" >&2
   exit 1
 }
 # board/icons/ holds the Lucide glyphs only a Board draws, since every file in assets/icons/ is
