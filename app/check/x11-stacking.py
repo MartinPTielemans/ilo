@@ -6,8 +6,10 @@ them, as i3 tiles it beside ilo's window and floats the overlay over ilo's tile,
 beside $1, not over it, whatever the stacking. Each one in the stacking must also be viewable with
 a shape that isn't empty, as one the manager mapped with no place yet, its shape kept back, would be
 under $1 and never seen.
+With a point $3 $4 in the content of ilo's largest window, one of the overlays must cover it, as
+the one the run means is there, where its UI asked, and not only another that stays (the foot bar).
 Prints the order and exits 0 when each one shown is below $1; otherwise says why and exits 1.
-Usage: python3 -I check/x11-stacking.py <window> <pid>"""
+Usage: python3 -I check/x11-stacking.py <window> <pid> [<x> <y>]"""
 import ctypes
 import json
 import sys
@@ -127,6 +129,20 @@ for i in overlays:
     if not ok:
         sys.exit(f"ilo's overlay {order[i]['window']} is in the manager's stacking but not seen: it's "
                  f"{what}, bottom first: {json.dumps(order)}")
+if len(sys.argv) > 4:
+    point = int(sys.argv[3]), int(sys.argv[4])
+    windows = [box(window) for window, o in zip(stacking, order) if o["is"] == "ilo"]
+    windows = [each for each in windows if each]
+    if not windows:
+        sys.exit(f"no window of ilo's is in the manager's stacking, bottom first: {said}")
+    window = max(windows, key=lambda each: each[2] * each[3])
+    at = window[0] + point[0], window[1] + point[1], 1, 1
+    for i in overlays:
+        order[i]["box"] = box(stacking[i])
+    if not any(overlap(order[i]["box"], at) for i in overlays):
+        sys.exit(f"no overlay of ilo's in the manager's stacking covers {point[0]},{point[1]} in "
+                 f"ilo's window at {window}, {at[0]},{at[1]} on the screen: "
+                 f"{json.dumps(order)}")
 cover = box(other)
 beside = cover is not None and not any(
     overlap(box(window), cover) for window, o in zip(stacking, order) if o["is"] == "ilo")

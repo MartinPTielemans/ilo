@@ -27,6 +27,7 @@ use browser::import::sources::{Os, Roots};
 use browser::link_preview;
 use browser::log;
 use browser::menu;
+use browser::mini_bar;
 use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
@@ -379,6 +380,7 @@ struct Fake {
     downloads: RefCell<Vec<Download>>,
     /// The onboarding's two switches, both offered and off to begin with.
     opt_ins: Cell<(bool, bool)>,
+    daily_count: Cell<bool>,
     /// The tab each Space opens on where the site names one.
     opens_on: RefCell<HashMap<u64, u64>>,
     /// The tab each Space showed as it was left, which it shows again, and its page beside shows
@@ -1854,6 +1856,9 @@ impl Browser for Fake {
     // And the folder preview's.
     fn folder_preview(&self, _: browser::folder_preview::Ask, _: &mut App) {}
 
+    // And the tab switcher's: its walk ends at each ⌃Tab (watch_control).
+    fn tab_switcher(&self, _: browser::tab_switcher::Ask, _: &mut App) {}
+
     fn card_picture(&self, _: u64, _: f32, _: &mut App) {}
 
     // The same for the link target's, which the preview's made-up pages have no links for.
@@ -1953,6 +1958,14 @@ impl Browser for Fake {
 
     fn set_agents(&self, on: bool, _: &mut App) {
         self.opt_ins.set((self.opt_ins.get().0, on));
+    }
+
+    fn daily_count(&self, _: &App) -> Option<bool> {
+        Some(self.daily_count.get())
+    }
+
+    fn set_daily_count(&self, on: bool, _: &mut App) {
+        self.daily_count.set(on);
     }
 
     fn new_private_window(&self, _: &mut App) {}
@@ -2674,6 +2687,7 @@ fn main() {
                         archive: RefCell::new(archive),
                         downloads: RefCell::new(downloads),
                         opt_ins: Cell::new((false, false)),
+                        daily_count: Cell::new(false),
                         opens_on: RefCell::default(),
                         shows: Rc::default(),
                     });
@@ -2696,6 +2710,10 @@ fn main() {
                         _ => Shell::new(browser, cx),
                     };
                     shell.force_tone(preview_tone());
+                    // The app's UI there lies over the core's window, which is black under the
+                    // tint; the preview's would show the desktop through it (#3033).
+                    #[cfg(any(target_os = "windows", target_os = "linux"))]
+                    shell.set_ground(gpui::black().into());
                     shell.set_profiles(preview_profiles(), cx);
                     shell.set_spaces(spaces, cx);
                     shell.set_space(first_space, cx);
@@ -2935,8 +2953,17 @@ fn main() {
                     if welcome {
                         shell.set_welcome(cx);
                     }
-                    if let Some(appearance) = &onboarding {
-                        shell.start_onboarding(Some(appearance), cx);
+                    // =dark:opt-ins opens it at that step, and =dark:opt-ins:on turns the
+                    // daily count's switch on there.
+                    if let Some(given) = &onboarding {
+                        let mut parts = given.split(':');
+                        shell.start_onboarding(parts.next(), cx);
+                        if let Some(step) = parts.next() {
+                            shell.onboarding_to(step, cx);
+                        }
+                        if parts.next() == Some("on") {
+                            shell.onboarding_count_on(cx);
+                        }
                     }
                     shell
                 });
@@ -3188,6 +3215,14 @@ fn main() {
                 })
                 .detach();
             }
+            // PREVIEW_MINI_BAR=selected shows Arrange's mini bar over a made-up thing selected on the
+            // page, with Hide and Put back; =float adds the pin, the thing staying on screen, and
+            // =scrolls the pin with the thing scrolling with the page.
+            if let Ok(kind) = std::env::var("PREVIEW_MINI_BAR")
+                && let Some(shell) = shell_window
+            {
+                preview_mini_bar(&kind, shell, bounds, cx);
+            }
             // PREVIEW_MENU=<x>,<y>[,<key>…] right-clicks there in the window, as on a row or a Space's
             // name, and then presses the keys in ilo's menu, such as `m,right` for a submenu.
             if let Ok(what) = std::env::var("PREVIEW_MENU") {
@@ -3371,6 +3406,65 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
 /// ilo's menu over the preview's window, whose host can't move it: its window covers the preview's.
 struct PreviewMenu;
 
+thread_local! {
+    /// Where the mini bar asked to go.
+    static MINI_BAR_PLACE: std::cell::Cell<Option<Bounds<Pixels>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+struct PreviewMiniBar;
+
+impl mini_bar::Host for PreviewMiniBar {
+    fn show(&self, _: u64, place: Bounds<Pixels>) {
+        MINI_BAR_PLACE.set(Some(place));
+    }
+
+    fn hide(&self) {}
+}
+
+/// Shows Arrange's mini bar over a made-up thing selected on the page of the preview's `window` at
+/// `bounds` (`mini_bar::sample`). The bar sizes its window to what it shows, so a hidden one lays it
+/// out first, as the host would place it.
+fn preview_mini_bar(
+    kind: &str,
+    window: gpui::WindowHandle<Shell>,
+    bounds: Bounds<Pixels>,
+    cx: &mut App,
+) {
+    let Ok((page, palette)) = window.read_with(cx, |shell, _| {
+        (shell.page_frame(bounds.size).0, shell.palette())
+    }) else {
+        return;
+    };
+    let Some(shown) = mini_bar::sample(kind, page, palette.accent.into()) else {
+        return;
+    };
+    let selection = shown.selection;
+    let on_press: mini_bar::OnPress =
+        Rc::new(|_, press, _| log!("preview: mini bar {} pressed", press.name()));
+    let hidden = Bounds::new(bounds.origin, size(px(1.), px(1.)));
+    let Some(measuring) = mini_bar::open_at(Rc::new(PreviewMiniBar), hidden, false, cx) else {
+        return;
+    };
+    mini_bar::show(0, Some((shown.clone(), on_press.clone())), cx);
+    let _ = measuring.update(cx, |_, window, _| window.remove_window());
+    let Some(place) = MINI_BAR_PLACE.get() else {
+        return;
+    };
+    // The bar's window is the bar and the margin its shadow draws in.
+    let at = Bounds::new(bounds.origin + place.origin, place.size).dilate(px(mini_bar::MARGIN));
+    if mini_bar::open_at(Rc::new(PreviewMiniBar), at, true, cx).is_some() {
+        mini_bar::show(0, Some((shown, on_press)), cx);
+        // The made-up box, for the captures.
+        let (x, y) = (f32::from(selection.origin.x), f32::from(selection.origin.y));
+        let (w, h) = (
+            f32::from(selection.size.width),
+            f32::from(selection.size.height),
+        );
+        log!("preview: mini bar shown over {x},{y} {w}x{h}");
+    }
+}
+
 impl menu::Host for PreviewMenu {
     fn show(&self, _: Bounds<Pixels>, _: &[Bounds<Pixels>]) {}
 
@@ -3479,8 +3573,9 @@ impl link_preview::Host for PreviewPeek {
         false
     }
 
-    fn close_waits(&self) -> bool {
-        false
+    fn shown_at_once(&self) -> bool {
+        // Nor any page that could be anywhere but where it's laid out.
+        true
     }
 
     fn release(&self) {}
@@ -4537,6 +4632,7 @@ mod web {
             archive: RefCell::new(Vec::new()),
             downloads: RefCell::new(Vec::new()),
             opt_ins: Cell::new((false, false)),
+            daily_count: Cell::new(false),
             opens_on: RefCell::default(),
             shows: Rc::default(),
         });
@@ -5039,6 +5135,7 @@ mod tests {
                 archive: Default::default(),
                 downloads: Default::default(),
                 opt_ins: Default::default(),
+                daily_count: Default::default(),
                 opens_on: Default::default(),
                 shows: Default::default(),
             });

@@ -1,5 +1,6 @@
 # check.sh runs this at 20.
-# Clicks move keyboard focus between the page and the UI, and typing goes where the focus is. With
+# Clicks move keyboard focus between the page and the UI, and typing goes where the focus is. On the
+# Mac, each modifier pressed alone reaches the page as its own key (#3097). With
 # the page focused, the browser's reserved shortcuts reach the UI and never the page, and the others
 # reach the page first, which can keep them. ⌘N, from the page and the UI, opens a window whose UI
 # has the keyboard, and ⇧⌘W, from either, closes it, giving back the page it took, live, as ⌘W does
@@ -35,6 +36,10 @@
 
 # The test page puts what reached it in its title, which the app logs. Chromium drops input
 # to a page that hasn't drawn yet, so the page says when it has.
+# Only the Mac's page says when it gets a modifier alone (#3097): the other drivers press real
+# modifier keys for every shortcut, and the line would come between the ones later steps wait on.
+alone='if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) document.title = "page saw alone " + e.key;'
+[ "$(uname)" = Darwin ] || alone=
 page='data:text/html,<title>loading</title>
 <textarea id=text autofocus style="font:24px system-ui;width:95%25;height:90vh"></textarea>
 <script>
@@ -50,6 +55,7 @@ addEventListener("keydown", e => {
 }, true);
 addEventListener("keydown", e => {
   if (e.key == "Escape") document.title = "page saw escape " + (e.repeat ? "repeat" : "press");
+  '"$alone"'
 });
 </script>'
 log="$out/keys.log"
@@ -90,6 +96,16 @@ fi
 [ "$focus" = RenderWidgetHostViewCocoa ] || fail "a click on the page left focus on $focus"
 send type abc
 expect '^browser: title [0-9]* value abc$' "typing didn't reach the focused page"
+# Each modifier pressed alone reaches the page as its own key going down, as the Mac's driver
+# posts it with that key's code (#3097).
+if [ "$(uname)" = Darwin ]; then
+  for modifier in shift:Shift ctrl:Control alt:Alt cmd:Meta; do
+    send flags "${modifier%%:*}"
+    expect "^browser: title [0-9]* page saw alone ${modifier#*:}\$" \
+      "${modifier%%:*} pressed alone didn't reach the page as ${modifier#*:}"
+    send flags
+  done
+fi
 # In a text field, ⌘← and ⌘→ move the caret, so they don't come back to go back and forward.
 send key left cmd
 send key right cmd
@@ -131,11 +147,21 @@ sed -n "/^browser: drive $held: /,\$p" "$log" | grep -q '^browser: title [0-9]* 
   fail "a held escape's repeats went on to the page after it closed the command bar"
 send key f cmd
 expect '^browser: title [0-9]* page saw cmd-f$' "⌘F with the page focused didn't reach the page"
+# One ⌘N opens one window: since step $1, which $2 names, new-window ran once. Under Wayland GPUI
+# holds the keys after a ⌘F the page kept, for a find bar, and the ⌘N the app answered would run
+# again in the new window's command bar, which takes them (#3135). Read once escape has closed
+# that bar, which comes after the keys held.
+one_window_since() {
+  ran=$(since "$1" | grep -c '^browser: command new-window via ')
+  [ "$ran" = 1 ] || fail "$2 ran new-window $ran times"
+}
 # ⌘N from the page opens a window with no page and its command bar, which escape closes, leaving
-# its UI the keyboard, and ⇧⌘W there closes it.
+# its UI the keyboard, and ⇧⌘W there closes it. ⌘F's hold is on as it comes.
 page_shortcut n new-window
+pressed=$step
 expect '^browser: window opened [0-9]' "⌘N with the page focused didn't open a window"
 new_window_bar
+one_window_since $pressed "⌘N with the page focused, after ⌘F"
 send state
 in_browser AccessKitSubclassOfGPUIView "in the window ⌘N opened"
 send key w cmd shift
@@ -146,8 +172,10 @@ send window 1
 send click $page_point
 in_browser RenderWidgetHostViewCocoa "before ⌘N opened a window for ⌘W"
 page_shortcut n new-window
+pressed=$step
 expect '^browser: window opened [0-9]' "⌘N with the page focused didn't open a window"
 new_window_bar
+one_window_since $pressed "⌘N with the page focused"
 send key w cmd
 expect '^browser: command close-tab via ui$' "⌘W with the UI focused didn't reach the UI"
 expect '^browser: window closed [0-9]' "⌘W in a window with no page didn't close it"
@@ -174,11 +202,13 @@ expect '^browser: title [0-9]* value abcd$' "the page got keys meant for the UI:
 tab=$(today)
 send click $sidebar_point
 send key n cmd
+pressed=$step
 expect '^browser: command new-window via ui$' "⌘N with the UI focused didn't reach the UI"
 expect '^browser: window opened [0-9]' "⌘N with the UI focused didn't open a window"
 first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 new_window_bar
+one_window_since $pressed "⌘N with the UI focused"
 # The driver counts windows in the order they opened, closed ones too.
 send window "$(grep -c '^browser: window opened ' "$log")"
 send click $(row 0)
@@ -243,7 +273,8 @@ fi
 # The driver's scripted input method stands in for Japanese input, which is system-wide. On Windows
 # it's Microsoft's Japanese IME itself, where the runner has it (check-windows.yml installs it for
 # this run): the driver's ime ja sends the keys through Windows' input queue, and "nihongo"
-# composes にほんご, as a user's typing does.
+# composes にほんご, as a user's typing does. Under Wayland the driver is sway's input method, so
+# what it composes goes to the page's field as an fcitx5's would; on X11 it can't reach a page.
 composed=日本語
 ime="ime on" preedit=nihongo preedit_marked=0,7
 japanese=
@@ -252,8 +283,8 @@ if windows; then
     2> /dev/null | grep -qi 03B5835F-F03C-411B-9CE2-AA23E1171E36 && japanese=1
   [ -z "$japanese" ] || { ime="ime ja"; preedit=にほんご; preedit_marked=0,4; }
 fi
-if [ "$(uname)" = Linux ]; then
-  echo "skip: composing in a page: the Linux driver types plain keys there; check/ime.sh covers it with a real input method."
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: composing in a page: on X11 the Linux driver types plain keys there; check/ime.sh covers it with a real input method."
   composed=
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing in a page: the runner has no Japanese IME, and the Windows driver's own input method composes in the UI's fields alone."
@@ -308,8 +339,8 @@ for shortcut in t l; do
   expect '^browser: command bar hidden$' "escape didn't close the command bar"
   in_browser RenderWidgetHostViewCocoa "after the command bar closed"
 done
-if [ "$(uname)" = Linux ]; then
-  echo "skip: composing right after ⌘L: the Linux driver types plain keys in a page."
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: composing right after ⌘L: on X11 the Linux driver types plain keys in a page."
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
 elif windows; then
@@ -378,17 +409,44 @@ else
 fi
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
-# Closed first: the find bar opened from the UI before stays open, and ⌘F would make it key at once.
-send key f cmd
-send key escape
-expect '^browser: find bar hidden$' "escape didn't close the find bar"
-send click $sidebar_point
-in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"
-typed_after f abc
-expect '^browser: find bar drew "abc" ' \
-  "keys typed right after ⌘F with the UI focused went elsewhere: $(drew 'find bar')"
-send key escape
-expect '^browser: find bar hidden$' "escape didn't close the find bar"
+# On X11 through sway's Xwayland before wlroots 0.19 (sway 1.11), the find bar, a window inside
+# the browser window, can't keep the X focus: wlroots' window manager gives it to the browser
+# window whenever it's moved into one of its windows (#2904). There the find bar's keys are known
+# not to work, and its close button closes it, which needs none.
+find_keys_refused() {
+  sway_xwayland || return 1
+  set -- $(sway --version 2>/dev/null | sed -n 's/.*version \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')
+  [ $# = 2 ] && { [ "$1" -lt 1 ] || { [ "$1" = 1 ] && [ "$2" -lt 11 ]; }; }
+}
+close_find_bar() {
+  set -- $(grep '^browser: find bar at ' "$log" | tail -1 | cut -d' ' -f5-)
+  [ $# = 4 ] || fail "the find bar didn't say where it is"
+  send click $(($1 + 284)) $(($2 + 16))
+  expect '^browser: find bar hidden$' "a click on the find bar's close button didn't hide it"
+}
+if find_keys_refused; then
+  echo "skip: escape and typing in the find bar, after ⌘F with the UI focused, a second ⌘F and" \
+    "⌘F with Prefer $app_name, known under #2904: on sway's Xwayland before wlroots 0.19" \
+    "($(sway --version)) the find bar can't keep the X focus"
+  send key f cmd
+  expect '^browser: find bar drew ' "⌘F with the UI focused didn't open the find bar"
+  close_find_bar
+  send click $sidebar_point
+  in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"
+else
+  # Closed first: the find bar opened from the UI before stays open, and ⌘F would make it key at
+  # once.
+  send key f cmd
+  send key escape
+  expect '^browser: find bar hidden$' "escape didn't close the find bar"
+  send click $sidebar_point
+  in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"
+  typed_after f abc
+  expect '^browser: find bar drew "abc" ' \
+    "keys typed right after ⌘F with the UI focused went elsewhere: $(drew 'find bar')"
+  send key escape
+  expect '^browser: find bar hidden$' "escape didn't close the find bar"
+fi
 # A page that keeps the shortcut, as this one keeps ⌘F, gets the keys typed after it once it has,
 # in order. Input reaches the page in order, so it has seen none of the keys the bars got.
 send click $page_point
@@ -751,8 +809,12 @@ send key f cmd
 expect '^browser: second press cmd-f$' "a second ⌘F at once wasn't taken as a second press"
 expect '^browser: command find via page$' "a second ⌘F at once didn't run Find"
 expect '^browser: find bar drew ' "a second ⌘F at once didn't open the find bar"
-send key escape
-expect '^browser: find bar hidden$' "escape didn't close the find bar the second ⌘F opened"
+if find_keys_refused; then
+  close_find_bar
+else
+  send key escape
+  expect '^browser: find bar hidden$' "escape didn't close the find bar the second ⌘F opened"
+fi
 prefer() {
   send menu Settings…
   expect '^browser: settings shown Shortcuts$' \
@@ -783,8 +845,12 @@ expect '^browser: find bar drew ' "⌘F with Prefer $app_name didn't open the fi
 saw='^browser: title [0-9]* page saw cmd-f$'
 sed -n "/^browser: drive $pressed: /,\$p" "$log" | grep -q "$saw" &&
   fail "the page saw ⌘F with Prefer $app_name"
-send key escape
-expect '^browser: find bar hidden$' "escape didn't close the find bar"
+if find_keys_refused; then
+  close_find_bar
+else
+  send key escape
+  expect '^browser: find bar hidden$' "escape didn't close the find bar"
+fi
 prefer "Prefer Websites, Prefer $app_name (checked)" websites "Prefer Websites"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"

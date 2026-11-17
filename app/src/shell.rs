@@ -35,6 +35,8 @@ mod access;
 mod agent_bar;
 mod agent_pointer;
 mod agent_question;
+#[cfg(test)]
+mod app_menu_tests;
 mod arrange;
 mod assets;
 #[cfg(test)]
@@ -126,6 +128,9 @@ mod window_move_tests;
 pub use conversation::{bind_keys as bind_conversation_keys, send_agents};
 mod picture;
 mod recent_downloads;
+mod recent_tabs;
+#[cfg(test)]
+mod recent_tabs_tests;
 #[cfg(test)]
 mod recorder;
 mod return_mark;
@@ -659,6 +664,15 @@ fn replace<T: PartialEq>(kept: &mut T, value: T) -> bool {
         *kept = value;
     }
     changed
+}
+
+/// Whether `tab` is a favorite or in one of the Spaces, so not closed.
+fn open_in(spaces: &[Space], task_spaces: &[Space], favorites: &[u64], tab: u64) -> bool {
+    favorites.contains(&tab)
+        || spaces
+            .iter()
+            .chain(task_spaces)
+            .any(|space| space.pinned.contains(&tab) || space.today.contains(&tab))
 }
 
 /// A Space as the core reports it: its id, name, colour (0xRRGGBB), profile, icon, the name of the
@@ -1312,6 +1326,8 @@ pub struct Shell {
     /// ⌃ is held after a ⌃Tab, which showed this tab. The tabs a walk shows don't count as shown
     /// until ⌃ goes up, and then its last one does, though a click may have shown another since.
     walked: Option<u64>,
+    /// That walk, and its switcher (recent_tabs).
+    held: Option<recent_tabs::Held>,
     hovered: Option<Row>,
     /// The pinned row the pointer is on, whose − or middle press just unloaded it. Its remove
     /// button waits until the pointer has left the row or pressed it, so a second click meant for
@@ -1425,6 +1441,10 @@ pub struct Shell {
     /// •••, and whether the menu up is the one it opened, which keeps them while it's up.
     name_hovered: bool,
     name_menu: bool,
+    /// Whether the footer has the menu control, off the Mac, where there's no menu bar to hold
+    /// ilo's menu (#3148), and whether the menu up is the one it opened, which keeps it pressed.
+    menu_control: bool,
+    app_menu: bool,
     /// The Space and whether its pinned rows were collapsed when last drawn, and when they last
     /// changed there, for the chevron's turn.
     pinned_seen: Option<(u64, bool)>,
@@ -1482,6 +1502,9 @@ pub struct Shell {
     /// The window shows another Space, whose tab the core says next, for the command bar to follow
     /// once it has.
     bar_follows: bool,
+    /// ⌘L, from where it came, pressed after the tab shown closed and before the core said which
+    /// shows next, which the bar then opens on (#2953).
+    edit_url_waits: Option<String>,
     drag: Option<Drag>,
     /// A tab's row dragged out of the window, as the system drags it, until it's let go.
     window_drag: Option<drag::WindowDrag>,
@@ -1823,6 +1846,12 @@ pub struct Shell {
     zapping: Option<u64>,
     /// The tab whose page Arrange is on (#2347), one at a time, as Zap.
     arranging: Option<u64>,
+    /// What the core last said of the mode, and its ⌘Z history.
+    arrange_mode: arrange::Mode,
+    /// What Arrange's mini bar was last asked to show, so it's asked again only on a change.
+    mini_bar_shown: Option<crate::mini_bar::Shown>,
+    /// What Arrange's foot bar last showed (shell/arrange.rs).
+    foot_bar_shown: Option<arrange::FootShown>,
     boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Library › Boosts' list, the window's profile's, read as it's shown.
     boost_list: Vec<crate::boosts::Boost>,
@@ -1848,8 +1877,10 @@ pub struct Shell {
     hang_noted: Option<u64>,
     /// The dialogs the tabs' pages ask, such as an alert(): the tab shown's goes over its card.
     page_dialogs: HashMap<u64, PageDialog>,
-    /// The page dialog asked over the card last, by its tab and id, and where.
-    page_dialog_shown: Option<(u64, u64, (Bounds<Pixels>, f32))>,
+    /// What the window told last of its page's dialog: the one asked over the card, by its tab
+    /// and id, and where, or none. Untold once it comes to the front, when the dialog shown may
+    /// be another window's.
+    page_dialog_shown: Option<Option<(u64, u64, (Bounds<Pixels>, f32))>>,
     /// The tab or Space the user asked for and when, until it's shown.
     switching: Option<(Switch, Instant)>,
     /// Where the window's background was pressed, until the pointer moves past DRAG_START and it
@@ -1882,6 +1913,9 @@ pub struct Shell {
     /// drew (`Shell::right`).
     right: bool,
     forced_tone: Option<Tone>,
+    /// What lies under the tint where nothing else does: the preview's, whose window has no
+    /// material and shows the desktop through the tint, as the app's never does (#3033).
+    ground: Option<Rgba>,
     window_active: bool,
     window_watches: Vec<Subscription>,
     /// Whether the window is the one the user is in, as the host says (host_watch_window_main):
@@ -1963,6 +1997,7 @@ impl Shell {
             agents_at: HashMap::new(),
             recent: Vec::new(),
             walked: None,
+            held: None,
             selected: 0,
             hovered: None,
             remove_held: None,
@@ -2010,6 +2045,8 @@ impl Shell {
             caret_drawn: Rc::default(),
             name_hovered: false,
             name_menu: false,
+            menu_control: OFF_THE_MAC,
+            app_menu: false,
             pinned_seen: None,
             pinned_turn: None,
             split_folds: HashMap::new(),
@@ -2036,6 +2073,7 @@ impl Shell {
             in_hint: false,
             press_closed_bar: false,
             bar_follows: false,
+            edit_url_waits: None,
             drag: None,
             window_drag: None,
             dragged: false,
@@ -2211,6 +2249,9 @@ impl Shell {
             boost_pending: None,
             zapping: None,
             arranging: None,
+            arrange_mode: arrange::Mode::default(),
+            mini_bar_shown: None,
+            foot_bar_shown: None,
             boost_card_drawn: Rc::default(),
             boost_list: Vec::new(),
             battery_saver: None,
@@ -2222,7 +2263,7 @@ impl Shell {
             crash_reload_drawn: Rc::default(),
             hang_noted: None,
             page_dialogs: HashMap::new(),
-            page_dialog_shown: None,
+            page_dialog_shown: Some(None),
             picker_pending: None,
             theme_preview: None,
             name_row_drawn: Rc::default(),
@@ -2244,6 +2285,7 @@ impl Shell {
             lone_header: false,
             right: false,
             forced_tone: None,
+            ground: None,
             window_active: true,
             window_main: true,
             nav_dimmed_drawn: Cell::new(None),
@@ -3224,18 +3266,16 @@ impl Shell {
         log!("browser: favorite splits {}", splits.join(" "));
     }
 
+    fn tab_open(&self, tab: u64) -> bool {
+        open_in(&self.spaces, &self.task_spaces, &self.all_favorites, tab)
+    }
+
     /// What the shell knew of a closed tab goes with it. The core reports a tab in its new place
     /// before it leaves the old, so one moving between a Space and the favorites stays.
     fn forget_closed(&mut self, cx: &mut App) {
         let (spaces, favorites) = (&self.spaces, &self.all_favorites);
         let task_spaces = &self.task_spaces;
-        let open = |tab: &u64| {
-            favorites.contains(tab)
-                || spaces
-                    .iter()
-                    .chain(task_spaces)
-                    .any(|space| space.pinned.contains(tab) || space.today.contains(tab))
-        };
+        let open = |tab: &u64| open_in(spaces, task_spaces, favorites, *tab);
         // A closed tab's hover card picture goes with it.
         let closed: Vec<u64> = self.tabs.keys().copied().filter(|tab| !open(tab)).collect();
         for tab in closed {
@@ -3366,6 +3406,9 @@ impl Shell {
         if self.split_pending.take() == Some(tab) {
             self.add_pane(cx);
         }
+        if let Some(from) = self.edit_url_waits.take() {
+            self.edit_url(&from, cx);
+        }
         self.update_title(cx);
         self.update_menus(cx);
         cx.notify();
@@ -3380,8 +3423,9 @@ impl Shell {
         }
         cx.set_global(ShellHandle(cx.weak_entity()));
         commands::heard_key(&cx.weak_entity());
-        // Its tab's dialog goes over its card again, as another window's may have shown since, and
-        // its hung page's note shows, which waited while it was behind.
+        // Its tab's dialog goes over its card again, or another window's leaves, as that window may
+        // have closed before its draw took it back (#3108). Its hung page's note shows, which
+        // waited while it was behind.
         self.page_dialog_shown = None;
         self.note_hang(cx);
         cx.notify();
@@ -3483,15 +3527,6 @@ impl Shell {
         }
     }
 
-    /// ⌃ went up, which ends a ⌃Tab walk on the tab it shows. A click ends it too, and the core
-    /// may report the tab the click showed before this runs, so the walk's tab counts first.
-    pub fn control_released(&mut self, cx: &mut Context<Self>) {
-        if let Some(walked) = self.walked.take().filter(|tab| self.tabs.contains_key(tab)) {
-            self.shown(walked, cx);
-        }
-        self.shown(self.selected, cx);
-    }
-
     // The core reports a tab's title, favicon and state whenever Chromium touches them, often with
     // what it already has, and for tabs nobody sees. Each is kept, but only a change that shows
     // draws a frame.
@@ -3543,6 +3578,14 @@ impl Shell {
         // Asked here, once a report, as the row drawn each frame needs only the answer.
         let left_pinned_host =
             page.away_from_pinned_url && host(&page.url) != host(&self.browser.pinned_url(tab));
+        // Arrange ends and the Boost's card closes as Safari's engine takes the tab's page, the
+        // core's being Chromium's, hidden.
+        if page.system_engine && self.arranging == Some(tab) {
+            self.stop_arrange(cx);
+        }
+        if page.system_engine && self.boost_card == Some(tab) {
+            self.close_boost_card(cx);
+        }
         let entry = self.tabs.entry(tab).or_default();
         if page.unloaded != entry.page.unloaded {
             log!("browser: page {tab} unloaded {}", flag(page.unloaded));
@@ -4478,6 +4521,8 @@ impl Render for Shell {
             log!("{line}");
         }
         self.show_page_dialog(cx);
+        self.show_mini_bar(cx);
+        self.show_foot_bar(cx);
         let card_left = self.card_left();
         self.update_palette(cx);
         let focus_color = packed(self.palette.accent.into());
@@ -4588,7 +4633,7 @@ impl Render for Shell {
             .size_full()
             .relative()
             .font_family(crate::face::UI)
-            .when(!WEB, |shell| shell.bg(self.palette.tint))
+            .when(!WEB, |shell| shell.bg(self.window_tint()))
             .capture_any_mouse_down(cx.listener(|shell, _, _, cx| shell.leave_keys("press", cx)))
             // The rows, buttons and fields keep their presses. Everywhere else is the window's
             // background, which moves the window as a title bar does.
@@ -4869,6 +4914,7 @@ impl Shell {
             .children(self.download_bin(cx))
             .children(self.archive_flights())
             .children((!self.one_space()).then(|| self.plus_button(cx)))
+            .children(self.menu_control.then(|| self.menu_button(cx)))
             .children(self.switcher(cx))
             .child(self.press_listener())
             .children(self.paging_frame(started))

@@ -6,8 +6,7 @@
 # window's scale; closed, it's hidden, off screen, with neither the keyboard nor the pointer's
 # capture. For the scale change, each hidden overlay is told another scale first, as one made
 # hidden on another display is. The names come from the host's code, and a name this run has no way
-# to open fails it, so a new overlay is walked as soon as it's added. The foot bar, which nothing
-# but BROWSER_FOOT_BAR shows yet and nothing hides, is only seen shown. Each shown overlay is
+# to open fails it, so a new overlay is walked as soon as it's added. Each shown overlay is
 # captured with the windows over the browser window, as overlays-<event>-<name>.png.
 # Real input needs CI's hosted desktop, and lives are the Windows host's; the Mac's and Linux's
 # events are #2563's audit.
@@ -21,16 +20,16 @@ if [ -z "${CI:-}" ]; then
   exit 0
 fi
 
-# The names from the host's code: the five in kOverlayNames, each window it adopts, and the menu,
+# The names from the host's code: the six in kOverlayNames, each window it adopts, and the menu,
 # one a line.
 names=$({
   sed -n '/^const char\* const kOverlayNames/,/};/p' platform/windows/host.cc | grep -o '"[^"]*"'
   grep -o 'Adopt([^,]*, [^,]*, "[^"]*"' platform/windows/host.cc | grep -o '"[^"]*"'
   grep -o 'each(context, "[^"]*"' platform/windows/host.cc | grep -o '"[^"]*"'
 } | tr -d '"' | awk '!seen[$0]++')
-[ "$(printf '%s\n' "$names" | grep -c .)" -ge 20 ] ||
-  fail "the host's code gave fewer than the 20 names it had (#2563): $(printf '%s\n' "$names" | tr '\n' ',')"
-# The order the run walks them in. Each but the foot bar is opened and closed by open and close below.
+[ "$(printf '%s\n' "$names" | grep -c .)" -ge 22 ] ||
+  fail "the host's code gave fewer than the 22 names it had (#2563, #2954): $(printf '%s\n' "$names" | tr '\n' ',')"
+# The order the run walks them in. Each is opened and closed by open and close below.
 order='command bar
 find bar
 hud
@@ -47,9 +46,11 @@ dialog
 link preview
 boost editor
 folder preview
+tab switcher
 offer
 drop targets
 reveal
+mini bar
 foot bar'
 unknown=$(printf '%s\n' "$names" | while read -r name; do
   printf '%s\n' "$order" | grep -qx "$name" || printf '%s, ' "$name"
@@ -82,7 +83,7 @@ printf '%s\n' '/* overlays */' > "$profile_dir/Default/Boosts/$host.css"
 log="$out/overlays.log"
 step=0
 rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_FOOT_BAR=arrange BROWSER_URL="${site}overlays.html" "$browser" \
+BROWSER_DRIVE=1 BROWSER_URL="${site}overlays.html" "$browser" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -97,7 +98,6 @@ if [ "$active" != 1 ]; then
   exit 0
 fi
 logged '^browser: drive: real press' || fail "CI's desktop gave no real input, which the run's events need"
-await '^browser: foot bar shown over [0-9]*$' || fail "BROWSER_FOOT_BAR didn't show the foot bar"
 
 # The tabs: the page pinned, then a folder under it holding a pinned tab, closed, and a login page
 # in Today. The Today row is under the two pinned rows, the divider and "+ New Tab".
@@ -237,10 +237,46 @@ EOF
       send click $((bx + bw / 4)) $((by + bh - 26))
       expect '^browser: boost editor drawn$' "$2: Customize… didn't open the Boost editor"
       ;;
+    # Arrange's, over the thing a click selects in the mode, which the card's Arrange starts.
+    'mini bar')
+      bar_command edit-boost "Edit Boost" "edit boost"
+      expect "^browser: boost card $a at " "$2: Edit Boost drew no card"
+      send layout
+      read -r bx by bw bh << EOF
+$(grep "^browser: boost card $a at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+      # Arrange, the right of the card's last line.
+      send click $((bx + bw * 3 / 4)) $((by + bh - 26))
+      expect "browser: tab $a arrange on\$" "$2: the card's Arrange didn't turn the mode on"
+      send click $page_point
+      expect '^browser: mini bar window shown$' "$2: a click on the page in Arrange selected nothing, so no mini bar showed over it"
+      ;;
+    # Arrange's too, at the page's foot for as long as the mode is on.
+    'foot bar')
+      bar_command edit-boost "Edit Boost" "edit boost"
+      expect "^browser: boost card $a at " "$2: Edit Boost drew no card"
+      send layout
+      read -r bx by bw bh << EOF
+$(grep "^browser: boost card $a at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+      send click $((bx + bw * 3 / 4)) $((by + bh - 26))
+      expect "browser: tab $a arrange on\$" "$2: the card's Arrange didn't turn the mode on"
+      expect '^browser: foot bar drawn over [0-9]*$' "$2: Arrange on drew no foot bar"
+      # The keyboard to the page, where Escape is Done.
+      send click $page_point
+      ;;
     'folder preview')
       away
       send move $(pinned_row 1)
       expect "^browser: folder preview shown $f at " "$2: resting on the closed folder didn't preview it"
+      ;;
+    # ⌃Tab twice, ⌃ held, shows it at once.
+    'tab switcher')
+      send click $page_point
+      send key tab ctrl
+      pressed=$step
+      send key tab ctrl
+      expect '^browser: tab switcher shown$' "$2: ⌃Tab twice with ⌃ held didn't show the tab switcher" "$pressed"
       ;;
     offer)
       send click $today_row
@@ -279,6 +315,12 @@ close() {
       send key escape
       expect "^browser: $1 hidden\$" "$2: Escape didn't close the $1"
       ;;
+    # Escape in the page is Done, which ends the mode and takes its bar.
+    'mini bar' | 'foot bar')
+      send key escape
+      expect "browser: tab $a arrange off\$" "$2: Escape in the page didn't end Arrange, which shows the $1"
+      expect '^browser: arrange foot bar none$' "$2: Escape ended Arrange but its foot bar stayed"
+      ;;
     menu)
       send key escape
       expect '^browser: menu window hidden$' "$2: Escape didn't close the menu"
@@ -299,6 +341,12 @@ close() {
     tooltip)
       away
       expect '^browser: tooltip hidden$' "$2: the pointer leaving Hide Sidebar left its tooltip"
+      ;;
+    # ⌃ going up, as Ctrl+Esc is Windows' Start menu: it shows the row selected, and the walk
+    # shows the pinned page again.
+    'tab switcher')
+      send flags
+      expect '^browser: tab switcher hidden$' "$2: letting go of Ctrl didn't close the tab switcher"
       ;;
     'hover card' | 'link target' | 'folder preview')
       send move $page_point
@@ -344,7 +392,7 @@ walk() {
   # The names come in on 7, as a loop in a pipe would run in a subshell, where a failure wouldn't
   # end the run and the steps' count would be lost.
   while read -r name <&7; do
-    if [ -n "${3:-}" ] && [ "$name" != 'foot bar' ]; then
+    if [ -n "${3:-}" ]; then
       entry "$name"
       [ -z "$got" ] || {
         send dpi "$3" "$name"
@@ -355,7 +403,6 @@ walk() {
     lives_say "$name" shown "$1"
     ../tools/window-screenshot.sh "$pid" "$out/overlays-$2-$(echo "$name" | tr ' ' -).png" all ||
       fail "no window to capture"
-    [ "$name" != 'foot bar' ] || continue
     close "$name" "$1"
     lives_say "$name" hidden "$1"
     # Each overlay starts from the pinned page shown, as some take the tab elsewhere.
@@ -381,15 +428,23 @@ walk "a menu opened by a real click" menu
 events="a menu opened by a real click"
 
 # The display adapter restarting, as a driver update does, which took GPUI's device away (#2536).
-# pnputil needs an administrator, as CI's runner is.
+# pnputil needs an administrator, as CI's runner is. Nothing is shown over the browser window, so
+# only the sidebar's GPUI view, a child of Chromium's window, is on screen, and it stayed black
+# until the next input drew (#2983). tabs.sh restarts it under the command bar.
+send overlays
+expect '^browser: overlays shown none$' "an overlay was still shown before the display adapter restarted"
 restarted=$(powershell.exe -NoProfile -Command \
   'Get-PnpDevice -Class Display -Status OK | ForEach-Object { pnputil /restart-device $_.InstanceId }' \
   2>&1 || true)
+restarted_at=$SECONDS
 case "$restarted" in
   *"restarted successfully"*)
     send overlays
     expect '^browser: gpui redrew its windows on a new device$' \
-      "the windows drew nothing after the display adapter restarted"
+      "the windows drew nothing after the display adapter restarted with no overlay shown"
+    ../tools/window-screenshot.sh "$pid" "$out/overlays-adapter-restarted.png" all ||
+      fail "no window to capture"
+    echo "note: overlays-adapter-restarted.png is the window $((SECONDS - restarted_at)) s after the display adapter restarted, once GPUI said it drew on the new device"
     walk "the display adapter restarting" adapter
     events="$events, the display adapter restarting"
     ;;

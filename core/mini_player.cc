@@ -29,6 +29,7 @@
 #include "chrome/browser/ui/views/overlay/video_overlay_window_views.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/compositor/compositor.h"
@@ -108,12 +109,29 @@ void GiveKeyboardBack(views::Widget* window) {
 #endif
 
 // Tells the windows as the Mini Player takes the keyboard, which on Linux can come after the window
-// that let it go asked whether it had (MiniPlayerHasKeyboard).
-class KeyboardWatch : public views::WidgetObserver {
+// that let it go asked whether it had (MiniPlayerHasKeyboard). And logs it showing, and its first
+// frame on screen, on the clock of the tab switch that floated it (LogHandover).
+class MiniPlayerWatch : public views::WidgetObserver {
  public:
   void Watch(views::Widget* widget) {
     observation_.Reset();
     observation_.Observe(widget);
+  }
+
+  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override {
+    if (!visible) {
+      return;
+    }
+    // check.sh reads these lines.
+    const std::string size = widget->GetWindowBoundsInScreen().size().ToString();
+    LogHandover("mini player shows", size);
+    if (ui::Compositor* compositor = widget->GetCompositor()) {
+      compositor->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
+          [](const std::string& size, const viz::FrameTimingDetails&) {
+            LogHandover("mini player on screen", size);
+          },
+          size));
+    }
   }
 
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
@@ -136,8 +154,8 @@ class KeyboardWatch : public views::WidgetObserver {
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
 };
 
-KeyboardWatch& Watching() {
-  static base::NoDestructor<KeyboardWatch> watch;
+MiniPlayerWatch& Watching() {
+  static base::NoDestructor<MiniPlayerWatch> watch;
   return *watch;
 }
 
@@ -609,10 +627,12 @@ void LaidOut(VideoOverlayWindowViews* window) {
     rim->layer()->SetFillsBoundsOpaquely(false);
     rim->SetCanProcessEventsWithinSubtree(false);
     rim->SetBorder(views::CreateRoundedRectBorder(1, kCornerRadius, kRim));
-    // One flat scrim, rather than Chrome's and its gradients at the top and bottom.
+    // One flat scrim, rather than Chrome's and its gradients at the top and bottom. The gradients'
+    // views lose their backgrounds rather than being hidden, since the controls' fade shows each
+    // view it fades in (#2881).
     window->GetControlsScrimView()->SetBackground(views::CreateSolidBackground(kScrim));
-    window->GetControlsTopScrimView()->SetVisible(false);
-    window->GetControlsBottomScrimView()->SetVisible(false);
+    window->GetControlsTopScrimView()->SetBackground(nullptr);
+    window->GetControlsBottomScrimView()->SetBackground(nullptr);
   }
   const gfx::Size size = window->GetBounds().size();
   rim->SetBoundsRect(gfx::Rect(size));

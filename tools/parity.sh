@@ -9,15 +9,17 @@
 # Site Controls, the icon picker, the delete-Space dialog, the sidebar of a Space whose theme has
 # three colours, whose dot in the switcher draws all three (#1354), Peek over the page, its card a
 # hole the shell's page shows through, and more Spaces than fit (#1401): 16 in the switcher of a
-# sidebar 300 wide, and 8 in the Library's Spaces in a window 1100 wide, and Settings › Sync at
-# Settings' 720 by 480 least size, scrolled, the section's name held at the card's top, and the URL
+# sidebar 300 wide, and 8 in the Library's Spaces in a window 1100 wide, and Settings › Sync signed
+# in, a page taller than the card, at Settings' 720 by 480 least size, scrolled, the section's name
+# held at the card's top (a page that fits never scrolls, #2102), and the URL
 # field's translate mark lit under the pointer, light and dark (#2112), the foot bar with two lines
 # over the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380),
 # Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default naming
 # its model, light and dark (#2455), and the safe-start card at the sidebar's foot, light and dark,
-# and in the narrowest sidebar with ad blocking off (#2345). The preview's Linux host places no
-# window, so sway puts Site Controls and the icon picker in the middle rather than where the Mac's
-# host would.
+# and in the narrowest sidebar with ad blocking off (#2345), and the footer's menu control, which
+# only Linux and Windows draw, at rest and with its menu open above it, light and dark (#3148). The
+# preview's Linux host places no window, so sway puts Site Controls and the icon picker in the
+# middle rather than where the Mac's host would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
 # failure.
 # Usage: tools/parity.sh <preview> <output directory>
@@ -46,7 +48,7 @@ screens=(
   "peek|link preview settled|PREVIEW_PEEK=1"
   "many-spaces|drawn at|PREVIEW_SPACES=16 PREVIEW_SIDEBAR=300"
   "many-spaces-library|library shown|PREVIEW_SPACES=8 PREVIEW_LIBRARY=spaces PREVIEW_SIZE=1100x700"
-  "settings-least|settings held Sync|PREVIEW_ACCOUNT=words PREVIEW_SIZE=720x480 PREVIEW_SCROLL=200"
+  "settings-least|settings held Sync|PREVIEW_ACCOUNT=signed-in PREVIEW_SIZE=720x480 PREVIEW_SCROLL=200"
   "translate-hover-dark|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=dark|translate mark drawn at"
   "translate-hover-light|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=light|translate mark drawn at"
   "foot-bar|foot bar shown|PREVIEW_FOOT_BAR=point"
@@ -57,6 +59,10 @@ screens=(
   "safe-start-light|safe start card 0 at|PREVIEW_SAFE_START=1 PREVIEW_APPEARANCE=light"
   "safe-start-dark|safe start card 0 at|PREVIEW_SAFE_START=1 PREVIEW_APPEARANCE=dark"
   "safe-start-narrow|safe start card 0 at|PREVIEW_SAFE_START=unblocked PREVIEW_SIDEBAR=164"
+  "app-menu-rest-light|drawn at|PREVIEW_APPEARANCE=light"
+  "app-menu-rest-dark|drawn at|PREVIEW_APPEARANCE=dark"
+  "app-menu-light|menu shown|PREVIEW_APPEARANCE=light PREVIEW_CLICK=170,775"
+  "app-menu-dark|menu shown|PREVIEW_APPEARANCE=dark PREVIEW_CLICK=170,775"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;

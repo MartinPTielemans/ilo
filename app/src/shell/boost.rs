@@ -26,7 +26,7 @@ use crate::{
     theme_picker::At,
 };
 
-actions!(boost, [Escape]);
+actions!(boost, [Escape, ArrangeOuter, ArrangeInner]);
 
 /// Escape while the UI has the keyboard ends Zap, or else closes the card, and otherwise falls
 /// through, as the DRM note's does.
@@ -35,7 +35,13 @@ pub(super) fn escape_binding() -> KeyBinding {
 }
 
 pub(super) fn bind(cx: &mut gpui::App) {
-    cx.bind_keys([escape_binding()]);
+    // ↑ and ↓ with the UI holding the keyboard pick the box around or inside while Arrange is on,
+    // as they do with the page focused (run_arrange_key); a field's or the sidebar's own win.
+    cx.bind_keys([
+        escape_binding(),
+        KeyBinding::new("up", ArrangeOuter, Some(KEY_CONTEXT)),
+        KeyBinding::new("down", ArrangeInner, Some(KEY_CONTEXT)),
+    ]);
     cx.on_action(|_: &Escape, cx| {
         let shell = super::commands::key_shell(cx);
         let done =
@@ -44,14 +50,31 @@ pub(super) fn bind(cx: &mut gpui::App) {
             cx.propagate();
         }
     });
+    cx.on_action(|_: &ArrangeOuter, cx| arrange_key("up", cx));
+    cx.on_action(|_: &ArrangeInner, cx| arrange_key("down", cx));
+}
+
+fn arrange_key(keystroke: &str, cx: &mut gpui::App) {
+    let shell = super::commands::key_shell(cx);
+    let done = shell.and_then(|shell| {
+        shell
+            .update(cx, |shell, cx| {
+                shell.run_arrange_key(shell.field_tab(), keystroke, cx)
+            })
+            .ok()
+    });
+    if !done.unwrap_or(false) {
+        cx.propagate();
+    }
 }
 
 impl Shell {
     /// The profile and site of `tab`'s page where it can have a Boost: an http(s) page in a
-    /// regular window, outside an agent's Space.
+    /// regular window, outside an agent's Space, and not in Safari's engine, as what the core
+    /// boosts is Chromium's page, hidden while Safari's engine shows the tab's (#2955).
     pub(super) fn boost_site(&self, tab: u64) -> Option<(u64, String)> {
         let agents = !self.browser.space_agent(self.space).is_empty();
-        if tab == 0 || self.private || agents {
+        if tab == 0 || self.private || agents || self.page(tab).system_engine {
             return None;
         }
         let profile = self.shown_space()?.profile;
@@ -148,7 +171,7 @@ impl Shell {
         if self.shown_boost(cx).is_none() {
             return;
         }
-        // check.sh reads this line.
+        // check.sh reads these lines.
         log!("browser: boost card {tab} opened");
         self.boost_card = Some(tab);
         cx.notify();
@@ -303,6 +326,9 @@ impl Shell {
         };
         let changes = boosts::with(|boosts| boosts.zap(profile, &site, selector));
         self.browser.show_boosts(changes, cx);
+        if self.arranging == Some(tab) {
+            self.arrange_mode.kept(super::arrange::Undoable::Hide);
+        }
         cx.notify();
     }
 
@@ -314,7 +340,7 @@ impl Shell {
         }
     }
 
-    fn undo_zap(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn undo_zap(&mut self, cx: &mut Context<Self>) {
         let Some((profile, site, _)) = self.shown_boost(cx) else {
             return;
         };

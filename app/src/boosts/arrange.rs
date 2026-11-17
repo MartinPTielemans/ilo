@@ -262,5 +262,155 @@ fn change(change: &Value) -> Option<Change> {
     })
 }
 
+/// What the user asks of the mode on the page, as the core takes it (`bc_tab_arrange_do`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// ↑: the box around the one pointed at or selected.
+    Outer,
+    /// ↓: the box inside it.
+    Inner,
+    /// The core's last change undone: a settle, a trade, a float or a pin.
+    Undo,
+    /// The selected thing hidden, by Zap's rule.
+    Hide,
+    /// The selected thing back where the page had it.
+    PutBack,
+    /// A floating thing pinned to the screen, or to the page.
+    StaysOnScreen,
+    ScrollsWithPage,
+    /// Every change on the page undone.
+    Reset,
+}
+
+/// Where the user is in the mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Step {
+    #[default]
+    Pointing,
+    Carrying,
+    /// Carried and rested, the page showing what the drop would do.
+    Preview,
+    Selected,
+}
+
+/// What a drop does, or did, to the thing carried or selected.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Outcome {
+    #[default]
+    None,
+    Settles,
+    Trades,
+    Floats,
+    Refused,
+}
+
+/// Why the core refuses a drop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Refused {
+    #[default]
+    Fits,
+    DoesntFit,
+    NotShown,
+    Covered,
+}
+
+/// A thing on the page as the core names it: its kind's token and the page's own words, either
+/// empty. An empty kind is nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Element {
+    pub kind: String,
+    pub name: String,
+}
+
+/// The mode on a tab's page, as the core tells it (`tab_arrange_state`): once a step changes and
+/// once a scroll starts and rests, never each frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct State {
+    pub step: Step,
+    pub element: Element,
+    pub change: Outcome,
+    /// What a settle goes between, or a trade's other thing in `before`.
+    pub before: Element,
+    pub after: Element,
+    pub refused: Refused,
+    /// While a floating thing is selected, whether it stays on screen rather than scrolling.
+    pub on_screen: bool,
+    pub can_undo: bool,
+    pub can_reset: bool,
+    /// The selected thing's box in points from the page view's top-left, as x, y, width and
+    /// height: none while nothing is selected and while the page scrolls.
+    pub selection: Option<[f32; 4]>,
+}
+
+impl Element {
+    /// The element in the foot bar's line: the page's own words for it, or "the video" without
+    /// them.
+    fn said(&self) -> String {
+        match self.name.is_empty() {
+            true => format!("the {}", kind_word(&self.kind)),
+            false => self.name.clone(),
+        }
+    }
+}
+
+/// The key held to float the thing carried, as each OS names it.
+const FREE_KEY: &str = if cfg!(target_os = "macos") {
+    "⌘"
+} else {
+    "Ctrl"
+};
+
+/// `line` with its first letter a capital, as a line that starts "the video" does.
+fn capital(line: String) -> String {
+    let mut chars = line.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => line,
+    }
+}
+
+/// The foot bar's line for the mode in `state`: what to do while pointing, what a drop here would
+/// do while carrying, and what the selected thing's change did.
+pub fn foot_line(state: &State) -> String {
+    let thing = state.element.said();
+    let (before, after) = (&state.before, &state.after);
+    let between = match (before.kind.is_empty(), after.kind.is_empty()) {
+        (false, false) => format!("between {} and {}", before.said(), after.said()),
+        (false, true) => format!("after {}", before.said()),
+        (true, false) => format!("before {}", after.said()),
+        (true, true) => "here".into(),
+    };
+    let pick = "↑ ↓ pick the box around it or inside it.";
+    let line = match (state.step, state.change) {
+        (Step::Pointing, _) => format!("Point at what to move. {pick}"),
+        (Step::Carrying, Outcome::Settles) => format!("Settles {between}"),
+        (Step::Carrying, Outcome::Trades) => format!("Trades places with {}", before.said()),
+        // Only the free key floats a thing, so the line names it.
+        (Step::Carrying, Outcome::Floats) => {
+            format!("{FREE_KEY} held: stays where you let go, over the page")
+        }
+        (Step::Carrying | Step::Preview, Outcome::Refused) => match state.refused {
+            Refused::NotShown => "The page doesn't show it there".into(),
+            _ => "Doesn't fit there".into(),
+        },
+        (Step::Carrying | Step::Preview, Outcome::None) => "Let go where it goes".into(),
+        (Step::Preview, Outcome::Settles) => "Shown as it would settle. Let go to keep it.".into(),
+        (Step::Preview, Outcome::Trades) => "Shown as it would trade. Let go to keep it.".into(),
+        (Step::Preview, Outcome::Floats) => "Shown as it would float. Let go to keep it.".into(),
+        (Step::Selected, Outcome::Settles) => format!("Moved {thing} {between}"),
+        (Step::Selected, Outcome::Trades) => format!("Traded {thing} with {}", before.said()),
+        (Step::Selected, Outcome::Floats) if state.on_screen => {
+            format!("{thing} stays on screen, over the page")
+        }
+        (Step::Selected, Outcome::Floats) => format!("{thing} scrolls with the page, over it"),
+        (Step::Selected, _) => format!("{thing} selected. {pick}"),
+    };
+    let line = capital(line);
+    match state.refused == Refused::Covered && state.step == Step::Selected {
+        true => format!("{line}. The page may draw over it."),
+        false => line,
+    }
+}
+
 #[cfg(test)]
 mod tests;

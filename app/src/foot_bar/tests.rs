@@ -243,3 +243,132 @@ fn its_user_hides_it_and_it_never_takes_the_keyboard(cx: &mut TestAppContext) {
     assert_eq!(host.0.take(), ["show 7", "hide"], "hidden once");
     assert_eq!(cx.update(|cx| shown_over(cx)), None);
 }
+
+#[gpui::test]
+fn a_bar_that_grows_draws_once_its_window_has_grown(cx: &mut TestAppContext) {
+    let (host, window) = open_bar(cx);
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let saying = |words: &str, name: &'static str| {
+        let mut bar = arrange();
+        bar.words = words.to_owned().into();
+        let ran = ran.clone();
+        bar.buttons.last_mut().unwrap().run = Rc::new(move |_| ran.borrow_mut().push(name));
+        bar
+    };
+    show_bar(cx, &host, window, saying("Short", "before"));
+    let page = Bounds::new(point(px(250.), px(40.)), size(px(1000.), px(700.)));
+    let wider = saying("Inner scrolls with the page, over it", "after");
+    // The host sizes the window after the update that asked: until it has, the bar drawn, and the
+    // one a click presses, is the one before, not the new one cut at the old size (#2991).
+    cx.update(|cx| show(7, page, size(px(1260.), px(750.)), wider, cx));
+    cx.run_until_parked();
+    let places = host.1.borrow().clone();
+    let (before, after) = (places[places.len() - 2], places[places.len() - 1]);
+    assert!(after.size.width > before.size.width);
+    let done = |place: Place| {
+        point(
+            place.size.width - px(RIGHT.max(TALL_RIGHT) + 4.),
+            place.size.height / 2.,
+        )
+    };
+    VisualTestContext::from_window(window.into(), cx)
+        .simulate_click(done(before), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(*ran.borrow(), ["before"]);
+    VisualTestContext::from_window(window.into(), cx).simulate_resize(after.size);
+    cx.run_until_parked();
+    click_last(cx, &host, window);
+    assert_eq!(*ran.borrow(), ["before", "after"]);
+}
+
+/// Words that change twice before a frame, as Windows' log had them in Arrange: the window at the
+/// size of the bar between draws that one, not the newest cut to it.
+#[gpui::test]
+fn a_bar_replaced_before_it_drew_draws_when_its_window_fits_it(cx: &mut TestAppContext) {
+    let (host, window) = open_bar(cx);
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let saying = |words: &str, name: &'static str| {
+        let mut bar = arrange();
+        bar.words = words.to_owned().into();
+        let ran = ran.clone();
+        bar.buttons.last_mut().unwrap().run = Rc::new(move |_| ran.borrow_mut().push(name));
+        bar
+    };
+    show_bar(
+        cx,
+        &host,
+        window,
+        saying("Inner scrolls with the page, over it", "first"),
+    );
+    let page = Bounds::new(point(px(250.), px(40.)), size(px(1000.), px(700.)));
+    let (between, last) = (
+        saying("Let go where it goes", "between"),
+        saying("Go", "last"),
+    );
+    cx.update(|cx| {
+        show(7, page, size(px(1260.), px(750.)), between, cx);
+        show(7, page, size(px(1260.), px(750.)), last, cx);
+    });
+    cx.run_until_parked();
+    let places = host.1.borrow().clone();
+    let [first, between, last] = places[places.len() - 3..] else {
+        unreachable!()
+    };
+    assert!(first.size.width > between.size.width && between.size.width > last.size.width);
+    let done = |place: Place| {
+        point(
+            place.size.width - px(RIGHT.max(TALL_RIGHT) + 4.),
+            place.size.height / 2.,
+        )
+    };
+    let mut press = |place: Place| {
+        let mut window = VisualTestContext::from_window(window.into(), cx);
+        window.simulate_resize(place.size);
+        window.run_until_parked();
+        window.simulate_click(done(place), Modifiers::none());
+        window.run_until_parked();
+    };
+    press(first);
+    press(between);
+    press(last);
+    assert_eq!(*ran.borrow(), ["first", "between", "last"]);
+}
+
+/// A tiling manager on X11 can refuse the bar's window its size and give it a tile (#2900): the
+/// bar keeps its size, centred over the tile's bottom, and in a tile narrower than it, its words
+/// give way so its buttons stay in the tile.
+#[gpui::test]
+fn in_a_tile_it_didnt_ask_for_it_shows_whole_and_centred(cx: &mut TestAppContext) {
+    let (host, window) = open_bar(cx);
+    let ran = Rc::new(Cell::new(0));
+    let mut bar = arrange();
+    bar.words = "Inner scrolls with the page, over it".into();
+    let counting = ran.clone();
+    bar.buttons.last_mut().unwrap().run = Rc::new(move |_| counting.set(counting.get() + 1));
+    show_bar(cx, &host, window, bar);
+    let asked = host.1.borrow().last().unwrap().size;
+    // Its last button's right end, in a tile `width` wide and 800 tall with the bar centred over
+    // its bottom.
+    let mut press_in = |width: Pixels, bar_width: Pixels| {
+        let tile = size(width, px(800.));
+        let mut window = VisualTestContext::from_window(window.into(), cx);
+        window.simulate_resize(tile);
+        window.run_until_parked();
+        let right = (width + bar_width) / 2.;
+        let at = point(
+            right - px(RIGHT + 4.),
+            px(800. - BOTTOM) - asked.height / 2.,
+        );
+        window.simulate_click(at, Modifiers::none());
+        window.run_until_parked();
+    };
+    press_in(asked.width * 2., asked.width);
+    assert_eq!(
+        ran.get(),
+        1,
+        "the bar is its own size, over the bottom of a wider tile"
+    );
+    let narrow = asked.width - px(60.);
+    press_in(narrow, narrow - px(BOTTOM * 2.));
+    assert_eq!(ran.get(), 2, "its words give way in a narrower tile");
+}

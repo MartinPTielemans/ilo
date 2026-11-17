@@ -94,10 +94,16 @@ answer return accept "prompt ada"
 
 # On X11, another app's window raised over ilo's while the page's alert shows: the window manager
 # stacks the alert under that window with ilo's, where KWin drew an override-redirect one over every
-# window it manages (#2790). Back in ilo's window, the alert has the keys again for ↩.
+# window it manages (#2790). Back in ilo's window, the alert has the keys again for ↩. While the
+# alert holds the input focus ilo hears each button press on the display, and only counts them
+# (#2943); with another app active it hears none.
 raised_over=
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+  heard() { grep '^browser: x11 hears ' "$log" | tail -1 | cut -d' ' -f4-; }
   ask a Alert alert-raised-over
+  for _ in $(seq 50); do [ "$(heard)" = "button presses" ] && break; sleep 0.1; done
+  [ "$(heard)" = "button presses" ] ||
+    fail "the alert holding the input focus, ilo didn't hear the presses on the display: $(heard)"
   rm -f "$out/other-in"
   mkfifo "$out/other-in"
   python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
@@ -114,6 +120,9 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
     sleep 0.1
   done
   [ -n "$under" ] || fail "the alert isn't under another app's window raised over ilo's: $stacking"
+  for _ in $(seq 50); do [ "$(heard)" = "no button presses" ] && break; sleep 0.1; done
+  [ "$(heard)" = "no button presses" ] ||
+    fail "with another app active, ilo still hears every button press on the display: $(heard)"
   # The manager's stacking, bottom first, for whoever reads the run.
   printf '%s\n' "$stacking" > "$out/alert-raised-over-stacking.json"
   exec 7>&-
@@ -129,7 +138,7 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
 fi
 
 # Another tab takes the alert down, and its own brings it back.
-open_from_bar example.com
+open_from_bar "http://localhost:$port/one.html"
 other=$tab
 send click $(row 1)
 expect "^browser: selected $page\( in .*\)\{0,1\}\$" "a click on the dialogs page's row didn't show it"
@@ -160,7 +169,7 @@ send key u
 expect "^browser: title $page armed\$" "the page didn't ask to be asked before it's left"
 # Going from the page asks first, with Chrome's title.
 leave() {
-  go_from_bar example.org
+  go_from_bar "http://localhost:$port/two.html"
   expect "^browser: page $page dialog Leave Leave site?\$" "going from the page didn't ask first"
   expect '^browser: dialog settled$' "Leave site? didn't settle"
 }
@@ -185,7 +194,7 @@ fi
 leave
 send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't leave the page"
-expect "^browser: loaded $page https://example.org/\$" "the tab didn't go to example.org once left"
+expect "^browser: loaded $page http://localhost:$port/two.html\$" "the tab didn't go to two.html once left"
 
 # Each visit asks again, as a sign-in that was cancelled isn't asked for the page it shows.
 sign_in() {
@@ -487,6 +496,49 @@ SCREEN
   two_windows=1
 else
   echo "skip: the hover card over the window behind another, under Wayland or on sway's Xwayland: the compositor places the windows."
+fi
+# On sway's Xwayland the prompt takes the keys back once its window has sway's focus again after
+# another app's window had it: back from that window's workspace, and as that window, beside the
+# browser's, quits. wlroots gives the X focus to the browser's window, not to the prompt (#2894).
+# Last, as sway's focus back to the browser's window as a prompt answered from the keys goes can
+# take it from a command bar opened at once (#2943). The dialogs page is loaded again for it.
+if sway_xwayland; then
+  go_from_bar "${site}dialogs.html"
+  expect '^browser: title [0-9]* ready$' "the dialogs page didn't load again for the prompt's step"
+  page=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
+  send click $page_point
+  ask p Prompt prompt-back
+  # Whether the driver's "onscreen" says the X focus is on $1 (overlay, window or none) within 5 s.
+  keys_on() {
+    for _ in $(seq 50); do
+      send onscreen
+      grep '^browser: onscreen ' "$log" | tail -1 | grep -q "keyboard $1\$" && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  swaymsg 'workspace 2' > /dev/null || fail "sway didn't go to another workspace"
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other=$!
+  exec 5> "$out/other-in"
+  keys_on none ||
+    fail "another app's window on workspace 2 didn't take the keys from the prompt in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1), $(cat "$out/other-window.log")"
+  swaymsg 'workspace 1' > /dev/null || fail "sway didn't go back to the browser's workspace"
+  keys_on overlay ||
+    fail "back on the browser's workspace from another app's window, the prompt didn't take the keys back in 5 s, so typing would go to the page: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  swaymsg '[title="^Other app$"] move container to workspace 1, focus' > /dev/null ||
+    fail "sway didn't bring the other app's window to the browser's workspace"
+  keys_on none ||
+    fail "the other app's window on the browser's workspace didn't take the keys in 5 s: $(grep '^browser: onscreen ' "$log" | tail -1)"
+  # It quits, and sway gives its focus back to the browser's window.
+  exec 5>&-
+  wait "$other" || fail "another app's window didn't go once its stdin closed: $(cat "$out/other-window.log")"
+  keys_on overlay ||
+    fail "once another app's window beside the browser's went, the prompt didn't take the keys back in 5 s: $(grep '^browser: onscreen ' "$log" | tail -3 | tr '\n' ' ')"
+  send type ada
+  answer return accept "prompt ada"
 fi
 exec 3>&-
 quit

@@ -700,7 +700,7 @@ fn list_tabs_lists_only_the_agents_own_tabs(cx: &mut TestAppContext) {
         [("claude-code".to_string(), "Claude Code".to_string())]
     );
     assert!(!answer.error);
-    assert!(answer.text.starts_with("Your Space has no tabs yet."));
+    assert!(answer.text.starts_with("You have no tabs yet."));
 
     browser
         .tabs
@@ -1691,7 +1691,7 @@ fn a_tab_the_agents_click_opens_is_named(cx: &mut TestAppContext) {
     let said = clicked.text.split("\n\n").next().unwrap();
     assert_eq!(
         said,
-        "Clicked textbox “Coupon”. It opened tab 26 in your Space."
+        "Clicked textbox “Coupon”. It opened tab 26 among your tabs."
     );
 
     let answer = call(
@@ -4228,8 +4228,7 @@ mod tasks {
             json!({ "result": "Two museums.", "tabs": [30, 50] }),
             cx,
         );
-        let theirs =
-            "Tab 50 isn't one of yours: give the ids of tabs in your Space, from list_tabs.";
+        let theirs = "Tab 50 isn't one of yours: give the ids of your own tabs, from list_tabs.";
         assert_eq!(refused.recv().unwrap(), ToolResult::error(theirs));
         // A result with its other arguments written into it, as Haiku wrote one, calls again.
         let garbled = "MAAT opens at 10:00.</result>\n<parameter name=\"summary\">MAAT 10–19h";
@@ -6220,3 +6219,35 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 }
 
 mod holds;
+
+/// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
+/// address as the agent wrote it through `open_tab` and `navigate`, bc_agent_open_tab's and
+/// bc_agent_navigate's, which take no typed text, so the core never sets
+/// url_typed_with_http_scheme for it and HTTPS-First still tries it over https first.
+#[gpui::test]
+fn an_agents_http_address_is_never_a_typed_one(cx: &mut TestAppContext) {
+    let (agents, browser, _configs) = connected(cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "http://plain.example.com/" }),
+        cx,
+    );
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    let (tab, _, _, opened) = *browser.tabs.borrow().last().unwrap();
+    assert_eq!((tab, opened), (30, "http://plain.example.com/"));
+
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "url": "http://other.example.com/" }),
+        cx,
+    );
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    assert_eq!(
+        *browser.navigated.borrow(),
+        [(30, "http://other.example.com/".to_string())]
+    );
+}

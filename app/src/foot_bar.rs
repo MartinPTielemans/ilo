@@ -9,12 +9,13 @@
 //! There's one, which shows over one browser window at a time, as the toast does: a mode shows it
 //! over its own window when that window comes in front.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    App, Bounds, Context, FontWeight, Global, Hsla, Pixels, Role, SharedString, Size,
+    App, Bounds, Context, FontWeight, Global, Hsla, Pixels, Point, Role, SharedString, Size,
     TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, div, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowOptions, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::elevation::Level;
@@ -200,12 +201,27 @@ fn place(page: Bounds<Pixels>, content: Size<Pixels>, size: Size<Pixels>) -> Pla
     }
 }
 
+/// The top left of a bar at `place` in a window's content `content` big: centred between its
+/// insets, `bottom` over the content's bottom edge, as each host puts it.
+fn origin(place: &Place, content: Size<Pixels>) -> Point<Pixels> {
+    let between = f32::from(content.width) - place.left - place.right;
+    point(
+        px(place.left + (between - f32::from(place.size.width)) / 2.),
+        px(f32::from(content.height) - place.bottom - f32::from(place.size.height)),
+    )
+}
+
 struct Shown {
     window: u64,
-    bar: Bar,
+    bar: Rc<Bar>,
     layout: Layout,
     /// Whether it has drawn on screen, which the log says once, for the checks.
     drawn: bool,
+    /// The bar's top left in its browser window's content, where the host centres it.
+    origin: Point<Pixels>,
+    /// Where each button last drew in that content, which the log says as it changes, for the
+    /// checks to click.
+    placed: Rc<RefCell<Vec<Option<Bounds<Pixels>>>>>,
 }
 
 pub struct FootBar {
@@ -213,6 +229,13 @@ pub struct FootBar {
     /// The palette of a browser window, by its id, for the main button's accent.
     look: Box<dyn Fn(u64, &App) -> Palette>,
     shown: Option<Shown>,
+    /// The bars shown before `shown` since one last drew, oldest first, that one included. The host
+    /// sizes the window after the update that asked, so until the window has the new bar's size the
+    /// latest of these that fits it draws instead: the new bar drawn at the old size was cut, and
+    /// the Mac stretched it to the new one (#2991).
+    earlier: Vec<Shown>,
+    /// The bar the last frame drew, which a click presses.
+    on_screen: Option<Rc<Bar>>,
 }
 
 struct FootBarWindow(WindowHandle<FootBar>);
@@ -260,6 +283,8 @@ pub fn open_at(
             host,
             look: Box::new(look),
             shown: None,
+            earlier: Vec::new(),
+            on_screen: None,
         })
     });
     match window {
@@ -290,11 +315,22 @@ pub fn show(window: u64, page: Bounds<Pixels>, content: Size<Pixels>, bar: Bar, 
         let room = f32::from(page.size.width) - BOTTOM * 2.;
         let layout = layout(&bar, room, &measure);
         let place = place(page, content, layout.size);
+        let origin = origin(&place, content);
+        let placed = Rc::new(RefCell::new(vec![None; bar.buttons.len()]));
+        if let Some(was) = foot_bar.shown.take() {
+            if was.drawn {
+                foot_bar.earlier.clear();
+            }
+            foot_bar.earlier.push(was);
+        }
+        foot_bar.earlier.retain(|was| was.window == window);
         foot_bar.shown = Some(Shown {
             window,
-            bar,
+            bar: Rc::new(bar),
             layout,
             drawn: false,
+            origin,
+            placed,
         });
         foot_bar.host.show(window, place);
         cx.notify();
@@ -307,6 +343,8 @@ pub fn hide(cx: &mut App) {
         return;
     };
     let _ = handle.update(cx, |foot_bar, _, cx| {
+        foot_bar.earlier.clear();
+        foot_bar.on_screen = None;
         if foot_bar.shown.take().is_some() {
             foot_bar.host.hide();
             cx.notify();
@@ -327,8 +365,7 @@ pub fn shown_over(cx: &App) -> Option<u64> {
 
 impl FootBar {
     fn press(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(button) = (self.shown.as_ref()).and_then(|shown| shown.bar.buttons.get(index))
-        else {
+        let Some(button) = (self.on_screen.as_ref()).and_then(|bar| bar.buttons.get(index)) else {
             return;
         };
         if !button.enabled {
@@ -344,14 +381,44 @@ impl FootBar {
 impl Render for FootBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div().size_full().font_family(crate::face::UI);
-        let Some(shown) = &mut self.shown else {
+        let viewport = window.viewport_size();
+        let fits = |shown: &Shown| {
+            let size = shown.layout.size;
+            (f32::from(viewport.width) - f32::from(size.width)).abs() < 1.
+                && (f32::from(viewport.height) - f32::from(size.height)).abs() < 1.
+        };
+        let earlier = match &self.shown {
+            Some(shown) if !fits(shown) => self.earlier.iter().rposition(fits),
+            _ => None,
+        };
+        match earlier {
+            Some(index) => _ = self.earlier.drain(..index),
+            None => self.earlier.clear(),
+        }
+        let shown = match earlier {
+            Some(_) => self.earlier.first_mut(),
+            None => self.shown.as_mut(),
+        };
+        self.on_screen = shown.as_ref().map(|shown| shown.bar.clone());
+        let Some(shown) = shown else {
             return root;
         };
         // GPUI draws a window only once the system reports it visible, some frames after the host
-        // shows it, so the line comes with the first frame that's seen. check.sh reads it.
+        // shows it, so the lines come with the first frame that's seen. check.sh reads them: the
+        // second says the bar's size and the window's, which a frame drawn before the host sized
+        // the window shows apart.
         if !shown.drawn {
             match window.is_visible() {
-                true => log!("browser: foot bar drawn over {}", shown.window),
+                true => {
+                    log!("browser: foot bar drawn over {}", shown.window);
+                    log!(
+                        "browser: foot bar drew {}x{} in {}x{}",
+                        f32::from(shown.layout.size.width).round(),
+                        f32::from(shown.layout.size.height).round(),
+                        f32::from(viewport.width).round(),
+                        f32::from(viewport.height).round(),
+                    );
+                }
                 false => window.request_animation_frame(),
             }
             shown.drawn = window.is_visible();
@@ -359,7 +426,25 @@ impl Render for FootBar {
         let shown = &*shown;
         let palette = (self.look)(shown.window, cx);
         let a11y = window.is_a11y_active();
-        let (bar, layout) = (&shown.bar, shown.layout);
+        let bar = &shown.bar;
+        let layout = match viewport.width < shown.layout.size.width {
+            true => {
+                let system = window.text_system().clone();
+                let measure = |text: &SharedString, size: f32, weight| {
+                    crate::tooltip::text_width(text, size, weight, &system)
+                };
+                layout(bar, f32::from(viewport.width) - BOTTOM * 2., &measure)
+            }
+            false => shown.layout,
+        };
+        // A tiling manager can refuse the bar's window its size and give it a tile (#2900): the
+        // bar keeps its own size in it, laid out again if the tile is narrower, centred over the
+        // tile's bottom as it is over the page's.
+        let root = root
+            .flex()
+            .flex_col()
+            .items_center()
+            .pt((viewport.height - layout.size.height - px(BOTTOM)).max(px(0.)));
         let tall = bar.lead.is_some();
         // VoiceOver reads who's asking with the words.
         let bar_said = match &bar.lead {
@@ -417,8 +502,32 @@ impl Render for FootBar {
                 false => rgba(QUIET).into(),
             };
             let enabled = button.enabled;
+            let (name, origin, placed) = (button.name, shown.origin, shown.placed.clone());
+            let listener = canvas(
+                move |bounds, _, _| {
+                    let at = Bounds::new(bounds.origin + origin, bounds.size);
+                    let mut placed = placed.borrow_mut();
+                    if placed.get(index).is_some_and(|was| *was != Some(at)) {
+                        placed[index] = Some(at);
+                        // check.sh reads this line, to click the button.
+                        log!(
+                            "browser: foot bar {name} at {} {} {} {}",
+                            f32::from(at.origin.x).round(),
+                            f32::from(at.origin.y).round(),
+                            f32::from(at.size.width).round(),
+                            f32::from(at.size.height).round(),
+                        );
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full();
             div()
                 .id(("foot-bar-button", index))
+                .relative()
                 .h(px(BUTTON_HEIGHT))
                 .px(px(BUTTON_PAD))
                 .flex()
@@ -445,6 +554,7 @@ impl Render for FootBar {
                         })
                 })
                 .on_click(cx.listener(move |bar, _, _, cx| bar.press(index, cx)))
+                .child(listener)
                 .child(button.label.clone())
                 .children(button.key.map(|key| {
                     div()
@@ -457,7 +567,9 @@ impl Render for FootBar {
             div()
                 .id("foot-bar")
                 .when(a11y, |bar| bar.role(Role::Toolbar).aria_label(bar_said))
-                .size_full()
+                .flex_none()
+                .w(layout.size.width)
+                .h(layout.size.height)
                 .relative()
                 .flex()
                 .items_center()

@@ -576,6 +576,7 @@ pub(crate) fn finish_opening(
     if let Some(view) = prompt.and_then(|prompt| prompt.update(cx, |_, w, _| ns_view(w)).ok()) {
         let (right, top) = (offer::RIGHT.into(), offer::TOP.into());
         unsafe { platform::host_add_offer(ui_view, view, right, top) };
+        make_room(view, Level::Popover);
         // The core can report the window's tab before this, so the offer learns it here.
         let selected = shell.read(cx).selected();
         offer::tab_shown(id, selected, cx);
@@ -663,6 +664,7 @@ pub(crate) fn finish_opening(
         let radius = command_bar::RADIUS.into();
         elevate(COMMAND_BAR, Level::Modal);
         unsafe { platform::host_add_overlay(COMMAND_BAR, view, radius, command_bar_dismissed) };
+        make_room(view, command_bar::ROOM);
     }
     // The rest are made the first time one shows: a hidden overlay's window still holds what its
     // drawing needs, which a user who never opens it shouldn't pay for (#2138).
@@ -700,6 +702,20 @@ pub(crate) fn finish_opening(
                 elevate(FOLDER_PREVIEW, Level::Popover);
                 let dismissed = folder_preview_dismissed;
                 unsafe { platform::host_add_overlay(FOLDER_PREVIEW, view, radius, dismissed) };
+            }
+        },
+        cx,
+    );
+    when_asked::<tab_switcher::TabSwitcher>(
+        |cx| {
+            if let Some(switcher) = tab_switcher::open(Rc::new(TabSwitcherHost), cx)
+                && let Ok(view) = switcher.update(cx, |_, window, _| ns_view(window))
+            {
+                let radius = tab_switcher::RADIUS.into();
+                elevate(TAB_SWITCHER, Level::Modal);
+                let dismissed = tab_switcher_dismissed;
+                unsafe { platform::host_add_overlay(TAB_SWITCHER, view, radius, dismissed) };
+                make_room(view, Level::Modal);
             }
         },
         cx,
@@ -784,6 +800,16 @@ pub(crate) fn finish_opening(
             ) && let Ok(view) = foot_bar.update(cx, |_, window, _| ns_view(window))
             {
                 unsafe { platform::host_add_foot_bar(view) };
+            }
+        },
+        cx,
+    );
+    when_asked::<browser::mini_bar::MiniBar>(
+        |cx| {
+            if let Some(bar) = browser::mini_bar::open(Rc::new(MiniBarHost), cx)
+                && let Ok(view) = bar.update(cx, |_, window, _| ns_view(window))
+            {
+                unsafe { platform::host_add_mini_bar(view, browser::mini_bar::MARGIN.into()) };
             }
         },
         cx,
@@ -895,6 +921,19 @@ pub(crate) fn finish_opening(
         cx,
     );
     drop_targets::open(cx);
+}
+
+/// Has the host leave room round the panel in `view`'s window, one it has added, for the shadow of
+/// `level` the panel draws there on Windows (elevation::PANEL_SHADOW_IN_WINDOW).
+pub(crate) fn make_room(view: *mut c_void, level: Level) {
+    #[cfg(target_os = "windows")]
+    {
+        let margin = level.panel_margin();
+        let (above, sides, below) = (margin.above, margin.sides, margin.below);
+        unsafe { platform::host_set_shadow_margin(view, above.into(), sides.into(), below.into()) };
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (view, level);
 }
 
 /// Gives an overlay's shadow window its level's shadow, before the overlay is added.

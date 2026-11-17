@@ -271,6 +271,8 @@ struct Asked {
     fields: Vec<Entity<TextInput>>,
     checked: bool,
     answered: Option<Box<dyn FnOnce(Reply, &mut App)>>,
+    /// When it was asked to show.
+    asked: Instant,
     /// When its window was first on screen, where the motion starts.
     shown: Option<Instant>,
     settled: bool,
@@ -800,6 +802,7 @@ impl Dialog {
             fields,
             checked: false,
             answered: Some(answered),
+            asked: Instant::now(),
             shown: None,
             settled: false,
             settling: Settling::default(),
@@ -1098,6 +1101,11 @@ impl Render for Dialog {
         // GPUI draw it, so the motion starts there rather than skip its start.
         if asked.shown.is_none() && window.is_visible() {
             asked.shown = Some(Instant::now());
+            // How long it took to reach the screen, which a window manager can hold back (#2940).
+            log!(
+                "browser: dialog first frame in {:.1} ms",
+                asked.asked.elapsed().as_secs_f64() * 1000.
+            );
             if asked.source.grants() {
                 asked.settling.start("dialog".into(), cx);
             }

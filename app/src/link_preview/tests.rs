@@ -14,8 +14,9 @@ struct Recorder {
     under: Cell<bool>,
     /// Whether its hole opens the frame after it's laid out at rest, as on X11 and Windows.
     opens_at_once: Cell<bool>,
-    /// Whether the card shrinks back from the key as it closes, as on Windows.
-    closes_at_once: Cell<bool>,
+    /// Whether the page is on screen where it's laid out at once, with no word from the core, as
+    /// on Windows.
+    shown_at_once: Cell<bool>,
 }
 
 impl Recorder {
@@ -53,8 +54,8 @@ impl Host for Recorder {
     fn open_waits(&self) -> bool {
         !self.opens_at_once.get()
     }
-    fn close_waits(&self) -> bool {
-        !self.closes_at_once.get()
+    fn shown_at_once(&self) -> bool {
+        self.shown_at_once.get()
     }
     fn release(&self) {
         self.push("release".into());
@@ -395,15 +396,17 @@ fn where_the_open_never_showed_through_it_doesnt_wait(cx: &mut TestAppContext) {
     assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
 }
 
-/// Where Peek's page never showed round the shrinking card (Windows), neither the open nor the
-/// close waits for the core: the plate fills the hole the frame after the key, the hole closes and
-/// the page leaves the frame after that, and the card shrinks back from the key (#2640).
+/// Where the core never says the page is on screen (Windows), it's there once laid out, as its view
+/// moves at once. The close still holds the card at rest until the page has left, as there a first
+/// frame late after the key drew the card shrunk round the page at rest, and the page leaving with
+/// the hole showed the window's page in the card (#2640): the plate fills the hole, the hole closes
+/// over the page, the page leaves the frame after, and the card shrinks back from there.
 #[gpui::test]
-fn where_nothing_showed_through_neither_waits(cx: &mut TestAppContext) {
+fn where_the_core_never_says_the_close_holds_without_waiting(cx: &mut TestAppContext) {
     let host = Recorder::default();
     host.under.set(true);
     host.opens_at_once.set(true);
-    host.closes_at_once.set(true);
+    host.shown_at_once.set(true);
     let mut shown = Shown::on(host, cx);
     shown.calls();
     rest(&mut shown);
@@ -411,18 +414,18 @@ fn where_nothing_showed_through_neither_waits(cx: &mut TestAppContext) {
     frame(&mut shown);
     frame(&mut shown);
     assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE, HOLE]);
+    assert!(!waiting(&mut shown));
     shown.keys("escape");
+    // No frame for most of the close's time after the key: the preview is still there, at rest.
+    advance(&mut shown, CLOSE * 0.7);
+    assert_eq!(pose_of(&mut shown).scale, 1.);
     frame(&mut shown);
     frame(&mut shown);
-    let calls = shown.drawn();
     assert_eq!(
-        calls[..5],
-        [HOLE, HOLE, NO_HOLE, OUT_OF_SIGHT, "release"],
-        "{calls:?}"
+        shown.drawn(),
+        [HOLE, HOLE, NO_HOLE, NO_HOLE, OUT_OF_SIGHT, "release"]
     );
     assert!(!waiting(&mut shown));
-    advance(&mut shown, CLOSE / 2.);
-    assert!(pose_of(&mut shown).scale < 1.);
     let calls = shown.calls();
     assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
 }
