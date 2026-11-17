@@ -66,6 +66,7 @@ document.onvisibilitychange = () => {
   }
 };
 </script>'
+serve
 log="$out/spaces.log"
 step=0
 # X11 sends a touchpad's scrolling with no start or end, so two fingers never page there (#554):
@@ -87,6 +88,8 @@ await_load
 await '^browser: title [0-9]* ready$' || fail "the Spaces test page didn't draw"
 first=$(space)
 await "^browser: spaces $first\$" || fail "the app didn't start with one Space"
+# The app can say which window opened after its page has loaded (#3180).
+await '^browser: window opened [0-9]' || fail "the app didn't say which window opened"
 dots_window=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 a=$(today)
 send click $page_point
@@ -201,12 +204,12 @@ expect '^browser: space form gone$' "the form didn't leave after Create"
 send key t cmd
 expect '^browser: command new-tab via ui$' "⌘T in the new Space didn't reach the UI"
 expect '^browser: command bar shown$' "⌘T in the new Space didn't open the command bar"
-send type example.com
+send type "http://localhost:$port/one.html"
 send key return
-expect '^browser: today [0-9][0-9]*$' "the tab for example.com didn't open in the new Space"
+expect '^browser: today [0-9][0-9]*$' "the tab for one.html didn't open in the new Space"
 b=$(today)
 expect "^browser: selected $b\$" "the new Space's tab wasn't shown"
-expect "^browser: loaded $b https://example.com/\$" "example.com didn't load in the new Space's tab"
+expect "^browser: loaded $b http://localhost:$port/one.html\$" "one.html didn't load in the new Space's tab"
 
 # Opens the command bar with ⌘T and types $1, and once the core's rows are in among the bar's,
 # captures it in $3 if given and picks the row named $2 with ↓ and ↩, checking that it ran.
@@ -370,7 +373,7 @@ ran_hidden() {
   ran:*) fail "$1: $state" ;;
   esac
 }
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 expect "^browser: title $a hidden\$" "the tab behind the one shown isn't hidden"
 hidden_quiet "the tab behind the one shown ran frames while hidden, other than its picture's"
 send key w cmd
@@ -385,7 +388,7 @@ expect "^browser: title $a visible " "the tab in the Space shown again isn't vis
 ran_hidden "the tab in the Space shown again ran frames while hidden, other than its picture's"
 # A Space shows its last-used tab again: with two in Today and the lower one shown, a switch away
 # and back shows the lower one, not the top one.
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 c=$tab
 send click "$(row 1)"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the lower row didn't show tab $a"
@@ -1429,7 +1432,7 @@ for _ in $(seq 15); do logged '^browser: toast hidden$' && break; sleep 0.1; don
 logged '^browser: toast hidden$' || fail "the toast still said to use ⌘Z after ⌘Z"
 expect "^browser: spaces $first $second\$" "⌘Z didn't bring the Space back where it was"
 expect "^browser: space $second\( in .*\)\{0,1\}\$" "⌘Z didn't show the Space it brought back"
-expect "^browser: loaded [0-9]* https://example.com/\$" "the Space came back without its tab"
+expect "^browser: loaded [0-9]* http://localhost:$port/one.html\$" "the Space came back without its tab"
 expect "^browser: settled space $second\$" "the Space ⌘Z brought back didn't settle"
 # Export “reading 日本語” into Folder › Work, its own dimmed, makes the Space a folder at the bottom
 # of Work's pinned tabs and its tab the top of Work's Today, shows Work and deletes the Space, and a
@@ -1475,7 +1478,7 @@ send key t cmd shift
 # the export's ⌘Z showed it.
 expect '^browser: command reopen-closed-tab via \(ui\|page\)$' "⇧⌘T didn't reach the browser"
 expect "^browser: today [0-9]* $a\$" "⇧⌘T didn't reopen the deleted Space's tab here: Today is \"$(today)\""
-expect "^browser: loaded $(today | cut -d' ' -f1) https://example.com/\$" \
+expect "^browser: loaded $(today | cut -d' ' -f1) http://localhost:$port/one.html\$" \
   "the reopened tab didn't load its page"
 send key z cmd
 expect "^browser: spaces $first $second\$" "⌘Z after ⇧⌘T didn't bring the Space back"
@@ -1484,7 +1487,7 @@ expect '^browser: today $' "⌘Z brought back the tab ⇧⌘T had reopened: Toda
 # Each window keeps its own ⌘Z: with a Space deleted in this window and the archive cleared in a
 # second one, the second window's ⌘Z brings back the archive and not the Space, and this one's the
 # Space and not the archive.
-open_from_bar example.org
+open_from_bar "http://localhost:$port/two.html"
 send key w cmd
 expect '^browser: today $' "⌘W didn't take the tab out of Today: Today is \"$(today)\""
 expect '^browser: archive [1-9][0-9]* tabs$' "⌘W didn't archive the tab"

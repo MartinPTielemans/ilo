@@ -1318,6 +1318,12 @@ fn marked() -> Option<std::ops::Range<usize>> {
     }
 }
 
+/// Forgets what the scripted input method composed, as a real one does when sway activates or
+/// deactivates it: the text input it composed for has been reset, and the composition with it.
+pub(super) fn input_method_reset() {
+    COMPOSITION.set(None);
+}
+
 /// Handles `key` as drive.mm's scripted input method does, with the calls a Japanese one makes in
 /// the field with the keys: letters compose, space converts them all, return commits and escape
 /// cancels. Returns false for a key it leaves to the window, as one with a shortcut's modifiers,
@@ -1330,6 +1336,14 @@ pub(super) fn ime_key(key: &str, state: u16) -> Option<bool> {
     let composing = COMPOSITION.with_borrow(Option::is_some);
     if !IME_ON.get() || (state | FLAGS.get()) & shortcut != 0 || !(composing || letter) {
         return Some(false);
+    }
+    // Under Wayland, the activates and deactivates sway sent since the last key come first: the
+    // composition may have gone with them, and then Return and Escape are plain keys.
+    if crate::drive_wayland::on() {
+        crate::drive_wayland::sync();
+        if COMPOSITION.with_borrow(Option::is_none) && !letter {
+            return Some(false);
+        }
     }
     let field = Field::with_keys()?;
     let composition = COMPOSITION.take();
