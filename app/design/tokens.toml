@@ -1821,6 +1821,22 @@ bin-up = 12.0
 # The least a plate may be wide, in a card too narrow for the half it is.
 min-width = 160.0
 
+[shell.live-folder]
+# A Live Folder (#2979): a folder its profile's GitHub pull requests fill. Its two lists' headings,
+# "Review requests" and "Created by me", are this tall, at text's small size, semibold, in
+# `secondary`, as a menu's header is, starting this far in from their rows' plates (ours: the
+# measured app's folder wasn't recorded).
+heading-height = 22.0
+heading-x = 10.0
+# A draft's glyph and title are dimmed to this.
+draft = 0.55
+# After a refresh that failed, a mark this wide sits on the folder's glyph's bottom right corner,
+# on the sidebar's fill, with the circled ! in it.
+failed-mark = 9.0
+# Closed, the folder's row ends with how many review requests wait, this far in from its plate's
+# end.
+count-end = 12.0
+
 [shell.new-space]
 # The circle: across, its white ring, and the line of the sidebar's colour inside the ring.
 circle = 30.0
@@ -2727,6 +2743,10 @@ chip-lip = 2.0
 chip-radius = 6.0
 chip-padding = 3.0
 chip-after-text = 8.0
+# What's said of it after the name, as a Live Folder's rows' age: this far after it, in the
+# regular weight, the text's colour at this (ours, #2979's mock).
+detail-gap = 6.0
+detail = 0.7
 chip-gap = 3.5
 chip-text-size = 11.0
 # Arc's, measured at full opacity, are indigo: the plate #090C4B, the text #E2E5FF, the chips

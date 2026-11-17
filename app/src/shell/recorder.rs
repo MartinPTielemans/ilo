@@ -13,6 +13,7 @@ use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, WeakEnti
 
 use crate::theme::Appearance;
 
+use super::live_folders::LiveSource;
 use super::{
     Answer, BarSpace, BarTab, Browser, DownloadAction, MediaAction, MenuBar, MenuEntry, PageReply,
     ShownPageDialog, browser::WindowButton,
@@ -118,6 +119,8 @@ pub(super) struct Recorder {
     pub(super) arranged: Cell<Option<crate::boosts::Arranged>>,
     /// Whether the core refuses Arrange, as on a page that isn't http(s).
     pub(super) arrange_refused: Cell<bool>,
+    /// Whether the core refuses to make a Live Folder, as in a Space it can't fill one in.
+    pub(super) live_refused: Cell<bool>,
     /// The tab Arrange's mini bar shows for and what its press runs, while it shows.
     #[allow(clippy::type_complexity)]
     pub(super) mini_bar: RefCell<Option<(u64, crate::mini_bar::OnPress)>>,
@@ -506,6 +509,25 @@ impl Browser for Recorder {
 
     fn delete_folder(&self, folder: u64, _: &mut App) {
         self.edit(format!("delete folder {folder}"));
+    }
+
+    fn create_live_folder(&self, space: u64, source: LiveSource, name: &str, _: &mut App) -> u64 {
+        if self.live_refused.get() {
+            return 0;
+        }
+        let made = self.make();
+        self.edit(format!("live folder {made} {space} {source:?} {name}"));
+        made
+    }
+
+    fn end_live_folder(&self, folder: u64, _: &mut App) {
+        self.edit(format!("end live folder {folder}"));
+    }
+
+    fn fetch_live_folder(&self, folder: u64, source: LiveSource, refresh: bool, _: &mut App) {
+        self.record(format!(
+            "fetch live folder {folder} {source:?} refresh {refresh}"
+        ));
     }
 
     fn separate(&self, tab: u64, _: &mut App) {
