@@ -763,8 +763,7 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   # instead, or on X11 the click on the warning already took that one and the press beside takes
   # none (#3243), while the area goes on to show the tab pressed. So each tab the two clicks took
   # over is watched again and handed back there, with the UI given the keyboard by a click on the
-  # sidebar: on the Mac the warning takes it as its page shows (#3240), and keys typed there never
-  # reach the app (#3230).
+  # sidebar: on the Mac the warning takes it as its page shows (#3240).
   send state
   taken=$(since "$warning_clicked" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
     sort -u | tr '\n' ' ')
