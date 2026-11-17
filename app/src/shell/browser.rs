@@ -629,6 +629,12 @@ pub trait Browser {
         cx.set_global(super::SidebarRight(right));
         cx.refresh_windows();
     }
+    /// The user turned Top bar on or off from a menu, the command bar or its key: kept on this
+    /// device, and every window follows.
+    fn keep_top_bar(&self, on: bool, cx: &mut App) {
+        cx.set_global(super::TopBar(on));
+        cx.refresh_windows();
+    }
     /// A Little ilo window's UI has drawn its first frame on screen, where its opening grows from
     /// (host_grow_little_window).
     fn little_drawn(&self, cx: &mut App);
@@ -980,6 +986,14 @@ pub trait Browser {
     fn os(&self) -> crate::default_browser::Os {
         crate::default_browser::Os::current()
     }
+    /// The search engines `space`'s profile's default is picked from, each its keyword and name, in
+    /// the core's order, and the default's keyword: none until they've loaded, or while a policy or
+    /// an extension picks the default.
+    fn search_engines(&self, _space: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        Default::default()
+    }
+    /// Makes the engine of `keyword`, one of `search_engines`, `space`'s profile's default.
+    fn set_search_engine(&self, _space: u64, _keyword: &str, _name: &str, _cx: &mut App) {}
 
     /// Whether crash reports are sent, as Settings' switch has it, or None while there's no
     /// collector to send them to, when neither Settings nor the first launch offers it.

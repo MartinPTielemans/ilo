@@ -73,6 +73,7 @@ impl Shell {
         // On the right, the card and its panel are today's mirrored, so the panel stays between
         // the page and the sidebar.
         let card = self.little_card(super::sidebar::mirrored(self.right, viewport.width, card));
+        let card = self.under_bar(card);
         match self.side_panel.is_some() && card_left != 0. {
             true => {
                 let (page, panel) = split_card(card, panel_width(self.side_panel_width));
