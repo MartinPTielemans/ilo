@@ -101,7 +101,7 @@ send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
 post click 204 $((height - 25))
-plus=$(cased "New Space…, New Folder…, New Split View, New Note, Edit Boost…")
+plus=$(cased "New Space…, New Folder…, New Split View, New Board, New Note, Edit Boost…")
 expect "^browser: menu shown $plus\(, .*\)\{0,1\}\$" "the +'s menu didn't offer Edit Boost…"
 expect '^browser: menu drawn ' "the +'s menu didn't draw"
 ../tools/window-screenshot.sh "$pid" "$out/boost-plus-menu.png" || fail "no window to capture"
