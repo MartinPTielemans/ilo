@@ -16,7 +16,10 @@ use web_time::Instant;
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, Entity, KeyboardButton, KeyboardClickEvent,
     KeystrokeEvent, MouseButton, PathBuilder, Pixels, Rgba, SharedString, Subscription, Window,
-    canvas, div, fill, point, prelude::*, px, rgb, size,
+    accesskit::{Role, Toggled},
+    canvas, div, fill, point,
+    prelude::*,
+    px, rgb, size,
 };
 
 use super::{
@@ -27,9 +30,9 @@ use super::{
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
-use crate::settings_rows::{SLIDE, group, stop_switch};
+use crate::settings_rows::{SLIDE, group, named_button, ring, stop_switch};
 use crate::theme::Theme;
-use crate::theme_picker::SWATCHES;
+use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::palette::{INK, PAPER};
 use crate::tokens::settings::PADDING;
 use crate::tokens::shell::onboarding::BUTTON_GAP;
@@ -338,6 +341,14 @@ pub(super) struct Onboarding {
     slid: bool,
     /// ⇥ put the keyboard on the opt-ins' switches, which it leaves with them (onboarding_layer).
     on_switches: bool,
+    /// The step shown holds the keyboard while nothing in it does, so an assistive app, which
+    /// follows the keyboard, reads each step by its title and line as it comes (#3151).
+    focus: gpui::FocusHandle,
+    /// ⇥'s stops at the step's button and at its corner's Skip or Back, which ↩ and Space press.
+    continue_stop: gpui::FocusHandle,
+    skip_stop: gpui::FocusHandle,
+    /// The step that last took the keyboard as it came.
+    focused_step: Option<Step>,
     /// Where the opt-ins' rows and switches are drawn (opt_in_frame).
     frames: Frames,
     /// Where the step's button is drawn, once the step has settled (button_frame).
@@ -419,6 +430,10 @@ impl Shell {
             switched: None,
             slid: false,
             on_switches: false,
+            focus: cx.focus_handle(),
+            continue_stop: cx.focus_handle().tab_stop(true),
+            skip_stop: cx.focus_handle().tab_stop(true),
+            focused_step: None,
             frames: Frames::default(),
             button: Rc::default(),
             since: Instant::now(),
@@ -787,11 +802,12 @@ impl Shell {
                 }
             }
             (Step::Import, _) => {}
-            // ⇥ and ⇧⇥ go along the opt-ins' switches, the window's only stops; Space turns the one
-            // the keyboard is on, as Settings' does, and ↩ stays Continue (#2985).
-            (Step::OptIns, "tab") => {
+            // ⇥ and ⇧⇥ go along the step's stops: the swatches, the opt-ins' switches, its button
+            // and Skip, the window's only stops. Space turns the switch the keyboard is on, as
+            // Settings' does, and ↩ stays Continue there (#2985).
+            (_, "tab") => {
                 if let Some(onboarding) = self.onboarding.as_mut() {
-                    onboarding.on_switches = true;
+                    onboarding.on_switches = step == Step::OptIns;
                 }
                 if key.modifiers.shift {
                     window.focus_prev(cx)
@@ -799,11 +815,19 @@ impl Shell {
                     window.focus_next(cx)
                 }
             }
-            (_, "enter") if !key.modifiers.modified() => {
+            // On the button or Skip, ↩ is that one's press, its click.
+            (_, "enter") if !key.modifiers.modified() && !self.onboarding_stop_keyed(window) => {
                 self.onboarding_continue("return", window, cx)
             }
             _ => {}
         }
+    }
+
+    /// The keyboard is on the step's button or its Skip, which take ↩ and Space as their press.
+    fn onboarding_stop_keyed(&self, window: &Window) -> bool {
+        (self.onboarding.as_ref()).is_some_and(|onboarding| {
+            onboarding.continue_stop.is_focused(window) || onboarding.skip_stop.is_focused(window)
+        })
     }
 
     /// The flow over the whole window while it shows, stepping its motion; none otherwise, at no
@@ -817,7 +841,13 @@ impl Shell {
         // The switches go with their step, and a keyboard left on one would leave the shell's own
         // keys, ⌘T among them, with nowhere to go off the Mac, so it goes back to the shell.
         let left = onboarding.step != Step::OptIns || onboarding.ending.is_some();
-        if left && std::mem::take(&mut onboarding.on_switches) {
+        // So do the step and its stops as the flow ends.
+        let held = onboarding.focus.is_focused(window)
+            || onboarding.continue_stop.is_focused(window)
+            || onboarding.skip_stop.is_focused(window);
+        if (left && std::mem::take(&mut onboarding.on_switches))
+            || (onboarding.ending.is_some() && held)
+        {
             window.focus(&self.focus_handle, cx);
         }
         // A page shown covers it, so it has ended.
@@ -852,6 +882,22 @@ impl Shell {
         if window.is_visible() && !std::mem::replace(&mut onboarding.keyboard, true) {
             let browser = self.browser.clone();
             cx.defer(move |cx| browser.focus_ui(cx));
+        }
+        // Each step takes the keyboard as it comes, from the window or from the step before, so an
+        // assistive app reads it; never from a field that has it.
+        let resting = window.focused(cx).is_none_or(|focus| {
+            focus == self.focus_handle
+                || focus == onboarding.focus
+                || focus == onboarding.continue_stop
+                || focus == onboarding.skip_stop
+        });
+        if onboarding.keyboard
+            && onboarding.ending.is_none()
+            && resting
+            && onboarding.focused_step != Some(onboarding.step)
+        {
+            onboarding.focused_step = Some(onboarding.step);
+            window.focus(&onboarding.focus, cx);
         }
         let still = cx.reduce_motion();
         let elapsed = onboarding.since.elapsed().as_secs_f32();
@@ -1003,10 +1049,25 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center();
+        // A screen reader reads the step shown as a dialog called by its title, with its line, and
+        // the step leaving under it, still drawn as it slides, as nothing.
+        let named = self.a11y
+            && (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.step == step);
         if step == Step::Intro {
             let drawn = Drawn::at(t, still);
             return layer.child(
                 div()
+                    .id("onboarding-intro")
+                    .when_some(
+                        (self.onboarding.as_ref()).map(|onboarding| onboarding.focus.clone()),
+                        |intro, focus| intro.track_focus(&focus),
+                    )
+                    .when(named, |intro| {
+                        intro
+                            .role(Role::Dialog)
+                            .aria_label(env!("APP_NAME"))
+                            .aria_description("a good tool.")
+                    })
                     .flex()
                     .flex_col()
                     .items_center()
@@ -1063,7 +1124,7 @@ impl Shell {
                 .onboarding
                 .as_ref()
                 .and_then(|onboarding| onboarding.picked);
-            swatch_row(picked, colors, cx)
+            swatch_row(picked, colors, self.a11y, cx)
         });
         let chip = |keys: String, fill: Rgba| {
             div()
@@ -1109,9 +1170,24 @@ impl Shell {
         });
         let drawn = (self.onboarding.as_ref())
             .map(|onboarding| (onboarding.button.clone(), onboarding.settled));
+        let said = (title.clone(), line.clone());
+        // Only the step shown's: the one leaving, drawn under it, has none.
+        let stops = (self.onboarding.as_ref())
+            .filter(|onboarding| onboarding.step == step)
+            .map(|onboarding| {
+                (
+                    onboarding.continue_stop.clone(),
+                    onboarding.skip_stop.clone(),
+                )
+            });
         let button = (!button.is_empty()).then(|| {
             div()
                 .id("onboarding-continue")
+                .when(self.a11y, |control| named_button(control, button.clone()))
+                .when_some(stops.clone(), |control, (stop, _)| {
+                    control.track_focus(&stop).focus_from_keys_only()
+                })
+                .focus_visible(ring(look.ink))
                 .relative()
                 .mt(px(BUTTON_GAP))
                 .h(px(BUTTON_HEIGHT))
@@ -1137,8 +1213,20 @@ impl Shell {
                 ))
                 .children(drawn.map(|(at, settled)| button_frame(at, settled)))
         });
+        let focus = (self.onboarding.as_ref())
+            .filter(|onboarding| onboarding.step == step)
+            .map(|onboarding| onboarding.focus.clone());
         layer.child(
             div()
+                .id(("onboarding-step", step as usize))
+                .when_some(focus, |content, focus| content.track_focus(&focus))
+                .when(named, |content| {
+                    let (title, line) = said;
+                    content
+                        .role(Role::Dialog)
+                        .aria_label(title)
+                        .aria_description(line)
+                })
                 .flex()
                 .flex_col()
                 .items_center()
@@ -1302,8 +1390,17 @@ impl Shell {
             .rounded(px(CHIP_RADIUS))
             .bg(colors.ink(SKIP_CHIP))
             .child("esc");
+        let stop = (self.onboarding.as_ref()).map(|onboarding| onboarding.skip_stop.clone());
         div()
             .id("onboarding-skip")
+            .when(self.a11y, |control| {
+                named_button(control, if back { "Back" } else { "Skip" })
+            })
+            .when_some(stop, |control, stop| {
+                control.track_focus(&stop).focus_from_keys_only()
+            })
+            .rounded(px(CHIP_RADIUS))
+            .focus_visible(ring(colors.ink(1.)))
             .absolute()
             .right(px(SKIP_MARGIN))
             .bottom(px(SKIP_MARGIN))
@@ -1371,14 +1468,23 @@ fn opt_in_frame(
 
 /// The theme picker's swatches in a row, the one picked ringed in the ink, each with a hairline
 /// edge so the lightest still reads on Paper.
+/// A screen reader reads them as one choice, a radio button each called by its colour.
 fn swatch_row(
     picked: Option<usize>,
     colors: Colors,
+    a11y: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement + use<> {
     // Each swatch's ring and the gap inside it, on both sides.
     let ringed = SWATCH + 4. * SWATCH_RING;
     div()
+        .id("onboarding-swatches")
+        .when(a11y, |row| row.role(Role::RadioGroup).aria_label("Colour"))
+        // One stop, the arrows going along it, with the swatch picked read as they move.
+        .tab_index(0)
+        .focus_from_keys_only()
+        .rounded_full()
+        .focus_visible(ring(colors.ink(1.)))
         .mt(px(SWATCH_GAP))
         .flex()
         .gap(px(SWATCH_PITCH - ringed))
@@ -1388,8 +1494,21 @@ fn swatch_row(
             } else {
                 colors.ink(0.)
             };
+            let toggled = match picked == Some(index) {
+                true => Toggled::True,
+                false => Toggled::False,
+            };
             div()
                 .id(("onboarding-swatch", index))
+                .when(a11y, |swatch| {
+                    swatch
+                        .role(Role::RadioButton)
+                        .aria_label(swatch_name(color))
+                        .aria_toggled(toggled)
+                        .when(picked == Some(index), |swatch| {
+                            swatch.aria_active_descendant()
+                        })
+                })
                 .p(px(SWATCH_RING))
                 .rounded_full()
                 .border(px(SWATCH_RING))

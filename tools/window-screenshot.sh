@@ -20,7 +20,9 @@
 # the window under it shows.
 # On the Mac, with "floating", it takes only the process's window above the normal level at FRAME,
 # "<x> <y> <width> <height>" from the main display's top-left, such as Picture in Picture's, on its
-# own: the overlays over the browser window are above the normal level too.
+# own: the overlays over the browser window are above the normal level too. On the Mac too, a
+# capture that hasn't finished in 60 s gives up, saying what it was doing then: one taken while
+# another capture of the window was going sat in ScreenCaptureKit for 45 minutes (#3191).
 # Usage: tools/window-screenshot.sh <pid> <output.png> [all | screen | floating]
 set -e
 { [ $# -eq 2 ] || { [ $# -eq 3 ] && { [ "$3" = all ] || [ "$3" = screen ]; }; }; } ||
@@ -420,9 +422,34 @@ func fail(_ message: String) -> Never {
   exit(1)
 }
 
+// What it's doing, for the limit to say.
+final class Stage: @unchecked Sendable {
+  private let lock = NSLock()
+  private var now = "listing the windows on screen"
+  var text: String {
+    get {
+      lock.lock()
+      defer { lock.unlock() }
+      return now
+    }
+    set {
+      lock.lock()
+      defer { lock.unlock() }
+      now = newValue
+    }
+  }
+}
+let stage = Stage()
+DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
+  FileHandle.standardError.write(
+    Data("The capture didn't finish in 60 s, while it was \(stage.text).\n".utf8))
+  _exit(124)
+}
+
 let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
 let windows = content.windows.filter { $0.owningApplication?.processID == pid }
 func write(_ image: CGImage) -> Never {
+  stage.text = "writing \(out.path)"
   guard let file = CGImageDestinationCreateWithURL(out as CFURL, UTType.png.identifier as CFString, 1, nil)
   else { fail("can't write \(out.path)") }
   CGImageDestinationAddImage(file, image, nil)
@@ -447,6 +474,7 @@ if floating {
   config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
   config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
   config.showsCursor = false
+  stage.text = "capturing the floating window"
   write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
 }
 // The largest normal window; a process can also own invisible helper windows.
@@ -466,5 +494,6 @@ config.sourceRect = frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.m
 config.width = Int(frame.width * CGFloat(filter.pointPixelScale))
 config.height = Int(frame.height * CGFloat(filter.pointPixelScale))
 config.showsCursor = false
+stage.text = "capturing the window"
 write(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
 SWIFT

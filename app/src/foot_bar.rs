@@ -426,7 +426,25 @@ impl Render for FootBar {
         let shown = &*shown;
         let palette = (self.look)(shown.window, cx);
         let a11y = window.is_a11y_active();
-        let (bar, layout) = (&shown.bar, shown.layout);
+        let bar = &shown.bar;
+        let layout = match viewport.width < shown.layout.size.width {
+            true => {
+                let system = window.text_system().clone();
+                let measure = |text: &SharedString, size: f32, weight| {
+                    crate::tooltip::text_width(text, size, weight, &system)
+                };
+                layout(bar, f32::from(viewport.width) - BOTTOM * 2., &measure)
+            }
+            false => shown.layout,
+        };
+        // A tiling manager can refuse the bar's window its size and give it a tile (#2900): the
+        // bar keeps its own size in it, laid out again if the tile is narrower, centred over the
+        // tile's bottom as it is over the page's.
+        let root = root
+            .flex()
+            .flex_col()
+            .items_center()
+            .pt((viewport.height - layout.size.height - px(BOTTOM)).max(px(0.)));
         let tall = bar.lead.is_some();
         // VoiceOver reads who's asking with the words.
         let bar_said = match &bar.lead {
@@ -549,7 +567,9 @@ impl Render for FootBar {
             div()
                 .id("foot-bar")
                 .when(a11y, |bar| bar.role(Role::Toolbar).aria_label(bar_said))
-                .size_full()
+                .flex_none()
+                .w(layout.size.width)
+                .h(layout.size.height)
                 .relative()
                 .flex()
                 .items_center()

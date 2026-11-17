@@ -202,11 +202,12 @@ fn a_click_on_the_picture_takes_the_page_back(cx: &mut TestAppContext) {
     cx.simulate_click(card.center(), Modifiers::none());
     assert_eq!(host.take(), ["select 10"]);
     cx.simulate_click(card.center(), Modifiers::none());
-    // Nor does the window coming to the front ask for a picture of a page on its way here.
+    // Nor does the window coming to the front ask for a picture of a page on its way here. It
+    // tells that its page asks nothing, which it does on every return to the front.
     shell.update(cx, |shell, cx| shell.became_key(cx));
     cx.executor().advance_clock(Duration::from_millis(300));
     cx.run_until_parked();
-    assert!(host.take().is_empty());
+    assert_eq!(host.take(), ["page dialog none"]);
 }
 
 /// The window a page leaves shows at once the picture the window taking it showed, at the card's
