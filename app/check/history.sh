@@ -18,6 +18,8 @@
 # https. The profile remembers a host that fell back to http, so each run names a new one, and
 # $written is another such host, typed with http://, and $agent_opened, $agent_moved and $linked
 # three more, which an agent and a link go to, and $barred one a link goes to under the command bar.
+# Each leads to the check's server, so none waits on the machine's DNS, which has no address for
+# them: https fails at the handshake, and Chrome's warning before http comes as it would.
 # $nearby is a local name for the check's server that no run typed before: Chrome's bar fills in a
 # page typed once under the host and port typed, such as tabs' back.html under 127.0.0.1:$port, as
 # one check.sh's runs share its server (#1148).
@@ -53,7 +55,8 @@ BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
   --host-resolver-rules="MAP stuck.test 127.0.0.1:$(cat "$out/port"), \
 MAP $plain 127.0.0.1:$port, MAP $nearby 127.0.0.1:$port, \
 MAP $written 127.0.0.1:$port, MAP $agent_opened 127.0.0.1:$port, \
-MAP $agent_moved 127.0.0.1:$port, MAP $linked 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
+MAP $agent_moved 127.0.0.1:$port, MAP $linked 127.0.0.1:$port, \
+MAP $barred 127.0.0.1:$port" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
