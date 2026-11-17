@@ -1865,6 +1865,12 @@ import-hold = 0.6
 # and lines between rows.
 opt-in-width = 420.0
 opt-in-line = 18.0
+# The search engine step's list, in the opt-ins' box: a row each, this tall, of a radio's dot and
+# the engine's name after it. The dot is a ring in the ink, and the one picked is filled in the
+# signal green around a paper centre.
+engine-row = 40.0
+engine-dot = 16.0
+engine-dot-center = 6.0
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the

@@ -1944,6 +1944,19 @@ impl Browser for Fake {
         false
     }
 
+    // The US's list as the core gives it, Google last, so the onboarding shows its step.
+    fn search_engines(&self, _: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
+        let engines = [
+            ("duckduckgo.com", "DuckDuckGo"),
+            ("search.brave.com", "Brave"),
+            ("bing.com", "Microsoft Bing"),
+            ("ecosia.org", "Ecosia"),
+            ("google.com", "Google"),
+        ];
+        let engines = engines.map(|(keyword, name)| (keyword.into(), name.into()));
+        (engines.to_vec(), "duckduckgo.com".into())
+    }
+
     fn crash_reports(&self, _: &App) -> Option<bool> {
         Some(self.opt_ins.get().0)
     }
