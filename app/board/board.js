@@ -46,8 +46,15 @@ const send = (message, ...args) =>
   });
 
 // Writes |bytes| as |kind| ("board", "thumb" or "file"), a slice at a time: the stored file's name
-// for a picture, "" for the others, or false.
-async function write(kind, bytes) {
+// for a picture, "" for the others, or false. The core takes one write at a time, so each waits for
+// the one before: a thumbnail still being written as the tab shows again would fail a landing's save.
+let writing = Promise.resolve();
+function write(kind, bytes) {
+  const now = writing.then(() => writeNow(kind, bytes));
+  writing = now.catch(() => {});
+  return now;
+}
+async function writeNow(kind, bytes) {
   if (!(await send("write", kind, bytes.byteLength))) return false;
   for (let at = 0; at < bytes.byteLength; at += SLICE) {
     // ArrayBuffer, which chrome.send carries as binary.
@@ -438,6 +445,8 @@ async function picture(file, bitmap) {
 // one again rather than losing it.
 const STEP = 24, RUN = 8; // A run of 8 steps starts again a step across.
 let landing = null, landAgain = false;
+// Arrivals landed whose taking the core hasn't answered yet, which a landing passes over.
+let held = [];
 async function land() {
   if (!writable || document.visibilityState === "hidden") return;
   if (landing) {
@@ -455,8 +464,14 @@ async function land() {
 async function landArrivals() {
   const names = ((await read(`/${id}/arrived`)) || "").split("\n").filter(Boolean);
   if (!names.length) return;
+  const fresh = names.slice();
+  for (const name of held) {
+    const at = fresh.indexOf(name);
+    if (at >= 0) fresh.splice(at, 1);
+  }
+  held.push(...fresh);
   const landed = [];
-  for (const file of names) {
+  for (const file of fresh) {
     const blob = await read(`/${id}/files/${file}`, "blob");
     let bitmap;
     try {
@@ -479,7 +494,7 @@ async function landArrivals() {
   }
   // A save already under way doesn't hold the cards just landed.
   while (saving) await saving;
-  if (await save()) await send("taken", names);
+  if ((await save()) && (await send("taken", names))) held = [];
 }
 // Where |card| lands: centred in the view, or the first free place down a run of steps from there,
 // each run a step across from the last, so a long list of arrivals stays in view.

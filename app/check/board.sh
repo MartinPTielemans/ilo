@@ -148,7 +148,8 @@ landing=$(printf 'f%.0s' $(seq 32))
 mkdir -p "$boards/$landing/files"
 echo '{"version": 1, "camera": {"x": 0, "y": 0, "zoom": 1}, "cards": []}' > "$boards/$landing/board.json"
 # Puts a 64 × 40 picture, green as much as $1, in the landing Board's files and its name on its
-# arrivals. Bash 3.2 misreads a here-document inside $(), so the name is read back from the list.
+# arrivals, ending its line with \n as the core does, which Python on Windows would write as \r\n.
+# Bash 3.2 misreads a here-document inside $(), so the name is read back from the list.
 put_picture() {
   python3 -I - "$boards/$landing/files" "$1" >> "$boards/$landing/arrived" <<'PYEOF'
 import hashlib, os, struct, sys, zlib
@@ -159,7 +160,7 @@ png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 
     chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 name = hashlib.sha256(png).hexdigest() + ".png"
 open(os.path.join(sys.argv[1], name), "wb").write(png)
-print(name)
+sys.stdout.buffer.write((name + "\n").encode())
 PYEOF
 }
 # Waits for the core to take the landing Board's arrivals off its list; $1 says what didn't happen.
@@ -203,8 +204,10 @@ a, b = cards.get(sys.argv[2]), cards.get(sys.argv[3])
 if not b:
     print("the Board's file has no card of the picture that came while its tab wasn't showing")
 elif (b["x"] - a["x"], b["y"] - a["y"]) != (24, 24):
-    print("the second picture landed %d, %d from the first, not a step (24, 24) down and right"
-          % (b["x"] - a["x"], b["y"] - a["y"]))
+    print("the second picture landed %d, %d from the first, not a step (24, 24) down and right; "
+          "the Board's pictures: %s" % (b["x"] - a["x"], b["y"] - a["y"], ", ".join(
+              "%s at %d, %d" % (card["file"][:8], card["x"], card["y"])
+              for card in json.load(open(sys.argv[1]))["cards"] if card.get("kind") == "picture")))
 PYEOF
 [ ! -s "$out/board-landed.why" ] || fail "$(cat "$out/board-landed.why")"
 ../tools/window-screenshot.sh "$pid" "$out/board-landed-shown.png" || fail "no window to capture"
