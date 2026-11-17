@@ -128,7 +128,7 @@ impl Shell {
     fn cells(&self, along: Along) -> (Vec<f32>, f32) {
         match along {
             Along::Switcher => {
-                let span = self.width() - 2. * SWITCHER_INSET;
+                let span = self.switcher_span();
                 let cells = self.switcher_cells(span);
                 let left = (span - cells.iter().sum::<f32>()) / 2.;
                 (cells, left)

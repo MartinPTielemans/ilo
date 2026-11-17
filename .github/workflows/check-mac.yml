@@ -15,8 +15,8 @@
 # owner's Mac.
 # Its default runs, the night's and a train's, are every run check.sh does unnamed but VM_RUNS, the
 # runs a release still needs from the owner's MacBook's check VM, each here with its reason (#2205):
-# - clear: in 2 of 5 runs here the tab Clear Browsing Data opened drew nothing in the page area,
-#   so its dialog never had the keyboard; the VM passes it (#2248).
+# none now. clear was one until #2888: a switch from a Safari's-engine page to Chromium's left the
+# window's stale occluded mark, so the tab Clear Browsing Data opened drew nothing here.
 # switch-frames runs here: its empty page area through a switch, here in 3 of 4 runs, is on the VM
 # too, about half the time, and quarantined on the Mac under #2248 (check/quarantine.mac).
 # And one part of a run that passes here, which skips it, saying so:
@@ -106,7 +106,7 @@ jobs:
     env:
       # The runs a release still needs from the check VM, as the header says why: one leaves the
       # list once it passes on the runner (#2248).
-      VM_RUNS: clear
+      VM_RUNS: ''
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
@@ -354,6 +354,27 @@ jobs:
           sudo killall tccd || true
           launchctl kickstart -k "gui/$(id -u)/com.apple.tccd"
           killall replayd || true
+          # A runner has refused a job's every capture though granted, ScreenCaptureKit's -3801,
+          # which failed its first check as "no window to capture" (#2963). One listing, as
+          # tools/window-screenshot.sh starts with, says so here, as the runner's fault.
+          cat > "$RUNNER_TEMP/list-windows.swift" <<'SWIFT'
+          import ScreenCaptureKit
+          do {
+            _ = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            print("ScreenCaptureKit lists the windows on screen")
+          } catch {
+            print(error)
+            exit((error as NSError).code == -3801 ? 3 : 1)
+          }
+          SWIFT
+          refused=0
+          said=$(swift "$RUNNER_TEMP/list-windows.swift" 2>&1) || refused=$?
+          echo "$said"
+          if [ "$refused" = 3 ]; then
+            echo "::error::the runner refused screen capture after its grants (ScreenCaptureKit's -3801), a runner fault, not a check's (#2963)"
+            exit 1
+          fi
+          [ "$refused" = 0 ] || echo "::warning::ScreenCaptureKit's listing failed, but not with -3801: $said"
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which

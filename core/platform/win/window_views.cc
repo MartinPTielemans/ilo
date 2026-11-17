@@ -14,6 +14,7 @@
 #include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -27,10 +28,12 @@
 #include "browser_core/host.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/session.h"
+#include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/client/window_types.h"
@@ -396,6 +399,65 @@ bool Tapped(HWND root) {
 
 }  // namespace alt_taps
 
+// Which window a press activating a browser window went to. Windows tells each of the pressed
+// window's parents with WM_PARENTNOTIFY first, then sends it WM_MOUSEACTIVATE, and a thread's
+// WH_CALLWNDPROC hook sees both whichever window answers them: the window under a page's content
+// is content's own, which answers WM_MOUSEACTIVATE without passing it on to the pane
+// (LegacyRenderWidgetHostHWND::OnMouseActivate), and the UI's holder focuses the UI on hearing of
+// its press (host.cc), which activates the window before WM_MOUSEACTIVATE comes. The window's own
+// WM_PARENTNOTIFY, which names no child, is the last. The hook is set only while a browser window
+// is in the back, as only a press bringing one forward is asked about.
+namespace presses {
+
+HHOOK g_hook = nullptr;
+int g_waiting = 0;
+HWND g_pressed = nullptr;
+
+LRESULT CALLBACK Sent(int code, WPARAM own, LPARAM sent) {
+  const auto* message = reinterpret_cast<const CWPSTRUCT*>(sent);
+  if (code != HC_ACTION) {
+    return CallNextHookEx(nullptr, code, own, sent);
+  }
+  const UINT told = LOWORD(message->wParam);
+  if (message->message == WM_MOUSEACTIVATE ||
+      (message->message == WM_PARENTNOTIFY &&
+       (told == WM_LBUTTONDOWN || told == WM_RBUTTONDOWN || told == WM_MBUTTONDOWN ||
+        told == WM_XBUTTONDOWN) &&
+       GetAncestor(message->hwnd, GA_ROOT) != message->hwnd)) {
+    g_pressed = message->hwnd;
+  }
+  return CallNextHookEx(nullptr, code, own, sent);
+}
+
+// |root|, a browser window, went to the back. A press in it the hook heard while another window
+// was in the back is forgotten: it came while |root| was in front, so it brought nothing forward,
+// and |root| coming back by the keyboard or the taskbar would read it as its own.
+void Wait(HWND root) {
+  if (g_pressed && GetAncestor(g_pressed, GA_ROOT) == root) {
+    g_pressed = nullptr;
+  }
+  if (g_waiting++ == 0) {
+    g_pressed = nullptr;
+    g_hook = SetWindowsHookExW(WH_CALLWNDPROC, Sent, nullptr, GetCurrentThreadId());
+  }
+}
+
+// A browser window that went to the back came forward, or went.
+void StopWaiting() {
+  if (--g_waiting == 0) {
+    UnhookWindowsHookEx(std::exchange(g_hook, nullptr));
+    g_pressed = nullptr;
+  }
+}
+
+// The window in |root| the press activating it went to, once.
+HWND Pressed(HWND root) {
+  return g_pressed && GetAncestor(g_pressed, GA_ROOT) == root ? std::exchange(g_pressed, nullptr)
+                                                              : nullptr;
+}
+
+}  // namespace presses
+
 // What runs once the window in front changes, while an overlay that has a window's keyboard is
 // (WhenOverlayLetsGo), and the hook that hears it, set only then.
 std::vector<base::OnceClosure>& OverlayLetGo() {
@@ -453,7 +515,12 @@ class WindowViews : public views::WidgetObserver,
     alt_taps::Watch();
   }
 
-  ~WindowViews() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
+  ~WindowViews() override {
+    ui::HWNDSubclass::RemoveFilterFromAllTargets(this);
+    if (std::exchange(in_back_, false)) {
+      presses::StopWaiting();
+    }
+  }
 
   HWND window() const { return views::HWNDForWidget(widget_); }
   HWND ui() const { return ui_; }
@@ -488,12 +555,43 @@ class WindowViews : public views::WidgetObserver,
       // root names the browser window's widget, as a page in Chrome's own window reaches it.
       views::NativeWidgetAura::RegisterNativeWidgetForWindow(
           widget_->native_widget_private(), slot.widget->GetNativeView()->GetRootWindow());
-      // A page taking the keyboard ends the UI's hold on it, as on Linux.
       slot.keyboard = std::make_unique<PaneKeyboard>(
-          slot.widget.get(), base::BindRepeating(&WindowViews::set_ui_holds_for_page,
-                                                 base::Unretained(this), false));
+          slot.widget.get(),
+          base::BindRepeating(&WindowViews::PaneTookKeyboard, base::Unretained(this),
+                              slot.widget.get()));
     }
     return slot.widget.get();
+  }
+
+  // The page in |holder| took the keyboard, which ends the UI's hold on it, as on Linux. If its
+  // tab has a dialog up, the dialog takes it back (dialog_keys.cc), as the page drops every key
+  // then, ilo's shortcuts with them. The core hears it here: a page whose tab has a dialog ignores
+  // input, and Aura's page view then says nothing of taking the focus
+  // (RenderWidgetHostViewAura::OnWindowFocused), where the Mac's does. Chrome's page never takes
+  // it, as aura keeps a click from a page under its tab's dialog (WindowModalityController), but a
+  // pane is a host of its own, whose window the dialog doesn't belong to (#2855).
+  void PaneTookKeyboard(views::Widget* holder) {
+    set_ui_holds_for_page(false);
+    for (Window* window : Window::All()) {
+      if (window->widget() != widget_) {
+        continue;
+      }
+      content::WebContents* shown = Tab::FromId(window->selected());
+      if (shown && holder->GetNativeView()->Contains(shown->GetNativeView())) {
+        dialog_keys::PageFocused(shown);
+      }
+    }
+  }
+
+  // The window's child |hwnd| is or is in, the UI's or a pane's, or null if it's none of them.
+  HWND ChildHolding(HWND hwnd) const {
+    if (!hwnd || !IsChild(window(), hwnd)) {
+      return nullptr;
+    }
+    while (GetParent(hwnd) != window()) {
+      hwnd = GetParent(hwnd);
+    }
+    return hwnd;
   }
 
   // Takes |view| out of |holder| if it's there, so closing a slot never deletes a page, and hides
@@ -790,11 +888,28 @@ class WindowViews : public views::WidgetObserver,
       alt_taps::Deactivated(hwnd);
       HWND focus = GetFocus();
       had_keyboard_ = focus && IsChild(hwnd, focus) ? focus : nullptr;
+      pressed_ = nullptr;
+      if (!std::exchange(in_back_, true)) {
+        presses::Wait(hwnd);
+      }
+    } else if (message == WM_ACTIVATE) {
+      // By a press, on the UI or a pane, or by the keyboard or the taskbar. Not always
+      // WA_CLICKACTIVE: a press on the UI activates the window from inside its holder's SetFocus
+      // (WM_PARENTNOTIFY), before Windows sends WM_MOUSEACTIVATE (#2910).
+      pressed_ = ChildHolding(presses::Pressed(hwnd));
+      if (std::exchange(in_back_, false)) {
+        presses::StopWaiting();
+      }
     } else if (message == WM_SETFOCUS) {
       HWND from = reinterpret_cast<HWND>(w_param);
       HWND had = std::exchange(had_keyboard_, nullptr);
+      HWND pressed = std::exchange(pressed_, nullptr);
+      // Not for a press elsewhere, on the UI or another pane, which takes the keyboard itself: a
+      // tab's dialog in the pane took it from the pane then, from the UI the user pressed (#2910).
+      // Coming back by the keyboard or the taskbar, or by a press on that pane, the pane takes it
+      // back, and a dialog there takes it from the pane, wherever the pointer is.
       if (had && from != hwnd && !(from && IsChild(hwnd, from)) && IsChild(hwnd, had) &&
-          IsWindowVisible(had)) {
+          IsWindowVisible(had) && !(pressed && pressed != ChildHolding(had))) {
         SetFocus(had);
       }
     } else if (message == WM_SIZE) {
@@ -856,6 +971,11 @@ class WindowViews : public views::WidgetObserver,
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
   bool ui_holds_for_page_ = false;
   HWND had_keyboard_ = nullptr;
+  // The UI or the pane a press activating the window was on, from WM_ACTIVATE until the window
+  // takes the keyboard; null when the keyboard or the taskbar activated it.
+  HWND pressed_ = nullptr;
+  // Between going to the back and coming forward, while presses::Wait() counts it.
+  bool in_back_ = false;
   // The DPI the last WM_DPICHANGED carried, 0 before one comes (Scale).
   UINT dpi_ = 0;
   bool minimized_ = false;
@@ -1096,6 +1216,24 @@ void DrawPageIn(views::Widget* widget,
   }
 }
 
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget) {
+  // Aura windows in the pane's one HWND, which Windows doesn't see: DevTools fill the pane, and the
+  // page is at its place in them (LayOut), each from the pane's top-left.
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return std::nullopt;
+  }
+  for (Slot& slot : views->panes()) {
+    if (slot.widget && slot.page && slot.devtools && slot.devtools->IsVisible()) {
+      gfx::Rect frame(views->ContentSize());
+      frame.Inset(slot.insets);
+      const gfx::Vector2d at = frame.OffsetFromOrigin();
+      return std::pair(slot.devtools->bounds() + at, slot.page->bounds() + at);
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<gfx::Rect> FocusRingFrame(views::Widget* widget) {
   WindowViews* views = ViewsOf(widget);
   if (!views) {
@@ -1175,7 +1313,57 @@ class PassThrough : public ui::HWNDMessageFilter, public views::WidgetObserver {
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
 };
 
+// Hears the origins a move loop proposes for a window it moves as an outline, which WM_MOVING gives
+// it whether or not it shows the window's contents.
+class OutlineMoves : public ui::HWNDMessageFilter {
+ public:
+  OutlineMoves(HWND window, base::RepeatingCallback<void(const gfx::Point&)> moved)
+      : moved_(std::move(moved)) {
+    ui::HWNDSubclass::AddFilterToTarget(window, this);
+  }
+  ~OutlineMoves() override { ui::HWNDSubclass::RemoveFilterFromAllTargets(this); }
+
+  // ui::HWNDMessageFilter:
+  bool FilterMessage(HWND window, UINT message, WPARAM, LPARAM l_param, LRESULT*) override {
+    if (message == WM_MOVING) {
+      // The window's rectangle in pixels, converted as views converts the window's bounds
+      // (DesktopWindowTreeHostWin::GetWindowBoundsInScreen) once it's there: by the display
+      // nearest it, where the window isn't yet.
+      proposed_ = gfx::Rect(*reinterpret_cast<const RECT*>(l_param));
+      moved_.Run(display::win::GetScreenWin()->ScreenToDIPRect(nullptr, *proposed_).origin());
+    } else if (message == WM_EXITSIZEMOVE && proposed_) {
+      // Where the window landed beside the outline's last place, in pixels and in the DIPs each
+      // gives the move watch, which counts a move only where they differ. check.sh reads this line.
+      RECT landed;
+      ::GetWindowRect(window, &landed);
+      display::win::ScreenWin* screen = display::win::GetScreenWin();
+      LOG(ERROR) << "browser: outline move ended at " << proposed_->origin().ToString() << " ("
+                 << screen->ScreenToDIPRect(nullptr, *proposed_).origin().ToString()
+                 << " DIPs), the window at " << gfx::Rect(landed).origin().ToString() << " ("
+                 << screen->ScreenToDIPRect(window, gfx::Rect(landed)).origin().ToString()
+                 << " DIPs)";
+    }
+    return false;
+  }
+
+ private:
+  base::RepeatingCallback<void(const gfx::Point&)> moved_;
+  // The outline's last place, in pixels.
+  std::optional<gfx::Rect> proposed_;
+};
+
 }  // namespace
+
+base::ScopedClosureRunner WatchOutlineMoves(
+    views::Widget* widget,
+    base::RepeatingCallback<void(const gfx::Point&)> moved) {
+  BOOL contents = TRUE;
+  if (!SystemParametersInfo(SPI_GETDRAGFULLWINDOWS, 0, &contents, 0) || contents) {
+    return base::ScopedClosureRunner();
+  }
+  return base::ScopedClosureRunner(base::DoNothingWithBoundArgs(
+      std::make_unique<OutlineMoves>(views::HWNDForWidget(widget), std::move(moved))));
+}
 
 void PassPointerThrough(views::Widget* widget) {
   new PassThrough(widget);
@@ -1215,6 +1403,10 @@ void ReleaseKeyboard(views::Widget* widget) {
     views->set_ui_holds_for_page(false);
     SetFocus(views->window());
   }
+}
+
+bool EndKeyboardLoans(views::Widget*) {
+  return false;
 }
 
 bool OverlayHasKeyboard(views::Widget* widget) {
