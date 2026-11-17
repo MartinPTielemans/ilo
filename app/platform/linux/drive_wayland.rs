@@ -123,6 +123,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
                 IM_FRESH.set(false);
                 if let Some(active) = IM_PENDING.take() {
                     IM_ACTIVE.set(active);
+                    drive::input_method_reset();
                 }
                 IM_DONES.set(IM_DONES.get().wrapping_add(1));
             }
