@@ -23,10 +23,6 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${BROWSER_HEADL
 fi
 # Under KWin a frame shows Peek's page where it rests, outside its card, when its page presents
 # after the hole moves (#2640); the fix waits on its engine (#2715).
-if [ "${BROWSER_XVFB:-}" = kwin ]; then
-  echo "skip: peek-motion, under KWin: a frame shows Peek's resting frame outside its card (#2640)."
-  exit 0
-fi
 serve
 # The window's page is one green, its top 40% a link to another site, localhost, and Peek's page
 # one magenta, so a frame says whose page shows at a point. The titles say "ready" once drawn, and
@@ -153,7 +149,7 @@ round() {
 # so it opens and closes Peek again until a frame has caught each motion mid-way, eight times at
 # most, and fails at once on a frame that shows Peek's resting frame outside its card.
 resized=
-for n in 1 2 3 4 5 6 7 8; do
+for n in $(seq 36); do
   round $n
   # shellcheck disable=SC2086 # numbers: x y w h from x y
   python3 -I check/peek_motion.py "$frames" "$width" $(echo "$rest" | sed 's/ from / /') \
