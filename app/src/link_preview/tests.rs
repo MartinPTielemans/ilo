@@ -534,6 +534,43 @@ fn a_close_before_the_hole_opens_holds_until_the_page_has_left(cx: &mut TestAppC
     assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
 }
 
+/// Where the host says when the window's frame is on screen (Wayland's), where #3319 was seen, the
+/// page under the plate leaves once the plate's frame is.
+#[gpui::test]
+fn where_the_host_says_a_close_before_the_hole_opens_waits_for_the_plate(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    host.says_drawn.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE]);
+    shown.keys("escape");
+    frame(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    let drawn = shown.drawn();
+    assert!(drawn.iter().all(|call| call != OUT_OF_SIGHT), "{drawn:?}");
+    assert_eq!(
+        drawn.iter().filter(|call| *call == "when drawn 7").count(),
+        1,
+        "{drawn:?}"
+    );
+    assert_eq!(pose_of(&mut shown).scale, 1.);
+    shown.cx.cx.update(|cx| cover_shown(TAB, cx));
+    let drawn = shown.drawn();
+    assert_eq!(
+        drawn[drawn.len() - 2..],
+        [OUT_OF_SIGHT, "release"],
+        "{drawn:?}"
+    );
+    there(&mut shown, LEFT);
+    let calls = shown.calls();
+    assert_eq!(calls[calls.len() - 3..], ["hide", "close 7", CLOSED]);
+}
+
 /// The same on Windows, where the hole opens the frame after the page is laid out at rest: an Esc
 /// before that frame holds the card until the page has left (#3319).
 #[gpui::test]
