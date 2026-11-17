@@ -343,7 +343,9 @@ case "$(long)" in
   *) fail "the long list's arrangement didn't hold after a resize: the page says $(said)" ;;
 esac
 resized_ms=$(longest)
-echo "arrange-order: 300 things, the longest task by $by: ${on_ms} ms turning the file on, ${resized_ms} ms after the width changed from ${vw} to $(long | sed 's/.* view \([0-9]*\)x.*/\1/')."
+# Both entry types report only tasks of 50 ms or more, so 0 is none reported, not a time.
+reading() { if [ "$1" -gt 0 ]; then echo "a task of $1 ms"; else echo "no task of 50 ms or more"; fi; }
+echo "arrange-order: 300 things, by $by: $(reading "$on_ms") turning the file on, $(reading "$resized_ms") after the width changed from ${vw} to $(long | sed 's/.* view \([0-9]*\)x.*/\1/')."
 [ "$on_ms" -lt 50 ] || fail "turning on a file for 300 things made a task of $on_ms ms, at or over 50"
 [ "$resized_ms" -lt 50 ] || fail "a width change with a file for 300 things made a task of $resized_ms ms, at or over 50"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-order-long.png" || fail "no window to capture"
@@ -352,4 +354,4 @@ exec 3>&-
 quit
 echo "ok: Arrange laid each file out as one order, each change in turn:${ordered%,}. Put back took" \
   "each of three changes back in every order, the page each time the file without them:$backs." \
-  "Over 300 things no task reached 50 ms: $on_ms ms turning the file on, $resized_ms ms after a width change."
+  "Over 300 things no task reached 50 ms: $(reading "$on_ms") turning the file on, $(reading "$resized_ms") after a width change."
