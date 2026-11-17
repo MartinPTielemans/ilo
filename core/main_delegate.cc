@@ -24,6 +24,7 @@
 #include "base/time/time.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_job_voter.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/arrange.h"
 #include "browser_core/auto_archive.h"
@@ -292,6 +293,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     }
     sync::Start();
     WatchBatterySaver();
+    AddAgentJobVoter();
     // Once the Spaces the last launch saved are read, and so once the run loop is running.
     LoadSession(base::BindOnce([] {
       if (g_host.started) {

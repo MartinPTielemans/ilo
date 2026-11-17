@@ -26,6 +26,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "browser_core/agent_job_voter.h"
 #include "browser_core/ax_text.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
@@ -39,6 +40,7 @@
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
+#include "components/performance_manager/public/performance_manager.h"
 #include "content/public/browser/browser_accessibility_state.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
@@ -367,6 +369,26 @@ void Report(bc_id tab, uint64_t request, std::string text, bool error) {
   }
 }
 
+// A hidden tab's renderer runs as a background process, which the OS starves while the agent's
+// typing waits on it (#3285). The vote follows the page to whichever process holds it, and goes
+// with the page if the tab closes first.
+base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents) {
+  base::WeakPtr<performance_manager::PageNode> page =
+      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(&contents);
+  AgentJobVoter* voter = AgentJobVoter::Get();
+  if (!page || !voter) {
+    return {};
+  }
+  voter->JobStarted(page.get());
+  return base::ScopedClosureRunner(base::BindOnce(
+      [](base::WeakPtr<performance_manager::PageNode> page) {
+        if (AgentJobVoter* voter = AgentJobVoter::Get(); voter && page) {
+          voter->JobEnded(page.get());
+        }
+      },
+      page));
+}
+
 }  // namespace
 
 bool IsWebFrame(content::RenderFrameHost* frame) {
@@ -623,6 +645,7 @@ void AgentPage::Next() {
   job_ = std::move(jobs_.front());
   jobs_.pop_front();
   rest_.Stop();
+  working_ = LiftWhileWorking(GetWebContents());
   // A hidden tab otherwise stops drawing, and its page then takes no input and gives no picture.
   if (!drawing_) {
     drawing_ = GetWebContents().IncrementCapturerCount(gfx::Size(), /*stay_hidden=*/true,
@@ -2978,6 +3001,7 @@ void AgentPage::Answer(std::string text, bool error) {
   app_name_.clear();
   const uint64_t request = job_->request;
   job_.reset();
+  working_.RunAndReset();
   frames_.clear();
   EndChoosing();
   wheel_.reset();
@@ -3023,6 +3047,7 @@ void AgentPage::LetGo() {
     owed.push_front(*std::move(job_));
   }
   job_.reset();
+  working_.RunAndReset();
   download_starting_.Stop();
   AnswerHeld();
   for (const Job& job : owed) {

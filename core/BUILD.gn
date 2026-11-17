@@ -429,6 +429,19 @@ source_set("popup_hold") {
   deps = [ "//base" ]
 }
 
+# An agent's page's vote in Chromium's priority voting while its job works, apart so
+# browser_core_unittests tests it on a graph alone.
+source_set("agent_job_voter") {
+  sources = [
+    "agent_job_voter.cc",
+    "agent_job_voter.h",
+  ]
+  deps = [
+    "//base",
+    "//components/performance_manager",
+  ]
+}
+
 # An agent's download, held until the user answers, apart so browser_core_unittests tests the hold
 # alone.
 source_set("agent_download_hold") {
@@ -695,6 +708,7 @@ source_set("browser_core") {
     ":search_default",
     ":select_choices",
     ":agent_download_hold",
+    ":agent_job_voter",
     ":sidebar_backups",
     ":system_stores",
     ":site_searches",
@@ -998,6 +1012,7 @@ test("browser_core_unittests") {
     "board_store_unittest.cc",
     "ax_text_unittest.cc",
     "agent_download_hold_unittest.cc",
+    "agent_job_voter_unittest.cc",
     "boost_colors_unittest.cc",
     "boost_script_unittest.cc",
     # The removals the Library's History and the command bar undo on ⌘Z, on a history service.
@@ -1048,6 +1063,7 @@ test("browser_core_unittests") {
     ":board_store",
     ":ax_text",
     ":agent_download_hold",
+    ":agent_job_voter",
     ":boost_colors",
     ":boost_script",
     ":history_removal",
@@ -1077,6 +1093,8 @@ test("browser_core_unittests") {
     "//components/history/core/test",
     "//components/omnibox/browser",
     "//components/omnibox/browser:test_support",
+    "//components/performance_manager",
+    "//components/performance_manager/test_support",
     "//components/prefs",
     "//components/prefs:test_support",
     "//components/search_engines",
