@@ -2377,7 +2377,8 @@ BC_EXPORT void bc_window_focus_page(bc_id window);
 
 // Gives the page the window shows the keyboard at its first control (|last| false) or its last
 // (true), as Tab or ⇧Tab into a page from Chrome's toolbar does, wherever in the window the
-// keyboard was. The user's: agents get none.
+// keyboard was. Does nothing for an agent's tab (one in its Space the user doesn't hold): the
+// keyboard stays where it was, and so does the page's focused element. The user's: agents get none.
 BC_EXPORT void bc_window_focus_page_end(bc_id window, bool last);
 
 // Clears the Space the window shows: closes its Today tabs but those any window shows, as
