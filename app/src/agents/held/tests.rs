@@ -6,10 +6,9 @@ use std::collections::{HashSet, VecDeque};
 use super::*;
 
 /// Whether the core lets go of an action the agent started when a hand_off holds the tab, or the
-/// tab moves out of the agent's Space. It doesn't yet (#2601), so an action already started
-/// finishes on a tab that's the user's. Set this once the core's change for #2601 lands, and the
-/// walk then asserts no order lets one finish.
-const CORE_LETS_GO: bool = false;
+/// tab moves out of the agent's Space. It does (#2601, 479bd916f): the action stops there, so the
+/// walk asserts that no order lets one finish on a tab that's become the user's.
+const CORE_LETS_GO: bool = true;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Place {
@@ -131,7 +130,7 @@ impl World {
         }
         if self.may_act() {
             go("A hands off", &|w| {
-                // bc_agent_hand_off holds it, and today lets what runs there go on.
+                // bc_agent_hand_off holds it and stops what A was doing there.
                 w.core_held = true;
                 if CORE_LETS_GO {
                     w.acting = false;
@@ -323,7 +322,7 @@ fn every_order_of_events_around_an_agents_tab_answers_each_call_once_and_keeps_b
         "reached only {lives:?}"
     );
     // #2601's order: A's action started, then a hand_off or a move, then the action finishes on
-    // the user's tab. The walk reaches it until the core lets go there (CORE_LETS_GO).
+    // the user's tab. With the core letting go there (CORE_LETS_GO), the walk never reaches it.
     assert_eq!(
         owed, !CORE_LETS_GO,
         "#2601's order and CORE_LETS_GO disagree"

@@ -729,14 +729,13 @@ fn arrange_is_on_only_where_the_core_says(cx: &mut TestAppContext) {
     assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
 }
 
-/// The card's two lines of buttons are one grid: across the card, a press on either line lands in
-/// the same column, Edit CSS… over Customize… and Zap over Arrange, or in the gap between on both.
-/// Safari's engine shows a page Arrange can't reach, the core's being Chromium's, hidden: the card
-/// has no Arrange there, Customize… having its line alone, nothing starts the mode, and a mode on
-/// ends as the tab goes there.
+/// Safari's engine shows a page a Boost can't reach, the core's being Chromium's, hidden (#2955):
+/// over it the command bar, the tab's menu and Site Controls offer no Boost, nothing opens the card
+/// or starts Zap or Arrange, and a card open as the tab goes there closes, with its Zap and
+/// Arrange. Back in Chromium, the Boost is offered again.
 #[gpui::test]
-fn no_arrange_on_a_page_in_safaris_engine(cx: &mut TestAppContext) {
-    let (shell, host, _folder, cx) = window(cx);
+fn no_boost_on_a_page_in_safaris_engine(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
     let safari = |on, shell: &mut Shell, cx: &mut gpui::Context<Shell>| {
         let page = Page {
             url: "https://www.example.com/news".into(),
@@ -745,31 +744,61 @@ fn no_arrange_on_a_page_in_safaris_engine(cx: &mut TestAppContext) {
         };
         shell.set_page(10, page, cx);
     };
-    let arranged = |host: &Recorder| -> Vec<String> {
-        let calls = host.take().into_iter();
-        calls.filter(|call| call.starts_with("arrange ")).collect()
+    let boost_in_menu = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        host.take();
+        shell.update(cx, |shell, cx| {
+            shell.tab_menu(10, point(px(100.), px(200.)), cx)
+        });
+        menu(&host).iter().any(|title| title.contains("Boost…"))
     };
-    shell.update(cx, |shell, cx| {
-        safari(true, shell, cx);
-        shell.run(Command::NewBoost, "ui", cx);
-    });
-    host.take();
-    // Where Arrange would be is Customize…, the line's whole width.
-    press(&shell, 0.75, LAST, cx);
-    shell.update(cx, |shell, cx| shell.start_arrange(cx));
-    assert_eq!(arranged(&host), Vec::<String>::new());
-    assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
+    let opened = |host: &Recorder| {
+        let calls = host.take().into_iter();
+        calls
+            .filter(|call| call.starts_with("arrange ") || call.starts_with("zap "))
+            .collect::<Vec<_>>()
+    };
 
+    shell.update(cx, |shell, cx| safari(true, shell, cx));
+    assert_eq!(offered(&shell, cx), [false, false, true]);
+    assert!(!boost_in_menu(&shell, cx), "the tab's menu offered a Boost");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.boost_state(10)),
+        (false, None)
+    );
+    host.take();
     shell.update(cx, |shell, cx| {
-        safari(false, shell, cx);
+        shell.run(Command::NewBoost, "ui", cx);
+        shell.start_zap(cx);
+        shell.boost_zapped(10, Some("#ad"), cx);
         shell.start_arrange(cx);
     });
-    assert_eq!(arranged(&host), ["arrange 10 true"]);
+    assert_eq!(card(&shell, cx), None);
+    assert_eq!(opened(&host), Vec::<String>::new());
+    assert_eq!(folder.boost("example.com"), None);
+
+    // Back in Chromium it's offered, and a card open with Zap on closes as the tab goes again.
+    shell.update(cx, |shell, cx| safari(false, shell, cx));
+    assert_eq!(offered(&shell, cx), [true, false, true]);
+    assert!(boost_in_menu(&shell, cx), "the tab's menu offered no Boost");
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::NewBoost, "ui", cx);
+        shell.start_zap(cx);
+    });
+    assert!(card(&shell, cx).is_some(), "no card over Chromium's page");
+    assert!(shell.read_with(cx, |shell, _| shell.zapping(10)));
     shell.update(cx, |shell, cx| safari(true, shell, cx));
-    assert_eq!(arranged(&host), ["arrange 10 false"]);
-    assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
+    assert_eq!(card(&shell, cx), None);
+    assert!(!shell.read_with(cx, |shell, _| shell.zapping(10)));
+    shell.update(cx, |shell, cx| safari(false, shell, cx));
+    assert_eq!(
+        card(&shell, cx),
+        None,
+        "the card came back with Chromium's page"
+    );
 }
 
+/// The card's two lines of buttons are one grid: across the card, a press on either line lands in
+/// the same column, Edit CSS… over Customize… and Zap over Arrange, or in the gap between on both.
 #[gpui::test]
 fn the_cards_buttons_share_their_columns(cx: &mut TestAppContext) {
     let (shell, host, _folder, cx) = window(cx);

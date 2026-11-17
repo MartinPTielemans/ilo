@@ -146,6 +146,16 @@ kill "$helper" 2>/dev/null || true
 helper=
 exec 3>&-
 quit
+# The session it ran in, by what check.sh started: Xvfb under openbox or KWin, or sway's, on its
+# Wayland or its Xwayland, and in the Flatpak's sandbox with BROWSER_FLATPAK.
+if [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; then
+  session="Xvfb and $([ "${BROWSER_XVFB:-}" = kwin ] && echo KWin || echo openbox), on X11"
+elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  session="sway, on Wayland"
+else
+  session="sway, on its Xwayland"
+fi
+[ -z "${BROWSER_FLATPAK:-}" ] || session="$session, in the Flatpak's sandbox"
 echo "ok: another app's copy pastes into a page's field, the command bar from ⌘T, before and while" \
   "it's open, and the address field from ⌘L, a page's copy pastes into the bar, and the bar's copy" \
-  "and cut reach another app and the page; $primary (${BROWSER_HEADLESS:+sway }$([ -n "${WAYLAND_DISPLAY:-}" ] && echo Wayland || echo X11))."
+  "and cut reach another app and the page; $primary ($session)."

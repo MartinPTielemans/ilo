@@ -672,7 +672,8 @@ windowed_again() {
   done
   [ "$active" = 1 ] ||
     fail "Browser wasn't the active app again after the page's display went away $1, so its window isn't key"
-  ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"
+  capture "$out/$2.png" sidebar_back
+  [ -z "$redraw" ] || echo "window: under Wayland the windowed frame reached the capture after the page's display went away $1, $redraw"
   sidebar_back "$out/$2.png" ||
     fail "after the page's display went away $1 the sidebar is $sidebar_now, not $sidebar: the page still covers it"
   send key f
@@ -684,7 +685,8 @@ windowed_again() {
   expect '^browser: window left full screen$' "the window didn't leave full screen with the page after its display went away $1"
   check_layout "after the page's full screen after its display went away $1"
   check_buttons "after the page's full screen after its display went away $1"
-  ../tools/window-screenshot.sh "$pid" "$out/$2-again.png" || fail "no window to capture"
+  capture "$out/$2-again.png" sidebar_back
+  [ -z "$redraw" ] || echo "window: under Wayland the windowed frame reached the capture after the page's next full screen, its display gone $1, $redraw"
   sidebar_back "$out/$2-again.png" ||
     fail "after the page's next full screen the sidebar is $sidebar_now, not $sidebar: the page still covers it"
 }
@@ -1006,18 +1008,11 @@ step=$((step + 1))
 passed=$step
 echo "move 3 306" >&3
 send move 400 300
-if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-  # Under X11 the shell hears neither the pointer over the page nor its leaving for the page, so
-  # the pass brings the sidebar out once its wait is up, which may be before the pointer is back at
-  # the edge: the line is looked for from the pass on. Under Wayland the page is a surface of its
-  # own, whose entering is the leave of the shell's.
-  echo "skip: the pointer passing the window's edge, whose leaving for the page X11's shell doesn't hear."
-  reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out" "$passed"
-else
-  reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out"
-  [ "$(sed -n "/^browser: drive $passed: /,\$p" "$log" | grep -c '^browser: reveal shown$')" = 1 ] ||
-    fail "the pointer passing the window's edge brought the sidebar out"
-fi
+# Over the page the shell hears no moves on Linux and Windows, as the page is Chromium's window, but
+# it hears the pointer leave its own for it, which ends the wait (Shell::leave_listener).
+reveal_at_edge "the pointer at the window's edge didn't bring the sidebar out"
+[ "$(sed -n "/^browser: drive $passed: /,\$p" "$log" | grep -c '^browser: reveal shown$')" = 1 ] ||
+  fail "the pointer passing the window's edge brought the sidebar out"
 check_reveal "with the sidebar out" shown
 check_layout "with the sidebar out" inset
 check_buttons "with the sidebar out" hidden

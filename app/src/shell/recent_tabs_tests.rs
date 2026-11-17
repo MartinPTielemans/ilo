@@ -223,18 +223,62 @@ fn a_click_outside_that_also_ends_the_walk_still_stays(cx: &mut TestAppContext) 
     }
 }
 
+/// A press on a sidebar row while the switcher shows selects the row's tab during the press. On the
+/// Mac the press also reports ⌃ up, and the switcher's dismissal comes after it, so three things
+/// arrive in an order the host doesn't fix (#3114). Neither ⌃ up nor the dismissal undoes the
+/// row's tab: heard after the row's select, in either order, the walk ends on the row's tab; a
+/// dismissal heard before it goes back to where the walk started, and the row's tab shows after.
 #[gpui::test]
 fn a_click_outside_on_a_sidebar_row_keeps_the_tab_it_showed(cx: &mut TestAppContext) {
+    for release_first in [true, false] {
+        let (shell, host) = walked_window(cx);
+        run(&shell, cx, Command::RecentTab);
+        shows(&shell, cx, 12);
+        wait(cx, DELAY);
+        host.take();
+        let show = host.tab_switcher.borrow().clone().unwrap();
+        // The press's ⌃ up, then its select of the row's tab, during its event.
+        cx.update(|cx| {
+            shell.update(cx, |shell, cx| {
+                shell.control_released(cx);
+                shell.select(10, cx);
+            });
+            if !release_first {
+                (show.heard)(Heard::Stay, cx);
+            }
+        });
+        cx.run_until_parked();
+        if release_first {
+            hear(&host, cx, Heard::Stay);
+        }
+        assert_eq!(
+            asked(&host),
+            ["select 10", "tab switcher close"],
+            "release first {release_first}"
+        );
+        shows(&shell, cx, 10);
+        assert_eq!(recent(&shell, cx)[..2], [10, 13], "{release_first}");
+    }
+
+    // The dismissal before the row's select.
     let (shell, host) = walked_window(cx);
     run(&shell, cx, Command::RecentTab);
     shows(&shell, cx, 12);
     wait(cx, DELAY);
     host.take();
-    // The click reaches the sidebar during its event, and the dismissal is heard after it.
-    shell.update(cx, |shell, cx| shell.select(10, cx));
     hear(&host, cx, Heard::Stay);
-    release(&shell, cx);
-    assert_eq!(asked(&host), ["select 10", "tab switcher close"]);
+    shell.update(cx, |shell, cx| {
+        shell.control_released(cx);
+        shell.select(10, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        asked(&host),
+        ["tab switcher close", "select 13", "select 10"]
+    );
+    shows(&shell, cx, 13);
+    shows(&shell, cx, 10);
+    assert_eq!(recent(&shell, cx)[..2], [10, 13]);
 }
 
 #[gpui::test]

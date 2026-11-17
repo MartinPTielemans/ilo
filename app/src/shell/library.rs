@@ -2557,6 +2557,10 @@ impl Shell {
             };
             self.history_trash(("archived-trash", id), "Delete from Archive", remove, cx)
         });
+        // Where the row is, which History's visits newer than the tab move down (#2337).
+        let drawn = (self.library.as_ref()).map(|library| {
+            crate::settings_rows::drawn(format!("library archived {id}"), library.drawn.clone())
+        });
         div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
@@ -2596,7 +2600,8 @@ impl Shell {
                             .child(icon),
                     )
                     .child(history_text(title, about, trash.is_some(), &self.palette))
-                    .children(trash),
+                    .children(trash)
+                    .children(drawn),
             )
             .into_any_element()
     }

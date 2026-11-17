@@ -471,6 +471,19 @@ jobs:
           rustup update stable --no-self-update
           ./setup.sh
 
+      # The engine's dSYMs, beside its Chromium.app, where build.sh finds them for tools/symbols.sh,
+      # so the framework's frames in crash reports have names (#2951). An engine released without
+      # them still makes a release, with those frames unnamed until Mac symbols adds them.
+      - name: Engine's symbols
+        run: |
+          status=0
+          ../engine/fetch.sh symbols >/dev/null || status=$?
+          case $status in
+          0) ;;
+          2) echo "::warning::The engine's release has no dSYMs, so this version's crash reports won't name the framework's frames. Run Mac symbols (mac-symbols.yml) once it has them." ;;
+          *) exit "$status" ;;
+          esac
+
       # A keychain of the run's own, which the runner deletes, with the Developer ID and the
       # notarization key as notarytool's profile "notary".
       - name: Keychain

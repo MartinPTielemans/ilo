@@ -125,9 +125,12 @@ impl Prompt {
         self.cx.run_until_parked();
     }
 
+    /// A click at `x`, `y` in the offer, which its window has inside the room it keeps round it
+    /// where the offer draws its own shadow (#2988).
     fn click(&mut self, x: f32, y: f32) {
-        self.cx
-            .simulate_click(point(px(x), px(y)), Modifiers::none());
+        let room = crate::elevation::Level::Popover.panel_margin();
+        let at = point(px(x + room.sides), px(y + room.above));
+        self.cx.simulate_click(at, Modifiers::none());
         self.cx.run_until_parked();
     }
 

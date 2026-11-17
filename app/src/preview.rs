@@ -2710,6 +2710,10 @@ fn main() {
                         _ => Shell::new(browser, cx),
                     };
                     shell.force_tone(preview_tone());
+                    // The app's UI there lies over the core's window, which is black under the
+                    // tint; the preview's would show the desktop through it (#3033).
+                    #[cfg(any(target_os = "windows", target_os = "linux"))]
+                    shell.set_ground(gpui::black().into());
                     shell.set_profiles(preview_profiles(), cx);
                     shell.set_spaces(spaces, cx);
                     shell.set_space(first_space, cx);
@@ -3569,8 +3573,9 @@ impl link_preview::Host for PreviewPeek {
         false
     }
 
-    fn close_waits(&self) -> bool {
-        false
+    fn shown_at_once(&self) -> bool {
+        // Nor any page that could be anywhere but where it's laid out.
+        true
     }
 
     fn release(&self) {}

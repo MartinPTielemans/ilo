@@ -759,12 +759,17 @@ last() { grep "^browser: $1 " "$log" | tail -1 | sed 's/.* //'; }
 # takes its stills after recorded. A recording that doesn't start is tried once more, then the
 # run goes on without it, saying why: the video is the motion's proof, never a step's.
 record() {
-  # tools/window-record.sh records with the Mac's ScreenCaptureKit alone.
-  if [ "$(uname)" != Darwin ]; then
+  # tools/window-record.sh records the Mac's windows with ScreenCaptureKit, and on Linux check.sh's
+  # Xvfb, which holds nothing but the app. Wayland's sessions and Windows have no recorder yet.
+  case "$(uname):${BROWSER_HEADLESS:-}" in
+  Darwin:* | Linux:xvfb) ;;
+  *)
     recording=""
-    echo "skip: recording $1, as tools/window-record.sh records only the Mac's windows so far."
+    echo "skip: recording $1, as tools/window-record.sh records only the Mac's windows and" \
+      "Linux's Xvfb so far."
     return 0
-  fi
+    ;;
+  esac
   recording="$out/$1.mp4"
   for try in 1 2; do
     ../tools/window-record.sh "$pid" "$2" "$recording" > "$out/$1-record.log" 2>&1 &
@@ -834,21 +839,24 @@ expect_tabs() {
   expect "^browser: today $1\$" "$3: Today is \"$(today)\", not \"$1\""
   expect "^browser: selected $2\( in .*\)\{0,1\}\$" "$3: tab $2 isn't shown"
 }
-# Opens a tab from the command bar, to https://$1. The scheme is typed: a bare host goes to http
+# Opens a tab from the command bar, to https://$1, or to $1 as it is when it's an http:// address,
+# a page of the check's own site (#3144). The scheme is typed: a bare host goes to http
 # and Chrome's HTTPS-Upgrades takes it to https, falling back to http when the runner's https is
 # slow or fails (#1261), and the runs that follow expect https. history checks the upgrade itself.
 open_from_bar() {
+  local typed=https://$1 url=https://$1/
+  case $1 in http://*) typed=$1 url=$1 ;; esac
   before=$(today)
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar"
   expect '^browser: new tab plate 1$' "⌘T didn't give New Tab the selected plate"
-  send type "https://$1"
+  send type "$typed"
   send key return
   expect "^browser: today [0-9][0-9]*${before:+ $before}\$" "the tab for $1 didn't open at the top of Today"
   tab=$(today | cut -d' ' -f1)
   expect "^browser: selected $tab\$" "the tab for $1 wasn't shown"
   expect '^browser: new tab plate 0$' "the tab for $1 didn't take the selected plate"
-  expect "^browser: loaded $tab https://$1/\$" "$1 didn't load in its tab"
+  expect "^browser: loaded $tab $url\$" "$1 didn't load in its tab"
 }
 # The driver's key $1 shows tab $2, as a switch the app times.
 switch() {
@@ -915,10 +923,12 @@ check_layout() {
   [ "$ui" = "0,0 $content" ] || fail "$1: GPUI's view is at $ui in a $content window"
 }
 
-# Waits for the tab's page to be at https://$1/, done loading, with back and forward as $2 and $3
-# (1 or 0). $4 says when.
+# Waits for the tab's page to be at https://$1/, or at $1 when it's an http:// address, done
+# loading, with back and forward as $2 and $3 (1 or 0). $4 says when.
 expect_page() {
-  expect "^browser: page $tab back $2 forward $3 loading 0 https://$1/\$" "$4: the tab isn't at $1 with back $2 and forward $3: $(grep "^browser: page $tab" "$log" | tail -1)"
+  local url=https://$1/
+  case $1 in http://*) url=$1 ;; esac
+  expect "^browser: page $tab back $2 forward $3 loading 0 $url\$" "$4: the tab isn't at $1 with back $2 and forward $3: $(grep "^browser: page $tab" "$log" | tail -1)"
 }
 # Loads https://$1 in the tab from the command bar.
 go_from_bar() {
@@ -1046,8 +1056,10 @@ start_with_cdp() {
     exec 3> "$out/drive"
     await '^DevTools listening on ws://' || fail "DevTools didn't say where it listens"
     socket=$(grep -m1 '^DevTools listening on ws://' "$log" | cut -d' ' -f4 | tr -d '\r')
-    cat "$scratch/cdp" | python3 -I -u check/cdp.py --socket "$socket" "${cdp_page#/}" \
-      > "$cdp_log" 2>&1 &
+    # Neither holds the driver's pipe: wait "$helper" doesn't wait for cat, and a writer left open
+    # gives the next launch a pipe no command reaches, as exited() says (#3125).
+    cat "$scratch/cdp" 3>&- | python3 -I -u check/cdp.py --socket "$socket" "${cdp_page#/}" \
+      3>&- > "$cdp_log" 2>&1 &
   else
     mkfifo "$scratch/to-browser" "$scratch/from-browser"
     # Each end of a pipe waits for the other to open, in this order: the driver's, the browser's

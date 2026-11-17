@@ -403,6 +403,10 @@ impl Shell {
         history.any |= !history.pages.is_empty();
         history.more = more;
         history.text = Some(asked.text);
+        // check.sh waits for this line, then for where the next frame draws the rows, which the
+        // visits may have moved: the pages aren't logged, as they're the user's.
+        log!("browser: history listed {}", history.pages.len());
+        library.drawn.borrow_mut().clear();
         self.filter(true, cx);
     }
 

@@ -13,12 +13,14 @@
 # paused. View › Cast… and the page menu's Cast… open the tab's Cast card, and × closes it; on the
 # Mac the run answers macOS's question for the local network that looking for devices brings, and
 # any it asks as the call starts. A video's page menu floats it in Picture in Picture, the Mini
-# Player, 10 in from the top right of the screen, with Dia's corners and rim, and its scrim under the
-# pointer, on the Mac in mini-player-rest.png and mini-player-hover.png. A scroll or a drag moves
-# it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab, shown. On the
-# Mac a throw settles it 10 in at a corner, and a slow release near a side 10 in along it. The next
-# shows where it was left, after a relaunch too, and coming back to its tab's window from another
-# window, or from another app with a menu open, puts it back in the tab.
+# Player, 10 in from the top right of the screen, with Dia's corners and rim, and its flat scrim
+# under the pointer, on the Mac in mini-player-rest.png and mini-player-hover.png. A scroll or a
+# drag moves it, ⌘ or Ctrl with a scroll sizes it, and a double-click puts it back in its tab,
+# shown. On the Mac a throw settles it 10 in at a corner, and a slow release near a side 10 in along
+# it. The next shows where it was left, after a relaunch too, and coming back to its tab's window
+# from another window, or from another app with a menu open, puts it back in the tab. A video
+# playing with sound floats as a tab switch hides it, its Mini Player on screen within 250 ms of the
+# switch.
 # A page asks to share the screen only from a click or a key: asked with neither, its promise is
 # refused, and nothing is shared (decision 12).
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
@@ -291,6 +293,14 @@ EOF
     sleep 0.1
   done
   fail "$2"
+}
+# drag_full_windows <0 or 1>: Windows' "Show window contents while dragging", for this user.
+drag_full_windows() {
+  local user32='[DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint action, uint value, System.IntPtr unused, uint save);'
+  powershell -NoProfile -Command "Add-Type -Name Desktop -Namespace Check -MemberDefinition '$user32';
+    if ([Check.Desktop]::SystemParametersInfo(0x25, $1, [System.IntPtr]::Zero, 3)) { exit 0 };
+    exit 1" > "$out/drag-full-windows.log" 2>&1 ||
+    fail "Windows didn't set Show window contents while dragging to $1: $(cat "$out/drag-full-windows.log")"
 }
 # pip_driven: whether the driver presses and drags in a Picture in Picture window, which it does
 # through X11 or sway's tree. Windows' and the Mac's leave the drag to the desktop's pointer.
@@ -894,6 +904,16 @@ EOF
   done
   [ "$hovered" -lt 170 ] ||
     fail "the pointer on the Mini Player didn't bring its scrim: it stayed at $hovered, where the video is about 204 and under the scrim about 133"
+  # One flat scrim, as Dia's: over the video, one colour in a frame, it's as dark at a third of
+  # the height as at three fifths, off the buttons above and the progress bar below (#2881). An
+  # engine older than its core has Chrome's gradients.
+  if engine_has ../core/mini_player.cc; then
+    upper=$(pixel "$out/mini-player-hover.png" 0.125 0.3)
+    lower=$(pixel "$out/mini-player-hover.png" 0.125 0.6)
+    echo "$upper $lower" |
+      awk '{ for (i = 1; i <= 3; i++) { d = $i - $(i + 3); if (d * d > 16) exit 1 } }' ||
+      fail "the Mini Player's scrim wasn't flat: $upper a third down, $lower three fifths down"
+  fi
 fi
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
@@ -974,12 +994,46 @@ elif [ "$(uname)" = Darwin ]; then
   mini_player_at "x >= px - 200 && x <= px - 190 && y == py && w == pw && h == ph" \
     "a drag didn't move the Mini Player: $(cat "$out/pointer.txt")"
 else
+  if windows; then
+    # Windows 11 shows a window's contents while it's dragged, as the core's throw expects: with
+    # that off, as on GitHub's runners, Windows moves the window once, at the release, which the
+    # core reads as a throw (#3062). So the drag has it on, and puts back what was set after.
+    drag_full=$(reg query 'HKCU\Control Panel\Desktop' //v DragFullWindows 2> /dev/null |
+      awk '/DragFullWindows/ { print $3 }')
+    drag_full_windows 1
+  fi
   send pip press $((pw / 8)) $((ph / 2))
   expect 'browser: mini player pressed at ' "a press off its controls didn't reach the Mini Player"
   send pip dragto $((pw / 8 - 10)) $((ph / 2))
   expect 'browser: mini player moving from ' "a drag didn't start moving the Mini Player"
   send pip dragto $((pw / 8 - 200)) $((ph / 2))
+  if windows; then
+    # Windows' move loop moves the window a moment after the pointer, and a release within 100 ms
+    # of a move longer than 6 points throws it to a corner (core/mini_player_place.h). So once it's
+    # there, the pointer rests a moment before it lets go, as a hand meaning to leave it there does.
+    # The release goes regardless, so the setting is put back before a failure.
+    for _ in $(seq 50); do
+      send pip
+      dragged=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: pip at ' | tail -1 |
+        cut -d' ' -f4)
+      [ -n "$dragged" ] && [ "$dragged" -le $((px - 190)) ] && break
+      sleep 0.1
+    done
+    # Twice the core's 100 ms release history, so the release comes after the move, not with it.
+    sleep 0.2
+  fi
   send pip release $((pw / 8 - 200)) $((ph / 2))
+  if windows; then
+    drag_full_windows "${drag_full:-1}"
+    [ -n "$dragged" ] && [ "$dragged" -le $((px - 190)) ] ||
+      fail "the Mini Player didn't follow the pointer as it was dragged: it stayed at ${dragged:-none}"
+    expect 'browser: mini player let go at ' "the Mini Player wasn't let go"
+    let_go=$(grep 'browser: mini player let go at ' "$log" | tail -1 | sed 's/.*browser: //')
+    case $let_go in
+    *", staying") ;;
+    *) fail "the Mini Player let go after a rest was thrown: $let_go" ;;
+    esac
+  fi
   moved="x == px - 200"
   ! windows || moved="x >= px - 200 && x <= px - 190"
   ! wayland || moved="x >= px - 200 && x <= px - 190" grown="x == px && y == py"
@@ -1057,11 +1111,19 @@ second=$(grep -c '^browser: window opened ' "$log")
 opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: window $opened main true\$" "the window ⌘N opened didn't become the main one"
 send window 1
+back=$step
 expect 'browser: mini player back in its tab$' \
   "coming back to the video's window didn't put the Mini Player back in its tab"
 expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
 # The new window's command bar closes as the video's window takes the keyboard, which stays there:
-# the Mac's host gave it back to the bar's window (#2179).
+# the Mac's host gave it back to the bar's window (#2179). On X11 the bar is a window over all of
+# the app's, so one left open stays over the video's, and it took the keyboard back as another of
+# the app's windows took it (#3082). Under Wayland the keys the video's window gets went to the bar
+# over the other (#3116).
+if [ "$(uname)" = Linux ]; then
+  expect '^browser: command bar hidden$' \
+    "the new window's command bar didn't close as the video's window took the keyboard" "$back"
+fi
 if [ "$(uname)" = Darwin ]; then
   first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
   keys=$(grep '^browser: key window [0-9]*$' "$log" | tail -2 | tr '\n' ' ')
@@ -1219,6 +1281,65 @@ expect "^browser: title $v floating\$" "the video didn't float after a relaunch"
 expect 'browser: mini player placed at ' "the core didn't place the Mini Player after a relaunch"
 placed_where_left ||
   fail "after a relaunch the Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
+# A video playing with sound in a page asking for it floats as a tab switch hides it, and its Mini
+# Player is on screen within twice Dia's ≈ 125 ms of the switch, which the core times its first
+# frame from (#2822). Chrome floats one on a switch only from https, on a site the user plays media
+# on often or has allowed, or from a file, as here. One video floats at a time, so this one lands.
+if engine_has ../core/mini_player.cc; then
+  send click $page_point
+  send key x
+  expect "^browser: title $v landed\$" "x in the page didn't land the relaunched video"
+  printf '%s' '<title>loading</title><body style="margin:0;background:#333">
+<video id=v playsinline loop src=card.webm style="width:100vw;height:100vh"></video>
+<script>
+const audio = new AudioContext();
+const tone = audio.createOscillator();
+const gain = audio.createGain();
+gain.gain.value = 0.05;
+tone.connect(gain).connect(audio.destination);
+tone.start();
+v.onplaying = () => document.title = "playing";
+v.onenterpictureinpicture = () => document.title = "floating";
+onclick = () => { audio.resume(); v.play(); };
+navigator.mediaSession.setActionHandler("enterpictureinpicture", () => v.requestPictureInPicture());
+document.title = "ready";
+</script>' > "$out/site/switch.html"
+  # Windows' path, D:\a\…, is file:///D:/a/….
+  switch_file=$(native_path "$PWD/$out/site/switch.html" | sed 's|\\|/|g')
+  case "$switch_file" in /*) ;; *) switch_file="/$switch_file" ;; esac
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar for the switch's video"
+  send type "file://$switch_file"
+  send key return
+  expect "^browser: title [0-9]* ready\$" "the switch's video page didn't load"
+  w=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
+  send click $page_point
+  expect "^browser: title $w playing\$" "a click didn't play the switch's video"
+  # Chromium floats a page on a hide only once it's audible and its media session plays
+  # (AutoPictureInPictureTabHelper), which the browser learns a moment after it plays, so the switch
+  # waits for both: one sooner floats nothing, in Chrome too.
+  expect "^browser: page $w audible 1 " "the switch's video didn't become audible"
+  expect "^browser: page $w media 1 playing 1 " "the switch's video's media session didn't play"
+  shown "$v"
+  expect "^browser: title $w floating\$" "the video playing with sound didn't float as a switch hid it"
+  expect '^browser: handover mini player on screen ' \
+    "the core didn't time the Mini Player's first frame after the switch"
+  on_screen=$(grep '^browser: handover mini player on screen ' "$log" | tail -1 |
+    sed 's/.* +\([0-9.]*\) ms.*/\1/')
+  echo "the Mini Player was on screen $on_screen ms after the switch"
+  # A hosted runner is a slower machine shared with other jobs, where GitHub's Mac took 0.7 s to
+  # put the window's first frame on screen, so there the time only reports, as perf.sh's targets
+  # do, and the check VMs keep the bar.
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "skip: the Mini Player on screen within twice Dia's 125 ms of the switch: a hosted" \
+      "runner only reports it (#2822)."
+  else
+    awk -v ms="$on_screen" 'BEGIN { exit !(ms <= 250) }' ||
+      fail "the Mini Player was on screen $on_screen ms after the switch, over twice Dia's 125 ms"
+  fi
+else
+  echo "skip: the Mini Player's time from a switch: an engine older than its core doesn't time it (#2822)."
+fi
 exec 3>&-
 quit
 
