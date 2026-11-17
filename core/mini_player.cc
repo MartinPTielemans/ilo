@@ -126,21 +126,26 @@ class MiniPlayerWatch : public views::WidgetObserver {
       return;
     }
     // check.sh reads these lines.
-    const std::string size = widget->GetWindowBoundsInScreen().size().ToString();
-    LogHandover("mini player shows", size);
+    LogHandover("mini player shows", widget->GetWindowBoundsInScreen().size().ToString());
     if (ui::Compositor* compositor = widget->GetCompositor()) {
       compositor->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
-          [](const std::string& size, const viz::FrameTimingDetails& timing) {
+          [](base::WeakPtr<views::Widget> widget, const viz::FrameTimingDetails& timing) {
+            if (!widget) {
+              return;
+            }
+            // Its size as its first frame is presented, not as it showed: Chrome can resize it
+            // after the show, in the same task, as for its automatic Picture in Picture question
+            // (#2822).
+            std::string detail = widget->GetWindowBoundsInScreen().size().ToString();
             // The time is when this ran on the UI thread. Beside it, when the frame was
             // presented, so a UI thread late to run it shows apart from a late frame (#3181).
-            std::string detail = size;
             if (const std::optional<base::TimeDelta> presented =
                     SinceHandoverClicked(timing.presentation_feedback.timestamp)) {
               detail += base::StringPrintf(", presented at %.1f ms", presented->InMillisecondsF());
             }
             LogHandover("mini player on screen", detail);
           },
-          size));
+          widget->GetWeakPtr()));
     }
   }
 
