@@ -174,7 +174,8 @@ slow_link="600 450"
 # card <point> <url> <case>: rests on the link at <point> until its plate shows, then ⇧ alone.
 card() {
   send move $1
-  expect "^browser: link target $2\$" "$3: resting on the link showed no link target for $2"
+  # The core says it as the plate shows it, with no scheme.
+  expect "^browser: link target ${2#*://}\$" "$3: resting on the link showed no link target for $2"
   expect '^browser: link target window shown$' "$3: the link target's window didn't show"
   send flags shift
   expect "^browser: title $tab key Shift\$" "$3: the page didn't get the ⇧, which a shift-click needs"
