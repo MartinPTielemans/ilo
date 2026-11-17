@@ -25,8 +25,9 @@ namespace browser_core {
 // front, to the page's first visually non-empty paint, a navigation that commits nothing, the end
 // of the load or the tab's closing. A load in a tab the user isn't looking at, such as a page
 // reloading itself in the background, doesn't count, so it can't keep taking the vote away. An
-// agent's tabs never count, even while the user acts in one; a tab the user has taken out of an
-// agent's Space is theirs, and counts as their other tabs do. Tab says which loads count.
+// agent's tabs never count while the agent has them. One the user has taken over is theirs until
+// they hand it back, and its loads count as their other tabs' do, as does one moved out of the
+// agent's Space. Tab says which loads count.
 // Apart from content so browser_core_unittests tests it on a graph alone.
 class AgentJobVoter : public performance_manager::execution_context_priority::PriorityVoter,
                       public performance_manager::PageNodeObserver {
@@ -81,7 +82,7 @@ class UserLoad {
   UserLoad& operator=(const UserLoad&) = delete;
 
   // |navigation| starts in the tab's main frame for another document. |page| is the tab's page,
-  // |shown| whether the user is looking at it, and |agents| whether it's in an agent's Space.
+  // |shown| whether the user is looking at it, and |agents| whether the agent has the tab now.
   void Started(int64_t navigation,
                base::WeakPtr<const performance_manager::PageNode> page,
                bool shown,

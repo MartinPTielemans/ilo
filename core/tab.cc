@@ -17,6 +17,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/agent_autofill.h"
 #include "browser_core/arrange.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/boosts.h"
@@ -1219,11 +1220,11 @@ void Tab::DidStartNavigation(content::NavigationHandle* navigation) {
     // that scrolls the same page keeps it.
     if (!navigation->IsSameDocument()) {
       ReportLinkTarget(GURL());
-      const Space* space = Space::Holding(id_);
       user_load_.Started(
           navigation->GetNavigationId(),
           performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(web_contents()),
-          web_contents()->GetVisibility() == content::Visibility::VISIBLE, space && space->agent());
+          web_contents()->GetVisibility() == content::Visibility::VISIBLE,
+          IsAgentTab(web_contents()));
     }
   }
 }

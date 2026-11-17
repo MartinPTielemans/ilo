@@ -313,11 +313,18 @@ TEST_F(UserLoadTest, ALoadCountsWhileItsTabIsShown) {
   EXPECT_TRUE(JobLifted());
 }
 
-// An agent's tab never counts, even shown and while the user acts in it.
-TEST_F(UserLoadTest, AnAgentsTabNeverCounts) {
+// A tab the agent has never counts, even shown. Once the user has taken it over it's theirs, and
+// its next load counts.
+TEST_F(UserLoadTest, AnAgentsTabCountsOnlyOnceTheUserHasIt) {
   UserLoad load;
   load.Started(1, PageOf(users_->page.get()), /*shown=*/true, /*agents=*/true);
   EXPECT_FALSE(load.counts());
+  EXPECT_TRUE(JobLifted());
+  load.Painted();
+
+  load.Started(2, PageOf(users_->page.get()), /*shown=*/true, /*agents=*/false);
+  EXPECT_FALSE(JobLifted());
+  load.Painted();
   EXPECT_TRUE(JobLifted());
 }
 
