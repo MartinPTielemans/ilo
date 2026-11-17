@@ -497,12 +497,20 @@ void HandoverClicked() {
   g_handover_click = base::TimeTicks::Now();
 }
 
+std::optional<base::TimeDelta> SinceHandoverClicked(base::TimeTicks at) {
+  const base::TimeDelta since = at - g_handover_click;
+  if (g_handover_click.is_null() || at.is_null() || since > base::Seconds(3)) {
+    return std::nullopt;
+  }
+  return since;
+}
+
 void LogHandover(const char* stage, const std::string& detail) {
-  const base::TimeDelta since = base::TimeTicks::Now() - g_handover_click;
-  if (g_handover_click.is_null() || since > base::Seconds(3)) {
+  const std::optional<base::TimeDelta> since = SinceHandoverClicked(base::TimeTicks::Now());
+  if (!since) {
     return;
   }
-  fprintf(stderr, "browser: handover %s +%.1f ms (%s)\n", stage, since.InMillisecondsF(),
+  fprintf(stderr, "browser: handover %s +%.1f ms (%s)\n", stage, since->InMillisecondsF(),
           detail.c_str());
 }
 
