@@ -7,8 +7,8 @@ use std::{
 use gpui::{Bounds, TestAppContext, point, px, size};
 
 use super::{
-    DELAY, GRACE, HEIGHT, Host, MARGIN, NEAR, PAD_X, Plate, RELEASE_POLL, Side, Target,
-    WINDOW_WIDTH, near, place, plate, window_left,
+    DELAY, GRACE, HEIGHT, Host, MARGIN, NEAR, PAD_X, Plate, RADIUS, RELEASE_POLL, Side, Target,
+    WINDOW_HEIGHT, WINDOW_MARGIN, WINDOW_WIDTH, near, place, plate, window_left, window_top,
 };
 use crate::palette::Palette;
 
@@ -184,11 +184,13 @@ fn the_plates_window_stays_inside_a_card_wider_than_it_from_either_corner() {
     }
 }
 
-/// What the plate asks of its window, and a mouse button the test holds down or lets go.
+/// What the plate asks of its window, and a mouse button the test holds down or lets go. The
+/// outlines its window tells are apart, as each frame that draws differently tells one.
 #[derive(Default)]
 struct Recorder {
     asked: RefCell<Vec<String>>,
     pressed: Cell<bool>,
+    outlines: RefCell<Vec<(Bounds<gpui::Pixels>, f32)>>,
 }
 
 impl Host for Recorder {
@@ -204,6 +206,21 @@ impl Host for Recorder {
 
     fn pressed(&self) -> bool {
         self.pressed.get()
+    }
+
+    fn card_picture(&self, card: u64, url: &str, page: &str) -> bool {
+        self.asked
+            .borrow_mut()
+            .push(format!("card {card} picture {url} of {page}"));
+        !url.contains("blocked")
+    }
+
+    fn card_cancel(&self, card: u64) {
+        self.asked.borrow_mut().push(format!("card {card} cancel"));
+    }
+
+    fn outline(&self, _: &mut gpui::Window, frame: Bounds<gpui::Pixels>, radius: f32) {
+        self.outlines.borrow_mut().push((frame, radius));
     }
 }
 
@@ -241,7 +258,7 @@ fn shown_at(frame: Bounds<gpui::Pixels>) -> String {
     format!(
         "show {} {} over 1",
         f32::from(frame.left()),
-        f32::from(frame.top())
+        window_top(frame)
     )
 }
 
@@ -306,4 +323,226 @@ fn a_shown_plate_moves_only_at_the_release(cx: &mut TestAppContext) {
     assert_eq!(after(cx, &host, DELAY), Vec::<String>::new());
     host.pressed.set(false);
     assert_eq!(after(cx, &host, RELEASE_POLL), vec![shown_at(moved)]);
+}
+
+/// The link card's state in the plate's window: its id, its state's name, and whether it shows.
+fn card_state(cx: &mut TestAppContext) -> Option<(u64, &'static str, bool)> {
+    cx.update(|cx| {
+        let window = cx.global::<super::LinkTargetWindow>().0;
+        let target = window.read(cx).unwrap();
+        (target.card.as_ref()).map(|card| (card.id, card.state.name(), card.shown))
+    })
+}
+
+const PAGE: &str = "https://example.com/docs";
+
+/// The plate shows for example.com/docs, and ⇧ asked for card 5.
+fn asked(cx: &mut TestAppContext) -> Rc<Recorder> {
+    let host = open_plate(cx);
+    on_link(cx, place(card(), 120., Side::Left));
+    after(cx, &host, DELAY);
+    let link = target("example.com/docs", "example.com");
+    cx.update(|cx| super::card_asked(5, link, cx));
+    cx.run_until_parked();
+    host
+}
+
+fn fetched(cx: &mut TestAppContext, status: i32, mime: &str, bytes: &[u8]) {
+    let bytes = bytes.to_vec();
+    let mime = mime.to_string();
+    cx.update(|cx| super::card_fetched(5, status, PAGE.into(), mime, bytes, cx));
+    cx.run_until_parked();
+}
+
+fn png() -> Vec<u8> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(40, 21, image::Rgba([200, 40, 40, 255]))
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    bytes.into_inner()
+}
+
+#[gpui::test]
+fn a_card_loads_after_the_plates_delay_then_shows_its_page_and_picture(cx: &mut TestAppContext) {
+    let host = asked(cx);
+    assert_eq!(
+        card_state(cx),
+        Some((5, "loading", false)),
+        "the card showed before the core's own wait was over, so a ⇧-click would flash it"
+    );
+    after(cx, &host, DELAY);
+    assert_eq!(card_state(cx), Some((5, "loading", true)));
+    fetched(
+        cx,
+        200,
+        "text/html",
+        b"<title>Docs</title><meta property='og:image' content='/i.png'>",
+    );
+    assert_eq!(
+        host.asked.take(),
+        vec![format!(
+            "card 5 picture https://example.com/i.png of {PAGE}"
+        )]
+    );
+    assert_eq!(card_state(cx), Some((5, "page, picture waiting", true)));
+    fetched(cx, 200, "image/png", &png());
+    assert_eq!(card_state(cx), Some((5, "page with picture", true)));
+}
+
+#[gpui::test]
+fn the_window_tells_the_outline_it_draws_the_plate_then_the_card_as_it_grows(
+    cx: &mut TestAppContext,
+) {
+    let host = asked(cx);
+    // The plate, at the window's bottom left past its margin, with the plate's corners.
+    let bottom = WINDOW_MARGIN + WINDOW_HEIGHT;
+    let plate = Bounds::new(
+        point(px(WINDOW_MARGIN), px(bottom - HEIGHT)),
+        size(px(120.), px(HEIGHT)),
+    );
+    assert_eq!(host.outlines.take(), vec![(plate, RADIUS)]);
+    // A frame that draws the same tells nothing.
+    cx.update(|cx| cx.refresh_windows());
+    cx.run_until_parked();
+    assert_eq!(host.outlines.take(), vec![]);
+    // The card the plate grew into, at the same corner, each of its states once, as each is taller.
+    let mut heights = Vec::new();
+    let mut card_told = || {
+        let told = host.outlines.take();
+        assert_eq!(told.len(), 1, "one outline a state: {told:?}");
+        let (frame, radius) = told[0];
+        assert_eq!(radius, crate::tokens::hover_card::RADIUS);
+        assert_eq!(
+            (frame.left(), frame.bottom()),
+            (px(WINDOW_MARGIN), px(bottom))
+        );
+        assert_eq!(frame.size.width, px(crate::tokens::link_card::WIDTH));
+        heights.push(f32::from(frame.size.height));
+    };
+    after(cx, &host, DELAY);
+    card_told();
+    fetched(
+        cx,
+        200,
+        "text/html",
+        b"<title>Docs</title><meta property='og:image' content='/i.png'>",
+    );
+    card_told();
+    fetched(cx, 200, "image/png", &png());
+    card_told();
+    assert!(
+        heights[0] > HEIGHT && heights[2] > heights[1],
+        "the card's outline didn't grow from the plate's: {heights:?}"
+    );
+    // Esc takes the card, and the window tells the plate's outline again.
+    assert!(cx.update(super::close_card));
+    cx.run_until_parked();
+    assert_eq!(host.outlines.take(), vec![(plate, RADIUS)]);
+}
+
+#[gpui::test]
+fn the_pages_answer_shows_the_card_at_once(cx: &mut TestAppContext) {
+    let host = asked(cx);
+    fetched(cx, 200, "text/html", b"<title>Docs</title>");
+    assert_eq!(card_state(cx), Some((5, "page", true)));
+    // With no picture to ask, the core's card, kept for it, goes.
+    assert_eq!(host.asked.take(), vec!["card 5 cancel".to_string()]);
+}
+
+#[gpui::test]
+fn a_blocked_picture_is_no_picture(cx: &mut TestAppContext) {
+    let host = asked(cx);
+    fetched(
+        cx,
+        200,
+        "text/html",
+        b"<title>Docs</title><meta property='og:image' content='https://ads.example/blocked.png'>",
+    );
+    assert_eq!(
+        host.asked.take(),
+        vec![
+            format!("card 5 picture https://ads.example/blocked.png of {PAGE}"),
+            "card 5 cancel".to_string(),
+        ]
+    );
+    assert_eq!(card_state(cx), Some((5, "page", true)));
+}
+
+#[gpui::test]
+fn a_broken_picture_leaves_the_card_without_one(cx: &mut TestAppContext) {
+    let _host = asked(cx);
+    fetched(
+        cx,
+        200,
+        "text/html",
+        b"<title>Docs</title><meta property='og:image' content='/i.png'>",
+    );
+    fetched(cx, 200, "image/png", b"not a picture");
+    assert_eq!(card_state(cx), Some((5, "page", true)));
+}
+
+#[gpui::test]
+fn a_failed_fetch_says_so_and_moving_on_says_nothing(cx: &mut TestAppContext) {
+    let _host = asked(cx);
+    fetched(cx, 403, "text/html", b"");
+    assert_eq!(card_state(cx), Some((5, "failed", true)));
+
+    let host = asked(cx);
+    // net::ERR_ABORTED: a key, press or wheel in the page within the core's wait.
+    fetched(cx, -3, "", b"");
+    assert_eq!(card_state(cx), None);
+    assert_eq!(
+        after(cx, &host, DELAY),
+        Vec::<String>::new(),
+        "a card that went quietly showed after its delay"
+    );
+}
+
+#[gpui::test]
+fn the_card_goes_with_its_plate_and_the_core_stops(cx: &mut TestAppContext) {
+    let host = asked(cx);
+    fetched(cx, 200, "text/html", b"<title>Docs</title>");
+    host.asked.take();
+    off_link(cx);
+    assert_eq!(card_state(cx), None);
+    assert_eq!(
+        host.asked.take(),
+        vec!["card 5 cancel".to_string(), "hide".to_string()]
+    );
+}
+
+#[gpui::test]
+fn esc_takes_a_shown_card_and_leaves_the_plate(cx: &mut TestAppContext) {
+    let host = asked(cx);
+    assert!(
+        !cx.update(super::close_card),
+        "Esc was kept from the page for a card that hadn't shown"
+    );
+    assert_eq!(host.asked.take(), vec!["card 5 cancel".to_string()]);
+    let link = target("example.com/docs", "example.com");
+    cx.update(|cx| super::card_asked(6, link, cx));
+    after(cx, &host, DELAY);
+    assert!(cx.update(super::close_card));
+    assert_eq!(card_state(cx), None);
+    assert_eq!(
+        host.asked.take(),
+        vec!["card 6 cancel".to_string()],
+        "Esc took the plate with the card"
+    );
+}
+
+#[gpui::test]
+fn a_card_is_asked_once_for_its_link(cx: &mut TestAppContext) {
+    let _host = asked(cx);
+    let (same, other) = (
+        target("example.com/docs", "example.com"),
+        target("example.org/", "example.org"),
+    );
+    assert!(cx.update(|cx| super::card_for(&same, cx)));
+    assert!(!cx.update(|cx| super::card_for(&other, cx)));
+}
+
+#[test]
+fn the_tallest_card_fits_the_windows_room() {
+    assert!(super::card::tallest() <= super::CARD_ROOM);
 }
