@@ -1050,6 +1050,22 @@ impl Shell {
         self.filter(true, cx);
     }
 
+    /// ⌘Z, or ⇧⌘Z unless `undoing`, in the Library's search field: while it's empty, nothing typed
+    /// there could seem to be what the key undoes, so it's the window's step, the one the toast
+    /// offers after Clear Archive or Delete from Archive (#3306). With text in it, the key goes on
+    /// to the field, which keeps it from undoing what's out of sight.
+    fn step_past_search(&mut self, undoing: bool, cx: &mut Context<Self>) {
+        let empty = (self.library.as_ref())
+            .is_some_and(|library| library.search.read(cx).text().is_empty());
+        if empty {
+            match undoing {
+                true => self.undo(cx),
+                false => self.redo(cx),
+            };
+            cx.stop_propagation();
+        }
+    }
+
     /// Closes the Library at once, as a page goes full screen.
     pub(super) fn close_library_now(&mut self) {
         self.library = None;
@@ -1828,6 +1844,13 @@ impl Shell {
                     window.focus(&search.focus_handle(cx), cx);
                 }),
             )
+            // Ahead of the field, which ends ⌘Z and ⇧⌘Z as it has no undo of its own.
+            .capture_action(cx.listener(|shell, _: &crate::text_input::Undo, _, cx| {
+                shell.step_past_search(true, cx)
+            }))
+            .capture_action(cx.listener(|shell, _: &crate::text_input::Redo, _, cx| {
+                shell.step_past_search(false, cx)
+            }))
             .text_size(px(text::BODY))
             .text_color(self.palette.text(FORM_TEXT))
             .child(
