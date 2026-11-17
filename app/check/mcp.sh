@@ -757,6 +757,7 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   warning_width=${warning_size%%x*} warning_height=${warning_size#*x}
   presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   send click $((warning_x + warning_width / 2)) $((warning_y + 8))
+  warning_clicked=$step
   send state
   [ "$key" = NativeWidgetMacNSWindow ] ||
     fail "a click on the agent's warning before http at $warning, watched in its split view, didn't give it the keyboard: $key, $focus"
@@ -769,24 +770,34 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     fail "a press in the page beside the agent's warning before http left the keyboard in $key, on $focus: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-pressed.png" || fail "no window to capture"
   # The press takes over the tab pressed, and ⌘↩ hands it back. It takes over the tab watched
-  # instead (#3243) while the area goes on to show the tab pressed, so the tab taken over is watched
-  # again and handed back there, with the UI given the keyboard by a click on the sidebar: on the
-  # Mac the warning takes it as its page shows (#3240), and keys typed there never reach the app
-  # (#3230).
+  # instead, or on X11 the click on the warning already took that one and the press beside takes
+  # none (#3243), while the area goes on to show the tab pressed. So each tab the two clicks took
+  # over is watched again and handed back there, with the UI given the keyboard by a click on the
+  # sidebar: on the Mac the warning takes it as its page shows (#3240), and keys typed there never
+  # reach the app (#3230).
   send state
-  taken=$(since "$pressed" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' | tail -1)
-  if [ -n "$taken" ] && [ "$taken" != "$beside" ]; then
-    echo "skip: mcp: a press in the other pane of a watched agent split taking over the tab pressed: it took over tab $taken, not $beside (#3243)."
-    to_pages "tab $beside"
-    watch "$taken"
-    send click $sidebar_point
-    send key return cmd
-    await_log "^browser: agent mcp-client handed back $taken\$" \
-      "⌘↩ didn't hand back tab $taken, which the press beside it took over"
-  else
+  taken=$(since "$warning_clicked" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
+    sort -u | tr '\n' ' ')
+  taken=${taken% }
+  [ -n "$taken" ] ||
+    fail "neither the click on the agent's warning before http nor the press beside it took over a tab: $(since "$warning_clicked" | grep -e '^browser: drive' -e '^browser: agent' | tail -8 | tr '\n' ' ')"
+  if [ "$taken" = "$beside" ]; then
     hand_back_pressed "$presses"
+    shown="the split view"
+  else
+    echo "skip: mcp: a press in the other pane of a watched agent split taking over the tab pressed: the clicks on the warning and beside it took over tab $taken, not $beside (#3243)."
+    shown="tab $beside"
+    for tab in $taken; do
+      to_pages "$shown"
+      watch "$tab"
+      send click $sidebar_point
+      send key return cmd
+      await_log "^browser: agent mcp-client handed back $tab\$" \
+        "⌘↩ didn't hand back tab $tab, which a click on the split view took over"
+      shown="tab $tab"
+    done
   fi
-  to_pages "the split view"
+  to_pages "$shown"
   for split_tab in $warned $beside; do
     closed=$(call close_tab "{\"tab\":$split_tab}")
     case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
