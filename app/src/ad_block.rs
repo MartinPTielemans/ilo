@@ -546,7 +546,33 @@ pub fn at_response(
 /// it, the "exceptions" to generic hiding, its scriptlets' "script", the "isolated" one that runs
 /// its procedural filters, and whether "generic" hiding applies.
 pub fn page(engine: &Engine, url: &str) -> String {
-    let resources = engine.rules.url_cosmetic_resources(url);
+    let mut resources = engine.rules.url_cosmetic_resources(url);
+    // PROBE (#3272, never merged): the watch page's scriptlets by name, and a marker that says
+    // whether they ran and what the page had run before them.
+    if url.starts_with("https://www.youtube.com/watch") {
+        let names: Vec<String> = (resources.injected_script.split("try {\n").skip(1))
+            .map(|call| {
+                let name: String = call
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                    .collect();
+                if name.is_empty() {
+                    "template".to_string()
+                } else {
+                    name
+                }
+            })
+            .collect();
+        crate::log!(
+            "browser: probe scriptlets {}: {}",
+            names.len(),
+            names.join(",")
+        );
+        resources.injected_script = format!(
+            "window.__iloProbe = {{ scripts: document.scripts.length, initial: typeof window.ytInitialPlayerResponse, at: Math.round(performance.now()) }};\n{}",
+            resources.injected_script
+        );
+    }
     let sorted = |set: std::collections::HashSet<String>| {
         let mut all: Vec<String> = set.into_iter().collect();
         all.sort();

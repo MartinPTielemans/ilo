@@ -268,11 +268,14 @@ videos="$dir/videos.txt"
 watch_video() {
   # Not site, the check's server, which a later pass in the same shell builds its pages on.
   watched=$1 ad=no-ad played=none met= state=- since=$(date +%s)
+  # PROBE (#3272, never merged): the states in order, and what the page had.
+  from=$step states= last=
   while [ $(($(date +%s) - since)) -lt 30 ]; do
     # The seconds, playing or paused, ad or no-ad, then refused, cued or the player's state.
     set -- $(video https://www.youtube.com/watch)
     if [ $# = 4 ]; then
       state=$4
+      [ "$4" = "$last" ] || { states="$states>$4"; last=$4; }
       case $4 in
         refused | cued)
           if [ -z "$met" ]; then
@@ -291,6 +294,15 @@ watch_video() {
     sleep 0.5
   done
   echo "$watched $ad $played ${met:-$state}" >> "$videos"
+  asked=$(grep -c '^cdp: probe ' "$cdp_log" || true)
+  echo "probe https://www.youtube.com/watch" >&5
+  for _ in $(seq 50); do
+    [ "$(grep -c '^cdp: probe ' "$cdp_log" || true)" -gt "$asked" ] && break
+    sleep 0.1
+  done
+  said=$(grep '^cdp: probe ' "$cdp_log" | tail -1)
+  injected=$(sed -n "/^browser: drive $from: /,\$p" "$log" | grep '^browser: probe scriptlets ' | tail -1)
+  echo "probe watch $n ${engine:-ublock}: states ${states#>}; met ${met:-none}; played $played; ${said#cdp: probe }; ${injected:-no scriptlet line}"
 }
 # Each site: when Return went, in ms since the epoch, then the site, then the load's time and what
 # loaded, or "none" for a load that didn't come within 45 s, then "bot-check" where Cloudflare's

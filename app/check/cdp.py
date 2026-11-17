@@ -550,6 +550,25 @@ CONTENT = """(() => {
 })()"""
 
 
+# PROBE (#3272, never merged): counts only, never contents.
+PROBE = """(() => {
+  const count = (r) => !r ? "no-response" : ["adPlacements", "playerAds"].map((k) =>
+    k + " " + (Array.isArray(r[k]) ? r[k].length : (r[k] === undefined ? "absent" : typeof r[k]))).join(" ");
+  const p = document.getElementById("movie_player");
+  const live = p && typeof p.getPlayerResponse === "function" ? p.getPlayerResponse() : null;
+  const m = window.__iloProbe;
+  return "initial " + count(window.ytInitialPlayerResponse) + "; player " + count(live) + "; injected " +
+    (m ? "scripts-before " + m.scripts + " initial-then " + m.initial + " at " + m.at + " ms" : "none");
+})()"""
+
+
+def probe(prefix):
+    on = page_session(prefix)
+    value = on and call("Runtime.evaluate", {"expression": PROBE, "returnByValue": True},
+                        on).get("result", {}).get("value")
+    return value or "-"
+
+
 def content():
     value = session and call("Runtime.evaluate", {"expression": CONTENT, "returnByValue": True},
                              session).get("result", {}).get("value")
@@ -775,6 +794,8 @@ for line in sys.stdin:
         log("content " + content())
     elif words[:1] == ["video"] and len(words) == 2:
         log("video " + video(words[1]))
+    elif words[:1] == ["probe"] and len(words) == 2:
+        log("probe " + probe(words[1]))
     elif words[:1] == ["hidden"] and len(words) in (2, 3) and session:
         log("hidden " + hidden(words[1], words[2] if len(words) == 3 else None))
     elif words[:1] == ["requests"] and len(words) == 2 and session and not recording:
