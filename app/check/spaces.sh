@@ -88,6 +88,8 @@ await_load
 await '^browser: title [0-9]* ready$' || fail "the Spaces test page didn't draw"
 first=$(space)
 await "^browser: spaces $first\$" || fail "the app didn't start with one Space"
+# The app can say which window opened after its page has loaded (#3180).
+await '^browser: window opened [0-9]' || fail "the app didn't say which window opened"
 dots_window=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 a=$(today)
 send click $page_point
