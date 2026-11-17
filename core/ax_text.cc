@@ -10,6 +10,7 @@
 #include "base/containers/flat_map.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_tree_update.h"
@@ -349,6 +350,16 @@ std::optional<std::string> ValueOf(const base::DictValue& node) {
     return base::NumberToString(*number);
   }
   return std::nullopt;
+}
+
+std::string OneSpaced(std::string_view text) {
+  return base::UTF16ToUTF8(OneSpaced(base::UTF8ToUTF16(text)));
+}
+
+std::u16string OneSpaced(std::u16string_view text) {
+  // Only UTF-16 strings collapse Unicode's white space; a line break's run stays a space, as
+  // Rust's split_whitespace leaves it.
+  return base::CollapseWhitespace(text, /*trim_sequences_with_line_breaks=*/false);
 }
 
 }  // namespace browser_core
