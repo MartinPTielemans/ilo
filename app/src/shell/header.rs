@@ -344,7 +344,13 @@ impl Shell {
         }
         let page = self.page(self.field_tab());
         let [sidebar, back, forward, reload_x] =
-            nav_places(self.width(), self.full_screen, self.right);
+            // Mock only, for #3160's sheet: (a) is main, (b) and (c) take the corner wherever the
+            // window's buttons have left it.
+            nav_places(
+                self.width(),
+                self.full_screen || (std::env::var("PREVIEW_BAR_LEFT").unwrap_or_default() != "a" && self.buttons_at_bar_end()),
+                self.right,
+            );
         let reload = match page.loading {
             true => (reload_x, reload_glyph(true), Command::Stop, true),
             false => (
@@ -1047,6 +1053,7 @@ pub(super) fn nav_places(width: f32, full_screen: bool, right: bool) -> [Option<
     };
     let first = sidebar + NAV_SIZE + NAV_AFTER_SIDEBAR;
     let last = width - NAV_TRAIL - NAV_SIZE;
+    let packed = std::env::var("PREVIEW_BAR_LEFT").unwrap_or_default() == "c";
     let count = (0..=3)
         .rev()
         .find(|&count| last - (count as f32 - 1.) * NAV_PITCH >= first);
@@ -1054,6 +1061,9 @@ pub(super) fn nav_places(width: f32, full_screen: bool, right: bool) -> [Option<
     if let Some(count) = count.filter(|&count| count > 0) {
         for index in 0..count {
             places[1 + index] = Some(match right {
+                // Mock only: (c) packs them from the sidebar button, at the corner's side.
+                true if packed => width - first - NAV_SIZE - (count - 1 - index) as f32 * NAV_PITCH,
+                false if packed => first + index as f32 * NAV_PITCH,
                 true => NAV_TRAIL + index as f32 * NAV_PITCH,
                 false => last - (count - 1 - index) as f32 * NAV_PITCH,
             });

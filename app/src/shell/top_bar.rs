@@ -57,7 +57,8 @@ impl Shell {
     /// With the sidebar on the right they're there already, in its column, and full screen has
     /// none.
     pub(super) fn buttons_at_bar_end(&self) -> bool {
-        BUTTONS_AT_BAR_END
+        // Mock only: PREVIEW_BUTTONS_AT_END puts Linux's at the bar's end as Windows has them.
+        (BUTTONS_AT_BAR_END || std::env::var("PREVIEW_BUTTONS_AT_END").is_ok())
             && self.bar_on()
             && self.little.is_none()
             && !self.right
@@ -80,7 +81,8 @@ impl Shell {
         let window = f32::from(self.viewport.width);
         // The buttons' far edge from the corner, and the card's inset past it.
         let buttons = match self.buttons_at_bar_end() {
-            true => WINDOW_BUTTONS[2].0 + WINDOWS_BUTTON_PLATE / 2.,
+            true if BUTTONS_AT_BAR_END => WINDOW_BUTTONS[2].0 + WINDOWS_BUTTON_PLATE / 2.,
+            true => f32::from(self.window_button_frames()[2].right()),
             false => 0.,
         };
         let (left, right) = match self.right {

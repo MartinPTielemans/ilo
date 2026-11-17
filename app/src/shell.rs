@@ -2199,7 +2199,8 @@ impl Shell {
             window_for_page: false,
             page_held: None,
             full_screen_timing: None,
-            sidebar_hidden: false,
+            // Mock only, for #3160's sheet.
+            sidebar_hidden: std::env::var("PREVIEW_SIDEBAR_HIDDEN").is_ok(),
             window_buttons: true,
             buttons_at_bar_end: false,
             window_button_geometry: None,
@@ -5537,7 +5538,7 @@ impl Shell {
     /// the Library's column. With the sidebar on the right they're mirrored `across` what they're
     /// drawn in, so close is at its corner, as AppKit's are.
     fn window_buttons(&self, across: Pixels, cx: &mut Context<Self>) -> AnyElement {
-        let right = self.right;
+        let right = self.right || self.buttons_at_bar_end();
         if cfg!(target_os = "windows") {
             return self.windows_buttons(right || self.buttons_at_bar_end(), cx);
         }

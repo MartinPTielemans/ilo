@@ -1915,8 +1915,9 @@ impl Browser for Fake {
         false
     }
 
+    // Mock only, for #3160's sheet.
     fn window_full_screen(&self) -> bool {
-        false
+        std::env::var("PREVIEW_FULL_SCREEN").is_ok()
     }
 
     // The reveal's window is the app's, over the page, which the preview has neither of. On the web
