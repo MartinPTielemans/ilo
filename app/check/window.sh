@@ -85,7 +85,7 @@ page=$(base64 << 'HTML' | tr -d '\n'
   addEventListener("resize", () => {
     document.title = `resized ${++resizes} times, to ${innerWidth}x${innerHeight}`;
   });
-  // After an n, the page goes to another site, the check server's one.html, when its window loses
+  // After an n, the page goes to another site, one.html on the check server, when its window loses
   // the keyboard, so a new page commits while the command bar is open.
   let leave = false;
   addEventListener("keydown", e => leave ||= e.key == "n");
