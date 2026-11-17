@@ -1,0 +1,23 @@
+Keeps Chrome's toasts from ending the browser (#2950): a toast anchors to a view of the window's
+BrowserView, and ilo's windows have none, so ToastController::CreateToast found no anchor and
+CHECKed, as after a page menu's Copy Link Address. With no anchor the toast isn't shown, as if
+CanShowToast had refused it, for every ToastId. The app turns off the toasts it knows of
+(app/src/main.rs); this covers those it doesn't, such as the auto sign-in toast, which no feature
+of the toasts' own turns off.
+
+--- a/chrome/browser/ui/toasts/toast_controller.cc
++++ b/chrome/browser/ui/toasts/toast_controller.cc
+@@ -139,6 +139,13 @@
+ }
+ 
+ bool ToastController::MaybeShowToast(ToastParams params) {
++  // browser_core: a window with no view of Chrome's to put a toast on, as none of ilo's has, shows
++  // none, where CreateToast would end the browser for want of one (#2950).
++  const ToastSpecification* spec = toast_registry_->GetToastSpecification(params.toast_id);
++  if (spec && !GetAnchorView(spec->is_global_scope())) {
++    RecordToastFailedToShow(params.toast_id);
++    return false;
++  }
+   if (!CanShowToast(params.toast_id)) {
+     RecordToastFailedToShow(params.toast_id);
+     return false;

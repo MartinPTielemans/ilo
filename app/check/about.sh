@@ -1,12 +1,14 @@
 # check.sh runs this at 420.
 # About ilo shows Settings on its About tab, and the Open of each of its Licence, Notices and
 # Libraries rows opens the file the build carries for it (tools/licences.sh) in a tab, which loads.
+# Off the Mac, where no menu bar holds ilo's menu, the footer's menu control before the + opens it
+# (#3148): escape closes it, and down and return in it run Settings…, which shows Settings.
 # Sync, which fits its card, doesn't scroll under a scroll.
 # It names the engine's Chromium version wherever the engine carries one: the Mac's framework
 # always, and beside chrome Linux's VERSION and Windows's manifest, in engines packaged since. On
 # Windows, first, a click in the page once its window is back from minimized gives it the keyboard.
 
-engine_version= engine_version_said= minimized=
+engine_version= engine_version_said= minimized= app_menu_said=
 [ "$(uname)" != Darwin ] || engine_version=yes
 for file in "$app"/VERSION "$app"/[0-9]*.[0-9]*.manifest; do
   [ ! -e "$file" ] || engine_version=yes
@@ -38,6 +40,29 @@ if windows; then
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
   minimized=" A click on the page once its window was back from minimized gave it the keyboard, and ⌘, from it showed Settings."
+fi
+if [ "$(uname)" != Darwin ]; then
+  # The control's middle: 8 and a pitch of 34 in from the sidebar's 228, 25 above the window's foot.
+  check_layout
+  control="170 $((${content#*x} - 25))"
+  app_menu=$(cased "Settings…, Import from Other Browsers…, Privacy Policy, About ilo, Quit ilo")
+  post click $control
+  expect "^browser: menu shown $app_menu\$" "a click on the footer's menu control didn't show ilo's menu: \
+$(grep '^browser: menu shown' "$log" | tail -1)"
+  expect '^browser: menu drawn ' "the menu control's menu didn't come on screen"
+  ../tools/window-screenshot.sh "$pid" "$out/app-menu.png" || fail "no window to capture"
+  send key escape
+  expect '^browser: menu closed' "escape didn't close the menu control's menu"
+  post click $control
+  expect "^browser: menu shown $app_menu\$" "a second click on the menu control didn't show its menu"
+  send key down
+  send key return
+  expect '^browser: command settings via footer$' "down and return in the menu control's menu didn't run Settings…"
+  expect '^browser: settings shown General$' "Settings… from the menu control didn't show Settings on its General tab"
+  settings_drew General
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings shown from the menu control"
+  app_menu_said=" The footer's menu control showed ilo's menu, which escape closed, and down and return in it showed Settings: $out/app-menu.png."
 fi
 loaded=
 for row in licence:LICENSE notices:NOTICE libraries:THIRD-PARTY.txt; do
@@ -86,4 +111,4 @@ exec 3>&-
 quit
 [ -n "$engine_version" ] || echo "skip: about's engine version. This engine was packaged before" \
   "it carried one (engine/linux/package.sh)."
-echo "ok: About ilo showed About$engine_version_said, and its rows' Open loaded$loaded in tabs.$minimized Windows: $out/about.png, $out/about-opened.png"
+echo "ok: About ilo showed About$engine_version_said, and its rows' Open loaded$loaded in tabs.$minimized$app_menu_said Windows: $out/about.png, $out/about-opened.png"

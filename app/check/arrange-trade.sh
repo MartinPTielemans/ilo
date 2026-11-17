@@ -3,7 +3,11 @@
 # takes the carried thing's, each at the gap the page had, with nothing else moved. On two flex
 # columns with a 20 px gap: one of four things of one height, and one of four of different heights,
 # so the room each leaves isn't the other's size. Carried up and carried down, with one thing between
-# them, with two, and next to each other, and across the two columns. After each, ⌘Z with the page focused takes the trade back
+# them, with two, and next to each other, and across the two columns; and between two parents one
+# over the other, where the lower place is first in its parent, which the upper room moves (#2990):
+# flex columns with a gap, and blocks whose margins collapse through them; and where the upper
+# thing is itself the box before the lower thing's parent, or before an ancestor of it.
+# After each, ⌘Z with the page focused takes the trade back
 # and a click on the page's empty part ends the selection, so each starts from the page as it was.
 # Then an arranged page at rest asks for nothing (#2981): each of the three files whose trade
 # restored a thing a settle lifted, a frame a pass, turned on from the Site Controls, shown and
@@ -23,6 +27,21 @@ body { margin: 0; height: 100vh; font: 16px sans-serif; background: rgb(243, 245
 section { height: 80px; background: rgb(217, 226, 230) }
 #b1 { height: 50px }
 #b3 { height: 140px }
+#s { position: absolute; left: 620px; top: 20px; width: 260px }
+#s > div { display: flex; flex-direction: column; gap: 20px }
+#s > div + div { margin-top: 20px }
+#c3 { height: 140px }
+#m { position: absolute; left: 620px; top: 480px; width: 260px }
+#m section { height: 40px; margin: 10px 0 }
+#m #m3 { height: 70px }
+#n, #o { position: absolute; top: 470px; width: 120px; display: flex; flex-direction: column; gap: 10px }
+#n { left: 320px }
+#o { left: 460px }
+#n > div, #o > div > div { display: flex; flex-direction: column; gap: 10px }
+#n section, #o section { height: 30px }
+#n1, #o1 { height: 10px !important }
+#n2, #o2 { height: 50px !important }
+#n3, #o3 { height: 110px !important }
 a { position: absolute; left: 20px; width: 60px; height: 30px }
 </style>
 <a href="arrange-idle.html?m2" style="top: 470px">m2</a><a href="arrange-idle.html?m4" style="top: 510px">m4</a><a href="arrange-idle.html?m12" style="top: 550px">m12</a>
@@ -32,6 +51,10 @@ a { position: absolute; left: 20px; width: 60px; height: 30px }
 <div class="col" id="b">
 <section id="b1" aria-label="B1"></section><section aria-label="B2"></section><section id="b3" aria-label="B3"></section><section aria-label="B4"></section>
 </div>
+<div id="s"><div><section aria-label="C1"></section><section aria-label="C2"></section></div><div><section id="c3" aria-label="C3"></section><section aria-label="C4"></section></div></div>
+<div id="m"><div><section aria-label="M1"></section><section aria-label="M2"></section></div><div><section id="m3" aria-label="M3"></section><section aria-label="M4"></section></div></div>
+<div id="n"><section id="n1" aria-label="N1"></section><section id="n2" aria-label="N2"></section><div><section id="n3" aria-label="N3"></section><section aria-label="N4"></section></div></div>
+<div id="o"><section id="o1" aria-label="O1"></section><section id="o2" aria-label="O2"></section><div><div><section id="o3" aria-label="O3"></section><section aria-label="O4"></section></div></div></div>
 <script>
 let at = "-";
 addEventListener("mousedown", (event) => { at = Math.round(event.clientX) + "," + Math.round(event.clientY); });
@@ -39,7 +62,8 @@ function column(col) {
   const c = col.getBoundingClientRect();
   const things = [...document.querySelectorAll("section")].filter((t) => {
     const r = t.getBoundingClientRect();
-    return r.left + r.width / 2 > c.left && r.left + r.width / 2 < c.right;
+    // Not N and O, under column b.
+    return r.left + r.width / 2 > c.left && r.left + r.width / 2 < c.right && r.top < 460;
   }).sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top);
   let edge = col.getBoundingClientRect().top - 20;
   const gaps = things.map((t) => {
@@ -51,11 +75,19 @@ function column(col) {
   const order = things.map((t) => t.getAttribute("aria-label").slice(t.parentNode === col ? 1 : 0)).join(",");
   return order + " " + (gaps.every((g) => Math.abs(g - 20) <= 1) ? "packed" : gaps.join(","));
 }
+// Two parents one over the other: their things from the top, and where each starts, from the top
+// of the two.
+function stacked(s) {
+  const top = s.getBoundingClientRect().top;
+  const things = [...s.querySelectorAll("section")].sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top);
+  return things.map((t) => t.getAttribute("aria-label").slice(1)).join(",") + " " +
+    things.map((t) => Math.round(t.getBoundingClientRect().top - top)).join(",");
+}
 let said;
 setInterval(() => {
   // Not while the things move: only where they come to rest.
   if (document.getAnimations().some((x) => x.playState === "running")) return;
-  const now = "a " + column(a) + " b " + column(b) + " at " + at;
+  const now = "a " + column(a) + " b " + column(b) + " c " + stacked(s) + " m " + stacked(m) + " n " + stacked(n) + " o " + stacked(o) + " at " + at;
   if (now !== said) document.title = said = now;
 }, 100);
 </script>' > "$out/site/arrange-trade.html"
@@ -76,7 +108,7 @@ pid=$!
 exec 3> "$out/drive"
 await_load
 await "^browser: boost shown $host " || fail "the app didn't give the core the site's Boost"
-await '^browser: title [0-9]* a 1,2,3,4 packed b 1,2,3,4 packed at -$' || fail "the fixture page didn't draw"
+await '^browser: title [0-9]* a 1,2,3,4 packed b 1,2,3,4 packed c 1,2,3,4 0,100,200,360 m 1,2,3,4 10,60,110,190 n 1,2,3,4 0,20,80,200 o 1,2,3,4 0,20,80,200 at -$' || fail "the fixture page didn't draw"
 tab=$(grep '^browser: title [0-9]* a ' "$log" | tail -1 | cut -d' ' -f3)
 said() { grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f4-; }
 # Waits for the page to say $1, as a pattern over its title, and fails with $2.
@@ -124,6 +156,10 @@ middle() {
   case $1 in
     A*) x=150 tops='20 120 220 320' heights='80 80 80 80' ;;
     B*) x=450 tops='20 90 190 350' heights='50 80 140 80' ;;
+    C*) x=750 tops='20 120 220 380' heights='80 80 140 80' ;;
+    M*) x=750 tops='490 540 590 670' heights='40 40 70 40' ;;
+    N*) x=380 tops='470 490 550 670' heights='10 50 110 30' ;;
+    O*) x=520 tops='470 490 550 670' heights='10 50 110 30' ;;
   esac
   set -- ${1#?} $tops $heights
   eval "echo $x \$((\${$(($1 + 1))} + \${$(($1 + 5))} / 2))"
@@ -144,7 +180,8 @@ trade() {
   ../tools/window-screenshot.sh "$pid" "$out/arrange-trade-$1-$2.png" || fail "no window to capture"
   traded="$traded $1 onto $2,"
   send key z cmd
-  page_says '^a 1,2,3,4 packed b 1,2,3,4 packed ' "$1 onto $2: ⌘Z didn't take the trade back"
+  page_says '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,2,3,4 0,100,200,360 m 1,2,3,4 10,60,110,190 n 1,2,3,4 0,20,80,200 o 1,2,3,4 0,20,80,200 ' \
+    "$1 onto $2: ⌘Z didn't take the trade back"
   # The selection ends, so its mini bar covers nothing the next press needs.
   send click $(page_at 600 600)
   expect "^browser: arrange $tab Pointing None" "$1 onto $2: a click on the page's empty part didn't end the selection"
@@ -170,6 +207,23 @@ trade B2 B3 '^a 1,2,3,4 packed b 1,3,2,4 packed '
 # one with things before and after it, and one first in its column.
 trade A2 B3 '^a 1,B3,3,4 packed b 1,2,A2,4 packed '
 trade B1 A3 '^a 1,2,B1,4 packed b A3,2,3,4 packed '
+# Between two parents one over the other, the lower place first in its parent: the upper parent
+# grows by the 60 pt the taller thing brings, and the lower parent, which starts 20 under it, moves
+# down with it, so C2 starts there and C4 20 under C2 (#2990).
+trade C2 C3 '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,3,2,4 0,100,260,360 '
+trade C3 C2 '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,3,2,4 0,100,260,360 '
+# The same with 10 pt margins that collapse through both parents, which move a parent's own edge
+# rather than what it follows: M2 starts 10 under the taller M3, and M4 10 under M2.
+trade M2 M3 '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,2,3,4 0,100,200,360 m 1,3,2,4 10,60,140,190 '
+trade M3 M2 '^a 1,2,3,4 packed b 1,2,3,4 packed c 1,2,3,4 0,100,200,360 m 1,3,2,4 10,60,140,190 '
+# The upper thing the box just before the lower thing's parent: the 60 pt taller N3 takes N2's
+# place, so the parent starts 60 lower, N2 at its top and N4 where it was (#3047). Then with O2
+# before an ancestor of O3's parent.
+both='c 1,2,3,4 0,100,200,360 m 1,2,3,4 10,60,110,190'
+trade N2 N3 "^a 1,2,3,4 packed b 1,2,3,4 packed $both n 1,3,2,4 0,20,140,200 o 1,2,3,4 0,20,80,200 "
+trade N3 N2 "^a 1,2,3,4 packed b 1,2,3,4 packed $both n 1,3,2,4 0,20,140,200 o 1,2,3,4 0,20,80,200 "
+trade O2 O3 "^a 1,2,3,4 packed b 1,2,3,4 packed $both n 1,2,3,4 0,20,80,200 o 1,3,2,4 0,20,140,200 "
+trade O3 O2 "^a 1,2,3,4 packed b 1,2,3,4 packed $both n 1,2,3,4 0,20,80,200 o 1,3,2,4 0,20,140,200 "
 
 send key escape
 expect "browser: tab $tab arrange off\$" "escape in the page didn't end Arrange"
@@ -260,7 +314,7 @@ const order = () => {
 arranged="$boosts/$host.arrange.json"
 keyed() { grep '^browser: site controls keyed ' "$log" | tail -1 | cut -d' ' -f5-; }
 # Writes file $1, the changes $2, outside ilo; turns it on from the Site Controls; opens its page;
-# and has the page count what it sees while it's idle, shown and behind example.org's tab.
+# and has the page count what it sees while it's idle, shown and behind two.html's tab.
 idle() {
   printf '{"version":1,"changes":[%s]}' "$2" > "$arranged"
   expect "^browser: arrangement for $host ([0-9]* bytes) \(New\|Changed\)\$" \
@@ -288,15 +342,15 @@ idle() {
     "idle $1 abcw r1r2r3r4 "*) fail "$1: the file placed nothing: the page says $(said)" ;;
   esac
   page=$tab
-  open_from_bar example.org
+  open_from_bar "http://localhost:$port/two.html"
   over=$tab
   tab=$page
   await "^browser: title $tab idle $1 .* hidden [0-9]* in [0-9]* ms\$" \
-    "$1: the page didn't say what it saw behind example.org's tab: it says $(said)"
+    "$1: the page didn't say what it saw behind two.html's tab: it says $(said)"
   tab=$over
   send key w cmd
   tab=$page
-  expect "^browser: selected $tab\( in .*\)*\$" "$1: ⌘W on example.org's tab didn't show the page again"
+  expect "^browser: selected $tab\( in .*\)*\$" "$1: ⌘W on two.html's tab didn't show the page again"
   await "^browser: title $tab idle $1 .* again [0-9]* quiet [0-9a-z]*\$" "$1: the page didn't say what it saw shown again: it says $(said)"
   case "$(said)" in
     *" quiet "[0-9]*" shown 0 late 0 hidden 0 in "*" again 0 quiet "[0-9]*) ;;

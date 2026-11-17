@@ -265,6 +265,8 @@ class Tab : public content::WebContentsObserver,
   // The page's last press, of the pointer or a key, held ⌘ (Ctrl off the Mac), which tells
   // ⌥⌘-click on a link from ⌥-click, as both ask the browser for a split view.
   bool last_press_held_command() const { return last_press_held_command_; }
+  // When the page's last press came, of the pointer or a key, for how long a tab it opens takes.
+  base::TimeTicks last_press_at() const { return last_press_at_; }
   // And ⌥ (Alt), which tells ⇧⌥-click on a link from ⇧-click on Linux, as both ask for a window.
   bool last_press_held_alt() const { return last_press_held_alt_; }
 
@@ -437,6 +439,7 @@ class Tab : public content::WebContentsObserver,
   bool state_report_posted_ = false;
   gfx::PointF last_click_;
   bool last_press_held_command_ = false;
+  base::TimeTicks last_press_at_;
   bool last_press_held_alt_ = false;
   // Whether the app was last told the page is full screen.
   bool fullscreen_ = false;
