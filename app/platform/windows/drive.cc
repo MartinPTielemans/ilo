@@ -423,6 +423,10 @@ LRESULT CALLBACK HearRealPointer(int code, WPARAM wparam, LPARAM lparam) {
   const auto* hook = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam);
   if (code == HC_ACTION && (hook->dwExtraInfo & ~kRealNumber) == kRealTag) {
     g_real_heard = (std::max)(g_real_heard, hook->dwExtraInfo & kRealNumber);
+    fprintf(stderr, "browser: probe heard %lu msg 0x%llx at %ld,%ld tick %lu msgtime %ld\n",
+            static_cast<unsigned long>(hook->dwExtraInfo & kRealNumber),
+            static_cast<unsigned long long>(wparam), hook->pt.x, hook->pt.y,
+            static_cast<unsigned long>(::GetTickCount()), ::GetMessageTime());
     switch (wparam) {
       case WM_LBUTTONDOWN:
       case WM_RBUTTONDOWN:
@@ -573,6 +577,11 @@ void SendReal(INPUT input) {
     input.mi.dwExtraInfo = kRealTag | number;
     g_real_vk = 0;
   }
+  fprintf(stderr, "browser: probe send %lu %s flags 0x%lx tick %lu\n",
+          static_cast<unsigned long>(number), input.type == INPUT_KEYBOARD ? "key" : "mouse",
+          static_cast<unsigned long>(input.type == INPUT_KEYBOARD ? input.ki.dwFlags
+                                                                  : input.mi.dwFlags),
+          static_cast<unsigned long>(::GetTickCount()));
   if (SendInput(1, &input, sizeof input) != 1) {
     fprintf(stderr, "browser: drive: SendInput failed, error %lu\n", GetLastError());
     g_real_heard = number;
@@ -2815,6 +2824,8 @@ void Next() {
     g_commands.pop_front();
     g_running = true;
     fprintf(stderr, "browser: drive %ld: %s\n", number, line.c_str());
+    fprintf(stderr, "browser: probe drive %ld tick %lu\n", number,
+            static_cast<unsigned long>(::GetTickCount()));
     if (!Run(line)) {
       g_steps.clear();
       fprintf(stderr, "browser: drive %ld: can't do that\n", number);
