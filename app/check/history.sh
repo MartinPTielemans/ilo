@@ -6,8 +6,9 @@
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
 # warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
 # and leaves a page split beside it the click into it and the typing after, and shows with the
-# keyboard on a click on its own pane's page, which never hears it, and a local one over http. One typed with http:// loads over http as written, with no https try and no warning, as in
-# Chrome's address bar. Only what the user typed counts: an agent's open_tab
+# keyboard on a click on its own pane's page, which never hears it, and a local one over http. One
+# typed with http:// loads over http as written, with no https try and no warning, as in Chrome's
+# address bar. Only what the user typed counts: an agent's open_tab
 # and navigate, and a link, to an http:// address, are tried over https first, and the agent's tab
 # at its warning leaves the user's window the keyboard. A right-click on reload lists Reload, Hard
 # Reload and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache,
