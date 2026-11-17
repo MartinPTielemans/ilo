@@ -58,6 +58,8 @@ void HandoverClicked();
 // The lines check.sh times a page's move between windows by, as the app's are: "browser: handover
 // |stage| +<ms> ms (|detail|)", in ms since HandoverClicked, within 3 s of it. No page content.
 void LogHandover(const char* stage, const std::string& detail);
+// How long after HandoverClicked |at| was, while the handover lines are logged: within 3 s of it.
+std::optional<base::TimeDelta> SinceHandoverClicked(base::TimeTicks at);
 
 // One native window: the app's UI, the page it shows over that, and a Browser per profile holding
 // the window's tabs (decision 3). Closing it closes its Browsers, and it goes once they have.

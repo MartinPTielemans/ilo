@@ -641,6 +641,19 @@ fn name(node: &Value) -> String {
     name.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// `text` as one line of a log, each character that could break it a space, so a line break in
+/// what an agent asked, which an error echoes as it was asked, can't make a line of its own.
+pub fn one_line(text: &str) -> String {
+    text.chars()
+        .map(
+            |c| match c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                true => ' ',
+                false => c,
+            },
+        )
+        .collect()
+}
+
 /// `text`, cut at `chars` characters.
 pub fn clip(text: &str, chars: usize) -> String {
     match text.char_indices().nth(chars) {
