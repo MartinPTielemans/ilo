@@ -180,21 +180,11 @@ std::u16string LabelOf(const base::DictValue& option) {
   return OneSpaced(base::UTF8ToUTF16(label && !label->empty() ? *label : ChildText(option)));
 }
 
-// A described field's value in the page's markup: an input's value attribute, a textarea's text,
-// or a select's option marked selected, else its first. None for anything else, as an editable
-// region's.
+// A described select's value in the page's markup: its option marked selected, else its first.
+// None for any other field, whose markup doesn't count (FieldFacts::select).
 std::optional<std::u16string> MarkupOf(const base::DictValue& node) {
   const std::string* name = node.FindString("nodeName");
-  if (!name) {
-    return std::nullopt;
-  }
-  if (*name == "INPUT") {
-    return base::UTF8ToUTF16(AttributeOf(node, "value").value_or(std::string()));
-  }
-  if (*name == "TEXTAREA") {
-    return base::UTF8ToUTF16(ChildText(node));
-  }
-  if (*name != "SELECT") {
+  if (!name || *name != "SELECT") {
     return std::nullopt;
   }
   std::vector<const base::DictValue*> options;
@@ -220,6 +210,40 @@ std::optional<std::u16string> MarkupOf(const base::DictValue& node) {
     }
   }
   return LabelOf(*options.front());
+}
+
+// What |described|, a field as DescribeField gives it, adds to |facts|: whether its type or
+// autocomplete makes it secret, and a select's value in the markup. One that couldn't be read, or
+// wasn't, is secret.
+void AddDescribed(FieldFacts& facts, const base::DictValue* described) {
+  const base::DictValue* node = described ? described->FindDict("node") : nullptr;
+  if (!node) {
+    facts.secret = true;
+    return;
+  }
+  const std::optional<std::string> type = AttributeOf(*node, "type");
+  const std::optional<std::string> autocomplete = AttributeOf(*node, "autocomplete");
+  facts.secret |= (type && base::EqualsCaseInsensitiveASCII(*type, "password")) ||
+                  (autocomplete && SecretAutocomplete(*autocomplete));
+  facts.markup = MarkupOf(*node);
+  // A select's value is its option's label, as the tree reads it, its runs of spaces one.
+  const std::string* name = node->FindString("nodeName");
+  if (name && *name == "SELECT") {
+    facts.value = OneSpaced(facts.value);
+  }
+}
+
+// The most fields one read asks the page about, each a round trip to its renderer. Past it a field
+// reads filled, so a page with very many can't make an outline or a picture slow.
+constexpr size_t kMostDescribed = 64;
+
+void Bound(std::vector<std::pair<int64_t, FieldFacts>>& fields) {
+  size_t described = 0;
+  for (auto& [element, facts] : fields) {
+    if (CouldShow(facts) && ++described > kMostDescribed) {
+      AddDescribed(facts, nullptr);
+    }
+  }
 }
 
 // The box around a quad's corners, as DOM.getBoxModel and DOM.getContentQuads give them.
@@ -351,7 +375,9 @@ bool IsWebFrame(content::RenderFrameHost* frame) {
   return scheme == url::kHttpScheme || scheme == url::kHttpsScheme;
 }
 
-base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwords) {
+base::ListValue AgentTree(base::ListValue nodes,
+                          const std::set<int64_t>& passwords,
+                          const std::map<int64_t, FieldShown>& contents) {
   std::map<std::string, std::vector<std::string>> choices = SelectChoices(nodes);
   std::map<std::string, const base::DictValue*> by_id;
   for (const base::Value& node : nodes) {
@@ -417,6 +443,24 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
       continue;
     }
     dict->Remove("value");
+    const std::optional<int64_t> backend = ElementOf(*dict);
+    if (const auto field = backend ? contents.find(*backend) : contents.end();
+        field != contents.end()) {
+      switch (field->second.seen) {
+        case Seen::kValue:
+          dict->Set("holds", field->second.value);
+          break;
+        case Seen::kEmpty:
+          dict->Set("contents", "empty");
+          break;
+        case Seen::kFilled:
+          dict->Set("contents", "filled");
+          break;
+        case Seen::kChanged:
+          dict->Set("contents", "changed");
+          break;
+      }
+    }
     if (IsField(*dict)) {
       if (auto list = lists.find(*id); list != lists.end()) {
         dict->Set("childIds", std::move(list->second));
@@ -438,7 +482,6 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
         return !name || *name == "valuetext";
       });
     }
-    const std::optional<int64_t> backend = ElementOf(*dict);
     if (backend && passwords.contains(*backend)) {
       dict->Set("password", true);
     }
@@ -1902,6 +1945,7 @@ void AgentPage::ReadFields(std::unique_ptr<Withholding> withholding, size_t next
                facts.secret = Has(*dict, "wasPassword");
                facts.autofilled = Has(*dict, "autofilled");
                facts.fixed = IsDisabled(node) || Has(*dict, "readonly");
+               facts.select = IsRole(*dict, "combobox");
                if (const auto typed = page->typed_.find(element); typed != page->typed_.end()) {
                  facts.typed = typed->second;
                }
@@ -1915,6 +1959,7 @@ void AgentPage::ReadFields(std::unique_ptr<Withholding> withholding, size_t next
 
 void AgentPage::Cover(std::unique_ptr<Withholding> withholding, size_t next) {
   if (next >= withholding->unread.size()) {
+    Bound(withholding->fields);
     NextField(std::move(withholding), 0);
     return;
   }
@@ -1962,31 +2007,37 @@ void AgentPage::NextField(std::unique_ptr<Withholding> withholding, size_t next)
     std::move(then).Run(std::move(withholding->boxes));
     return;
   }
+  // Any other field hatches whatever the page says of it.
+  if (!CouldShow(withholding->fields[next].second)) {
+    Withhold(std::move(withholding), next, nullptr);
+    return;
+  }
   const int64_t element = withholding->fields[next].first;
-  // Its attributes, then a textarea's text or a select's options, for its value in the markup.
+  DescribeField(element, base::BindOnce(&AgentPage::Withhold, weak_factory_.GetWeakPtr(),
+                                        std::move(withholding), next));
+}
+
+void AgentPage::DescribeField(int64_t element, Reply then) {
+  // Its attributes, then a select's options, for its value in the markup.
   Send("DOM.describeNode", base::DictValue().Set("backendNodeId", NodeOfElement(element)),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, std::unique_ptr<Withholding> withholding, size_t next,
+           [](base::WeakPtr<AgentPage> page, int64_t element, Reply then,
               const base::DictValue* result) {
              if (!page) {
                return;
              }
-             const int64_t element = withholding->fields[next].first;
              const base::DictValue* node = result ? result->FindDict("node") : nullptr;
              const std::string* name = node ? node->FindString("nodeName") : nullptr;
-             const int depth = !name ? 0 : *name == "SELECT" ? 3 : *name == "TEXTAREA" ? 1 : 0;
-             if (!depth) {
-               page->Withhold(std::move(withholding), next, result);
+             if (!name || *name != "SELECT") {
+               std::move(then).Run(result);
                return;
              }
-             page->Send("DOM.describeNode",
-                        base::DictValue()
-                            .Set("backendNodeId", NodeOfElement(element))
-                            .Set("depth", depth),
-                        base::BindOnce(&AgentPage::Withhold, page, std::move(withholding), next),
-                        SlotOfElement(element));
+             page->Send(
+                 "DOM.describeNode",
+                 base::DictValue().Set("backendNodeId", NodeOfElement(element)).Set("depth", 3),
+                 std::move(then), SlotOfElement(element));
            },
-           weak_factory_.GetWeakPtr(), std::move(withholding), next),
+           weak_factory_.GetWeakPtr(), element, std::move(then)),
        SlotOfElement(element));
 }
 
@@ -1995,21 +2046,7 @@ void AgentPage::Withhold(std::unique_ptr<Withholding> withholding,
                          const base::DictValue* described) {
   const int64_t element = withholding->fields[next].first;
   FieldFacts& facts = withholding->fields[next].second;
-  if (const base::DictValue* node = described ? described->FindDict("node") : nullptr) {
-    const std::optional<std::string> type = AttributeOf(*node, "type");
-    const std::optional<std::string> autocomplete = AttributeOf(*node, "autocomplete");
-    facts.secret |= (type && base::EqualsCaseInsensitiveASCII(*type, "password")) ||
-                    (autocomplete && SecretAutocomplete(*autocomplete));
-    facts.markup = MarkupOf(*node);
-    // A select's value is its option's label, as the tree reads it, its runs of spaces one.
-    const std::string* name = node->FindString("nodeName");
-    if (name && *name == "SELECT") {
-      facts.value = OneSpaced(facts.value);
-    }
-  } else {
-    // One that couldn't be read is withheld.
-    facts.secret = true;
-  }
+  AddDescribed(facts, described);
   if (!Hatches(facts, withholding->hatched)) {
     NextField(std::move(withholding), next + 1);
     return;
@@ -2116,15 +2153,8 @@ void AgentPage::Keep(std::unique_ptr<Withholding> withholding,
            weak_factory_.GetWeakPtr(), std::move(withholding), element, go_on, next));
 }
 
-void AgentPage::KeepTyped(const base::ListValue& nodes, int64_t element) {
-  for (const base::Value& node : nodes) {
-    const base::DictValue* dict = node.GetIfDict();
-    if (dict && ElementOf(*dict) == element) {
-      typed_[element] = base::UTF8ToUTF16(ValueOf(*dict).value_or(std::string()));
-      return;
-    }
-  }
-  typed_.erase(element);
+void AgentPage::KeepTyped(int64_t element, std::u16string sent) {
+  typed_[element] = std::move(sent);
 }
 
 void AgentPage::Snapshot() {
@@ -2445,30 +2475,35 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
                                std::vector<int64_t> fields,
                                std::set<int64_t> passwords) {
   if (fields.empty()) {
-    // What the agent's typing or choosing left, read once the page settled, which a field then
-    // shows only while it still holds exactly that.
+    // What the agent typed or chose, which a field then shows only while it holds exactly that:
+    // typing replaces what the field held, so anything else in it, even what the page or an
+    // extension changed as the agent typed, isn't the agent's.
     if (job_ && (job_->action == BC_AGENT_PAGE_TYPE || job_->action == BC_AGENT_PAGE_TYPE_SUBMIT)) {
-      KeepTyped(nodes, job_->element);
+      KeepTyped(job_->element, base::UTF8ToUTF16(job_->text));
     } else if (choosing_ == Choosing::kChosen && field_) {
-      KeepTyped(nodes, field_);
+      KeepTyped(field_, base::UTF8ToUTF16(chosen_name_));
     }
-    base::DictValue answer = base::DictValue().Set("nodes", AgentTree(std::move(nodes), passwords));
-    if (job_ && job_->busy) {
-      answer.Set("busy", true);
-    } else if (job_ && job_->requests) {
-      answer.Set("requests", true);
+    // Each field, with what the tree says of where what it holds came from.
+    std::vector<std::pair<int64_t, FieldFacts>> filled;
+    for (const base::Value& node : nodes) {
+      const base::DictValue* dict = node.GetIfDict();
+      const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+      if (!element || !IsField(*dict)) {
+        continue;
+      }
+      FieldFacts facts;
+      facts.value = base::UTF8ToUTF16(ValueOf(*dict).value_or(std::string()));
+      facts.secret = passwords.contains(*element) || Has(*dict, "wasPassword");
+      facts.autofilled = Has(*dict, "autofilled");
+      facts.fixed = IsDisabled(node) || Has(*dict, "readonly");
+      facts.select = IsRole(*dict, "combobox");
+      if (const auto typed = typed_.find(*element); typed != typed_.end()) {
+        facts.typed = typed->second;
+      }
+      filled.emplace_back(*element, std::move(facts));
     }
-    if (choosing_ == Choosing::kChosen && shows_) {
-      answer.Set("chosen", chosen_name_);
-    }
-    // The ids of elements in frames of their own are doubles, written as the integers they are.
-    std::optional<std::string> json = base::WriteJsonWithOptions(
-        base::Value(std::move(answer)), base::JSONWriter::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION);
-    if (json) {
-      Answer(std::move(*json), /*error=*/false);
-    } else {
-      Fail("The page's tree couldn't be read.");
-    }
+    Bound(filled);
+    ReadContents(std::move(nodes), std::move(passwords), std::move(filled), 0);
     return;
   }
   const int64_t field = fields.back();
@@ -2489,6 +2524,58 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
                  },
                  weak_factory_.GetWeakPtr(), std::move(nodes), std::move(fields),
                  std::move(passwords), field));
+}
+
+void AgentPage::ReadContents(base::ListValue nodes,
+                             std::set<int64_t> passwords,
+                             std::vector<std::pair<int64_t, FieldFacts>> filled,
+                             size_t next) {
+  // Only a field that could show what it holds needs anything more of the page.
+  while (next < filled.size() && !CouldShow(filled[next].second)) {
+    ++next;
+  }
+  if (next < filled.size()) {
+    const int64_t element = filled[next].first;
+    DescribeField(element, base::BindOnce(
+                               [](base::WeakPtr<AgentPage> page, base::ListValue nodes,
+                                  std::set<int64_t> passwords,
+                                  std::vector<std::pair<int64_t, FieldFacts>> filled, size_t next,
+                                  const base::DictValue* described) {
+                                 if (!page) {
+                                   return;
+                                 }
+                                 AddDescribed(filled[next].second, described);
+                                 page->ReadContents(std::move(nodes), std::move(passwords),
+                                                    std::move(filled), next + 1);
+                               },
+                               weak_factory_.GetWeakPtr(), std::move(nodes), std::move(passwords),
+                               std::move(filled), next));
+    return;
+  }
+  // A field shows what it holds only where an agent's picture of it would (withheld_fields.h).
+  std::map<int64_t, FieldShown> contents;
+  for (const auto& [element, facts] : filled) {
+    const Seen seen = SeenOf(facts);
+    contents[element] = {seen, seen == Seen::kValue ? base::UTF16ToUTF8(facts.value) : ""};
+  }
+  base::DictValue answer =
+      base::DictValue().Set("nodes", AgentTree(std::move(nodes), passwords, contents));
+  if (job_ && job_->busy) {
+    answer.Set("busy", true);
+  } else if (job_ && job_->requests) {
+    answer.Set("requests", true);
+  }
+  if (choosing_ == Choosing::kChosen && shows_) {
+    answer.Set("chosen", chosen_name_);
+  }
+  // The ids of elements in frames of their own are doubles, written as the integers they are.
+  std::optional<std::string> json = base::WriteJsonWithOptions(
+      base::Value(std::move(answer)), base::JSONWriter::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION);
+  if (json) {
+    Answer(std::move(*json), /*error=*/false);
+  } else {
+    Fail("The page's tree couldn't be read.");
+  }
 }
 
 void AgentPage::Center(Then then) {
@@ -2944,6 +3031,8 @@ void AgentPage::LetGo() {
                                   std::string("The agent's session with the tab ended."), true));
   }
   weak_factory_.InvalidateWeakPtrs();
+  // What the agent typed is kept only to compare with while its session lasts.
+  typed_.clear();
   acted_ = false;
   pictures_ = 0;
   wheel_.reset();
