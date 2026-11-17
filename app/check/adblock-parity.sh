@@ -445,6 +445,7 @@ for i, s in enumerate(sites):
     # hidden tells them apart (#3268).
     s["blocker_hid"] = len(look.get("blocker", []))
     s["page_hid"] = len(look.get("page", []))
+    s["blinks_unread"] = look.get("blinks_unread")
     # DataDome's captcha, which a site shows a runner it takes for a bot, over the page in place:
     # a bot check as Cloudflare's is, with no title to tell it by (#2111).
     s["bot"] = s["bot"] or any(h.endswith("captcha-delivery.com") for h in s["allowed"])
@@ -546,6 +547,13 @@ blocker_hid = sum(s["blocker_hid"] for s in sites)
 if loaded and not blocker_hid:
     worse.append("no site had an element the blocker's style sheet hid, by DevTools' matched "
                  "styles: cdp.py's hidden can't tell the blocker's hiding from the page's")
+# A Chromium whose own hiding rules haven't been read would count a new one as the blocker's.
+unread = sorted({s["blinks_unread"] for s in sites if s["blinks_unread"]})
+if unread:
+    worse.append(f"the browser is {', '.join(unread)}, and Blink's own display: none !important "
+                 "rules were read only for the majors in cdp.py's BLINKS_READ: read its style "
+                 "sheets as the comment over BLINKS says, or a rule of Blink's counts as the "
+                 "blocker's")
 times = sorted(int(s["load_ms"]) for s in loaded)
 median = times[len(times) // 2] if times else 0
 # The worse sites go first, on one line, since the run's FAIL line, the summary's row and a
