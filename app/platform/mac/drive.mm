@@ -2555,6 +2555,31 @@ void drive_start(void) {
     return nil;
   };
   [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskApplicationDefined handler:report_done];
+  // probe-3230, never merged: each key as AppKit dispatches it, and where the keyboard is then.
+  [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp
+                                        handler:^NSEvent*(NSEvent* event) {
+                                          NSWindow* key = NSApp.keyWindow;
+                                          fprintf(stderr,
+                                                  "browser: probe-3230 key %s code %d chars '%s' "
+                                                  "ignoring '%s' flags %lx window %s key %s "
+                                                  "focus %s\n",
+                                                  event.type == NSEventTypeKeyDown ? "down" : "up",
+                                                  event.keyCode, event.characters.UTF8String,
+                                                  event.charactersIgnoringModifiers.UTF8String,
+                                                  (unsigned long)event.modifierFlags,
+                                                  event.window
+                                                      ? NSStringFromClass(event.window.class)
+                                                            .UTF8String
+                                                      : "none",
+                                                  key ? NSStringFromClass(key.class).UTF8String
+                                                      : "none",
+                                                  key.firstResponder
+                                                      ? NSStringFromClass(
+                                                            key.firstResponder.class)
+                                                            .UTF8String
+                                                      : "none");
+                                          return event;
+                                        }];
   [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskApplicationDefined
                                         handler:^NSEvent*(NSEvent* event) {
                                           if (event.subtype != kPipLetGoSubtype) {

@@ -52,7 +52,7 @@ page='data:text/html,<title>loading</title>
 log="$out/history.log"
 step=0
 rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
+BROWSER_LOG=keys BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
   --host-resolver-rules="MAP stuck.test 127.0.0.1:$(cat "$out/port"), \
 MAP $plain 127.0.0.1:$port, MAP $nearby 127.0.0.1:$port, \
 MAP $written 127.0.0.1:$port, MAP $agent_opened 127.0.0.1:$port, \
