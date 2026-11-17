@@ -99,7 +99,25 @@ constexpr CGFloat kButtonInset = 13;
   return self;
 }
 
+// For #2248's proof runs only: who toggles full screen, and who AppKit's will to leave comes from,
+// the stack's first frames, as a window that entered went out 18 ms later with no command.
+static void LogStack(const char* what) {
+  NSArray<NSString*>* frames = NSThread.callStackSymbols;
+  fprintf(stderr, "browser: proof: %s, from:\n", what);
+  const NSUInteger count = frames.count < 14 ? frames.count : 14;
+  for (NSUInteger i = 1; i < count; ++i) {
+    fprintf(stderr, "browser: proof:   %s\n", frames[i].UTF8String);
+  }
+}
+
+- (void)toggleFullScreen:(id)sender {
+  LogStack(self.styleMask & NSWindowStyleMaskFullScreen ? "toggle full screen, in it"
+                                                        : "toggle full screen, windowed");
+  [super toggleFullScreen:sender];
+}
+
 - (void)willExitFullScreen:(NSNotification*)notification {
+  LogStack("AppKit will take the window out of full screen");
   _leaving = YES;
   _leavingFrom = self.screen.deviceDescription[@"NSScreenNumber"];
   _leavingMoved = NO;
@@ -161,6 +179,8 @@ class NativeWidget : public views::NativeWidgetMac {
       : views::NativeWidgetMac(widget), leaving_full_screen_(std::move(leaving_full_screen)) {}
 
   void SetFullscreen(bool fullscreen, int64_t target_display_id) override {
+    // For #2248's proof runs only: each time Chromium's side of the window asks for full screen.
+    fprintf(stderr, "browser: proof: widget asks full screen %d\n", fullscreen);
     // A way out AppKit didn't finish is over first, so the request isn't kept waiting for it.
     NSWindow* window = GetNativeWindow().GetNativeNSWindow();
     if ([window isKindOfClass:[BrowserCoreNSWindow class]]) {
