@@ -302,6 +302,7 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
         to.folders.push_back({.name = space.FolderName(id),
                               .icon = space.FolderIcon(id),
                               .open = space.IsOpen(id),
+                              .live = space.FolderLive(id),
                               .folder = folder_of(id),
                               .at = to.pinned.size(),
                               .node = node_of(id)});
@@ -500,6 +501,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
       base::DictValue row = base::DictValue().Set("folder", folder->name).Set("open", folder->open);
       if (!folder->icon.empty()) {
         row.Set("icon", folder->icon);
+      }
+      if (folder->live == BC_LIVE_PULL_REQUESTS) {
+        row.Set("live", "pull-requests");
       }
       write_folder(space.folders, folder->folder, row);
       WriteNode(folder->node, row);
@@ -783,6 +787,9 @@ std::optional<Saved> Read(const base::FilePath& path) {
               .name = *folder,
               .icon = dict->FindString("icon") ? *dict->FindString("icon") : std::string(),
               .open = dict->FindBool("open").value_or(true),
+              .live = dict->FindString("live") && *dict->FindString("live") == "pull-requests"
+                          ? BC_LIVE_PULL_REQUESTS
+                          : 0,
               .folder = folder_of(*dict),
               .at = to.pinned.size(),
               .node = ReadNode(*dict),
@@ -1467,6 +1474,7 @@ Space* RestoreSpace(Window& window,
                                             space->pinned_rows().size());
       space->SetOpen(folder, saved_folder.open);
       space->SetFolderIcon(folder, saved_folder.icon);
+      space->SetFolderLive(folder, saved_folder.live);
       nodes[folder] = saved_folder.node;
       folder_ids.push_back(folder);
     }

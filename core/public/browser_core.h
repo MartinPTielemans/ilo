@@ -545,6 +545,41 @@ typedef struct bc_agent_response {
   const char* error;
 } bc_agent_response;
 
+// What fills a Live Folder (bc_folder_live_create, #2979): 0 for a plain folder.
+// The pull requests waiting on the review of the user signed in to GitHub in the Space's profile,
+// and their own open ones.
+#define BC_LIVE_PULL_REQUESTS 1
+
+// How a Live Folder's fetch ended (folder_live_answered).
+// With its rows, perhaps none.
+#define BC_LIVE_ANSWERED 0
+// Nobody is signed in to the site in the Space's profile.
+#define BC_LIVE_SIGNED_OUT 1
+// Offline, a redirect off the site, an answer that wasn't the site's or was too big, or one past
+// the 30 s a request is given. The rows the app has stay.
+#define BC_LIVE_FAILED 2
+
+// The list a Live Folder's row is in.
+#define BC_LIVE_REVIEW_REQUESTS 0
+#define BC_LIVE_CREATED 1
+
+// A pull request's state. The lists are of open ones, so one merged or closed leaves them.
+#define BC_LIVE_OPEN 0
+#define BC_LIVE_DRAFT 1
+
+// A row of a Live Folder's answer. The strings are UTF-8 and last only for the call.
+typedef struct bc_live_item {
+  // A BC_LIVE_REVIEW_REQUESTS or BC_LIVE_CREATED.
+  int list;
+  // Its repository, as "owner/name", whose address the app makes with |number|.
+  const char* repo;
+  uint32_t number;
+  // Its title, plain text: no markup, which the core takes out.
+  const char* title;
+  // A BC_LIVE_OPEN or BC_LIVE_DRAFT.
+  int state;
+} bc_live_item;
+
 // Why an agent's session with a tab ended (agent_session_ended).
 // Its client disconnected (bc_agent_disconnected).
 #define BC_AGENT_SESSION_DISCONNECTED 0
@@ -1412,6 +1447,21 @@ typedef struct bc_host {
   // that one's. Never on Windows, where the app opens and closes the hole without waiting for it,
   // nor on the Mac, where the page is in the app's view, over what it draws.
   void (*tab_shown_in)(void* context, bc_id tab, bc_rect frame);
+  // The answer to the Live Folder's bc_folder_live_fetch: a BC_LIVE_ answer, with |items|, review
+  // requests first, only with BC_LIVE_ANSWERED. |answered| is when the site gave it, in
+  // milliseconds since the Unix epoch: up to two minutes ago for an answer the core kept. Once an
+  // ask, never for one the core refused. The items last only for the call, and the core logs none
+  // of them. The user's alone: agents get none.
+  void (*folder_live_answered)(void* context, bc_id folder, int answer, int64_t answered,
+                               const bc_live_item* items, size_t count);
+  // The answer to bc_tab_recent_fetch, in folder_live_answered's order: a BC_LIVE_ answer, with
+  // |items|, review requests first, only with BC_LIVE_ANSWERED. |answered| is when the site gave
+  // it, in milliseconds since the Unix epoch: up to two minutes ago for an answer the core kept.
+  // Once an ask, never for one the core refused, nor for a tab that closed, stopped being pinned
+  // or a favorite, or left the site while it waited. The items last only for the call, and the
+  // core logs none of them. The user's alone: agents get none.
+  void (*tab_recent_answered)(void* context, bc_id tab, int answer, int64_t answered,
+                              const bc_live_item* items, size_t count);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1972,6 +2022,33 @@ BC_EXPORT size_t bc_space_theme(bc_id space, char* theme, size_t capacity);
 // comes; empty takes the theme away. Then spaces_changed.
 BC_EXPORT void bc_space_set_theme(bc_id space, const char* theme);
 
+// The colours of a Space that its tabs' Boosts read (bc_space_set_boost_colors), each 0xRRGGBB in
+// sRGB.
+typedef struct bc_boost_colors {
+  // --ilo-space-background: the window's colour at its top left, opaque.
+  uint32_t background;
+  // --ilo-space-text: the window's text.
+  uint32_t text;
+  // --ilo-space-accent: the Space's accent.
+  uint32_t accent;
+  // --ilo-space-accent-text: the text that reads on the accent.
+  uint32_t accent_text;
+} bc_boost_colors;
+
+// Gives the Space's colours to Boosts (docs/ux-spec.md › Boosts), so a Boost's CSS can match a
+// site to the sidebar with var(). The core writes them as ilo's own custom properties, values
+// only, at the root of the Boost's own sheet, and only for a Boost whose CSS names one of them
+// (--ilo-space-): the site's own scripts can read them there, so a page with no Boost, or a Boost
+// that doesn't use them, tells its site nothing. A frame another site's page holds gets none. A tab
+// moved to another Space, or a favorite whose window shows another, takes that Space's with no
+// reload. A tab in an agent's Space gets none. A private window shows its original's Boosts, and
+// its pages get the colours the app gives its Space, which must not differ from one user to the
+// next: the app gives a private window's Space no theme and dark, the same for everyone.
+// The core doesn't keep them across a relaunch: the app gives them again at launch and as the
+// theme or the appearance changes, and a Space deleted takes its own away. Null takes them away.
+// The user's: agents get no path to them, as to a Boost.
+BC_EXPORT void bc_space_set_boost_colors(bc_id space, const bc_boost_colors* colors);
+
 // Deletes the Space, unless it's the last, and returns whether it will. A window showing it shows
 // the Space before it, else the one after it. Its tabs close, and it goes with the last of them; a
 // page that keeps its tab open keeps the Space until it closes. Its Today tabs reopen with
@@ -2035,6 +2112,43 @@ BC_EXPORT void bc_folder_move(bc_id folder, bc_id to, size_t index);
 // Deletes the folder, leaving what was in it where it was, in the folder that held it. Then
 // space_changed.
 BC_EXPORT void bc_folder_delete(bc_id folder);
+
+// Makes an open Live Folder named |name| at the bottom of the Space's pinned tabs, filled from
+// |source|, a BC_LIVE_ source, once the app asks (bc_folder_live_fetch). Returns it, or 0, making
+// none, for an agent's Space, a private window's, a source the core doesn't know, or one the Space
+// has a folder of already. Kept across a quit, on this device: the folder syncs as a plain one.
+// Then space_changed.
+BC_EXPORT bc_id bc_folder_live_create(bc_id space, int source, const char* name);
+
+// What fills the folder, a BC_LIVE_ source, or 0 for a plain folder or none. A duplicate is plain,
+// and so is a Live Folder moved to a Space bc_folder_live_create would make none in: an agent's,
+// or one that has a Live Folder of its source already.
+BC_EXPORT int bc_folder_live(bc_id folder);
+
+// Makes the Live Folder a plain one, the tabs opened from it staying in it. A fetch under way
+// answers nothing. Then space_changed.
+BC_EXPORT void bc_folder_live_end(bc_id folder);
+
+// Asks for the Live Folder's lists on its Space's profile's own session: the site's cookies, which
+// neither the app nor an agent sees. The site and what's asked of it are the core's; the app gives
+// neither. Answers with folder_live_answered, once, never inside this call. Does nothing for a
+// plain folder, one in an agent's Space or a private window, or one waiting on an answer. The core
+// never fetches on its own, and never again on a failure: when to ask is the app's. How often is
+// the core's: it asks the site at most once each two minutes for a profile, however many ask, and
+// inside that answers what the site last gave. A |refresh|, the user's Refresh alone, asks inside
+// the two minutes too, but joins a fetch under way (#3074).
+BC_EXPORT void bc_folder_live_fetch(bc_id folder, bool refresh);
+
+// Asks what's recent on the site of a pinned tab or a favorite, for its hover card, on its
+// profile's own session, as bc_folder_live_fetch asks for a Live Folder: today the open pull
+// requests of the user signed in to GitHub, for a tab whose committed page is on
+// https://github.com. The site and what's asked of it are the core's; the app gives the tab alone.
+// Answers with tab_recent_answered, once, never inside this call. Does nothing for a tab that isn't
+// pinned or a favorite, one on another site, one in an agent's Space or a private window, or one
+// waiting on an answer. The core never asks on its own; the app asks as the user rests on the tab.
+// It asks the site at most once each two minutes for a profile, with that profile's Live Folder,
+// and inside that answers what the site last gave. No agent tool reaches it (#3074).
+BC_EXPORT void bc_tab_recent_fetch(bc_id tab);
 
 // Where the favorites are kept, as the user chose: who shows the same ones above their own tabs. A
 // favorite is a site, and each profile that shows it has a tab of its own for it, in no Space,
