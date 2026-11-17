@@ -575,7 +575,8 @@ if worse:
     sys.exit(1)
 PY
 echo "$run: $(cat "$result")$memory. Per site: $dir/sites.tsv"
-# uBlock Origin's, for adblock-native's to compare with in a check of its own.
+# uBlock Origin's, for adblock-native's to compare with in the same check, or a later one that
+# names it in ADBLOCK_PARITY_BASELINE.
 if [ "$engine" = ublock ]; then
   cp "$dir/sites.tsv" build/adblock-parity-sites.tsv
   rm -rf build/adblock-parity-hidden build/adblock-parity-lists
