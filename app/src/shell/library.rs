@@ -3631,6 +3631,26 @@ impl Shell {
             Section::Boosts => ("icons/paintbrush.svg", "Boosts"),
             Section::Boards => ("icons/presentation.svg", "Boards"),
         };
+        // check.sh clicks where this says the button is drawn, so a section added to the column
+        // moves no check's click. Said once the column is at rest, not each frame it slides.
+        let (drawn, name) = (self.buttons_drawn.clone(), section.name());
+        let at_rest = !self.library_moving() && self.library_resize.is_none();
+        let log_drawn = canvas(
+            move |bounds, _, _| {
+                if at_rest && drawn.borrow_mut().insert(name, bounds) != Some(bounds) {
+                    log!(
+                        "browser: library button {name} at {} {} {} {}",
+                        f32::from(bounds.origin.x).round(),
+                        f32::from(bounds.origin.y).round(),
+                        f32::from(bounds.size.width).round(),
+                        f32::from(bounds.size.height).round(),
+                    );
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         div()
             .id(label)
             .relative()
@@ -3683,6 +3703,7 @@ impl Shell {
                     .text_color(self.palette.text(SECTION_LABEL))
                     .child(label),
             )
+            .child(log_drawn)
     }
 
     /// A download's row: its file's icon, its name over where it is, and while it runs, a bar. A
@@ -4430,9 +4451,11 @@ mod tests {
             shell.sidebar_fade = None;
         });
         cx.run_until_parked();
-        let height = cx.update(|window, _| f32::from(window.viewport_size().height));
-        // The fifth button, History, the column's seven centred 5 above its middle, 100 apart.
-        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 95.));
+        // History's button at its middle, where its log line says the column drew it.
+        let section = shell.read_with(cx, |shell, _| {
+            shell.buttons_drawn.borrow()["archive"].center()
+        });
+        assert_eq!(section.x, px(SECTION_X + SECTION_WIDTH / 2.));
         let menu = |cx: &mut gpui::VisualTestContext| {
             cx.simulate_mouse_down(section, MouseButton::Right, Modifiers::none());
             cx.simulate_mouse_up(section, MouseButton::Right, Modifiers::none());
