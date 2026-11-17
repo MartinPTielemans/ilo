@@ -851,7 +851,8 @@ impl Shell {
         }
     }
 
-    /// What stands for `tab`: the emoji the user gave it, else its page's favicon.
+    /// What stands for `tab`: the emoji the user gave it, else its page's favicon, or a Board's
+    /// glyph, as its page has none.
     pub(super) fn tab_icon(&self, tab: u64) -> AnyElement {
         self.tab_icon_in(&self.palette, tab)
     }
@@ -860,6 +861,15 @@ impl Shell {
     pub(super) fn tab_icon_in(&self, palette: &Palette, tab: u64) -> AnyElement {
         match self.tabs.get(&tab) {
             Some(each) if has_icon(&each.page.icon) => emoji(each.page.icon.clone()),
+            Some(each)
+                if each.favicon.is_none() && crate::boards::id_in(&each.page.url).is_some() =>
+            {
+                svg()
+                    .path("icons/presentation.svg")
+                    .size(px(FAVICON_DRAWN))
+                    .text_color(palette.text(SECONDARY))
+                    .into_any_element()
+            }
             each => favicon(palette, each.and_then(|each| each.favicon.clone())),
         }
     }

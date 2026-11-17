@@ -1745,6 +1745,7 @@ impl Shell {
             ("New Space…", Command::NewSpace),
             ("New Folder…", Command::NewFolder),
             ("New Split View", Command::AddSplit),
+            ("New Board", Command::NewBoard),
         ];
         // Off in Settings › Features, it has no item.
         if self.new_note {

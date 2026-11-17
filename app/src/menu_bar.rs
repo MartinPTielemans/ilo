@@ -114,6 +114,7 @@ pub(crate) fn menus(
             .chain([
                 item("New Incognito Window", Command::NewPrivateWindow),
                 item("Blank Window", Command::NewBlankWindow),
+                item("New Board", Command::NewBoard),
                 item("Restore Last Closed Tab", Command::ReopenClosedTab),
                 MenuItem::separator(),
                 item("Open Command Bar", Command::EditUrl),
@@ -312,6 +313,7 @@ pub(crate) fn menus(
                 Some(item("Open Library…", Command::ViewLibrary)),
                 Some(item("View Downloads…", Command::ViewDownloads)),
                 Some(item("View Media…", Command::ViewMedia)),
+                Some(item("View Boards…", Command::ViewBoards)),
                 // Arc's, after View Media…, where the window lists Boosts (Library › Boosts).
                 bar.boosts
                     .then(|| item("View Boosts…", Command::ViewBoosts)),
