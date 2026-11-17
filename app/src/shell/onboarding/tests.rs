@@ -1730,6 +1730,19 @@ fn no_engines_leaves_the_search_engine_step_out(cx: &mut TestAppContext) {
     assert_eq!(step(&shell, cx), Some(Step::Color));
 }
 
+/// A new profile's engines load after the flow starts: the step is planned, and its list is the
+/// one the core has when the step comes.
+#[gpui::test]
+fn engines_loaded_after_the_start_come_with_their_step(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    assert!(steps(&shell, cx).contains(&Step::SearchEngine));
+    with_engines(&host);
+    skip_to(&shell, cx, Step::SearchEngine);
+    assert_eq!(step(&shell, cx), Some(Step::SearchEngine));
+    assert_eq!(engine(&shell, cx), Some(0), "the default is picked");
+}
+
 /// A screen reader has the engines as one choice called Search engine, a radio button each by its
 /// name, the one picked checked.
 #[gpui::test]

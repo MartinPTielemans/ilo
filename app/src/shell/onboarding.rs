@@ -86,8 +86,8 @@ pub(super) enum Step {
     Favorites,
     /// Asks the system to open links with ilo; left out when it already does.
     DefaultBrowser,
-    /// The first profile's search engine, from Settings' list; left out while the core has none to
-    /// offer, as while a policy picks it.
+    /// The first profile's search engine, from Settings' list; left out when it comes while the
+    /// core has none to offer, as while a policy picks it.
     SearchEngine,
     /// The first Space's colour, from the theme picker's swatches.
     Color,
@@ -350,7 +350,7 @@ pub(super) struct Onboarding {
     /// The swatch picked at the colour step, if one is.
     pub(super) picked: Option<usize>,
     /// The search engines offered, each its keyword and name, and the profile's default's keyword,
-    /// as the step came.
+    /// read until the core has them: a new profile's load after the flow starts.
     engines: (Vec<(SharedString, SharedString)>, SharedString),
     /// The engine picked at its step, the default's until the user moves it. Nothing is set until
     /// Continue.
@@ -425,7 +425,8 @@ impl Shell {
             !view.is_empty() || view.running().is_some()
         });
         let default_browser = self.browser.is_default_browser();
-        // The step's list is the one the flow starts with: the steps logged are those it shows.
+        // A new profile's engines load after the flow starts, so the step is planned before the
+        // core has them, and onboarding_next reads them until it does.
         let engines = self.browser.search_engines(self.space);
         let engine = (engines.0.iter()).position(|(keyword, _)| *keyword == engines.1);
         let opt_ins = !self.opt_ins(cx).is_empty();
@@ -437,7 +438,7 @@ impl Shell {
                 // An import begun brings it in (import_event).
                 Step::Favorites => false,
                 Step::DefaultBrowser => !default_browser,
-                Step::SearchEngine => !engines.0.is_empty(),
+                Step::SearchEngine => true,
                 Step::Account => account.is_some(),
                 Step::OptIns => opt_ins,
                 _ => true,
@@ -559,6 +560,9 @@ impl Shell {
         // The core reads the account after the flow may have started, and it can be signed in by
         // then.
         let signed_in = !signed_out(&account::synced(cx));
+        let engines = (self.onboarding.as_ref())
+            .filter(|o| o.engines.0.is_empty() && o.steps.contains(&Step::SearchEngine))
+            .map(|_| self.browser.search_engines(self.space));
         let Some(onboarding) = self.onboarding.as_mut().filter(|o| o.ending.is_none()) else {
             return;
         };
@@ -579,7 +583,17 @@ impl Shell {
                 .steps
                 .retain(|&each| each != Step::Account || each == step);
         }
+        if let Some(engines) = engines {
+            onboarding.engine = (engines.0.iter()).position(|(keyword, _)| *keyword == engines.1);
+            onboarding.engines = engines;
+        }
         let at = onboarding.steps.iter().position(|&each| each == step);
+        // With none to offer when its turn comes, the search engine's step is left out.
+        if at.and_then(|at| onboarding.steps.get(at + 1)) == Some(&Step::SearchEngine)
+            && onboarding.engines.0.is_empty()
+        {
+            onboarding.steps.retain(|&each| each != Step::SearchEngine);
+        }
         match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
             Some(next) => {
                 let elapsed = onboarding.since.elapsed().as_secs_f32();
