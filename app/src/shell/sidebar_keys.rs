@@ -3,7 +3,9 @@
 //! opens a folder and left closes it or goes up to the folder a row is in, return shows the ringed
 //! tab and gives its page the keyboard, as a click on its row does, or opens or closes a folder,
 //! Close Tab closes the ringed row as its ✕ does, shift-F10 or the menu key opens its menu, and
-//! escape gives the page the keyboard back. Arc 1.170 has this, but its key isn't measured and ⌘.
+//! escape gives the page the keyboard back. New Tab's row is one of the rows, return on it opening a
+//! new tab as its click does, so an empty Space still has a row to ring and a screen reader a
+//! control to name (#3151). Arc 1.170 has this, but its key isn't measured and ⌘.
 //! is Stop Loading here, so it has no key until the user binds one in Settings › Shortcuts. A key
 //! in the page, a press anywhere, a field taking the keyboard or the sidebar going away ends it.
 //! It moves only the user's view, so agents get no path, as with Reveal Tab in Sidebar.
@@ -15,7 +17,7 @@ use gpui::{
     prelude::*, px,
 };
 
-use super::{Command, Shell, commands::Run};
+use super::{Command, Shell, Slot, commands::Run};
 use crate::tokens::shell::{KEYED, KEYED_RING};
 
 /// The sidebar's key context while it has the keyboard, under the Browser one, so its keys win over
@@ -25,6 +27,10 @@ pub(super) const CONTEXT: &str = "SidebarKeys";
 /// How long the ring stays on the tab Close and Keep Pinned shows. Interim: Arc 1.170's was still
 /// there 2.5 s after it was drawn, in the one recording of it, which ended there.
 const ATTENTION: Duration = Duration::from_millis(2500);
+
+/// New Tab's row among the rows the ring goes over, which are tabs' and folders' ids otherwise.
+/// The core counts those from 1.
+pub(super) const NEW_TAB: u64 = 0;
 
 actions!(
     sidebar_keys,
@@ -57,7 +63,8 @@ impl Shell {
             self.toggle_sidebar(cx);
         }
         let rows = self.key_rows();
-        let shown = Some(self.row_of(self.selected)).filter(|row| rows.contains(row));
+        let shown =
+            Some(self.row_of(self.selected)).filter(|row| *row != NEW_TAB && rows.contains(row));
         let Some(row) = shown.or_else(|| rows.first().copied()) else {
             return;
         };
@@ -78,7 +85,10 @@ impl Shell {
 
     fn key_row(&mut self, row: u64, cx: &mut Context<Self>) {
         self.keyed = Some(row);
-        self.scroll_to_row(row);
+        match row {
+            NEW_TAB => self.scroll_to_slot(Slot::NewTab, "new tab"),
+            row => self.scroll_to_row(row),
+        }
         // check.sh waits for this line.
         log!("browser: sidebar keyed {row}");
         cx.notify();
@@ -102,15 +112,21 @@ impl Shell {
     }
 
     /// The rows the ring goes over, in the sidebar's order: the favorites' tiles, then the Space's
-    /// pinned rows and folders, then Today's, past what collapsed pinned tabs and closed folders
-    /// hide. Unlike `sidebar_rows`, folders are in it, as a row the keys can open.
+    /// pinned rows and folders, then New Tab and Today's, past what collapsed pinned tabs and closed
+    /// folders hide. Unlike `sidebar_rows`, folders are in it, as a row the keys can open.
     fn key_rows(&self) -> Vec<u64> {
         let (pinned, today) = self.rows();
         let space = self.shown_space();
         let pinned = pinned
             .into_iter()
             .filter(|&row| !space.is_some_and(|space| space.shut(row)));
-        [self.favorites.clone(), pinned.collect(), today].concat()
+        [
+            self.favorites.clone(),
+            pinned.collect(),
+            vec![NEW_TAB],
+            today,
+        ]
+        .concat()
     }
 
     /// Opens or closes the ringed folder, as a press on its row does, the ring staying on it.
@@ -151,12 +167,12 @@ impl Shell {
 
     /// Close Tab, by its key or the menu, while a row is ringed: closes that row as its ✕ or −
     /// does, rather than the tab shown, and the ring goes to the row after it if it went. A folder
-    /// isn't a tab; its menu deletes it.
+    /// isn't a tab; its menu deletes it. New Tab isn't one either.
     fn key_run(&mut self, run: &Run, cx: &mut Context<Self>) {
         let Some(row) = self.keyed.filter(|_| run.0 == Command::CloseTab) else {
             return cx.propagate();
         };
-        if self.is_folder(row) {
+        if row == NEW_TAB || self.is_folder(row) {
             return;
         }
         let rows = self.key_rows();
@@ -180,6 +196,10 @@ impl Shell {
         let Some(row) = self.keyed else {
             return cx.propagate();
         };
+        // New Tab's row has no menu, as a right-click on it shows none.
+        if row == NEW_TAB {
+            return;
+        }
         let drawn = self.keyed_drawn.get().filter(|&(drawn, _)| drawn == row);
         if let Some((_, bounds)) = drawn {
             self.tab_menu(row, point(bounds.left(), bounds.bottom()), cx);
@@ -195,6 +215,10 @@ impl Shell {
         let Some(tab) = self.keyed.take() else {
             return cx.propagate();
         };
+        if tab == NEW_TAB {
+            cx.notify();
+            return self.run(Command::NewTab, "sidebar keys", cx);
+        }
         log!("browser: command select via sidebar keys");
         self.select(tab, cx);
         self.browser.focus_page(cx);
@@ -334,8 +358,9 @@ fn log_ring(drawn: &Rc<Cell<Option<(u64, Bounds<Pixels>)>>>, tab: u64, bounds: B
 mod tests {
     use std::{collections::HashMap, rc::Rc, time::Duration};
 
-    use gpui::{Entity, TestAppContext, VisualTestContext};
+    use gpui::{Entity, Role, TestAppContext, VisualTestContext};
 
+    use super::NEW_TAB;
     use crate::shell::{
         Folders, Page, Shell,
         commands::{Command, bind_keys},
@@ -390,6 +415,45 @@ mod tests {
         }
     }
 
+    /// In a Space with no tabs, Tab rings New Tab's row, which a screen reader names, and return
+    /// on it opens a new tab as its click does (#3151). Its menu key and Close Tab do nothing.
+    #[gpui::test]
+    fn tab_in_an_empty_space_rings_new_tab(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        cx.simulate_a11y_activation();
+        shell.update(cx, |shell, cx| {
+            let none = Folders::default();
+            shell.set_tabs(1, Vec::new(), Vec::new(), Vec::new(), none, cx);
+            shell.set_selected(0, cx);
+        });
+        cx.run_until_parked();
+        host.take();
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx), (Some(NEW_TAB), Some(NEW_TAB)));
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        let (_, node) = (tree.nodes.iter())
+            .find(|(id, _)| *id == tree.focus)
+            .expect("something has the keyboard");
+        assert_eq!(
+            (node.role(), node.label().unwrap_or_default().to_string()),
+            (Role::Button, "New Tab".into()),
+            "what a screen reader says"
+        );
+        cx.simulate_keystrokes("down up shift-f10 cmd-w");
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx).0, Some(NEW_TAB));
+        let calls = host.take();
+        assert!(
+            !calls.iter().any(|call| call.starts_with("close")),
+            "{calls:?}"
+        );
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(host.bar_open.get(), "return opened no new tab");
+        assert_eq!(ringed(&shell, cx), (None, None));
+    }
+
     /// Focus Sidebar rings the tab shown's row, the arrows move the ring over the rows, stopping at
     /// the ends, and return shows the ringed tab and gives its page the keyboard.
     #[gpui::test]
@@ -405,8 +469,18 @@ mod tests {
             (Some(21), Some(21)),
             "the ring went past the last row"
         );
-        cx.simulate_keystrokes("up up up up");
-        assert_eq!(ringed(&shell, cx), (Some(10), Some(10)));
+        cx.simulate_keystrokes("up up");
+        assert_eq!(
+            ringed(&shell, cx),
+            (Some(NEW_TAB), Some(NEW_TAB)),
+            "New Tab is a row"
+        );
+        cx.simulate_keystrokes("up up up");
+        assert_eq!(
+            ringed(&shell, cx),
+            (Some(10), Some(10)),
+            "the ring went past the first row"
+        );
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         let calls = host.take();
@@ -488,10 +562,10 @@ mod tests {
             shell.run(Command::FocusSidebar, "ui", cx);
         });
         cx.run_until_parked();
-        cx.simulate_keystrokes("up");
+        cx.simulate_keystrokes("up up");
         assert_eq!(
             ringed(&shell, cx).0,
-            Some(20),
+            Some(NEW_TAB),
             "the ring went to a collapsed row"
         );
         host.take();
@@ -532,7 +606,7 @@ mod tests {
         set(&shell, false, cx);
         shell.update(cx, |shell, cx| shell.run(Command::FocusSidebar, "ui", cx));
         cx.run_until_parked();
-        cx.simulate_keystrokes("up");
+        cx.simulate_keystrokes("up up");
         assert_eq!(
             ringed(&shell, cx).0,
             Some(11),
@@ -572,8 +646,8 @@ mod tests {
     }
 
     /// Close Tab closes the ringed row, not the tab shown, and the ring goes to the row after it;
-    /// on the last row it goes to the one before, and on a pinned row it stays. Elsewhere it's the
-    /// shown tab's again.
+    /// on the last row it goes to the one before, New Tab's for Today's first, where Close Tab does
+    /// nothing, and on a pinned row it stays. Elsewhere it's the shown tab's again.
     #[gpui::test]
     fn close_tab_closes_the_ringed_row(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
@@ -596,8 +670,13 @@ mod tests {
         cx.run_until_parked();
         cx.simulate_keystrokes("cmd-w");
         assert_eq!(host.take(), ["close 21"]);
-        assert_eq!(ringed(&shell, cx).0, Some(11));
+        assert_eq!(ringed(&shell, cx).0, Some(NEW_TAB));
         cx.simulate_keystrokes("cmd-w");
+        assert!(
+            host.take().is_empty(),
+            "Close Tab on New Tab closed something"
+        );
+        cx.simulate_keystrokes("up cmd-w");
         assert_eq!(host.take(), ["close 11"]);
         assert_eq!(
             ringed(&shell, cx).0,
