@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 #include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
@@ -145,6 +146,12 @@ bool KeyboardForPage(views::Widget* widget);
 // the page's.
 void ReleaseKeyboard(views::Widget* widget);
 
+// Ends the loans of |widget|'s keyboard to a window or bubble of Chromium's over it, such as an
+// extension's popup, so the UI or page that lent it doesn't have it back as the window is active
+// again. Whether there was one. Linux only: the Mac's and Windows' windows give the keyboard back
+// themselves.
+bool EndKeyboardLoans(views::Widget* widget);
+
 // Whether an overlay of the app's over |widget|'s window, such as the command bar or a menu, has
 // the keyboard, which takes it from the window on every platform: on the Mac a child window, key;
 // on Windows an owned window, in front; on Linux lent (bc_window_overlay_takes_keyboard).
@@ -179,6 +186,11 @@ void StretchOnResize(content::RenderWidgetHostView* view, bool stretch);
 // On Linux and Windows: the frame of a tab's dialog, such as print preview, shown in |widget|'s
 // window, from its content's top-left, if one shows (bc_window_dialog).
 std::optional<gfx::Rect> DialogFrame(views::Widget* widget);
+
+// On Linux and Windows: where DevTools docked in a page of |widget|'s window show, the first
+// pane's with them, and the page beside them, from its content's top-left (bc_window_devtools).
+// They're aura windows inside the pane's one X window or HWND, which the driver can't see.
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget);
 
 // On Windows: the widget of a tab's dialog, such as print preview, shown over |widget|'s window in
 // a window of its own (PageDialogsInOwnWindow), or null.

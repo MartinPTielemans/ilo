@@ -472,6 +472,36 @@ fn save_to_library_is_the_first_row_but_in_a_private_window(cx: &mut TestAppCont
     assert_eq!(private.calls()[1..], copied);
 }
 
+/// The row under the pointer is lit, its title with it (#3137): one row at a time, the field too,
+/// and none once the pointer leaves the menu.
+#[gpui::test]
+fn the_row_under_the_pointer_is_lit_and_none_off_the_menu(cx: &mut TestAppContext) {
+    let mut mode = Mode::shown(cx);
+    mode.hover(100., 100., rect(50., 60., 200., 80.));
+    mode.click(100., 100.);
+    assert_eq!(mode.calls(), ["camera false"]);
+    let menu = point(50. - RING + MENU_LEFT, 60. - RING);
+    let window = mode.window;
+    let mut lit_at = |y: f32| {
+        let at = point(px(menu.x + MENU_WIDTH / 2.), px(y));
+        mode.cx.simulate_mouse_move(at, None, Modifiers::none());
+        mode.cx.run_until_parked();
+        let lit = |capture: &mut Capture| capture.session.as_ref().and_then(|s| s.lit);
+        mode.cx
+            .cx
+            .update(|cx| window.update(cx, |capture, _, _| lit(capture)))
+            .unwrap()
+    };
+    assert_eq!(
+        lit_at(menu.y + row(Action::SaveToLibrary)),
+        Some(Action::SaveToLibrary)
+    );
+    assert_eq!(lit_at(menu.y + row(Action::Copy)), Some(Action::Copy));
+    assert_eq!(lit_at(menu.y + PADDING + ROW / 2.), Some(Action::SendTo));
+    assert_eq!(lit_at(menu.y + row(Action::Retake)), Some(Action::Retake));
+    assert_eq!(lit_at(590.), None);
+}
+
 #[gpui::test]
 fn it_takes_the_windows_look_as_it_changes(cx: &mut TestAppContext) {
     let mut mode = Mode::shown(cx);

@@ -70,10 +70,11 @@ fn arrange_key(keystroke: &str, cx: &mut gpui::App) {
 
 impl Shell {
     /// The profile and site of `tab`'s page where it can have a Boost: an http(s) page in a
-    /// regular window, outside an agent's Space.
+    /// regular window, outside an agent's Space, and not in Safari's engine, as what the core
+    /// boosts is Chromium's page, hidden while Safari's engine shows the tab's (#2955).
     pub(super) fn boost_site(&self, tab: u64) -> Option<(u64, String)> {
         let agents = !self.browser.space_agent(self.space).is_empty();
-        if tab == 0 || self.private || agents {
+        if tab == 0 || self.private || agents || self.page(tab).system_engine {
             return None;
         }
         let profile = self.shown_space()?.profile;
@@ -172,9 +173,6 @@ impl Shell {
         }
         // check.sh reads these lines.
         log!("browser: boost card {tab} opened");
-        if self.page(tab).system_engine {
-            log!("browser: boost card {tab} offers no Arrange in Safari's engine");
-        }
         self.boost_card = Some(tab);
         cx.notify();
     }
@@ -430,14 +428,8 @@ impl Shell {
         // pointer. Both lines are one grid of two equal columns, so the four buttons' edges line up
         // whatever their labels' widths.
         let zapping = self.zapping == Some(tab);
-        // Safari's engine shows a page Arrange can't reach, so Customize… has the line alone there,
-        // as Done does.
-        let safari = self.page(tab).system_engine;
         let second = (!zapping)
-            .then(|| match safari {
-                true => vec![customize.col_span_full().into_any_element()],
-                false => vec![customize.into_any_element(), arrange.into_any_element()],
-            })
+            .then(|| [customize.into_any_element(), arrange.into_any_element()])
             .into_iter()
             .flatten();
         let arranged = (boost.as_ref())

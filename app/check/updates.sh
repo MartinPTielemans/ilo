@@ -211,7 +211,7 @@ $out/updates-sample.txt, the window: $out/updates-stalled.png"
     await '^browser: update banner collapsed$' || fail "the update banner didn't show collapsed"
     # A round trip after the window left full screen, by when Sparkle would have shown its alert.
     send state
-    grep -q '^browser: update alert shows$\|^browser: update .* alert has the keyboard$' "$log" &&
+    grep -q '^browser: update \(alert shows\|.* alert has the keyboard\)$' "$log" &&
       fail "the scheduled check showed Sparkle's alert: $(grep '^browser: update' "$log" | tr '\n' ';')"
     ../tools/window-screenshot.sh "$pid" "$out/updates-available.png" all || fail "no window to capture"
     read -r bx by bw bh <<EOF

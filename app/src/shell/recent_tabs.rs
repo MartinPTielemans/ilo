@@ -179,13 +179,8 @@ impl Shell {
                 self.end_walk(tab, cx);
             }
             Heard::Stay => {
-                let (start, asked) = (held.start, self.tab_asked());
-                // A click outside that showed a tab, on its sidebar row, is the user's choice, and
-                // it's heard before the dismissal that comes with it.
-                let start = match Some(asked) == self.walked {
-                    true => start,
-                    false => asked,
-                };
+                let start = held.start;
+                let start = self.picked().unwrap_or(start);
                 // check.sh reads this line.
                 log!("browser: tab switcher stays on {start}");
                 self.end_walk(Some(start), cx);
@@ -199,8 +194,18 @@ impl Shell {
         let Some(held) = &self.held else {
             return;
         };
-        let tab = held.rows.get(held.at).map(|&row| self.row_tab(row));
+        let tab = self
+            .picked()
+            .or_else(|| held.rows.get(held.at).map(|&row| self.row_tab(row)));
         self.end_walk(tab, cx);
+    }
+
+    /// A tab other than the walk's shown since it, by a click outside the switcher on its sidebar
+    /// row: the user's choice, which the ⌃ up and the dismissal that come with the click, in
+    /// either order, keep (#3114).
+    fn picked(&self) -> Option<u64> {
+        let asked = self.tab_asked();
+        (Some(asked) != self.walked).then_some(asked)
     }
 
     /// Ends the walk on `to`: switched to unless it's shown or switching in, then counted as shown.
