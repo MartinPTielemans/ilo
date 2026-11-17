@@ -15,6 +15,7 @@
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/boost_colors.h"
 #include "browser_core/host.h"
 #include "browser_core/session.h"
 
@@ -131,6 +132,7 @@ void Space::Delete(bc_id id) {
   // The Spaces listed don't change with a window's own.
   const bool listed = !it->second->own();
   Spaces().erase(it);
+  BoostSpaceGone(id);
   if (listed) {
     std::erase(SpaceOrder(), id);
     ReportSpacesChanged();
@@ -991,6 +993,8 @@ void Space::ReportChanged() {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](bc_id id) {
+                       // A tab that moved takes its new Space's colours in its Boost.
+                       BoostSpacesChanged();
                        if (FromId(id) && Host().space_changed) {
                          Host().space_changed(Host().context, id);
                        }

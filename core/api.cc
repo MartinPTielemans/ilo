@@ -2375,6 +2375,10 @@ void bc_profile_set_boost(bc_id profile, const char* site, const char* css) {
   browser_core::Boosts::Set(profile, site ? site : "", css ? css : "");
 }
 
+void bc_space_set_boost_colors(bc_id space, const bc_boost_colors* colors) {
+  browser_core::Boosts::SetSpaceColors(space, colors);
+}
+
 namespace {
 
 int ScriptState(browser_core::boost_script::State state) {

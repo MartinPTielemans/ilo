@@ -28,6 +28,9 @@ void SessionChanged() {}
 
 void ScheduleAutoArchive() {}
 
+void BoostSpacesChanged() {}
+void BoostSpaceGone(bc_id) {}
+
 namespace {
 
 using Rows = std::vector<bc_id>;
