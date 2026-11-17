@@ -1318,6 +1318,12 @@ fn marked() -> Option<std::ops::Range<usize>> {
     }
 }
 
+/// Forgets what the scripted input method composed, as a real one does when sway activates or
+/// deactivates it: the text input it composed for has been reset, and the composition with it.
+pub(super) fn input_method_reset() {
+    COMPOSITION.set(None);
+}
+
 /// Handles `key` as drive.mm's scripted input method does, with the calls a Japanese one makes in
 /// the field with the keys: letters compose, space converts them all, return commits and escape
 /// cancels. Returns false for a key it leaves to the window, as one with a shortcut's modifiers,
