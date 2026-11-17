@@ -1601,6 +1601,9 @@ impl Shell {
         }
         let target = match command {
             Command::NewTab => {
+                // The page it opens is where the user's going, so the ring ends, as return on a
+                // tab's row ends it, and Tab from the window rings that page's row (#3151).
+                self.leave_keys("new tab", cx);
                 self.set_new_tab(true, cx);
                 self.set_bar_over_card(true, cx);
                 let shown = self.shown_urls();

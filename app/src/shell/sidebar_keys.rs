@@ -454,6 +454,87 @@ mod tests {
         assert_eq!(ringed(&shell, cx), (None, None));
     }
 
+    /// Space 1 holds `pinned` and `today` and shows `tab`, as the core has it once a page the
+    /// command bar opened shows, or `0` for none.
+    fn shows(
+        shell: &Entity<Shell>,
+        pinned: &[u64],
+        today: &[u64],
+        tab: u64,
+        cx: &mut VisualTestContext,
+    ) {
+        shell.update(cx, |shell, cx| {
+            let none = Folders::default();
+            shell.set_tabs(1, pinned.to_vec(), today.to_vec(), Vec::new(), none, cx);
+            shell.set_selected(tab, cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// New Tab, by its shortcut from a ring on a tab's row or on New Tab's, or by return on New
+    /// Tab's, ends the ring as return on a tab's row does, so once the page it opens shows, Tab
+    /// from the window rings that page's row rather than going nowhere (#3151).
+    #[gpui::test]
+    fn a_new_tab_ends_the_ring(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        shell.update(cx, |shell, cx| shell.run(Command::FocusSidebar, "ui", cx));
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx).0, Some(20));
+        cx.simulate_keystrokes("cmd-t");
+        cx.run_until_parked();
+        assert!(host.bar_open.take(), "the shortcut opened no new tab");
+        assert_eq!(ringed(&shell, cx), (None, None));
+        shows(&shell, &[10, 11], &[30, 20, 21], 30, cx);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx), (Some(30), Some(30)));
+
+        shows(&shell, &[], &[], 0, cx);
+        shell.update(cx, |shell, cx| shell.run(Command::FocusSidebar, "ui", cx));
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx).0, Some(NEW_TAB));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(host.bar_open.take(), "return opened no new tab");
+        assert_eq!(ringed(&shell, cx), (None, None));
+        shows(&shell, &[], &[31], 31, cx);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx), (Some(31), Some(31)));
+    }
+
+    /// Escape in the bar New Tab's shortcut opened from the ring leaves the window holding the
+    /// keyboard, and Tab from there rings a row again: New Tab's, in an empty Space, which a screen
+    /// reader names.
+    #[gpui::test]
+    fn escape_from_a_new_tab_leaves_tab_a_row_to_ring(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        cx.simulate_a11y_activation();
+        shows(&shell, &[], &[], 0, cx);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx).0, Some(NEW_TAB));
+        cx.simulate_keystrokes("cmd-t");
+        cx.run_until_parked();
+        assert!(host.bar_open.take(), "the shortcut opened no new tab");
+        shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
+        cx.run_until_parked();
+        let root = cx.update(|window, cx| shell.read(cx).focus_handle.is_focused(window));
+        assert!(root, "the window doesn't hold the keyboard");
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx), (Some(NEW_TAB), Some(NEW_TAB)));
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        let (_, node) = (tree.nodes.iter())
+            .find(|(id, _)| *id == tree.focus)
+            .expect("something has the keyboard");
+        assert_eq!(
+            (node.role(), node.label().unwrap_or_default().to_string()),
+            (Role::Button, "New Tab".into()),
+            "what a screen reader says"
+        );
+    }
+
     /// Focus Sidebar rings the tab shown's row, the arrows move the ring over the rows, stopping at
     /// the ends, and return shows the ringed tab and gives its page the keyboard.
     #[gpui::test]
