@@ -5,13 +5,13 @@
 //! its window goes through `Host`; where it goes, what it says and when the pointer is near it are
 //! the shell's, which calls `plate` and `place`.
 
-use std::{ops::Range, rc::Rc, time::Duration};
+use std::{cell::Cell, ops::Range, rc::Rc, time::Duration};
 use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, FontWeight, Global, Hsla, Pixels, SharedString, Task, TitlebarOptions,
     Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
-    WindowTextSystem, div, point, prelude::*, px, size,
+    WindowTextSystem, canvas, div, point, prelude::*, px, size,
 };
 
 use crate::{palette::Palette, tooltip};
@@ -259,6 +259,11 @@ pub trait Host {
     fn card_picture(&self, card: u64, url: &str, page: &str) -> bool;
     /// Stops link card `card` (bc_link_card_cancel): the core tells nothing more of it.
     fn card_cancel(&self, card: u64);
+    /// The window, `window`, drew only inside `frame`, in its own points, with corners rounded by
+    /// `radius`: the plate, or the card it grew into. Where a window can't blend with what's under
+    /// it, the host cuts the window to that, so its empty room above and beside it shows the page,
+    /// and elsewhere does nothing.
+    fn outline(&self, window: &mut Window, frame: Bounds<Pixels>, radius: f32);
 }
 
 /// The plate that waits for its delay, and where it goes.
@@ -290,6 +295,9 @@ pub struct LinkTarget {
     release: Option<Task<()>>,
     /// The link card asked for the link the plate shows, which goes with the plate.
     card: Option<card::Card>,
+    /// What the window last told the host it drew (`Host::outline`), so a frame that draws the
+    /// same tells nothing.
+    outlined: Rc<Cell<Option<(Bounds<Pixels>, f32)>>>,
 }
 
 struct LinkTargetWindow(WindowHandle<LinkTarget>);
@@ -337,6 +345,7 @@ pub fn open(
             hide_held: false,
             release: None,
             card: None,
+            outlined: Rc::default(),
         })
     });
     match window {
@@ -601,7 +610,13 @@ impl Render for LinkTarget {
         let (fill, palette) = (self.look)(cx);
         if let Some(card) = self.card.as_ref().filter(|card| card.shown) {
             let scale = window.scale_factor();
-            return root.child(card::render(&card.state, &plate, fill, &palette, scale));
+            return root.child(
+                div()
+                    .relative()
+                    .child(card::render(&card.state, &plate, fill, &palette, scale))
+                    // Rounded as card::render rounds the card.
+                    .child(self.outline(crate::tokens::hover_card::RADIUS)),
+            );
         }
         let text = div()
             .absolute()
@@ -633,8 +648,30 @@ impl Render for LinkTarget {
                 .shadow(Level::Popover.shadow())
                 .bg(fill)
                 .child(text)
-                .child(rim),
+                .child(rim)
+                .child(self.outline(RADIUS)),
         )
+    }
+}
+
+impl LinkTarget {
+    /// Fills what it's in, the plate or the card, and tells the host where that was laid out, from
+    /// the numbers the frame draws with, whenever it differs from the last frame's.
+    fn outline(&self, radius: f32) -> impl IntoElement {
+        let (host, outlined) = (self.host.clone(), self.outlined.clone());
+        canvas(
+            move |frame, window, _| {
+                if outlined.get() != Some((frame, radius)) {
+                    outlined.set(Some((frame, radius)));
+                    host.outline(window, frame, radius);
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 }
 

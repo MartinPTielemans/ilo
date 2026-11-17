@@ -739,12 +739,27 @@ impl link_target::Host for LinkTargetHost {
         let Some(view) = ui_view_of(window) else {
             return;
         };
+        // check.sh reads this line: where the window is, the card's room above the plate included.
+        log!("browser: link target window at {left} {top}");
         let fade = link_target::FADE_IN.as_secs_f64();
         unsafe { platform::host_show_link_target(view, left.into(), top.into(), fade) };
     }
 
     fn hide(&self) {
         unsafe { platform::host_hide_link_target(link_target::FADE_OUT.as_secs_f64()) };
+    }
+
+    fn outline(&self, window: &mut Window, frame: Bounds<Pixels>, radius: f32) {
+        let view = crate::browser_windows::ns_view(window);
+        let (left, top) = (
+            f32::from(frame.left()).into(),
+            f32::from(frame.top()).into(),
+        );
+        let (width, height) = (
+            f32::from(frame.size.width).into(),
+            f32::from(frame.size.height).into(),
+        );
+        unsafe { platform::host_outline_overlay(view, left, top, width, height, radius.into()) };
     }
 
     fn pressed(&self) -> bool {
