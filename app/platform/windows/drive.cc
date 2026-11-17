@@ -2923,6 +2923,15 @@ LRESULT CALLBACK WatchKeyboard(int code, WPARAM wparam, LPARAM lparam) {
                                  : FocusName(hwnd, GetAncestor(hwnd, GA_ROOT));
     fprintf(stderr, "browser: drive: %s %s\n", code == HCBT_ACTIVATE ? "activates" : "focuses",
             name.c_str());
+    // Probe for #3164: which window it is, its owner, whether it shows, and its root's.
+    HWND root = GetAncestor(hwnd, GA_ROOT);
+    wchar_t title[128] = L"";
+    GetWindowTextW(root, title, 128);
+    fprintf(stderr,
+            "browser: drive: probe %s class %s, root %s class %s title \"%s\" visible %d, owner %s\n",
+            code == HCBT_ACTIVATE ? "activates" : "focuses", Utf8(ClassOf(hwnd)).c_str(),
+            Describe(root).c_str(), Utf8(ClassOf(root)).c_str(), Utf8(title).c_str(),
+            IsWindowVisible(root) ? 1 : 0, Describe(GetWindow(root, GW_OWNER)).c_str());
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
