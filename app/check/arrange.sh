@@ -294,6 +294,32 @@ expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put b
 shows "$own" "Put back didn't take the settle back"
 kept 0 "Put back didn't take the change back"
 
+# A preview that goes back leaves the carried thing a ghost again, its room kept (#3189): Alpha
+# rests on Gamma's middle, which shows a trade, then at the edge under Beta, which shows the settle
+# with Alpha landed there, and settles there when let go. Were Alpha left where the trade's preview
+# put it, its room would go with it: Gamma would move up to the edge, and Alpha settle after it.
+carry $(slot 0) $(slot 2)
+expect "^browser: arrange $tab Preview Trades " "a rest on Gamma's middle didn't show a trade"
+send dragto $(slot_edge 1)
+expect "^browser: arrange $tab Preview Settles " \
+  "a rest at the edge under Beta, after a trade's preview on Gamma, didn't show a settle"
+shows 'b,a,c,w side s,n hidden - float -' \
+  "the settle's preview under Beta, after a trade's preview on Gamma, didn't show Alpha landed there"
+send release $(slot_edge 1)
+expect "^browser: arrange $tab Selected Settles selected " \
+  "letting go at the edge under Beta, after a trade's preview on Gamma, didn't settle"
+expect "browser: tab $tab arrange saved 1 changes\$" "the core didn't save the settle after a trade's preview"
+shows 'b,a,c,w side s,n hidden - float -' \
+  "letting go at the edge under Beta, after a trade's preview on Gamma, didn't settle Alpha there"
+send click $(slot 1)
+expect "^browser: arrange $tab Selected [A-Z][a-z]* selected section Alpha\$" \
+  "a click didn't select Alpha, settled under Beta after a trade's preview"
+bar_over $(slot 1) "the UI placed no mini bar over Alpha"
+press_mini_bar last "put back"
+expect "browser: tab $tab arrange saved 0 changes\$" "the core didn't save Put back"
+shows "$own" "Put back didn't take the settle after a trade's preview back"
+kept 0 "Put back didn't take the change back"
+
 # Trade: the third let go on the first's middle, and the two trade places.
 carry $(slot 2) $(slot 0)
 expect "^browser: arrange $tab Preview Trades " "a rest on a thing's middle didn't show a trade"

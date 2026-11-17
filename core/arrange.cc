@@ -527,10 +527,10 @@ constexpr char16_t kScript[] =
         lists.set(parent, l);
         for (const k of parent.children) {
           if (mode && k === mode.marks.host) continue;
-          if (carry && k === carry.el) {
+          if (k === carried()) {
             // Its room is a place in the list, so a settle beside it stays where it went and what's
             // after it stays after its room (#2975). It's never moved or measured: it's the ghost.
-            if (carry.lifted && carry.room != null) {
+            if (carry.room != null) {
               const e = { el: k, list: l, moved: false, carried: true, by: null, kind: '', geo: boxOf(carry.from, pr) };
               entries.set(k, e);
               l.items.push(e);
@@ -743,7 +743,7 @@ constexpr char16_t kScript[] =
     // One pass: the page as the site lays it out, the changes' lists, and the styles they make. A
     // change that puts a thing where it doesn't fit is left out, and the pass made again without it.
     function arrange() {
-      const now = live.filter((s) => !(carry && involves(s.c, carry.el)));
+      const own = carried(), now = live.filter((s) => !(own && involves(s.c, own)));
       const skip = new Set();
       for (const s of live) { s.applied = false; s.misfit = ''; s.nest = false; }
       for (const s of now) {
@@ -762,7 +762,7 @@ constexpr char16_t kScript[] =
       const held = performance.now() < holdUntil ? now.filter((s) => s.el && refOf(s.c) && !s.ref) : [];
       let p = null;
       for (let round = 0; round <= now.length; round++) {
-        for (const el of [...lifted]) if (!carry || el !== carry.el) unlift(el);
+        for (const el of [...lifted]) if (el !== carried()) unlift(el);
         unplaceAll();
         for (const s of held) put(s.el, 'visibility', 'hidden');
         p = plan(now, skip);
@@ -827,7 +827,7 @@ constexpr char16_t kScript[] =
     }
     // Puts |changes| on the page in place of what's there.
     function apply(changes) {
-      for (const el of [...saved.keys()]) if (!carry || el !== carry.el) restore(el);
+      for (const el of [...saved.keys()]) if (el !== carried()) restore(el);
       live = changes.map((c) => ({ c, el: null, ref: null }));
       if (!changes.length && !mode) { stop(); return; }
       start();
@@ -839,6 +839,8 @@ constexpr char16_t kScript[] =
     // ---- The mode: pointing, carrying, previewing, selected.
     let mode = null;
     let carry = null;
+    // The carried element while it's the ghost; a preview places it as any change.
+    const carried = () => (carry && carry.lifted ? carry.el : null);
     let undo = [];
     function marks(look) {
       const host = document.createElement('div');
