@@ -35,6 +35,8 @@ mod access;
 mod agent_bar;
 mod agent_pointer;
 mod agent_question;
+#[cfg(test)]
+mod app_menu_tests;
 mod arrange;
 mod assets;
 #[cfg(test)]
@@ -1439,6 +1441,10 @@ pub struct Shell {
     /// •••, and whether the menu up is the one it opened, which keeps them while it's up.
     name_hovered: bool,
     name_menu: bool,
+    /// Whether the footer has the menu control, off the Mac, where there's no menu bar to hold
+    /// ilo's menu (#3148), and whether the menu up is the one it opened, which keeps it pressed.
+    menu_control: bool,
+    app_menu: bool,
     /// The Space and whether its pinned rows were collapsed when last drawn, and when they last
     /// changed there, for the chevron's turn.
     pinned_seen: Option<(u64, bool)>,
@@ -2039,6 +2045,8 @@ impl Shell {
             caret_drawn: Rc::default(),
             name_hovered: false,
             name_menu: false,
+            menu_control: OFF_THE_MAC,
+            app_menu: false,
             pinned_seen: None,
             pinned_turn: None,
             split_folds: HashMap::new(),
@@ -4906,6 +4914,7 @@ impl Shell {
             .children(self.download_bin(cx))
             .children(self.archive_flights())
             .children((!self.one_space()).then(|| self.plus_button(cx)))
+            .children(self.menu_control.then(|| self.menu_button(cx)))
             .children(self.switcher(cx))
             .child(self.press_listener())
             .children(self.paging_frame(started))

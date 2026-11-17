@@ -1,0 +1,17 @@
+<!-- The footer's menu glyph (ours) beside the +, at its 1.75 pt stroke and its width, three lines
+  4.5 apart so their ink stands as tall as the + without reading heavier. -->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.75"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M6.5 7.5h11" />
+  <path d="M6.5 12h11" />
+  <path d="M6.5 16.5h11" />
+</svg>

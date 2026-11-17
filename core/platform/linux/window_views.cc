@@ -43,6 +43,7 @@
 #include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host_platform.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_solid_color.h"
@@ -206,6 +207,29 @@ views::Widget* MiniPlayerToTakeKeyboardFrom() {
     }
   }
   return floating && HasKeyboard(floating) ? floating : nullptr;
+}
+
+// Under Wayland a bubble of Chromium's over the browser window, such as an extension's popup, is a
+// subsurface of the window's surface, and the window hands it the keys Chromium hears while it's
+// active (WaylandWindow::ActivateBubble), which the window's focus client doesn't see (#2836).
+views::Widget* ActiveBubbleOver(views::Widget* widget) {
+  using Host = views::DesktopWindowTreeHostPlatform;
+  Host* browser =
+      Host::GetHostForWidget(widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget());
+  if (!browser) {
+    return nullptr;
+  }
+  for (aura::Window* window : Host::GetAllOpenWindows()) {
+    views::Widget* bubble = window ? views::Widget::GetWidgetForNativeWindow(window) : nullptr;
+    if (!bubble || bubble == widget || !bubble->IsActive() || !window->GetHost()) {
+      continue;
+    }
+    Host* host = Host::GetHostForWidget(window->GetHost()->GetAcceleratedWidget());
+    if (host && host->window_parent() == browser) {
+      return bubble;
+    }
+  }
+  return nullptr;
 }
 
 // An aura window in the browser window holding one pane's page and its docked DevTools, or the side
@@ -799,6 +823,7 @@ class WindowViews : public views::WidgetObserver,
     }
     ui_has_keyboard_ = true;
     ui_lent_ = false;
+    ui_lent_to_bubble_ = false;
     page_lent_.RemoveAll();
     if (auto* client = aura::client::GetFocusClient(content())) {
       client->ResetFocusWithinActiveWindow(content());
@@ -868,19 +893,87 @@ class WindowViews : public views::WidgetObserver,
   // keyboard back instead, as the Mac's window makes the preview's key again. Each side asks that
   // the preview still shows: the note outlives a preview that closed with the keyboard, and the
   // page under it would lose its keys to a cleared view with no preview to take them.
+  //
+  // A bubble of Chromium's taking the keys under Wayland deactivates the window too, and its going
+  // activates it again (UILendsToBubble).
   void OnWidgetActivationChanged(views::Widget*, bool active) override {
-    if (!active && preview_had_keyboard_ && PreviewShows()) {
+    const bool preview = preview_had_keyboard_ && PreviewShows();
+    if (!active && preview) {
       if (views::FocusManager* focus = widget_->GetFocusManager()) {
         focus->SetStoredFocusView(nullptr);
       }
     }
-    if (active && preview_had_keyboard_ && PreviewShows()) {
+    if (active && preview) {
       PreviewTakesBackKeyboard();
     }
-    if (!active && OnWayland()) {
-      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE,
-          base::BindOnce(&WindowViews::TakeKeyboardFromMiniPlayer, weak_factory_.GetWeakPtr()));
+    if (!OnWayland()) {
+      if (active) {
+        PostFocusDialog();
+      }
+      return;
+    }
+    if (active) {
+      if (std::exchange(ui_lent_to_bubble_, false) && !ui_has_keyboard_ && !preview) {
+        UITakesKeyboard();
+      }
+      return;
+    }
+    // Posted, as Chromium tells the window it's no longer active before telling the bubble it is.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WindowViews::UILendsToBubble, weak_factory_.GetWeakPtr()));
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&WindowViews::TakeKeyboardFromMiniPlayer, weak_factory_.GetWeakPtr()));
+  }
+
+  // Under Wayland GPUI hears the keys Chromium hands a bubble of its own, such as an extension's
+  // popup a click on its action in the UI opened, so the UI lends it the keyboard, as a window of
+  // Chromium's in the browser window takes it on X11 (OnWindowFocused), and has it back once the
+  // bubble goes and the window is active again (#2836).
+  void UILendsToBubble() {
+    if (ui_has_keyboard_ && !widget_->IsActive() && ActiveBubbleOver(widget_)) {
+      ui_lent_to_bubble_ = true;
+      PageTakesKeyboard();
+    }
+  }
+
+  bool EndLoans() {
+    const bool lent = ui_lent_ || ui_lent_to_bubble_ || !page_lent_.windows().empty();
+    ui_lent_ = false;
+    ui_lent_to_bubble_ = false;
+    page_lent_.RemoveAll();
+    return lent;
+  }
+
+  // On X11 a tab's dialog over the shown page takes the keyboard back from a window activated, or
+  // focused, with none of its views focused, as by a click on the page beside the dialog, which
+  // ignores input under it (#2926). The dialog is a child widget, which shares the window's focus
+  // manager, and views gives a key only to the focused view, so with none every key, ilo's
+  // shortcuts too, was lost. Views focuses the view it stored as the window lost activation, the
+  // dialog's, unless the UI took the keyboard since, which forgets it (#2789). Posted, after views
+  // has restored the focus, and not while the UI has the keyboard, which a click in it keeps.
+  void PostFocusDialog() {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WindowViews::FocusDialog, weak_factory_.GetWeakPtr()));
+  }
+
+  void FocusDialog() {
+    views::FocusManager* focus = widget_->GetFocusManager();
+    // A link preview's page that has the keyboard keeps it: views never sees it focused.
+    if (!focus || focus->GetFocusedView() || ui_has_keyboard_ || overlay_has_keyboard_ ||
+        (preview_had_keyboard_ && PreviewShows()) || !widget_->IsActive()) {
+      return;
+    }
+    // Chrome shows the dialog of the selected tab alone.
+    for (views::Widget* dialog : views::Widget::GetAllOwnedWidgets(widget_->GetNativeView())) {
+      if (dialog == widget_ || !dialog->IsVisible() || !dialog->widget_delegate() ||
+          dialog->widget_delegate()->GetModalType() != ui::mojom::ModalType::kChild) {
+        continue;
+      }
+      if (views::View* first = dialog->widget_delegate()->GetInitiallyFocusedView()) {
+        first->RequestFocus();
+      }
+      return;
     }
   }
 
@@ -928,6 +1021,10 @@ class WindowViews : public views::WidgetObserver,
   }
 
   void OnWidgetDestroying(views::Widget*) override {
+    // The views outlive the widget (AllWindowViews), so what they posted for it goes with it: on
+    // X11 a window closing is activated and focused as it goes, and the focus it posted ran on its
+    // freed focus manager (#3088).
+    weak_factory_.InvalidateWeakPtrs();
     ui_text_input_.SetKeyboard(false);
     x11_observation_.Reset();
     children_events_ = x11::ScopedEventSelector();
@@ -978,6 +1075,9 @@ class WindowViews : public views::WidgetObserver,
   // tab's dialog. That gives it back as it goes to the UI or page that had it, as Chrome's views
   // restore the focus, which here would leave it with the window, where no page hears the keys.
   void OnWindowFocused(aura::Window* gained_focus, aura::Window* lost_focus) override {
+    if (gained_focus && !OnWayland()) {
+      PostFocusDialog();
+    }
     // The focus goes to none as the window loses activation, and to the window's own as it's active
     // again, before the widget hears it (DesktopNativeWidgetAura::HandleActivationChanged), so
     // neither says the preview's page let it go.
@@ -985,6 +1085,8 @@ class WindowViews : public views::WidgetObserver,
       preview_had_keyboard_ = preview_.holder && preview_.holder->Contains(gained_focus);
     }
     if (gained_focus && gained_focus != content()) {
+      // Not the bubble's loan: the window focuses its page again as it's active once more, before
+      // it says it's active (DesktopNativeWidgetAura::HandleActivationChanged).
       if (InSlot(gained_focus)) {
         ui_lent_ = false;
         page_lent_.RemoveAll();
@@ -1088,8 +1190,9 @@ class WindowViews : public views::WidgetObserver,
     if (overlay_has_keyboard_ && ui_ != x11::Window::None) {
       SetInputFocus(window());
     }
-    // A click in a page that's focused already focuses nothing.
+    // A click in a page that's focused already focuses nothing. It ends a loan to a bubble too.
     if (InSlot(static_cast<aura::Window*>(event->target()))) {
+      ui_lent_to_bubble_ = false;
       PageTakesKeyboard();
     }
   }
@@ -1363,6 +1466,8 @@ class WindowViews : public views::WidgetObserver,
   // Whether the link preview's page had the keyboard last, which it has back as the window is
   // active again (OnWidgetActivationChanged).
   bool preview_had_keyboard_ = false;
+  // Under Wayland, a bubble of Chromium's has the keyboard the UI had (UILendsToBubble).
+  bool ui_lent_to_bubble_ = false;
   // On Wayland, the page that gave its focus to the window while an overlay has the keyboard.
   aura::WindowTracker overlay_lent_;
   // On Wayland, whether a page composing as an overlay took the keyboard keeps its focus until the
@@ -1675,6 +1780,10 @@ bool KeyboardForPage(views::Widget* widget) {
   if (views && views->ui_has_keyboard()) {
     return views->ui_holds_for_page();
   }
+  // A window of Chromium's own, such as an extension's popup.
+  if (views && OnWayland() && ActiveBubbleOver(widget)) {
+    return false;
+  }
   aura::client::FocusClient* client = aura::client::GetFocusClient(widget->GetNativeView());
   aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
   // The window itself has it as it opens, or once the view that had it went.
@@ -1695,6 +1804,11 @@ void ReleaseKeyboard(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->PageTakesKeyboard();
   }
+}
+
+bool EndKeyboardLoans(views::Widget* widget) {
+  WindowViews* views = ViewsOf(widget);
+  return views && views->EndLoans();
 }
 
 bool OverlayHasKeyboard(views::Widget* widget) {
@@ -1771,6 +1885,9 @@ bool KeyboardInChild(views::Widget* widget) {
   if (!views || views->ui_has_keyboard()) {
     return false;
   }
+  if (OnWayland() && ActiveBubbleOver(widget)) {
+    return true;
+  }
   aura::client::FocusClient* client = aura::client::GetFocusClient(widget->GetNativeView());
   aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
   return focused && focused != widget->GetNativeView() && !views->InSlot(focused);
@@ -1799,6 +1916,10 @@ std::optional<gfx::Rect> KeyboardPageFrame(views::Widget* widget) {
 std::u16string ChildTitle(views::Widget* widget) {
   if (!KeyboardInChild(widget)) {
     return {};
+  }
+  if (views::Widget* bubble = OnWayland() ? ActiveBubbleOver(widget) : nullptr) {
+    return bubble->widget_delegate() ? bubble->widget_delegate()->GetWindowTitle()
+                                     : std::u16string();
   }
   // The focused window is the child widget's own or one in it, as a dialog's button.
   aura::client::FocusClient* client = aura::client::GetFocusClient(widget->GetNativeView());
