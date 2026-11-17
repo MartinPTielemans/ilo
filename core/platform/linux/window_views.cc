@@ -726,6 +726,10 @@ class WindowViews : public views::WidgetObserver,
     if (takes) {
       return;
     }
+    // A tab's dialog that took aura's focus while the overlay had the keyboard (FocusDialogView).
+    if (OnWayland()) {
+      PostFocusDialogView();
+    }
     const x11::Window focus = OnWayland() ? x11::Window::None : InputFocus();
     if (ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(focus, ui_)) {
       UITakesKeyboard();
@@ -1046,6 +1050,8 @@ class WindowViews : public views::WidgetObserver,
   void OnWindowFocused(aura::Window* gained_focus, aura::Window* lost_focus) override {
     if (gained_focus && !OnWayland()) {
       PostFocusDialog();
+    } else if (gained_focus) {
+      PostFocusDialogView();
     }
     if (gained_focus && gained_focus != content()) {
       // Not the bubble's loan: the window focuses its page again as it's active once more, before
@@ -1067,6 +1073,36 @@ class WindowViews : public views::WidgetObserver,
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(&WindowViews::PageTakesBackKeyboard, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  // Under Wayland a tab's dialog shown again with its tab, as the tab in front of it closes, has
+  // aura's focus with none of its views focused: Chrome focuses the view it stored as the tab went
+  // behind (WebContents::RestoreFocus), which the core doesn't, and views gives a key only to the
+  // focused view, so every key was lost, ilo's shortcuts too (#3167). Its first view takes the
+  // focus. On X11 FocusDialog does, as it does after every focus change with no view focused, and
+  // it alone has #2926's case, with aura's focus on the window or the page beside the dialog: this
+  // looks only at a dialog that has aura's focus. Posted, not while the focus client tells of the
+  // change, and not while the UI or an overlay has the keyboard: the first view may be a field,
+  // which would take the input method from the overlay's. The overlay letting go asks again.
+  void PostFocusDialogView() {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WindowViews::FocusDialogView, weak_factory_.GetWeakPtr()));
+  }
+
+  void FocusDialogView() {
+    views::FocusManager* focus = widget_->GetFocusManager();
+    aura::client::FocusClient* client = aura::client::GetFocusClient(content());
+    aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
+    views::Widget* dialog = focused ? views::Widget::GetWidgetForNativeView(focused) : nullptr;
+    if (!focus || focus->GetFocusedView() || ui_has_keyboard_ || overlay_has_keyboard_ ||
+        !dialog || dialog == widget_.get() || dialog->GetTopLevelWidget() != widget_.get() ||
+        dialog->IsClosed() || !dialog->IsVisible() || !dialog->widget_delegate() ||
+        dialog->widget_delegate()->GetModalType() != ui::mojom::ModalType::kChild) {
+      return;
+    }
+    if (views::View* first = dialog->widget_delegate()->GetInitiallyFocusedView()) {
+      first->RequestFocus();
     }
   }
 
