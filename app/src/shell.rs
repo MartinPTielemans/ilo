@@ -2191,7 +2191,7 @@ impl Shell {
             page_fullscreen: false,
             link: None,
             text_system: None,
-            full_screen: false,
+            full_screen: std::env::var("PREVIEW_FULL_SCREEN").is_ok(),
             opening: None,
             on_top: false,
             escapes: Default::default(),
