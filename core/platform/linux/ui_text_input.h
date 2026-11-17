@@ -37,7 +37,7 @@ class UITextInput : public ui::TextInputClient {
   // method, which composes past the hold, composes here if it composed for the page's field: what
   // it composes and commits is kept for the UI's field until that has the keys and its caret. The
   // hold ends |claimed| as the field takes the keys, else the page gets the input method back with
-  // what was kept, as it gets the keys held.
+  // what was kept, the composition committed, as it gets the keys held.
   void HoldForPage(bool hold, bool claimed);
   // Whether the input method's client is the UI's field.
   bool attached() const { return attached_; }

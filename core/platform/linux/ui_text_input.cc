@@ -86,22 +86,17 @@ void UITextInput::EndHold() {
     return;
   }
   base::WeakPtr<ui::TextInputClient> page = page_;
-  const std::u16string kept = std::exchange(kept_, std::u16string());
-  const std::u16string composition = std::exchange(composition_, std::u16string());
+  // The composition goes to the page committed. Giving the input method's client back to the
+  // page disables and enables the text input, which resets the input method, and resets Chromium's
+  // own (ResetContext), so neither has a composition left to finish: one set in the page would be
+  // replaced by the next, and the user's text lost with it.
+  const std::u16string text = std::exchange(kept_, std::u16string()) +
+                              std::exchange(composition_, std::u16string());
   composition_kept_ = false;
   Update();
   ui::InputMethod* ime = widget_->GetInputMethod();
-  if (!page || !ime || ime->GetTextInputClient() != page.get()) {
-    return;
-  }
-  if (!kept.empty()) {
-    page->InsertText(kept, ui::TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
-  }
-  if (!composition.empty()) {
-    ui::CompositionText text;
-    text.text = composition;
-    text.selection = gfx::Range(composition.size());
-    page->SetCompositionText(text);
+  if (!text.empty() && page && ime && ime->GetTextInputClient() == page.get()) {
+    page->InsertText(text, ui::TextInputClient::InsertTextCursorBehavior::kMoveCursorAfterText);
   }
 }
 

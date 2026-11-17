@@ -378,7 +378,9 @@ else
   kept=$step
   expect "^browser: title [0-9]* value keep$preedit\$" \
     "the page that kept ⌘L didn't get the composition typed while it was held: $(grep '^browser: title' "$log" | tail -1)"
-  send key return
+  # Under Wayland the page gets it committed, as handing the page the input method back resets it:
+  # nothing is left for Return to commit, which would be the textarea's.
+  [ -n "${WAYLAND_DISPLAY:-}" ] || send key return
   send ime off
   send type x
   expect "^browser: title [0-9]* value keep${preedit}x\$" \
@@ -397,6 +399,21 @@ else
     send type z
     expect "^browser: title [0-9]* value keep${preedit}x${preedit}z\$" \
       "the page that kept ⌘F lost or doubled the composition it had open: $(grep '^browser: title' "$log" | tail -1)"
+    # One letter composed while ⌘L is held goes in committed too: the next composition, cancelled
+    # here, comes after it rather than replacing it.
+    send key a cmd
+    send type keep
+    expect '^browser: title [0-9]* value keep$' "the page didn't take \"keep\""
+    send $ime
+    typed_after l n
+    expect '^browser: title [0-9]* value keepn$' \
+      "the page that kept ⌘L didn't get the letter composed while it was held: $(grep '^browser: title' "$log" | tail -1)"
+    send type ihongo
+    send key escape
+    send ime off
+    send type x
+    expect '^browser: title [0-9]* value keepnx$' \
+      "the next composition replaced the letter the page that kept ⌘L got: $(grep '^browser: title' "$log" | tail -1)"
   fi
   send key a cmd
   send type y
