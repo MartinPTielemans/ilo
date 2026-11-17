@@ -468,7 +468,8 @@ if [ "$(uname)" = Darwin ]; then
   send key down
   send key escape
   page_says ' field - ' "escape in the composition didn't cancel it"
-  sed -n "$((n + 1)),\$p" "$log" | grep -q "before the page: \(zap or \)\?arrange\$\|^browser: arrange $tab Selected\|^browser: tab $tab arrange off\$" &&
+  sed -n "$((n + 1)),\$p" "$log" | grep -q -e "before the page: \(zap or \)\?arrange\$" \
+    -e "^browser: arrange $tab Selected" -e "^browser: tab $tab arrange off\$" &&
     fail "Arrange took a key from the composition: $(sed -n "$((n + 1)),\$p" "$log" | grep 'arrange' | tail -4)"
   send type nihongo
   send key space
