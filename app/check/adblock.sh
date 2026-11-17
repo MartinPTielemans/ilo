@@ -415,7 +415,7 @@ done
 # (#3063): the user's switch in Chrome's extensions page, or a reload a quit cut short. A load
 # keeps the reasons, and launch's own look at the setting can come before the load, so the core
 # looks again at each one. Turned off there with Ad blocking on, it blocks again at the next launch.
-# An engine without this tree's core keeps it off, which the run would read as this tree's fault.
+# An engine without this tree's core turns it on only when launch's look comes after the load.
 if engine_has ../core/ad_block.cc; then
   before=$(today)
   send key t cmd
