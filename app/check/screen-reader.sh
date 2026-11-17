@@ -5,9 +5,10 @@
 # Windows tells it took the focus. It writes each thing it would say to its log, with the key it
 # heard before, so the run's record, screen-reader-speech.txt, is what each key made NVDA say, and
 # screen-reader-focus.txt is what UI Automation and the window manager had focused after it. It
-# judges the onboarding and the sidebar: each step, each Tab through one, F6 from the page and the
-# arrows down the rows have NVDA say something, with UI Automation's focus off GPUI's unnamed root
-# and, in the sidebar, on the ringed row. Elsewhere it records.
+# judges the onboarding, the sidebar and the command bar: each step, each Tab through one, F6 from
+# the page and the arrows down the rows have NVDA say something, with UI Automation's focus off
+# GPUI's unnamed root and, in the sidebar, on the ringed row; ↓ in the bar has it say the suggestion
+# selected and where it stands. Elsewhere it records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -172,6 +173,14 @@ on_row() {
   tail -n 4 "$focus_file" | grep -q "^UI Automation focus: [A-Za-z ]* \"$1\", framework AccessKit" ||
     fail "UI Automation's focus isn't on the sidebar's $1 row after $2: $focus_file"
 }
+# NVDA says something matching $2 within 5 s of the log's line $1, or the run fails as $3 says.
+says() {
+  for _ in $(seq 50); do
+    tail -n "+$(($1 + 1))" "$nvda_log" | grep -q "^Speaking .*$2" && return 0
+    sleep 0.1
+  done
+  fail "$3: $nvda_log"
+}
 # A key the driver sends as a hand's, as NVDA hears it.
 press() {
   heard=$(wc -l < "$nvda_log")
@@ -212,7 +221,11 @@ spoken "command bar after the onboarding"
 heard=$(wc -l < "$nvda_log")
 send type exa
 spoken "typed exa"
+# ↓ selects the next suggestion while the field keeps the keyboard, and the bar's live region says
+# it and where it stands, "…, 2 of 3" (#3236).
+at=$(wc -l < "$nvda_log")
 press down
+says "$at" ", [0-9]* of [0-9]*'" "NVDA didn't say the suggestion ↓ selected in the command bar"
 press escape
 press tab
 press tab
