@@ -1002,10 +1002,12 @@ painted(() => document.title = "choose");
   [ -n "$status" ] && [ -n "$priority" ] ||
     fail "the choosing page's fields had the refs '$status' and '$priority'"
   # A picker whose list is its child (aria-owns), as Chromium's tree has it, shows its options with
-  # refs, and what's in its field, the page's own value (#2355).
-  case "$outline" in
-    *'- combobox "City" [e'*'] (holds "Ber-by-ada")'*) ;;
-    *) fail "the picker's line didn't hold the page's own value: $(printf '%s\n' "$outline" | grep City)" ;;
+  # refs. Its field is an input, whose text from the markup reads only as filled (#2355).
+  city=$(printf '%s\n' "$outline" | grep -- '- combobox "City" \[')
+  case "$city" in
+    *Ber-by-ada*) fail "the picker's line gave its input's text from the markup: $city" ;;
+    *'] (filled)' | *'] (expanded) (filled)') ;;
+    *) fail "the picker's line didn't say only that it was filled: $city" ;;
   esac
   bern=$(ref_of option Bern)
   case "$outline" in
@@ -1569,7 +1571,7 @@ button { position: absolute; left: 70vw; top: 50vh }
 <select aria-label='Moved select' style='position: absolute; left: 74vw; top: 33vh'><option selected>First<option>Second</select>
 <input aria-label=Copied style='left: 2vw; top: 71vh; height: 4vh; font-size: 3vh'>
 <textarea aria-label='Copied note' style='left: 26vw; top: 71vh; height: 4vh; font-size: 3vh'></textarea>
-<select aria-label='Default select' style='position: absolute; left: 50vw; top: 71vh; width: 20vw; height: 4vh; color: #f00; font: 3vh/1 monospace'><option>First<option selected>██████</select>
+<select aria-label='Default select' style='position: absolute; left: 50vw; top: 71vh; width: 20vw; height: 4vh; appearance: none; margin: 0; padding: 0; border: 2px solid #888; background: #fff; color: #f00; font: 3vh/1 monospace'><option>First<option selected>██████</select>
 <input aria-label=Disabled disabled value='██████' style='left: 74vw; top: 58vh'>
 <input aria-label='Toggled back' type=password value='██████' style='left: 74vw; top: 76vh'>
 <iframe id=site src=http://127.0.0.1:$port/withheld-inner.html></iframe>
