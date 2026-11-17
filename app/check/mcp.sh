@@ -1641,8 +1641,8 @@ addEventListener("message", (event) => {
     *) fail "request answered: $sent" ;;
   esac
   case "$sent" in *s3cret* | *tok-*) fail "the request's answer held the session: $sent" ;; esac
-  grep -q "^GET chromium localhost:$port/api/me cookie .*api=s3cret$port" "$out/site.log" ||
-    fail "the agent's request didn't carry the tab's session"
+  served "^GET chromium localhost:$port/api/me cookie .*api=s3cret$port" \
+    "the agent's request didn't carry the tab's session" "^GET chromium localhost:$port/api/me "
   await_log "^browser: agent activity mcp-client $frames_tab request\$" \
     "the request didn't reach the activity log"
   changes='^browser: agent mcp-client asks [0-9]*: make a change on localhost$'
@@ -1671,9 +1671,10 @@ CARD
     'POST /api/items → 201 application/json'*'{"id":8,"title":"Milk"}') ;;
     *) fail "the allowed change answered: $changed" ;;
   esac
-  # Its body on its own, as the session may hold other cookies of localhost's, such as profiles'.
-  grep "$posted" "$out/site.log" | grep -q ' body {"title":"Milk"}$' ||
-    fail "the allowed change didn't reach the site with the tab's session"
+  # Awaited, not read once: a read just after the answer missed a line the site had logged (#3314).
+  # The session may hold other cookies of localhost's, such as profiles', before the body.
+  served "$posted.*body {\"title\":\"Milk\"}\$" \
+    "the allowed change didn't reach the site with the tab's session" "^POST "
   change Dismiss 1
   [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
     fail "the denied change answered: $changed"
