@@ -63,8 +63,8 @@ takes a command a line on its standard input:
                   writes to FILE, as JSON, the attached page's elements at display: none from a
                   style sheet, as the ad blocker's hiding would be, each as the selector its tag,
                   id and classes make, with the elements that selector takes in the page and
-                  those of them shown, and of those it hid all of, which a blocker's injected
-                  style sheet hides and which the page hid itself (#3268); and with BASE, an
+                  those of them shown, and of those it hid all of, which a blocker's style
+                  sheet hides and which the page hid itself (#3268); and with BASE, an
                   earlier run's FILE for the same site, its selectors none of whose elements were
                   shown then, the page's own aside, and some are now. Logs "cdp: hidden SELECTORS
                   ELEMENTS SHOWN blocker SELECTORS page SELECTORS missed SELECTORS ELEMENTS in MS
@@ -555,8 +555,8 @@ def content():
 # style sheet, where an ad blocker's hiding would be: not those with neither id nor class, as
 # their selector would take in the page's every such element, nor those under one, nor those the
 # page hides itself with an inline style or the hidden attribute. Which of them the ad blocker
-# hid can't be told here: an extension's injected sheets and the browser's user ones never come
-# to DevTools, not even as rules a node matches, so a run is held to another's on the same site.
+# hid can't be told here: an extension's injected sheets and the browser's user ones aren't among
+# the page's style sheets, so whose() asks for the rules each element matches.
 HIDDEN_NOW = """(() => {
   const kept = new Set(["SCRIPT", "STYLE", "TEMPLATE", "HEAD", "META", "LINK", "TITLE",
                         "NOSCRIPT", "BR", "PARAM", "SOURCE", "TRACK"]);
@@ -624,17 +624,34 @@ UNMARK = """(() => {
 })()"""
 
 
-def hides_none(rule):
+def hides_none(rule, important=False):
     return any(p["name"] == "display" and p["value"].replace("!important", "").strip() == "none"
                and not p.get("disabled") and p.get("parsedOk", True)
+               and (not important or p.get("important") or "!important" in p["value"])
                for p in rule["style"].get("cssProperties", []))
+
+
+# Blink's own rules that set display: none !important (html.css), which DevTools reports as a
+# blocker's are, with origin user-agent. Its -internal- ones are left out by that word.
+BLINKS = {"audio:not([controls])", 'input[type="hidden" i]'}
+
+
+def blockers(rules):
+    """The selector lists of RULES, those matched for an element, that are a blocker's: not from
+    a style sheet of the page's, and setting display: none !important, as the native engine's
+    (core/native_ad_block.cc) and uBlock Origin's do. Blink matches a sheet injected as the
+    user's, as both are, without the sheet, so DevTools gives its rules origin user-agent rather
+    than injected, as Blink's own; its own that hide as !important are named in BLINKS."""
+    return [r["selectorList"]["text"] for r in rules
+            if r.get("origin") in ("injected", "user-agent") and hides_none(r, important=True)
+            and r["selectorList"]["text"] not in BLINKS and "-internal-" not in r["selectorList"]["text"]]
 
 
 def whose(selectors, budget=15):
     """Of SELECTORS, those a blocker hid and those the page hid itself, as two lists. A blocker's
-    hiding is a style sheet the page didn't load, one DevTools calls injected: the browser's own
-    engine's (core/ad_block_page_agent.cc) and uBlock Origin's, its procedural filters' too, which
-    hide by an attribute and a rule. The page's own is an element at display: none that no such
+    hiding is a rule from a style sheet the page didn't load, as blockers() tells it: the
+    browser's own engine's (core/ad_block_page_agent.cc) and uBlock Origin's, their procedural
+    filters' too, which hide by an attribute and a rule. The page's own is an element at display: none that no such
     rule hides, as a player's controls before it plays (#3268). A selector is the page's only
     where every element looked at is, and one not told apart in BUDGET seconds is neither, so it
     counts as the blocker's would."""
@@ -657,7 +674,7 @@ def whose(selectors, budget=15):
             if styles is None:
                 continue
             rules = [m["rule"] for m in styles.get("matchedCSSRules", []) if hides_none(m["rule"])]
-            theirs = [r["selectorList"]["text"] for r in rules if r.get("origin") == "injected"]
+            theirs = blockers(rules)
             if not theirs:
                 said[k] = "page"
                 continue
