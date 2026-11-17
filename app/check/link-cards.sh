@@ -228,8 +228,9 @@ expect '^browser: link card page$' \
 ../tools/window-screenshot.sh "$pid" "$out/link-card-plain.png" > /dev/null 2>&1 || true
 
 card "$bare_link" "https://cards.test/bare.html" "a page that says nothing"
-expect '^browser: link card page$' \
-  "a page that says nothing: ⇧ on its link showed no card of its address"
+# With no title or description, the card says the page doesn't say what it is, as a refusal does.
+expect '^browser: link card failed$' \
+  "a page that says nothing: ⇧ on its link didn't show the card saying so"
 ../tools/window-screenshot.sh "$pid" "$out/link-card-bare.png" > /dev/null 2>&1 || true
 
 # The slow page answers only once link-cards-slow.go is there, so the card waits, loading.
