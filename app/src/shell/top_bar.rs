@@ -7,9 +7,13 @@ use gpui::{
     Bounds, Context, MouseButton, MouseDownEvent, Pixels, Point, div, point, prelude::*, px, size,
 };
 
-use crate::tokens::shell::{TOP_BAR, URL_FIELD_HEIGHT};
+use crate::tokens::shell::{TOP_BAR, URL_FIELD_HEIGHT, WINDOWS_BUTTON_PLATE};
 
-use super::{CARD_INSET, LIST_TOP, PLATE_INSET, Shell, URL_FIELD_TOP};
+use super::{CARD_INSET, LIST_TOP, PLATE_INSET, Shell, URL_FIELD_TOP, WINDOW_BUTTONS};
+
+/// Windows has the window's buttons at its right corner, where the bar puts them; the Mac's and
+/// Linux's stay with the header's (#3160).
+const BUTTONS_AT_BAR_END: bool = cfg!(target_os = "windows");
 
 impl Shell {
     /// Follows Top bar: the window lays itself out with the bar, or without.
@@ -49,6 +53,17 @@ impl Shell {
         }
     }
 
+    /// Whether the window's buttons are at the bar's right end, away from the sidebar on the left.
+    /// With the sidebar on the right they're there already, in its column, and full screen has
+    /// none.
+    pub(super) fn buttons_at_bar_end(&self) -> bool {
+        BUTTONS_AT_BAR_END
+            && self.bar_on()
+            && self.little.is_none()
+            && !self.right
+            && !self.full_screen
+    }
+
     /// Where the sidebar's list starts: under the URL field, or in its place with the bar on.
     pub(super) fn list_start(&self) -> f32 {
         match self.bar_on() {
@@ -58,13 +73,19 @@ impl Shell {
     }
 
     /// The URL field's box in the bar, across the window: from the docked sidebar's edge to the
-    /// card's right edge, mirrored with the sidebar on the right, centred on the header's line.
-    /// The sidebar hidden, it stays where it is, as do the header's buttons.
+    /// card's right edge, or the window's buttons there, mirrored with the sidebar on the right,
+    /// centred on the header's line. The sidebar hidden, it stays where it is, as do the header's
+    /// buttons.
     pub(super) fn bar_field_bounds(&self) -> Bounds<Pixels> {
         let window = f32::from(self.viewport.width);
+        // The buttons' far edge from the corner, and the card's inset past it.
+        let buttons = match self.buttons_at_bar_end() {
+            true => WINDOW_BUTTONS[2].0 + WINDOWS_BUTTON_PLATE / 2.,
+            false => 0.,
+        };
         let (left, right) = match self.right {
             true => (CARD_INSET, window - self.width()),
-            false => (self.width(), window - CARD_INSET),
+            false => (self.width(), window - buttons - CARD_INSET),
         };
         Bounds::new(
             point(px(left), px((TOP_BAR - URL_FIELD_HEIGHT) / 2.)),
