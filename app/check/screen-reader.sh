@@ -8,7 +8,8 @@
 # judges the onboarding, the sidebar and the command bar: each step, each Tab through one, Tab
 # from the window, F6 from the page and the arrows down the rows have NVDA say something, with UI
 # Automation's focus off GPUI's unnamed root and, in the sidebar, on the ringed row; ↓ in the bar
-# has it say the suggestion selected and where it stands. Elsewhere it records.
+# has it say the suggestion selected and where it stands, and ⇧Tab from a page's first control
+# keeps the keyboard in ilo's window. Elsewhere it records.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -261,6 +262,11 @@ press tab
 press down
 press down
 press tab shift
+# ⇧Tab again, from the page's first control, the link: the keyboard stays in ilo's window, as
+# Chrome's goes to its own controls, never to another app's (#3220). Where in it is recorded.
+press tab shift
+tail -n 4 "$focus_file" | grep -q "^foreground window: .* (ilo's)$" ||
+  fail "⇧Tab from the page's first control took the keyboard out of ilo's window: $focus_file"
 # Out of the page into the sidebar with F6, Focus Sidebar, and along its rows: each is read by its
 # name, with UI Automation's focus on GPUI's node for it, not Chromium's window (#3151). A second
 # tab first, at the top of Today, so ↓ has the first page's row to go to.
