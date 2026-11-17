@@ -34,6 +34,7 @@
 #include "browser_core/device_chooser.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/downloads.h"
+#include "browser_core/board.h"
 #include "browser_core/boosts.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/drm_request.h"
@@ -262,6 +263,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     Arrange::RegisterProfilePrefs();
     RegisterAdBlockPrefs();
     RegisterWebRtc();
+    RegisterBoards();
     widevine::Start();
   }
 
