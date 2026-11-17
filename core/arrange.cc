@@ -733,7 +733,6 @@ constexpr char16_t kScript[] =
 
     // One pass: the page as the site lays it out, the changes' lists, and the styles they make. A
     // change that puts a thing where it doesn't fit is left out, and the pass made again without it.
-    let took = 0, laid = 0;
     function arrange() {
       const now = live.filter((s) => !(carry && involves(s.c, carry.el)));
       const skip = new Set();
@@ -757,9 +756,7 @@ constexpr char16_t kScript[] =
         for (const s of bad) { s.misfit = 'fit'; skip.add(s); }
       }
       for (const s of now) if (!skip.has(s)) s.applied = true;
-      laid = 0;
       for (const l of (p && p.realized) || []) {
-        laid += l.items.length;
         watch(l.parent);
         for (const e of l.items) watch(e.el);
       }
@@ -771,12 +768,10 @@ constexpr char16_t kScript[] =
     function layoutAll() {
       if (busy || !on) return;
       busy = true;
-      const t0 = performance.now();
       try {
         still(arrange);
         for (const s of live) { watch(s.el); watch(s.ref); }
       } finally {
-        took = performance.now() - t0;
         mo.takeRecords();
         busy = false;
       }
@@ -823,8 +818,6 @@ constexpr char16_t kScript[] =
       layoutAll();
     }
     const misfits = () => live.map((s, i) => (fits(s) ? -1 : i)).filter((i) => i >= 0);
-    // The changes that found no place, and what the last pass took, for the core's log.
-    const fitted = () => ({ misfits: misfits(), took: Math.round(took * 100) / 100, things: laid });
     const involves = (c, el) => !!el && (find(c.target) === el || (refOf(c) && c.kind === 'trade' && find(c.with.target) === el));
 
     // ---- The mode: pointing, carrying, previewing, selected.
@@ -1167,9 +1160,9 @@ constexpr char16_t kScript[] =
         holdUntil = performance.now() + HOLD;
         apply(committed);
         if (committed.some((c) => refOf(c))) setTimeout(() => { holdUntil = 0; layoutAll(); }, HOLD);
-        return fitted();
+        return { misfits: misfits() };
       },
-      fits() { layoutAll(); return fitted(); },
+      fits() { layoutAll(); return { misfits: misfits() }; },
       // The site's own layout back at once.
       unload() {
         if (mode) ops.off();
@@ -1550,12 +1543,6 @@ void Arrange::HoldEnded() {
 }
 
 void Arrange::Fits(base::Value answer) {
-  // What the layout pass took, for check/arrange-order.sh's measure of a long list.
-  const base::DictValue* fitted = answer.is_dict() ? &answer.GetDict() : nullptr;
-  if (std::optional<double> took = fitted ? fitted->FindDouble("took") : std::nullopt) {
-    LOG(ERROR) << "browser: tab " << tab_ << " arrange laid out "
-               << fitted->FindInt("things").value_or(0) << " things in " << *took << " ms";
-  }
   const base::ListValue* misfits = answer.is_dict() ? answer.GetDict().FindList("misfits") : nullptr;
   if (!misfits || !Host().tab_arrangement_fits) {
     return;

@@ -8,8 +8,12 @@
 # - a settle into another column, and a trade of the thing it settled beside;
 # - a row's trade, and a settle beside one of the two;
 # - an anchor the site hides takes its thing's place, and comes back when the site shows it.
-# Last, in the mode, the mini bar's Put back takes each of a file's three changes back in all six
+# Then, in the mode, the mini bar's Put back takes each of a file's three changes back in all six
 # orders, and each time the page is the file without the changes taken back.
+# Last, a column of 300 things with one settled to its top and one traded: each pass takes
+# everything down and lays it all out again, so the page's own PerformanceObserver says the
+# longest task while the file is turned on and again after the window's width changes, and
+# neither may reach 50 ms.
 
 serve
 # The page says, once nothing moves, its things in each list by where they're drawn: the column's
@@ -61,6 +65,45 @@ setInterval(() => {
 }, 100);
 </script>' > "$out/site/arrange-order.html"
 own='a,b,c,w side s,n row r1,r2,r3,r4 hidden -'
+
+# The long list's page: 300 things in a column as wide as part of the view, so a width change
+# moves every one. Once nothing has moved for half a second it says which of four things is on top,
+# the order of the traded two, its view, how many times Mark was pressed, and the longest task the
+# browser reported since the last press, by long-animation-frame where it has it.
+things=
+for i in $(seq 0 299); do
+  things="$things<section id=\"t$i\" aria-label=\"Thing $i\">Thing $i</section>"
+done
+printf '%s' '<!doctype html><meta charset="utf-8"><title>-</title>
+<style>
+body { margin: 0; font: 14px sans-serif; background: rgb(243, 245, 246) }
+#list { margin: 40px 0 40px 160px; width: 50vw; display: flex; flex-direction: column; gap: 8px }
+#list > section { height: 32px; background: rgb(217, 226, 230) }
+#mark { position: fixed; left: 20px; top: 40px; width: 100px; height: 40px }
+</style>
+<button id="mark">Mark</button>
+<div id="list">'"$things"'</div>
+<script>
+const type = PerformanceObserver.supportedEntryTypes.includes("long-animation-frame") ? "long-animation-frame" : "longtask";
+let longest = 0, since = 0, mark = 0;
+new PerformanceObserver((list) => {
+  for (const e of list.getEntries()) if (e.startTime >= since) longest = Math.max(longest, e.duration);
+}).observe({ type, buffered: true });
+document.getElementById("mark").addEventListener("click", () => { since = performance.now(); longest = 0; mark++; });
+const top = (id) => document.getElementById(id).getBoundingClientRect().top;
+let now, still = 0, said;
+setInterval(() => {
+  if (document.getAnimations().some((x) => x.playState === "running")) return;
+  const first = ["t0", "t100", "t200", "t299"].sort((x, y) => top(x) - top(y))[0];
+  const was = now;
+  now = "first " + first + " pair " + (top("t100") < top("t200") ? "t100,t200" : "t200,t100") +
+    " view " + innerWidth + "x" + innerHeight + " mark " + mark;
+  if (now !== was) { still = 0; return; }
+  if (++still < 5) return;
+  const title = "long " + now + " longest " + Math.round(longest) + " by " + type;
+  if (title !== said) document.title = said = title;
+}, 100);
+</script>' > "$out/site/arrange-long.html"
 
 host=${site#http://}
 host=${host%%:*}
@@ -126,6 +169,12 @@ placed() {
   expect "^browser: arrangement for $host ([0-9]* bytes) \(New\|Changed\)\$" \
     "$1: the app didn't read the file written outside ilo as one kept off"
   shows "$own" "$1: the file written outside ilo wasn't kept off"
+  turn_on "$1"
+  shows "$3" "$1"
+  ordered="$ordered $1,"
+}
+# Turns the site's file on from the Site Controls, the user's path. $1 says the case.
+turn_on() {
   send key l cmd
   expect '^browser: command bar shown$' "⌘L didn't open the command bar"
   send type site controls
@@ -143,8 +192,6 @@ placed() {
   expect "^browser: arrangement for $host ([0-9]* bytes) kept true\$" "$1: Turn On didn't keep the file"
   send key escape
   expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
-  shows "$3" "$1"
-  ordered="$ordered $1,"
 }
 # A thing of the page by its id, and a trade and a settle of them, as Arrange's file has them.
 thing() { printf '"name":"%s","role":"region","target":{"path":"#%s"}' "$1" "$1"; }
@@ -247,7 +294,62 @@ for order in acw awc caw cwa wac wca; do
 done
 ../tools/window-screenshot.sh "$pid" "$out/arrange-order-put-back.png" || fail "no window to capture"
 
+# The long list: its page in the same tab, Mark pressed before the file is turned on and again
+# before the width changes, so each reading is that step's alone.
+go_from_bar "${site}arrange-long.html"
+long() { said | sed -n 's/^long \(.*\) longest [0-9]* by [a-z-]*$/\1/p'; }
+longest() { said | sed -n 's/^long .* longest \([0-9]*\) by [a-z-]*$/\1/p'; }
+# Waits for the long page to say $1, up to its view and Mark's count, else fails with $2.
+long_shows() {
+  for _ in $(seq 100); do
+    case "$(long)" in "$1"*) return 0 ;; esac
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 0.1
+  done
+  fail "$2: the page says $(said)"
+}
+# Presses Mark and waits for the page to count press $1.
+mark() {
+  send click $(page_at 70 60)
+  for _ in $(seq 100); do
+    case "$(long)" in *" mark $1") return 0 ;; esac
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 0.1
+  done
+  fail "a click on the long page's Mark didn't count press $1: the page says $(said)"
+}
+long_shows 'first t0 pair t100,t200 view ' "the long list's page didn't draw"
+mark 1
+printf '{"version":1,"changes":[%s]}' "$(settle_of t299 before t0),$(trade_of t100 t200)" > "$arranged"
+expect "^browser: arrangement for $host ([0-9]* bytes) \(New\|Changed\)\$" \
+  "the long list: the app didn't read the file written outside ilo as one kept off"
+turn_on 'the long list'
+long_shows 'first t299 pair t200,t100 view ' \
+  "the long list's file didn't settle Thing 299 to its top and trade Thing 100 with Thing 200"
+on_ms=$(longest)
+by=$(said | sed 's/.* by //')
+read -r vw vh << EOF
+$(long | sed -n 's/.* view \([0-9]*\)x\([0-9]*\) .*/\1 \2/p')
+EOF
+mark 2
+# The window as wide as the view was, as mini-bar.sh does, so the view narrows by the sidebar.
+send resize "$vw" $((vh + 40))
+for _ in $(seq 100); do
+  case "$(long)" in "first t299 pair t200,t100 view ${vw}x"*) sleep 0.1 ;; "first t299 pair t200,t100 view "*) break ;; *) sleep 0.1 ;; esac
+done
+case "$(long)" in
+  "first t299 pair t200,t100 view ${vw}x"*) fail "the long page's view didn't change width after a resize: the page says $(said)" ;;
+  "first t299 pair t200,t100 view "*" mark 2") ;;
+  *) fail "the long list's arrangement didn't hold after a resize: the page says $(said)" ;;
+esac
+resized_ms=$(longest)
+echo "arrange-order: 300 things, the longest task by $by: ${on_ms} ms turning the file on, ${resized_ms} ms after the width changed from ${vw} to $(long | sed 's/.* view \([0-9]*\)x.*/\1/')."
+[ "$on_ms" -lt 50 ] || fail "turning on a file for 300 things made a task of $on_ms ms, at or over 50"
+[ "$resized_ms" -lt 50 ] || fail "a width change with a file for 300 things made a task of $resized_ms ms, at or over 50"
+../tools/window-screenshot.sh "$pid" "$out/arrange-order-long.png" || fail "no window to capture"
+
 exec 3>&-
 quit
 echo "ok: Arrange laid each file out as one order, each change in turn:${ordered%,}. Put back took" \
-  "each of three changes back in every order, the page each time the file without them:$backs."
+  "each of three changes back in every order, the page each time the file without them:$backs." \
+  "Over 300 things no task reached 50 ms: $on_ms ms turning the file on, $resized_ms ms after a width change."
