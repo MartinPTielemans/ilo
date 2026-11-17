@@ -490,8 +490,10 @@ expect "^browser: download folder of profile $work $(printf '%s\n' "$work_downlo
   "Change… didn't set the second profile's download folder: $(grep '^browser: download folder' "$log" | tail -1)"
 # Each profile picks its search engine and archive time, the first keeping its own.
 post clickkey $(drawn "search engine $work")
-expect '^browser: menu shown .*DuckDuckGo (checked)' \
-  "the second profile's Search engine didn't show the engines, with DuckDuckGo chosen"
+# DuckDuckGo is marked as the engine a profile searches with until one is picked.
+expect '^browser: menu shown .*DuckDuckGo (default) (checked)' \
+  "the second profile's Search engine didn't show the engines, with DuckDuckGo chosen and marked the default"
+../tools/window-screenshot.sh "$pid" "$out/settings-search-engines.png" || fail "no window to capture"
 send choose Microsoft Bing
 expect "^browser: profile $work searches with Microsoft Bing\$" "choosing Bing didn't set the second profile's"
 send clickkey $(drawn "toolbar Tabs & Sidebar")
