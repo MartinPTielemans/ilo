@@ -169,18 +169,24 @@ for i in 1 2; do
   expect "^browser: selected $c in " "a click on example.com's row didn't show it"
   sleep 0.7
 done
+# ⌃Tab as a hand types it, ⌃ going up after the Tab: that ends the walk it starts, so the next goes
+# back to the tab it left. The driver's key holds ⌃ only for its own key and never says it went up,
+# and while ⌃ is held a second Tab opens the Recent Tabs Switcher instead (Arc).
+ctrl_tab() {
+  send key tab ctrl
+  send flags
+}
 if [ -n "$held" ]; then
   mark "ctrl2 moving"
   send key 2 ctrl
   expect "^browser: space $second in " "⌃2 didn't show the second Space"
   # Its page in the pictures for as long as each switch before had.
   sleep 0.7
-  # One mark for the ten, as each alone is too short for enough pictures. A walk goes on while ⌃
-  # is held, and each of these lets it go, so they go back and forth between the Space's two tabs
-  # shown last, the pages that move.
+  # One mark for the ten, as each alone is too short for enough pictures. Each lets ⌃ go, so they go
+  # back and forth between the Space's two tabs shown last, the pages that move.
   mark ctrltabs
   for i in 1 2 3 4 5 6 7 8 9 10; do
-    send key tab ctrl
+    ctrl_tab
     expect "^browser: selected [0-9][0-9]* in " "⌃Tab $i in a run of them didn't show a tab"
   done
   # The last switch's page in the pictures for as long as each switch before had.
@@ -216,7 +222,7 @@ if [ -n "$held" ]; then
   # cursor each, would show for the 250 ms.
   send move $page_point
   expect "^browser: title $shown moved [0-9]*\$" "a pointer move over the page area didn't reach the page shown"
-  send key tab ctrl
+  ctrl_tab
   expect "^browser: selected $other in " "⌃Tab didn't show the other page that moves"
   let_go "⌃Tab with the pointer over the page area"
   turned=$step
@@ -225,7 +231,7 @@ if [ -n "$held" ]; then
   none_since "^browser: title $shown moved " "$turned" ||
     fail "a pointer move just after ⌃Tab reached the page it let go too"
   left "after a pointer move" "$step"
-  send key tab ctrl
+  ctrl_tab
   expect "^browser: selected $shown in " "⌃Tab didn't show the first page that moves again"
   let_go "⌃Tab back"
   send click $((width - 110)) $((height - 60)) shift
