@@ -80,9 +80,9 @@ gfx::Rect InPicture(const gfx::RectF& box,
                     const gfx::Rect& source,
                     const gfx::Size& picture);
 
-// Paints each of |boxes| over with a hatch in its own background, as a filled field whose contents
-// are withheld looks in an agent's picture: filled, with nothing of the text, not even its length.
-// |scale| is the picture's pixels per CSS pixel.
+// Paints each of |boxes| over with a grey hatch, as a filled field whose contents are withheld
+// looks in an agent's picture: filled, with nothing of the text, not even its length, and the
+// same whatever the field holds. |scale| is the picture's pixels per CSS pixel.
 void Hatch(SkBitmap& picture, const std::vector<gfx::Rect>& boxes, float scale);
 
 }  // namespace browser_core
