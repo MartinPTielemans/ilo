@@ -31,7 +31,7 @@ index a91818acd0..2d1de9aa21 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..ef6b8af668 100644
+index a5390e77f8..9cd66b3f5c 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
 @@ -1,4 +1,26 @@
@@ -48,7 +48,7 @@ index a5390e77f8..ef6b8af668 100644
 +    Corner, CursorPicture, EmbeddedKeyboard, EmbedderDrag, EmbedderDropped, answered_key, current_platform, dispatch_embedded,
 +    dispatch_embedded_after_read, embed, embed_wayland, embed_x11, embedded_fd, embedder_scale, embedder_size, embedder_windows_going,
 +    give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
-+    linux_platform, move_overlay, new_host_window, overlay_first_frame_scale, overlay_size, overlays_blend, overlays_blur,
++    linux_platform, move_overlay, new_host_window, when_overlay_presented, overlay_first_frame_scale, overlay_size, overlays_blend, overlays_blur,
 +    pointer_pressed,
 +    set_overlay_blur, set_overlay_cursor, set_overlay_keyboard,
 +    set_overlay_managed, set_overlay_menu, set_overlay_outline, set_overlay_outlines, set_overlay_panel,
