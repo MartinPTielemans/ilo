@@ -57,6 +57,7 @@ mark() { echo "$(now) $*" >> "$marks"; }
 ../tools/window-frames.sh "$pid" 120 "$stop" 244 26 $((width - 270)) $((height - 52)) \
   "$out/switch-flat" > "$frames" 2> "$out/switch-frames-capture.log" &
 capture=$!
+capturing "$capture" "$stop"
 for _ in $(seq 600); do
   grep -q '^capturing' "$frames" && break
   kill -0 "$capture" 2> /dev/null || break
