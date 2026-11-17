@@ -228,6 +228,17 @@ void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size) {
       widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget());
 }
 
+void ComposeThroughWindow(void* surface, views::Widget* widget) {
+  wl::WaylandProxy* proxy = wl::WaylandProxy::GetInstance();
+  if (!proxy) {
+    return;
+  }
+  proxy->SetEmbedderTextInputSurface(
+      static_cast<wl_surface*>(surface),
+      widget ? widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget()
+             : gfx::kNullAcceleratedWidget);
+}
+
 bool TakeKeyboardBack(views::Widget* widget) {
   gfx::Size size;
   auto* surface = static_cast<wl_surface*>(WaylandSurfaceOf(widget, &size));
