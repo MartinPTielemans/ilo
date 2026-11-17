@@ -183,21 +183,11 @@ std::u16string LabelOf(const base::DictValue& option) {
       /*trim_sequences_with_line_breaks=*/true);
 }
 
-// A described field's value in the page's markup: an input's value attribute, a textarea's text,
-// or a select's option marked selected, else its first. None for anything else, as an editable
-// region's.
+// A described select's value in the page's markup: its option marked selected, else its first.
+// None for any other field, whose markup doesn't count (FieldFacts::select).
 std::optional<std::u16string> MarkupOf(const base::DictValue& node) {
   const std::string* name = node.FindString("nodeName");
-  if (!name) {
-    return std::nullopt;
-  }
-  if (*name == "INPUT") {
-    return base::UTF8ToUTF16(AttributeOf(node, "value").value_or(std::string()));
-  }
-  if (*name == "TEXTAREA") {
-    return base::UTF8ToUTF16(ChildText(node));
-  }
-  if (*name != "SELECT") {
+  if (!name || *name != "SELECT") {
     return std::nullopt;
   }
   std::vector<const base::DictValue*> options;
@@ -226,7 +216,8 @@ std::optional<std::u16string> MarkupOf(const base::DictValue& node) {
 }
 
 // What |described|, a field as DescribeField gives it, adds to |facts|: whether its type or
-// autocomplete makes it secret, and its value in the markup. One that couldn't be read is secret.
+// autocomplete makes it secret, and a select's value in the markup. One that couldn't be read, or
+// wasn't, is secret.
 void AddDescribed(FieldFacts& facts, const base::DictValue* described) {
   const base::DictValue* node = described ? described->FindDict("node") : nullptr;
   if (!node) {
@@ -242,6 +233,19 @@ void AddDescribed(FieldFacts& facts, const base::DictValue* described) {
   const std::string* name = node->FindString("nodeName");
   if (name && *name == "SELECT") {
     facts.value = base::CollapseWhitespace(facts.value, /*trim_sequences_with_line_breaks=*/true);
+  }
+}
+
+// The most fields one read asks the page about, each a round trip to its renderer. Past it a field
+// reads filled, so a page with very many can't make an outline or a picture slow.
+constexpr size_t kMostDescribed = 64;
+
+void Bound(std::vector<std::pair<int64_t, FieldFacts>>& fields) {
+  size_t described = 0;
+  for (auto& [element, facts] : fields) {
+    if (CouldShow(facts) && ++described > kMostDescribed) {
+      AddDescribed(facts, nullptr);
+    }
   }
 }
 
@@ -1946,6 +1950,7 @@ void AgentPage::ReadFields(std::unique_ptr<Withholding> withholding, size_t next
                facts.secret = Has(*dict, "wasPassword");
                facts.autofilled = Has(*dict, "autofilled");
                facts.fixed = IsDisabled(node) || Has(*dict, "readonly");
+               facts.select = IsRole(*dict, "combobox");
                if (const auto typed = page->typed_.find(element); typed != page->typed_.end()) {
                  facts.typed = typed->second;
                }
@@ -1959,6 +1964,7 @@ void AgentPage::ReadFields(std::unique_ptr<Withholding> withholding, size_t next
 
 void AgentPage::Cover(std::unique_ptr<Withholding> withholding, size_t next) {
   if (next >= withholding->unread.size()) {
+    Bound(withholding->fields);
     NextField(std::move(withholding), 0);
     return;
   }
@@ -2006,13 +2012,18 @@ void AgentPage::NextField(std::unique_ptr<Withholding> withholding, size_t next)
     std::move(then).Run(std::move(withholding->boxes));
     return;
   }
+  // Any other field hatches whatever the page says of it.
+  if (!CouldShow(withholding->fields[next].second)) {
+    Withhold(std::move(withholding), next, nullptr);
+    return;
+  }
   const int64_t element = withholding->fields[next].first;
   DescribeField(element, base::BindOnce(&AgentPage::Withhold, weak_factory_.GetWeakPtr(),
                                         std::move(withholding), next));
 }
 
 void AgentPage::DescribeField(int64_t element, Reply then) {
-  // Its attributes, then a textarea's text or a select's options, for its value in the markup.
+  // Its attributes, then a select's options, for its value in the markup.
   Send("DOM.describeNode", base::DictValue().Set("backendNodeId", NodeOfElement(element)),
        base::BindOnce(
            [](base::WeakPtr<AgentPage> page, int64_t element, Reply then,
@@ -2022,14 +2033,13 @@ void AgentPage::DescribeField(int64_t element, Reply then) {
              }
              const base::DictValue* node = result ? result->FindDict("node") : nullptr;
              const std::string* name = node ? node->FindString("nodeName") : nullptr;
-             const int depth = !name ? 0 : *name == "SELECT" ? 3 : *name == "TEXTAREA" ? 1 : 0;
-             if (!depth) {
+             if (!name || *name != "SELECT") {
                std::move(then).Run(result);
                return;
              }
              page->Send(
                  "DOM.describeNode",
-                 base::DictValue().Set("backendNodeId", NodeOfElement(element)).Set("depth", depth),
+                 base::DictValue().Set("backendNodeId", NodeOfElement(element)).Set("depth", 3),
                  std::move(then), SlotOfElement(element));
            },
            weak_factory_.GetWeakPtr(), element, std::move(then)),
@@ -2491,11 +2501,13 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
       facts.secret = passwords.contains(*element) || Has(*dict, "wasPassword");
       facts.autofilled = Has(*dict, "autofilled");
       facts.fixed = IsDisabled(node) || Has(*dict, "readonly");
+      facts.select = IsRole(*dict, "combobox");
       if (const auto typed = typed_.find(*element); typed != typed_.end()) {
         facts.typed = typed->second;
       }
       filled.emplace_back(*element, std::move(facts));
     }
+    Bound(filled);
     ReadContents(std::move(nodes), std::move(passwords), std::move(filled), 0);
     return;
   }
@@ -2523,8 +2535,8 @@ void AgentPage::ReadContents(base::ListValue nodes,
                              std::set<int64_t> passwords,
                              std::vector<std::pair<int64_t, FieldFacts>> filled,
                              size_t next) {
-  // An empty field needs nothing more of the page.
-  while (next < filled.size() && filled[next].second.value.empty()) {
+  // Only a field that could show what it holds needs anything more of the page.
+  while (next < filled.size() && !CouldShow(filled[next].second)) {
     ++next;
   }
   if (next < filled.size()) {

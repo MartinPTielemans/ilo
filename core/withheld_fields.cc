@@ -61,10 +61,16 @@ Seen SeenOf(const FieldFacts& field) {
   if (field.secret || field.autofilled) {
     return Seen::kFilled;
   }
-  if ((field.typed && *field.typed == field.value) || field.fixed || field.markup == field.value) {
+  if ((field.typed && *field.typed == field.value) || field.fixed ||
+      (field.select && field.markup == field.value)) {
     return Seen::kValue;
   }
   return field.typed ? Seen::kChanged : Seen::kFilled;
+}
+
+bool CouldShow(const FieldFacts& field) {
+  return !field.value.empty() && !field.secret && !field.autofilled &&
+         (field.typed || field.fixed || field.select);
 }
 
 bool Withheld(const FieldFacts& field) {

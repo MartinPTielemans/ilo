@@ -25,8 +25,10 @@ struct FieldFacts {
   bool autofilled = false;
   // Disabled or read-only, which neither the user nor autofill can fill.
   bool fixed = false;
-  // Its value in the page's markup: an input's value attribute, a textarea's text, or a select's
-  // option marked selected.
+  // A select, by its role: the only field whose markup counts. A field is the page's own only
+  // while the page's markup is what filled it, which the core can't tell of an input or a textarea.
+  bool select = false;
+  // A select's value in the page's markup: its option marked selected, else its first.
   std::optional<std::u16string> markup;
   // What the agent's own typing or choosing left in it, as the field read after it settled.
   std::optional<std::u16string> typed;
@@ -37,7 +39,7 @@ enum class Seen {
   // It holds nothing.
   kEmpty,
   // What it holds: the agent's own typing, unchanged, or the page's own value, a read-only or
-  // disabled field's or the one its markup gives.
+  // disabled field's or a select's option its markup marks selected.
   kValue,
   // That it holds something, which the core can't name as either: the user's typing, what
   // autofill or a password manager put there, and a secret field's contents always, even the
@@ -47,6 +49,11 @@ enum class Seen {
   kChanged,
 };
 Seen SeenOf(const FieldFacts& field);
+
+// Whether reading the field's attributes and markup could let SeenOf show what it holds: what the
+// agent typed, a read-only or disabled field's, or a select's. Any other filled field reads filled
+// whatever they say, so the page isn't asked about it.
+bool CouldShow(const FieldFacts& field);
 
 // Whether what the field holds is withheld from an agent: anything SeenOf doesn't show.
 bool Withheld(const FieldFacts& field);

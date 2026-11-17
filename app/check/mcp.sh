@@ -130,7 +130,12 @@ printf '%s' 'for (const style of ["position: fixed; left: 40vw; top: 76vh", "dis
 const changed = document.querySelector("[aria-label=\"Extension changed\"]");
 changed.addEventListener("input", () => {
   if (changed.value.length == 6) changed.value += "█";
-});' > "$extension/withheld.js"
+});
+for (const label of ["Copied", "Copied note"]) {
+  const field = document.querySelector("[aria-label=\"" + label + "\"]");
+  field.value = "██████";
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+}' > "$extension/withheld.js"
 printf '%s' '<!doctype html><meta charset=utf-8><style>
 body { margin: 0; background: #fff; color: #f00; font: 60vh/1 monospace;
   -webkit-text-stroke: 0.1em #f00; overflow: hidden }
@@ -703,7 +708,9 @@ if [ "$driven" = 1 ]; then
   # head, read before them, wouldn't say, and it has painted (painted.js, site.sh).
   printf '%s' '<script src="painted.js"></script>
 <p style="position:relative;z-index:1;pointer-events:none">Fields for the agents check.</p>
-<label>Name <input id=typed style="position:fixed;inset:0;width:100%;height:100%"></label>
+<label>Name <input id=typed style="position:fixed;inset:0;width:100%;height:100%;color:#f00"></label>
+<label>Draft <textarea id=draft
+  style="position:fixed;top:0;right:0;width:25%;height:15%;z-index:2;color:#f00"></textarea></label>
 <label>Password <input id=password type=password></label>
 <label>Email <input id=email autocomplete=email></label>
 <label>Card <input id=card autocomplete=cc-number value=4111111111111111></label>
@@ -713,7 +720,14 @@ if [ "$driven" = 1 ]; then
 <script>
 password.value = "hunter2-by-ada";
 email.value = "ada@example.com";
-typed.oninput = () => document.title = "typed";
+typed.oninput = () => {
+  typed.setAttribute("value", typed.value);
+  document.title = "typed";
+};
+draft.oninput = () => {
+  draft.textContent = draft.value;
+  document.title = "drafted";
+};
 // A form'"'"'s Send on ⌘↩ or Ctrl+Enter, which would keep Hand Back'"'"'s key from ilo (#1080).
 onkeydown = (e) => {
   if (e.key == "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -734,6 +748,9 @@ painted(() => document.title = "fields");
   [ "$focus" = RenderWidgetHostViewCocoa ] || fail "a click on the fields page left focus on $focus"
   send type typed-by-ada
   expect "^browser: title $agent_tab typed\$" "typing didn't reach the page's field"
+  send key tab
+  send type drafted-by-ada
+  expect "^browser: title $agent_tab drafted\$" "typing didn't reach the page's textarea"
   # The page keeps ⌘↩ as its form's Send, so Hand Back's key reaches ilo before it (#1080).
   hand_back_pressed "$presses"
   grep -q "^browser: title $agent_tab sent\$" "$log" &&
@@ -744,38 +761,43 @@ painted(() => document.title = "fields");
     *"Fields for the agents check."*) ;;
     *) fail "reading the fields page didn't give its prose: $read" ;;
   esac
-  secrets="typed-by-ada hunter2-by-ada ada@example.com 4111111111111111 note-by-ada editable-by-ada
-    chosen-by-ada"
+  secrets="typed-by-ada drafted-by-ada hunter2-by-ada ada@example.com 4111111111111111 note-by-ada
+    editable-by-ada chosen-by-ada"
   for secret in $secrets; do
     case "$read" in *"$secret"*) fail "reading the fields page gave a field's value, $secret" ;; esac
   done
 
   # The outline names the fields by ref and the password field off limits. A field shows what it
-  # holds only where that's the page's own, as the note's text and the select's option marked
-  # selected are, and of any other only that it's filled. A select's line names its options, the
-  # page's own (#2355).
+  # holds only where that's the page's own, as the select's option marked selected is, and of any
+  # other only that it's filled: the user's typing, in a field whose page keeps its markup in step
+  # with what it holds too, and an input's or a textarea's text from the markup, which the core
+  # can't tell from that. A select's line names its options, the page's own (#2355).
   outline=$(call snapshot "{\"tab\":$agent_tab}")
   printf '%s\n' "$outline" > "$out/mcp-outline.txt"
   case "$outline" in
-    "Tab $agent_tab: typed"*"Fields for the agents check."*"(password: off limits)"*) ;;
+    "Tab $agent_tab: drafted"*"Fields for the agents check."*"(password: off limits)"*) ;;
     *) fail "the fields page's outline was: $outline" ;;
   esac
   for secret in $secrets; do
-    case $secret in note-by-ada | chosen-by-ada) continue ;; esac
+    case $secret in chosen-by-ada) continue ;; esac
     case "$outline" in *"$secret"*) fail "the fields page's outline gave a field's value, $secret" ;; esac
   done
   ref_of() { printf '%s\n' "$outline" | sed -n "s/.*- $1 \"$2\" \[\(e[0-9]*\)\].*/\1/p" | head -1; }
   line_of() { printf '%s\n' "$outline" | grep -- "- $1 \"$2\" \["; }
-  for field in Name Email Card; do
+  for field in Name Draft Email Card Note; do
     case "$(line_of textbox $field)" in
       *'] (filled)') ;;
       *) fail "the $field field's line didn't say only that it was filled: $(line_of textbox $field)" ;;
     esac
   done
-  case "$(line_of textbox Note)" in
-    *'] (holds "note-by-ada")') ;;
-    *) fail "the note's line didn't hold the page's own text: $(line_of textbox Note)" ;;
-  esac
+  # Its picture paints over the user's typing in both, whose text is red: none is left.
+  mcp "$(request screenshot "{\"tab\":$agent_tab}")" | python3 -I -c '
+import base64, json, sys
+content = json.load(sys.stdin)["result"]["content"][0]
+if content["type"] != "image":
+    sys.exit(content.get("text", "no picture"))
+open(sys.argv[1], "wb").write(base64.b64decode(content["data"]))' "$out/agent-typed.jpg" ||
+    fail "the screenshot of the fields page answered no picture"
   chosen=$(printf '%s\n' "$outline" | grep 'chosen-by-ada')
   case "$chosen" in
     *'- combobox [e'*'] (holds "chosen-by-ada") (options: "Pick one", "chosen-by-ada")') ;;
@@ -1499,14 +1521,18 @@ CARD
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 
   # The agent's picture of a page withholds what its outline does of a field, by one rule: a field
-  # holding what the agent typed and is unchanged shows it, as does the page's own value, by the
-  # markup or in a read-only or disabled field; any other field with something in it is painted
-  # over and its line says only that it's filled, so a field filled by the page's script, as the
-  # user's typing or a password manager's fill would be, one the agent typed into that the page or
-  # an extension changed since, which says it's not as the agent typed it, a password field the
-  # page made a text field and one it made a password again, a card's field and a one-time code's,
-  # even with the agent's own typing, in a frame of another site and half out of view too (#2355). Each field's text is red blocks: a field shown
-  # has red in the picture, and one withheld has none. The check's extension puts two frames of its
+  # holding what the agent typed and is unchanged shows it, as does the page's own value, a
+  # select's option its markup marks selected or a read-only or disabled field's; any other field
+  # with something in it is painted over and its line says only that it's filled, so a field filled
+  # by the page's script, as the user's typing or a password manager's fill would be, an input's
+  # value and a textarea's text from the markup, which the core can't tell from those, and fields
+  # whose page keeps their markup in step with what they hold, filled by the check's extension as a
+  # fill would be (the user's typing in such fields is the fields page's), one the agent typed into
+  # that the page or an extension changed since, which says it's not as the agent typed it, a
+  # password field the page made a text field and one it made a password again, a card's field and
+  # a one-time code's, even with the agent's own typing, in a frame of another site and half out of
+  # view too (#2355). Each field's text is red blocks: a field shown has red in the picture, and one
+  # withheld has none. The check's extension puts two frames of its
   # own with red text in the page, one over it and one in its flow below the fields, which the
   # outline leaves out, so the picture has no red there either. The site's frame has a rule of its
   # own, as one for every iframe would place the extension's too.
@@ -1541,6 +1567,9 @@ button { position: absolute; left: 70vw; top: 50vh }
 <input aria-label='Card typed' autocomplete='cc-number' style='left: 26vw; top: 33vh; height: 5vh; font-size: 4vh'>
 <input aria-label='Extension changed' style='left: 50vw; top: 33vh; height: 5vh; font-size: 4vh'>
 <select aria-label='Moved select' style='position: absolute; left: 74vw; top: 33vh'><option selected>First<option>Second</select>
+<input aria-label=Copied style='left: 2vw; top: 71vh; height: 4vh; font-size: 3vh'>
+<textarea aria-label='Copied note' style='left: 26vw; top: 71vh; height: 4vh; font-size: 3vh'></textarea>
+<select aria-label='Default select' style='position: absolute; left: 50vw; top: 71vh; width: 20vw; height: 4vh; color: #f00; font: 3vh/1 monospace'><option>First<option selected>██████</select>
 <input aria-label=Disabled disabled value='██████' style='left: 74vw; top: 58vh'>
 <input aria-label='Toggled back' type=password value='██████' style='left: 74vw; top: 76vh'>
 <iframe id=site src=http://127.0.0.1:$port/withheld-inner.html></iframe>
@@ -1555,6 +1584,8 @@ field('Shown password').type = 'text';
 field('Toggled back').type = 'text';
 field('Toggled back').type = 'password';
 field('Moved select').selectedIndex = 1;
+field('Copied').oninput = event => event.target.setAttribute('value', event.target.value);
+field('Copied note').oninput = event => event.target.textContent = event.target.value;
 let ready = 0;
 const shown = () => ++ready == 4 && (document.title = 'fields');
 painted(shown);
@@ -1588,7 +1619,7 @@ addEventListener('message', event =>
   seen_line Changed '(filled, not as you typed it)'
   seen_line 'Extension changed' '(filled, not as you typed it)'
   seen_line Filled '(filled)'
-  seen_line Default '(holds "██████")'
+  seen_line Default '(filled)'
   seen_line Fixed '(holds "██████")'
   seen_line Disabled '(disabled) (holds "██████")'
   seen_line 'Shown password' '(filled)'
@@ -1596,11 +1627,14 @@ addEventListener('message', event =>
   seen_line Card '(filled)'
   seen_line 'Card typed' '(filled)'
   seen_line 'One-time code' '(filled)'
-  seen_line Note '(holds "██████")'
-  seen_line 'Frame default' '(holds "██████")'
+  seen_line Note '(filled)'
+  seen_line Copied '(filled)'
+  seen_line 'Copied note' '(filled)'
+  seen_line 'Frame default' '(filled)'
   seen_line 'Frame filled' '(filled)'
   seen_line Below '(filled)'
   seen_line 'Moved select' '(filled) (options: "First", "Second")'
+  seen_line 'Default select' '(holds "██████") (options: "First", "██████")'
   mcp "$(request screenshot "{\"tab\":$fields_tab}")" | python3 -I -c '
 import base64, json, sys
 content = json.load(sys.stdin)["result"]["content"][0]
@@ -1645,7 +1679,7 @@ PY
   see_field Typed 3 4 21 12 shown
   see_field Changed 27 4 45 12 withheld
   see_field Filled 51 4 69 12 withheld
-  see_field Default 75 4 93 12 shown
+  see_field Default 75 4 93 12 withheld
   see_field Fixed 3 22 21 30 shown
   see_field "Shown password" 27 22 45 30 withheld
   see_field Card 51 22 69 30 withheld
@@ -1654,12 +1688,18 @@ PY
   see_field "Extension changed" 51 34 69 37 withheld
   see_field Disabled 75 60 93 68 shown
   see_field "Toggled back" 75 78 93 86 withheld
-  see_field Note 75 22 93 30 shown
-  see_field "Frame default" 6 44 28 54 shown
+  see_field Note 75 22 93 30 withheld
+  see_field Copied 3 72 21 74 withheld
+  see_field "Copied note" 27 72 45 74 withheld
+  see_field "Default select" 51 72 65 74 shown
+  see_field "Frame default" 6 44 28 54 withheld
   see_field "Frame filled" 36 44 58 54 withheld
   see_field Below 3 95 21 99 withheld
   see_field "Extension frame over the page" 41 77 64 90 withheld
   see_field "Extension frame in the page" 3 77 26 90 withheld
+  # The user's typing on the fields page, in fields whose page keeps their markup in step.
+  pixel "$out/agent-typed.jpg" 0 0 > /dev/null
+  see_field "User's typing, copied to the markup" 0 0 100 100 withheld
   call close_tab "{\"tab\":$fields_tab}" > /dev/null
 
   # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.

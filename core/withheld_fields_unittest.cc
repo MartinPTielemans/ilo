@@ -43,11 +43,19 @@ TEST(WithheldFieldsTest, WhatTheAgentSees) {
   EXPECT_TRUE(Withheld(autofilled));
   EXPECT_EQ(SeenOf(autofilled), Seen::kFilled);
 
-  // The page's own value, as its markup has it.
+  // The page's own choice, a select's option its markup marks selected.
   FieldFacts page_default = Holding(u"Netherlands");
+  page_default.select = true;
   page_default.markup = u"Netherlands";
   EXPECT_FALSE(Withheld(page_default));
   EXPECT_EQ(SeenOf(page_default), Seen::kValue);
+
+  // An input's or a textarea's markup never counts: the core can't tell it's what filled the
+  // field.
+  FieldFacts copied = Holding(u"ada@example.com");
+  copied.markup = u"ada@example.com";
+  EXPECT_TRUE(Withheld(copied));
+  EXPECT_EQ(SeenOf(copied), Seen::kFilled);
 
   // A read-only or disabled field, which nobody but the page fills.
   FieldFacts fixed = Holding(u"Order 1234");
@@ -57,6 +65,7 @@ TEST(WithheldFieldsTest, WhatTheAgentSees) {
 
   // The agent's typing put back to the page's default reads as the page's.
   FieldFacts restored = Holding(u"Netherlands");
+  restored.select = true;
   restored.markup = u"Netherlands";
   restored.typed = u"Belgium";
   EXPECT_EQ(SeenOf(restored), Seen::kValue);
@@ -88,10 +97,33 @@ TEST(WithheldFieldsTest, WhatTheAgentSees) {
   EXPECT_EQ(SeenOf(Holding(u"")), Seen::kEmpty);
 }
 
+// Only a field that may show what it holds is worth asking the page about.
+TEST(WithheldFieldsTest, OnlyAFieldThatMayShowIsDescribed) {
+  FieldFacts typed = Holding(u"Ada");
+  typed.typed = u"Ada";
+  FieldFacts fixed = Holding(u"Order 1234");
+  fixed.fixed = true;
+  FieldFacts select = Holding(u"Netherlands");
+  select.select = true;
+  for (const FieldFacts& field : {typed, fixed, select}) {
+    EXPECT_TRUE(CouldShow(field));
+  }
+  FieldFacts password = typed;
+  password.secret = true;
+  FieldFacts autofilled = select;
+  autofilled.autofilled = true;
+  FieldFacts empty = select;
+  empty.value.clear();
+  for (const FieldFacts& field : {Holding(u"ada@example.com"), password, autofilled, empty}) {
+    EXPECT_FALSE(CouldShow(field));
+  }
+}
+
 // Point's picture hatches every value, as its text and the note's panel send none: the page's
 // default, a read-only field's and the agent's own typing too, which a screenshot shows.
 TEST(WithheldFieldsTest, PointsPictureHatchesEveryValue) {
   FieldFacts page_default = Holding(u"Netherlands");
+  page_default.select = true;
   page_default.markup = u"Netherlands";
   FieldFacts fixed = Holding(u"Order 1234");
   fixed.fixed = true;
