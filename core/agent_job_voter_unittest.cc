@@ -54,6 +54,8 @@ class AgentJobVoterTest : public GraphTestHarness {
     voter_ = nullptr;
     other_ = nullptr;
     GraphTestHarness::TearDown();
+    // The harness otherwise takes the graph down only in its destructor; the voter goes with it.
+    TearDownAndDestroyGraph();
     EXPECT_FALSE(AgentJobVoter::Get());
   }
 
