@@ -1738,8 +1738,13 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   esac
   [ "$(grep -c "browser: agent close $leaving asks its page\$" "$log")" = 2 ] ||
     fail "the discard didn't ask the page first"
-  await_log "^browser: agent activity mcp-client $leaving discard_tab\$" \
+  # The activity log has it as a discard, once, after the page was asked again. The permission
+  # check's "agent activity" line at the call names the tool, close_tab.
+  await_log "^browser: agent logged mcp-client discard_tab localhost\$" \
     "the discard didn't reach the activity log"
+  asked=$(grep -n "browser: agent close $leaving asks its page\$" "$log" | tail -1 | cut -d: -f1)
+  [ "$(sed -n "$asked,\$p" "$log" | grep -c '^browser: agent logged mcp-client discard_tab localhost$')" = 1 ] ||
+    fail "the discard wasn't logged once after its page was asked"
   call list_tabs '{}' | grep -q "^. $leaving  " && fail "list_tabs listed the discarded tab"
   grep -q "^browser: page $leaving dialog [^n]" "$log" && fail "closing the leaving page showed a dialog"
   # A form the agent typed in asks, as one the user typed in would.
