@@ -202,6 +202,7 @@ pub struct Archived {
 
 mod board_list;
 mod history_list;
+pub(super) mod keys;
 pub use history_list::Visited;
 use history_list::{History, Pointed, history_text, history_when};
 
@@ -433,6 +434,9 @@ impl Space {
 /// The open Library, until it has closed.
 pub(super) struct Library {
     search: Entity<TextInput>,
+    /// Spaces' keyboard, which has no search field, and the card its ring is on, by its Space.
+    cards: gpui::FocusHandle,
+    keyed_card: Option<u64>,
     /// The search the list shows, to skip notes from the field that leave its text as it was.
     query: String,
     items: Vec<Item>,
@@ -1030,6 +1034,8 @@ impl Shell {
             steps_all: Vec::new(),
             drawn: Rc::default(),
             _search: observe,
+            cards: cx.focus_handle(),
+            keyed_card: None,
         });
         // check.sh waits for these lines.
         log!("browser: library section {}", section.name());
@@ -1068,13 +1074,7 @@ impl Shell {
             );
             cx.on_next_frame(window, |shell, _, cx| shell.library_drawn(cx));
         }
-        // The search field goes with the Library, so the keyboard goes back to the shell.
-        if !self.library_open
-            && let Some(library) = &self.library
-            && library.search.focus_handle(cx).is_focused(window)
-        {
-            window.focus(&self.focus_handle, cx);
-        }
+        self.step_library_keys(window, cx);
         if self.library.is_none() {
             self.library_resize = None;
         }
@@ -2021,7 +2021,7 @@ impl Shell {
             true => (0., COLUMN_WIDTH),
             false => (COLUMN_WIDTH, 0.),
         };
-        div()
+        let cards = div()
             .id("library-spaces")
             .absolute()
             .left(px(left))
@@ -2049,7 +2049,8 @@ impl Shell {
                 }),
             )
             .children(self.space_drop_line(Along::Cards))
-            .child(self.space_drop_listener(Along::Cards, cx))
+            .child(self.space_drop_listener(Along::Cards, cx));
+        self.with_card_keys(cards, cx)
     }
 
     /// A Space's card: its name's field over the rows the sidebar would show, in its colour. A
@@ -2168,7 +2169,7 @@ impl Shell {
                     .size(px(URL_BUTTON_GLYPH))
                     .text_color(palette.glyph(NAV)),
             );
-        div()
+        let card = div()
             .id(("space-card", id))
             .flex_none()
             .w(px(CARD_WIDTH))
@@ -2210,7 +2211,8 @@ impl Shell {
             .child(field)
             .child(div().children(rows))
             .child(more)
-            .child(self.card_handle(id, &palette, cx))
+            .child(self.card_handle(id, &palette, cx));
+        self.card_keyed(card, id, space.name.clone())
     }
 
     /// The handle at the card's foot, on the •••'s line and as far in from the card's left (Arc),
