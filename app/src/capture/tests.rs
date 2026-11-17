@@ -784,7 +784,8 @@ impl Mode {
 
 /// The toast a Board with no room for a capture shows, naming it and saying what to do.
 fn no_room(board: &str) -> String {
-    format!("{board} has too many captures waiting. Open it, then add this again.")
+    let most = boards::MOST_WAITING;
+    format!("{board} has {most} new captures you haven't seen. Open it, then add this again.")
 }
 
 /// The pointer on Add to Board opens its submenu beside the menu, its first row level with Add to
