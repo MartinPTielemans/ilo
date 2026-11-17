@@ -319,6 +319,23 @@ while read -r url <&4; do
     # run's 20 minutes on Windows' Check, needs no pictures, so it waits only after the last site,
     # and gives a bot check no second go.
     [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
+    # A page can send itself on once it has loaded, as dailymail.co.uk does to dailymail.com,
+    # which then loads itself again (#3309). DevTools asked about the page meanwhile waits on the
+    # page being replaced, and the next site would take its last load for its own. So the site's
+    # page is the one its tab ends on: a tab loading again is waited on to its last load, within
+    # the same 45 s from Return. The load's time stays the first's, the one the user waited on.
+    if [ "$loaded" != none ] && [ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ]; then
+      while sed -n "/^browser: drive $step: /,\$p" "$log" | grep "^browser: page $tab " | tail -1 |
+        grep -q ' loading 1 '; do
+        [ $(($(ms) - started)) -lt 45000 ] || fail "$url loaded (${loaded#* }) and was loading again \
+45 s after Return: $(sed -n "/^browser: drive $step: /,\$p" "$log" |
+          grep "^browser: \(page\|loaded\) $tab " | tail -3 | tr '\n' ';')"
+        kill -0 "$pid" 2> /dev/null || gone
+        sleep 0.1
+      done
+      line=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep "^browser: loaded $tab " | tail -1)
+      loaded="${loaded%% *} ${line#browser: loaded $tab }"
+    fi
     # The tab's title now: its last line, as the browser logs a title only when it changes, so a
     # second go to the same check logs none.
     title=$(grep "^browser: title $tab " "$log" | tail -1)
