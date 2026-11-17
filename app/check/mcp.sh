@@ -2161,7 +2161,8 @@ if [ "$driven" = 1 ]; then
     logs=$(grep -c "$logged" "$log" || true)
     lists=$(grep -c '^browser: downloads [0-9]*$' "$log" || true)
     flying=$(grep -c '^browser: download flying ' "$log" || true)
-    marked=$(grep -c '^browser: window [0-9]* urgent on$' "$log" || true)
+    # Not $marked, which send state sets to the driver's marked window.
+    urgent_marks=$(grep -c '^browser: window [0-9]* urgent on$' "$log" || true)
     # Its link's ref afresh, as the client reconnected since.
     saved_page=$(call snapshot "{\"tab\":$notes_tab}")
     notes_ref=$(printf '%s\n' "$saved_page" | sed -n 's/.*- link "Notes" \[\(e[0-9]*\)\].*/\1/p' | head -1)
@@ -2178,7 +2179,7 @@ if [ "$driven" = 1 ]; then
     send state
     [ "$active" = 0 ] ||
       fail "the agent's download took the keyboard from the other app's window: it's in $key, on $focus"
-    [ "$(grep -c '^browser: window [0-9]* urgent on$' "$log")" = "$marked" ] ||
+    [ "$(grep -c '^browser: window [0-9]* urgent on$' "$log" || true)" = "$urgent_marks" ] ||
       fail "the agent's download marked ilo's window urgent"
     # Sway marks a window urgent when it asks to come forward while another has the keyboard, and
     # keeps the mark until the window has the keyboard, so its tree says whether ilo's asked.
