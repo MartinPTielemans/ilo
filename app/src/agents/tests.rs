@@ -1421,6 +1421,21 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
         missed.text
     );
 
+    // A line break in the option goes to the core as it was asked, and the answer says it on one
+    // line.
+    let choose = json!({ "tab": 20, "ref": "e1", "option": "5\n1" });
+    let answer = call(&agents, "claude-code", "select", choose, cx);
+    let (.., text) = browser.pages.borrow().last().cloned().unwrap();
+    assert_eq!(text, "5\n1");
+    let missed = page_done(&agents, &browser, answer, answered(None), cx);
+    assert!(
+        missed
+            .text
+            .starts_with("Chose “5 1” in the combobox “Status”. It doesn't"),
+        "{}",
+        missed.text
+    );
+
     let pages = browser.pages.borrow().len();
     for wrong in [
         json!({ "tab": 20, "ref": "e1" }),
@@ -1458,7 +1473,8 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
     );
 
     let pages = browser.pages.borrow().len();
-    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay now" });
+    // The user's question says the option on one line, its line break a space.
+    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay\u{2028}now" });
     let _answer = call(&agents, "claude-code", "select", paying, cx);
     let question = browser
         .asked
@@ -4859,6 +4875,43 @@ mod tasks {
             0,
             "a stopped card asks for nothing"
         );
+    }
+
+    /// A step that chose an option with a line break in it says it on one line, as the card's
+    /// status and the trace's title are a line each.
+    #[gpui::test]
+    fn a_chosen_options_line_break_makes_no_second_line_of_the_step(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        let choose = json!({ "tab": 30, "ref": "e1", "option": "SPRING\n10" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "select",
+            choose,
+            Some(shop_tree()),
+            cx,
+        );
+        let status = card_of(&agents, cx).status.to_string();
+        assert_eq!(status, "Step 2 · Chose “SPRING 10” in “Coupon”");
     }
 
     /// A task's calls are its conversation's trace, each titled by what it did and opening to what

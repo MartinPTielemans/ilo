@@ -166,16 +166,18 @@ done
 grep -q '/popup\.html' "$out/site.log" && fail "the pop-up's page reached the server"
 # The page that opened it keeps the keyboard throughout, through the hold too, which at some 5 ms
 # is too short to type into: no other view took it, or the page would have blurred, and a key
-# after the tab closed reaches it. On Windows the pop-up's page still starts loading before its
-# tab closes and takes the keyboard from the opener, which never gets it back, so the key after
-# reaches no page: both known under #2806, and only once the opener blurred.
+# after the tab closed reaches it. On Windows content's focus of the held pop-up can still move the
+# keyboard from the opener to the browser window itself as the pop-up opens, before the filters
+# answer: the opener blurs, and the key after reaches no page. Both are known under #2806, and only
+# once the opener blurred.
 blurred=
 if since "$pressed" | grep -q "^browser: title $tab the opener blurred\$"; then
   windows ||
     fail "the page that opened the pop-up the filter closed lost the keyboard: $(since "$pressed" | grep -e '^browser: drive' -e "^browser: title $tab " | tr '\n' ' ')"
   blurred=1
   echo "skip: the opener keeping the keyboard while the filter closes its pop-up, known under" \
-    "#2806: on Windows the pop-up's page starts loading before its tab closes and blurs the opener"
+    "#2806: on Windows the keyboard went from the opener to the browser window as the pop-up" \
+    "opened: $(since "$pressed" | grep '^browser: drive: focuses ' | tr '\n' ' ')"
 fi
 send key x
 if [ -n "$blurred" ]; then

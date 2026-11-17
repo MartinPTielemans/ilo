@@ -2106,7 +2106,7 @@ impl Agents {
             }
             "select" => {
                 did.target = element.as_ref().map(named).unwrap_or_default();
-                did.text = page::clip(&string("option"), tools::TYPED_SHOWN);
+                did.text = page::clip(&page::one_line(&string("option")), tools::TYPED_SHOWN);
             }
             "press_key" => did.target = string("key"),
             "request" => did.target = super::request::described(arguments),
