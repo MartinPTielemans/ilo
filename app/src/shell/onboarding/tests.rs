@@ -16,7 +16,7 @@ use crate::account::{self, State, Status};
 use crate::import::ImportEvent;
 use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
 use crate::theme::Theme;
-use crate::theme_picker::SWATCHES;
+use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::{IMPORT_HOLD, SKIP_MARGIN};
 
 /// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, with the
@@ -767,9 +767,11 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
         [
             "Send a daily usage count",
             "Send crash reports",
-            "Let agents use the browser"
+            "Let agents use the browser",
+            "Continue",
+            "Skip"
         ],
-        "the stops ⇥ goes along"
+        "the stops ⇥ goes along, the step's buttons too, as a screen reader's user finds them (#3151)"
     );
     cx.update(|window, cx| window.blur(cx));
     host.take();
@@ -784,9 +786,9 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
         let said: Vec<String> = said.into_iter().map(str::to_string).collect();
         assert_eq!(host.take(), said, "Space on switch {at}");
     }
-    // Round to the first, and back to the last.
-    cx.simulate_keystrokes("tab");
-    cx.simulate_keystrokes("shift-tab");
+    // Round past Continue and Skip to the first, and back to the last switch.
+    cx.simulate_keystrokes("tab tab tab");
+    cx.simulate_keystrokes("shift-tab shift-tab shift-tab");
     press("space", cx);
     assert_eq!(
         offered(&shell, cx),
@@ -795,7 +797,7 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
             (OptIn::CrashReports, true),
             (OptIn::Agents, false),
         ],
-        "⇧⇥ from the first went back to the last"
+        "⇧⇥ from the first went back past the buttons to the last switch"
     );
 }
 
@@ -1577,4 +1579,74 @@ fn return_imports_open_tabs(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_button_imports_open_tabs(cx: &mut TestAppContext) {
     imports_open_tabs_on(Press::Click, cx);
+}
+
+/// What has the keyboard, as a screen reader reads it: its role and name. Inside a stop with an
+/// active one, as the colours have, that one.
+fn keyed(cx: &mut VisualTestContext) -> Option<(Role, String)> {
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let (_, node) = tree.nodes.iter().find(|(id, _)| *id == tree.focus)?;
+    Some((node.role(), node.label().unwrap_or_default().to_string()))
+}
+
+/// A key pressed and let go, as a keyboard sends it: Space and Return click on the release.
+fn press(key: &'static str, cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes(key);
+    let keystroke = gpui::Keystroke::parse(key).unwrap();
+    cx.update(|window, cx| {
+        window.dispatch_event(
+            gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+}
+
+/// The keyboard rests on each step as it comes, so a screen reader, which follows it, reads the
+/// step by its title. ⇥ goes along the step's stops, each read by its name, the colours' saying
+/// the one picked as the arrows move, and ↩ on Skip is Skip's press alone (#3151).
+#[gpui::test]
+fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    let dialog = |name: &str| Some((Role::Dialog, name.to_string()));
+    assert_eq!(keyed(cx), dialog(env!("APP_NAME")), "the intro");
+
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    cx.simulate_keystrokes("tab tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
+    press("enter", cx);
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Color),
+        "↩ on Skip skipped one step"
+    );
+    assert_eq!(
+        keyed(cx),
+        dialog("Pick a colour for your first Space."),
+        "the step it went on to has the keyboard"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::RadioGroup, "Colour".into())));
+    cx.simulate_keystrokes("right");
+    let first = swatch_name(SWATCHES[0]).to_string();
+    assert_eq!(
+        keyed(cx),
+        Some((Role::RadioButton, first)),
+        "→ picks the first, which it reads"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Continue".into())));
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
+    host.take();
+    press("enter", cx);
+    let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+    assert!(ending.is_some(), "↩ on Skip left the last step");
+    let colored = host
+        .take()
+        .iter()
+        .any(|call| call.starts_with("space color 1 "));
+    assert!(!colored, "as Skip, keeping the Space's colour");
 }
