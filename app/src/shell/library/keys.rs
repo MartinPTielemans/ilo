@@ -211,11 +211,16 @@ impl Shell {
         cx.notify();
     }
 
-    /// Rings the list's `rows`th row as ↓ from the field does, for the preview.
-    pub fn preview_ring_library_row(&mut self, rows: usize, cx: &mut Context<Self>) {
+    /// Rings the list's `rows`th row as ↓ from the field does, for the preview, once the list
+    /// has rows: whether it had.
+    pub fn preview_ring_library_row(&mut self, rows: usize, cx: &mut Context<Self>) -> bool {
+        if self.row_stops().is_empty() {
+            return false;
+        }
         for _ in 0..rows {
             self.row_step(true, cx);
         }
+        true
     }
 
     /// Whether the ring is on `item`'s row, or on its tile at `column` in Media.

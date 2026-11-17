@@ -3303,12 +3303,7 @@ fn main() {
                     if let Some(rows) = rows.and_then(|rows| rows.parse().ok()) {
                         window
                             .update(cx, |_, window, cx| {
-                                let shell = cx.entity();
-                                window.on_next_frame(move |_, cx| {
-                                    shell.update(cx, |shell, cx| {
-                                        shell.preview_ring_library_row(rows, cx)
-                                    })
-                                });
+                                ring_library_row(cx.entity(), rows, 120, window)
                             })
                             .ok();
                     }
@@ -3983,6 +3978,21 @@ impl menu::Host for PreviewMenu {
     fn show(&self, _: Bounds<Pixels>, _: &[Bounds<Pixels>]) {}
 
     fn hide(&self) {}
+}
+
+/// Rings the Library's `rows`th row at the first frame its list has rows, trying `frames` more.
+fn ring_library_row(
+    shell: gpui::Entity<Shell>,
+    rows: usize,
+    frames: usize,
+    window: &mut gpui::Window,
+) {
+    window.on_next_frame(move |window, cx| {
+        let rang = shell.update(cx, |shell, cx| shell.preview_ring_library_row(rows, cx));
+        if !rang && frames > 0 {
+            ring_library_row(shell, rows, frames - 1, window);
+        }
+    });
 }
 
 /// The icon picker over the preview's window, whose host can't move it: it opened where it's to be.
