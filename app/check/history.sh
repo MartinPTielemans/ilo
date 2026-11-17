@@ -462,7 +462,7 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.title = "beside
     fail "a key after a click on $warned_tab's page below its warning before http reached the page beside it"
   since "$pressed" | grep -q "^browser: page $warned_tab back [01] forward [01] loading 1 " &&
     fail "a click on $warned_tab's page below its warning before http reached the page under the warning: $(since "$pressed" | grep "^browser: page $warned_tab " | tail -3 | tr '\n' ' ')"
-  # Escape is the warning's Go back, which loads the new tab page where there's no page to go back to.
+  # Escape is the warning's Go back, or the new tab page where there's nothing to go back to.
   send key escape
   expect "^browser: page $warned_tab back [01] forward [01] loading 1 " \
     "escape on Chrome's warning before http, after a click below it focused its pane, didn't go back: the keyboard is in $key, on $focus"
