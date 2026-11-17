@@ -341,9 +341,14 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
   fi
   pid=$!
   exec 3> "$out/drive"
-  await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
+  await '^browser: onboarding started$' || fail "the onboarding didn't start"
+  # The intro goes on by itself 1.4 s after it settles, sooner than the Mac's reader compiles, so
+  # the read starts with the flow and asks again until the intro is there.
   intro="$out/access-intro.txt"
-  read_tree "$dialog \"$app_name\"" > "$intro"
+  read_tree "$dialog \"$app_name\"" > "$intro" &
+  reading=$!
+  await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
+  wait "$reading"
   grep -q " $dialog \"$app_name\"" "$intro" || fail "the intro isn't a dialog called $app_name: $intro"
   # Esc goes on from each step to the colour's, each one settled before the next Esc.
   for _ in 1 2 3 4; do
