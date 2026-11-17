@@ -696,10 +696,18 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
   [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
     fail "split_tabs with the tab at the warning answered: $split"
-  back="^browser: task page $agent_tab back\$"
-  before=$(grep -c "$back" "$log" || true)
-  send key escape
-  await_more "$back" "$before" || fail "Escape didn't step back to Pages from tab $agent_tab"
+  # Escape steps back to Pages from the page watched, $1, which goes back into its picture before a
+  # click on another picture can watch it.
+  to_pages() {
+    back='^browser: task page [0-9]* back$'
+    thumbnail='^browser: task page in its thumbnail$'
+    before=$(grep -c "$back" "$log" || true)
+    shrunk=$(grep -c "$thumbnail" "$log" || true)
+    send key escape
+    await_more "$back" "$before" || fail "Escape didn't step back to Pages from $1"
+    await_more "$thumbnail" "$shrunk" || fail "$1 didn't go back into its picture"
+  }
+  to_pages "tab $agent_tab"
   watch "$warned"
   for _ in $(seq 50); do
     send layout
@@ -740,12 +748,26 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   send state
   [ "$key" = BrowserCoreNSWindow ] ||
     fail "a press in the page beside the agent's warning before http left the keyboard in $key, on $focus: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
-  hand_back_pressed "$presses"
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-pressed.png" || fail "no window to capture"
-  back="^browser: task page $warned back\$"
-  before=$(grep -c "$back" "$log" || true)
-  send key escape
-  await_more "$back" "$before" || fail "Escape didn't step back to Pages from tab $warned"
+  # The press takes over the tab pressed, and ⌘↩ hands it back. It takes over the tab watched
+  # instead (#3243) while the area goes on to show the tab pressed, so the tab taken over is watched
+  # again and handed back there, with the UI given the keyboard by a click on the sidebar: on the
+  # Mac the warning takes it as its page shows (#3240), and keys typed there never reach the app
+  # (#3230).
+  send state
+  taken=$(since "$pressed" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' | tail -1)
+  if [ -n "$taken" ] && [ "$taken" != "$beside" ]; then
+    echo "skip: mcp: a press in the other pane of a watched agent split taking over the tab pressed: it took over tab $taken, not $beside (#3243)."
+    to_pages "tab $beside"
+    watch "$taken"
+    send click $sidebar_point
+    send key return cmd
+    await_log "^browser: agent mcp-client handed back $taken\$" \
+      "⌘↩ didn't hand back tab $taken, which the press beside it took over"
+  else
+    hand_back_pressed "$presses"
+  fi
+  to_pages "the split view"
   for split_tab in $warned $beside; do
     closed=$(call close_tab "{\"tab\":$split_tab}")
     case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
