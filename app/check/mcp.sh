@@ -1981,15 +1981,16 @@ $(grep 'browser: agent .*download' "$log" | tail -3)"
     # Left open: the agent is at work in it, which the session's end below ends.
   fi
   # A site the user always allows downloads from, whose page's download link the agent clicks with
-  # another app in front below (#3183).
-  printf 'notes\n' > "$out/site/notes.txt"
-  printf '%s' '<!doctype html><title>Notes</title><a href="notes.txt" download>Notes</a>' \
+  # another app in front below (#3183). A .docx, which the check's server sends as a file, where a
+  # .txt would open as a page.
+  printf 'notes\n' > "$out/site/notes.docx"
+  printf '%s' '<!doctype html><title>Notes</title><a href="notes.docx" download>Notes</a>' \
     > "$out/site/notes.html"
-  file="{\"url\":\"saved.localhost:$port/notes.txt\"}"
-  wants='^browser: agent mcp-client asks [0-9]*: download notes\.txt from saved\.localhost$'
+  file="{\"url\":\"saved.localhost:$port/notes.docx\"}"
+  wants='^browser: agent mcp-client asks [0-9]*: download notes\.docx from saved\.localhost$'
   answer_download Always
   case "$downloaded" in
-    "Downloaded notes.txt "*) ;;
+    "Downloaded notes.docx "*) ;;
     *) fail "the download answered with Always Allow: $downloaded" ;;
   esac
   saved_page=$(call open_tab "{\"url\":\"saved.localhost:$port/notes.html\"}")
